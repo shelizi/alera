@@ -30,6 +30,7 @@ pub struct WorkspaceQuickOpenSession {
 pub struct WorkspaceQuickOpenMatch {
     pub relative_path: String,
     pub score: i32,
+    pub is_directory: bool,
 }
 
 #[derive(Debug)]
@@ -42,8 +43,14 @@ const QUICK_OPEN_SESSION_IDLE_TTL: Duration = Duration::from_secs(15 * 60);
 const MAX_QUICK_OPEN_SESSIONS: usize = 16;
 const MAX_QUICK_OPEN_INDEXED_FILES: usize = 50_000;
 const MAX_QUICK_OPEN_INDEXED_PATH_BYTES: usize = 2 * 1024 * 1024;
+// Separate directory quotas ensure new Explorer searches cannot reduce the
+// count of indexed files used by the existing Ctrl+P Quick Open.
+const MAX_QUICK_OPEN_INDEXED_DIRECTORIES: usize = 50_000;
+const MAX_QUICK_OPEN_INDEXED_DIRECTORY_PATH_BYTES: usize = 2 * 1024 * 1024;
 const MAX_QUICK_OPEN_IGNORED_INDEXED_FILES: usize = 25_000;
 const MAX_QUICK_OPEN_IGNORED_INDEXED_PATH_BYTES: usize = 1024 * 1024;
+const MAX_QUICK_OPEN_IGNORED_INDEXED_DIRECTORIES: usize = 25_000;
+const MAX_QUICK_OPEN_IGNORED_DIRECTORY_PATH_BYTES: usize = 1024 * 1024;
 
 const QUICK_OPEN_PROTECTED_DIRS: &[&str] = &[".git", ".hg", ".svn"];
 
@@ -108,7 +115,8 @@ fn start_workspace_quick_open_session_with_symlinks(
         )
     })?;
     sort_quick_open_files(&mut files);
-    let indexed_file_count = u32::try_from(files.len()).unwrap_or(u32::MAX);
+    let indexed_file_count =
+        u32::try_from(files.iter().filter(|file| !file.is_directory).count()).unwrap_or(u32::MAX);
     let id = Uuid::new_v4().to_string();
     let mut sessions = sessions().lock().map_err(|_| {
         WorkspaceFileError::new(
@@ -179,8 +187,13 @@ fn collect_quick_open_files(
         .build();
     let mut files = Vec::new();
     let mut indexed_path_bytes = 0_usize;
+    let mut indexed_file_count = 0_usize;
     let mut ignored_file_count = 0_usize;
     let mut ignored_path_bytes = 0_usize;
+    let mut directory_count = 0_usize;
+    let mut directory_path_bytes = 0_usize;
+    let mut ignored_directory_count = 0_usize;
+    let mut ignored_directory_path_bytes = 0_usize;
     for entry in walker {
         let entry = match entry {
             Ok(entry) => entry,
@@ -192,11 +205,31 @@ fn collect_quick_open_files(
                 ));
             }
         };
-        if let Some(relative_path) =
+        if let Some((relative_path, is_directory)) =
             quick_open_relative_path(root, entry.path(), include_internal_symlinks, exclusions)?
         {
             let is_gitignored = !git_visible_paths.contains(entry.path());
-            if is_gitignored {
+            if is_directory && is_gitignored {
+                if ignored_directory_count >= MAX_QUICK_OPEN_IGNORED_INDEXED_DIRECTORIES {
+                    continue;
+                }
+                let next = ignored_directory_path_bytes.saturating_add(relative_path.len());
+                if next > MAX_QUICK_OPEN_IGNORED_DIRECTORY_PATH_BYTES {
+                    continue;
+                }
+                ignored_directory_count += 1;
+                ignored_directory_path_bytes = next;
+            } else if is_directory {
+                if directory_count >= MAX_QUICK_OPEN_INDEXED_DIRECTORIES {
+                    continue;
+                }
+                let next = directory_path_bytes.saturating_add(relative_path.len());
+                if next > MAX_QUICK_OPEN_INDEXED_DIRECTORY_PATH_BYTES {
+                    continue;
+                }
+                directory_count += 1;
+                directory_path_bytes = next;
+            } else if is_gitignored {
                 if ignored_file_count >= MAX_QUICK_OPEN_IGNORED_INDEXED_FILES {
                     continue;
                 }
@@ -207,7 +240,6 @@ fn collect_quick_open_files(
                 ignored_file_count += 1;
                 ignored_path_bytes = next_path_bytes;
             } else {
-                let indexed_file_count = files.len().saturating_sub(ignored_file_count);
                 if indexed_file_count >= max_files {
                     continue;
                 }
@@ -216,8 +248,13 @@ fn collect_quick_open_files(
                     continue;
                 }
                 indexed_path_bytes = next_path_bytes;
+                indexed_file_count += 1;
             }
-            files.push(QuickOpenFile::with_gitignored(relative_path, is_gitignored));
+            files.push(QuickOpenFile::with_kind(
+                relative_path,
+                is_gitignored,
+                is_directory,
+            ));
         }
     }
     Ok(files)
@@ -253,10 +290,7 @@ fn collect_git_visible_paths(
                 ));
             }
         };
-        if entry
-            .file_type()
-            .is_some_and(|file_type| !file_type.is_dir())
-        {
+        if entry.file_type().is_some() {
             visible.insert(entry.into_path());
         }
     }
@@ -269,6 +303,26 @@ pub fn search_workspace_quick_open_session(
     limit: u32,
     include_gitignored: bool,
 ) -> Result<Vec<WorkspaceQuickOpenMatch>, WorkspaceFileError> {
+    search_workspace_index_session(session, query, limit, include_gitignored, false)
+}
+
+/// Uses the same index as Ctrl+P, but includes directories for Explorer.
+pub fn search_workspace_explorer_filter_session(
+    session: WorkspaceQuickOpenSession,
+    query: String,
+    limit: u32,
+    include_gitignored: bool,
+) -> Result<Vec<WorkspaceQuickOpenMatch>, WorkspaceFileError> {
+    search_workspace_index_session(session, query, limit, include_gitignored, true)
+}
+
+fn search_workspace_index_session(
+    session: WorkspaceQuickOpenSession,
+    query: String,
+    limit: u32,
+    include_gitignored: bool,
+    include_directories: bool,
+) -> Result<Vec<WorkspaceQuickOpenMatch>, WorkspaceFileError> {
     let index = {
         let mut sessions = sessions().lock().map_err(|_| {
             WorkspaceFileError::new(
@@ -278,7 +332,13 @@ pub fn search_workspace_quick_open_session(
         })?;
         access_session(&mut sessions, &session.id, Instant::now())?
     };
-    Ok(ranking::search(&index, &query, limit, include_gitignored))
+    Ok(ranking::search(
+        &index,
+        &query,
+        limit,
+        include_gitignored,
+        include_directories,
+    ))
 }
 
 fn access_session(
@@ -311,7 +371,7 @@ fn quick_open_relative_path(
     path: &std::path::Path,
     include_internal_symlinks: bool,
     exclusions: &QuickOpenExclusions,
-) -> Result<Option<String>, WorkspaceFileError> {
+) -> Result<Option<(String, bool)>, WorkspaceFileError> {
     let relative_path = relative_string(root, path)?;
     if relative_path.is_empty() || exclusions.excludes_path(std::path::Path::new(&relative_path)) {
         return Ok(None);
@@ -361,7 +421,7 @@ fn quick_open_relative_path(
     } else {
         link_metadata
     };
-    Ok(metadata.is_file().then_some(relative_path))
+    Ok((metadata.is_file() || metadata.is_dir()).then_some((relative_path, metadata.is_dir())))
 }
 
 #[derive(Clone)]

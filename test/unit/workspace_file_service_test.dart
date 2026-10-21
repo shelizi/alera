@@ -101,6 +101,64 @@ void main() {
     });
   });
 
+  testWidgets(
+    'file-only and directory-enabled searches keep independent caches',
+    (tester) async {
+      final service = _RefreshingQuickOpenFileService()
+        ..files.add('src/deep/file.toml')
+        ..directories.add('src/deep/empty-folder');
+      addTearDown(service.dispose);
+      const path = '/repo/alera';
+      final filesOnly = await service.searchQuickOpenCached(
+        workspacePath: path,
+        excludedDirectories: const [],
+        query: 'deep',
+        includeGitignored: false,
+      );
+      final all = await service.searchQuickOpenCached(
+        workspacePath: path,
+        excludedDirectories: const [],
+        query: 'deep',
+        includeGitignored: false,
+        includeDirectories: true,
+      );
+      expect(filesOnly.map((item) => item.relativePath), [
+        'src/deep/file.toml',
+      ]);
+      expect(all.map((item) => item.relativePath), [
+        'src/deep/file.toml',
+        'src/deep/empty-folder',
+      ]);
+      expect(all.last.isDirectory, isTrue);
+      expect(service.startedSessionIds, hasLength(1));
+      expect(service.includeDirectoriesRequests, [false, true]);
+
+      service.directories.add('src/deep/another-folder');
+      service.scheduleQuickOpenRefresh(
+        workspacePath: path,
+        debounce: Duration.zero,
+      );
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.pump();
+      final cachedFiles = service.peekQuickOpenMatches(
+        workspacePath: path,
+        excludedDirectories: const [],
+        query: 'deep',
+        includeGitignored: false,
+      );
+      final cachedExplorer = service.peekQuickOpenMatches(
+        workspacePath: path,
+        excludedDirectories: const [],
+        query: 'deep',
+        includeGitignored: false,
+        includeDirectories: true,
+      );
+      expect(cachedFiles, hasLength(1));
+      expect(cachedExplorer, hasLength(3));
+      expect(service.startedSessionIds, hasLength(2));
+    },
+  );
+
   group('WorkspaceFileService.applyGitStatusSnapshot', () {
     final service = WorkspaceFileService();
 
@@ -748,6 +806,7 @@ class _ExpiringQuickOpenFileService extends WorkspaceFileService {
     required String query,
     required bool includeGitignored,
     int limit = 50,
+    bool includeDirectories = false,
   }) async {
     searchedSessionIds.add(session.id);
     includeGitignoredRequests.add(includeGitignored);
@@ -759,7 +818,11 @@ class _ExpiringQuickOpenFileService extends WorkspaceFileService {
           );
     }
     return const <native.WorkspaceQuickOpenMatch>[
-      native.WorkspaceQuickOpenMatch(relativePath: 'lib/main.dart', score: 1),
+      native.WorkspaceQuickOpenMatch(
+        relativePath: 'lib/main.dart',
+        score: 1,
+        isDirectory: false,
+      ),
     ];
   }
 
@@ -771,8 +834,12 @@ class _ExpiringQuickOpenFileService extends WorkspaceFileService {
 
 class _RefreshingQuickOpenFileService extends WorkspaceFileService {
   final List<String> files = <String>[];
+  final List<String> directories = <String>[];
   final List<String> startedSessionIds = <String>[];
+  final List<bool> includeDirectoriesRequests = <bool>[];
   final Map<String, List<String>> _indexedFiles = <String, List<String>>{};
+  final Map<String, List<String>> _indexedDirectories =
+      <String, List<String>>{};
 
   @override
   Future<native.WorkspaceQuickOpenSession> startQuickOpenSession({
@@ -782,6 +849,7 @@ class _RefreshingQuickOpenFileService extends WorkspaceFileService {
     final id = 'index-${startedSessionIds.length + 1}';
     startedSessionIds.add(id);
     _indexedFiles[id] = List<String>.of(files);
+    _indexedDirectories[id] = List<String>.of(directories);
     return native.WorkspaceQuickOpenSession(
       id: id,
       indexedFileCount: files.length,
@@ -794,11 +862,27 @@ class _RefreshingQuickOpenFileService extends WorkspaceFileService {
     required String query,
     required bool includeGitignored,
     int limit = 50,
-  }) async => <native.WorkspaceQuickOpenMatch>[
-    for (final path in _indexedFiles[session.id] ?? const <String>[])
-      if (path.contains(query))
-        native.WorkspaceQuickOpenMatch(relativePath: path, score: 1),
-  ].take(limit).toList();
+    bool includeDirectories = false,
+  }) async {
+    includeDirectoriesRequests.add(includeDirectories);
+    return <native.WorkspaceQuickOpenMatch>[
+      for (final path in _indexedFiles[session.id] ?? const <String>[])
+        if (path.contains(query))
+          native.WorkspaceQuickOpenMatch(
+            relativePath: path,
+            score: 1,
+            isDirectory: false,
+          ),
+      if (includeDirectories)
+        for (final path in _indexedDirectories[session.id] ?? const <String>[])
+          if (path.contains(query))
+            native.WorkspaceQuickOpenMatch(
+              relativePath: path,
+              score: 1,
+              isDirectory: true,
+            ),
+    ].take(limit).toList();
+  }
 
   @override
   Future<void> stopQuickOpenSession({

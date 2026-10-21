@@ -714,7 +714,11 @@ Workspace _workspace(String id, String name, String path) {
 }
 
 native.WorkspaceQuickOpenMatch _match(String relativePath) {
-  return native.WorkspaceQuickOpenMatch(relativePath: relativePath, score: 0);
+  return native.WorkspaceQuickOpenMatch(
+    relativePath: relativePath,
+    score: 0,
+    isDirectory: false,
+  );
 }
 
 native.WorkspaceQuickOpenSession _session(String id, int indexedFileCount) {
@@ -876,6 +880,7 @@ class _QuickOpenFileService({
     required String query,
     required bool includeGitignored,
     int limit = 50,
+    bool includeDirectories = false,
   }) {
     if (cachedEntries.isEmpty) {
       return null;
@@ -899,6 +904,7 @@ class _QuickOpenFileService({
     required String query,
     required bool includeGitignored,
     int limit = 50,
+    bool includeDirectories = false,
   }) async {
     var session = _cachedSessionByWorkspacePath[workspacePath];
     if (session == null) {
@@ -913,6 +919,7 @@ class _QuickOpenFileService({
       query: query,
       includeGitignored: includeGitignored,
       limit: limit,
+      includeDirectories: includeDirectories,
     );
   }
 
@@ -948,6 +955,7 @@ class _QuickOpenFileService({
     required String query,
     required bool includeGitignored,
     int limit = 50,
+    bool includeDirectories = false,
   }) {
     includeGitignoredRequests.add(includeGitignored);
     final gate = searchGates[query];

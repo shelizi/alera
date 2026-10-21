@@ -94,6 +94,7 @@ class const _ExplorerRow({
   required final bool selected,
   required final bool sourceControlRoot,
   required final VoidCallback onTap,
+  final double leadingPadding = 0,
 }) extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
@@ -110,7 +111,10 @@ class const _ExplorerRow({
             color: selected ? AleraTokens.surfaceElevated : Colors.transparent,
           ),
           child: Padding(
-            padding: const EdgeInsets.only(right: AleraTokens.space8),
+            padding: EdgeInsets.only(
+              left: leadingPadding,
+              right: AleraTokens.space8,
+            ),
             child: Row(
               children: <Widget>[
                 AleraFileIcon(
@@ -288,6 +292,26 @@ class const _ExplorerMenuDelegate({
     nodeType: tree.NodeType.file,
     isFocusedRoot: () => false,
     onBeforeOpen: onMenuOpeningForFile,
+    onEntryAction: onEntryAction,
+  );
+
+  /// Search results and tree nodes must expose precisely the same actions,
+  /// including folder-specific operations and focused source control roots.
+  Widget wrapFilteredEntryWithMenu(
+    BuildContext context,
+    Widget child, {
+    required native.WorkspaceFileEntry entry,
+    required bool isFocusedRoot,
+    required VoidCallback onMenuOpeningForEntry,
+    required Future<void> Function(BuildContext, _ExplorerAction) onEntryAction,
+  }) => _wrapEntryMenu(
+    context,
+    child,
+    nodeType: _isDirectoryEntry(entry)
+        ? tree.NodeType.folder
+        : tree.NodeType.file,
+    isFocusedRoot: () => isFocusedRoot,
+    onBeforeOpen: onMenuOpeningForEntry,
     onEntryAction: onEntryAction,
   );
 

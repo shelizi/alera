@@ -19,9 +19,10 @@ pub use move_file::move_workspace_text_from_root;
 
 pub use prompts::{list_codex_saved_prompts, CodexSavedPrompt, CodexSavedPromptScope};
 pub use quick_open::{
-    search_workspace_quick_open_session, start_workspace_quick_open_session,
-    start_workspace_quick_open_session_without_symlinks, stop_workspace_quick_open_session,
-    WorkspaceQuickOpenMatch, WorkspaceQuickOpenSession, DEFAULT_QUICK_OPEN_EXCLUDED_DIRECTORIES,
+    search_workspace_explorer_filter_session, search_workspace_quick_open_session,
+    start_workspace_quick_open_session, start_workspace_quick_open_session_without_symlinks,
+    stop_workspace_quick_open_session, WorkspaceQuickOpenMatch, WorkspaceQuickOpenSession,
+    DEFAULT_QUICK_OPEN_EXCLUDED_DIRECTORIES,
 };
 pub use trash::{
     list_workspace_text_trash, move_workspace_text_to_trash, open_workspace_text_trash,

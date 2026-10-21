@@ -7,8 +7,8 @@ import '../frb_generated.dart';
 
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `content_token`, `copy_recursively`, `ensure_inside_existing_parent`, `ensure_not_descendant`, `entry_for_path_filtered`, `entry_for_path`, `from_io`, `is_hidden_entry`, `is_protected_child_path`, `is_protected_relative_path`, `join_relative`, `modified_millis`, `move_external_entry`, `new`, `reject_protected`, `relative_components`, `relative_string`, `resolve_existing_no_follow`, `resolve_existing`, `resolve_new_child`, `sanitize_name`, `shared_workspace_file_error`, `unique_copy_destination`, `workspace_root`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`
+// These functions are ignored because they are not marked as `pub`: `content_token`, `copy_recursively`, `ensure_inside_existing_parent`, `ensure_not_descendant`, `entry_for_path_filtered`, `entry_for_path`, `from_io`, `is_hidden_entry`, `is_protected_child_path`, `is_protected_relative_path`, `join_relative`, `map_quick_open_matches`, `modified_millis`, `move_external_entry`, `new`, `reject_protected`, `relative_components`, `relative_string`, `resolve_existing_no_follow`, `resolve_existing`, `resolve_new_child`, `sanitize_name`, `shared_workspace_file_error`, `unique_copy_destination`, `workspace_root`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `assert_fields_are_eq`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`
 
 Future<List<WorkspaceFileEntry>> listWorkspaceChildren({
   required String workspacePath,
@@ -43,6 +43,21 @@ Future<List<WorkspaceQuickOpenMatch>> searchWorkspaceQuickOpenSession({
       includeGitignored: includeGitignored,
     );
 
+/// Search files and directories from the same native index. Ctrl+P continues
+/// to use search_workspace_quick_open_session (files only).
+Future<List<WorkspaceQuickOpenMatch>> searchWorkspaceExplorerFilterSession({
+  required WorkspaceQuickOpenSession session,
+  required String query,
+  required int limit,
+  required bool includeGitignored,
+}) => RustLib.instance.api
+    .crateApiWorkspaceFilesSearchWorkspaceExplorerFilterSession(
+      session: session,
+      query: query,
+      limit: limit,
+      includeGitignored: includeGitignored,
+    );
+
 Future<void> stopWorkspaceQuickOpenSession({
   required WorkspaceQuickOpenSession session,
 }) => RustLib.instance.api.crateApiWorkspaceFilesStopWorkspaceQuickOpenSession(
@@ -66,6 +81,39 @@ Future<WorkspaceExplorerTreeProjection> projectWorkspaceExplorerTree({
   directories: directories,
   replacement: replacement,
 );
+
+/// Initialize a retained native tree from the optional Flutter cache once.
+Future<WorkspaceExplorerProjectionHandle>
+startWorkspaceExplorerProjectionSession({
+  required String workspaceName,
+  required String workspacePath,
+  required List<WorkspaceExplorerDirectoryChildren> directories,
+}) => RustLib.instance.api
+    .crateApiWorkspaceFilesStartWorkspaceExplorerProjectionSession(
+      workspaceName: workspaceName,
+      workspacePath: workspacePath,
+      directories: directories,
+    );
+
+/// Update just one directory and return node/metadata deltas, rejecting a
+/// stale handle version rather than corrupting a newer native snapshot.
+Future<WorkspaceExplorerProjectionDelta>
+updateWorkspaceExplorerProjectionSession({
+  required WorkspaceExplorerProjectionHandle handle,
+  required WorkspaceExplorerDirectoryChildren replacement,
+}) => RustLib.instance.api
+    .crateApiWorkspaceFilesUpdateWorkspaceExplorerProjectionSession(
+      handle: handle,
+      replacement: replacement,
+    );
+
+/// Release retained tree memory when an Explorer view resets or unmounts.
+Future<void> stopWorkspaceExplorerProjectionSession({
+  required WorkspaceExplorerProjectionHandle handle,
+}) => RustLib.instance.api
+    .crateApiWorkspaceFilesStopWorkspaceExplorerProjectionSession(
+      handle: handle,
+    );
 
 Future<WorkspaceExplorerWatcherHandle> startWorkspaceExplorerWatcher({
   required String workspacePath,
@@ -416,6 +464,74 @@ class WorkspaceExplorerEntryBinding {
           relativePath == other.relativePath;
 }
 
+/// A compact diff relative to the previous native projection version.
+/// The Flutter client updates its existing TreeData rather than receiving a
+/// complete list of all loaded directories and tree nodes on each refresh.
+class WorkspaceExplorerProjectionDelta {
+  final BigInt version;
+  final List<WorkspaceExplorerDirectoryChildren> changedDirectories;
+  final List<String> removedDirectoryPaths;
+  final List<WorkspaceExplorerTreeNode> changedNodes;
+  final List<String> removedNodeIds;
+  final List<WorkspaceExplorerEntryBinding> changedBindings;
+  final List<String> removedBindingNodeIds;
+
+  const WorkspaceExplorerProjectionDelta({
+    required this.version,
+    required this.changedDirectories,
+    required this.removedDirectoryPaths,
+    required this.changedNodes,
+    required this.removedNodeIds,
+    required this.changedBindings,
+    required this.removedBindingNodeIds,
+  });
+
+  @override
+  int get hashCode =>
+      version.hashCode ^
+      changedDirectories.hashCode ^
+      removedDirectoryPaths.hashCode ^
+      changedNodes.hashCode ^
+      removedNodeIds.hashCode ^
+      changedBindings.hashCode ^
+      removedBindingNodeIds.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is WorkspaceExplorerProjectionDelta &&
+          runtimeType == other.runtimeType &&
+          version == other.version &&
+          changedDirectories == other.changedDirectories &&
+          removedDirectoryPaths == other.removedDirectoryPaths &&
+          changedNodes == other.changedNodes &&
+          removedNodeIds == other.removedNodeIds &&
+          changedBindings == other.changedBindings &&
+          removedBindingNodeIds == other.removedBindingNodeIds;
+}
+
+/// Client-held versioned handle for the native Explorer tree snapshot.
+class WorkspaceExplorerProjectionHandle {
+  final BigInt id;
+  final BigInt version;
+
+  const WorkspaceExplorerProjectionHandle({
+    required this.id,
+    required this.version,
+  });
+
+  @override
+  int get hashCode => id.hashCode ^ version.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is WorkspaceExplorerProjectionHandle &&
+          runtimeType == other.runtimeType &&
+          id == other.id &&
+          version == other.version;
+}
+
 class WorkspaceExplorerTreeNode {
   final String id;
   final String name;
@@ -640,14 +756,17 @@ enum WorkspaceFileKind { file, directory, symlink, other }
 class WorkspaceQuickOpenMatch {
   final String relativePath;
   final int score;
+  final bool isDirectory;
 
   const WorkspaceQuickOpenMatch({
     required this.relativePath,
     required this.score,
+    required this.isDirectory,
   });
 
   @override
-  int get hashCode => relativePath.hashCode ^ score.hashCode;
+  int get hashCode =>
+      relativePath.hashCode ^ score.hashCode ^ isDirectory.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -655,7 +774,8 @@ class WorkspaceQuickOpenMatch {
       other is WorkspaceQuickOpenMatch &&
           runtimeType == other.runtimeType &&
           relativePath == other.relativePath &&
-          score == other.score;
+          score == other.score &&
+          isDirectory == other.isDirectory;
 }
 
 class WorkspaceQuickOpenSession {

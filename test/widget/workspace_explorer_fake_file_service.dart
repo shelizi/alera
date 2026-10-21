@@ -63,6 +63,8 @@ class _FakeWorkspaceFileService({
   int projectionCalls = 0;
   final Map<String, String> writtenFiles = <String, String>{};
   List<String> quickOpenEntries = <String>[];
+  List<String> quickOpenDirectories = <String>[];
+  final List<bool> quickOpenDirectoryModeRequests = <bool>[];
 
   void emitWatchBatch(
     List<String> directoryRelativePaths, {
@@ -84,21 +86,30 @@ class _FakeWorkspaceFileService({
     required String query,
     required bool includeGitignored,
     int limit = 50,
+    bool includeDirectories = false,
   }) async {
+    quickOpenDirectoryModeRequests.add(includeDirectories);
     if (quickOpenSearchError case final error?) {
       throw error;
     }
     final normalizedQuery = query.trim().toLowerCase();
-    return quickOpenEntries
+    return <(String, bool)>[
+          for (final path in quickOpenEntries) (path, false),
+          if (includeDirectories)
+            for (final path in quickOpenDirectories) (path, true),
+        ]
         .where(
-          (path) =>
+          (entry) =>
               normalizedQuery.isEmpty ||
-              path.toLowerCase().contains(normalizedQuery),
+              entry.$1.toLowerCase().contains(normalizedQuery),
         )
         .take(limit)
         .map(
-          (path) =>
-              native.WorkspaceQuickOpenMatch(relativePath: path, score: 0),
+          (entry) => native.WorkspaceQuickOpenMatch(
+            relativePath: entry.$1,
+            score: 0,
+            isDirectory: entry.$2,
+          ),
         )
         .toList(growable: false);
   }
@@ -153,6 +164,125 @@ class _FakeWorkspaceFileService({
       directories: directories,
       replacement: replacement,
     );
+  }
+
+  int nativeProjectionStarts = 0;
+  int nativeProjectionUpdates = 0;
+  int nativeProjectionStops = 0;
+  bool failNextNativeProjection = false;
+  BigInt _nextProjectionId = BigInt.one;
+  final Map<BigInt, _FakeExplorerNativeProjection> _nativeProjections = {};
+
+  @override
+  Future<native.WorkspaceExplorerProjectionHandle>
+  startExplorerProjectionSession({
+    required String workspaceName,
+    required String workspacePath,
+    required List<native.WorkspaceExplorerDirectoryChildren> directories,
+  }) async {
+    nativeProjectionStarts++;
+    final id = _nextProjectionId;
+    _nextProjectionId += BigInt.one;
+    _nativeProjections[id] = _FakeExplorerNativeProjection(
+      name: workspaceName,
+      path: workspacePath,
+      version: BigInt.zero,
+      projection: _projectExplorerTree(
+        workspaceName: workspaceName,
+        workspacePath: workspacePath,
+        directories: directories,
+      ),
+    );
+    return native.WorkspaceExplorerProjectionHandle(
+      id: id,
+      version: BigInt.zero,
+    );
+  }
+
+  @override
+  Future<native.WorkspaceExplorerProjectionDelta>
+  updateExplorerProjectionSession({
+    required native.WorkspaceExplorerProjectionHandle handle,
+    required native.WorkspaceExplorerDirectoryChildren replacement,
+  }) async {
+    nativeProjectionUpdates++;
+    if (failNextNativeProjection) {
+      failNextNativeProjection = false;
+      throw StateError('synthetic stale native Explorer session');
+    }
+    final session = _nativeProjections[handle.id];
+    if (session == null || session.version != handle.version) {
+      throw StateError('stale native Explorer projection');
+    }
+    final before = session.projection;
+    final after = _projectExplorerTree(
+      workspaceName: session.name,
+      workspacePath: session.path,
+      directories: before.directories,
+      replacement: replacement,
+    );
+    final priorDirs = {
+      for (final item in before.directories) item.relativePath: item,
+    };
+    final afterDirs = {
+      for (final item in after.directories) item.relativePath: item,
+    };
+    final priorNodes = {for (final item in before.nodes) item.id: item};
+    final afterNodes = {for (final item in after.nodes) item.id: item};
+    final priorBindings = {
+      for (final item in before.entryBindings) item.nodeId: item,
+    };
+    final afterBindings = {
+      for (final item in after.entryBindings) item.nodeId: item,
+    };
+    final version = session.version + BigInt.one;
+    session
+      ..version = version
+      ..projection = after;
+    return native.WorkspaceExplorerProjectionDelta(
+      version: version,
+      changedDirectories: [
+        for (final item in after.directories)
+          if (!workspaceExplorerDirectoryChildrenUnchanged(
+            priorDirs[item.relativePath]?.children,
+            item.children,
+          ))
+            item,
+      ],
+      removedDirectoryPaths: [
+        for (final path in priorDirs.keys)
+          if (!afterDirs.containsKey(path)) path,
+      ],
+      changedNodes: [
+        for (final item in after.nodes)
+          if (!_fakeExplorerNodeEqual(priorNodes[item.id], item) ||
+              (before.directories.isEmpty &&
+                  after.directories.isNotEmpty &&
+                  item.id == 'workspace-root'))
+            item,
+      ],
+      removedNodeIds: [
+        for (final id in priorNodes.keys)
+          if (!afterNodes.containsKey(id)) id,
+      ],
+      changedBindings: [
+        for (final item in after.entryBindings)
+          if (priorBindings[item.nodeId]?.relativePath != item.relativePath)
+            item,
+      ],
+      removedBindingNodeIds: [
+        for (final id in priorBindings.keys)
+          if (!afterBindings.containsKey(id)) id,
+      ],
+    );
+  }
+
+  @override
+  Future<void> stopExplorerProjectionSession({
+    required native.WorkspaceExplorerProjectionHandle handle,
+  }) async {
+    nativeProjectionStops++;
+    _nativeProjections.remove(handle.id);
   }
 
   @override
@@ -344,6 +474,36 @@ class _FakeWorkspaceFileService({
     ];
   }
 }
+
+final class _FakeExplorerNativeProjection {
+  _FakeExplorerNativeProjection({
+    required this.name,
+    required this.path,
+    required this.version,
+    required this.projection,
+  });
+
+  final String name;
+  final String path;
+  BigInt version;
+  native.WorkspaceExplorerTreeProjection projection;
+}
+
+bool _fakeExplorerNodeEqual(
+  native.WorkspaceExplorerTreeNode? before,
+  native.WorkspaceExplorerTreeNode after,
+) =>
+    before != null &&
+    before.id == after.id &&
+    before.name == after.name &&
+    before.kind == after.kind &&
+    before.parentId == after.parentId &&
+    before.virtualPath == after.virtualPath &&
+    before.sourcePath == after.sourcePath &&
+    before.entryId == after.entryId &&
+    listEquals(before.childIds, after.childIds) &&
+    before.isExpanded == after.isExpanded &&
+    before.isVirtual == after.isVirtual;
 
 class const _SystemClipboardWrite({
   required final List<String> paths,

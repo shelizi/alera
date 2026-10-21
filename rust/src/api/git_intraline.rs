@@ -136,10 +136,22 @@ impl<'a> PreparedDiffLine<'a> {
 }
 
 // Reuse the dynamic-programming storage for all comparisons in one hunk.
-#[derive(Default)]
+// Internal hunk comparison scratch is not a bridge data model.
+#[flutter_rust_bridge::frb(ignore)]
 struct SimilarityScratch {
     previous: Vec<usize>,
     current: Vec<usize>,
+}
+
+// Do not derive Default here: FRB codegen incorrectly exposes the private
+// scratch struct through a generated public default_() bridge method.
+impl Default for SimilarityScratch {
+    fn default() -> Self {
+        Self {
+            previous: Vec::new(),
+            current: Vec::new(),
+        }
+    }
 }
 
 impl SimilarityScratch {

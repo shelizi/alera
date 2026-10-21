@@ -4,6 +4,7 @@ use std::path::{Component, Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
 mod editor_text;
+mod explorer_session;
 mod explorer_tree;
 mod listing;
 mod source_control_watcher;
@@ -51,7 +52,7 @@ pub struct WorkspaceFileError {
     pub context: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkspaceFileEntry {
     pub relative_path: String,
     pub name: String,
@@ -110,13 +111,13 @@ pub enum WorkspaceExplorerTreeNodeKind {
     File,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkspaceExplorerDirectoryChildren {
     pub relative_path: String,
     pub children: Vec<WorkspaceFileEntry>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkspaceExplorerTreeNode {
     pub id: String,
     pub name: String,
@@ -130,7 +131,7 @@ pub struct WorkspaceExplorerTreeNode {
     pub is_virtual: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkspaceExplorerEntryBinding {
     pub node_id: String,
     pub relative_path: String,
@@ -141,6 +142,27 @@ pub struct WorkspaceExplorerTreeProjection {
     pub directories: Vec<WorkspaceExplorerDirectoryChildren>,
     pub nodes: Vec<WorkspaceExplorerTreeNode>,
     pub entry_bindings: Vec<WorkspaceExplorerEntryBinding>,
+}
+
+/// Client-held versioned handle for the native Explorer tree snapshot.
+#[derive(Debug, Clone)]
+pub struct WorkspaceExplorerProjectionHandle {
+    pub id: u64,
+    pub version: u64,
+}
+
+/// A compact diff relative to the previous native projection version.
+/// The Flutter client updates its existing TreeData rather than receiving a
+/// complete list of all loaded directories and tree nodes on each refresh.
+#[derive(Debug, Clone)]
+pub struct WorkspaceExplorerProjectionDelta {
+    pub version: u64,
+    pub changed_directories: Vec<WorkspaceExplorerDirectoryChildren>,
+    pub removed_directory_paths: Vec<String>,
+    pub changed_nodes: Vec<WorkspaceExplorerTreeNode>,
+    pub removed_node_ids: Vec<String>,
+    pub changed_bindings: Vec<WorkspaceExplorerEntryBinding>,
+    pub removed_binding_node_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -175,6 +197,7 @@ pub struct WorkspaceQuickOpenSession {
 pub struct WorkspaceQuickOpenMatch {
     pub relative_path: String,
     pub score: i32,
+    pub is_directory: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -256,16 +279,42 @@ pub fn search_workspace_quick_open_session(
         limit,
         include_gitignored,
     )
-    .map(|matches| {
-        matches
-            .into_iter()
-            .map(|item| WorkspaceQuickOpenMatch {
-                relative_path: item.relative_path,
-                score: item.score,
-            })
-            .collect()
-    })
+    .map(map_quick_open_matches)
     .map_err(shared_workspace_file_error)
+}
+
+/// Search files and directories from the same native index. Ctrl+P continues
+/// to use search_workspace_quick_open_session (files only).
+pub fn search_workspace_explorer_filter_session(
+    session: WorkspaceQuickOpenSession,
+    query: String,
+    limit: u32,
+    include_gitignored: bool,
+) -> Result<Vec<WorkspaceQuickOpenMatch>, WorkspaceFileError> {
+    alera_core::workspace_files::search_workspace_explorer_filter_session(
+        alera_core::workspace_files::WorkspaceQuickOpenSession {
+            id: session.id,
+            indexed_file_count: session.indexed_file_count,
+        },
+        query,
+        limit,
+        include_gitignored,
+    )
+    .map(map_quick_open_matches)
+    .map_err(shared_workspace_file_error)
+}
+
+fn map_quick_open_matches(
+    matches: Vec<alera_core::workspace_files::WorkspaceQuickOpenMatch>,
+) -> Vec<WorkspaceQuickOpenMatch> {
+    matches
+        .into_iter()
+        .map(|item| WorkspaceQuickOpenMatch {
+            relative_path: item.relative_path,
+            score: item.score,
+            is_directory: item.is_directory,
+        })
+        .collect()
 }
 
 pub fn stop_workspace_quick_open_session(session: WorkspaceQuickOpenSession) {
@@ -334,6 +383,29 @@ pub fn project_workspace_explorer_tree(
     replacement: Option<WorkspaceExplorerDirectoryChildren>,
 ) -> WorkspaceExplorerTreeProjection {
     explorer_tree::project_tree(workspace_name, workspace_path, directories, replacement)
+}
+
+/// Initialize a retained native tree from the optional Flutter cache once.
+pub fn start_workspace_explorer_projection_session(
+    workspace_name: String,
+    workspace_path: String,
+    directories: Vec<WorkspaceExplorerDirectoryChildren>,
+) -> Result<WorkspaceExplorerProjectionHandle, WorkspaceFileError> {
+    explorer_session::start(workspace_name, workspace_path, directories)
+}
+
+/// Update just one directory and return node/metadata deltas, rejecting a
+/// stale handle version rather than corrupting a newer native snapshot.
+pub fn update_workspace_explorer_projection_session(
+    handle: WorkspaceExplorerProjectionHandle,
+    replacement: WorkspaceExplorerDirectoryChildren,
+) -> Result<WorkspaceExplorerProjectionDelta, WorkspaceFileError> {
+    explorer_session::update(handle, replacement)
+}
+
+/// Release retained tree memory when an Explorer view resets or unmounts.
+pub fn stop_workspace_explorer_projection_session(handle: WorkspaceExplorerProjectionHandle) {
+    explorer_session::stop(handle);
 }
 
 pub fn start_workspace_explorer_watcher(
