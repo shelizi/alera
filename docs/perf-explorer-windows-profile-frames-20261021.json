@@ -1,0 +1,294 @@
+{
+  "benchmark": "explorer_windows_profile_aot",
+  "mode": "profile",
+  "os": "\"Windows 10 Pro for Workstations\" 10.0 (Build 26200)",
+  "scenario": "Real WorkspaceExplorer UI + Rust FFI; synthetic root listing/watch. No disk/Git I/O.",
+  "fixtures": [
+    {
+      "rootFiles": 100,
+      "batchFiles": 150,
+      "nativeCalls": 19,
+      "fallbackCalls": 0,
+      "scenarios": [
+        {
+          "scenario": "add_150",
+          "wall": {
+            "count": 5,
+            "p50_ms": 35.428,
+            "p95_ms": 36.471,
+            "max_ms": 36.471
+          },
+          "build": {
+            "count": 17,
+            "p50_ms": 0.117,
+            "p95_ms": 1.233,
+            "max_ms": 1.254
+          },
+          "raster": {
+            "count": 17,
+            "p50_ms": 1.386,
+            "p95_ms": 1.869,
+            "max_ms": 2.28
+          },
+          "total": {
+            "count": 17,
+            "p50_ms": 2.76,
+            "p95_ms": 4.514,
+            "max_ms": 4.651
+          },
+          "frames_over_16_7ms": 0,
+          "frames_over_33_3ms": 0
+        },
+        {
+          "scenario": "remove_150",
+          "wall": {
+            "count": 5,
+            "p50_ms": 35.433,
+            "p95_ms": 36.597,
+            "max_ms": 36.597
+          },
+          "build": {
+            "count": 16,
+            "p50_ms": 0.118,
+            "p95_ms": 1.227,
+            "max_ms": 1.391
+          },
+          "raster": {
+            "count": 16,
+            "p50_ms": 1.345,
+            "p95_ms": 1.867,
+            "max_ms": 1.932
+          },
+          "total": {
+            "count": 16,
+            "p50_ms": 2.753,
+            "p95_ms": 4.497,
+            "max_ms": 4.765
+          },
+          "frames_over_16_7ms": 0,
+          "frames_over_33_3ms": 0
+        },
+        {
+          "scenario": "metadata_only",
+          "wall": {
+            "count": 6,
+            "p50_ms": 36.637,
+            "p95_ms": 38.305,
+            "max_ms": 38.305
+          },
+          "build": {
+            "count": 23,
+            "p50_ms": 0.118,
+            "p95_ms": 0.92,
+            "max_ms": 1.01
+          },
+          "raster": {
+            "count": 23,
+            "p50_ms": 1.367,
+            "p95_ms": 1.91,
+            "max_ms": 2.061
+          },
+          "total": {
+            "count": 23,
+            "p50_ms": 3.016,
+            "p95_ms": 3.819,
+            "max_ms": 3.831
+          },
+          "frames_over_16_7ms": 0,
+          "frames_over_33_3ms": 0
+        }
+      ]
+    },
+    {
+      "rootFiles": 300,
+      "batchFiles": 150,
+      "nativeCalls": 19,
+      "fallbackCalls": 0,
+      "scenarios": [
+        {
+          "scenario": "add_150",
+          "wall": {
+            "count": 5,
+            "p50_ms": 34.97,
+            "p95_ms": 35.906,
+            "max_ms": 35.906
+          },
+          "build": {
+            "count": 15,
+            "p50_ms": 0.115,
+            "p95_ms": 1.256,
+            "max_ms": 1.394
+          },
+          "raster": {
+            "count": 15,
+            "p50_ms": 1.314,
+            "p95_ms": 1.885,
+            "max_ms": 1.892
+          },
+          "total": {
+            "count": 15,
+            "p50_ms": 2.831,
+            "p95_ms": 4.373,
+            "max_ms": 4.373
+          },
+          "frames_over_16_7ms": 0,
+          "frames_over_33_3ms": 0
+        },
+        {
+          "scenario": "remove_150",
+          "wall": {
+            "count": 5,
+            "p50_ms": 34.911,
+            "p95_ms": 35.156,
+            "max_ms": 35.156
+          },
+          "build": {
+            "count": 15,
+            "p50_ms": 0.116,
+            "p95_ms": 1.122,
+            "max_ms": 1.148
+          },
+          "raster": {
+            "count": 15,
+            "p50_ms": 1.327,
+            "p95_ms": 1.725,
+            "max_ms": 1.748
+          },
+          "total": {
+            "count": 15,
+            "p50_ms": 2.862,
+            "p95_ms": 3.619,
+            "max_ms": 3.779
+          },
+          "frames_over_16_7ms": 0,
+          "frames_over_33_3ms": 0
+        },
+        {
+          "scenario": "metadata_only",
+          "wall": {
+            "count": 6,
+            "p50_ms": 35.324,
+            "p95_ms": 37.896,
+            "max_ms": 37.896
+          },
+          "build": {
+            "count": 20,
+            "p50_ms": 0.109,
+            "p95_ms": 1.056,
+            "max_ms": 1.702
+          },
+          "raster": {
+            "count": 20,
+            "p50_ms": 1.345,
+            "p95_ms": 1.687,
+            "max_ms": 1.756
+          },
+          "total": {
+            "count": 20,
+            "p50_ms": 2.743,
+            "p95_ms": 3.762,
+            "max_ms": 4.487
+          },
+          "frames_over_16_7ms": 0,
+          "frames_over_33_3ms": 0
+        }
+      ]
+    },
+    {
+      "rootFiles": 1000,
+      "batchFiles": 150,
+      "nativeCalls": 19,
+      "fallbackCalls": 0,
+      "scenarios": [
+        {
+          "scenario": "add_150",
+          "wall": {
+            "count": 5,
+            "p50_ms": 34.827,
+            "p95_ms": 35.954,
+            "max_ms": 35.954
+          },
+          "build": {
+            "count": 15,
+            "p50_ms": 0.11,
+            "p95_ms": 1.466,
+            "max_ms": 1.497
+          },
+          "raster": {
+            "count": 15,
+            "p50_ms": 1.336,
+            "p95_ms": 1.619,
+            "max_ms": 1.896
+          },
+          "total": {
+            "count": 15,
+            "p50_ms": 2.578,
+            "p95_ms": 4.373,
+            "max_ms": 4.849
+          },
+          "frames_over_16_7ms": 0,
+          "frames_over_33_3ms": 0
+        },
+        {
+          "scenario": "remove_150",
+          "wall": {
+            "count": 5,
+            "p50_ms": 35.52,
+            "p95_ms": 36.869,
+            "max_ms": 36.869
+          },
+          "build": {
+            "count": 15,
+            "p50_ms": 0.115,
+            "p95_ms": 1.251,
+            "max_ms": 1.774
+          },
+          "raster": {
+            "count": 15,
+            "p50_ms": 1.308,
+            "p95_ms": 1.577,
+            "max_ms": 2.256
+          },
+          "total": {
+            "count": 15,
+            "p50_ms": 2.607,
+            "p95_ms": 4.393,
+            "max_ms": 4.659
+          },
+          "frames_over_16_7ms": 0,
+          "frames_over_33_3ms": 0
+        },
+        {
+          "scenario": "metadata_only",
+          "wall": {
+            "count": 6,
+            "p50_ms": 36.166,
+            "p95_ms": 36.775,
+            "max_ms": 36.775
+          },
+          "build": {
+            "count": 19,
+            "p50_ms": 0.113,
+            "p95_ms": 1.189,
+            "max_ms": 1.356
+          },
+          "raster": {
+            "count": 19,
+            "p50_ms": 1.309,
+            "p95_ms": 1.613,
+            "max_ms": 1.622
+          },
+          "total": {
+            "count": 19,
+            "p50_ms": 2.589,
+            "p95_ms": 3.587,
+            "max_ms": 3.693
+          },
+          "frames_over_16_7ms": 0,
+          "frames_over_33_3ms": 0
+        }
+      ]
+    }
+  ],
+  "cycles": 5
+}
