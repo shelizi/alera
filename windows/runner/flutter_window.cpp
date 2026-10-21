@@ -5,6 +5,7 @@
 #include <flutter/standard_method_codec.h>
 
 #include "flutter/generated_plugin_registrant.h"
+#include "flutter_view_message_guard.h"
 #include "win32_app_menu.h"
 #include "win32_dark_mode.h"
 #include "win32_file_drag.h"
@@ -31,7 +32,13 @@ bool FlutterWindow::OnCreate() {
     return false;
   }
   RegisterPlugins(flutter_controller_->engine());
-  SetChildContent(flutter_controller_->view()->GetNativeWindow());
+  const HWND flutter_hwnd = flutter_controller_->view()->GetNativeWindow();
+  if (!flutter_hwnd || !::IsWindow(flutter_hwnd)) {
+    return false;
+  }
+  SetChildContent(flutter_hwnd);
+  flutter_view_hwnd_ = flutter_hwnd;
+  flutter_view_ready_ = true;
 
   app_menu_channel_ =
       std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
@@ -114,6 +121,8 @@ bool FlutterWindow::OnCreate() {
 }
 
 void FlutterWindow::OnDestroy() {
+  flutter_view_ready_ = false;
+  flutter_view_hwnd_ = nullptr;
   detached_tab_channel_.reset();
   rich_clipboard_channel_.reset();
   file_drag_channel_.reset();
@@ -129,8 +138,20 @@ LRESULT
 FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
                               WPARAM const wparam,
                               LPARAM const lparam) noexcept {
+  // A WM_PARENTNOTIFY/WM_DESTROY arrives while Flutter's child HWND is being
+  // removed. Its embedder view may already be null even though the runner's
+  // FlutterViewController still exists (GetEngine(nullptr) AV at +0x1e240).
+  if ((message == WM_PARENTNOTIFY && LOWORD(wparam) == WM_DESTROY &&
+       reinterpret_cast<HWND>(lparam) == flutter_view_hwnd_) ||
+      message == WM_DESTROY || message == WM_NCDESTROY) {
+    flutter_view_ready_ = false;
+  }
+  const bool can_forward =
+      flutter_controller_ &&
+      ShouldForwardToFlutterView(
+          flutter_view_ready_ && ::IsWindow(flutter_view_hwnd_), message, wparam);
   // Give Flutter, including plugins, an opportunity to handle window messages.
-  if (flutter_controller_) {
+  if (can_forward) {
     std::optional<LRESULT> result =
         flutter_controller_->HandleTopLevelWindowProc(hwnd, message, wparam,
                                                       lparam);
@@ -163,7 +184,9 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
       RefreshAleraMenuBarForDpi(hwnd);
       break;
     case WM_FONTCHANGE:
-      flutter_controller_->engine()->ReloadSystemFonts();
+      if (can_forward && flutter_controller_->engine()) {
+        flutter_controller_->engine()->ReloadSystemFonts();
+      }
       break;
   }
 

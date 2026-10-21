@@ -134,7 +134,33 @@ struct WindowCheck {
   bool maximized = false;
   bool passed = false;
   bool forwarded = true;
+  bool identity_published = false;
 };
+
+bool IsPrimaryWindowPublished(const std::wstring& id, HWND expected) {
+  const auto mapping_name = L"Local\\" + id + L".desktop.window";
+  HANDLE mapping =
+      ::OpenFileMappingW(FILE_MAP_READ, FALSE, mapping_name.c_str());
+  if (!mapping) {
+    return false;
+  }
+  struct alignas(8) SharedWindowIdentitySnapshot {
+    LONG64 hwnd;
+    LONG process_id;
+    LONG reserved;
+  };
+  auto* identity = static_cast<const SharedWindowIdentitySnapshot*>(
+      ::MapViewOfFile(mapping, FILE_MAP_READ, 0, 0,
+                      sizeof(SharedWindowIdentitySnapshot)));
+  const bool matches =
+      identity && identity->hwnd == reinterpret_cast<LONG64>(expected) &&
+      identity->process_id == static_cast<LONG>(::GetCurrentProcessId());
+  if (identity) {
+    ::UnmapViewOfFile(identity);
+  }
+  ::CloseHandle(mapping);
+  return matches;
+}
 
 LRESULT CALLBACK TestWindowProc(HWND window, UINT message, WPARAM wparam,
                                 LPARAM lparam) {
@@ -155,8 +181,9 @@ LRESULT CALLBACK TestWindowProc(HWND window, UINT message, WPARAM wparam,
     }
     check->passed = ::IsWindowVisible(window) && !::IsIconic(window) &&
                     (::IsZoomed(window) != FALSE) == check->maximized;
+    check->identity_published = IsPrimaryWindowPublished(check->id, window);
     ::KillTimer(window, kCheckWindow);
-    ::PostQuitMessage(check->passed ? 0 : 1);
+    ::PostQuitMessage(check->passed && check->identity_published ? 0 : 1);
     return 0;
   }
   return ::DefWindowProcW(window, message, wparam, lparam);
@@ -192,7 +219,8 @@ bool ChecksWindowActivation(int show_state, bool hide, bool before_window,
   ::SetTimer(window, before_window ? kCheckWindow : kLaunchAgain, 150, nullptr);
   const int result = instance.RunMessageLoop(window);
   ::DestroyWindow(window);
-  return result == 0 && check.passed && check.forwarded;
+  return result == 0 && check.passed && check.forwarded &&
+         check.identity_published;
 }
 
 }  // namespace

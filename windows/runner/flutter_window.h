@@ -32,6 +32,10 @@ class FlutterWindow : public Win32Window {
   // The Flutter instance hosted by this window.
   std::unique_ptr<flutter::FlutterViewController> flutter_controller_;
 
+  // The Flutter HWND must be attached and alive before native message forwarding.
+  HWND flutter_view_hwnd_ = nullptr;
+  bool flutter_view_ready_ = false;
+
   // Channel used to forward native app-menu activation into Dart.
   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>>
       app_menu_channel_;

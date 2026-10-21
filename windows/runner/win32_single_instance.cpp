@@ -3,12 +3,21 @@
 #include <cstdlib>
 
 Win32SingleInstance::Win32SingleInstance(const std::wstring& app_id)
-    : object_name_(L"Local\\" + app_id + L".desktop"),
-      window_property_(app_id + L".desktop.window") {}
+    : object_name_(L"Local\\" + app_id + L".desktop") {}
 
 Win32SingleInstance::~Win32SingleInstance() {
   if (owns_mutex_) {
+    if (window_identity_) {
+      ::InterlockedExchange(&window_identity_->process_id, 0);
+      ::InterlockedExchange64(&window_identity_->hwnd, 0);
+    }
     ::ReleaseMutex(mutex_);
+  }
+  if (window_identity_) {
+    ::UnmapViewOfFile(window_identity_);
+  }
+  if (window_mapping_) {
+    ::CloseHandle(window_mapping_);
   }
   if (mutex_) {
     ::CloseHandle(mutex_);
@@ -27,10 +36,25 @@ Win32SingleInstance::StartResult Win32SingleInstance::Start() {
   if (!activation_event_ || !mutex_) {
     return StartResult::failed;
   }
+  // A fixed-size kernel mapping records the primary HWND/PID for transfer of
+  // foreground rights. This never calls GlobalAddAtom/SetProp and survives a
+  // session where all global atom slots are already exhausted.
+  window_mapping_ = ::CreateFileMappingW(
+      INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0,
+      sizeof(SharedWindowIdentity), (object_name_ + L".window").c_str());
+  if (window_mapping_) {
+    window_identity_ = static_cast<SharedWindowIdentity*>(
+        ::MapViewOfFile(window_mapping_, FILE_MAP_READ | FILE_MAP_WRITE, 0, 0,
+                        sizeof(SharedWindowIdentity)));
+  }
 
   const DWORD wait = ::WaitForSingleObject(mutex_, 0);
   if (wait == WAIT_OBJECT_0 || wait == WAIT_ABANDONED) {
     owns_mutex_ = true;
+    if (window_identity_) {
+      ::InterlockedExchange(&window_identity_->process_id, 0);
+      ::InterlockedExchange64(&window_identity_->hwnd, 0);
+    }
     return StartResult::primary;
   }
   if (wait != WAIT_TIMEOUT) {
@@ -39,27 +63,41 @@ Win32SingleInstance::StartResult Win32SingleInstance::Start() {
 
   // Windows gives the freshly launched process foreground rights. Pass those
   // rights to the existing window without relying on its mutable title.
-  ::EnumWindows(AllowForegroundForWindow, reinterpret_cast<LPARAM>(this));
+  AllowForegroundForPrimaryWindow();
   return ::SetEvent(activation_event_) ? StartResult::forwarded
                                        : StartResult::failed;
 }
 
-BOOL CALLBACK Win32SingleInstance::AllowForegroundForWindow(HWND window,
-                                                            LPARAM context) {
-  const auto* instance = reinterpret_cast<Win32SingleInstance*>(context);
-  if (!::GetPropW(window, instance->window_property_.c_str())) {
-    return TRUE;
+void Win32SingleInstance::AllowForegroundForPrimaryWindow() const {
+  if (!window_identity_) {
+    return;
   }
-  DWORD pid = 0;
-  ::GetWindowThreadProcessId(window, &pid);
-  ::AllowSetForegroundWindow(pid);
-  return FALSE;
+  const LONG pid =
+      ::InterlockedCompareExchange(&window_identity_->process_id, 0, 0);
+  const LONG64 hwnd_bits =
+      ::InterlockedCompareExchange64(&window_identity_->hwnd, 0, 0);
+  if (pid <= 0 || !hwnd_bits) {
+    return;
+  }
+  const HWND window = reinterpret_cast<HWND>(static_cast<INT_PTR>(hwnd_bits));
+  DWORD actual_pid = 0;
+  if (::IsWindow(window)) {
+    ::GetWindowThreadProcessId(window, &actual_pid);
+  }
+  if (actual_pid == static_cast<DWORD>(pid)) {
+    ::AllowSetForegroundWindow(actual_pid);
+  }
 }
 
 int Win32SingleInstance::RunMessageLoop(HWND window) {
-  if (!owns_mutex_ || !::SetPropW(window, window_property_.c_str(),
-                                  reinterpret_cast<HANDLE>(1))) {
+  if (!owns_mutex_ || !window || !::IsWindow(window)) {
     return EXIT_FAILURE;
+  }
+  if (window_identity_) {
+    ::InterlockedExchange64(&window_identity_->hwnd,
+                            reinterpret_cast<LONG64>(window));
+    ::InterlockedExchange(&window_identity_->process_id,
+                          static_cast<LONG>(::GetCurrentProcessId()));
   }
 
   int exit_code = EXIT_SUCCESS;
@@ -89,6 +127,9 @@ int Win32SingleInstance::RunMessageLoop(HWND window) {
       ::DispatchMessageW(&message);
     }
   }
-  ::RemovePropW(window, window_property_.c_str());
+  if (window_identity_) {
+    ::InterlockedExchange(&window_identity_->process_id, 0);
+    ::InterlockedExchange64(&window_identity_->hwnd, 0);
+  }
   return exit_code;
 }
