@@ -85,6 +85,7 @@ void _registerWorkspaceExplorerModeTests() {
     await tester.pumpAndSettle();
 
     expect(find.text('lib/deep/hidden_match.dart'), findsOneWidget);
+    expect(find.byTooltip('lib/deep/hidden_match.dart'), findsOneWidget);
     expect(find.text('main.dart'), findsNothing);
     expect(
       service.listChildrenCalls.where((call) => call.relativePath == 'lib'),

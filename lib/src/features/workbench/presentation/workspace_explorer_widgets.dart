@@ -126,15 +126,18 @@ class const _ExplorerRow({
                 ),
                 const SizedBox(width: AleraTokens.space6),
                 Expanded(
-                  child: AleraSearchHighlightedText(
-                    text: name,
-                    query: filterQuery,
-                    maxLines: 1,
-                    overflow: .ellipsis,
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: entry?.isProtected ?? false
-                          ? AleraTokens.foregroundFaint
-                          : color,
+                  child: Tooltip(
+                    message: name,
+                    child: AleraSearchHighlightedText(
+                      text: name,
+                      query: filterQuery,
+                      maxLines: 1,
+                      overflow: .ellipsis,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: entry?.isProtected ?? false
+                            ? AleraTokens.foregroundFaint
+                            : color,
+                      ),
                     ),
                   ),
                 ),

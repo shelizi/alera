@@ -1,6 +1,40 @@
 part of 'workspace_explorer_test.dart';
 
 void _registerWorkspaceExplorerFileTreeTests() {
+  testWidgets('long Explorer names show their full text on hover', (
+    tester,
+  ) async {
+    const filename =
+        'this-is-a-very-long-filename-that-cannot-fit-in-the-explorer-panel.dart';
+    const folder =
+        'this-is-a-very-long-directory-name-that-cannot-fit-in-the-panel';
+    final service = _FakeWorkspaceFileService()
+      ..childrenByDirectory[''] = <native.WorkspaceFileEntry>[
+        _file(filename),
+        _directory(folder, hasChildrenHint: false),
+      ];
+    final opened = <String>[];
+    await _pumpExplorer(tester, service, onOpenFile: opened.add);
+
+    expect(find.byTooltip(filename), findsOneWidget);
+    expect(find.byTooltip(folder), findsOneWidget);
+    final fileLabel = tester.widget<Text>(find.text(filename));
+    expect(fileLabel.maxLines, 1);
+    expect(fileLabel.overflow, TextOverflow.ellipsis);
+
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    addTearDown(mouse.removePointer);
+    await mouse.addPointer(location: Offset.zero);
+    await mouse.moveTo(tester.getCenter(find.text(filename)));
+    await tester.pump(const Duration(milliseconds: 800));
+    expect(find.text(filename), findsNWidgets(2));
+
+    await mouse.moveTo(Offset.zero);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text(filename));
+    expect(opened, <String>[filename]);
+  });
+
   testWidgets('branch change replaces files from the previous checkout', (
     tester,
   ) async {
