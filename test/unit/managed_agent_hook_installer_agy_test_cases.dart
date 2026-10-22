@@ -164,7 +164,7 @@ void _registerAgyHookInstallerTests(
   });
 
   test('installs AGY wrapper scripts on Windows', () {
-    final home = readHome();
+    final home = Directory(p.join(readHome().path, "user space (dev)'s & 中文"));
     final windowsService = ManagedAgentHookInstallService(
       homeDirectory: home.path,
       platform: .windows,
@@ -177,9 +177,17 @@ void _registerAgyHookInstallerTests(
     expect(status.state, ManagedAgentHookInstallState.installed);
     final stopCommand = _commandsFor(bundle, 'Stop').single;
     expect(stopCommand, contains('alera-agy-stop.cmd'));
-    // Quoted so a profile path containing a space survives cmd's tokenizer.
-    expect(stopCommand.startsWith('"'), isTrue);
-    expect(stopCommand.endsWith('"'), isTrue);
+    expect(stopCommand, contains('powershell.exe -NoProfile -NonInteractive'));
+    expect(stopCommand, isNot(contains('"')));
+    final encoded = base64Decode(stopCommand.split('-EncodedCommand ').last);
+    final source = String.fromCharCodes(<int>[
+      for (var i = 0; i < encoded.length; i += 2)
+        encoded[i] | (encoded[i + 1] << 8),
+    ]);
+    expect(
+      source,
+      "& '${p.join(home.path, '.alera', 'agent-hooks', 'alera-agy-stop.cmd').replaceAll("'", "''")}'",
+    );
     expect(stopCommand, isNot(contains('cmd /d /s /c')));
     expect(stopCommand, isNot(contains("MSYS2_ARG_CONV_EXCL='*'")));
     expect(
@@ -197,6 +205,21 @@ void _registerAgyHookInstallerTests(
         ),
       ),
     );
+    windowsService.install(.agy);
+    expect(_commandsFor(agyBundle(home), 'Stop'), hasLength(1));
+    final config = _readJson(agyConfigPath(home));
+    final nextBundle = agyBundle(home);
+    (nextBundle['Stop'] as List).insert(0, <String, Object?>{
+      'type': 'command',
+      'command': 'echo user',
+    });
+    config['alera-status'] = nextBundle;
+    _writeJson(agyConfigPath(home), config);
+    expect(
+      windowsService.remove(.agy).state,
+      ManagedAgentHookInstallState.notInstalled,
+    );
+    expect(_commandsFor(agyBundle(home), 'Stop'), <String>['echo user']);
   });
 
   test('removes only Alera-managed AGY bundle entries', () {

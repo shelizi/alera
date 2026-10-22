@@ -35,7 +35,16 @@ extension _AgyManagedAgentHook on ManagedAgentHookInstallService {
       for (final event in events) {
         final path = _agyWindowsWrapperPath(event.eventName);
         wrappers[path] = _agyWindowsWrapperScript(event.eventName);
-        windowsCommandsByEvent[event.eventName] = '"$path"';
+        // AGY's Go runner backslash-escapes double quotes for cmd /c. Encode
+        // the invocation so spaces and shell metacharacters stay out of cmd.
+        // Keep a visible script tag for managed-hook reconciliation.
+        final source = "& '${path.replaceAll("'", "''")}'";
+        final encoded = base64Encode(<int>[
+          for (final unit in source.codeUnits) ...[unit & 0xff, unit >> 8],
+        ]);
+        windowsCommandsByEvent[event.eventName] =
+            'set ALERA_MANAGED_HOOK=agent-hooks/${p.basename(path)}&& '
+            'powershell.exe -NoProfile -NonInteractive -EncodedCommand $encoded';
       }
     }
     return _AgentHookDescriptor(

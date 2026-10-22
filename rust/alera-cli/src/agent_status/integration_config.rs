@@ -4,6 +4,9 @@ use std::path::{Path, PathBuf};
 use alera_core::runtime::RuntimeAgentStatusHookSettings;
 use serde_json::{json, Map, Value};
 
+#[cfg(windows)]
+#[path = "integration_config_agy_windows.rs"]
+mod agy_windows;
 #[path = "integration_config_ccs.rs"]
 mod ccs;
 #[path = "integration_config_codex.rs"]
@@ -222,10 +225,289 @@ fn apply_devin_hooks(config: &mut Map<String, Value>, script: &Path) {
 }
 
 fn install_agy(script: &Path) -> anyhow::Result<()> {
-    let path = home_dir()?.join(".gemini/config/hooks.json");
-    let mut config = read_json_object(&path)?.unwrap_or_default();
+    let mut errors = Vec::new();
+    for path in agy_hook_config_paths()? {
+        if let Err(error) = write_agy_bundle(&path, script) {
+            errors.push(format!("{}: {error}", path.display()));
+        }
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!(errors.join("; ")))
+    }
+}
+
+fn write_agy_bundle(path: &Path, script: &Path) -> anyhow::Result<()> {
+    let mut config = read_json_object(path)?.unwrap_or_default();
     apply_agy_bundle(&mut config, script);
-    write_json_object(&path, &config)
+    write_json_object(path, &config)
+}
+
+// Portable agy (Scoop `antigravity_cli_portable`) launches
+// `agy.exe --gemini_dir=<persist>\data\gemini` on every start. That flag
+// replaces `~/.gemini`, so a home-only hooks file never receives
+// PreInvocation or Stop and Alera stays without a running or finished state.
+fn agy_hook_config_paths() -> anyhow::Result<Vec<PathBuf>> {
+    let mut dirs = vec![home_dir()?.join(".gemini")];
+    for dir in discover_agy_gemini_dirs() {
+        if !dirs.iter().any(|existing| paths_equivalent(existing, &dir)) {
+            dirs.push(dir);
+        }
+    }
+    Ok(dirs
+        .into_iter()
+        .map(|dir| dir.join("config").join("hooks.json"))
+        .collect())
+}
+
+fn discover_agy_gemini_dirs() -> Vec<PathBuf> {
+    discover_agy_gemini_dirs_from(&agy_launchers_on_path())
+}
+
+fn discover_agy_gemini_dirs_from(launchers: &[PathBuf]) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    for launcher in launchers {
+        walk_agy_launcher(launcher, 0, &mut seen, &mut dirs);
+    }
+    dirs
+}
+
+fn walk_agy_launcher(
+    path: &Path,
+    depth: usize,
+    seen: &mut std::collections::BTreeSet<String>,
+    dirs: &mut Vec<PathBuf>,
+) {
+    if depth > 4 {
+        return;
+    }
+    let key = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    if !seen.insert(normalized_path_key(&key)) {
+        return;
+    }
+    if !is_agy_launcher_script(path) {
+        return;
+    }
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return;
+    };
+    if metadata.len() > 256 * 1024 {
+        return;
+    }
+    let Ok(contents) = std::fs::read_to_string(path) else {
+        return;
+    };
+    for dir in gemini_dirs_declared_by_launcher(path, &contents) {
+        if dir.is_absolute() && !dirs.iter().any(|existing| paths_equivalent(existing, &dir)) {
+            dirs.push(dir);
+        }
+    }
+    for next in launcher_follow_targets(&contents) {
+        if next.is_file() {
+            walk_agy_launcher(&next, depth + 1, seen, dirs);
+        }
+    }
+}
+
+fn agy_launchers_on_path() -> Vec<PathBuf> {
+    let Some(path) = std::env::var_os("PATH") else {
+        return Vec::new();
+    };
+    let extensions: Vec<String> = if cfg!(windows) {
+        std::env::var("PATHEXT")
+            .unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string())
+            .split(';')
+            .filter(|extension| !extension.is_empty())
+            .map(|extension| {
+                if extension.starts_with('.') {
+                    extension.to_string()
+                } else {
+                    format!(".{extension}")
+                }
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let mut found = Vec::new();
+    for directory in std::env::split_paths(&path) {
+        if extensions.is_empty() {
+            let candidate = directory.join("agy");
+            if candidate.is_file() {
+                found.push(candidate);
+            }
+            continue;
+        }
+        for extension in &extensions {
+            let candidate = directory.join(format!("agy{extension}"));
+            if candidate.is_file() {
+                found.push(candidate);
+            }
+        }
+    }
+    found
+}
+
+fn is_agy_launcher_script(path: &Path) -> bool {
+    match path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| extension.to_ascii_lowercase())
+    {
+        Some(extension) => matches!(extension.as_str(), "cmd" | "bat" | "ps1" | "sh"),
+        None => true,
+    }
+}
+
+fn gemini_dirs_declared_by_launcher(launcher: &Path, contents: &str) -> Vec<PathBuf> {
+    let script_dir = launcher.parent().unwrap_or_else(|| Path::new("."));
+    let dp0 = format!("{}{}", script_dir.display(), std::path::MAIN_SEPARATOR);
+    let mut variables = BTreeMap::new();
+    let mut dirs = Vec::new();
+    for raw_line in contents.lines() {
+        let line = raw_line.trim();
+        if let Some((name, value)) = parse_cmd_set(line) {
+            variables.insert(name, expand_cmd_vars(&value, &dp0, &variables));
+            continue;
+        }
+        if let Some(value) = gemini_dir_argument(line) {
+            let expanded = expand_cmd_vars(&value, &dp0, &variables);
+            let path = gemini_dir_path(expanded.trim_matches('"').trim());
+            if path.as_os_str().is_empty()
+                || path
+                    .components()
+                    .any(|component| component.as_os_str().to_string_lossy().contains('%'))
+            {
+                continue;
+            }
+            dirs.push(path);
+        }
+    }
+    dirs
+}
+
+fn parse_cmd_set(line: &str) -> Option<(String, String)> {
+    let rest = line
+        .strip_prefix("set ")
+        .or_else(|| line.strip_prefix("SET "))?;
+    let rest = rest.trim().trim_matches('"');
+    let (name, value) = rest.split_once('=')?;
+    let name = name.trim();
+    if name.is_empty() || name.contains(' ') || name.contains('%') {
+        return None;
+    }
+    Some((name.to_string(), value.to_string()))
+}
+
+fn gemini_dir_argument(line: &str) -> Option<String> {
+    let marker = "--gemini_dir";
+    let index = line.find(marker)?;
+    let rest = line[index + marker.len()..].trim_start();
+    let rest = rest.strip_prefix('=').unwrap_or(rest).trim_start();
+    if rest.is_empty() {
+        return None;
+    }
+    if let Some(quoted) = rest.strip_prefix('"') {
+        let end = quoted.find('"')?;
+        return Some(quoted[..end].to_string());
+    }
+    Some(
+        rest.split_whitespace()
+            .next()?
+            .trim_matches('\'')
+            .to_string(),
+    )
+}
+
+// `%~dp0` is the launcher directory. It is not a `%VAR%` reference: cmd does
+// not require a closing percent, which is how the portable wrapper writes
+// `set "AGY_PORTABLE_DATA_DIR=%~dp0data\gemini"`.
+fn expand_cmd_vars(value: &str, dp0: &str, variables: &BTreeMap<String, String>) -> String {
+    let chars: Vec<char> = value.chars().collect();
+    let mut expanded = String::new();
+    let mut index = 0;
+    while index < chars.len() {
+        if starts_with_ignore_ascii_case(&chars[index..], "%~dp0") {
+            expanded.push_str(dp0);
+            index += 5;
+            continue;
+        }
+        if chars[index] == '%' {
+            if let Some(end) = chars[index + 1..].iter().position(|char| *char == '%') {
+                let name: String = chars[index + 1..index + 1 + end].iter().collect();
+                if let Some(replacement) = variables.get(&name) {
+                    expanded.push_str(replacement);
+                } else {
+                    expanded.push('%');
+                    expanded.push_str(&name);
+                    expanded.push('%');
+                }
+                index += end + 2;
+                continue;
+            }
+        }
+        expanded.push(chars[index]);
+        index += 1;
+    }
+    expanded
+}
+
+fn gemini_dir_path(value: &str) -> PathBuf {
+    #[cfg(windows)]
+    {
+        PathBuf::from(value.replace('/', "\\"))
+    }
+    #[cfg(not(windows))]
+    {
+        PathBuf::from(value.replace('\\', "/"))
+    }
+}
+
+fn launcher_follow_targets(contents: &str) -> Vec<PathBuf> {
+    let mut targets = Vec::new();
+    for raw_line in contents.lines() {
+        let line = raw_line.trim();
+        if let Some(rest) = line
+            .strip_prefix("@rem ")
+            .or_else(|| line.strip_prefix("@REM "))
+        {
+            let path = PathBuf::from(rest.trim());
+            if !path.as_os_str().is_empty() {
+                targets.push(path);
+            }
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("@\"") {
+            if let Some(end) = rest.find('"') {
+                targets.push(PathBuf::from(&rest[..end]));
+            }
+        }
+    }
+    targets
+}
+
+fn paths_equivalent(left: &Path, right: &Path) -> bool {
+    normalized_path_key(left) == normalized_path_key(right)
+}
+
+fn normalized_path_key(path: &Path) -> String {
+    let text = path.to_string_lossy();
+    if cfg!(windows) {
+        text.to_ascii_lowercase()
+    } else {
+        text.into_owned()
+    }
+}
+
+fn starts_with_ignore_ascii_case(chars: &[char], token: &str) -> bool {
+    let token: Vec<char> = token.chars().collect();
+    chars.len() >= token.len()
+        && chars
+            .iter()
+            .zip(token.iter())
+            .all(|(char, expected)| char.eq_ignore_ascii_case(expected))
 }
 
 // Antigravity keeps each hook set under its own top-level key and uses two
@@ -319,6 +601,9 @@ fn native_windows_managed_command(script: &Path, agent: &str, event: &str) -> St
 pub(super) fn managed_command(script: &Path, agent: &str, event: &str) -> String {
     #[cfg(windows)]
     {
+        if agent == "agy" {
+            return agy_windows::managed_command(script, event);
+        }
         match windows_hook_execution_strategy(agent) {
             WindowsHookExecutionStrategy::NativeCmd => {
                 native_windows_managed_command(script, agent, event)

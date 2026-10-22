@@ -221,10 +221,73 @@ fn agy_bundle_keeps_user_entries_and_drops_alera_ones() {
     let stop = bundle["Stop"].as_array().expect("array");
     assert_eq!(stop.len(), 2, "one user handler plus one Alera handler");
     assert_eq!(stop[0]["command"], json!("echo user"));
-    assert!(stop[1]["command"]
-        .as_str()
-        .expect("command")
-        .contains("hook.sh"));
+    assert_eq!(
+        stop[1]["command"],
+        json!(managed_command(
+            Path::new("/home/user/.alera/agent-hooks/hook.sh"),
+            "agy",
+            "Stop"
+        ))
+    );
+}
+
+#[test]
+fn portable_agy_wrapper_redirects_gemini_dir_next_to_the_launcher() {
+    let root = tempfile::tempdir().unwrap();
+    let launcher = root.path().join("agy-portable.cmd");
+    std::fs::write(
+        &launcher,
+        "\
+@echo off
+setlocal
+set \"AGY_PORTABLE_DATA_DIR=%~dp0data\\gemini\"
+\"%~dp0agy.exe\" --gemini_dir=\"%AGY_PORTABLE_DATA_DIR%\" %*
+endlocal
+",
+    )
+    .unwrap();
+
+    let contents = std::fs::read_to_string(&launcher).unwrap();
+    assert_eq!(
+        gemini_dirs_declared_by_launcher(&launcher, &contents),
+        vec![root.path().join("data").join("gemini")]
+    );
+}
+
+#[test]
+fn agy_discovery_follows_a_scoop_shim_to_the_portable_wrapper() {
+    let root = tempfile::tempdir().unwrap();
+    let gemini = root.path().join("persist").join("gemini");
+    let wrapper = root.path().join("agy-portable.cmd");
+    let shim = root.path().join("agy.cmd");
+    std::fs::write(
+        &wrapper,
+        format!("agy.exe --gemini_dir=\"{}\" %*\n", gemini.display()),
+    )
+    .unwrap();
+    std::fs::write(
+        &shim,
+        format!(
+            "@rem {}\n@\"{}\" %*\n",
+            wrapper.display(),
+            wrapper.display()
+        ),
+    )
+    .unwrap();
+
+    assert_eq!(
+        discover_agy_gemini_dirs_from(std::slice::from_ref(&shim)),
+        vec![gemini]
+    );
+}
+
+#[test]
+fn agy_discovery_ignores_an_unexpanded_gemini_dir() {
+    let root = tempfile::tempdir().unwrap();
+    let launcher = root.path().join("agy.cmd");
+    std::fs::write(&launcher, "agy.exe --gemini_dir=\"%MISSING%\"\n").unwrap();
+
+    assert!(discover_agy_gemini_dirs_from(std::slice::from_ref(&launcher)).is_empty());
 }
 
 #[cfg(windows)]
