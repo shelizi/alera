@@ -275,6 +275,26 @@ class _BlockingDiffBlobBackend extends FakeGitBackend {
   }
 }
 
+class _DelayedFileDiffBackend extends FakeGitBackend {
+  final Map<String, Completer<GitDiffResult>> pending =
+      <String, Completer<GitDiffResult>>{};
+
+  @override
+  Future<GitDiffResult> diff({
+    required String path,
+    required String filePath,
+    required GitChangeArea area,
+    GitDiffWhitespaceMode whitespaceMode = GitDiffWhitespaceMode.normal,
+  }) =>
+      pending[filePath]?.future ??
+      super.diff(
+        path: path,
+        filePath: filePath,
+        area: area,
+        whitespaceMode: whitespaceMode,
+      );
+}
+
 class _ProgressiveAllDiffBackend extends FakeGitBackend {
   final Map<String, GitDiffResult> diffByFile = <String, GitDiffResult>{};
   final Map<String, Completer<void>> gates = <String, Completer<void>>{};

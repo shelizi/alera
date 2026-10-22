@@ -1,5 +1,16 @@
 part of 'workspace_git_diff_surface.dart';
 
+bool _hasEditableDiffBaseline(GitDiffFile file, _FullFileContents? contents) {
+  if (contents?.newDecoded == null) return false;
+  return switch (file.status) {
+    GitChangeStatus.added || GitChangeStatus.untracked => true,
+    GitChangeStatus.deleted => false,
+    // Failed or pending old-side hydration must never turn a modification
+    // into a synthetic all-added diff. Render the original patch instead.
+    _ => contents!.oldDecoded != null,
+  };
+}
+
 final class _SingleColumnDiffOverviewProjection {
   const _SingleColumnDiffOverviewProjection({
     required this.changes,
@@ -919,18 +930,19 @@ class _DiffRows {
           );
         }
         final editable = editableDocuments[file.path];
+        final editableContents = fullFileContents[file];
         if (sideBySide &&
             fileContentMode == GitDiffContentMode.fullFile &&
             editable != null &&
+            _hasEditableDiffBaseline(file, editableContents) &&
             onEditableChanged != null &&
             onEditableSave != null) {
-          final contents = fullFileContents[file];
           items.add(
             _WidgetDiffRow(
               _EditableWorkingTreeDiff(
                 file: file,
                 syntax: syntax,
-                baseline: contents?.oldDecoded?.content ?? '',
+                baseline: editableContents?.oldDecoded?.content ?? '',
                 document: editable,
                 whitespaceMode: whitespaceMode,
                 viewportHeight: editableViewportHeight,

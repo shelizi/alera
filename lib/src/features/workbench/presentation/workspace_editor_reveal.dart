@@ -272,6 +272,50 @@ int _displayUtf16OffsetForRawColumn({
   return utf16Offset;
 }
 
+@visibleForTesting
+bool workspaceEditorIsUnsupportedFileError(Object error) {
+  if (error is native.WorkspaceFileError) {
+    return error.kind == native.WorkspaceFileErrorKind.unsupported;
+  }
+  // CodeForge's native workspace source reports unsupported binary/size
+  // errors as strings rather than WorkspaceFileError. Distinguish these from
+  // missing files, permission failures and other actionable load failures.
+  final description = error.toString().toLowerCase();
+  return description.contains('binary-looking text content') ||
+      description.contains('unsupported text file size') ||
+      description.contains('unsupported detected text encoding') ||
+      description.contains('unsupported legacy text encoding');
+}
+
+class const WorkspaceEditorUnsupportedFileView({
+  super.key,
+  required this.onOpenWithDefaultApplication,
+}) extends StatelessWidget {
+  final VoidCallback onOpenWithDefaultApplication;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          Text(
+            context.tr('This file type is not supported by the editor.'),
+            style: Theme.of(context).textTheme.bodyMedium
+                ?.copyWith(color: AleraTokens.foregroundMuted),
+          ),
+          const SizedBox(height: AleraTokens.space12),
+          FilledButton.icon(
+            onPressed: onOpenWithDefaultApplication,
+            icon: const Icon(AleraIcons.external, size: 16),
+            label: Text(context.tr('Open with Default Application')),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class const _EditorMessage({required final String message})
     extends StatelessWidget {
   @override

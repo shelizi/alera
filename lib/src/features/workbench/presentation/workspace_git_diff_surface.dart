@@ -354,6 +354,9 @@ class _WorkspaceGitDiffSurfaceState
             child: _showReadingDiff && _readingDiffResult != null
                 ? ReadingDiffView(result: _readingDiffResult!)
                 : FutureBuilder<GitDiffResult>(
+                    // FutureBuilder retains the previous snapshot while the
+                    // next file's asynchronous diff is still pending.
+                    key: ValueKey<int>(_diffLoadGeneration),
                     future: _future,
                     builder: (context, snapshot) {
                       final result = _loadedResult ?? snapshot.data;

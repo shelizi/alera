@@ -1,6 +1,105 @@
 part of 'workspace_git_diff_surface_test.dart';
 
 void _registerWorkspaceGitDiffHorizontalResetTests() {
+  testWidgets(
+    'switching diff files never reuses the previous added-file result',
+    (tester) async {
+      const addedFile = GitDiffResult(
+        files: <GitDiffFile>[
+          GitDiffFile(
+            path: 'lib/added.dart',
+            area: .unstaged,
+            status: .added,
+            lines: <GitDiffLine>[GitDiffLine.addition('+previous added file')],
+          ),
+        ],
+      );
+      const modifiedFile = GitDiffResult(
+        files: <GitDiffFile>[
+          GitDiffFile(
+            path: 'lib/modified.dart',
+            area: .unstaged,
+            status: .modified,
+            lines: <GitDiffLine>[
+              GitDiffLine.deletion('-original content'),
+              GitDiffLine.addition('+updated content'),
+            ],
+          ),
+        ],
+      );
+      final backend = _DelayedFileDiffBackend()..gitDiffResult = addedFile;
+      await _pumpDiffSurface(
+        tester,
+        backend: backend,
+        tab: _diffTab(filePath: 'lib/added.dart', title: 'added.dart'),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('+previous added file'), findsOneWidget);
+
+      final pending = Completer<GitDiffResult>();
+      backend.pending['lib/modified.dart'] = pending;
+      await _pumpDiffSurface(
+        tester,
+        backend: backend,
+        tab: _diffTab(filePath: 'lib/modified.dart', title: 'modified.dart'),
+      );
+      await tester.pump();
+
+      expect(find.text('+previous added file'), findsNothing);
+      expect(find.byType(CircularProgressIndicator), findsWidgets);
+
+      pending.complete(modifiedFile);
+      await tester.pumpAndSettle();
+      expect(find.text('-original content'), findsOneWidget);
+      expect(find.text('+updated content'), findsOneWidget);
+      expect(find.text('+previous added file'), findsNothing);
+    },
+  );
+
+  testWidgets('modified diff without old blob never edits against empty base', (
+    tester,
+  ) async {
+    final backend = FakeGitBackend()
+      ..gitDiffResult = const GitDiffResult(
+        files: <GitDiffFile>[
+          GitDiffFile(
+            path: 'lib/modified.dart',
+            area: .unstaged,
+            status: .modified,
+            lines: <GitDiffLine>[
+              GitDiffLine.hunk('@@ -1 +1 @@'),
+              GitDiffLine.deletion('-original content'),
+              GitDiffLine.addition('+updated content'),
+            ],
+          ),
+        ],
+      )
+      ..diffBlobBytesBySide[(filePath: 'lib/modified.dart', oldSide: false)] =
+          Uint8List.fromList('updated content\n'.codeUnits);
+    await _pumpDiffSurface(
+      tester,
+      backend: backend,
+      workspaceFileService: _EditableDiffFileService(
+        content: 'updated content\n',
+      ),
+      tab: _diffTab(filePath: 'lib/modified.dart', title: 'modified.dart'),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Switch to Side-by-Side View'));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(
+        const ValueKey<String>(
+          'git-diff-working-tree-editor-x-scrollbar-lib/modified.dart',
+        ),
+      ),
+      findsNothing,
+    );
+    expect(find.text('original content'), findsOneWidget);
+    expect(find.text('updated content'), findsOneWidget);
+  });
+
   testWidgets('switching Git Diff files resets x offset despite long lines', (
     tester,
   ) async {

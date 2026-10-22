@@ -20,6 +20,7 @@ import 'package:alera/src/features/language_intelligence/application/language_se
 import 'package:alera/src/features/language_intelligence/domain/language_capability.dart';
 import 'package:alera/src/features/language_intelligence/domain/language_intelligence_settings.dart';
 import 'package:alera/src/features/language_intelligence/domain/source_location.dart';
+import 'package:alera/src/features/projects/application/project_providers.dart';
 import 'package:alera/src/features/settings/domain/editor_syntax_theme_catalog.dart';
 import 'package:alera/src/features/workbench/application/editor_autosave_controller.dart';
 import 'package:alera/src/features/workbench/application/workspace_file_preview_kind.dart';
@@ -31,6 +32,7 @@ import 'package:alera/src/features/workbench/domain/workspace_relative_path.dart
 import 'package:alera/src/features/workbench/domain/workspace_source_control_scope.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_git_file_compare.dart';
+import 'package:alera/src/features/workbench/presentation/terminal_path_drop.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_editor_save_perf.dart';
 import 'package:alera/src/rust/api/workspace_files.dart' as native;
 import 'package:alera/src/shared/infra/git/git_diff_models.dart';
@@ -345,7 +347,12 @@ class _WorkspaceEditorSurfaceState
     if (_loading) {
       content = const Center(child: CircularProgressIndicator());
     } else if (_loadError case final loadError?) {
-      content = _EditorMessage(message: _messageFor(loadError));
+      content = workspaceEditorIsUnsupportedFileError(loadError)
+          ? WorkspaceEditorUnsupportedFileView(
+              onOpenWithDefaultApplication: () =>
+                  unawaited(_openWithDefaultApplication(filePath)),
+            )
+          : _EditorMessage(message: _messageFor(loadError));
     } else {
       content = Stack(
         children: <Widget>[
@@ -526,6 +533,30 @@ class _WorkspaceEditorSurfaceState
       return () => widget.onOpenMarkdownViewerTab(filePath);
     }
     return null;
+  }
+
+  Future<void> _openWithDefaultApplication(String filePath) async {
+    try {
+      final result = await ref
+          .read(workspaceFolderOpenerProvider)
+          .openWithDefaultApplication(
+            terminalAbsolutePath(
+              rootPath: widget.workspace.path,
+              relativePath: filePath,
+            ),
+          );
+      if (!mounted || widget.tab.filePath != filePath || result.ok) return;
+      _showToast(
+        result.message ?? 'Could not open item with the default application.',
+        tone: .error,
+      );
+    } catch (_) {
+      if (!mounted || widget.tab.filePath != filePath) return;
+      _showToast(
+        'Could not open item with the default application.',
+        tone: .error,
+      );
+    }
   }
 
   Future<void> _openDiffForFile() async {

@@ -3,6 +3,7 @@ import 'dart:ui' as ui;
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_editor_surface.dart';
+import 'package:alera/src/rust/api/workspace_files.dart' as native;
 import 'package:alera/src/features/settings/domain/editor_syntax_theme_catalog.dart';
 import 'package:code_forge/code_forge.dart' as code_forge;
 import 'package:flutter/material.dart';
@@ -11,6 +12,62 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 
 void main() {
+  test('only unsupported editor load errors offer the default application', () {
+    expect(
+      workspaceEditorIsUnsupportedFileError(
+        const native.WorkspaceFileError(
+          kind: native.WorkspaceFileErrorKind.unsupported,
+          context: 'binary data',
+        ),
+      ),
+      isTrue,
+    );
+    expect(
+      workspaceEditorIsUnsupportedFileError(
+        Exception('binary-looking text content'),
+      ),
+      isTrue,
+    );
+    expect(
+      workspaceEditorIsUnsupportedFileError(
+        Exception('unsupported text file size 20000000 bytes'),
+      ),
+      isTrue,
+    );
+    expect(
+      workspaceEditorIsUnsupportedFileError(
+        const native.WorkspaceFileError(
+          kind: native.WorkspaceFileErrorKind.notFound,
+          context: 'missing',
+        ),
+      ),
+      isFalse,
+    );
+    expect(
+      workspaceEditorIsUnsupportedFileError(Exception('permission denied')),
+      isFalse,
+    );
+  });
+
+  testWidgets('unsupported file displays open-with-default action in center', (
+    tester,
+  ) async {
+    var opened = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: WorkspaceEditorUnsupportedFileView(
+            onOpenWithDefaultApplication: () => opened++,
+          ),
+        ),
+      ),
+    );
+    expect(find.text('Open with Default Application'), findsOneWidget);
+    expect(find.text('File operation failed'), findsNothing);
+    await tester.tap(find.text('Open with Default Application'));
+    expect(opened, 1);
+  });
+
   test('CodeForge shift pointer selection preserves its anchor', () {
     expect(
       code_forge.codeForgeShiftPointerSelection(
