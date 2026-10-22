@@ -1,5 +1,7 @@
 # Alera 單 Flutter Engine 多視窗原型 (Windows)
 
+> **更新**：200 次長跑、Release、雙 DPI、鍵盤、window_manager 相容性與主窗關閉行為的實測，請優先閱讀 [DEEP_TEST_RESULTS.md](DEEP_TEST_RESULTS.md)。本文件保留第一輪 PoC 的原始估算和結果。
+
 ## 隔離範圍
 
 - 工作樹：`.worktrees/fix-right-sidebar-20261020`
