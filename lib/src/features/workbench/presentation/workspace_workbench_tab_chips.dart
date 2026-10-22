@@ -41,9 +41,18 @@ class const _DraggableWorkspaceTabChip({
         // Keep the drag avatar's origin at the pointer so releasing just
         // outside the native HWND is recognized as an external drop.
         dragAnchorStrategy: pointerDragAnchorStrategy,
-        onDragStarted: tabDragController.begin,
+        onDragStarted: () {
+          tabDragController.begin();
+          // Flutter can only draw its avatar inside the Alera HWND.
+          unawaited(
+            detachedTabDragPreview.start(
+              session?.displayTitle ?? _workspaceTabTitle(tab),
+            ),
+          );
+        },
         onDragEnd: (details) async {
           tabDragController.finishAfterLayout();
+          unawaited(detachedTabDragPreview.stop());
           if (details.wasAccepted ||
               defaultTargetPlatform != TargetPlatform.windows) {
             return;
@@ -102,7 +111,10 @@ class const _DraggableWorkspaceTabChip({
                 }),
           );
         },
-        onDraggableCanceled: (_, _) => tabDragController.finishAfterLayout(),
+        onDraggableCanceled: (_, _) {
+          tabDragController.finishAfterLayout();
+          unawaited(detachedTabDragPreview.stop());
+        },
         data: _WorkspaceTabDragData(
           workspaceId: workspace.id,
           sourceGroupId: groupId,
@@ -261,6 +273,16 @@ class const _WorkspaceTabChip({
                   ),
                 ),
                 const SizedBox(width: AleraTokens.space4),
+                if (detachedTabWindows.isLaunching(tab.id)) ...<Widget>[
+                  const Tooltip(
+                    message: 'Opening separate window...',
+                    child: SizedBox.square(
+                      dimension: 12,
+                      child: CircularProgressIndicator(strokeWidth: 1.5),
+                    ),
+                  ),
+                  const SizedBox(width: AleraTokens.space4),
+                ],
                 if (tab.isPinned) ...<Widget>[
                   const Tooltip(
                     message: 'Pinned tab',
