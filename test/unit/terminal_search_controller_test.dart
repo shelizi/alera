@@ -1,7 +1,9 @@
 import 'package:alera/src/features/workbench/domain/terminal_search.dart';
 import 'package:alera/src/features/workbench/presentation/terminal_search_controller.dart';
+import 'package:alera/src/features/workbench/presentation/terminal_search_source.dart';
 import 'package:alera/src/features/workbench/presentation/terminal_xterm_buffer_model.dart';
 import 'package:alera/src/features/workbench/presentation/terminal_xterm_worker.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:xterm2/xterm.dart' as xterm;
 
@@ -39,6 +41,77 @@ void main() {
 
     expect(matches, hasLength(1));
     expect(matches.single.start, 6);
+  });
+
+  test('incremental tail updates preserve ordered results and selection', () {
+    final source = _MutableTerminalSearchSource([
+      'needle one',
+      'other',
+      'needle two needle',
+      'still plain',
+    ]);
+    final controller = TerminalSearchController.fromSource(
+      source: source,
+      scrollToLine: (_) {},
+    );
+    addTearDown(controller.dispose);
+    addTearDown(source.dispose);
+
+    controller
+      ..open()
+      ..setQuery('needle')
+      ..next();
+    final selected = controller.selectedMatch;
+    expect((selected?.lineIndex, selected?.start), (2, 0));
+
+    source.append('more needle needle');
+    expect(
+      [for (final match in controller.matches) (match.lineIndex, match.start)],
+      [(0, 0), (2, 0), (2, 11), (4, 5), (4, 12)],
+    );
+    expect(controller.selectedMatch?.lineId, same(selected?.lineId));
+    expect(controller.selectedMatchNumber, 2);
+
+    // Same-height TUI rewrites may remove and later add a suffix hit.
+    source.rewriteTail('other output');
+    expect(controller.matchCount, 3);
+    expect(controller.selectedMatchNumber, 2);
+    source.rewriteTail('needle tail');
+    expect(controller.matchCount, 4);
+    expect(controller.matches.last.start, 0);
+  });
+
+  test('same-height scrollback head trim falls back to corrected indices', () {
+    final source = _MutableTerminalSearchSource([
+      'needle dropped',
+      'needle retained',
+      'plain',
+      'needle tail',
+    ]);
+    final controller = TerminalSearchController.fromSource(
+      source: source,
+      scrollToLine: (_) {},
+    );
+    addTearDown(controller.dispose);
+    addTearDown(source.dispose);
+
+    controller
+      ..open()
+      ..setQuery('needle')
+      ..next();
+    final retained = controller.selectedMatch;
+    expect(retained?.lineIndex, 1);
+
+    // The first line ID changes without reducing buffer height. Treating
+    // this as an append would leave every older lineIndex stale.
+    source.trimHeadAndAppend('needle newest');
+    expect(
+      [for (final match in controller.matches) match.lineIndex],
+      [0, 2, 3],
+    );
+    expect(controller.selectedMatch?.lineId, same(retained?.lineId));
+    expect(controller.selectedMatch?.lineIndex, 0);
+    expect(controller.selectedMatchNumber, 1);
   });
 
   test('navigates matches and wraps in both directions', () {
@@ -302,6 +375,70 @@ void main() {
       expect(controller.needsFullRefreshForTesting, isFalse);
     },
   );
+}
+
+final class _MutableTerminalSearchLine {
+  _MutableTerminalSearchLine(this.text, this.index);
+
+  String text;
+  int index;
+}
+
+final class _MutableTerminalSearchSource extends ChangeNotifier
+    implements TerminalSearchSource {
+  _MutableTerminalSearchSource(List<String> rows)
+    : lines = [
+        for (var i = 0; i < rows.length; i++)
+          _MutableTerminalSearchLine(rows[i], i),
+      ];
+
+  final List<_MutableTerminalSearchLine> lines;
+  final Object _identity = Object();
+
+  @override
+  int get height => lines.length;
+
+  @override
+  int get viewHeight => 3;
+
+  @override
+  int get viewWidth => 80;
+
+  @override
+  Object get bufferIdentity => _identity;
+
+  @override
+  Object lineIdAt(int index) => lines[index];
+
+  @override
+  String lineTextAt(int index) => lines[index].text;
+
+  @override
+  int? lineIndexOf(Object id) {
+    if (id is! _MutableTerminalSearchLine) return null;
+    final index = id.index;
+    if (index < 0 || index >= height) return null;
+    return identical(lines[index], id) ? index : null;
+  }
+
+  void append(String text) {
+    lines.add(_MutableTerminalSearchLine(text, lines.length));
+    notifyListeners();
+  }
+
+  void rewriteTail(String text) {
+    lines.last.text = text;
+    notifyListeners();
+  }
+
+  void trimHeadAndAppend(String text) {
+    lines.removeAt(0).index = -1;
+    for (var i = 0; i < lines.length; i++) {
+      lines[i].index = i;
+    }
+    lines.add(_MutableTerminalSearchLine(text, lines.length));
+    notifyListeners();
+  }
 }
 
 xterm.Terminal _terminal() {
