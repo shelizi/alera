@@ -35,6 +35,11 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   // activate (or replace) the primary Alera window.
   std::vector<std::string> command_line_arguments = GetCommandLineArguments();
   const bool detached_tab = IsDetachedChildInvocation(command_line_arguments);
+  // An exact, explicit argument only. Still participates in the normal
+  // primary instance gate and never overrides a detached child invocation.
+  const bool experimental_shared_engine =
+      !detached_tab && command_line_arguments.size() == 1 &&
+      command_line_arguments[0] == "--alera-shared-engine-tabs";
   Win32SingleInstance single_instance(
       detached_tab ? std::wstring(ALERA_APP_ID) + L".detached." +
                          std::to_wstring(GetCurrentProcessId())
@@ -67,7 +72,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
 
   project.set_dart_entrypoint_arguments(std::move(command_line_arguments));
 
-  FlutterWindow window(project);
+  FlutterWindow window(project, experimental_shared_engine);
   Win32Window::Point origin(10, 10);
   Win32Window::Size size(1280, 720);
   if (detached_tab) {
