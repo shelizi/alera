@@ -80,8 +80,13 @@ class const _DraggableWorkspaceTabChip({
               detachedTabWindows.isLaunching(tab.id)) {
             return;
           }
+          final descriptor = DetachedTabDescriptor(
+            workspace: workspace,
+            tab: tab,
+          );
+          final sharesSession = detachedTabWindows.willShareSession(descriptor);
           final registry = ref.read(editorSessionRegistryProvider);
-          if (registry.isDirty(tab.id)) {
+          if (!sharesSession && registry.isDirty(tab.id)) {
             AleraToast.publish(
               message: 'Save this file before detaching its tab.',
             );
@@ -92,13 +97,14 @@ class const _DraggableWorkspaceTabChip({
           }
           unawaited(
             detachedTabWindows
-                .detach(DetachedTabDescriptor(workspace: workspace, tab: tab))
+                .detach(descriptor)
                 .then((created) {
                   if (!created) {
                     AleraToast.publish(
                       message: 'Could not open detached window.',
                     );
-                  } else if (tab.kind == WorkspaceTabKind.terminal) {
+                  } else if (!sharesSession &&
+                      tab.kind == WorkspaceTabKind.terminal) {
                     // Keep the PTY alive in the shared terminal host, but
                     // release the primary process renderer/attachment.
                     terminalRuntime.releaseTab(tab.id);

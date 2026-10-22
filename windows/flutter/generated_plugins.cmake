@@ -6,6 +6,7 @@ list(APPEND FLUTTER_PLUGIN_LIST
   desktop_drop
   desktop_updater
   file_selector_windows
+  multiview_desktop
   pasteboard
   record_windows
   screen_retriever_windows

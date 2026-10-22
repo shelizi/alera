@@ -7,4 +7,22 @@ void main() {
     // and their native/database initialization tear-offs have valid types.
     expect(app.main, isNotNull);
   });
+
+  test('single-engine option must exactly match native runner invocation', () {
+    expect(
+      app.isExperimentalSharedEngineTabsInvocation(const [
+        '--alera-shared-engine-tabs',
+      ]),
+      isTrue,
+    );
+    for (final arguments in <List<String>>[
+      const [],
+      const ['--alera-shared-engine-tabs=1'],
+      const ['--alera-shared-engine-tabs', '--extra'],
+      const ['--extra', '--alera-shared-engine-tabs'],
+      const ['--alera-detached-tab', '5123', 'token'],
+    ]) {
+      expect(app.isExperimentalSharedEngineTabsInvocation(arguments), isFalse);
+    }
+  });
 }

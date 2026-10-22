@@ -253,7 +253,13 @@ extension _WorkspaceTabMenu on _WorkspaceTabChip {
       case _TabMenuAction.openExternalTerminal:
         await onOpenExternalTerminal?.call(tab);
       case _TabMenuAction.detachWindow:
-        if (ref.read(editorSessionRegistryProvider).isDirty(tab.id)) {
+        final descriptor = DetachedTabDescriptor(
+          workspace: workspace,
+          tab: tab,
+        );
+        final sharesSession = detachedTabWindows.willShareSession(descriptor);
+        if (!sharesSession &&
+            ref.read(editorSessionRegistryProvider).isDirty(tab.id)) {
           AleraToast.publish(
             message: 'Save this file before moving it to a new window.',
             tone: AleraToastTone.error,
@@ -264,15 +270,13 @@ extension _WorkspaceTabMenu on _WorkspaceTabChip {
           _KeepPreviewTabScope.maybeOf(context)?.call(tab.id);
         }
         try {
-          final created = await detachedTabWindows.detach(
-            DetachedTabDescriptor(workspace: workspace, tab: tab),
-          );
+          final created = await detachedTabWindows.detach(descriptor);
           if (!created) {
             AleraToast.publish(
               message: 'Could not open detached window.',
               tone: AleraToastTone.error,
             );
-          } else if (tab.kind == WorkspaceTabKind.terminal) {
+          } else if (!sharesSession && tab.kind == WorkspaceTabKind.terminal) {
             ref.read(terminalRuntimeProvider).releaseTab(tab.id);
           }
         } on Object catch (error) {

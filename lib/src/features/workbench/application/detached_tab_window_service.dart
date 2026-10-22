@@ -56,6 +56,18 @@ typedef DetachedTabProcessStarter = Future<void> Function(
   String token,
 );
 
+/// An opt-in single-engine window backend. Unlike the process-backed
+/// launcher it shares the main ProviderScope, EditorSessionRegistry and
+/// TerminalRuntime. Unsupported tab kinds must still use the established
+/// process-backed implementation.
+abstract interface class SharedEngineDetachedTabBackend implements Listenable {
+  bool supports(DetachedTabDescriptor descriptor);
+  Future<bool> detach(DetachedTabDescriptor descriptor);
+  Set<String> get detachedTabIds;
+  bool isDetached(String tabId);
+  bool isLaunching(String tabId);
+}
+
 /// Tests may supply a fake launcher; production opens the same exe in a new
 /// native Windows process. Each child uses its own single-instance identity.
 Future<void> startDetachedTabProcess(int port, String token) async {
@@ -83,6 +95,25 @@ class DetachedTabWindowService extends ChangeNotifier {
   final DetachedTabProcessStarter _starter;
   final Duration _timeout;
   final Duration _initializationTimeout;
+  SharedEngineDetachedTabBackend? _sharedBackend;
+
+  /// This remains disabled unless a Windows experimental multi-view root has
+  /// actually been installed. Never choose this backend in ordinary runApp.
+  void useExperimentalSharedBackend(SharedEngineDetachedTabBackend? backend) {
+    if (_disposed) throw StateError('DetachedTabWindowService is disposed');
+    if (identical(_sharedBackend, backend)) return;
+    _sharedBackend?.removeListener(_notifySharedBackend);
+    _sharedBackend = backend;
+    _sharedBackend?.addListener(_notifySharedBackend);
+    notifyListeners();
+  }
+
+  void _notifySharedBackend() {
+    if (!_disposed) notifyListeners();
+  }
+
+  bool willShareSession(DetachedTabDescriptor descriptor) =>
+      _sharedBackend?.supports(descriptor) ?? false;
 
   /// Navigation is routed to the primary workbench. Child windows never
   /// create duplicate workspace tab records.
@@ -95,11 +126,26 @@ class DetachedTabWindowService extends ChangeNotifier {
   final Set<String> _pending = {};
   bool _disposed = false;
 
-  Set<String> get detachedTabIds => Set.unmodifiable(_active.keys);
-  bool isDetached(String tabId) => _active.containsKey(tabId);
-  bool isLaunching(String tabId) => _pending.contains(tabId);
+  Set<String> get detachedTabIds => Set.unmodifiable(<String>{
+    ..._active.keys,
+    ...?_sharedBackend?.detachedTabIds,
+  });
+  bool isDetached(String tabId) =>
+      _active.containsKey(tabId) ||
+      (_sharedBackend?.isDetached(tabId) ?? false);
+  bool isLaunching(String tabId) =>
+      _pending.contains(tabId) || (_sharedBackend?.isLaunching(tabId) ?? false);
 
   Future<bool> detach(DetachedTabDescriptor descriptor) async {
+    final shared = _sharedBackend;
+    if (shared != null && shared.supports(descriptor)) {
+      if (_disposed ||
+          isDetached(descriptor.tab.id) ||
+          isLaunching(descriptor.tab.id)) {
+        return false;
+      }
+      return shared.detach(descriptor);
+    }
     final tabId = descriptor.tab.id;
     if (_disposed || _active.containsKey(tabId) || !_pending.add(tabId)) {
       return false;
@@ -288,6 +334,8 @@ class DetachedTabWindowService extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    _sharedBackend?.removeListener(_notifySharedBackend);
+    _sharedBackend = null;
     // Closing a socket can synchronously invoke its onDone listener, which
     // removes the entry from _active. Iterate over a stable snapshot so
     // closing the primary Alera process never throws a ConcurrentModification.

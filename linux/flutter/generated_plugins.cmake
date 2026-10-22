@@ -6,6 +6,7 @@ list(APPEND FLUTTER_PLUGIN_LIST
   desktop_drop
   desktop_updater
   file_selector_linux
+  multiview_desktop
   pasteboard
   record_linux
   screen_retriever_linux
