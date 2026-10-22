@@ -11,6 +11,20 @@
 #include "win32_file_drag.h"
 #include "win32_rich_clipboard.h"
 
+namespace {
+std::wstring PreviewTitleFromUtf8(const std::string& utf8) {
+  if (utf8.empty()) return L"Tab";
+  const int size = ::MultiByteToWideChar(
+      CP_UTF8, MB_ERR_INVALID_CHARS, utf8.data(),
+      static_cast<int>(utf8.size()), nullptr, 0);
+  if (size <= 0) return L"Tab";
+  std::wstring title(size, L'\0');
+  ::MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, utf8.data(),
+                        static_cast<int>(utf8.size()), title.data(), size);
+  return title;
+}
+}  // namespace
+
 FlutterWindow::FlutterWindow(const flutter::DartProject& project)
     : project_(project) {}
 
@@ -96,6 +110,27 @@ bool FlutterWindow::OnCreate() {
       [this](const flutter::MethodCall<flutter::EncodableValue>& call,
              std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>>
                  result) {
+        if (call.method_name() == "startDragPreview") {
+          std::wstring title = L"Tab";
+          if (const auto* arguments =
+                  std::get_if<flutter::EncodableMap>(call.arguments())) {
+            auto found = arguments->find(flutter::EncodableValue("title"));
+            if (found != arguments->end()) {
+              if (const auto* utf8 =
+                      std::get_if<std::string>(&found->second)) {
+                title = PreviewTitleFromUtf8(*utf8);
+              }
+            }
+          }
+          tab_drag_preview_.Start(GetHandle(), title);
+          result->Success();
+          return;
+        }
+        if (call.method_name() == "stopDragPreview") {
+          tab_drag_preview_.Stop();
+          result->Success();
+          return;
+        }
         if (call.method_name() != "isCursorOverWindow") {
           result->NotImplemented();
           return;
@@ -121,6 +156,7 @@ bool FlutterWindow::OnCreate() {
 }
 
 void FlutterWindow::OnDestroy() {
+  tab_drag_preview_.Stop();
   flutter_view_ready_ = false;
   flutter_view_hwnd_ = nullptr;
   detached_tab_channel_.reset();

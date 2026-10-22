@@ -6,6 +6,7 @@ import 'dart:math';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 import 'package:flutter/foundation.dart';
+import 'package:logging/logging.dart';
 
 /// A view onto a tab that belongs to the main Alera instance.
 /// The record itself stays in the workbench database and is never closed.
@@ -74,11 +75,14 @@ class DetachedTabWindowService extends ChangeNotifier {
   DetachedTabWindowService({
     DetachedTabProcessStarter starter = startDetachedTabProcess,
     Duration handshakeTimeout = const Duration(seconds: 45),
+    Duration initializationTimeout = const Duration(minutes: 2),
   }) : _starter = starter,
-       _timeout = handshakeTimeout;
+       _timeout = handshakeTimeout,
+       _initializationTimeout = initializationTimeout;
 
   final DetachedTabProcessStarter _starter;
   final Duration _timeout;
+  final Duration _initializationTimeout;
 
   /// Navigation is routed to the primary workbench. Child windows never
   /// create duplicate workspace tab records.
@@ -100,9 +104,19 @@ class DetachedTabWindowService extends ChangeNotifier {
     if (_disposed || _active.containsKey(tabId) || !_pending.add(tabId)) {
       return false;
     }
+    // The original tab remains visible until READY, but its chip needs to
+    // acknowledge the drag immediately rather than appear to do nothing.
+    notifyListeners();
+    // Capture user-observable drop-to-ready time, including process creation
+    // and Flutter engine startup which occur before child Dart tracing starts.
+    final launchClock = Stopwatch()..start();
+    int? processStartedMs;
+    int? connectedMs;
+    int? previewVisibleMs;
     ServerSocket? server;
     Socket? socket;
     StreamSubscription<Socket>? accepting;
+    Timer? readyDeadline;
     try {
       server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
       // Subscribe before launching: a failing child must not leave a
@@ -125,8 +139,17 @@ class DetachedTabWindowService extends ChangeNotifier {
         (_) => Random.secure().nextInt(256),
       ).map((byte) => byte.toRadixString(16).padLeft(2, '0')).join();
       await _starter(server.port, token);
+      processStartedMs = launchClock.elapsedMilliseconds;
       socket = await connection.future.timeout(_timeout);
+      connectedMs = launchClock.elapsedMilliseconds;
       final ready = Completer<void>();
+      readyDeadline = Timer(_timeout, () {
+        if (!ready.isCompleted) {
+          ready.completeError(
+            TimeoutException('Detached window did not start', _timeout),
+          );
+        }
+      });
       var authenticated = false;
       var active = false;
       final connected = socket;
@@ -150,11 +173,43 @@ class DetachedTabWindowService extends ChangeNotifier {
                 connected.writeln(jsonEncode(descriptor.toJson()));
               } else if (!active && message == 'READY') {
                 active = true;
+                final totalMs = launchClock.elapsedMilliseconds;
+                Logger('DetachedTabStartup').info(
+                  'tab kind=${descriptor.tab.kind.name} '
+                  'processStartMs=${processStartedMs ?? -1} '
+                  'connectMs=${connectedMs ?? -1} '
+                  'firstFrameMs=${previewVisibleMs ?? -1} '
+                  'contentReadyMs=$totalMs',
+                );
                 if (!_disposed) {
                   _active[tabId] = connected;
                   notifyListeners();
                 }
                 if (!ready.isCompleted) ready.complete();
+              } else if (!active && message == 'LOADING') {
+                previewVisibleMs ??= launchClock.elapsedMilliseconds;
+                // The child has already painted its native window but may
+                // still be waiting for cold Rust/SQLite startup. A separate
+                // bounded deadline prevents a late but valid child from
+                // becoming an orphan after the initial 45-second handshake.
+                readyDeadline?.cancel();
+                readyDeadline = Timer(_initializationTimeout, () {
+                  if (!ready.isCompleted) {
+                    ready.completeError(
+                      TimeoutException(
+                        'Detached tab initialization did not finish',
+                        _initializationTimeout,
+                      ),
+                    );
+                  }
+                });
+              } else if (!active && message == 'FAILED') {
+                if (!ready.isCompleted) {
+                  ready.completeError(
+                    StateError('Detached window could not initialize'),
+                  );
+                }
+                connected.destroy();
               } else if (message == 'DOCK') {
                 connected.destroy();
               } else if (active && message == 'DOCK_QUERY') {
@@ -212,10 +267,11 @@ class DetachedTabWindowService extends ChangeNotifier {
               _finish(tabId, connected);
             },
           );
-      await ready.future.timeout(_timeout);
+      await ready.future;
       return !_disposed && _active[tabId] == connected;
     } finally {
-      _pending.remove(tabId);
+      readyDeadline?.cancel();
+      if (_pending.remove(tabId) && !_disposed) notifyListeners();
       await accepting?.cancel();
       await server?.close();
       if (!_active.containsKey(tabId)) socket?.destroy();
@@ -322,6 +378,14 @@ class DetachedTabWindowClient {
   }
 
   void ready() => _socket.writeln('READY');
+
+  /// Sent when the child has painted its own window but before native
+  /// editor/terminal initialization, which can be slow on cold Windows boots.
+  void loading() => _socket.writeln('LOADING');
+
+  /// Fail promptly instead of leaving the original tab pending for the full
+  /// handshake timeout when native initialization fails after the preview.
+  void failed() => _socket.writeln('FAILED');
 
   /// Request opening a linked file in the primary workbench model.
   void requestOpenFile(String relativePath) {

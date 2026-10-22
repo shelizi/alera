@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:alera/src/app/app.dart';
 import 'package:alera/src/features/workbench/application/detached_tab_window_service.dart';
+import 'package:alera/src/features/workbench/application/detached_tab_bootstrap.dart';
 import 'package:alera/src/features/workbench/presentation/detached_tab_child_app.dart';
 import 'package:window_manager/window_manager.dart';
 import 'package:alera/src/app/resource_manager_terminal_composition.dart';
@@ -19,6 +20,7 @@ import 'package:code_forge/code_forge.dart' as code_forge;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:ghostty_vte_flutter/ghostty_vte_flutter.dart';
+import 'package:logging/logging.dart';
 
 Future<void> main(List<String> args) async {
   await runZonedGuarded<Future<void>>(() => _bootstrap(args), recordZoneError);
@@ -31,37 +33,20 @@ Future<void> _bootstrap(List<String> args) async {
 
   final detachedArgs = DetachedTabLaunchArguments.parse(args);
   if (detachedArgs != null) {
-    await AppLogger.configure();
-    installGlobalErrorHandlers();
-    await RustLib.init();
-    await code_forge.RustLib.init();
-    await initializeGhosttyVteWeb();
+    // Connect before Rust/SQLite initialization: the native HWND used to
+    // remain invisible until *all* of that work finished. Flutter can paint
+    // a small initial scene immediately and finish native initialization
+    // while the user sees which tab is opening.
     final client = await DetachedTabWindowClient.connect(detachedArgs);
-    // Match the primary window's synchronous bootstrap provider contract.
-    // Without this, settingsRepositoryProvider reads AsyncLoading on the
-    // child window's first frame, before the database has opened.
-    final childDatabase = await openAleraDb();
-    await windowManager.ensureInitialized();
-    await windowManager.setTitle('Alera - ' + client.descriptor.tab.title);
-    await windowManager.setPreventClose(true);
-    runApp(
-      ProviderScope(
-        observers: const <ProviderObserver>[LoggingProviderObserver()],
-        overrides: [
-          resourceManagerTerminalBindingOverride(),
-          terminalRuntimeBindingOverride(),
-          runtimeHostWindowExitOverride(),
-          aleraDatabaseProvider.overrideWith((ref) {
-            ref.onDispose(() async {
-              await childDatabase.close();
-            });
-            return childDatabase;
-          }),
-        ],
-        child: DetachedTabChildApp(client: client),
-      ),
-    );
-    WidgetsBinding.instance.addPostFrameCallback((_) => client.ready());
+    // The Win32 runner already has a usable HWND and temporary Alera title.
+    // Defer plugin window setup until after the first visible Flutter frame.
+    AleraPerformanceTrace.recordFirstFrame();
+    runApp(DetachedTabStartupApp(title: client.descriptor.tab.title));
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      AleraPerformanceTrace.mark('detached_preview_first_frame');
+      client.loading();
+      unawaited(_finishDetachedTabInitialization(client));
+    });
     return;
   }
   // Logging comes up before anything that can fail. It used to run after both
@@ -72,6 +57,91 @@ Future<void> _bootstrap(List<String> args) async {
 
   // Privacy portable build: do not initialize the Sentry SDK at all.
   await _startApp();
+}
+
+Future<void> _finishDetachedTabInitialization(
+  DetachedTabWindowClient client,
+) async {
+  AleraDatabase? childDatabase;
+  final elapsed = Stopwatch()..start();
+  try {
+    installGlobalErrorHandlers();
+    // File-backed logging, window plugin setup, both independent Rust
+    // engines and SQLite now start together, without serializing the cold
+    // Rust/DB path behind a platform directory lookup for the log sink.
+    childDatabase = await initializeDetachedTabDependencies<AleraDatabase>(
+      kind: client.descriptor.tab.kind,
+      configureLogging: () => AleraPerformanceTrace.measureAsync(
+        'detached_logger_init',
+        AppLogger.configure,
+      ),
+      initializeWindow: () =>
+          AleraPerformanceTrace.measureAsync('detached_window_setup', () async {
+            await windowManager.ensureInitialized();
+            await windowManager.setTitle(
+              'Alera - ' + client.descriptor.tab.title,
+            );
+          }),
+      initializeAleraRust: () => AleraPerformanceTrace.measureAsync(
+        'detached_alera_rust_init',
+        RustLib.init,
+      ),
+      initializeCodeForge: () => AleraPerformanceTrace.measureAsync(
+        'detached_code_forge_rust_init',
+        code_forge.RustLib.init,
+      ),
+      openDatabase: () => AleraPerformanceTrace.measureAsync(
+        'detached_database_open',
+        openAleraDb,
+      ),
+      closeDatabase: (database) => database.close(),
+    );
+    // Keep the synchronous provider contract for the actual editor widget.
+    // Only the lightweight initial frame is rendered without the database.
+    final readyDatabase = childDatabase!;
+    await windowManager.setPreventClose(true);
+    Logger('DetachedTabStartup')
+        .info('Native tab initialized in ${elapsed.elapsedMilliseconds}ms');
+    runApp(
+      ProviderScope(
+        observers: const <ProviderObserver>[LoggingProviderObserver()],
+        overrides: [
+          resourceManagerTerminalBindingOverride(),
+          terminalRuntimeBindingOverride(),
+          runtimeHostWindowExitOverride(),
+          aleraDatabaseProvider.overrideWith((ref) {
+            ref.onDispose(() async {
+              await readyDatabase.close();
+            });
+            return readyDatabase;
+          }),
+        ],
+        child: DetachedTabChildApp(client: client),
+      ),
+    );
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      AleraPerformanceTrace.mark('detached_content_first_frame');
+      client.ready();
+    });
+  } catch (error, stackTrace) {
+    Logger('DetachedTabStartup').warning(
+      'Failed after ${elapsed.elapsedMilliseconds}ms',
+      error,
+      stackTrace,
+    );
+    try {
+      client.failed();
+    } catch (_) {
+      // The parent may already have closed the launch socket.
+    }
+    // The coordinator already closes a DB opened during a failed parallel
+    // task. This only covers failures after a fully successful bootstrap
+    // (for example setPreventClose or building the actual app).
+    await childDatabase?.close();
+    runApp(
+      DetachedTabStartupApp(title: client.descriptor.tab.title, failed: true),
+    );
+  }
 }
 
 Future<void> _startApp() async {

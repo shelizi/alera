@@ -9,6 +9,7 @@
 #include <memory>
 
 #include "win32_desktop_presence.h"
+#include "win32_tab_drag_preview.h"
 #include "win32_window.h"
 
 // A window that does nothing but host a Flutter view.
@@ -50,6 +51,7 @@ class FlutterWindow : public Win32Window {
   // Native hit testing for docking a detached tab over the primary HWND.
   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>>
       detached_tab_channel_;
+  Win32TabDragPreview tab_drag_preview_;
 };
 
 #endif  // RUNNER_FLUTTER_WINDOW_H_

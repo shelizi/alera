@@ -16,6 +16,7 @@ add_executable(${BINARY_NAME} WIN32
   "win32_file_drag.cpp"
   "win32_rich_clipboard.cpp"
   "win32_single_instance.cpp"
+  "win32_tab_drag_preview.cpp"
   "win32_window.cpp"
   "${FLUTTER_MANAGED_DIR}/generated_plugin_registrant.cc"
   "Runner.rc"

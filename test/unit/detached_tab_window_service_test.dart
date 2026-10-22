@@ -65,6 +65,48 @@ void main() {
     expect(service.isLaunching('file-tab'), isFalse);
   });
 
+  test(
+    'launch state notifies immediately and clears after a failed start',
+    () async {
+      final launch = Completer<void>();
+      final service = DetachedTabWindowService(
+        starter: (_, _) => launch.future,
+      );
+      addTearDown(service.dispose);
+      final states = <bool>[];
+      service.addListener(() => states.add(service.isLaunching('file-tab')));
+
+      final detach = service.detach(descriptor());
+      expect(service.isLaunching('file-tab'), isTrue);
+      expect(states, <bool>[true]);
+      launch.completeError(StateError('failed before the child connected'));
+      await expectLater(detach, throwsStateError);
+      expect(states, <bool>[true, false]);
+      expect(service.isDetached('file-tab'), isFalse);
+    },
+  );
+
+  test(
+    'child startup failure returns promptly without hiding the tab',
+    () async {
+      final service = DetachedTabWindowService(
+        starter: (port, token) async {
+          // The starter returns after creating the process, not after the
+          // parent has completed its descriptor handshake.
+          unawaited(
+            DetachedTabWindowClient.connect(
+              DetachedTabLaunchArguments(port, token),
+            ).then((client) => client.failed()),
+          );
+        },
+      );
+      addTearDown(service.dispose);
+      await expectLater(service.detach(descriptor()), throwsStateError);
+      expect(service.isLaunching('file-tab'), isFalse);
+      expect(service.isDetached('file-tab'), isFalse);
+    },
+  );
+
   test('handshake hides only after child READY and restores on dock', () async {
     final childResult = Completer<DetachedTabWindowClient>();
     final service = DetachedTabWindowService(
@@ -111,6 +153,35 @@ void main() {
     }
     expect(service.isDetached('file-tab'), isFalse);
   });
+
+  test(
+    'first frame keeps cold native startup alive past handshake deadline',
+    () async {
+      final childResult = Completer<DetachedTabWindowClient>();
+      final service = DetachedTabWindowService(
+        handshakeTimeout: const Duration(milliseconds: 100),
+        initializationTimeout: const Duration(seconds: 2),
+        starter: (port, token) async {
+          unawaited(
+            DetachedTabWindowClient.connect(
+              DetachedTabLaunchArguments(port, token),
+            ).then(childResult.complete, onError: childResult.completeError),
+          );
+        },
+      );
+      addTearDown(service.dispose);
+
+      final opening = service.detach(descriptor());
+      final child = await childResult.future;
+      child.loading();
+      await Future<void>.delayed(const Duration(milliseconds: 180));
+      expect(service.isLaunching('file-tab'), isTrue);
+      expect(service.isDetached('file-tab'), isFalse);
+      child.ready();
+      expect(await opening, isTrue);
+      await child.dock();
+    },
+  );
 
   test('child can close after the primary process disconnects', () async {
     final childResult = Completer<DetachedTabWindowClient>();
