@@ -27,7 +27,44 @@ void main() {
       'sinceDay': '2026-08-04',
       'untilDay': '2026-08-10',
       'includeGrok': true,
+      'claudeDefaultEnabled': true,
+      'claudeProfiles': <Map<String, String>>[],
     });
+  });
+
+  test('local usage also sends selected Claude profiles', () async {
+    final runtime = _RecordingRuntimeHostClient();
+    final loader = RuntimeAgentUsageLoader(
+      runtime,
+      _RecordingRuntimeProxyClient(),
+    );
+    await loader.fetch(
+      const AgentUsageRequest(
+        hostId: 'local',
+        target: null,
+        settings: AgentQuotaHostSettings(
+          claudeDefaultShowInUsage: false,
+          claudeProfiles: <ClaudeQuotaProfileSettings>[
+            ClaudeQuotaProfileSettings(
+              alias: 'dev',
+              profile: 'engineering',
+              usageDisplayName: 'Engineering',
+            ),
+            ClaudeQuotaProfileSettings(
+              alias: 'hidden',
+              profile: 'hidden',
+              showInUsage: false,
+            ),
+          ],
+        ),
+        sinceDay: '2026-10-01',
+        untilDay: '2026-10-22',
+      ),
+    );
+    expect(runtime.payload['claudeDefaultEnabled'], isFalse);
+    expect(runtime.payload['claudeProfiles'], <Object?>[
+      <String, String>{'alias': 'Engineering', 'profile': 'engineering'},
+    ]);
   });
 
   test(

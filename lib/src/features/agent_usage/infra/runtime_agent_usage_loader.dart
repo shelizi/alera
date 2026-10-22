@@ -12,6 +12,15 @@ class const RuntimeAgentUsageLoader(
       'sinceDay': request.sinceDay,
       'untilDay': request.untilDay,
       'includeGrok': true,
+      'claudeDefaultEnabled': request.settings.claudeDefaultShowInUsage,
+      'claudeProfiles': <Map<String, String>>[
+        for (final profile in request.settings.claudeProfiles)
+          if (profile.showInUsage)
+            <String, String>{
+              'alias': profile.usageLabel,
+              'profile': profile.profile,
+            },
+      ],
     };
     if (request.hostId == 'local') {
       return _mapValue(
@@ -27,18 +36,7 @@ class const RuntimeAgentUsageLoader(
       target: request.target,
       type: 'agentUsage.fetch',
       timeout: const Duration(seconds: 90),
-      payload: <String, Object?>{
-        ...payload,
-        'claudeDefaultEnabled': request.settings.claudeDefaultShowInUsage,
-        'claudeProfiles': <Map<String, String>>[
-          for (final profile in request.settings.claudeProfiles)
-            if (profile.showInUsage)
-              <String, String>{
-                'alias': profile.usageLabel,
-                'profile': profile.profile,
-              },
-        ],
-      },
+      payload: payload,
     );
   }
 }

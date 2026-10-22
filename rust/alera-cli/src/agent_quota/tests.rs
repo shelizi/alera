@@ -141,6 +141,38 @@ fn maps_claude_oauth_usage_windows() {
 }
 
 #[test]
+fn claude_extra_usage_maps_actual_usd_cents() {
+    let raw = json!({"is_enabled":true,"used_credits":283,"monthly_limit":5000});
+    let amount = map_claude_extra_usage(Some(&raw)).expect("native overage");
+    assert_eq!(amount.spent_amount, Some(2.83));
+    assert_eq!(amount.limit_amount, Some(50.0));
+    assert_eq!(amount.currency, "USD");
+    assert!(
+        map_claude_extra_usage(Some(&json!({"is_enabled":false,"used_credits":400}))).is_none()
+    );
+    assert!(map_claude_extra_usage(Some(&json!({"is_enabled":true}))).is_none());
+    assert!(map_claude_extra_usage(Some(
+        &json!({"is_enabled":true,"currency":"JPY","used_credits":200})
+    ))
+    .is_none());
+}
+
+#[test]
+fn codex_native_credits_never_invent_billable_usd_cost() {
+    let balance =
+        map_codex_credit_balance(Some(&json!({"has_credits":true,"balance":"12.5"}))).unwrap();
+    assert_eq!(balance.remaining_amount, Some(12.5));
+    assert_eq!(balance.spent_amount, None);
+    assert_eq!(balance.currency, "credits");
+    assert!(map_codex_credit_balance(Some(&json!({"has_credits":false,"balance":20}))).is_none());
+    let monthly =
+        map_codex_monthly_credit_limit(Some(&json!({"used":2,"limit":10,"remaining":8}))).unwrap();
+    assert_eq!(monthly.spent_amount, Some(2.0));
+    assert_eq!(monthly.limit_amount, Some(10.0));
+    assert_eq!(monthly.currency, "credits");
+}
+
+#[test]
 fn claude_model_limits_skip_unscoped_weekly_all_and_keep_fable() {
     let weekly_all = json!({
         "is_active": true,

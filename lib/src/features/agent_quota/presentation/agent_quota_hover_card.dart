@@ -136,6 +136,17 @@ class const _AgentQuotaHoverSection({
               if (index > 0) const SizedBox(height: AleraTokens.space12),
               _QuotaHoverReading(entry: entry, status: snapshot.status),
             ],
+          // Actual extra-usage charges above are distinct from the value of
+          // subscription tokens at public API prices. Resolve costs lazily
+          // only when this hover card is visible.
+          if ((snapshot.provider == AgentQuotaProviderId.claude ||
+                  snapshot.provider == AgentQuotaProviderId.codex) &&
+              actions.apiEquivalentCost != null) ...<Widget>[
+            const SizedBox(height: AleraTokens.space12),
+            const Divider(height: 1, color: AleraTokens.borderSubtle),
+            const SizedBox(height: AleraTokens.space12),
+            actions.buildApiEquivalentCost(hostId: hostId, snapshot: snapshot),
+          ],
           if (snapshot.provider == AgentQuotaProviderId.codex &&
               snapshot.rateLimitResetCredits != null)
             actions.buildCodexReset(hostId: hostId, snapshot: snapshot),
@@ -160,6 +171,11 @@ class const _QuotaHoverReading({
 }) extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
+    if (entry.amount != null &&
+        (entry.provider == AgentQuotaProviderId.claude ||
+            entry.provider == AgentQuotaProviderId.codex)) {
+      return _QuotaNativeAmountReading(amount: entry.amount!, status: status);
+    }
     final color = _quotaColor(status, entry.remainingPercent);
     final label = _quotaHoverLabel(entry.provider, entry.label);
     final reset =
@@ -215,6 +231,72 @@ class const _QuotaHoverReading({
   }
 }
 
+class _QuotaNativeAmountReading extends StatelessWidget {
+  const _QuotaNativeAmountReading({required this.amount, required this.status});
+
+  final AgentQuotaAmount amount;
+  final AgentQuotaStatus status;
+
+  @override
+  Widget build(BuildContext context) {
+    final spent = amount.spentAmount;
+    final limit = amount.limitAmount;
+    // Only derive the bar ratio from provider-reported amounts. No token or
+    // model-price estimate is used to manufacture an actual billed cost.
+    final usedFraction = spent != null && limit != null && limit > 0
+        ? (spent / limit).clamp(0.0, 1.0).toDouble()
+        : null;
+    final color = _quotaColor(
+      status,
+      usedFraction == null ? null : 100 - usedFraction * 100,
+    );
+    final valueText = spent != null && limit != null
+        ? '${_formatQuotaAmountValue(spent, amount.currency)} / ${_formatQuotaAmountValue(limit, amount.currency)}'
+        : _formatQuotaAmount(amount);
+    final small = AleraTokens.monoStyle.copyWith(
+      fontSize: 10,
+      color: AleraTokens.foregroundFaint,
+    );
+    final reset = _resetText(amount.resetsAt, amount.resetDescription);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        Text(
+          amount.label,
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+            color: AleraTokens.foregroundMuted,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+        if (usedFraction != null) ...<Widget>[
+          const SizedBox(height: AleraTokens.space6),
+          LinearProgressIndicator(
+            value: usedFraction,
+            minHeight: AleraTokens.space4,
+            color: color,
+            backgroundColor: AleraTokens.surfaceVariant,
+            borderRadius: BorderRadius.circular(AleraTokens.radiusPill),
+            semanticsLabel: '${amount.label} Used',
+            semanticsValue: '${(usedFraction * 100).round()}%',
+          ),
+        ],
+        const SizedBox(height: AleraTokens.space6),
+        Row(
+          children: <Widget>[
+            Expanded(child: Text(valueText, style: small)),
+            if (usedFraction != null)
+              Text('${(usedFraction * 100).round()}% used', style: small),
+          ],
+        ),
+        if (reset != null) ...<Widget>[
+          const SizedBox(height: AleraTokens.space4),
+          Text(reset, style: small),
+        ],
+      ],
+    );
+  }
+}
+
 class const _QuotaHoverEmptyState({required final AgentQuotaSnapshot snapshot})
     extends StatelessWidget {
   @override
@@ -236,6 +318,7 @@ class const _QuotaHoverEntry({
   required final DateTime? resetsAt,
   required final String? resetDescription,
   final String? valueText,
+  final AgentQuotaAmount? amount,
 });
 
 List<_QuotaHoverEntry> _quotaHoverEntries(AgentQuotaSnapshot snapshot) {
@@ -264,6 +347,7 @@ List<_QuotaHoverEntry> _quotaHoverEntries(AgentQuotaSnapshot snapshot) {
         resetsAt: amount.resetsAt,
         resetDescription: amount.resetDescription,
         valueText: _formatQuotaAmount(amount),
+        amount: amount,
       ),
   ]..sort(
     (left, right) => _readingOrder(
