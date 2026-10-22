@@ -6,6 +6,8 @@ import 'package:flutter/material.dart';
 import 'package:multiview_desktop/multiview_desktop.dart';
 import 'package:window_manager/window_manager.dart' as wm;
 
+import 'handoff_harness.dart';
+
 void trace(String message) {
   File('poc_startup_trace.txt').writeAsStringSync(
     '${DateTime.now().toIso8601String()} pid=$pid $message\n',
@@ -27,26 +29,33 @@ void main(List<String> args) {
     trace('FLUTTER_ERROR ${details.exceptionAsString()}');
   };
   runMultiApp(
-    home: (_, _) => MaterialApp(
+    home: (_, viewId) => MaterialApp(
       title: 'Alera single-engine PoC',
       theme: ThemeData.dark(useMaterial3: true),
-      home: _MainView(
-        autoSmoke: args.contains('--poc-smoke'),
-        pluginProbe: args.contains('--poc-window-manager'),
-        displayProbe: args.contains('--poc-display'),
-        anchorProbe:
-            args.contains('--poc-anchor-close') ||
-            args.contains('--poc-anchor-keep'),
-        keepAnchorChildren: args.contains('--poc-anchor-keep'),
-        inputProbe: args.contains('--poc-input'),
-        cycleCount: args.contains('--poc-long')
-            ? 200
-            : args.contains('--poc-stress')
-            ? 50
-            : 10,
-      ),
+      home: args.contains('--poc-handoff')
+          ? HandoffHarness(
+              mainViewId: viewId,
+              cycles: args.contains('--poc-handoff-stress') ? 20 : 8,
+              requireExternalWmClose: args.contains('--poc-handoff-wmclose'),
+            )
+          : _MainView(
+              autoSmoke: args.contains('--poc-smoke'),
+              pluginProbe: args.contains('--poc-window-manager'),
+              displayProbe: args.contains('--poc-display'),
+              anchorProbe:
+                  args.contains('--poc-anchor-close') ||
+                  args.contains('--poc-anchor-keep'),
+              keepAnchorChildren: args.contains('--poc-anchor-keep'),
+              inputProbe: args.contains('--poc-input'),
+              cycleCount: args.contains('--poc-long')
+                  ? 200
+                  : args.contains('--poc-stress')
+                  ? 50
+                  : 10,
+            ),
     ),
     config: MultiAppConfig(
+      observers: <WindowObserver>[handoffWindowObserver],
       fileLogParams: const LogParams(enable: true),
       generalParams: MultiPlatformParams(
         closeMode: args.contains('--poc-anchor-keep')
