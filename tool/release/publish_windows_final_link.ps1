@@ -183,12 +183,18 @@ function Restore-PinnedSubmodule {
     if (Test-Path -LiteralPath $moduleStore) {
         & git "--git-dir=$moduleStore" cat-file -e "${submoduleCommit}^{commit}" 2>$null
         if ($LASTEXITCODE -eq 0) {
-            Invoke-Checked -FilePath 'git' -Arguments @(
-                "--git-dir=$moduleStore",
-                "--work-tree=$destination",
-                'checkout', '-f', $submoduleCommit, '--', '.'
-            )
-            $restoredFromLocalStore = $true
+            $archivePath = Join-Path ([System.IO.Path]::GetTempPath()) ("alera-submodule-" + [guid]::NewGuid().ToString('N') + '.tar')
+            try {
+                Invoke-Checked -FilePath 'git' -Arguments @(
+                    "--git-dir=$moduleStore",
+                    'archive', '--format=tar', "--output=$archivePath", $submoduleCommit
+                )
+                Invoke-Checked -FilePath 'tar.exe' -Arguments @('-xf', $archivePath, '-C', $destination)
+                $restoredFromLocalStore = $true
+            }
+            finally {
+                Remove-Item -LiteralPath $archivePath -Force -ErrorAction SilentlyContinue
+            }
         }
     }
 
