@@ -22,19 +22,29 @@
   Flutter drag preview and tab-strip drop behavior remain unchanged.
   The preview is hidden/stopped on drag end or runner teardown.
   Preview positioning clamps to the nearest monitor's work area.
-- The child receives its one-time authenticated descriptor, initializes
-  window management, and renders an `Opening tab...` Flutter scene **before**
-  Rust/SQLite initialization. The actual widget is rendered only after those
-  engines are ready. `READY` still means the actual content's first frame
-  completed, so the parent never hides the original tab prematurely.
-- Database startup overlaps Rust initialization. CodeForge Rust is skipped for
-  Terminal, Markdown, PDF and Git History windows; it is still initialized
-  for editor and Git Diff.
+- The child receives its one-time authenticated descriptor and renders an
+  `Opening tab...` Flutter scene **before** window-manager setup, logging,
+  Rust or SQLite initialization. The actual widget is rendered only after
+  those engines are ready. `READY` still means the actual content's first
+  frame completed, so the parent never hides the original tab prematurely.
+- Phase 2 uses a small typed coordinator to launch file logging, window-manager
+  setup, SQLite, Alera Rust and (when needed) CodeForge Rust **concurrently**.
+  It waits for every task to settle on failure, then closes any database that
+  finished opening after another task failed. Failure after successful
+  bootstrap also closes the database.
+  CodeForge Rust is skipped for Terminal, Markdown, PDF and Git History,
+  but loaded for editor and Git Diff. The Ghostty wasm setup function is a
+  no-op on native Windows, so the child no longer awaits it.
 - The parent notifies pending-state changes immediately; the source chip shows
   a progress indicator while launching. After the child sends `LOADING` on
   its first frame, a bounded 2-minute initialization deadline replaces the
   normal 45-second handshake deadline. `FAILED` ends a bad initialization
   promptly, keeping the original tab visible.
+- On each successful detach, the primary app logger records elapsed
+  `processStartMs`, `connectMs`, `firstFrameMs`, and `contentReadyMs`,
+  all measured from releasing the tab. These include time outside the Dart
+  child bootstrap (process/Flutter engine startup) and do not require enabling
+  verbose trace mode.
 
 ## Verification
 
@@ -42,6 +52,7 @@ The targeted Flutter test command is:
 
 ```sh
 flutter test --no-pub test/unit/detached_tab_window_service_test.dart \
+  test/unit/detached_tab_bootstrap_test.dart \
   test/unit/detached_tab_drag_preview_test.dart \
   test/unit/detached_tab_entrypoint_compile_test.dart \
   test/widget/detached_tab_startup_test.dart \
@@ -50,7 +61,9 @@ flutter test --no-pub test/unit/detached_tab_window_service_test.dart \
   test/unit/workbench_tab_strip_drop_test.dart
 ```
 
-Result: **28 passed, 0 failed**. A pre-fix regression reproduced that pending
+Phase 1 result: **28 passed, 0 failed**. Phase 2 result:
+**31 passed, 0 failed**. The added coordinator tests cover true asynchronous
+overlap, CodeForge gating and late-DB cleanup. A pre-fix regression reproduced that pending
 detached launches did not notify listeners. Flutter tests validate Dart,
 protocol and widgets, but cannot validate the Win32 preview itself.
 
@@ -81,3 +94,14 @@ The Dart analyzer invocation timed out; it has not been counted as passed.
    `detached_content_first_frame`. Also time multiple actual Windows
    cold/warm window launches. **No runtime speedup is claimed without those
    measurements.**
+
+## Further improvements to consider after profiling
+
+- The dominant remaining floor may be OS process creation and Flutter engine
+  initialization. A limited **single spare pre-warmed child process** would
+  improve subsequent detaches but incurs continuous memory/CPU usage and
+  needs a safe one-time descriptor handshake, cancellation and lifecycle.
+- An in-process native multi-window/engine design could avoid repeat process
+  startup, but requires an explicit review of Flutter Windows embedder
+  multi-view support, plugin registration, terminal ownership and crash
+  isolation. It must not be introduced solely based on synthetic tests.

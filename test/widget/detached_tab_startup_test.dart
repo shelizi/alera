@@ -1,4 +1,5 @@
 import 'package:alera/src/features/workbench/presentation/detached_tab_child_app.dart';
+import 'package:alera/src/features/workbench/application/detached_tab_bootstrap.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';

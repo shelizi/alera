@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:alera/src/app/app.dart';
 import 'package:alera/src/features/workbench/application/detached_tab_window_service.dart';
+import 'package:alera/src/features/workbench/application/detached_tab_bootstrap.dart';
 import 'package:alera/src/features/workbench/presentation/detached_tab_child_app.dart';
 import 'package:window_manager/window_manager.dart';
 import 'package:alera/src/app/resource_manager_terminal_composition.dart';
@@ -37,8 +38,8 @@ Future<void> _bootstrap(List<String> args) async {
     // a small initial scene immediately and finish native initialization
     // while the user sees which tab is opening.
     final client = await DetachedTabWindowClient.connect(detachedArgs);
-    await windowManager.ensureInitialized();
-    await windowManager.setTitle('Alera - ' + client.descriptor.tab.title);
+    // The Win32 runner already has a usable HWND and temporary Alera title.
+    // Defer plugin window setup until after the first visible Flutter frame.
     AleraPerformanceTrace.recordFirstFrame();
     runApp(DetachedTabStartupApp(title: client.descriptor.tab.title));
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -64,36 +65,37 @@ Future<void> _finishDetachedTabInitialization(
   AleraDatabase? childDatabase;
   final elapsed = Stopwatch()..start();
   try {
-    await AppLogger.configure();
     installGlobalErrorHandlers();
-    // The DB opens on an independent worker. Overlap it with Rust engine
-    // startup rather than paying both initialization costs sequentially.
-    await Future.wait<void>([
-      () async {
-        await AleraPerformanceTrace.measureAsync(
-          'detached_alera_rust_init',
-          RustLib.init,
-        );
-        // Terminal, Markdown, PDF and history views do not construct a
-        // CodeForge editor. Avoid loading its separate Rust DLL for them.
-        if (detachedTabRequiresCodeForge(client.descriptor.tab.kind)) {
-          await AleraPerformanceTrace.measureAsync(
-            'detached_code_forge_rust_init',
-            code_forge.RustLib.init,
-          );
-        }
-        await AleraPerformanceTrace.measureAsync(
-          'detached_ghostty_init',
-          initializeGhosttyVteWeb,
-        );
-      }(),
-      () async {
-        childDatabase = await AleraPerformanceTrace.measureAsync(
-          'detached_database_open',
-          openAleraDb,
-        );
-      }(),
-    ]);
+    // File-backed logging, window plugin setup, both independent Rust
+    // engines and SQLite now start together, without serializing the cold
+    // Rust/DB path behind a platform directory lookup for the log sink.
+    childDatabase = await initializeDetachedTabDependencies<AleraDatabase>(
+      kind: client.descriptor.tab.kind,
+      configureLogging: () => AleraPerformanceTrace.measureAsync(
+        'detached_logger_init',
+        AppLogger.configure,
+      ),
+      initializeWindow: () =>
+          AleraPerformanceTrace.measureAsync('detached_window_setup', () async {
+            await windowManager.ensureInitialized();
+            await windowManager.setTitle(
+              'Alera - ' + client.descriptor.tab.title,
+            );
+          }),
+      initializeAleraRust: () => AleraPerformanceTrace.measureAsync(
+        'detached_alera_rust_init',
+        RustLib.init,
+      ),
+      initializeCodeForge: () => AleraPerformanceTrace.measureAsync(
+        'detached_code_forge_rust_init',
+        code_forge.RustLib.init,
+      ),
+      openDatabase: () => AleraPerformanceTrace.measureAsync(
+        'detached_database_open',
+        openAleraDb,
+      ),
+      closeDatabase: (database) => database.close(),
+    );
     // Keep the synchronous provider contract for the actual editor widget.
     // Only the lightweight initial frame is rendered without the database.
     final readyDatabase = childDatabase!;
@@ -132,6 +134,9 @@ Future<void> _finishDetachedTabInitialization(
     } catch (_) {
       // The parent may already have closed the launch socket.
     }
+    // The coordinator already closes a DB opened during a failed parallel
+    // task. This only covers failures after a fully successful bootstrap
+    // (for example setPreventClose or building the actual app).
     await childDatabase?.close();
     runApp(
       DetachedTabStartupApp(title: client.descriptor.tab.title, failed: true),

@@ -6,6 +6,7 @@ import 'dart:math';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 import 'package:flutter/foundation.dart';
+import 'package:logging/logging.dart';
 
 /// A view onto a tab that belongs to the main Alera instance.
 /// The record itself stays in the workbench database and is never closed.
@@ -106,6 +107,12 @@ class DetachedTabWindowService extends ChangeNotifier {
     // The original tab remains visible until READY, but its chip needs to
     // acknowledge the drag immediately rather than appear to do nothing.
     notifyListeners();
+    // Capture user-observable drop-to-ready time, including process creation
+    // and Flutter engine startup which occur before child Dart tracing starts.
+    final launchClock = Stopwatch()..start();
+    int? processStartedMs;
+    int? connectedMs;
+    int? previewVisibleMs;
     ServerSocket? server;
     Socket? socket;
     StreamSubscription<Socket>? accepting;
@@ -132,7 +139,9 @@ class DetachedTabWindowService extends ChangeNotifier {
         (_) => Random.secure().nextInt(256),
       ).map((byte) => byte.toRadixString(16).padLeft(2, '0')).join();
       await _starter(server.port, token);
+      processStartedMs = launchClock.elapsedMilliseconds;
       socket = await connection.future.timeout(_timeout);
+      connectedMs = launchClock.elapsedMilliseconds;
       final ready = Completer<void>();
       readyDeadline = Timer(_timeout, () {
         if (!ready.isCompleted) {
@@ -164,12 +173,21 @@ class DetachedTabWindowService extends ChangeNotifier {
                 connected.writeln(jsonEncode(descriptor.toJson()));
               } else if (!active && message == 'READY') {
                 active = true;
+                final totalMs = launchClock.elapsedMilliseconds;
+                Logger('DetachedTabStartup').info(
+                  'tab kind=${descriptor.tab.kind.name} '
+                  'processStartMs=${processStartedMs ?? -1} '
+                  'connectMs=${connectedMs ?? -1} '
+                  'firstFrameMs=${previewVisibleMs ?? -1} '
+                  'contentReadyMs=$totalMs',
+                );
                 if (!_disposed) {
                   _active[tabId] = connected;
                   notifyListeners();
                 }
                 if (!ready.isCompleted) ready.complete();
               } else if (!active && message == 'LOADING') {
+                previewVisibleMs ??= launchClock.elapsedMilliseconds;
                 // The child has already painted its native window but may
                 // still be waiting for cold Rust/SQLite startup. A separate
                 // bounded deadline prevents a late but valid child from

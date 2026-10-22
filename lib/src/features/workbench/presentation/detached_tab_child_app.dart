@@ -9,7 +9,6 @@ import 'package:alera/src/features/text_actions/presentation/text_actions_scope.
 import 'package:alera/src/features/settings/domain/alera_settings.dart';
 import 'package:alera/src/features/workbench/application/detached_tab_window_service.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
-import 'package:flutter/foundation.dart';
 import 'package:alera/src/features/workbench/presentation/terminal_runtime_providers.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_workbench_view.dart';
 import 'package:flutter/material.dart';
@@ -18,10 +17,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:window_manager/window_manager.dart';
 import 'package:logging/logging.dart';
-
-@visibleForTesting
-bool detachedTabRequiresCodeForge(WorkspaceTabKind kind) =>
-    kind == WorkspaceTabKind.editor || kind == WorkspaceTabKind.gitDiff;
 
 /// Drawn on the very first Flutter frame, before any Rust engine or database
 /// initialization. The Windows runner shows its HWND on that first frame.
