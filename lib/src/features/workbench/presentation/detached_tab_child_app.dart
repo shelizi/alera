@@ -9,6 +9,7 @@ import 'package:alera/src/features/text_actions/presentation/text_actions_scope.
 import 'package:alera/src/features/settings/domain/alera_settings.dart';
 import 'package:alera/src/features/workbench/application/detached_tab_window_service.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
+import 'package:flutter/foundation.dart';
 import 'package:alera/src/features/workbench/presentation/terminal_runtime_providers.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_workbench_view.dart';
 import 'package:flutter/material.dart';
@@ -17,6 +18,68 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:window_manager/window_manager.dart';
 import 'package:logging/logging.dart';
+
+@visibleForTesting
+bool detachedTabRequiresCodeForge(WorkspaceTabKind kind) =>
+    kind == WorkspaceTabKind.editor || kind == WorkspaceTabKind.gitDiff;
+
+/// Drawn on the very first Flutter frame, before any Rust engine or database
+/// initialization. The Windows runner shows its HWND on that first frame.
+class DetachedTabStartupApp extends StatelessWidget {
+  const DetachedTabStartupApp({
+    super.key,
+    required this.title,
+    this.failed = false,
+  });
+
+  final String title;
+  final bool failed;
+
+  @override
+  Widget build(BuildContext context) => MaterialApp(
+    debugShowCheckedModeBanner: false,
+    theme: aleraDarkTheme,
+    home: Scaffold(
+      body: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 460),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              if (failed)
+                const Icon(Icons.error_outline, size: 36)
+              else
+                const CircularProgressIndicator(
+                  semanticsLabel: 'Opening separate window',
+                ),
+              const SizedBox(height: 24),
+              Text(
+                failed
+                    ? 'Could not open the separate window'
+                    : 'Opening tab...',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              const SizedBox(height: 8),
+              Text(
+                title,
+                textAlign: TextAlign.center,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+              if (failed) ...<Widget>[
+                const SizedBox(height: 24),
+                FilledButton(
+                  onPressed: () => unawaited(windowManager.destroy()),
+                  child: const Text('Close window'),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
+}
 
 /// Owns the view for an existing tab, never its database record.
 class DetachedTabChildApp extends ConsumerStatefulWidget {
