@@ -81,7 +81,17 @@ String _formatQuotaAmount(AgentQuotaAmount amount) {
   final value =
       amount.spentAmount ?? amount.remainingAmount ?? amount.limitAmount;
   if (value == null) return 'n/a';
-  return '${amount.currency} ${value.toStringAsFixed(2)}';
+  return _formatQuotaAmountValue(value, amount.currency);
+}
+
+String _formatQuotaAmountValue(double value, String currency) {
+  if (currency == 'USD') {
+    return "${r'US$'}${value.toStringAsFixed(2)}";
+  }
+  if (currency == 'credits') {
+    return '${value.toStringAsFixed(2)} credits';
+  }
+  return '$currency ${value.toStringAsFixed(2)}';
 }
 
 String _windowReadingLabel(AgentQuotaProviderId provider, String label) {

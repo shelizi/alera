@@ -9,6 +9,55 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  testWidgets('Claude native cost and usage show screenshot-style progress', (tester) async {
+    await tester.pumpWidget(MaterialApp(
+      theme: buildAleraDarkTheme(),
+      home: Scaffold(body: AgentQuotaStatusBarContent(
+        hostId: 'local',
+        settings: const AgentQuotaHostSettings(
+          enabledProviders: [AgentQuotaProviderId.claude],
+        ),
+        snapshots: [
+          AgentQuotaSnapshot(
+            provider: .claude,
+            accountId: 'default',
+            displayName: 'Default',
+            status: .ok,
+            updatedAt: DateTime.utc(2026),
+            error: null,
+            windows: const [
+              AgentQuotaWindow(label: '5 Hour', usedPercent: 1,
+                windowMinutes: 300, resetsAt: null, resetDescription: 'Resets in 4h 35m'),
+            ],
+            buckets: const [],
+            amounts: const [
+              AgentQuotaAmount(
+                label: 'Usage credits', currency: 'USD',
+                spentAmount: 2.83, remainingAmount: null, limitAmount: 50.0,
+                resetsAt: null, resetDescription: null,
+              ),
+            ],
+          ),
+        ],
+        onRefresh: () {},
+        onTogglePinned: (_, _) {},
+      )),
+    ));
+    final mouse = await tester.createGesture(kind: .mouse);
+    addTearDown(mouse.removePointer);
+    await mouse.addPointer(location: .zero);
+    await mouse.moveTo(tester.getCenter(
+      find.byWidgetPredicate((widget) => widget is AgentQuotaProviderIcon &&
+        widget.provider == AgentQuotaProviderId.claude),
+    ));
+    await tester.pump(AleraTokens.durationMid);
+    await tester.pumpAndSettle();
+    expect(find.text('1% used'), findsOneWidget);
+    expect(find.text('Resets in 4h 35m'), findsOneWidget);
+    expect(find.text(r'US$2.83 / US$50.00'), findsOneWidget);
+    expect(find.text('6% used'), findsOneWidget);
+  });
+
   testWidgets('quota previews open overlays without native providers', (
     tester,
   ) async {

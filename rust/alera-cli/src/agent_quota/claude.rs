@@ -265,16 +265,13 @@ async fn fetch_claude_oauth(
             }
         }
     }
-    if windows.is_empty() && buckets.is_empty() {
+    let extra_usage = map_claude_extra_usage(data.get("extra_usage"));
+    if windows.is_empty() && buckets.is_empty() && extra_usage.is_none() {
         Ok(ClaudeOAuthFetch::FallbackRequired)
     } else {
-        Ok(ClaudeOAuthFetch::Snapshot(QuotaSnapshot::ok(
-            "claude",
-            account_id,
-            display_name,
-            windows,
-            buckets,
-        )))
+        let mut snapshot = QuotaSnapshot::ok("claude", account_id, display_name, windows, buckets);
+        snapshot.amounts.extend(extra_usage);
+        Ok(ClaudeOAuthFetch::Snapshot(snapshot))
     }
 }
 
@@ -410,6 +407,43 @@ fn map_claude_oauth_model_limit(limit: &Value) -> Option<QuotaBucket> {
         used_percent: used_percent.clamp(0.0, 100.0),
         window_minutes: Some(WEEKLY_WINDOW_MINUTES),
         resets_at: limit.get("resets_at").and_then(claude_reset_millis),
+        reset_description: None,
+    })
+}
+
+/// Read Claude's provider-reported monthly extra usage. Values are US cents,
+/// unlike locally estimated API-equivalent transcript costs.
+fn map_claude_extra_usage(value: Option<&Value>) -> Option<QuotaAmount> {
+    let value = value?;
+    if value.get("is_enabled").and_then(Value::as_bool) != Some(true) {
+        return None;
+    }
+    if value
+        .get("currency")
+        .and_then(Value::as_str)
+        .is_some_and(|currency| !currency.eq_ignore_ascii_case("USD"))
+    {
+        return None;
+    }
+    let cents = |field: &str| {
+        value
+            .get(field)
+            .and_then(numeric)
+            .filter(|amount| amount.is_finite() && *amount >= 0.0)
+            .map(|amount| amount / 100.0)
+    };
+    let spent = cents("used_credits");
+    let limit = cents("monthly_limit");
+    if spent.is_none() && limit.is_none() {
+        return None;
+    }
+    Some(QuotaAmount {
+        label: "Usage credits".to_string(),
+        currency: "USD".to_string(),
+        spent_amount: spent,
+        remaining_amount: None,
+        limit_amount: limit,
+        resets_at: value.get("resets_at").and_then(claude_reset_millis),
         reset_description: None,
     })
 }

@@ -75,10 +75,21 @@ async fn fetch_codex_backend_in_home(
     ) {
         windows.push(window);
     }
-    if windows.is_empty() {
+    let monthly_limit = map_codex_monthly_credit_limit(
+        raw.get("spend_control")
+            .and_then(|v| v.get("individual_limit"))
+            .or_else(|| {
+                raw.get("spendControl")
+                    .and_then(|v| v.get("individualLimit"))
+            }),
+    );
+    let balance = map_codex_credit_balance(raw.get("credits"));
+    if windows.is_empty() && monthly_limit.is_none() && balance.is_none() {
         return Ok(None);
     }
     let mut snapshot = QuotaSnapshot::ok("codex", "default", "Codex", windows, Vec::new());
+    snapshot.amounts.extend(monthly_limit);
+    snapshot.amounts.extend(balance);
     snapshot.rate_limit_reset_credits = raw
         .get("rate_limit_reset_credits")
         .or_else(|| raw.get("rateLimitResetCredits"))
@@ -186,20 +197,78 @@ async fn fetch_codex_via_rpc(home: Option<&std::path::Path>) -> QuotaSnapshot {
     if let Some(window) = map_codex_window(limits.get("secondary"), WEEKLY_WINDOW_MINUTES) {
         windows.push(window);
     }
-    if windows.is_empty() {
+    let monthly_limit = map_codex_monthly_credit_limit(
+        limits
+            .get("individualLimit")
+            .or_else(|| raw.get("individualLimit")),
+    );
+    let balance = map_codex_credit_balance(limits.get("credits").or_else(|| raw.get("credits")));
+    if windows.is_empty() && monthly_limit.is_none() && balance.is_none() {
         return QuotaSnapshot::error(
             "codex",
             "default",
             "Codex",
-            "Codex quota response did not include usage windows",
+            "Codex quota response did not include usage windows or credits",
         );
     }
     let mut snapshot = QuotaSnapshot::ok("codex", "default", "Codex", windows, Vec::new());
+    snapshot.amounts.extend(monthly_limit);
+    snapshot.amounts.extend(balance);
     snapshot.rate_limit_reset_credits = raw
         .get("rateLimitResetCredits")
         .and_then(|value| map_codex_reset_credits(value, None))
         .map(Box::new);
     snapshot
+}
+
+/// The Codex backend reports credits and workspace monthly limits in native
+/// credits, which are not a USD invoice or estimated API costs.
+fn map_codex_credit_balance(value: Option<&Value>) -> Option<QuotaAmount> {
+    let value = value?;
+    if value.get("has_credits").and_then(Value::as_bool) == Some(false) {
+        return None;
+    }
+    let balance = value
+        .get("balance")
+        .and_then(numeric)
+        .filter(|v| v.is_finite())?;
+    Some(QuotaAmount {
+        label: "Credits balance".to_string(),
+        currency: "credits".to_string(),
+        spent_amount: None,
+        remaining_amount: Some(balance),
+        limit_amount: None,
+        resets_at: None,
+        reset_description: None,
+    })
+}
+
+fn map_codex_monthly_credit_limit(value: Option<&Value>) -> Option<QuotaAmount> {
+    let value = value?;
+    let positive_amount = |field: &str| {
+        value
+            .get(field)
+            .and_then(numeric)
+            .filter(|v| v.is_finite() && *v >= 0.0)
+    };
+    let spent = positive_amount("used");
+    let limit = positive_amount("limit");
+    if spent.is_none() && limit.is_none() {
+        return None;
+    }
+    Some(QuotaAmount {
+        label: "Monthly credit limit".to_string(),
+        currency: "credits".to_string(),
+        spent_amount: spent,
+        remaining_amount: positive_amount("remaining"),
+        limit_amount: limit,
+        resets_at: value
+            .get("reset_at")
+            .or_else(|| value.get("resetAt"))
+            .or_else(|| value.get("resetsAt"))
+            .and_then(parse_codex_timestamp),
+        reset_description: None,
+    })
 }
 
 fn codex_request(
