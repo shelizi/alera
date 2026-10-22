@@ -4,6 +4,7 @@ import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/feedback/alera_toast.dart';
 import 'package:alera/src/design_system/layout/alera_confirm_dialog.dart';
 import 'package:alera/src/features/agent_quota/application/agent_quota_providers.dart';
+import 'package:alera/src/features/agent_quota/presentation/agent_quota_api_equivalent_cost.dart';
 import 'package:alera/src/features/agent_quota/domain/agent_quota.dart';
 import 'package:alera/src/features/agent_usage/presentation/agent_usage_dialog.dart';
 import 'package:alera/src/features/remote_hosts/application/ssh_target_providers.dart';
@@ -78,6 +79,7 @@ class const AgentQuotaStatusBar({super.key, final Widget? trailing})
           codexReset: _buildCodexReset,
           claudeTui: _buildClaudeTui,
           accountSwitch: _buildAccountSwitch,
+          apiEquivalentCost: _buildApiEquivalentCost,
         ),
         onRefresh: refresh,
         onRefreshSnapshot: refreshSnapshot,
@@ -96,6 +98,7 @@ class const AgentQuotaStatusBar({super.key, final Widget? trailing})
           codexReset: _buildCodexReset,
           claudeTui: _buildClaudeTui,
           accountSwitch: _buildAccountSwitch,
+          apiEquivalentCost: _buildApiEquivalentCost,
         ),
         onRefresh: refresh,
         onRefreshSnapshot: refreshSnapshot,
@@ -112,6 +115,7 @@ class const AgentQuotaStatusBar({super.key, final Widget? trailing})
           codexReset: _buildCodexReset,
           claudeTui: _buildClaudeTui,
           accountSwitch: _buildAccountSwitch,
+          apiEquivalentCost: _buildApiEquivalentCost,
         ),
         onRefresh: refresh,
         onRefreshSnapshot: refreshSnapshot,
@@ -128,6 +132,7 @@ class const AgentQuotaStatusBar({super.key, final Widget? trailing})
           codexReset: _buildCodexReset,
           claudeTui: _buildClaudeTui,
           accountSwitch: _buildAccountSwitch,
+          apiEquivalentCost: _buildApiEquivalentCost,
         ),
         onRefresh: refresh,
         onRefreshSnapshot: refreshSnapshot,
@@ -173,6 +178,12 @@ Widget _buildClaudeTui({
   required AgentQuotaSnapshot snapshot,
   required bool compact,
 }) => _ClaudeTryWithTuiButton(hostId: hostId, snapshot: snapshot);
+
+Widget _buildApiEquivalentCost({
+  required String hostId,
+  required AgentQuotaSnapshot snapshot,
+  required bool compact,
+}) => AgentQuotaApiEquivalentCost(hostId: hostId, snapshot: snapshot);
 
 Widget _buildAccountSwitch({
   required String hostId,

@@ -12,6 +12,7 @@ class const AgentQuotaInlineActions({
   final AgentQuotaActionBuilder? codexReset,
   final AgentQuotaActionBuilder? claudeTui,
   final AgentQuotaActionBuilder? accountSwitch,
+  final AgentQuotaActionBuilder? apiEquivalentCost,
 }) {
   Widget buildAccountSwitch({
     required String hostId,
@@ -26,6 +27,17 @@ class const AgentQuotaInlineActions({
     bool compact = false,
   }) =>
       codexReset?.call(hostId: hostId, snapshot: snapshot, compact: compact) ??
+      const SizedBox.shrink();
+
+  Widget buildApiEquivalentCost({
+    required String hostId,
+    required AgentQuotaSnapshot snapshot,
+  }) =>
+      apiEquivalentCost?.call(
+        hostId: hostId,
+        snapshot: snapshot,
+        compact: false,
+      ) ??
       const SizedBox.shrink();
 
   Widget buildClaudeTui({

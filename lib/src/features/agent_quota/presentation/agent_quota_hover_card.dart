@@ -136,6 +136,17 @@ class const _AgentQuotaHoverSection({
               if (index > 0) const SizedBox(height: AleraTokens.space12),
               _QuotaHoverReading(entry: entry, status: snapshot.status),
             ],
+          // Actual extra-usage charges above are distinct from the value of
+          // subscription tokens at public API prices. Resolve costs lazily
+          // only when this hover card is visible.
+          if ((snapshot.provider == AgentQuotaProviderId.claude ||
+                  snapshot.provider == AgentQuotaProviderId.codex) &&
+              actions.apiEquivalentCost != null) ...<Widget>[
+            const SizedBox(height: AleraTokens.space12),
+            const Divider(height: 1, color: AleraTokens.borderSubtle),
+            const SizedBox(height: AleraTokens.space12),
+            actions.buildApiEquivalentCost(hostId: hostId, snapshot: snapshot),
+          ],
           if (snapshot.provider == AgentQuotaProviderId.codex &&
               snapshot.rateLimitResetCredits != null)
             actions.buildCodexReset(hostId: hostId, snapshot: snapshot),
@@ -162,67 +173,59 @@ class const _QuotaHoverReading({
   Widget build(BuildContext context) {
     if (entry.amount != null &&
         (entry.provider == AgentQuotaProviderId.claude ||
-         entry.provider == AgentQuotaProviderId.codex)) {
+            entry.provider == AgentQuotaProviderId.codex)) {
       return _QuotaNativeAmountReading(amount: entry.amount!, status: status);
     }
     final color = _quotaColor(status, entry.remainingPercent);
     final label = _quotaHoverLabel(entry.provider, entry.label);
-    final isNativeUsage = entry.provider == AgentQuotaProviderId.claude ||
-        entry.provider == AgentQuotaProviderId.codex;
-    final usedPercent = 100 - entry.remainingPercent;
-    final reset = _resetText(entry.resetsAt, entry.resetDescription);
-    final small = AleraTokens.monoStyle.copyWith(
-      fontSize: 10,
-      color: AleraTokens.foregroundFaint,
-    );
+    final reset =
+        _resetText(entry.resetsAt, entry.resetDescription) ??
+        'Reset time unavailable';
     return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
+      crossAxisAlignment: .stretch,
       children: <Widget>[
         Row(
           children: <Widget>[
             Expanded(
               child: Text(
                 label,
-                overflow: TextOverflow.ellipsis,
+                overflow: .ellipsis,
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
                   color: AleraTokens.foregroundMuted,
                   fontWeight: .w500,
                 ),
               ),
             ),
-            if (!isNativeUsage) ...<Widget>[
-              const SizedBox(width: AleraTokens.space12),
-              Text(
-                entry.valueText ?? '${entry.remainingPercent.round()}% Left',
-                style: AleraTokens.monoStyle.copyWith(
-                  fontSize: 11, color: color, fontWeight: FontWeight.w600,
-                ),
+            const SizedBox(width: AleraTokens.space12),
+            Text(
+              entry.valueText ?? '${entry.remainingPercent.round()}% Left',
+              style: AleraTokens.monoStyle.copyWith(
+                fontSize: 11,
+                color: color,
+                fontWeight: .w600,
               ),
-            ],
+            ),
           ],
         ),
         const SizedBox(height: AleraTokens.space6),
         if (entry.valueText == null)
           LinearProgressIndicator(
-            value: (isNativeUsage ? usedPercent : entry.remainingPercent) / 100,
+            value: entry.remainingPercent / 100,
             minHeight: AleraTokens.space4,
             color: color,
             backgroundColor: AleraTokens.surfaceVariant,
             borderRadius: BorderRadius.circular(AleraTokens.radiusPill),
-            semanticsLabel: isNativeUsage ? '$label Used' : '$label Remaining',
-            semanticsValue: '${(isNativeUsage ? usedPercent : entry.remainingPercent).round()}%',
+            semanticsLabel: '$label Remaining',
+            semanticsValue: '${entry.remainingPercent.round()}%',
           ),
         const SizedBox(height: AleraTokens.space6),
-        if (isNativeUsage)
-          Row(
-            children: <Widget>[
-              Text('${usedPercent.round()}% used', style: small),
-              const Spacer(),
-              if (reset != null) Flexible(child: Text(reset, style: small, textAlign: TextAlign.right)),
-            ],
-          )
-        else
-          Text(reset ?? 'Reset time unavailable', style: small),
+        Text(
+          reset,
+          style: AleraTokens.monoStyle.copyWith(
+            fontSize: 9,
+            color: AleraTokens.foregroundFaint,
+          ),
+        ),
       ],
     );
   }
@@ -251,7 +254,8 @@ class _QuotaNativeAmountReading extends StatelessWidget {
         ? '${_formatQuotaAmountValue(spent, amount.currency)} / ${_formatQuotaAmountValue(limit, amount.currency)}'
         : _formatQuotaAmount(amount);
     final small = AleraTokens.monoStyle.copyWith(
-      fontSize: 10, color: AleraTokens.foregroundFaint,
+      fontSize: 10,
+      color: AleraTokens.foregroundFaint,
     );
     final reset = _resetText(amount.resetsAt, amount.resetDescription);
     return Column(
