@@ -1,7 +1,14 @@
 param(
  [ValidateRange(1,200)][int]$Cycles=20,
  [ValidateRange(0,20)][int]$NativeCloseEvery=5,
- [ValidateRange(50,2000)][int]$ChildReadyWaitMs=350
+ [ValidateRange(50,2000)][int]$ChildReadyWaitMs=350,
+ [int]$TabX=477,
+ [int]$TabY=65,
+ [int]$MenuX=615,
+ [int]$MenuY=252,
+ [int]$ReturnX=1277,
+ [int]$ReturnY=74,
+ [ValidateRange(1,4)][int]$MaxGestureAttempts=3
 )
 $ErrorActionPreference='Stop'
 $base=(Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
@@ -93,17 +100,27 @@ try{
    $main=[AleraE2ECyclesNative]::FindTopLevel($pidToProbe,$mainTitle)
    if($main -eq [IntPtr]::Zero){throw "Cycle $i main HWND missing"}
    $started=$sw.ElapsedMilliseconds
-   if(-not [AleraE2ECyclesNative]::Mouse($main,477,65,$true)){throw "Cycle $i tab right click failed"}
-   Start-Sleep -Milliseconds 100
-   if(-not [AleraE2ECyclesNative]::Mouse($main,615,252,$false)){throw "Cycle $i Move to New Window menu click failed"}
    $child=[IntPtr]::Zero
-   $end=[DateTime]::UtcNow.AddSeconds(10)
-   do{
-     $child=[AleraE2ECyclesNative]::FindTopLevel($pidToProbe,$childTitle)
-     if($child -ne [IntPtr]::Zero){break}
-     Start-Sleep -Milliseconds 50
-   }while([DateTime]::UtcNow -lt $end)
-   if($child -eq [IntPtr]::Zero){throw "Cycle $i did not create child native window"}
+   $attempts=0
+   do {
+     $attempts++
+     if(-not [AleraE2ECyclesNative]::Mouse($main,$TabX,$TabY,$true)){throw "Cycle $i attempt $attempts right click failed"}
+     # Popup menus are async frame-scheduled: never click immediately after
+     # synthetic WM_RBUTTONUP, especially on high-DPI monitors.
+     Start-Sleep -Milliseconds 500
+     if(-not [AleraE2ECyclesNative]::Mouse($main,$MenuX,$MenuY,$false)){throw "Cycle $i attempt $attempts menu click failed"}
+     $end=[DateTime]::UtcNow.AddSeconds(3)
+     do {
+       $child=[AleraE2ECyclesNative]::FindTopLevel($pidToProbe,$childTitle)
+       if($child -ne [IntPtr]::Zero){break}
+       Start-Sleep -Milliseconds 50
+     }while([DateTime]::UtcNow -lt $end)
+     if($child -eq [IntPtr]::Zero -and $attempts -lt $MaxGestureAttempts) {
+       Write-Output "GESTURE_RETRY_CYCLE=$i AFTER_ATTEMPT=$attempts"
+       Start-Sleep -Milliseconds 850
+     }
+   }while($child -eq [IntPtr]::Zero -and $attempts -lt $MaxGestureAttempts)
+   if($child -eq [IntPtr]::Zero){throw "Cycle $i did not create child native window after $attempts attempts"}
    $openMs=$sw.ElapsedMilliseconds-$started
    Start-Sleep -Milliseconds $ChildReadyWaitMs
    if([AleraE2ECyclesNative]::OwnedTopLevelCount($pidToProbe) -ne 2){throw "Cycle $i wrong child+main count"}
@@ -114,7 +131,7 @@ try{
        throw "Cycle $i native WM_CLOSE failed"
      }
    }else{
-     if(-not [AleraE2ECyclesNative]::Mouse($child,1277,74,$false)){
+     if(-not [AleraE2ECyclesNative]::Mouse($child,$ReturnX,$ReturnY,$false)){
        throw "Cycle $i Return-tab icon click failed"
      }
    }
@@ -129,18 +146,22 @@ try{
    }while([DateTime]::UtcNow -lt $end)
    if(-not $closed){throw "Cycle $i child window did not close"}
    $closeMs=$sw.ElapsedMilliseconds-$returnStart
-   Start-Sleep -Milliseconds 200
+   # Native child HWND removal precedes the Dart source-editor frame barrier.
+   # Allow the main Editor and its tab gesture detector to remount before
+   # triggering the next simulated right-click.
+   Start-Sleep -Milliseconds 900
    if([AleraE2ECyclesNative]::OwnedTopLevelCount($pidToProbe) -ne 1){throw "Cycle $i leaked HWND"}
    $app.Refresh()
    $row=[pscustomobject]@{
      cycle=$i;method=$(if($nativeClose){'WM_CLOSE'}else{'Return'});
+     nativeGestureAttempts=$attempts;
      openedMs=$openMs;closedMs=$closeMs;
      workingSetMiB=[math]::Round($app.WorkingSet64/1MB,1);
      handles=$app.HandleCount;
      gdi=[AleraE2ECyclesNative]::GetGuiResources($app.Handle,0)
    }
    $cyclesResults.Add($row)
-   Write-Output "CYCLE=$i MODE=$($row.method) OPEN_MS=$($row.openedMs) RETURN_MS=$($row.closedMs) RSS_MIB=$($row.workingSetMiB) HANDLES=$($row.handles) GDI=$($row.gdi)"
+   Write-Output "CYCLE=$i MODE=$($row.method) GESTURE_ATTEMPTS=$attempts OPEN_MS=$($row.openedMs) RETURN_MS=$($row.closedMs) RSS_MIB=$($row.workingSetMiB) HANDLES=$($row.handles) GDI=$($row.gdi)"
  }
 }finally {
  $folder=Join-Path $base 'build/windows/shared_gui_ninja/diagnostics'
