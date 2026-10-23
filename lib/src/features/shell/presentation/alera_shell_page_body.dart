@@ -7,7 +7,53 @@ class _AleraShellPageBodyState extends ConsumerState<_AleraShellPageBody> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) async {
-      await ref.read(workbenchControllerProvider.notifier).bootstrap();
+      final controller = ref.read(workbenchControllerProvider.notifier);
+      await controller.bootstrap();
+      if (!mounted) return;
+
+      // Test-only navigation: the Windows E2E runner keeps its SQLite profile
+      // separate from the installed app, but a new process normally starts on
+      // Welcome without a selected workspace. Automated PTY handoff tests
+      // must not click an unrelated window on a mixed-DPI remote desktop.
+      // Both independent compile-time gates must be enabled explicitly.
+      const autoSelectE2ETerminal =
+          String.fromEnvironment('ALERA_E2E_DESKTOP') == '1' &&
+          bool.fromEnvironment('ALERA_E2E_AUTO_SELECT_TERMINAL');
+      if (autoSelectE2ETerminal) {
+        const workspaceId = 'alera-e2e-shared-window-workspace';
+        const tabId = 'alera-e2e-shared-window-editor';
+        // The project/workspace watchers hydrate asynchronously *after*
+        // bootstrap() returns. Poll only this isolated test run, with a firm
+        // deadline rather than blindly assuming the first snapshot is ready.
+        var available = false;
+        for (var attempt = 0; attempt < 100 && mounted; attempt++) {
+          available = ref
+              .read(workbenchControllerProvider)
+              .workspacesByProject
+              .values
+              .expand((workspaces) => workspaces)
+              .any((workspace) => workspace.id == workspaceId);
+          if (available) break;
+          await Future<void>.delayed(const Duration(milliseconds: 150));
+        }
+        if (!mounted) return;
+        if (!available) {
+          final state = ref.read(workbenchControllerProvider);
+          Logger('AleraE2ETerminalBootstrap').warning(
+            'E2E workspace was not hydrated after bootstrap '
+            'projects=${state.projects.length} '
+            'workspace_groups=${state.workspacesByProject.length} '
+            'error_present=${state.error != null}',
+          );
+        } else {
+          await controller.selectWorkspaceTab(
+            workspaceId: workspaceId,
+            tabId: tabId,
+          );
+          Logger('AleraE2ETerminalBootstrap')
+              .info('E2E test workspace selected');
+        }
+      }
     });
   }
 
