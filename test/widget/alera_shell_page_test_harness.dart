@@ -310,6 +310,7 @@ class _ShellTestWorkbenchController(
     required Workspace workspace,
     bool deleteBranch = true,
     String? activeWorkspaceId,
+    bool allowExternalWorktreeRemoval = false,
   }) async {
     if (deleteWorkspaceFailure case final Object failure) {
       throw failure;

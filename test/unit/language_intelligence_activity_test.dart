@@ -4,6 +4,36 @@ import 'package:alera/src/features/language_intelligence/domain/language_server_
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('parser status notifications do not reenter a widget build', () async {
+    final store = LanguageIntelligenceActivityStore();
+    addTearDown(store.dispose);
+    var insideProducer = false;
+    var notifiedSynchronously = false;
+    var notifications = 0;
+    final subscription = store.changes.listen((_) {
+      if (insideProducer) notifiedSynchronously = true;
+      notifications += 1;
+    });
+    addTearDown(subscription.cancel);
+
+    // CodeForge may publish a parser status from createRenderObject while
+    // another widget's StreamBuilder is mounted and Flutter is still building.
+    insideProducer = true;
+    store.reportStructuralParserDocument(
+      StructuralParserDocumentSnapshot(
+        language: LanguageId('dart'),
+        documentId: 'handoff_test.dart',
+        state: StructuralParserActivityState.ready,
+      ),
+    );
+    insideProducer = false;
+    expect(notifiedSynchronously, isFalse);
+    expect(notifications, 0);
+    await Future<void>.delayed(Duration.zero);
+    expect(notifications, 1);
+    expect(store.snapshot.parserFor(LanguageId('dart')), isNotNull);
+  });
+
   test('aggregates download, server, and parser activity', () {
     final store = LanguageIntelligenceActivityStore();
     addTearDown(store.dispose);
@@ -110,6 +140,7 @@ void main() {
       documentId: 'main.py',
     );
 
+    await Future<void>.delayed(Duration.zero);
     expect(emitted, hasLength(3));
     expect(
       emitted[0].parserFor(python)?.state,

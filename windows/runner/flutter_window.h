@@ -16,7 +16,8 @@
 class FlutterWindow : public Win32Window {
  public:
   // Creates a new FlutterWindow hosting a Flutter view running |project|.
-  explicit FlutterWindow(const flutter::DartProject& project);
+  explicit FlutterWindow(const flutter::DartProject& project,
+                         bool experimental_shared_engine = false);
   virtual ~FlutterWindow();
 
  protected:
@@ -29,6 +30,9 @@ class FlutterWindow : public Win32Window {
  private:
   // The project to run.
   flutter::DartProject project_;
+  // Off unless the user explicitly launches --alera-shared-engine-tabs.
+  // The established FlutterViewController remains the default.
+  bool experimental_shared_engine_ = false;
 
   // The Flutter instance hosted by this window.
   std::unique_ptr<flutter::FlutterViewController> flutter_controller_;

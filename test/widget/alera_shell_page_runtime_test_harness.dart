@@ -34,6 +34,7 @@ class const _FakeManagedWorkspaceRuntime()
     required Workspace workspace,
     bool? deleteBranch,
     String? activeWorkspaceId,
+    bool allowExternalWorktreeRemoval = false,
   }) async {}
 
   @override

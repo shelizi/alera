@@ -30,6 +30,7 @@ void main() {
     final scanTimer = Stopwatch()..start();
     final session = await native.startWorkspaceQuickOpenSession(
       workspacePath: workspace.path,
+      excludedDirectories: const <String>[],
     );
     scanTimer.stop();
     expect(session.indexedFileCount, _fileCount);
@@ -47,6 +48,7 @@ void main() {
         session: session,
         query: query,
         limit: _resultLimit,
+        includeGitignored: false,
       );
       timer.stop();
       expect(matches.length, lessThanOrEqualTo(_resultLimit));

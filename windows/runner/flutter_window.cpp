@@ -2,7 +2,11 @@
 
 #include <optional>
 
+#include <flutter/plugin_registrar.h>
+#include <flutter/plugin_registrar_windows.h>
+#include <flutter/plugin_registry.h>
 #include <flutter/standard_method_codec.h>
+#include <multi_view_desktop/multi_view_desktop.h>
 
 #include "flutter/generated_plugin_registrant.h"
 #include "flutter_view_message_guard.h"
@@ -12,6 +16,22 @@
 #include "win32_rich_clipboard.h"
 
 namespace {
+// The shared engine is owned by the multiview plugin. Obtain a stable
+// BinaryMessenger from a registrar scoped to that engine, rather than
+// creating a second FlutterViewController or retaining a temporary wrapper.
+flutter::BinaryMessenger* g_shared_native_messenger = nullptr;
+
+void RegisterSharedEnginePlugins(flutter::PluginRegistry* registry) {
+  RegisterPlugins(registry);
+  auto registrar_ref =
+      registry->GetRegistrarForPlugin("AleraRunnerNativeChannels");
+  if (!registrar_ref) return;
+  auto registrar = flutter::PluginRegistrarManager::GetInstance()
+                       ->GetRegistrar<flutter::PluginRegistrarWindows>(
+                           registrar_ref);
+  g_shared_native_messenger = registrar->messenger();
+}
+
 std::wstring PreviewTitleFromUtf8(const std::string& utf8) {
   if (utf8.empty()) return L"Tab";
   const int size = ::MultiByteToWideChar(
@@ -25,8 +45,10 @@ std::wstring PreviewTitleFromUtf8(const std::string& utf8) {
 }
 }  // namespace
 
-FlutterWindow::FlutterWindow(const flutter::DartProject& project)
-    : project_(project) {}
+FlutterWindow::FlutterWindow(const flutter::DartProject& project,
+                             bool experimental_shared_engine)
+    : project_(project),
+      experimental_shared_engine_(experimental_shared_engine) {}
 
 FlutterWindow::~FlutterWindow() {}
 
@@ -37,17 +59,32 @@ bool FlutterWindow::OnCreate() {
 
   RECT frame = GetClientArea();
 
-  // The size here must match the window dimensions to avoid unnecessary surface
-  // creation / destruction in the startup path.
-  flutter_controller_ = std::make_unique<flutter::FlutterViewController>(
-      frame.right - frame.left, frame.bottom - frame.top, project_);
-  // Ensure that basic setup of the controller was successful.
-  if (!flutter_controller_->engine() || !flutter_controller_->view()) {
-    return false;
+  HWND flutter_hwnd = nullptr;
+  flutter::BinaryMessenger* messenger = nullptr;
+  if (experimental_shared_engine_) {
+    // Exactly one Engine hosts all Flutter Views, only under the explicit
+    // --alera-shared-engine-tabs flag. Existing app channels still bind to
+    // the main HWND but their messenger is shared across the Dart isolate.
+    g_shared_native_messenger = nullptr;
+    MultiViewDesktopPrepareEngine(project_, GetHandle());
+    MultiViewDesktopCreateMainView(
+        GetHandle(), frame.right - frame.left, frame.bottom - frame.top,
+        RegisterSharedEnginePlugins);
+    flutter_hwnd =
+        MultiViewDesktopGetFlutterHwnd(MultiViewDesktopGetMainViewId());
+    messenger = g_shared_native_messenger;
+  } else {
+    // The established single-view runner is untouched for normal launches.
+    flutter_controller_ = std::make_unique<flutter::FlutterViewController>(
+        frame.right - frame.left, frame.bottom - frame.top, project_);
+    if (!flutter_controller_->engine() || !flutter_controller_->view()) {
+      return false;
+    }
+    RegisterPlugins(flutter_controller_->engine());
+    flutter_hwnd = flutter_controller_->view()->GetNativeWindow();
+    messenger = flutter_controller_->engine()->messenger();
   }
-  RegisterPlugins(flutter_controller_->engine());
-  const HWND flutter_hwnd = flutter_controller_->view()->GetNativeWindow();
-  if (!flutter_hwnd || !::IsWindow(flutter_hwnd)) {
+  if (!flutter_hwnd || !::IsWindow(flutter_hwnd) || !messenger) {
     return false;
   }
   SetChildContent(flutter_hwnd);
@@ -56,13 +93,13 @@ bool FlutterWindow::OnCreate() {
 
   app_menu_channel_ =
       std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
-          flutter_controller_->engine()->messenger(),
+          messenger,
           "dev.leynier.alera/app_menu",
           &flutter::StandardMethodCodec::GetInstance());
 
   desktop_presence_channel_ =
       std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
-          flutter_controller_->engine()->messenger(),
+          messenger,
           "dev.leynier.alera/desktop_presence",
           &flutter::StandardMethodCodec::GetInstance());
   desktop_presence_.Attach(GetHandle(), desktop_presence_channel_.get());
@@ -75,7 +112,7 @@ bool FlutterWindow::OnCreate() {
 
   file_drag_channel_ =
       std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
-          flutter_controller_->engine()->messenger(),
+          messenger,
           "dev.leynier.alera/native_file_drag",
           &flutter::StandardMethodCodec::GetInstance());
   file_drag_channel_->SetMethodCallHandler(
@@ -87,7 +124,7 @@ bool FlutterWindow::OnCreate() {
 
   rich_clipboard_channel_ =
       std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
-          flutter_controller_->engine()->messenger(),
+          messenger,
           "dev.leynier.alera/rich_clipboard",
           &flutter::StandardMethodCodec::GetInstance());
   rich_clipboard_channel_->SetMethodCallHandler(
@@ -103,7 +140,7 @@ bool FlutterWindow::OnCreate() {
   // the detached window or an unrelated application.
   detached_tab_channel_ =
       std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
-          flutter_controller_->engine()->messenger(),
+          messenger,
           "dev.leynier.alera/detached_tabs",
           &flutter::StandardMethodCodec::GetInstance());
   detached_tab_channel_->SetMethodCallHandler(
@@ -143,14 +180,18 @@ bool FlutterWindow::OnCreate() {
         result->Success(flutter::EncodableValue(on_this_window));
       });
 
-  flutter_controller_->engine()->SetNextFrameCallback([&]() {
+  if (!experimental_shared_engine_) {
+    flutter_controller_->engine()->SetNextFrameCallback([&]() {
+      this->Show();
+    });
+    // Flutter can complete the first frame before the "show window" callback
+    // is registered; request redraw using only the default controller.
+    flutter_controller_->ForceRedraw();
+  } else {
+    // Shared Engine owns every FlutterViewController. The multiview plugin
+    // drives first frames without a second runner-owned controller.
     this->Show();
-  });
-
-  // Flutter can complete the first frame before the "show window" callback is
-  // registered. The following call ensures a frame is pending to ensure the
-  // window is shown. It is a no-op if the first frame hasn't completed yet.
-  flutter_controller_->ForceRedraw();
+  }
 
   return true;
 }
@@ -166,6 +207,10 @@ void FlutterWindow::OnDestroy() {
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
   }
+  if (experimental_shared_engine_) {
+    // Only the plugin owns the shared engine's native lifetime.
+    g_shared_native_messenger = nullptr;
+  }
 
   Win32Window::OnDestroy();
 }
@@ -174,6 +219,16 @@ LRESULT
 FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
                               WPARAM const wparam,
                               LPARAM const lparam) noexcept {
+  if (experimental_shared_engine_ && message == WM_CLOSE) {
+    // The multi-view plugin would otherwise destroy the main engine's HWND
+    // (and all Editor windows) before Alera's async quit/save gate runs.
+    // Route only the native *main* close request back to the Dart lifecycle
+    // coordinator; its committed destroy uses WM_DESTROY, not WM_CLOSE.
+    if (detached_tab_channel_) {
+      detached_tab_channel_->InvokeMethod("mainCloseRequested", nullptr);
+    }
+    return 0;
+  }
   // A WM_PARENTNOTIFY/WM_DESTROY arrives while Flutter's child HWND is being
   // removed. Its embedder view may already be null even though the runner's
   // FlutterViewController still exists (GetEngine(nullptr) AV at +0x1e240).
@@ -181,6 +236,13 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
        reinterpret_cast<HWND>(lparam) == flutter_view_hwnd_) ||
       message == WM_DESTROY || message == WM_NCDESTROY) {
     flutter_view_ready_ = false;
+  }
+  if (experimental_shared_engine_) {
+    LRESULT result = 0;
+    if (MultiViewDesktopHandleWindowProc(hwnd, message, wparam, lparam,
+                                         &result)) {
+      return result;
+    }
   }
   const bool can_forward =
       flutter_controller_ &&
@@ -220,7 +282,9 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
       RefreshAleraMenuBarForDpi(hwnd);
       break;
     case WM_FONTCHANGE:
-      if (can_forward && flutter_controller_->engine()) {
+      if (experimental_shared_engine_ && MultiViewDesktopGetEngineRef()) {
+        FlutterDesktopEngineReloadSystemFonts(MultiViewDesktopGetEngineRef());
+      } else if (can_forward && flutter_controller_->engine()) {
         flutter_controller_->engine()->ReloadSystemFonts();
       }
       break;

@@ -1,9 +1,11 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:alera/src/app/app.dart';
 import 'package:alera/src/features/workbench/application/detached_tab_window_service.dart';
 import 'package:alera/src/features/workbench/application/detached_tab_bootstrap.dart';
 import 'package:alera/src/features/workbench/presentation/detached_tab_child_app.dart';
+import 'package:alera/src/features/workbench/presentation/shared_engine_detached_tab_window.dart';
 import 'package:window_manager/window_manager.dart';
 import 'package:alera/src/app/resource_manager_terminal_composition.dart';
 import 'package:alera/src/app/runtime_host_window_exit_composition.dart';
@@ -21,6 +23,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:ghostty_vte_flutter/ghostty_vte_flutter.dart';
 import 'package:logging/logging.dart';
+import 'package:multiview_desktop/multiview_desktop.dart';
+
+/// Deliberately command-line only. The normal Alera launch always retains
+/// the established per-process detached tab implementation.
+const experimentalSharedEngineTabsFlag = '--alera-shared-engine-tabs';
+
+bool isExperimentalSharedEngineTabsInvocation(List<String> args) =>
+    args.length == 1 && args.single == experimentalSharedEngineTabsFlag;
 
 Future<void> main(List<String> args) async {
   await runZonedGuarded<Future<void>>(() => _bootstrap(args), recordZoneError);
@@ -56,7 +66,10 @@ Future<void> _bootstrap(List<String> args) async {
   installGlobalErrorHandlers();
 
   // Privacy portable build: do not initialize the Sentry SDK at all.
-  await _startApp();
+  await _startApp(
+    sharedEngineTabs:
+        Platform.isWindows && isExperimentalSharedEngineTabsInvocation(args),
+  );
 }
 
 Future<void> _finishDetachedTabInitialization(
@@ -98,7 +111,7 @@ Future<void> _finishDetachedTabInitialization(
     );
     // Keep the synchronous provider contract for the actual editor widget.
     // Only the lightweight initial frame is rendered without the database.
-    final readyDatabase = childDatabase!;
+    final readyDatabase = childDatabase;
     await windowManager.setPreventClose(true);
     Logger('DetachedTabStartup')
         .info('Native tab initialized in ${elapsed.elapsedMilliseconds}ms');
@@ -144,7 +157,7 @@ Future<void> _finishDetachedTabInitialization(
   }
 }
 
-Future<void> _startApp() async {
+Future<void> _startApp({bool sharedEngineTabs = false}) async {
   await RustLib.init();
   AleraPerformanceTrace.mark('alera_rust_initialized');
   await code_forge.RustLib.init();
@@ -155,26 +168,45 @@ Future<void> _startApp() async {
   AleraPerformanceTrace.mark('ghostty_initialized');
   AleraPerformanceTrace.recordFirstFrame();
 
-  runApp(
-    ProviderScope(
-      observers: const <ProviderObserver>[LoggingProviderObserver()],
-      overrides: [
-        resourceManagerTerminalBindingOverride(),
-        terminalRuntimeBindingOverride(),
-        runtimeHostWindowExitOverride(),
-        if (windowBootstrap.database case final db?)
-          aleraDatabaseProvider.overrideWith((ref) {
-            ref.onDispose(() async {
-              await db.close();
-            });
-            // The desktop bootstrap already opened the database. Returning it
-            // synchronously keeps dependent providers out of AsyncLoading on
-            // their first build while preserving the FutureProvider contract.
-            return db;
-          }),
-      ],
-      child: const AleraApp(),
-    ),
+  Widget appScope(Widget child) => ProviderScope(
+    observers: const <ProviderObserver>[LoggingProviderObserver()],
+    overrides: [
+      resourceManagerTerminalBindingOverride(),
+      terminalRuntimeBindingOverride(),
+      runtimeHostWindowExitOverride(),
+      if (windowBootstrap.database case final db?)
+        aleraDatabaseProvider.overrideWith((ref) {
+          ref.onDispose(() async {
+            await db.close();
+          });
+          // The desktop bootstrap already opened the database. Returning it
+          // synchronously keeps dependent providers out of AsyncLoading on
+          // their first build while preserving the FutureProvider contract.
+          return db;
+        }),
+    ],
+    child: child,
   );
+
+  if (sharedEngineTabs) {
+    // All Flutter Views must share the *same* root ProviderScope. Creating a
+    // ProviderScope per child would silently duplicate EditorSessionRegistry,
+    // Rust-backed runtime state and the SQLite owner.
+    final windows = SharedEngineDetachedTabWindows();
+    detachedTabWindows.useExperimentalSharedBackend(windows);
+    runMultiApp(
+      home: (_, _) => const AleraApp(),
+      globalScope: appScope,
+      config: MultiAppConfig(
+        observers: <WindowObserver>[windows],
+        generalParams: MultiPlatformParams(
+          closeMode: CloseMode.softCascade,
+          animation: ViewAnimationConfig.disabled,
+        ),
+      ),
+    );
+  } else {
+    runApp(appScope(const AleraApp()));
+  }
   AleraPerformanceTrace.mark('run_app_called');
 }

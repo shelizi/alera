@@ -236,6 +236,7 @@ class const _ManagedWorkspaceRuntimeWithoutWatcher()
     required Workspace workspace,
     bool? deleteBranch,
     String? activeWorkspaceId,
+    bool allowExternalWorktreeRemoval = false,
   }) async {}
 }
 
@@ -283,5 +284,6 @@ class const _ManagedWorkspaceRuntimeWithDeferredSetup(
     required Workspace workspace,
     bool? deleteBranch,
     String? activeWorkspaceId,
+    bool allowExternalWorktreeRemoval = false,
   }) async {}
 }

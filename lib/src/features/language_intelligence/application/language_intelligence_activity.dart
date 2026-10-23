@@ -293,7 +293,10 @@ final class LanguageIntelligenceActivityStore
         LanguageIntelligenceActivityReporter {
   final StreamController<LanguageIntelligenceActivitySnapshot> _changes =
       StreamController<LanguageIntelligenceActivitySnapshot>.broadcast(
-        sync: true,
+        // The CodeForge native parser can update status from createRenderObject
+        // during build. Synchronous broadcast reenters StreamBuilder.setState
+        // and violates Flutter's build-phase invariant.
+        sync: false,
       );
   final Map<String, ManagedLanguageServerAcquisitionSnapshot> _acquisitions =
       <String, ManagedLanguageServerAcquisitionSnapshot>{};

@@ -9,6 +9,7 @@
 #include <desktop_drop/desktop_drop_plugin.h>
 #include <desktop_updater/desktop_updater_plugin.h>
 #include <file_selector_linux/file_selector_plugin.h>
+#include <multiview_desktop/multiview_desktop_plugin.h>
 #include <pasteboard/pasteboard_plugin.h>
 #include <record_linux/record_linux_plugin.h>
 #include <screen_retriever_linux/screen_retriever_linux_plugin.h>
@@ -25,6 +26,9 @@ void fl_register_plugins(FlPluginRegistry* registry) {
   g_autoptr(FlPluginRegistrar) file_selector_linux_registrar =
       fl_plugin_registry_get_registrar_for_plugin(registry, "FileSelectorPlugin");
   file_selector_plugin_register_with_registrar(file_selector_linux_registrar);
+  g_autoptr(FlPluginRegistrar) multiview_desktop_registrar =
+      fl_plugin_registry_get_registrar_for_plugin(registry, "MultiviewDesktopPlugin");
+  multiview_desktop_plugin_register_with_registrar(multiview_desktop_registrar);
   g_autoptr(FlPluginRegistrar) pasteboard_registrar =
       fl_plugin_registry_get_registrar_for_plugin(registry, "PasteboardPlugin");
   pasteboard_plugin_register_with_registrar(pasteboard_registrar);
