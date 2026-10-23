@@ -206,7 +206,11 @@ Future<void> _startApp({bool sharedEngineTabs = false}) async {
     // All Flutter Views must share the *same* root ProviderScope. Creating a
     // ProviderScope per child would silently duplicate EditorSessionRegistry,
     // Rust-backed runtime state and the SQLite owner.
-    final windows = SharedEngineDetachedTabWindows();
+    final windows = SharedEngineDetachedTabWindows(
+      experimentalTerminalTabs: const bool.fromEnvironment(
+        'ALERA_EXPERIMENTAL_SHARED_TERMINAL_TABS',
+      ),
+    );
     detachedTabWindows.useExperimentalSharedBackend(windows);
     runMultiApp(
       home: (_, _) => const AleraApp(),

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io' show Platform;
 
 import 'package:alera/src/features/workbench/application/detached_tab_window_service.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
@@ -10,7 +11,9 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   final now = DateTime.utc(2026, 10, 22);
 
-  DetachedTabDescriptor fixture() => DetachedTabDescriptor(
+  DetachedTabDescriptor fixture({
+    WorkspaceTabKind kind = WorkspaceTabKind.editor,
+  }) => DetachedTabDescriptor(
     workspace: Workspace(
       id: 'ws',
       projectId: 'project',
@@ -25,12 +28,98 @@ void main() {
       id: 'tab-a',
       workspaceId: 'ws',
       title: 'file.dart',
-      kind: WorkspaceTabKind.editor,
+      kind: kind,
       payload: const {'filePath': 'file.dart'},
       createdAt: now,
       updatedAt: now,
     ),
   );
+
+  test('Terminal sharing is opt-in and other kinds retain legacy windows', () {
+    final regular = SharedEngineDetachedTabWindows();
+    final experimental = SharedEngineDetachedTabWindows(
+      experimentalTerminalTabs: true,
+    );
+    addTearDown(regular.dispose);
+    addTearDown(experimental.dispose);
+
+    expect(regular.supports(fixture(kind: WorkspaceTabKind.terminal)), isFalse);
+    expect(
+      experimental.supports(fixture(kind: WorkspaceTabKind.terminal)),
+      Platform.isWindows,
+    );
+    expect(
+      regular.supports(fixture(kind: WorkspaceTabKind.editor)),
+      Platform.isWindows,
+    );
+    expect(
+      experimental.supports(fixture(kind: WorkspaceTabKind.editor)),
+      Platform.isWindows,
+    );
+    for (final kind in WorkspaceTabKind.values) {
+      if (kind == WorkspaceTabKind.editor ||
+          kind == WorkspaceTabKind.terminal) {
+        continue;
+      }
+      expect(experimental.supports(fixture(kind: kind)), isFalse);
+    }
+  });
+
+  test('opt-in Terminal never mounts two views during a handoff', () async {
+    if (!Platform.isWindows) return;
+    final sourceUnmounted = Completer<void>();
+    final closed = <int>[];
+    final bridge = SharedEngineDetachedTabWindows(
+      experimentalTerminalTabs: true,
+      openNativeWindow: (_, _) async => 71,
+      sourceFrameBarrier: () => sourceUnmounted.future,
+      closeNativeWindow: (viewId) async {
+        closed.add(viewId);
+        return true;
+      },
+    );
+    addTearDown(bridge.dispose);
+    final terminal = fixture(kind: WorkspaceTabKind.terminal);
+    final launched = bridge.detach(terminal);
+    await Future<void>.delayed(Duration.zero);
+    expect(bridge.isDetached(terminal.tab.id), isTrue);
+    expect(bridge.isLaunching(terminal.tab.id), isTrue);
+    expect(bridge.canRender(terminal.tab.id, 71), isFalse);
+    expect(await bridge.detach(terminal), isFalse);
+
+    sourceUnmounted.complete();
+    await Future<void>.delayed(Duration.zero);
+    expect(bridge.canRender(terminal.tab.id, 71), isTrue);
+    bridge.reportContentMounted(terminal.tab.id, 71);
+    expect(await launched, isTrue);
+    expect(bridge.isLaunching(terminal.tab.id), isFalse);
+
+    bridge.onWindowClosed(71);
+    await Future<void>.delayed(Duration.zero);
+    expect(bridge.isDetached(terminal.tab.id), isFalse);
+    expect(closed, isEmpty);
+  });
+
+  test('Terminal close during source unmount restores the original', () async {
+    if (!Platform.isWindows) return;
+    final unmounted = Completer<void>();
+    final bridge = SharedEngineDetachedTabWindows(
+      experimentalTerminalTabs: true,
+      openNativeWindow: (_, _) async => 72,
+      sourceFrameBarrier: () => unmounted.future,
+      closeNativeWindow: (_) async => true,
+    );
+    addTearDown(bridge.dispose);
+    final terminal = fixture(kind: WorkspaceTabKind.terminal);
+    final launched = bridge.detach(terminal);
+    await Future<void>.delayed(Duration.zero);
+    bridge.onWindowClosed(72);
+    unmounted.complete();
+    expect(await launched, isFalse);
+    await Future<void>.delayed(Duration.zero);
+    expect(bridge.isDetached(terminal.tab.id), isFalse);
+    expect(bridge.isLaunching(terminal.tab.id), isFalse);
+  });
 
   test(
     'two-stage handoff cannot mount child before source frame barrier',

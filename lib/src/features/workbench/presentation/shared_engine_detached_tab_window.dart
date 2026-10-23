@@ -19,15 +19,16 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:logging/logging.dart';
 import 'package:multiview_desktop/multiview_desktop.dart';
 
-/// Experimental Windows-only backend. Registered only if the application's
-/// root is runMultiApp and all views share the same root ProviderScope.
+/// Windows-only backend. Registered only if the application's root is
+/// runMultiApp and all views share the same root ProviderScope.
 ///
-/// DO NOT use for terminal, Git Diff, PDF or other tab types until their native
-/// per-view resources have been audited. Those retain the original new-process
-/// path, including the explicit-save requirement.
+/// Only Editor is enabled by default. A build-time opt-in can exercise the
+/// Terminal view handoff while its PTY, input method and plugin lifetime are
+/// audited. Git Diff, PDF and other types retain the process-backed path.
 final class SharedEngineDetachedTabWindows extends ChangeNotifier
     implements SharedEngineDetachedTabBackend, WindowObserver {
   SharedEngineDetachedTabWindows({
+    this.experimentalTerminalTabs = false,
     Future<int> Function(Widget Function(BuildContext, int), WindowOptions)?
     openNativeWindow,
     Future<void> Function()? sourceFrameBarrier,
@@ -46,6 +47,7 @@ final class SharedEngineDetachedTabWindows extends ChangeNotifier
 
   final Future<int> Function(Widget Function(BuildContext, int), WindowOptions)
   _openNativeWindow;
+  final bool experimentalTerminalTabs;
   final Future<void> Function() _sourceFrameBarrier;
   final Future<bool> Function(int) _closeNativeWindow;
   final Future<bool> Function() _isCursorOverMainWindow;
@@ -81,7 +83,10 @@ final class SharedEngineDetachedTabWindows extends ChangeNotifier
 
   @override
   bool supports(DetachedTabDescriptor descriptor) =>
-      Platform.isWindows && descriptor.tab.kind == WorkspaceTabKind.editor;
+      Platform.isWindows &&
+      (descriptor.tab.kind == WorkspaceTabKind.editor ||
+          (experimentalTerminalTabs &&
+              descriptor.tab.kind == WorkspaceTabKind.terminal));
 
   bool canRender(String tabId, int viewId) {
     final entry = _active[tabId];
@@ -102,11 +107,10 @@ final class SharedEngineDetachedTabWindows extends ChangeNotifier
     try {
       // The native window initially shows only a lightweight placeholder.
       // Reparenting an Editor's CodeForgeController directly is not supported.
-      // After the new HWND exists, hide the old widget, wait for dispose to
-      // snapshot the dirty document into EditorSessionRegistry, then build a
-      // fresh Editor widget under the *same* registry/ProviderScope.
+      // Terminal also owns a long-lived PTY and view attachment. Unmount the
+      // source before mounting either kind under the same ProviderScope.
       final windowId = await _openNativeWindow(
-        (context, nativeId) => _SharedDetachedEditorWindow(
+        (context, nativeId) => _SharedDetachedTabWindow(
           descriptor: descriptor,
           viewId: nativeId,
           controller: this,
@@ -128,7 +132,7 @@ final class SharedEngineDetachedTabWindows extends ChangeNotifier
         return false; // OS window closed while source was unmounting.
       }
       entry.contentMayMount = true;
-      notifyListeners(); // Only now is the child allowed to build the Editor.
+      notifyListeners(); // Only now may the child attach its tab surface.
       await entry.contentMounted.future.timeout(const Duration(seconds: 15));
       return identical(_active[id], entry) && !entry.nativeClosed && !_disposed;
     } catch (error, stack) {
@@ -287,8 +291,8 @@ final class _SharedTabWindow {
 /// Per-View MaterialApp only. No second ProviderScope or Rust/SQLite startup.
 /// A new Editor widget shares the primary's EditorSessionRegistry and all
 /// existing provider state, while a scoped native View ID controls close/title.
-final class _SharedDetachedEditorWindow extends ConsumerWidget {
-  const _SharedDetachedEditorWindow({
+final class _SharedDetachedTabWindow extends ConsumerWidget {
+  const _SharedDetachedTabWindow({
     required this.descriptor,
     required this.viewId,
     required this.controller,
@@ -383,8 +387,8 @@ final class _SharedDetachedEditorWindow extends ConsumerWidget {
               if (!controller.canRender(descriptor.tab.id, viewId)) {
                 return const Center(child: CircularProgressIndicator());
               }
-              return _SharedEditorFrame(
-                key: ValueKey('shared-editor-${descriptor.tab.id}-$viewId'),
+              return _SharedTabFrame(
+                key: ValueKey('shared-tab-${descriptor.tab.id}-$viewId'),
                 descriptor: descriptor,
                 controller: controller,
                 viewId: viewId,
@@ -397,8 +401,8 @@ final class _SharedDetachedEditorWindow extends ConsumerWidget {
   }
 }
 
-final class _SharedEditorFrame extends ConsumerStatefulWidget {
-  const _SharedEditorFrame({
+final class _SharedTabFrame extends ConsumerStatefulWidget {
+  const _SharedTabFrame({
     super.key,
     required this.descriptor,
     required this.controller,
@@ -409,10 +413,10 @@ final class _SharedEditorFrame extends ConsumerStatefulWidget {
   final int viewId;
 
   @override
-  ConsumerState<_SharedEditorFrame> createState() => _SharedEditorFrameState();
+  ConsumerState<_SharedTabFrame> createState() => _SharedTabFrameState();
 }
 
-final class _SharedEditorFrameState extends ConsumerState<_SharedEditorFrame> {
+final class _SharedTabFrameState extends ConsumerState<_SharedTabFrame> {
   @override
   void initState() {
     super.initState();
