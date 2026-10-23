@@ -1,5 +1,7 @@
 # Windows shared-engine Terminal opt-in experiment (2026-10-23)
 
+> **接手後先看：** [SHARED_TERMINAL_NEXT_STEPS.md](SHARED_TERMINAL_NEXT_STEPS.md)（目前工作樹狀態、未提交檔案、優先待辦、重建指令、驗收門檻）。本文件保留先前實驗與測試證據，**不能以舊版通過紀錄推定最新程式已通過驗收**。
+
 ## Baseline
 
 Windows Alera now starts in shared-engine mode by default for Editor tabs. Every other tab type still uses the legacy process-backed detached window. The supported Editor path and `--alera-legacy-detached-tabs` fallback remain unchanged.
