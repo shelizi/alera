@@ -4,9 +4,7 @@ import 'package:alera/src/features/workbench/application/detached_tab_window_ser
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 import 'package:alera/src/features/workbench/presentation/shared_engine_detached_tab_window.dart';
-import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:multiview_desktop/multiview_desktop.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
