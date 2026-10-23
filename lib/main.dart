@@ -111,7 +111,7 @@ Future<void> _finishDetachedTabInitialization(
     );
     // Keep the synchronous provider contract for the actual editor widget.
     // Only the lightweight initial frame is rendered without the database.
-    final readyDatabase = childDatabase!;
+    final readyDatabase = childDatabase;
     await windowManager.setPreventClose(true);
     Logger('DetachedTabStartup')
         .info('Native tab initialized in ${elapsed.elapsedMilliseconds}ms');
