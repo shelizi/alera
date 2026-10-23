@@ -11,7 +11,8 @@ param(
  [ValidateRange(1,4)][int]$MaxGestureAttempts=3,
  [ValidatePattern('^Alera - [A-Za-z0-9_ .-]{1,90}$')][string]$ChildTitle='Alera - handoff_test.dart',
  [ValidatePattern('^[A-Za-z0-9_-]+\.json$')][string]$ReportName='real_editor_native_cycles.json',
- [ValidateSet('EDITOR','TERMINAL')][string]$Scenario='EDITOR'
+ [ValidateSet('EDITOR','TERMINAL')][string]$Scenario='EDITOR',
+ [switch]$PreflightOnly
 )
 $ErrorActionPreference='Stop'
 $base=(Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
@@ -106,6 +107,29 @@ $main=[AleraE2ECyclesNative]::FindTopLevel($pidToProbe,$mainTitle)
 if($main -eq [IntPtr]::Zero){throw "E2E main not visible"}
 if([AleraE2ECyclesNative]::FindTopLevel($pidToProbe,$childTitle) -ne [IntPtr]::Zero){throw 'Unexpected preexisting child'}
 if([AleraE2ECyclesNative]::OwnedTopLevelCount($pidToProbe) -ne 1){throw 'Unexpected extra E2E HWNDs'}
+function Assert-PointInsideE2EFlutterView([IntPtr]$window,[int]$x,[int]$y,[string]$label){
+  $view=[AleraE2ECyclesNative]::FlutterChild($window)
+  if($view -eq [IntPtr]::Zero){throw 'No E2E FlutterView to hit-test'}
+  $parentRect=New-Object AleraE2ECyclesNative+RECT
+  $viewRect=New-Object AleraE2ECyclesNative+RECT
+  if(-not [AleraE2ECyclesNative]::GetWindowRect($window,[ref]$parentRect) -or
+      -not [AleraE2ECyclesNative]::GetWindowRect($view,[ref]$viewRect)) {
+    throw 'Could not read E2E Win32 window bounds'
+  }
+  $clientX=$x-($viewRect.Left-$parentRect.Left)
+  $clientY=$y-($viewRect.Top-$parentRect.Top)
+  if($clientX -lt 0 -or $clientY -lt 0 -or
+      $clientX -ge ($viewRect.Right-$viewRect.Left) -or
+      $clientY -ge ($viewRect.Bottom-$viewRect.Top)) {
+    throw "$label coordinate ($x,$y) outside E2E FlutterView; viewport may have resized. Recalibrate before starting a stream."
+  }
+}
+Assert-PointInsideE2EFlutterView $main $TabX $TabY 'Tab'
+Assert-PointInsideE2EFlutterView $main $MenuX $MenuY 'Popup menu'
+if($PreflightOnly){
+  Write-Output "E2E_COORDINATES_VALID=1 PID=$pidToProbe SCENARIO=$Scenario"
+  exit 0
+}
 $sw=[System.Diagnostics.Stopwatch]::StartNew()
 $cyclesResults=New-Object 'System.Collections.Generic.List[object]'
 $beginRss=[math]::Round($app.WorkingSet64/1MB,1)

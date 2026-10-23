@@ -1,6 +1,142 @@
 part of 'terminal_surface_test.dart';
 
 void _registerTerminalSurfaceTabSwitchTests() {
+  testWidgets('Terminal follows live output after a resized view handoff', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+    try {
+      final factory = _FakeTerminalPtySessionFactory();
+      final runtime = XtermTerminalRuntime(
+        ptySessionFactory: factory,
+        shellLaunchesBuilder: _testShellLaunches,
+      );
+      addTearDown(runtime.dispose);
+      final workspace = _workspace();
+      final tab = _tab();
+      final session = runtime.sessionFor(workspace: workspace, tab: tab);
+
+      Future<void> mountAtHeight(double height) async {
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: Align(
+                alignment: Alignment.topLeft,
+                child: SizedBox(
+                  width: 640,
+                  height: height,
+                  child: TerminalSurface(session: session),
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 200));
+      }
+
+      await mountAtHeight(260);
+      final pty = factory.sessions.single;
+      pty.emitOutput(
+        utf8.encode(
+          [for (var i = 0; i < 100; i++) 'VIEW_START_$i'].join('\r\n'),
+        ),
+      );
+      await _pumpTerminalOutput(tester);
+      var scroll = tester
+          .widget<xterm.TerminalView>(find.byType(xterm.TerminalView))
+          .scrollController!;
+      expect(scroll.position.extentAfter, lessThan(4));
+
+      // The old view was at the tail. While there is no view, keep writing;
+      // then attach the same session in a larger viewport and add more data.
+      await _hideTerminalSurface(tester);
+      pty.emitOutput(
+        utf8.encode(
+          [for (var i = 100; i < 145; i++) 'VIEW_GAP_$i'].join('\r\n'),
+        ),
+      );
+      await mountAtHeight(440);
+      pty.emitOutput(utf8.encode('\r\nVIEW_AFTER_RETURN\r\n'));
+      await _pumpTerminalOutput(tester);
+      scroll = tester
+          .widget<xterm.TerminalView>(find.byType(xterm.TerminalView))
+          .scrollController!;
+
+      expect(
+        terminalBufferTextForTesting(session),
+        contains('VIEW_AFTER_RETURN'),
+      );
+      expect(scroll.position.extentAfter, lessThan(4));
+      expect(pty.terminated, isFalse);
+      expect(factory.sessions, hasLength(1));
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
+
+  testWidgets('Continuous PTY output survives source and child view handoffs', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+    try {
+      final factory = _FakeTerminalPtySessionFactory();
+      final runtime = XtermTerminalRuntime(
+        ptySessionFactory: factory,
+        shellLaunchesBuilder: _testShellLaunches,
+      );
+      addTearDown(runtime.dispose);
+      final workspace = _workspace();
+      final tab = _tab();
+      final session = runtime.sessionFor(workspace: workspace, tab: tab);
+
+      await _pumpTerminalSurface(tester, session);
+      final pty = factory.sessions.single;
+      pty.emitOutput(utf8.encode('STREAM_BEGIN\r\n'));
+      await _pumpTerminalOutput(tester);
+
+      // Output must not kill the durable PTY during the brief gap between
+      // unmounting the source and mounting the new native Flutter view.
+      await _hideTerminalSurface(tester);
+      for (var index = 0; index < 45; index++) {
+        pty.emitOutput(utf8.encode('STREAM_GAP_$index\r\n'));
+      }
+      expect(runtime.peekSession(tab.id), same(session));
+      expect(pty.terminated, isFalse);
+
+      await _pumpTerminalSurface(
+        tester,
+        runtime.sessionFor(workspace: workspace, tab: tab),
+      );
+      pty.emitOutput(utf8.encode('STREAM_CHILD\r\n'));
+      await _pumpTerminalOutput(tester);
+      expect(terminalBufferTextForTesting(session), contains('STREAM_CHILD'));
+
+      // The child may close while stdout is still being delivered: the
+      // source must receive both the gap and the latest output after remount.
+      await _hideTerminalSurface(tester);
+      for (var index = 0; index < 45; index++) {
+        pty.emitOutput(utf8.encode('STREAM_RETURN_$index\r\n'));
+      }
+      await _pumpTerminalSurface(
+        tester,
+        runtime.sessionFor(workspace: workspace, tab: tab),
+      );
+      pty.emitOutput(utf8.encode('STREAM_END\r\n'));
+      await _pumpTerminalOutput(tester);
+
+      final buffer = terminalBufferTextForTesting(session);
+      expect(buffer, contains('STREAM_GAP_44'));
+      expect(buffer, contains('STREAM_RETURN_44'));
+      expect(buffer, contains('STREAM_END'));
+      expect(pty.terminated, isFalse);
+      expect(factory.sessions, hasLength(1));
+      expect(runtime.peekSession(tab.id), same(session));
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
+
   testWidgets('Terminal view handoff keeps its PTY and output history', (
     tester,
   ) async {
