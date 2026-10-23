@@ -105,6 +105,12 @@ Implemented in the isolated experiment:
 
 This instrumentation is deliberately narrow. If `peer_closed` recurs during future Windows Debug/Release runs, correlate the new `SocketTerminalHostClient` `origin=...` line with the host `cleanup-completion` timestamp before proposing additional automatic recovery. Still outstanding: native IME, mixed-DPI drag-back, clipboard/selection, multi-hour output and leak analysis. The experimental shared Terminal define stays **off by default**.
 
+#### Recompiled Debug GUI smoke after transport patch
+
+Re-generated the isolated Debug Flutter config and checked the exact `ALERA_E2E_DESKTOP=1`, `ALERA_E2E_SUPPORT_DIR=<worktree>/build/windows/shared_gui_ninja/e2e_support` and `ALERA_EXPERIMENTAL_SHARED_TERMINAL_TABS=true` defines. Native `flutter build windows --debug` again encountered this machine's CMake compiler-discovery issue; the checked-in `build_alera_in_worktree_debug.cmd` VC+Ninja fallback completed with exit **0** and `ISOLATED_DEBUG_BUNDLE_READY`. The rebuilt `alera-dev.exe` started as isolated PID **47788**, owned a single `Alera Dev` HWND and was `Responding=True`.
+
+During this session the remote desktop focus/coordinate mapping was unreliable with another running Alera window visible, so the rebuilt GUI **was not** put through another interactive long-output detach/return test. The script sent the normal quit command only to the exact isolated E2E PID and verified **E2E_PROCESS_EXITED=47788**. Do **not** count this as a new PTY handoff acceptance result; the previous 1,200-line and Release AOT native results predate the socket-reader changes. The new code's 1,500-frame single-connection validation was an in-process loopback test, not a native GUI test.
+
 For an isolated GUI build, keep the E2E App ID and support directory settings from `ALERA_PRODUCTION_INTEGRATION_HANDOFF.md` and additionally supply `--dart-define=ALERA_EXPERIMENTAL_SHARED_TERMINAL_TABS=true` during the Flutter compilation step. Merely passing a command-line argument to an already built EXE does not enable Terminal mode. Do not run experimental GUI tests against the real Alera user profile or modify an installed build.
 
 ## Safety limitations before promoting
