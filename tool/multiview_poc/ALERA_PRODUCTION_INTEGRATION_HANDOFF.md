@@ -42,7 +42,7 @@
 3. 拖回主視窗目前**只支援按 Return 按鈕**，尚未做 drag-back 原生 HWND hit-test；要做使用者要求的「拖出／拖回」UX 仍需新增。
 4. 子窗 WM_CLOSE（含 dirty buffer）已通過；仍需雙螢幕混合 DPI、IME、系統剪貼簿、Native method-channel 每窗路由、平台 tray/close、外部錯誤回退、Terminate/restart、長期資源變化及 Release 的完整互動延遲。
 5. 預設安裝環境能否完全避免因新增插件而提升啟動資源需比較。
-6. 功能目前不應合併 main / 做正式 release；保留 opt-in + 多程序 fallback。
+6. 正式 release 或預設啟用仍未達標；保留 Windows Editor-only opt-in + 多程序 fallback。是否將「預設關閉的實驗功能」合併 main，依最後的合併門檻測試判斷。
 
 ## 重現建置流程（Windows / MSVC + Ninja）
 
@@ -75,10 +75,20 @@ flutter test --no-pub test/unit/language_intelligence_activity_test.dart test/un
 - 記憶體及物件紀錄：20 輪起始 RSS 631.8 MiB，結束 657.3 MiB；Handle 1061→1092；GDI 18→18。短測有資源增量，尚須較長時間觀察回收斜率，不能聲稱完全無洩漏。明細：`build/windows/shared_gui_ninja/diagnostics/real_editor_native_cycles.json`（忽略版控）。
 - 實測發現 Flutter 在 Editor dispose 時 `ref.read` 已失效，以及 CodeForge 建構 RenderObject 時同步廣播 LanguageIntelligence 狀態觸發 `setState during build`。修正：`workspace_editor_surface.dart` 於 initState 快取 keepAlive language registry；`language_intelligence_activity.dart` 的廣播改為 async。TDD 先 RED 後 GREEN；相關 21/21 Flutter 測試通過。新的 E2E 測試時段沒有新增 SEVERE，舊四筆記錄保留，其中一筆為測試工具注入不合法 Windows Ctrl modifier 的斷言，現已移除該測試注入。
 - 真正 `Ctrl+S`：Flutter widget shortcut tests 已過；Windows `SendInput` 工具因 foreground 權限拒絕，未發送任何鍵盤事件，所以**實機 Ctrl+S 尚未證明**。子/主 Editor Save 按鈕的實機儲存均已成功。
-- 尚需：滑鼠原生拖回 UX（目前 Return 按鈕可行）、Terminal/PDF/Git Diff 等類型、多 Tab 多視窗同時運作、跨 DPI/螢幕 IME 與 plugin channel 路由、關主窗時子窗資料處理、Release 效能及較長時間資源壓力。**不合併 main、不推送或做正式發布。**
+- 尚需：滑鼠原生拖回 UX 實機手勢（目前 Return 按鈕可行）、Terminal/PDF/Git Diff 等類型、多 Tab 多視窗同時運作、跨 DPI/螢幕 IME 與 plugin channel 路由、Release 效能及較長時間資源壓力。此項清單建立於後續正式 Quit 防護測試前。
 
 重新建置時必須以 Dart define 指向這個 worktree 的 `build/windows/shared_gui_ninja/e2e_support`（不可使用舊的外部 C: 測試 profile）；`build_alera_in_worktree_debug.cmd` 將在 Dart define 不符合時拒絕執行。
 
+## 2026-10-23 合併門檻補測（最新）
+
+- **Windows 實際 Editor 生命週期**：已測 20/20 輪以及額外 200% DPI 的 30/30 輪同程序 Editor 原生拆窗、返回與 WM_CLOSE。高 DPI 30 輪中有 9 輪合成選單點擊需要重試；這是測試工具輸入的不確定性，不能算成 30/30 次手勢一次成功。沒有留下子 HWND；仍缺真正的滑鼠跨視窗 drag-back 端到端手勢驗證。
+- **明確 Quit 的資料保護**：在子 Editor 修改但尚未存檔時，主窗選單 Quit 出現 Unsaved detached editors；Cancel 保留兩窗與 Dirty Buffer，Save and Quit 真正把內容寫到磁碟再退出。普通 WM_CLOSE 的「隱藏至背景」是 Alera 原本的視窗政策，不能混同於 Quit。
+- **預設舊行為實機回退**：不帶 `--alera-shared-engine-tabs` 啟動隔離 E2E Alera，從 `handoff_test.dart` 的 Move to New Window 確實建立第二個 `alera-dev.exe --alera-detached-tab ...` 子程序（獨立 PID），子窗顯示 CodeForge Editor；Return to Alera 後子程序正常結束，主程序正常留存。這條路不依賴新的共用 Engine。
+- **測試**：多視窗/退出/既有 Socket/快捷鍵 31/31、舊子程序初始化和 parser 14/14、Editor/Workbench Widget 59/59，另外 Controller/Shell/圖片預覽/Shared 生命周期擴大回歸 250/250、修改後 child bootstrap 15/15。各批有重疊，不能把數字相加當成不重複案例。Windows Runner 原生 CTest **2/2**（`tool/multiview_poc/test_windows_native_runner.cmd`）。
+- **Flutter 靜態分析**：初次全量分析發現原本測試替身簽名及 benchmark 已落後 API，12 項編譯 error；已另行修正測試介面與兩個脆弱斷言，重新執行 `flutter analyze --no-pub --no-fatal-warnings --no-fatal-infos`，**0 error、exit 0**。仍有既有 warnings/info；這不代表 lint 全數歸零。
+- **安全界線**：新方案在 Windows 只有命令列精確 `--alera-shared-engine-tabs` 才生效，且只接管 Editor；預設仍沿用多程序拆窗。Flutter `multiview_desktop 2.0.2` 會對 macOS/Linux 產生插件註冊，但本次 Windows 主機未編譯其他桌面平台，**不可把其他平台當成已驗證或做正式全平台 release**。真正拖回操作、Ctrl+S 實機 SendInput、IME、混合 DPI 長期資源回收仍待驗證。
+- **合併政策**：以上證據足以在**維持預設關閉、仍有既有多程序回退**的前提下，合併實驗功能至本機 main 供後續測試；不表示可預設啟用或公開發布。
+
 ## 結論
 
-**進度：Windows 正式 Alera Editor 單 Engine 雙原生 HWND 已真實拆出、編輯、Save、無損帶回 dirty buffer；20/20 次原生拆窗/關窗驗證成功。仍是 Windows Editor-only opt-in 實驗，尚未到可合併主線的程度。**
+**截至 2026-10-23：Windows Editor 單 Engine 多 HWND、儲存/Dirty Buffer、子窗關閉、主程式明確 Quit 防護、以及預設多程序回退均有實機證據；程式分析無 error。可保守合併「預設關閉的實驗功能」到本機 main；仍不可宣稱功能全面成熟、已跨平台驗證或預設取代原本拆窗流程。**
