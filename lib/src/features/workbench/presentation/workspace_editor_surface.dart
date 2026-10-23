@@ -91,6 +91,9 @@ class _WorkspaceEditorSurfaceState
   late final EditorAutosaveController _autosave;
   late final LanguageIntelligenceManager _languageIntelligence;
   late final LanguageIntelligenceActivityReporter _languageActivity;
+  // The editor's dispose path may not access ref after Riverpod deactivates
+  // the widget. This keepAlive registry is stable for the editor's lifetime.
+  late final LanguageExtensionRegistry _languageExtensionRegistry;
   late EditorDocumentSession _document;
   Object? _loadError;
   bool _loading = true;
@@ -130,6 +133,7 @@ class _WorkspaceEditorSurfaceState
   void initState() {
     super.initState();
     _controller = code_forge.CodeForgeController();
+    _languageExtensionRegistry = ref.read(languageExtensionRegistryProvider);
     _controller.nativeSyntaxStatus.addListener(_handleNativeSyntaxStatus);
     _lastObservedDocumentVersion = _controller.documentVersion;
     _applyEditorSettings(
@@ -260,10 +264,7 @@ class _WorkspaceEditorSurfaceState
     final status = _controller.nativeSyntaxStatus.value;
     final filePath = widget.tab.filePath;
     if (filePath == null) return;
-    final language = ref
-        .read(languageExtensionRegistryProvider)
-        .languageForPath(filePath)
-        ?.id;
+    final language = _languageExtensionRegistry.languageForPath(filePath)?.id;
     if (language == null) return;
     if (status.state == code_forge.CodeForgeNativeSyntaxState.disabled) {
       _languageActivity.removeStructuralParserDocument(
@@ -298,10 +299,7 @@ class _WorkspaceEditorSurfaceState
 
   void _removeNativeSyntaxActivityForPath(String? filePath) {
     if (filePath == null) return;
-    final language = ref
-        .read(languageExtensionRegistryProvider)
-        .languageForPath(filePath)
-        ?.id;
+    final language = _languageExtensionRegistry.languageForPath(filePath)?.id;
     if (language != null) {
       _languageActivity.removeStructuralParserDocument(
         language: language,
