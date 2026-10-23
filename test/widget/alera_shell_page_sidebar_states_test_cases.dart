@@ -161,7 +161,8 @@ void _registerAleraShellSidebarStateTests() {
   ) async {
     await _pumpShell(tester, state: _linkedWorkbenchState());
 
-    expect(find.byIcon(AleraIcons.gitBranch), findsNWidgets(2));
+    // Count only workspace-tray branch glyphs: the shell now also renders
+    // a separate active-branch glyph outside the workspace metadata tray.
     expect(find.byKey(const Key('workspace-tray-branch')), findsNWidgets(2));
     expect(
       find.byWidgetPredicate(

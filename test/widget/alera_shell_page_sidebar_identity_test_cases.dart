@@ -75,7 +75,15 @@ void _registerAleraShellSidebarIdentityTests() {
     );
 
     expect(find.byType(AgentRunSharedSpinner), findsWidgets);
-    expect(find.byType(CircularProgressIndicator), findsNothing);
+    // Other parts of Alera can legitimately show a Material progress
+    // indicator. Workspace status glyphs must use the shared agent ticker.
+    expect(
+      find.descendant(
+        of: find.byKey(_statusGlyphKey),
+        matching: find.byType(CircularProgressIndicator),
+      ),
+      findsNothing,
+    );
   });
 }
 

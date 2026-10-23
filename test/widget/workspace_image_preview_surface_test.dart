@@ -252,7 +252,7 @@ WorkspaceTabRecord _tab(String id, String filePath) {
   );
 }
 
-class const _ResolvedWorkspaceFileService(final ResolvedWorkspaceFile file)
+class _ResolvedWorkspaceFileService(final ResolvedWorkspaceFile file)
     extends WorkspaceFileService {
   @override
   Future<ResolvedWorkspaceFile> resolveWorkspaceFilePath({
