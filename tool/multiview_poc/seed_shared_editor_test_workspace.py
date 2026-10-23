@@ -25,6 +25,72 @@ ORIGINAL_TEXT = """void main() {
 """
 
 
+def tab_details(tab_kind: str) -> tuple[str, dict[str, object]]:
+    if tab_kind == "editor":
+        return TEST_FILE, {"filePath": TEST_FILE, "preview": False}
+    if tab_kind == "terminal":
+        return "E2E Terminal", {"terminalSessionId": "alera-e2e-shared-terminal-session"}
+    raise ValueError("Unsupported E2E tab kind")
+
+
+def seed_local_workbench(
+    db: sqlite3.Connection, *, project_path: Path, seconds: int, tab_kind: str
+) -> None:
+    """Seed the disposable local Drift cache, not just its Runtime Host peer.
+
+    Dart Drift's DateTime columns use Unix seconds, unlike the Runtime Host
+    JSON/ISO-8601 timestamps. Without local rows, a cold offline launcher may
+    display Welcome despite a perfectly populated runtime.sqlite.
+    """
+    needed = {"projects_table", "workspaces_table", "workspace_tabs_table"}
+    present = {
+        row[0]
+        for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    }
+    if not needed.issubset(present):
+        raise RuntimeError("Unexpected local Drift schema; missing " + repr(needed - present))
+    title, payload = tab_details(tab_kind)
+    db.execute("BEGIN IMMEDIATE")
+    try:
+        db.execute(
+            """INSERT INTO projects_table(id,name,repo_path,created_at,updated_at,kind)
+               VALUES (?,?,?,?,?,?)
+               ON CONFLICT(id) DO UPDATE SET name=excluded.name,
+                 repo_path=excluded.repo_path, updated_at=excluded.updated_at,
+                 kind=excluded.kind""",
+            (PROJECT_ID, "Alera Shared Editor E2E", str(project_path),
+             seconds, seconds, "folder"),
+        )
+        db.execute(
+            """INSERT INTO workspaces_table(id,project_id,name,branch,path,
+                 created_at,updated_at,kind,status,source_branch,
+                 reuses_existing_branch,is_pinned,archived_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+               ON CONFLICT(id) DO UPDATE SET name=excluded.name,
+                 path=excluded.path, updated_at=excluded.updated_at,
+                 status=excluded.status, is_pinned=excluded.is_pinned,
+                 archived_at=NULL""",
+            (WORKSPACE_ID, PROJECT_ID, "E2E Workspace", None,
+             str(project_path), seconds, seconds, "main", "active", None,
+             0, 1, None),
+        )
+        db.execute(
+            """INSERT INTO workspace_tabs_table(id,workspace_id,kind,title,
+                 created_at,updated_at,payload_json)
+               VALUES (?,?,?,?,?,?,?)
+               ON CONFLICT(id) DO UPDATE SET workspace_id=excluded.workspace_id,
+                 kind=excluded.kind,title=excluded.title,
+                 updated_at=excluded.updated_at,
+                 payload_json=excluded.payload_json""",
+            (TAB_ID, WORKSPACE_ID, tab_kind, title, seconds, seconds,
+             json.dumps(payload)),
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--reset-test-file", action="store_true")
@@ -47,6 +113,7 @@ def main() -> None:
     )
     profile = build / "e2e_support"
     runtime_db = profile / "terminal_host" / "runtime.sqlite"
+    local_db = profile / "alera.sqlite"
     project_dir = build / "e2e_workspace"
     project_path = project_dir.resolve()
     runtime_path = runtime_db.resolve()
@@ -56,11 +123,17 @@ def main() -> None:
         raise RuntimeError("Refusing database outside ignored worktree build")
     if not runtime_path.is_file():
         raise RuntimeError("Start/stop isolated E2E Alera once to initialize Runtime DB first")
+    local_path = local_db.resolve()
+    if not local_path.is_relative_to(build.resolve()):
+        raise RuntimeError("Refusing local database outside ignored worktree build")
+    if not local_path.is_file():
+        raise RuntimeError("Start/stop isolated E2E Alera once to initialize local Drift DB")
     project_dir.mkdir(parents=True, exist_ok=True)
     file = project_dir / TEST_FILE
     if args.reset_test_file or not file.exists():
         file.write_text(ORIGINAL_TEXT, encoding="utf-8")
     now = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    seconds = int(datetime.now(timezone.utc).timestamp())
     db = sqlite3.connect(runtime_path)
     try:
         needed = {"projects", "workspaces", "workspaceTabs"}
@@ -84,12 +157,7 @@ def main() -> None:
             (WORKSPACE_ID, WORKSPACE_ID, "local", PROJECT_ID, "E2E Workspace",
              None, str(project_path), now, now, "main", "active", None, 0, 1, None),
         )
-        tab_title = TEST_FILE if args.tab_kind == "editor" else "E2E Terminal"
-        tab_payload = (
-            {"filePath": TEST_FILE, "preview": False}
-            if args.tab_kind == "editor"
-            else {"terminalSessionId": "alera-e2e-shared-terminal-session"}
-        )
+        tab_title, tab_payload = tab_details(args.tab_kind)
         db.execute(
             """INSERT INTO workspaceTabs(id,workspaceId,kind,title,createdAt,updatedAt,payloadJson)
                VALUES (?,?,?,?,?,?,?)
@@ -107,6 +175,17 @@ def main() -> None:
         raise
     finally:
         db.close()
+    local = sqlite3.connect(local_path)
+    try:
+        seed_local_workbench(
+            local, project_path=project_path, seconds=seconds,
+            tab_kind=args.tab_kind,
+        )
+    finally:
+        local.close()
+    print("SEED_LOCAL_OK", "local_db="+str(local_path),
+          "project="+PROJECT_ID, "workspace="+WORKSPACE_ID,
+          "tab="+TAB_ID, "kind="+args.tab_kind)
 
 
 if __name__ == "__main__":
