@@ -136,9 +136,11 @@ final class SharedEngineDetachedTabWindows extends ChangeNotifier
       await entry.contentMounted.future.timeout(const Duration(seconds: 15));
       return identical(_active[id], entry) && !entry.nativeClosed && !_disposed;
     } catch (error, stack) {
-      Logger(
-        'SharedEngineDetachedTabWindows',
-      ).warning('Failed to detach editor ${descriptor.tab.id}', error, stack);
+      Logger('SharedEngineDetachedTabWindows').warning(
+        'Failed to detach ${descriptor.tab.kind.name} tab ${descriptor.tab.id}',
+        error,
+        stack,
+      );
       if (entry != null && identical(_active[id], entry)) {
         _active.remove(id);
         notifyListeners();
@@ -238,10 +240,10 @@ final class SharedEngineDetachedTabWindows extends ChangeNotifier
       // removed entry to report a failed handoff without losing the tab.
       entry.contentMounted.complete();
     }
-    // The child Editor must unmount and materialize its dirty CodeForge buffer
-    // into the shared EditorSessionRegistry before the source remounts.
-    // Releasing the active tab immediately on this native close notification
-    // can briefly mount both Editors for the same tab id.
+    // The child must unmount before the source remounts: Editor materializes
+    // its dirty CodeForge buffer into the shared EditorSessionRegistry;
+    // Terminal releases its view/visibility attachment without killing PTY.
+    // Releasing the active tab immediately can mount both tab views at once.
     WidgetsBinding.instance.scheduleFrame();
     unawaited(_restoreSourceAfterNativeClose(tabId, entry));
   }
@@ -258,7 +260,7 @@ final class SharedEngineDetachedTabWindows extends ChangeNotifier
     }
     if (_disposed || !identical(_active[tabId], entry)) return;
     _active.remove(tabId);
-    // The main Editor remounts only after the child has had a teardown frame.
+    // The main tab remounts only after the child's teardown frame.
     notifyListeners();
   }
 
@@ -289,8 +291,8 @@ final class _SharedTabWindow {
 }
 
 /// Per-View MaterialApp only. No second ProviderScope or Rust/SQLite startup.
-/// A new Editor widget shares the primary's EditorSessionRegistry and all
-/// existing provider state, while a scoped native View ID controls close/title.
+/// A new tab widget shares the primary's EditorSessionRegistry, TerminalRuntime
+/// and provider state; its scoped native View ID controls close/title.
 final class _SharedDetachedTabWindow extends ConsumerWidget {
   const _SharedDetachedTabWindow({
     required this.descriptor,

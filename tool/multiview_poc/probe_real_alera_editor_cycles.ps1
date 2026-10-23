@@ -8,11 +8,29 @@ param(
  [int]$MenuY=252,
  [int]$ReturnX=1277,
  [int]$ReturnY=74,
- [ValidateRange(1,4)][int]$MaxGestureAttempts=3
+ [ValidateRange(1,4)][int]$MaxGestureAttempts=3,
+ [ValidatePattern('^Alera - [A-Za-z0-9_ .-]{1,90}$')][string]$ChildTitle='Alera - handoff_test.dart',
+ [ValidatePattern('^[A-Za-z0-9_-]+\.json$')][string]$ReportName='real_editor_native_cycles.json',
+ [ValidateSet('EDITOR','TERMINAL')][string]$Scenario='EDITOR'
 )
 $ErrorActionPreference='Stop'
 $base=(Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
 $exe=Join-Path $base 'build/windows/shared_gui_ninja/runner/Debug/alera-dev.exe'
+$buildConfig=Join-Path $base 'windows/flutter/ephemeral/generated_config.cmake'
+if($Scenario -eq 'TERMINAL') {
+  # Terminal is intentionally disabled in standard Alera builds. Avoid
+  # mistaking process-backed windows for this experimental one-engine test.
+  $define=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes('ALERA_EXPERIMENTAL_SHARED_TERMINAL_TABS=true'))
+  if(-not (Test-Path $buildConfig) -or -not [IO.File]::ReadAllText($buildConfig).Contains($define)) {
+    throw 'Refusing Terminal stress test without compiled experimental Terminal flag'
+  }
+  # Win32 PostMessage can open and native-close this tab reliably. The Return
+  # icon requires real desktop input, verified separately. Do not turn a
+  # synthetic hit-test failure into an Alera product failure.
+  if($NativeCloseEvery -ne 1) {
+    throw 'Terminal synthetic-cycle probe requires -NativeCloseEvery 1; verify Return using real mouse input'
+  }
+}
 $procs=@(Get-Process alera-dev -ErrorAction SilentlyContinue | Where-Object Path -eq $exe)
 if($procs.Count -ne 1){throw "Expected exactly one E2E Alera process; found $($procs.Count)"}
 $app=$procs[0]
@@ -83,7 +101,7 @@ public static class AleraE2ECyclesNative {
 }
 '@
 $mainTitle='Alera Dev'
-$childTitle='Alera - handoff_test.dart'
+$childTitle=$ChildTitle
 $main=[AleraE2ECyclesNative]::FindTopLevel($pidToProbe,$mainTitle)
 if($main -eq [IntPtr]::Zero){throw "E2E main not visible"}
 if([AleraE2ECyclesNative]::FindTopLevel($pidToProbe,$childTitle) -ne [IntPtr]::Zero){throw 'Unexpected preexisting child'}
@@ -146,8 +164,8 @@ try{
    }while([DateTime]::UtcNow -lt $end)
    if(-not $closed){throw "Cycle $i child window did not close"}
    $closeMs=$sw.ElapsedMilliseconds-$returnStart
-   # Native child HWND removal precedes the Dart source-editor frame barrier.
-   # Allow the main Editor and its tab gesture detector to remount before
+   # Native child HWND removal precedes the Dart source-tab frame barrier.
+   # Allow the main tab and its gesture detector to remount before
    # triggering the next simulated right-click.
    Start-Sleep -Milliseconds 900
    if([AleraE2ECyclesNative]::OwnedTopLevelCount($pidToProbe) -ne 1){throw "Cycle $i leaked HWND"}
@@ -166,8 +184,9 @@ try{
 }finally {
  $folder=Join-Path $base 'build/windows/shared_gui_ninja/diagnostics'
  New-Item -ItemType Directory -Force -Path $folder|Out-Null
- $file=Join-Path $folder 'real_editor_native_cycles.json'
+ $file=Join-Path $folder $ReportName
  $payload=[pscustomobject]@{
+   scenario=$Scenario;childTitle=$childTitle;
    pid=$pidToProbe;requested=$Cycles;completed=$cyclesResults.Count;
    rssInitialMiB=$beginRss;handlesInitial=$beginHandles;gdiInitial=$beginGdi;
    results=$cyclesResults.ToArray()
@@ -179,4 +198,4 @@ if($cyclesResults.Count -ne $Cycles){exit 2}
 $opens=@($cyclesResults|ForEach-Object openedMs|Sort-Object)
 $closes=@($cyclesResults|ForEach-Object closedMs|Sort-Object)
 $ix=[math]::Max(0,[math]::Ceiling($Cycles*0.95)-1)
-Write-Output "E2E_EDITOR_STRESS_PASS=$Cycles/$Cycles OPEN_P95_MS=$($opens[$ix]) CLOSE_P95_MS=$($closes[$ix])"
+Write-Output "E2E_${Scenario}_STRESS_PASS=$Cycles/$Cycles OPEN_P95_MS=$($opens[$ix]) CLOSE_P95_MS=$($closes[$ix])"

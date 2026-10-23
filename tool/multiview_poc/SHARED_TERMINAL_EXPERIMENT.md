@@ -31,7 +31,40 @@ Windows Native Runner CTest **3/3 passed**. The first isolated Windows Debug exe
 - Real desktop keyboard input in the child executed `echo SHARED_TERMINAL_OK` and displayed the matching output. Injecting raw `WM_CHAR` events to the native child was unreliable and produced duplicate characters; don't equate those synthetic events with real keyboard behavior.
 - Posting native `WM_CLOSE` to the exact E2E child HWND returned to one top-level window; the main Terminal tab restored the existing scrollback, including `SHARED_TERMINAL_OK`. Real desktop input then executed `echo RETURN_PTY_ALIVE` in the restored main Terminal, with matching output. Thus the PTY remained interactive after native close and reattachment in this run.
 - The real GUI screenshots and temporary data are stored only in the ignored per-worktree `build/windows/shared_gui_ninja/diagnostics` and `e2e_support` directories. Other running Alera processes and regular user data were not targeted.
-- **Still not accepted:** repeated long-running Terminal detach/return cycles, large ongoing PTY output, real drag-back mouse gestures, Zhuyin IME, mixed DPI, clipboard/mouse-selection, multiple simultaneous child terminals, packaged Release AOT, and memory/handle leak analysis. One working cycle does not establish these properties.
+- **At this first one-cycle checkpoint**, repeated Terminal handoffs, large ongoing PTY output, real drag-back mouse gestures, Zhuyin IME, mixed DPI, clipboard/mouse-selection, concurrent children, packaged Release AOT, and longer-term memory/handle behavior still needed testing. The next section records subsequent 60-cycle and two-child progress; sustained output, IME/DPI, clipboard, Release and multi-hour leak analysis remain outstanding.
+
+### Continued Windows stress and concurrent windows (2026-10-23)
+
+The already isolated Debug E2E application was exercised in the same process without restarting between the batches. `probe_real_alera_editor_cycles.ps1` now accepts a child title, scenario and unique diagnostics filename; the Editor defaults are unchanged. The Terminal scenario refuses a build without the experimental Dart define, and requires native `WM_CLOSE` for automated cycles because synthetic `PostMessage` clicks of the child Return icon were not reliable. A **real mouse click of Return** was tested separately and successfully docked the Terminal. Do not count the synthetic Return test failure as a product regression.
+
+PowerShell and desktop-input tools use differently scaled coordinates on this 125% DPI remote display. Initial `0/3` synthetic gestures missed the tab/menu. After inspecting the menu and calibrating native view-relative coordinates, all 60 subsequent gestures succeeded at their **first** attempt. Those coordinates are specific to the current test layout, not portable defaults.
+
+```powershell
+pwsh -NoProfile -File tool/multiview_poc/probe_real_alera_editor_cycles.ps1 `
+  -Scenario TERMINAL -ChildTitle 'Alera - E2E Terminal' `
+  -Cycles 30 -NativeCloseEvery 1 -ChildReadyWaitMs 250 `
+  -TabX 754 -TabY 107 -MenuX 430 -MenuY 386 `
+  -ReportName real_terminal_native_cycles_30.json
+```
+
+Results for the one native Windows PID (`11396`):
+
+| Measure | First 30 cycles | Next 30 cycles |
+|---|---:|---:|
+| Detach / native close success | **30/30** | **30/30** |
+| Open P95 (includes 500 ms synthetic popup wait) | 999 ms | 941 ms |
+| Close P95 | 66 ms | 64 ms |
+| Working set at batch start / finish | 594.8 / 617.6 MiB | 597.3 / 605.2 MiB |
+| Handle count at batch start / finish | 1027 / 1054 | 1025 / 1056 |
+| GDI objects at batch start / finish | 23 / 23 | 23 / 23 |
+
+Across the 60 post-close samples: RSS min/max **596.4/623.3 MiB**, handles **1043–1057**, GDI **always 23**, combined observed Open P95 **943 ms**, Close P95 **65 ms**. After returning to idle, RSS was approximately **595.5 MiB** and handles **1023**. This suggests transient allocations and no *obvious* monotonic growth in these 60 samples; it **does not prove leak-freedom**, especially for native PTY and renderer allocations over hours. Windows remained at one main HWND after each close. A real keyboard command `echo PTY_AFTER_60_CYCLES` still worked on the original shell after all 60 handoffs.
+
+Concurrent Terminal validation: open a second Terminal tab, detach `Terminal 1`, detach the original `E2E Terminal` at the same time. Windows reported **three HWNDs under the same PID**. Closing `E2E Terminal` returned to two HWNDs and left `Terminal 1` interactive (`echo SECOND_OK` completed); closing `Terminal 1` returned to one HWND with both tab records preserved. Switching to the original tab showed its previous `PTY_AFTER_60_CYCLES` output. A first burst of synthetic desktop typing dropped the start of a command, so only the subsequent successful real-input `echo SECOND_OK` is counted as confirmation.
+
+The JSON samples and Windows capture artifacts remain only in the ignored `build/windows/shared_gui_ninja/diagnostics/` directory. Neither `main` nor installed Alera was changed. Native close, PTY identity, and concurrent view lifecycle are substantially better verified now, but the experimental Terminal mode must **remain opt-in** pending mixed-DPI, IME, clipboard, sustained output, real drag-back, and Release validation.
+
+The final focused Flutter suite (shared backend, lifecycle, Dart entrypoint and TerminalSurface) passed **61/61**. The updated PowerShell cycle driver parsed successfully, the Dart source was formatted, and `git diff --check` passed. The disposable E2E process was shut down through Alera's own running-PTY confirmation dialog; no test GUI remains running.
 
 For an isolated GUI build, keep the E2E App ID and support directory settings from `ALERA_PRODUCTION_INTEGRATION_HANDOFF.md` and additionally supply `--dart-define=ALERA_EXPERIMENTAL_SHARED_TERMINAL_TABS=true` during the Flutter compilation step. Merely passing a command-line argument to an already built EXE does not enable Terminal mode. Do not run experimental GUI tests against the real Alera user profile or modify an installed build.
 
