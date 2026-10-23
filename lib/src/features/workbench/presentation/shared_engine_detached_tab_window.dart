@@ -14,6 +14,7 @@ import 'package:alera/src/features/workbench/presentation/detached_tab_child_app
 import 'package:alera/src/features/workbench/presentation/terminal_runtime_providers.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_workbench_view.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:logging/logging.dart';
@@ -32,6 +33,7 @@ final class SharedEngineDetachedTabWindows extends ChangeNotifier
     openNativeWindow,
     Future<void> Function()? sourceFrameBarrier,
     Future<bool> Function(int)? closeNativeWindow,
+    Future<bool> Function()? isCursorOverMainWindow,
   }) : _openNativeWindow =
            openNativeWindow ??
            ((builder, options) => openWindow(builder, options: options)),
@@ -39,12 +41,31 @@ final class SharedEngineDetachedTabWindows extends ChangeNotifier
            sourceFrameBarrier ?? (() => WidgetsBinding.instance.endOfFrame),
        _closeNativeWindow =
            closeNativeWindow ??
-           ((viewId) => MultiViewDesktop.fromId(viewId).closeWindow());
+           ((viewId) => MultiViewDesktop.fromId(viewId).closeWindow()),
+       _isCursorOverMainWindow =
+           isCursorOverMainWindow ?? _nativeCursorOverMainWindow;
 
   final Future<int> Function(Widget Function(BuildContext, int), WindowOptions)
   _openNativeWindow;
   final Future<void> Function() _sourceFrameBarrier;
   final Future<bool> Function(int) _closeNativeWindow;
+  final Future<bool> Function() _isCursorOverMainWindow;
+
+  // Registered only by the primary Win32 runner. Its WindowFromPoint result
+  // is false if another app *or the detached child* is covering the main HWND.
+  // Never infer this from Flutter's drag end offset: coordinates may be over
+  // an occluded area or a different monitor's scale.
+  static Future<bool> _nativeCursorOverMainWindow() async {
+    try {
+      return await const MethodChannel('dev.leynier.alera/detached_tabs')
+              .invokeMethod<bool>('isCursorOverWindow') ??
+          false;
+    } on MissingPluginException {
+      return false;
+    } on PlatformException {
+      return false;
+    }
+  }
 
   final Map<String, _SharedTabWindow> _active = <String, _SharedTabWindow>{};
   final Set<String> _pending = <String>{};
@@ -146,6 +167,39 @@ final class SharedEngineDetachedTabWindows extends ChangeNotifier
     return _closeNativeWindow(viewId);
   }
 
+  /// Dock on native drag end only when the OS pointer is really over Alera's
+  /// main HWND. The child must stay open for an unrelated application's HWND.
+  /// The identity check after awaiting the probe prevents an obsolete drag
+  /// from closing a newly opened window that happens to reuse the view id.
+  Future<bool> tryReturnTabAtPointer(String tabId, int viewId) async {
+    final entry = _active[tabId];
+    if (_disposed ||
+        entry == null ||
+        entry.viewId != viewId ||
+        entry.nativeClosed ||
+        !entry.contentMayMount ||
+        entry.dockInProgress) {
+      return false;
+    }
+    entry.dockInProgress = true;
+    try {
+      final allowed = await _isCursorOverMainWindow();
+      if (!allowed ||
+          _disposed ||
+          !identical(_active[tabId], entry) ||
+          entry.nativeClosed) {
+        return false;
+      }
+      return await _closeNativeWindow(viewId);
+    } catch (error, stack) {
+      Logger('SharedEngineDetachedTabWindows')
+          .warning('Native drag-back failed for $tabId', error, stack);
+      return false;
+    } finally {
+      entry.dockInProgress = false;
+    }
+  }
+
   @override
   void onWindowOpened(int viewId, {int? parentViewId}) {}
 
@@ -228,6 +282,7 @@ final class _SharedTabWindow {
   final Completer<void> contentMounted = Completer<void>();
   bool contentMayMount = false;
   bool nativeClosed = false;
+  bool dockInProgress = false;
 }
 
 /// Per-View MaterialApp only. No second ProviderScope or Rust/SQLite startup.
@@ -286,7 +341,30 @@ final class _SharedDetachedEditorWindow extends ConsumerWidget {
       ),
       home: Scaffold(
         appBar: AppBar(
-          title: Text(descriptor.tab.title),
+          title: Draggable<String>(
+            data: descriptor.tab.id,
+            dragAnchorStrategy: pointerDragAnchorStrategy,
+            onDragEnd: (_) => unawaited(
+              controller.tryReturnTabAtPointer(descriptor.tab.id, viewId),
+            ),
+            feedback: Material(
+              color: Colors.transparent,
+              child: DecoratedBox(
+                decoration: const BoxDecoration(color: Color(0xFF303030)),
+                child: Padding(
+                  padding: const EdgeInsets.all(10),
+                  child: Text(
+                    descriptor.tab.title,
+                    style: const TextStyle(color: Colors.white, fontSize: 13),
+                  ),
+                ),
+              ),
+            ),
+            child: Tooltip(
+              message: 'Drag onto the main Alera window to return this tab',
+              child: Text(descriptor.tab.title),
+            ),
+          ),
           actions: <Widget>[
             IconButton(
               tooltip: 'Return tab to main window',
