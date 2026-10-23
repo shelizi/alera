@@ -29,6 +29,12 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--reset-test-file", action="store_true")
     parser.add_argument(
+        "--tab-kind",
+        choices=("editor", "terminal"),
+        default="editor",
+        help="Use a disposable Terminal tab instead of the default Editor tab",
+    )
+    parser.add_argument(
         "--configuration",
         choices=("Debug", "Release"),
         default="Debug",
@@ -78,17 +84,24 @@ def main() -> None:
             (WORKSPACE_ID, WORKSPACE_ID, "local", PROJECT_ID, "E2E Workspace",
              None, str(project_path), now, now, "main", "active", None, 0, 1, None),
         )
+        tab_title = TEST_FILE if args.tab_kind == "editor" else "E2E Terminal"
+        tab_payload = (
+            {"filePath": TEST_FILE, "preview": False}
+            if args.tab_kind == "editor"
+            else {"terminalSessionId": "alera-e2e-shared-terminal-session"}
+        )
         db.execute(
             """INSERT INTO workspaceTabs(id,workspaceId,kind,title,createdAt,updatedAt,payloadJson)
                VALUES (?,?,?,?,?,?,?)
                ON CONFLICT(id) DO UPDATE SET workspaceId=excluded.workspaceId, kind=excluded.kind,
                  title=excluded.title,payloadJson=excluded.payloadJson""",
-            (TAB_ID, WORKSPACE_ID, "editor", TEST_FILE, now, now,
-             json.dumps({"filePath":TEST_FILE,"preview":False})),
+            (TAB_ID, WORKSPACE_ID, args.tab_kind, tab_title, now, now,
+             json.dumps(tab_payload)),
         )
         db.commit()
         print("SEED_OK", "test_db="+str(runtime_path), "project="+str(project_path),
-              "tab="+TAB_ID, "file_sha_seed_bytes="+str(file.stat().st_size))
+              "tab="+TAB_ID, "kind="+args.tab_kind,
+              "file_sha_seed_bytes="+str(file.stat().st_size))
     except Exception:
         db.rollback()
         raise
