@@ -6,7 +6,7 @@
 - **未合併、未推送 main，亦未取代任何已安裝的 Alera。**
 - **預設功能關閉**：一般 Windows 啟動維持 `FlutterViewController + runApp` 與 Socket/獨立程序拆窗。新插件會註冊，但實驗 Shared Engine 只在命令列唯一完整參數為 `--alera-shared-engine-tabs` 時啟動；獨立 Tab 子程序仍走舊流程。
 - 實驗單引擎共享 `ProviderScope`，僅 Editor Tab `WorkspaceTabKind.editor` 可走共用狀態；Terminal、Git Diff、PDF 等保留多程序 fallback。尚未驗證其餘類型在 single-engine root 下與舊流程的實機共存。
-- 使用 `ALERA_E2E_DESKTOP=1` 使原生 App ID 獨立；且必須把 `ALERA_E2E_SUPPORT_DIR=C:/a_mv_20261022/e2e_support` 編譯進 Flutter kernel，隔離 Alera SQLite、TerminalHost 與 AppLogger 主要資料。建置腳本在缺少此 Dart define 時直接停止；不可在真實個人設定上測試此實驗版。
+- 使用 `ALERA_E2E_DESKTOP=1` 使原生 App ID 獨立；且必須把 `ALERA_E2E_SUPPORT_DIR=<worktree>/build/windows/shared_gui_ninja/e2e_support` 編譯進 Flutter kernel，隔離 Alera SQLite、TerminalHost 與 AppLogger 主要資料。建置腳本在缺少此 Dart define 時直接停止；不可在真實個人設定上測試此實驗版。
 - 新版僅支援 Windows；macOS/Linux 插件相依變更雖生成註冊檔，但尚未編譯、驗證。
 
 ## 實作與修正
@@ -22,25 +22,25 @@
 
 ## 已通過驗證（2026-10-23）
 
-- **17/17 Flutter 測試通過**：
+- **21/21 Flutter 測試通過**（加上 LanguageIntelligenceActivityStore 新增的非同步通知回歸測試）：
   ```powershell
-  flutter test --no-pub test/unit/detached_tab_entrypoint_compile_test.dart test/unit/shared_engine_detached_backend_test.dart test/unit/shared_engine_detached_window_lifecycle_test.dart test/unit/detached_tab_window_service_test.dart test/widget/detached_tab_save_shortcuts_test.dart
+  flutter test --no-pub test/unit/language_intelligence_activity_test.dart test/unit/detached_tab_entrypoint_compile_test.dart test/unit/shared_engine_detached_backend_test.dart test/unit/shared_engine_detached_window_lifecycle_test.dart test/unit/detached_tab_window_service_test.dart test/widget/detached_tab_save_shortcuts_test.dart
   ```
   涵蓋既有 Socket 手握／失敗回退、共享後端 opt-in、重複拆窗、啟動參數、child WM_CLOSE 在來源卸載途中及已掛載後、返回需等 source/child frame barrier、Ctrl+S、Meta+S、Terminal 不誤觸 Editor save。
 - MSVC 語法、正式 CMake Windows `flutter_window.cpp` / `main.cpp` 原生物件編譯通過。
 - 使用 Ninja Multi-Config 完整編譯 **Windows Debug EXE** 並完成 CMake install，正確安裝 `alera_native.dll`、`code_forge.dll`、`flutter_local_notifications_windows.dll`、`dartjni.dll`、Flutter kernel + assets、terminal-related native DLL；程序 exit code 0。
 - 先前缺 Rust DLL 的確切原因：單獨呼叫 Ninja 時沒有 `FLUTTER_ROOT`，導致 Cargokit 找不到 Dart SDK，且舊 build-tool script 回傳碼可誤判成功。測試腳本現在尋找 SDK 並**檢查實際 DLL 存在**，已從此 worktree 成功編出 Rust Alera Native 與 CodeForge。
 - 為遵守 MCP workspace executable policy，另於本 worktree `build/windows/shared_gui_ninja/runner/Debug` 完成可執行的 Windows GUI Debug bundle（未複製日期/來源不明 DLL，並確認必需產物）。
-- **實機主視窗 smoke 過關（於子窗最新改動前）**：使用 `--alera-shared-engine-tabs` 啟動了本 worktree 的測試 EXE，Dart VM service 與 Impeller 初始化；Windows 程序 Responding=True 且有主 HWND；實際載入上述 Alera native、CodeForge、multiview DLL；產生 `C:/a_mv_20261022/e2e_support/alera.sqlite` 與 TerminalHost 相關測試資料；使用 `CloseMainWindow` 對該測試 PID 發送 WM_CLOSE，正常退出，其他 worktree 的 Alera 進程沒有受到影響。
-- 上述 **主視窗啟動成功不等於實際 Editor 拆出成功**；最新的快捷鍵、關窗 frame barrier 只有 Flutter tests 驗證，尚未重編並進行該版 GUI 操作。
+- **實機主視窗 smoke 過關（於子窗最新改動前）**：使用 `--alera-shared-engine-tabs` 啟動了本 worktree 的測試 EXE，Dart VM service 與 Impeller 初始化；Windows 程序 Responding=True 且有主 HWND；實際載入上述 Alera native、CodeForge、multiview DLL；產生 `<worktree>/build/windows/shared_gui_ninja/e2e_support/alera.sqlite` 與 TerminalHost 相關測試資料；使用 `CloseMainWindow` 對該測試 PID 發送 WM_CLOSE，正常退出，其他 worktree 的 Alera 進程沒有受到影響。
+- 後續已完成真正 Editor 拆出及保存、帶 dirty buffer 返回、原生 WM_CLOSE、20 輪實機壓測；見後方 2026-10-23 最新驗證段落。
 - `git diff --check` 與 Dart formatter 通過。先前整個 root 的 `flutter analyze` 超時，尚未確認全量 analyzer lint clean。
 
-## 仍待實際 GUI/安全驗證
+## 尚未完成的驗證
 
-1. 重新以 `build_alera_in_worktree_debug.cmd` 編入最後的 shared Editor shell 變更，檢查 isolated Dart define 仍存在。
-2. **使用真正的 Editor**：選擇測試工作區中的測試檔（不要操作個人工作專案），在 dirty buffer 狀態拆出/保存/返回，反覆至少 20 次，觀察文件快照、selection、scroll、CodeForge session 與 Ctrl+S；無主子雙重掛載。
+1. Ctrl+S 實機（widget test 通過，但 Windows 前景政策拒絕了本次測試工具的 SendInput）。子窗與主窗 Save 按鈕實機通過。
+2. 20 輪原生拆窗/返回及一次 dirty buffer 交接已成功；仍需真正滑鼠拖回命中測試、多 Tab 併發、selection、scroll、撤銷歷程、操作中跨窗切換等更深層狀態驗證。
 3. 拖回主視窗目前**只支援按 Return 按鈕**，尚未做 drag-back 原生 HWND hit-test；要做使用者要求的「拖出／拖回」UX 仍需新增。
-4. 子窗 WM_CLOSE、雙螢幕與混合 DPI、IME、視窗/文字輸入/系統剪貼簿、Native method-channel 視窗歸屬、平台 tray/close、安全回退、Terminate/restart、長期記憶體和啟動速度均待實機核對。PoC 的結果不可當成正式 Alera 結果。
+4. 子窗 WM_CLOSE（含 dirty buffer）已通過；仍需雙螢幕混合 DPI、IME、系統剪貼簿、Native method-channel 每窗路由、平台 tray/close、外部錯誤回退、Terminate/restart、長期資源變化及 Release 的完整互動延遲。
 5. 預設安裝環境能否完全避免因新增插件而提升啟動資源需比較。
 6. 功能目前不應合併 main / 做正式 release；保留 opt-in + 多程序 fallback。
 
@@ -49,7 +49,8 @@
 在本 worktree：
 ```powershell
 # 首先讓 Flutter 產生包含隔離資料目錄的 Windows generated_config.cmake：
-flutter build windows --debug --no-pub --dart-define=ALERA_E2E_SUPPORT_DIR=C:/a_mv_20261022/e2e_support
+$root = (Get-Location).Path.Replace('\', '/')
+flutter build windows --debug --no-pub --dart-define="ALERA_E2E_SUPPORT_DIR=$root/build/windows/shared_gui_ninja/e2e_support"
 
 # 此主機上直接 flutter build 可能因 MSBuild 編譯器偵測失敗，
 # 若 config 已成功產生，改用下列 Ninja 腳本。
@@ -57,13 +58,27 @@ flutter build windows --debug --no-pub --dart-define=ALERA_E2E_SUPPORT_DIR=C:/a_
 tool\multiview_poc\build_alera_in_worktree_debug.cmd
 
 # 完整程式碼回歸：
-flutter test --no-pub test/unit/detached_tab_entrypoint_compile_test.dart test/unit/shared_engine_detached_backend_test.dart test/unit/shared_engine_detached_window_lifecycle_test.dart test/unit/detached_tab_window_service_test.dart test/widget/detached_tab_save_shortcuts_test.dart
+flutter test --no-pub test/unit/language_intelligence_activity_test.dart test/unit/detached_tab_entrypoint_compile_test.dart test/unit/shared_engine_detached_backend_test.dart test/unit/shared_engine_detached_window_lifecycle_test.dart test/unit/detached_tab_window_service_test.dart test/widget/detached_tab_save_shortcuts_test.dart
 ```
 - 實驗測試版在 `build/windows/shared_gui_ninja/runner/Debug/alera-dev.exe`；真正 E2E 啟動需要**唯一參數** `--alera-shared-engine-tabs`。
 - 需 MSVC 18 Community vcvars、Ninja 與既有可重用同專案 CLI sidecar（測試專用環境 `ALERA_E2E_REUSE_CLI=1`），避免大量無關 Rust CLI 重編譯。
 - 輔助工具 `tool/multiview_poc/` 含：native 語法測試、Ninja 配置、隔離 Build、FFI DLL 存在性檢查與日誌檔版本。CMake 短路徑 `C:/a_mv_20261022` 在本主機仍有，不應視為正式版本輸出。
 - GUI E2E 路徑必須保持資料隔離，且勿以全域 Desktop 輸入干擾另一個使用中的 Alera/Parsec 工作階段。
 
+## 2026-10-23 最新真實 Editor GUI 驗證（取代前述部分待驗證項目）
+
+- 使用本 worktree 的 Windows Debug EXE，唯一實驗參數 `--alera-shared-engine-tabs`。先啟動/關閉一次讓隔離 Runtime DB 初始化，再以 `python tool/multiview_poc/seed_shared_editor_test_workspace.py --reset-test-file` 建立獨立測試 Project、Workspace 和 `handoff_test.dart`。測試資料全部位於 worktree 被忽略的 `build/windows/shared_gui_ninja/`。
+- 真實 Alera 專案側欄能看到測試 Project / Workspace；選取後 CodeForge Editor 正常顯示。從右鍵 Move to New Window 成功建立第二個原生 HWND。Windows PID 32332 保持不變；主窗與子窗各有自己的 Flutter View。`capture_alera_gui_window.ps1` 已擷取兩窗實際內容。
+- 向子 Flutter HWND 送出文字後，Editor 畫面呈現新的 dirty buffer，磁碟尚無新字串；點子窗 Save 後磁碟真的寫入。再建立未保存文字並按子窗 Return，主 Editor 重新掛載後保留 dirty 文字、磁碟未被修改；最後在主窗 Save 可成功寫檔。
+- 另測試對含 dirty buffer 的子 HWND 直接發原生 `WM_CLOSE`；第二個 HWND 關閉，主 Editor 自動顯示原 dirty 文字、磁碟仍未改，主窗再 Save 正常落地。
+- `probe_real_alera_editor_cycles.ps1` 跑過真正 Alera **20/20 次**原生 Editor 拆窗/返回：16 次 Return UI、4 次 Windows `WM_CLOSE`。每輪可見 HWND 由 1→2→1，沒有留下子視窗。原生 HWND 生命週期 Open P95 **526 ms**，Close P95 **278 ms**；曾見單次 Open 856 ms、Close 742 ms。**這不是放開拖曳至畫面完全可互動的端到端延遲，也不等於 release 版速度。**
+- 記憶體及物件紀錄：20 輪起始 RSS 631.8 MiB，結束 657.3 MiB；Handle 1061→1092；GDI 18→18。短測有資源增量，尚須較長時間觀察回收斜率，不能聲稱完全無洩漏。明細：`build/windows/shared_gui_ninja/diagnostics/real_editor_native_cycles.json`（忽略版控）。
+- 實測發現 Flutter 在 Editor dispose 時 `ref.read` 已失效，以及 CodeForge 建構 RenderObject 時同步廣播 LanguageIntelligence 狀態觸發 `setState during build`。修正：`workspace_editor_surface.dart` 於 initState 快取 keepAlive language registry；`language_intelligence_activity.dart` 的廣播改為 async。TDD 先 RED 後 GREEN；相關 21/21 Flutter 測試通過。新的 E2E 測試時段沒有新增 SEVERE，舊四筆記錄保留，其中一筆為測試工具注入不合法 Windows Ctrl modifier 的斷言，現已移除該測試注入。
+- 真正 `Ctrl+S`：Flutter widget shortcut tests 已過；Windows `SendInput` 工具因 foreground 權限拒絕，未發送任何鍵盤事件，所以**實機 Ctrl+S 尚未證明**。子/主 Editor Save 按鈕的實機儲存均已成功。
+- 尚需：滑鼠原生拖回 UX（目前 Return 按鈕可行）、Terminal/PDF/Git Diff 等類型、多 Tab 多視窗同時運作、跨 DPI/螢幕 IME 與 plugin channel 路由、關主窗時子窗資料處理、Release 效能及較長時間資源壓力。**不合併 main、不推送或做正式發布。**
+
+重新建置時必須以 Dart define 指向這個 worktree 的 `build/windows/shared_gui_ninja/e2e_support`（不可使用舊的外部 C: 測試 profile）；`build_alera_in_worktree_debug.cmd` 將在 Dart define 不符合時拒絕執行。
+
 ## 結論
 
-**進度：真實 Alera Windows 主窗單 Engine 實驗路徑可編譯、連結、完整打包並安全啟動退出；Editor 子窗只有契約、生命週期與儲存測試通過，尚未達正式 GUI 20 輪驗證或可合併主線的程度。**
+**進度：Windows 正式 Alera Editor 單 Engine 雙原生 HWND 已真實拆出、編輯、Save、無損帶回 dirty buffer；20/20 次原生拆窗/關窗驗證成功。仍是 Windows Editor-only opt-in 實驗，尚未到可合併主線的程度。**

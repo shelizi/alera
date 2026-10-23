@@ -1,0 +1,161 @@
+param(
+ [ValidateRange(1,200)][int]$Cycles=20,
+ [ValidateRange(0,20)][int]$NativeCloseEvery=5,
+ [ValidateRange(50,2000)][int]$ChildReadyWaitMs=350
+)
+$ErrorActionPreference='Stop'
+$base=(Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
+$exe=Join-Path $base 'build/windows/shared_gui_ninja/runner/Debug/alera-dev.exe'
+$procs=@(Get-Process alera-dev -ErrorAction SilentlyContinue | Where-Object Path -eq $exe)
+if($procs.Count -ne 1){throw "Expected exactly one E2E Alera process; found $($procs.Count)"}
+$app=$procs[0]
+$pidToProbe=$app.Id
+Add-Type @'
+using System;
+using System.Collections.Generic;
+using System.Text;
+using System.Runtime.InteropServices;
+public static class AleraE2ECyclesNative {
+ public delegate bool Callback(IntPtr handle, IntPtr unused);
+ [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left,Top,Right,Bottom; }
+ [DllImport("user32.dll")] public static extern bool EnumWindows(Callback cb,IntPtr data);
+ [DllImport("user32.dll")] public static extern bool EnumChildWindows(IntPtr hwnd, Callback cb,IntPtr data);
+ [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hwnd);
+ [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hwnd,out uint pid);
+ [DllImport("user32.dll",CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr hwnd,StringBuilder outBuf,int size);
+ [DllImport("user32.dll",CharSet=CharSet.Unicode)] public static extern int GetClassName(IntPtr hwnd,StringBuilder outBuf,int size);
+ [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hwnd,out RECT rect);
+ [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr hwnd,uint msg,UIntPtr wp,IntPtr lp);
+ [DllImport("user32.dll")] public static extern uint GetGuiResources(IntPtr proc,uint flag);
+ public static IntPtr FindTopLevel(int targetPid,string title) {
+   IntPtr found=IntPtr.Zero;
+   EnumWindows((h,_)=>{
+     uint pid;GetWindowThreadProcessId(h,out pid);
+     if(pid!=(uint)targetPid || !IsWindowVisible(h)) return true;
+     var buf=new StringBuilder(256);GetWindowText(h,buf,buf.Capacity);
+     if(buf.ToString()==title){found=h;return false;}
+     return true;
+   },IntPtr.Zero);
+   return found;
+ }
+ public static int OwnedTopLevelCount(int targetPid){
+   var count=0;
+   EnumWindows((h,_)=>{uint pid;GetWindowThreadProcessId(h,out pid);
+     if(pid==(uint)targetPid && IsWindowVisible(h)) count++;return true;},IntPtr.Zero);
+   return count;
+ }
+ public static IntPtr FlutterChild(IntPtr parent) {
+   IntPtr found=IntPtr.Zero;
+   EnumChildWindows(parent,(h,_)=>{
+     var b=new StringBuilder(256);GetClassName(h,b,b.Capacity);
+     if(b.ToString()=="FLUTTERVIEW"){found=h;return false;}
+     return true;
+   },IntPtr.Zero);
+   return found;
+ }
+ public static IntPtr Pack(int x,int y){
+   return new IntPtr((y & 0xffff)<<16 | (x & 0xffff));
+ }
+ public static bool Mouse(IntPtr parent,int x,int y,bool right){
+   if(parent==IntPtr.Zero)return false;
+   var view=FlutterChild(parent);
+   if(view==IntPtr.Zero)return false;
+   RECT pr,vr;
+   GetWindowRect(parent,out pr);GetWindowRect(view,out vr);
+   int cx=x-(vr.Left-pr.Left);
+   int cy=y-(vr.Top-pr.Top);
+   if(cx<0 || cy<0 || cx>=vr.Right-vr.Left || cy>=vr.Bottom-vr.Top)return false;
+   var lp=Pack(cx,cy);
+   uint flag=right?2u:1u;
+   uint down=right?0x204u:0x201u;
+   uint up=right?0x205u:0x202u;
+   return PostMessage(view,0x200,UIntPtr.Zero,lp)
+     && PostMessage(view,down,(UIntPtr)flag,lp)
+     && PostMessage(view,up,UIntPtr.Zero,lp);
+ }
+}
+'@
+$mainTitle='Alera Dev'
+$childTitle='Alera - handoff_test.dart'
+$main=[AleraE2ECyclesNative]::FindTopLevel($pidToProbe,$mainTitle)
+if($main -eq [IntPtr]::Zero){throw "E2E main not visible"}
+if([AleraE2ECyclesNative]::FindTopLevel($pidToProbe,$childTitle) -ne [IntPtr]::Zero){throw 'Unexpected preexisting child'}
+if([AleraE2ECyclesNative]::OwnedTopLevelCount($pidToProbe) -ne 1){throw 'Unexpected extra E2E HWNDs'}
+$sw=[System.Diagnostics.Stopwatch]::StartNew()
+$cyclesResults=New-Object 'System.Collections.Generic.List[object]'
+$beginRss=[math]::Round($app.WorkingSet64/1MB,1)
+$beginHandles=$app.HandleCount
+$beginGdi=[AleraE2ECyclesNative]::GetGuiResources($app.Handle,0)
+try{
+ for($i=1;$i -le $Cycles;$i++){
+   $app.Refresh()
+   if($app.HasExited){throw "Test Alera exited unexpectedly at cycle $i"}
+   $main=[AleraE2ECyclesNative]::FindTopLevel($pidToProbe,$mainTitle)
+   if($main -eq [IntPtr]::Zero){throw "Cycle $i main HWND missing"}
+   $started=$sw.ElapsedMilliseconds
+   if(-not [AleraE2ECyclesNative]::Mouse($main,477,65,$true)){throw "Cycle $i tab right click failed"}
+   Start-Sleep -Milliseconds 100
+   if(-not [AleraE2ECyclesNative]::Mouse($main,615,252,$false)){throw "Cycle $i Move to New Window menu click failed"}
+   $child=[IntPtr]::Zero
+   $end=[DateTime]::UtcNow.AddSeconds(10)
+   do{
+     $child=[AleraE2ECyclesNative]::FindTopLevel($pidToProbe,$childTitle)
+     if($child -ne [IntPtr]::Zero){break}
+     Start-Sleep -Milliseconds 50
+   }while([DateTime]::UtcNow -lt $end)
+   if($child -eq [IntPtr]::Zero){throw "Cycle $i did not create child native window"}
+   $openMs=$sw.ElapsedMilliseconds-$started
+   Start-Sleep -Milliseconds $ChildReadyWaitMs
+   if([AleraE2ECyclesNative]::OwnedTopLevelCount($pidToProbe) -ne 2){throw "Cycle $i wrong child+main count"}
+   $nativeClose=$NativeCloseEvery -gt 0 -and ($i % $NativeCloseEvery -eq 0)
+   $returnStart=$sw.ElapsedMilliseconds
+   if($nativeClose) {
+     if(-not [AleraE2ECyclesNative]::PostMessage($child,0x10,[UIntPtr]::Zero,[IntPtr]::Zero)){
+       throw "Cycle $i native WM_CLOSE failed"
+     }
+   }else{
+     if(-not [AleraE2ECyclesNative]::Mouse($child,1277,74,$false)){
+       throw "Cycle $i Return-tab icon click failed"
+     }
+   }
+   $closed=$false
+   $end=[DateTime]::UtcNow.AddSeconds(10)
+   do{
+     if([AleraE2ECyclesNative]::FindTopLevel($pidToProbe,$childTitle) -eq [IntPtr]::Zero){
+       $closed=$true
+       break
+     }
+     Start-Sleep -Milliseconds 50
+   }while([DateTime]::UtcNow -lt $end)
+   if(-not $closed){throw "Cycle $i child window did not close"}
+   $closeMs=$sw.ElapsedMilliseconds-$returnStart
+   Start-Sleep -Milliseconds 200
+   if([AleraE2ECyclesNative]::OwnedTopLevelCount($pidToProbe) -ne 1){throw "Cycle $i leaked HWND"}
+   $app.Refresh()
+   $row=[pscustomobject]@{
+     cycle=$i;method=$(if($nativeClose){'WM_CLOSE'}else{'Return'});
+     openedMs=$openMs;closedMs=$closeMs;
+     workingSetMiB=[math]::Round($app.WorkingSet64/1MB,1);
+     handles=$app.HandleCount;
+     gdi=[AleraE2ECyclesNative]::GetGuiResources($app.Handle,0)
+   }
+   $cyclesResults.Add($row)
+   Write-Output "CYCLE=$i MODE=$($row.method) OPEN_MS=$($row.openedMs) RETURN_MS=$($row.closedMs) RSS_MIB=$($row.workingSetMiB) HANDLES=$($row.handles) GDI=$($row.gdi)"
+ }
+}finally {
+ $folder=Join-Path $base 'build/windows/shared_gui_ninja/diagnostics'
+ New-Item -ItemType Directory -Force -Path $folder|Out-Null
+ $file=Join-Path $folder 'real_editor_native_cycles.json'
+ $payload=[pscustomobject]@{
+   pid=$pidToProbe;requested=$Cycles;completed=$cyclesResults.Count;
+   rssInitialMiB=$beginRss;handlesInitial=$beginHandles;gdiInitial=$beginGdi;
+   results=$cyclesResults.ToArray()
+ }
+ $payload|ConvertTo-Json -Depth 6 | Set-Content -Path $file -Encoding utf8
+ Write-Output "REPORT=$file COMPLETED=$($cyclesResults.Count)/$Cycles"
+}
+if($cyclesResults.Count -ne $Cycles){exit 2}
+$opens=@($cyclesResults|ForEach-Object openedMs|Sort-Object)
+$closes=@($cyclesResults|ForEach-Object closedMs|Sort-Object)
+$ix=[math]::Max(0,[math]::Ceiling($Cycles*0.95)-1)
+Write-Output "E2E_EDITOR_STRESS_PASS=$Cycles/$Cycles OPEN_P95_MS=$($opens[$ix]) CLOSE_P95_MS=$($closes[$ix])"
