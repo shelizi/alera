@@ -55,3 +55,10 @@ python tool/multiview_poc/seed_shared_editor_test_workspace.py --configuration R
 ```
 
 此模式不應在其他平台直接啟用。Windows **Release AOT 已完成本 worktree 隔離 GUI 驗證**，但仍不是已簽章、已封裝的正式 installer，尚未做跨螢幕真實拖回、IME、長期記憶體與完整全平台發布驗收。新模式在 Windows 預設開啟，但保留 `--alera-legacy-detached-tabs` 作為恢復路徑。
+
+## Fresh worktree 靜態分析與獨立 PoC 測試
+
+在新的 worktree 直接 `flutter analyze` 時，獨立的 `tool/multiview_poc` 尚未生成自己的 `.dart_tool/package_config.json`，因此根專案的分析器會把該範例的 package import 誤當成 Alera 專案依賴，產生 14 項錯誤。根專案 `analysis_options.yaml` 已將獨立 Flutter 專案排除，與原本已排除的 `mobile/` 和 `rust_builder/` 相同。
+
+- 在根專案執行 `flutter analyze --no-pub --no-fatal-warnings --no-fatal-infos`：**0 error、exit 0**，尚有 12 warning 與既有 info 提示。
+- 另外在 `tool/multiview_poc/` 執行 `flutter pub get --offline` 與 `flutter test --no-pub`：**8/8 項通過**。不要以根專案的分析排除取代 PoC 自己的測試。
