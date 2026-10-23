@@ -1,7 +1,13 @@
-param([int]$TargetPid=0)
+param(
+ [int]$TargetPid=0,
+ [ValidateSet('Debug','Release')][string]$Configuration='Debug'
+)
 $ErrorActionPreference='Stop'
 $root=(Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
-$expectedExe=Join-Path $root 'build/windows/shared_gui_ninja/runner/Debug/alera-dev.exe'
+$buildPath = if($Configuration -eq 'Release') {
+ 'build/windows/shared_release_ninja/runner/Release/alera-dev.exe'
+} else { 'build/windows/shared_gui_ninja/runner/Debug/alera-dev.exe' }
+$expectedExe=Join-Path $root $buildPath
 $ps=@(Get-Process alera-dev -ErrorAction SilentlyContinue | Where-Object {$_.Path -eq $expectedExe -and ($TargetPid -eq 0 -or $_.Id -eq $TargetPid)})
 if($ps.Count -ne 1){throw "Exactly one E2E Alera required, found $($ps.Count)"}
 $p=$ps[0]

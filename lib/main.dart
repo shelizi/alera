@@ -25,12 +25,24 @@ import 'package:ghostty_vte_flutter/ghostty_vte_flutter.dart';
 import 'package:logging/logging.dart';
 import 'package:multiview_desktop/multiview_desktop.dart';
 
-/// Deliberately command-line only. The normal Alera launch always retains
-/// the established per-process detached tab implementation.
-const experimentalSharedEngineTabsFlag = '--alera-shared-engine-tabs';
+/// Existing explicit enable switch is kept for users with old launchers.
+const sharedEngineTabsCompatFlag = '--alera-shared-engine-tabs';
 
-bool isExperimentalSharedEngineTabsInvocation(List<String> args) =>
-    args.length == 1 && args.single == experimentalSharedEngineTabsFlag;
+/// Explicit recovery switch for Windows users who need the original
+/// per-process detached Editor windows. Non-Editor tab types still use that
+/// implementation automatically, regardless of this setting.
+const legacyDetachedTabsFlag = '--alera-legacy-detached-tabs';
+
+/// Must exactly match ShouldUseSharedEngineTabs in Windows runner/main.cpp.
+/// Default Windows primary launch uses one Flutter Engine; independent
+/// detached child processes and unknown arguments retain the legacy behavior.
+bool shouldUseSharedEngineTabsInvocation(
+  List<String> args, {
+  required bool isWindows,
+}) =>
+    isWindows &&
+    (args.isEmpty ||
+        (args.length == 1 && args.single == sharedEngineTabsCompatFlag));
 
 Future<void> main(List<String> args) async {
   await runZonedGuarded<Future<void>>(() => _bootstrap(args), recordZoneError);
@@ -67,8 +79,10 @@ Future<void> _bootstrap(List<String> args) async {
 
   // Privacy portable build: do not initialize the Sentry SDK at all.
   await _startApp(
-    sharedEngineTabs:
-        Platform.isWindows && isExperimentalSharedEngineTabsInvocation(args),
+    sharedEngineTabs: shouldUseSharedEngineTabsInvocation(
+      args,
+      isWindows: Platform.isWindows,
+    ),
   );
 }
 

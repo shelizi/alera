@@ -13,10 +13,6 @@ import sqlite3
 import sys
 
 ROOT = Path(__file__).resolve().parents[2]
-BUILD = ROOT / "build" / "windows" / "shared_gui_ninja"
-PROFILE = BUILD / "e2e_support"
-RUNTIME_DB = PROFILE / "terminal_host" / "runtime.sqlite"
-PROJECT_DIR = BUILD / "e2e_workspace"
 PROJECT_ID = "alera-e2e-shared-window-project"
 WORKSPACE_ID = "alera-e2e-shared-window-workspace"
 TAB_ID = "alera-e2e-shared-window-editor"
@@ -32,17 +28,30 @@ ORIGINAL_TEXT = """void main() {
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--reset-test-file", action="store_true")
+    parser.add_argument(
+        "--configuration",
+        choices=("Debug", "Release"),
+        default="Debug",
+        help="Select an isolated build profile; never use Alera's real settings",
+    )
     args = parser.parse_args()
-    project_path = PROJECT_DIR.resolve()
-    runtime_path = RUNTIME_DB.resolve()
-    if not project_path.is_relative_to(BUILD.resolve()):
+    build = ROOT / "build" / "windows" / (
+        "shared_release_ninja" if args.configuration == "Release"
+        else "shared_gui_ninja"
+    )
+    profile = build / "e2e_support"
+    runtime_db = profile / "terminal_host" / "runtime.sqlite"
+    project_dir = build / "e2e_workspace"
+    project_path = project_dir.resolve()
+    runtime_path = runtime_db.resolve()
+    if not project_path.is_relative_to(build.resolve()):
         raise RuntimeError("Refusing project outside ignored worktree build")
-    if not runtime_path.is_relative_to(BUILD.resolve()):
+    if not runtime_path.is_relative_to(build.resolve()):
         raise RuntimeError("Refusing database outside ignored worktree build")
     if not runtime_path.is_file():
         raise RuntimeError("Start/stop isolated E2E Alera once to initialize Runtime DB first")
-    PROJECT_DIR.mkdir(parents=True, exist_ok=True)
-    file = PROJECT_DIR / TEST_FILE
+    project_dir.mkdir(parents=True, exist_ok=True)
+    file = project_dir / TEST_FILE
     if args.reset_test_file or not file.exists():
         file.write_text(ORIGINAL_TEXT, encoding="utf-8")
     now = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")

@@ -8,21 +8,44 @@ void main() {
     expect(app.main, isNotNull);
   });
 
-  test('single-engine option must exactly match native runner invocation', () {
+  test('Windows main window enables the shared Engine by default', () {
     expect(
-      app.isExperimentalSharedEngineTabsInvocation(const [
-        '--alera-shared-engine-tabs',
-      ]),
+      app.shouldUseSharedEngineTabsInvocation(const [], isWindows: true),
       isTrue,
     );
-    for (final arguments in <List<String>>[
-      const [],
+    expect(
+      app.shouldUseSharedEngineTabsInvocation(const [
+        '--alera-shared-engine-tabs',
+      ], isWindows: true),
+      isTrue,
+    ); // Previous opt-in CLI remains compatible.
+  });
+
+  test('explicit legacy mode never initializes shared Engine', () {
+    for (final args in <List<String>>[
+      const ['--alera-legacy-detached-tabs'],
+      const ['--alera-detached-tab', '5123', 'validchildtoken'],
       const ['--alera-shared-engine-tabs=1'],
       const ['--alera-shared-engine-tabs', '--extra'],
       const ['--extra', '--alera-shared-engine-tabs'],
-      const ['--alera-detached-tab', '5123', 'token'],
     ]) {
-      expect(app.isExperimentalSharedEngineTabsInvocation(arguments), isFalse);
+      expect(
+        app.shouldUseSharedEngineTabsInvocation(args, isWindows: true),
+        isFalse,
+        reason: 'Fail closed to the legacy process runner for $args',
+      );
+    }
+  });
+
+  test('other desktop platforms remain on their existing window model', () {
+    for (final args in <List<String>>[
+      const [],
+      const ['--alera-shared-engine-tabs'],
+    ]) {
+      expect(
+        app.shouldUseSharedEngineTabsInvocation(args, isWindows: false),
+        isFalse,
+      );
     }
   });
 }
