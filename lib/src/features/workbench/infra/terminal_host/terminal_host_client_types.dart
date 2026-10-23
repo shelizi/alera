@@ -42,10 +42,16 @@ final class _TerminalHostConnection {
     outputFrames = const Stream<TerminalHostOutputFrame>.empty();
     decodedOutput = reader.output;
     unawaited(
-      reader.done.then((_) {
-        unawaited(_lines.close());
-        unawaited(_output.close());
-      }),
+      reader.done.then<void>(
+        (_) {
+          unawaited(_lines.close());
+          unawaited(_output.close());
+        },
+        onError: (Object _, StackTrace _) {
+          unawaited(_lines.close());
+          unawaited(_output.close());
+        },
+      ),
     );
   }
 
@@ -80,7 +86,19 @@ final class _TerminalHostConnection {
       const Stream<TerminalHostOutputTextEvent>.empty();
 
   void _consume(List<int> chunk) {
-    for (final frame in _frameReader.add(chunk)) {
+    final List<TerminalHostFrame> frames;
+    try {
+      frames = _frameReader.add(chunk);
+    } on FormatException {
+      // Even when isolate startup falls back to reading on the UI isolate,
+      // corrupted framing must not throw from an asynchronous socket callback.
+      if (!_lines.isClosed) {
+        _lines.addError(const _TerminalHostSocketReaderFailure('protocol'));
+      }
+      _socket?.destroy();
+      return;
+    }
+    for (final frame in frames) {
       switch (frame) {
         case TerminalHostJsonFrame(:final json):
           if (!_lines.isClosed) {

@@ -48,6 +48,34 @@ String _sentinelLine() {
 }
 
 void main() {
+  test('reader reports a protocol fault before closing the socket', () async {
+    final harness = await _startIsolate();
+    final socket = await harness.ready;
+    final seen = <List<Object?>>[];
+    final closed = Completer<void>();
+    final sub = harness.messages.stream.listen((message) {
+      seen.add(message);
+      if (message.first == terminalHostIsolateClosed && !closed.isCompleted) {
+        closed.complete();
+      }
+    });
+    addTearDown(sub.cancel);
+
+    socket.write(_sentinelLine());
+    socket.add(<int>[1, 0x7f, 0xff, 0xff, 0xff]);
+    await closed.future.timeout(const Duration(seconds: 5));
+
+    expect(
+      seen.any(
+        (event) =>
+            event.length == 2 &&
+            event[0] == terminalHostIsolateError &&
+            event[1] == 'protocol',
+      ),
+      isTrue,
+    );
+  });
+
   test('delivers control lines before the upgrade', () async {
     final harness = await _startIsolate();
     final socket = await harness.ready;

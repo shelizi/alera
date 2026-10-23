@@ -25,6 +25,79 @@ Future<SocketTerminalHostClient> _binaryClient(
 }
 
 void _registerTerminalHostClientBinaryFrameTests() {
+  test('a burst of 1500 framed outputs keeps one socket connected', () async {
+    final server = await _TerminalHostTestServer.start(
+      negotiateBinaryFrames: true,
+    );
+    addTearDown(server.dispose);
+    final client = await _binaryClient(server, advertiseCapability: true);
+    await client.runtimeRequest('status.get');
+
+    const count = 1500;
+    final expected = StringBuffer();
+    final actual = StringBuffer();
+    final done = Completer<void>();
+    var outputs = 0;
+    final sub = client.eventsForSession('session-1').listen((event) {
+      if (event is! TerminalHostOutputTextEvent) return;
+      actual.write(event.text);
+      outputs++;
+      if (outputs == count && !done.isCompleted) done.complete();
+    });
+    addTearDown(sub.cancel);
+
+    for (var index = 0; index < count; index++) {
+      final line = 'BURST_${index.toString().padLeft(4, '0')}_SAFE\r\n';
+      expected.write(line);
+      server.sendOutput('session-1', utf8.encode(line));
+    }
+    await done.future.timeout(const Duration(seconds: 12));
+    expect(actual.toString(), expected.toString());
+
+    // After the burst both output and control traffic must remain viable on
+    // the original authenticated socket; no full reconnect/replay was needed.
+    await client.runtimeRequest('status.get');
+    expect(server.acceptedConnections, 1);
+  });
+
+  test('broken frame exposes a classified close and allows reattach', () async {
+    final warnings = <LogRecord>[];
+    final logSub = Logger('SocketTerminalHostClient').onRecord.listen((record) {
+      if (record.level >= Level.WARNING) warnings.add(record);
+    });
+    addTearDown(logSub.cancel);
+    final server = await _TerminalHostTestServer.start(
+      negotiateBinaryFrames: true,
+    );
+    addTearDown(server.dispose);
+    final client = await _binaryClient(server, advertiseCapability: true);
+
+    await client.runtimeRequest('status.get');
+    final failure = client
+        .eventsForSession('session-1')
+        .where((event) => event is TerminalHostErrorEvent)
+        .cast<TerminalHostErrorEvent>()
+        .first;
+    server.sendMalformedFrameHeader();
+
+    expect(
+      (await failure.timeout(const Duration(seconds: 5))).error.toString(),
+      contains('protocol'),
+    );
+    expect(
+      warnings.any(
+        (record) => record.message.contains(
+          'origin=socket_reader_error reader_stage=protocol',
+        ),
+      ),
+      isTrue,
+    );
+    // A decoder fault should not poison the client: the published runtime is
+    // still available for a fresh authenticated connection.
+    await client.runtimeRequest('status.get');
+    expect(server.acceptedConnections, greaterThanOrEqualTo(2));
+  });
+
   test('negotiates frames and receives raw output', () async {
     final server = await _TerminalHostTestServer.start(
       negotiateBinaryFrames: true,

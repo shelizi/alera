@@ -20,6 +20,11 @@ const int terminalHostFrameKindOutput = 2;
 /// Kind byte plus the u32 length.
 const int terminalHostFrameHeaderLength = 5;
 
+/// Bounds both old-style JSON snapshot replies (10 MiB of raw scrollback,
+/// base64-encoded) and newer binary frames. An invalid advertised length must
+/// not make the reader wait forever or retain an unbounded input buffer.
+const int terminalHostMaxFramePayloadBytes = 32 * 1024 * 1024;
+
 /// Last line before the stream switches to frames.
 ///
 /// The switch has to be visible in the bytes: the reader can live in another
@@ -72,6 +77,10 @@ class TerminalHostFrameReader {
 
   TerminalHostFrame? _takeLine() {
     final newline = _buffer.indexOf(0x0a);
+    if ((newline < 0 ? _buffer.length : newline) >
+        terminalHostMaxFramePayloadBytes) {
+      throw const FormatException('Terminal host line exceeds size limit.');
+    }
     if (newline < 0) {
       return null;
     }
@@ -93,6 +102,9 @@ class TerminalHostFrameReader {
         (_buffer[2] << 16) |
         (_buffer[3] << 8) |
         _buffer[4];
+    if (length > terminalHostMaxFramePayloadBytes) {
+      throw const FormatException('Terminal host frame exceeds size limit.');
+    }
     final end = terminalHostFrameHeaderLength + length;
     if (_buffer.length < end) {
       return null;

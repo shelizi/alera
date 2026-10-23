@@ -71,6 +71,7 @@ mixin _TerminalHostClientHeartbeat {
         _handleConnectionClosed(
           connection,
           StateError('Terminal host stopped answering liveness probes.'),
+          'heartbeat_exhausted',
         );
       }
     }
@@ -81,5 +82,6 @@ mixin _TerminalHostClientHeartbeat {
   void _handleConnectionClosed(
     _TerminalHostConnection connection, [
     Object? error,
+    String origin = 'unspecified',
   ]);
 }

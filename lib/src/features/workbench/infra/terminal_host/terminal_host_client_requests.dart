@@ -105,7 +105,7 @@ Future<Object?> _sendTerminalHostRequest(
     });
   } catch (error, stackTrace) {
     client._pending.remove(id);
-    client._handleConnectionClosed(connection, error);
+    client._handleConnectionClosed(connection, error, 'request_write_error');
     if (!completer.isCompleted) {
       final requestError = client._disposed || client._appQuitInProgress
           ? const TerminalHostConnectionClosedException()

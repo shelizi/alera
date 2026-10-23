@@ -9,10 +9,25 @@ part of 'terminal_host_client.dart';
 /// Spawning is allowed to fail. Losing terminals over an isolate problem would
 /// be far worse than losing the offload, so the caller falls back to reading
 /// the socket here instead.
+final class const _TerminalHostSocketReaderFailure(final String stage)
+    implements Exception {
+  @override
+  String toString() => 'Terminal host reader failed ($stage).';
+}
+
 final class _TerminalHostSocketReader._(
   var SendPort? _commands,
   final ReceivePort _fromIsolate,
 ) {
+  // A socket can fail before the connection owner has installed its callback.
+  // Keep a handler attached to the original future so that early errors are
+  // not treated as uncaught isolate exceptions.
+  this {
+    unawaited(
+      _done.future.then<void>((_) {}, onError: (Object _, StackTrace _) {}),
+    );
+  }
+
   static Future<_TerminalHostSocketReader?> connect({
     required String host,
     required int port,
@@ -52,6 +67,7 @@ final class _TerminalHostSocketReader._(
       StreamController<TerminalHostOutputTextEvent>.broadcast();
   final Completer<void> _done = Completer<void>();
   bool _closed = false;
+  String? _failureStage;
 
   Stream<Object?> get lines => _lines.stream;
   Stream<TerminalHostOutputTextEvent> get output => _output.stream;
@@ -59,6 +75,14 @@ final class _TerminalHostSocketReader._(
 
   void _attach(ReceivePort port, Completer<SendPort?> ready) {
     port.listen((Object? message) {
+      if (message == null) {
+        // Isolate.onExit sends null, including when the event loop crashes
+        // before it manages to send its ordinary `closed` notification.
+        if (!ready.isCompleted) ready.complete(null);
+        _failureStage ??= 'isolate_exit';
+        _finish();
+        return;
+      }
       if (message is! List || message.isEmpty) {
         return;
       }
@@ -81,11 +105,28 @@ final class _TerminalHostSocketReader._(
             );
           }
         case terminalHostIsolateError:
+          _failureStage = switch (message.length > 1 ? message[1] : null) {
+            'connect' => 'connect',
+            'read' => 'read',
+            'write' => 'write',
+            'protocol' => 'protocol',
+            _ => 'unknown',
+          };
           if (!ready.isCompleted) {
             ready.complete(null);
           }
         case terminalHostIsolateClosed:
+          if (!ready.isCompleted) ready.complete(null);
           _finish();
+        default:
+          // Isolate.onError sends [error, stack] without our event tag. Never
+          // keep raw exception text or stacks: classify and wait for onExit.
+          if (message.length == 2 &&
+              message[0] is String &&
+              message[1] is String) {
+            _failureStage ??= 'isolate_uncaught';
+            if (!ready.isCompleted) ready.complete(null);
+          }
       }
     });
   }
@@ -106,11 +147,18 @@ final class _TerminalHostSocketReader._(
     _closed = true;
     _commands = null;
     _fromIsolate.close();
+    if (!_done.isCompleted) {
+      final stage = _failureStage;
+      if (stage == null) {
+        _done.complete();
+      } else {
+        _done.completeError(_TerminalHostSocketReaderFailure(stage));
+      }
+    }
+    // Notify the owner of a transport failure before control onDone can
+    // misclassify it as an ordinary EOF.
     unawaited(_lines.close());
     unawaited(_output.close());
-    if (!_done.isCompleted) {
-      _done.complete();
-    }
   }
 }
 

@@ -265,6 +265,15 @@ final class _TerminalHostTestServer._(
     _client!.writeln(jsonEncode(message));
   }
 
+  /// Sends deliberately malformed wire bytes to validate reader failures.
+  /// Only an isolated test-server socket is affected.
+  void sendMalformedFrameHeader() {
+    if (!_binaryFrames) {
+      throw StateError('malformed-frame test requires negotiated frames');
+    }
+    _client!.add(<int>[1, 0x7f, 0xff, 0xff, 0xff]);
+  }
+
   /// Sends PTY output the way the host would for this client's negotiated mode.
   void sendOutput(String sessionId, List<int> data) {
     if (_binaryFrames) {

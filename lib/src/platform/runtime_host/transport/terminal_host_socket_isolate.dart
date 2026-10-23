@@ -47,8 +47,10 @@ Future<void> terminalHostSocketIsolateMain(
       config.port,
       timeout: Duration(milliseconds: config.connectTimeoutMillis),
     );
-  } catch (error) {
-    toMain.send(<Object?>[terminalHostIsolateError, error.toString()]);
+  } catch (_) {
+    // Error categories are intentionally bounded: socket exception text can
+    // contain machine-specific details and should not enter crash reports.
+    toMain.send(const <Object?>[terminalHostIsolateError, 'connect']);
     toMain.send(const <Object?>[terminalHostIsolateClosed]);
     return;
   }
@@ -95,7 +97,13 @@ Future<void> terminalHostSocketIsolateMain(
     switch (message[0]) {
       case terminalHostIsolateWrite:
         if (!closed) {
-          socket.add(message[1] as List<int>);
+          try {
+            socket.add(message[1] as List<int>);
+          } on Object {
+            toMain.send(const <Object?>[terminalHostIsolateError, 'write']);
+            closeSocket();
+            toMain.send(const <Object?>[terminalHostIsolateClosed]);
+          }
         }
       case terminalHostIsolateClose:
         closeSocket();
@@ -104,20 +112,27 @@ Future<void> terminalHostSocketIsolateMain(
 
   socket.listen(
     (Uint8List chunk) {
-      for (final frame in reader.add(chunk)) {
-        switch (frame) {
-          case TerminalHostJsonFrame(:final json):
-            toMain.send(<Object?>[
-              terminalHostIsolateLine,
-              decodeHostLine(json),
-            ]);
-          case TerminalHostOutputFrame(:final sessionId, :final data):
-            emitOutput(sessionId, data);
+      if (closed) return;
+      try {
+        for (final frame in reader.add(chunk)) {
+          switch (frame) {
+            case TerminalHostJsonFrame(:final json):
+              toMain.send(<Object?>[
+                terminalHostIsolateLine,
+                decodeHostLine(json),
+              ]);
+            case TerminalHostOutputFrame(:final sessionId, :final data):
+              emitOutput(sessionId, data);
+          }
         }
+      } on Object {
+        toMain.send(const <Object?>[terminalHostIsolateError, 'protocol']);
+        closeSocket();
+        toMain.send(const <Object?>[terminalHostIsolateClosed]);
       }
     },
-    onError: (Object error) {
-      toMain.send(<Object?>[terminalHostIsolateError, error.toString()]);
+    onError: (Object _) {
+      toMain.send(const <Object?>[terminalHostIsolateError, 'read']);
       closeSocket();
       toMain.send(const <Object?>[terminalHostIsolateClosed]);
     },
@@ -197,6 +212,10 @@ Future<SendPort?> spawnTerminalHostSocketIsolate({
         connectTimeoutMillis: connectTimeout.inMilliseconds,
       ),
       debugName: 'alera-terminal-host-socket',
+      // Unexpected isolate failures must not strand a connected PTY forever:
+      // the owner sees a classified error and can reconnect to the live host.
+      onError: toMain,
+      onExit: toMain,
     );
   } catch (_) {
     return null;

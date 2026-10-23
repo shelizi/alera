@@ -587,7 +587,7 @@ final class SocketTerminalHostClient._(
               'Terminal host authentication was rejected.',
         );
         connection.completeAuthenticationError(error);
-        _handleConnectionClosed(connection, error);
+        _handleConnectionClosed(connection, error, 'authentication_rejected');
       } else {
         connection.completeAuthentication();
       }
@@ -620,14 +620,31 @@ final class SocketTerminalHostClient._(
   void _handleConnectionClosed(
     _TerminalHostConnection connection, [
     Object? error,
+    String origin = 'unspecified',
   ]) {
     if (connection.isClosed) {
       return;
     }
+    final wasTerminalConnection = identical(_terminalConnection, connection);
+    final wasRuntimeConnection = identical(_runtimeConnection, connection);
+    if ((wasTerminalConnection || wasRuntimeConnection) &&
+        !_disposed &&
+        !_appQuitInProgress) {
+      // Never log a host frame, socket exception message, or RPC payload: the
+      // runtime may contain user terminal output and authentication secrets.
+      final detail = switch (error) {
+        _TerminalHostSocketReaderFailure(:final stage) =>
+          ' reader_stage=$stage',
+        null => '',
+        _ => ' error_type=${error.runtimeType}',
+      };
+      Logger(
+        'SocketTerminalHostClient',
+      ).warning('terminal host transport disconnected origin=$origin$detail');
+    }
     final closedError = TerminalHostConnectionClosedException(error);
     _stopHeartbeatFor(connection);
     connection.completeAuthenticationError(closedError);
-    final wasTerminalConnection = identical(_terminalConnection, connection);
     if (wasTerminalConnection) {
       _terminalConnection = null;
       _terminalConnectionFuture = null;
@@ -637,7 +654,7 @@ final class SocketTerminalHostClient._(
     if (wasTerminalConnection && !_disposed && !_appQuitInProgress) {
       _emitConnectionError(closedError);
     }
-    if (identical(_runtimeConnection, connection)) {
+    if (wasRuntimeConnection) {
       CrashReporting.clearRuntimeContext();
       _runtimeConnection = null;
       _runtimeConnectionFuture = null;

@@ -260,9 +260,16 @@ void main() {
       final resumePayload = resumeFixture['payload']! as Map;
       expect(resume.isDelta, isFalse);
       expect(resume.resetInteractionModes, isTrue);
+      // The socket isolate predecodes snapshot bytes into snapshotText to
+      // avoid transferring a large base64 payload to the UI isolate. Verify
+      // the logical payload, not only the legacy raw-byte representation.
       expect(
-        resume.snapshot,
-        orderedEquals(base64Decode(resumePayload['snapshotBase64']! as String)),
+        resume.snapshotText ??
+            utf8.decode(resume.snapshot, allowMalformed: true),
+        utf8.decode(
+          base64Decode(resumePayload['snapshotBase64']! as String),
+          allowMalformed: true,
+        ),
       );
 
       harness.server.respondWithOutputBeforeBinaryResponse(

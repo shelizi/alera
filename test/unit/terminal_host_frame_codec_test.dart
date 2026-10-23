@@ -6,6 +6,17 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   group('TerminalHostFrameReader', () {
+    test('rejects an oversized announced binary frame immediately', () {
+      final reader = TerminalHostFrameReader()..upgradeToBinary();
+
+      // A corrupted length must not leave the socket reader buffering PTY
+      // output indefinitely, even when no payload bytes have arrived.
+      expect(
+        () => reader.add(<int>[1, 0x7f, 0xff, 0xff, 0xff]),
+        throwsA(isA<FormatException>()),
+      );
+    });
+
     test('reads newline JSON before the upgrade', () {
       final reader = TerminalHostFrameReader();
 

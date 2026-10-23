@@ -217,9 +217,9 @@ extension _SocketTerminalHostClientConnections on SocketTerminalHostClient {
     }
     unawaited(
       connection.done.then(
-        (_) => _handleConnectionClosed(connection),
+        (_) => _handleConnectionClosed(connection, null, 'socket_eof'),
         onError: (Object error, StackTrace _) {
-          _handleConnectionClosed(connection, error);
+          _handleConnectionClosed(connection, error, 'socket_reader_error');
         },
       ),
     );
@@ -241,11 +241,13 @@ extension _SocketTerminalHostClientConnections on SocketTerminalHostClient {
         try {
           _handleLine(connection, line);
         } catch (error) {
-          _handleConnectionClosed(connection, error);
+          _handleConnectionClosed(connection, error, 'message_dispatch_error');
         }
       },
-      onError: (error) => _handleConnectionClosed(connection, error),
-      onDone: () => _handleConnectionClosed(connection),
+      onError: (error) =>
+          _handleConnectionClosed(connection, error, 'control_stream_error'),
+      onDone: () =>
+          _handleConnectionClosed(connection, null, 'control_stream_done'),
       cancelOnError: true,
     );
     try {

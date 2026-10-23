@@ -11,6 +11,7 @@ import 'package:alera/src/platform/runtime_host/protocol/terminal_host_protocol.
 import 'package:alera/src/shared/infra/logging/app_logger.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ghostty_vte_flutter/ghostty_vte_flutter.dart';
+import 'package:logging/logging.dart';
 import 'package:path/path.dart' as p;
 import 'package:sentry/sentry.dart';
 part 'terminal_host_client_resilience_cases.dart';
