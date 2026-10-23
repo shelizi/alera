@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 #include "flutter_window.h"
+#include "shared_engine_startup_mode.h"
 #include "utils.h"
 #include "win32_dark_mode.h"
 #include "win32_single_instance.h"
@@ -35,11 +36,12 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   // activate (or replace) the primary Alera window.
   std::vector<std::string> command_line_arguments = GetCommandLineArguments();
   const bool detached_tab = IsDetachedChildInvocation(command_line_arguments);
-  // An exact, explicit argument only. Still participates in the normal
-  // primary instance gate and never overrides a detached child invocation.
-  const bool experimental_shared_engine =
-      !detached_tab && command_line_arguments.size() == 1 &&
-      command_line_arguments[0] == "--alera-shared-engine-tabs";
+  // Normal Windows startup now uses one Engine and multiple native Flutter
+  // Views by default. Explicit --alera-legacy-detached-tabs (or an unknown
+  // invocation) falls back to the proven multi-process window model. Detached
+  // child processes *always* own an independent Flutter Engine.
+  const bool shared_engine_tabs =
+      ShouldUseSharedEngineTabs(command_line_arguments, detached_tab);
   Win32SingleInstance single_instance(
       detached_tab ? std::wstring(ALERA_APP_ID) + L".detached." +
                          std::to_wstring(GetCurrentProcessId())
@@ -72,7 +74,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
 
   project.set_dart_entrypoint_arguments(std::move(command_line_arguments));
 
-  FlutterWindow window(project, experimental_shared_engine);
+  FlutterWindow window(project, shared_engine_tabs);
   Win32Window::Point origin(10, 10);
   Win32Window::Size size(1280, 720);
   if (detached_tab) {

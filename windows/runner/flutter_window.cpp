@@ -46,9 +46,9 @@ std::wstring PreviewTitleFromUtf8(const std::string& utf8) {
 }  // namespace
 
 FlutterWindow::FlutterWindow(const flutter::DartProject& project,
-                             bool experimental_shared_engine)
+                             bool shared_engine)
     : project_(project),
-      experimental_shared_engine_(experimental_shared_engine) {}
+      shared_engine_(shared_engine) {}
 
 FlutterWindow::~FlutterWindow() {}
 
@@ -61,10 +61,9 @@ bool FlutterWindow::OnCreate() {
 
   HWND flutter_hwnd = nullptr;
   flutter::BinaryMessenger* messenger = nullptr;
-  if (experimental_shared_engine_) {
-    // Exactly one Engine hosts all Flutter Views, only under the explicit
-    // --alera-shared-engine-tabs flag. Existing app channels still bind to
-    // the main HWND but their messenger is shared across the Dart isolate.
+  if (shared_engine_) {
+    // Exactly one Engine hosts all main/Editor Flutter Views by default.
+    // App channels bind to main HWND; their messenger is shared in the isolate.
     g_shared_native_messenger = nullptr;
     MultiViewDesktopPrepareEngine(project_, GetHandle());
     MultiViewDesktopCreateMainView(
@@ -74,7 +73,8 @@ bool FlutterWindow::OnCreate() {
         MultiViewDesktopGetFlutterHwnd(MultiViewDesktopGetMainViewId());
     messenger = g_shared_native_messenger;
   } else {
-    // The established single-view runner is untouched for normal launches.
+    // Original single-view runner for detached child processes and the
+    // explicit --alera-legacy-detached-tabs recovery option.
     flutter_controller_ = std::make_unique<flutter::FlutterViewController>(
         frame.right - frame.left, frame.bottom - frame.top, project_);
     if (!flutter_controller_->engine() || !flutter_controller_->view()) {
@@ -180,7 +180,7 @@ bool FlutterWindow::OnCreate() {
         result->Success(flutter::EncodableValue(on_this_window));
       });
 
-  if (!experimental_shared_engine_) {
+  if (!shared_engine_) {
     flutter_controller_->engine()->SetNextFrameCallback([&]() {
       this->Show();
     });
@@ -207,7 +207,7 @@ void FlutterWindow::OnDestroy() {
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
   }
-  if (experimental_shared_engine_) {
+  if (shared_engine_) {
     // Only the plugin owns the shared engine's native lifetime.
     g_shared_native_messenger = nullptr;
   }
@@ -219,7 +219,7 @@ LRESULT
 FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
                               WPARAM const wparam,
                               LPARAM const lparam) noexcept {
-  if (experimental_shared_engine_ && message == WM_CLOSE) {
+  if (shared_engine_ && message == WM_CLOSE) {
     // The multi-view plugin would otherwise destroy the main engine's HWND
     // (and all Editor windows) before Alera's async quit/save gate runs.
     // Route only the native *main* close request back to the Dart lifecycle
@@ -237,7 +237,7 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
       message == WM_DESTROY || message == WM_NCDESTROY) {
     flutter_view_ready_ = false;
   }
-  if (experimental_shared_engine_) {
+  if (shared_engine_) {
     LRESULT result = 0;
     if (MultiViewDesktopHandleWindowProc(hwnd, message, wparam, lparam,
                                          &result)) {
@@ -282,7 +282,7 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
       RefreshAleraMenuBarForDpi(hwnd);
       break;
     case WM_FONTCHANGE:
-      if (experimental_shared_engine_ && MultiViewDesktopGetEngineRef()) {
+      if (shared_engine_ && MultiViewDesktopGetEngineRef()) {
         FlutterDesktopEngineReloadSystemFonts(MultiViewDesktopGetEngineRef());
       } else if (can_forward && flutter_controller_->engine()) {
         flutter_controller_->engine()->ReloadSystemFonts();

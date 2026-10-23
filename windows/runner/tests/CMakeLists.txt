@@ -26,3 +26,15 @@ target_compile_options(flutter_view_message_guard_test PRIVATE /W4 /WX /EHsc)
 target_link_libraries(flutter_view_message_guard_test PRIVATE user32)
 add_test(NAME flutter_view_message_guard COMMAND flutter_view_message_guard_test)
 set_tests_properties(flutter_view_message_guard PROPERTIES TIMEOUT 30)
+
+# Native and Dart entrypoints must agree which invocation uses one Engine.
+# Default Windows main enables it; a child or explicit legacy opt-out must not.
+add_executable(shared_engine_startup_mode_test
+  "shared_engine_startup_mode_test.cpp"
+)
+target_include_directories(shared_engine_startup_mode_test PRIVATE "..")
+target_compile_features(shared_engine_startup_mode_test PRIVATE cxx_std_17)
+target_compile_definitions(shared_engine_startup_mode_test PRIVATE UNICODE _UNICODE NOMINMAX)
+target_compile_options(shared_engine_startup_mode_test PRIVATE /W4 /WX /EHsc)
+add_test(NAME shared_engine_startup_mode COMMAND shared_engine_startup_mode_test)
+set_tests_properties(shared_engine_startup_mode PROPERTIES TIMEOUT 30)
