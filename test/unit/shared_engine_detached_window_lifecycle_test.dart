@@ -76,6 +76,7 @@ void main() {
       expect(states, contains('true:true:false'));
       expect(states, contains('true:true:true'));
       bridge.onWindowClosed(2);
+      await Future<void>.delayed(Duration.zero);
       expect(bridge.isDetached('tab-a'), isFalse);
       expect(closed, isEmpty);
     },
@@ -97,8 +98,41 @@ void main() {
       bridge.onWindowClosed(3);
       barrier.complete();
       expect(await result, isFalse);
+      await Future<void>.delayed(Duration.zero);
       expect(bridge.isDetached('tab-a'), isFalse);
       expect(bridge.isLaunching('tab-a'), isFalse);
+    },
+  );
+
+  test(
+    'native close holds main editor hidden through child teardown frame',
+    () async {
+      final closeFrame = Completer<void>();
+      var barrierCalls = 0;
+      final bridge = SharedEngineDetachedTabWindows(
+        openNativeWindow: (builder, options) async => 4,
+        sourceFrameBarrier: () {
+          barrierCalls += 1;
+          return barrierCalls == 1 ? Future<void>.value() : closeFrame.future;
+        },
+        closeNativeWindow: (_) async => true,
+      );
+      addTearDown(bridge.dispose);
+      final open = bridge.detach(fixture());
+      await Future<void>.delayed(Duration.zero);
+      expect(bridge.canRender('tab-a', 4), isTrue);
+      bridge.reportContentMounted('tab-a', 4);
+      expect(await open, isTrue);
+
+      bridge.onWindowClosed(4);
+      expect(bridge.isDetached('tab-a'), isTrue);
+      expect(bridge.canRender('tab-a', 4), isFalse);
+      expect(barrierCalls, 2);
+      await Future<void>.delayed(Duration.zero);
+      expect(bridge.isDetached('tab-a'), isTrue);
+      closeFrame.complete();
+      await Future<void>.delayed(Duration.zero);
+      expect(bridge.isDetached('tab-a'), isFalse);
     },
   );
 }
