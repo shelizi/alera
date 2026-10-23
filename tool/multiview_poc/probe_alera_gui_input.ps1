@@ -4,11 +4,15 @@ param(
  [int]$Y=0,
  [int]$TargetPid=0,
  [string]$WindowTitle='',
- [string]$Text=''
+ [string]$Text='',
+ [ValidateSet('Debug','Release')][string]$Configuration='Debug'
 )
 $ErrorActionPreference="Stop"
 $root=(Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
-$expectedExe=Join-Path $root 'build/windows/shared_gui_ninja/runner/Debug/alera-dev.exe'
+$buildPath = if($Configuration -eq 'Release') {
+ 'build/windows/shared_release_ninja/runner/Release/alera-dev.exe'
+} else { 'build/windows/shared_gui_ninja/runner/Debug/alera-dev.exe' }
+$expectedExe=Join-Path $root $buildPath
 $apps=@(Get-Process alera-dev -ErrorAction SilentlyContinue |
  Where-Object {$_.Path -eq $expectedExe -and ($TargetPid -eq 0 -or $_.Id -eq $TargetPid)})
 if($apps.Count -ne 1){throw "Expected exactly one isolated E2E Alera; found $($apps.Count)"}

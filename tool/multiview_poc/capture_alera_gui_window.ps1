@@ -1,11 +1,15 @@
 param(
   [string]$OutputName = 'alera-shared-gui-window.png',
   [int]$TargetPid = 0,
-  [string]$WindowTitle = ''
+  [string]$WindowTitle = '',
+  [ValidateSet('Debug','Release')][string]$Configuration = 'Debug'
 )
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
-$expectedExe = Join-Path $root 'build/windows/shared_gui_ninja/runner/Debug/alera-dev.exe'
+$buildPath = if($Configuration -eq 'Release') {
+  'build/windows/shared_release_ninja/runner/Release/alera-dev.exe'
+} else { 'build/windows/shared_gui_ninja/runner/Debug/alera-dev.exe' }
+$expectedExe = Join-Path $root $buildPath
 $target = @(Get-Process alera-dev -ErrorAction SilentlyContinue |
   Where-Object { $_.Path -eq $expectedExe -and ($TargetPid -eq 0 -or $_.Id -eq $TargetPid) })
 if ($target.Count -ne 1) {
@@ -61,7 +65,9 @@ try {
     try { $rendered = [AleraE2ECaptureNative]::PrintWindow($hwnd,$dc,2) }
     finally { $graphics.ReleaseHdc($dc) }
   } finally { $graphics.Dispose() }
-  $dir = Join-Path $root 'build/windows/shared_gui_ninja/diagnostics'
+  $dir = if($Configuration -eq 'Release') {
+    Join-Path $root 'build/windows/shared_release_ninja/diagnostics'
+  } else { Join-Path $root 'build/windows/shared_gui_ninja/diagnostics' }
   New-Item -ItemType Directory -Force -Path $dir | Out-Null
   if ($OutputName -notmatch '^[A-Za-z0-9_-]+\.png$') {
     throw 'OutputName must be a bare .png filename'

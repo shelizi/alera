@@ -30,12 +30,28 @@ macOS、Linux、Android、iOS 不變；Windows 的 Dart 和 Win32 啟動判斷�
 4. C++ Runner CTest `test_windows_native_runner.cmd` **3/3 通過**，含 Win32 單一實例、Flutter View 銷毀防護、預設/回退命令列判斷；Dart 模式判斷、共用 backend、Quit guard **11/11 通過**。
 5. 之前同 Engine opt-in 已進行高 DPI 原生建立/關閉 30/30 輪（部分合成右鍵事件需重試）；更大範圍 regression 見歷史交接文件。模式改成 default 後，將在此基礎上繼續補足高 DPI/混合螢幕、IME、鍵盤快捷鍵與真實拖回的 UX 驗收。
 
+## 2026-10-23 Windows Release AOT 實機驗證（新增）
+
+此項驗證使用獨立的 E2E App ID、資料目錄與 Release 二進位，**沒有覆蓋任何使用者已安裝的 Alera**：
+
+- 標準 `flutter build windows --release --no-pub` 在本機 VS 2026/MSBuild 環境遇到既有 CMake 編譯器偵測問題，故由 `tool/multiview_poc/build_alera_in_worktree_release.cmd` 使用 VC 環境與 Ninja Multi-Config 建置。Flutter 產出的 `flutter_windows.dll.lib` 補上 CMake `BYPRODUCTS`，解決 Ninja 首次連結圖缺少此產物的問題。
+- 實際從此 worktree **重新編譯** Release Rust CLI、Flutter AOT、Windows 主程式、`multiview_desktop`、CodeForge 及 Alera Native DLL；隔離套件位於 `build/windows/shared_release_ninja/runner/Release`，其中 `data/app.so`、`data/icudtl.dat`、原生插件及 CLI sidecar 均存在。Release Ninja 建置及安裝退出碼 **0**。
+- 初次無參數啟動 Release GUI：正常顯示完整主窗；OS 回報 DPI=192（200%）、程序 `Responding=True`，隔離 SQLite schema 已初始化。使用 `seed_shared_editor_test_workspace.py --configuration Release --reset-test-file` 植入 **獨立** E2E Workspace 和 `handoff_test.dart`。
+- 再次無參數啟動、開啟 CodeForge Editor、右鍵 Move to New Window：主窗與子窗由一個變兩個原生 HWND，**PID 55708 不變且全程只有一個 Alera Release 程序**；子窗截圖顯示 Editor 確實渲染。
+- 在子 Editor 以限定 E2E HWND 的 `WM_CHAR` 輸入 `RELEASE_DIRTY_20261023`；螢幕顯示文字、磁碟原檔仍無該字串。按子窗 Return 後 HWND 回到一個，主 Editor 顯示同一段未儲存內容，磁碟仍未更動；點主 Editor Save 後檔案確實包含該字串。
+- 完整 Quit 後以 `--alera-legacy-detached-tabs` 重新啟動 Release：主程序 PID 54568，Editor Move to New Window 確實啟動 PID 5248，且 command line 含 `--alera-detached-tab`。子窗顯示 CodeForge，Return to Alera 後**子程序結束、主程序正常留存**。最後兩者均正常退出。
+- 上述 GUI 自動化只向精確比對過的隔離測試程序及 HWND 送事件，結果截圖位於被忽略的 `build/windows/shared_release_ninja/diagnostics/`；不代表實機鍵盤 Ctrl+S、跨原生 HWND 滑鼠拖回或混合 DPI 多螢幕輸入均已完整通過。
+
 ## 本機測試命令
 
 ```powershell
 flutter test --no-pub test/unit/detached_tab_entrypoint_compile_test.dart test/unit/shared_engine_detached_backend_test.dart test/unit/shared_engine_detached_quit_guard_test.dart
 
 tool\multiview_poc\test_windows_native_runner.cmd
+
+# 僅用於已使用隔離 Dart define 產出 generated_config.cmake 的 Windows 主機
+tool\multiview_poc\build_alera_in_worktree_release.cmd
+python tool/multiview_poc/seed_shared_editor_test_workspace.py --configuration Release --reset-test-file
 ```
 
-此模式不應在其他平台直接啟用。要降低事故擴散，發佈前須確認 Windows Release/installer 的 Runtime、資料路徑與同程序多視窗相容性；本次驗證是 Windows Debug GUI，不等於 Release 已完成。
+此模式不應在其他平台直接啟用。Windows **Release AOT 已完成本 worktree 隔離 GUI 驗證**，但仍不是已簽章、已封裝的正式 installer，尚未做跨螢幕真實拖回、IME、長期記憶體與完整全平台發布驗收。新模式在 Windows 預設開啟，但保留 `--alera-legacy-detached-tabs` 作為恢復路徑。
