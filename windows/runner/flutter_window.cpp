@@ -219,6 +219,16 @@ LRESULT
 FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
                               WPARAM const wparam,
                               LPARAM const lparam) noexcept {
+  if (experimental_shared_engine_ && message == WM_CLOSE) {
+    // The multi-view plugin would otherwise destroy the main engine's HWND
+    // (and all Editor windows) before Alera's async quit/save gate runs.
+    // Route only the native *main* close request back to the Dart lifecycle
+    // coordinator; its committed destroy uses WM_DESTROY, not WM_CLOSE.
+    if (detached_tab_channel_) {
+      detached_tab_channel_->InvokeMethod("mainCloseRequested", nullptr);
+    }
+    return 0;
+  }
   // A WM_PARENTNOTIFY/WM_DESTROY arrives while Flutter's child HWND is being
   // removed. Its embedder view may already be null even though the runner's
   // FlutterViewController still exists (GetEngine(nullptr) AV at +0x1e240).

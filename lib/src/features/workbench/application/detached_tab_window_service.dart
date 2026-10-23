@@ -115,6 +115,13 @@ class DetachedTabWindowService extends ChangeNotifier {
   bool willShareSession(DetachedTabDescriptor descriptor) =>
       _sharedBackend?.supports(descriptor) ?? false;
 
+  /// Only the opt-in same-Engine backend needs an app-quit dirty-document
+  /// gate. A legacy child process has its own independent quit lifecycle.
+  bool get hasExperimentalSharedBackend => _sharedBackend != null;
+
+  Set<String> get sharedDetachedTabIds =>
+      Set<String>.unmodifiable(_sharedBackend?.detachedTabIds ?? const {});
+
   /// Navigation is routed to the primary workbench. Child windows never
   /// create duplicate workspace tab records.
   Future<void> Function(DetachedTabDescriptor, String relativePath)? onOpenFile;
