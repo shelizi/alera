@@ -7,6 +7,8 @@ pub(crate) enum DisconnectReason {
     TransportWriteFailed,
     /// The client-side transport ended or reported that its peer was gone.
     PeerClosed,
+    /// The socket reader encountered an I/O failure, not a clean EOF.
+    TransportReadFailed,
     /// An existing mobile or relay connection was retired for a replacement.
     Replaced,
     /// The host is disposing its remaining clients as part of shutdown.
@@ -24,6 +26,7 @@ impl DisconnectReason {
         match self {
             Self::TransportWriteFailed => "transport_write_failed",
             Self::PeerClosed => "peer_closed",
+            Self::TransportReadFailed => "transport_read_failed",
             Self::Replaced => "replaced",
             Self::HostShutdown => "host_shutdown",
             Self::Unauthenticated => "unauthenticated",
@@ -50,6 +53,10 @@ mod tests {
             "transport_write_failed"
         );
         assert_eq!(DisconnectReason::PeerClosed.as_str(), "peer_closed");
+        assert_eq!(
+            DisconnectReason::TransportReadFailed.as_str(),
+            "transport_read_failed"
+        );
         assert_eq!(DisconnectReason::Replaced.as_str(), "replaced");
         assert_eq!(DisconnectReason::HostShutdown.as_str(), "host_shutdown");
         assert_eq!(

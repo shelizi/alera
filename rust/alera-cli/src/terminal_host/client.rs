@@ -175,6 +175,16 @@ impl ClientFrameOrdering {
 ///
 /// The two outbound lanes are serialized through this single writer. Dropping
 /// the [`ClientHandle`] closes both lanes and therefore the socket.
+fn reason_for_read_termination(
+    result: &std::io::Result<Option<String>>,
+) -> Option<DisconnectReason> {
+    match result {
+        Ok(Some(_)) => None,
+        Ok(None) => Some(DisconnectReason::PeerClosed),
+        Err(_) => Some(DisconnectReason::TransportReadFailed),
+    }
+}
+
 pub async fn connection_loop(
     stream: TcpStream,
     id: u64,
@@ -229,20 +239,22 @@ pub async fn connection_loop(
         }
         tokio::select! {
             line = lines.next_line() => {
+                if let Some(reason) = reason_for_read_termination(&line) {
+                    // Never include the raw error: OS socket diagnostics may
+                    // contain device details, and input is terminal content.
+                    let _ = inbox.send(ServerCommand::ClientDisconnected {
+                        id,
+                        reason,
+                    });
+                    break;
+                }
                 match line {
                     Ok(Some(line)) => {
                         if inbox.send(ServerCommand::ClientLine { id, line }).is_err() {
                             break;
                         }
                     }
-                    // EOF or read error: the client is gone.
-                    _ => {
-                        let _ = inbox.send(ServerCommand::ClientDisconnected {
-                            id,
-                            reason: DisconnectReason::PeerClosed,
-                        });
-                        break;
-                    }
+                    _ => unreachable!("termination classified before dispatch"),
                 }
             }
             message = control_out_rx.recv() => {
@@ -411,6 +423,19 @@ mod tests {
     use super::*;
     use serde_json::json;
     use tokio::net::TcpListener;
+
+    #[test]
+    fn clean_socket_eof_and_read_failure_have_distinct_disconnect_causes() {
+        assert_eq!(
+            reason_for_read_termination(&Ok(None)),
+            Some(DisconnectReason::PeerClosed)
+        );
+        assert_eq!(
+            reason_for_read_termination(&Err(std::io::Error::other("no contents in logs"))),
+            Some(DisconnectReason::TransportReadFailed)
+        );
+        assert_eq!(reason_for_read_termination(&Ok(Some(String::new()))), None);
+    }
 
     #[tokio::test]
     async fn control_response_stays_between_its_causal_terminal_frames() {
