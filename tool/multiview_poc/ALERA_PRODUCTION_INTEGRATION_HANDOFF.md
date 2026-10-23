@@ -1,5 +1,7 @@
 # Alera 單 Flutter Engine 多視窗：正式主程式實驗整合交接（2026-10-23）
 
+> **歷史整合紀錄。** 本頁下文保留最初「預設關閉、需指定 `--alera-shared-engine-tabs`」時期的測試狀況，並非目前 Windows 啟動政策。後續已完成預設啟用與回退實機驗證，**請以 [DEFAULT_WINDOWS_SHARED_ENGINE.md](DEFAULT_WINDOWS_SHARED_ENGINE.md) 為準**；Windows 不帶參數現在預設為 shared Engine，`--alera-legacy-detached-tabs` 可強制恢復原多程序模式。
+
 ## 範圍與安全隔離
 
 - 隔離 worktree：`.worktrees/fix-right-sidebar-20261020`；專用分支 `poc/single-engine-multiview-20261022`。
