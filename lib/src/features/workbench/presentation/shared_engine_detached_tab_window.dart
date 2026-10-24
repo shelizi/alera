@@ -10,11 +10,14 @@ import 'package:alera/src/design_system/feedback/alera_toast_host.dart';
 import 'package:alera/src/design_system/icons/alera_file_icon.dart';
 import 'package:alera/src/design_system/icons/alera_icons.dart';
 import 'package:alera/src/features/workbench/application/detached_tab_window_service.dart';
+import 'package:alera/src/features/workbench/application/external_terminal_providers.dart';
 import 'package:alera/src/features/settings/domain/alera_settings.dart';
 import 'package:alera/src/features/text_actions/presentation/text_actions_scope.dart';
+import 'package:alera/src/features/workbench/domain/external_terminal_launcher.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 import 'package:alera/src/features/workbench/presentation/detached_tab_child_app.dart';
 import 'package:alera/src/features/workbench/presentation/shared_engine_detached_tab_window_cursor.dart';
+import 'package:alera/src/features/workbench/presentation/workbench_close_confirmation.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_workbench_view.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -29,12 +32,14 @@ part 'shared_engine_detached_tab_window_view.dart';
 /// Windows-only backend. Registered only if the application's root is
 /// runMultiApp and all views share the same root ProviderScope.
 ///
-/// Editor always uses this backend on Windows. Terminal does too when
-/// [experimentalTerminalTabs] is true. Production passes the compile-time
-/// `experimentalSharedTerminalTabs` constant, whose default is true. The
-/// constructor default stays false so a compile-time override and tests can
-/// keep Terminal on the child process. Git Diff, PDF and other types retain
-/// the process-backed path.
+/// Every tab kind uses this backend on Windows: editor, markdown, PDF, git
+/// diff and git history surfaces share the main ProviderScope and registry
+/// state directly, and Terminal does too when [experimentalTerminalTabs] is
+/// true. Production passes the compile-time `experimentalSharedTerminalTabs`
+/// constant, whose default is true. The constructor default stays false so a
+/// compile-time override and tests can keep Terminal on the child process;
+/// that process-backed path remains the fallback when no shared backend is
+/// installed.
 final class SharedEngineDetachedTabWindows extends ChangeNotifier
     implements SharedEngineDetachedTabBackend, WindowObserver {
   SharedEngineDetachedTabWindows({
@@ -163,9 +168,8 @@ final class SharedEngineDetachedTabWindows extends ChangeNotifier
   @override
   bool supports(DetachedTabDescriptor descriptor) =>
       Platform.isWindows &&
-      (descriptor.tab.kind == WorkspaceTabKind.editor ||
-          (experimentalTerminalTabs &&
-              descriptor.tab.kind == WorkspaceTabKind.terminal));
+      (descriptor.tab.kind != WorkspaceTabKind.terminal ||
+          experimentalTerminalTabs);
 
   /// Ordered tabs hosted by the detached window [viewId], in strip order.
   List<DetachedTabDescriptor> tabsForView(int viewId) {
@@ -227,6 +231,66 @@ final class SharedEngineDetachedTabWindows extends ChangeNotifier
     return detachedWindowUnderCursor(bounds);
   }
 
+  /// Opens the hidden native window that will host [descriptor]'s surface
+  /// and returns its view id with a fresh group record. The caller fills
+  /// [ _SharedWindowGroup.tabIds] and drives the show handshake; every open
+  /// goes through `showOnInit: false` so the view's text input client exists
+  /// before platform focus can deliver keystrokes to it.
+  Future<({int viewId, _SharedWindowGroup group})> _openHiddenDetachedWindow(
+    DetachedTabDescriptor descriptor,
+  ) async {
+    // The public view id is captured from the builder, which runs on the
+    // hidden view's first frame; openWindow's future only resolves after
+    // completeShow.
+    final remembered = _physicalBoundsByTab[descriptor.tab.id];
+    final windowIdCompleter = Completer<int>();
+    unawaited(() async {
+      try {
+        final realId = await _openNativeWindow(
+          (context, nativeId) {
+            if (!windowIdCompleter.isCompleted) {
+              windowIdCompleter.complete(nativeId);
+            }
+            return _SharedDetachedTabWindow(
+              descriptor: descriptor,
+              viewId: nativeId,
+              controller: this,
+            );
+          },
+          WindowOptions(
+            title: 'Alera - ${descriptor.tab.title}',
+            size: const Size(1050, 720),
+            // Null keeps a saved frame. The package merges an omitted
+            // alignment back to Alignment.center, which is only wanted
+            // for the first open.
+            alignment: remembered == null ? Alignment.center : null,
+            showOnInit: false,
+          ),
+        );
+        if (!windowIdCompleter.isCompleted) {
+          windowIdCompleter.complete(realId);
+        }
+      } catch (error, stack) {
+        if (!windowIdCompleter.isCompleted) {
+          windowIdCompleter.completeError(error, stack);
+        } else {
+          Logger('SharedEngineDetachedTabWindows').warning(
+            'Detached window open finished with an error',
+            error,
+            stack,
+          );
+        }
+      }
+    }());
+    final windowId = await windowIdCompleter.future.timeout(
+      const Duration(seconds: 15),
+    );
+    if (remembered != null) {
+      _writePhysicalBounds(windowId, remembered);
+    }
+    return (viewId: windowId, group: _SharedWindowGroup(windowId));
+  }
+
   @override
   Future<bool> detach(DetachedTabDescriptor descriptor) async {
     if (_disposed || !supports(descriptor)) return false;
@@ -236,59 +300,9 @@ final class SharedEngineDetachedTabWindows extends ChangeNotifier
 
     _SharedTabWindow? entry;
     try {
-      // The native window stays hidden until its text input client exists:
-      // platform focus delivers keystrokes to a view before its client is
-      // attached, and those characters are dropped without a trace. The view
-      // is created with showOnInit: false so openWindow's future hangs on
-      // completeShow; the public view id is captured from the builder, which
-      // runs on the hidden view's first frame.
-      final remembered = _physicalBoundsByTab[id];
-      final windowIdCompleter = Completer<int>();
-      unawaited(() async {
-        try {
-          final realId = await _openNativeWindow(
-            (context, nativeId) {
-              if (!windowIdCompleter.isCompleted) {
-                windowIdCompleter.complete(nativeId);
-              }
-              return _SharedDetachedTabWindow(
-                descriptor: descriptor,
-                viewId: nativeId,
-                controller: this,
-              );
-            },
-            WindowOptions(
-              title: 'Alera - ${descriptor.tab.title}',
-              size: const Size(1050, 720),
-              // Null keeps a saved frame. The package merges an omitted
-              // alignment back to Alignment.center, which is only wanted
-              // for the first open.
-              alignment: remembered == null ? Alignment.center : null,
-              showOnInit: false,
-            ),
-          );
-          if (!windowIdCompleter.isCompleted) {
-            windowIdCompleter.complete(realId);
-          }
-        } catch (error, stack) {
-          if (!windowIdCompleter.isCompleted) {
-            windowIdCompleter.completeError(error, stack);
-          } else {
-            Logger('SharedEngineDetachedTabWindows').warning(
-              'Detached window open finished with an error',
-              error,
-              stack,
-            );
-          }
-        }
-      }());
-      final windowId = await windowIdCompleter.future.timeout(
-        const Duration(seconds: 15),
-      );
-      if (remembered != null) {
-        _writePhysicalBounds(windowId, remembered);
-      }
-      final group = _SharedWindowGroup(windowId)
+      final opened = await _openHiddenDetachedWindow(descriptor);
+      final windowId = opened.viewId;
+      final group = opened.group
         ..tabIds.add(id)
         ..activeTabId = id;
       entry = _SharedTabWindow(descriptor, windowId);
@@ -460,9 +474,11 @@ final class SharedEngineDetachedTabWindows extends ChangeNotifier
   }
 
   /// Dock on native drag end when the OS pointer is over Alera's main HWND,
-  /// or move the tab when it is over another detached window. The identity
-  /// check after awaiting each probe prevents an obsolete drag from closing
-  /// or moving a window that happens to reuse the view id.
+  /// move the tab when it is over another detached window, or open a fresh
+  /// detached window when the drop lands outside Alera — the same outcome a
+  /// primary-strip drag produces for each drop target. The identity check
+  /// after awaiting each probe prevents an obsolete drag from closing or
+  /// moving a window that happens to reuse the view id.
   Future<bool> tryReturnTabAtPointer(String tabId, int viewId) async {
     final entry = _active[tabId];
     final sourceGroup = _groups[viewId];
@@ -479,23 +495,28 @@ final class SharedEngineDetachedTabWindows extends ChangeNotifier
     try {
       final probe = _probeCursorWindow();
       if (probe != null) {
-        if (probe.viewId == viewId || probe.onForeignWindow) {
-          return false; // Dropped back on itself or on another application.
+        if (probe.viewId == viewId) {
+          return false; // Dropped back on its own window.
         }
         final target = probe.viewId;
         if (target != null && _groups.containsKey(target)) {
           return await _moveTabToWindow(tabId, entry, viewId, target);
         }
-        // Ours but not a detached window: fall through to the main check.
+        // Ours but not a detached window, or a foreign HWND: fall through
+        // to the main-window check or the fresh-window spawn.
       }
-      final allowed = await _isCursorOverMainWindow();
-      if (!allowed ||
-          _disposed ||
+      final overMain = probe != null && probe.onForeignWindow
+          ? false
+          : await _isCursorOverMainWindow();
+      if (_disposed ||
           !identical(_active[tabId], entry) ||
           sourceGroup.nativeClosed) {
         return false;
       }
-      return await closeTabWindow(tabId, viewId);
+      if (overMain) {
+        return await closeTabWindow(tabId, viewId);
+      }
+      return await _moveTabToNewWindow(tabId, entry, viewId);
     } catch (error, stack) {
       Logger('SharedEngineDetachedTabWindows')
           .warning('Native drag-back failed for $tabId', error, stack);
@@ -503,6 +524,150 @@ final class SharedEngineDetachedTabWindows extends ChangeNotifier
     } finally {
       entry.dockInProgress = false;
     }
+  }
+
+  /// Moves [tabId] into a freshly spawned detached window — the same
+  /// outcome an empty-space drag produces, driven from the child strip's
+  /// context menu.
+  Future<bool> moveTabToNewWindow(String tabId, int viewId) async {
+    final entry = _active[tabId];
+    final sourceGroup = _groups[viewId];
+    if (_disposed ||
+        entry == null ||
+        sourceGroup == null ||
+        entry.viewId != viewId ||
+        sourceGroup.nativeClosed ||
+        !entry.contentMayMount ||
+        entry.dockInProgress) {
+      return false;
+    }
+    entry.dockInProgress = true;
+    try {
+      return await _moveTabToNewWindow(tabId, entry, viewId);
+    } finally {
+      entry.dockInProgress = false;
+    }
+  }
+
+  /// Drops the detach bookkeeping for a tab whose record the workbench has
+  /// already closed. Unlike [closeTabWindow] nothing is restored to the
+  /// primary strip because the tab no longer exists; a window left empty
+  /// closes its HWND through the normal teardown path.
+  Future<void> forgetClosedTab(String tabId) async {
+    final entry = _active.remove(tabId);
+    if (entry == null) {
+      return;
+    }
+    final group = _groups[entry.viewId];
+    if (group != null && group.tabIds.remove(tabId)) {
+      if (group.activeTabId == tabId) {
+        group.activeTabId = group.tabIds.lastOrNull;
+        if (group.activeTabId != null) {
+          _writeWindowTitle(entry.viewId, _titleFor(group.activeTabId!));
+        }
+      }
+    }
+    _stopPhysicalBoundsPollIfIdle();
+    notifyListeners();
+    if (group != null && group.tabIds.isEmpty && !group.nativeClosed) {
+      await closeWindowTabs(entry.viewId);
+    }
+  }
+
+  /// Moves [tabId] out of [fromViewId] into a newly opened detached window.
+  /// The open follows [detach]'s hidden-until-attached show contract, and an
+  /// emptied source window closes its native HWND once the tab is shown in
+  /// its new home.
+  Future<bool> _moveTabToNewWindow(
+    String tabId,
+    _SharedTabWindow entry,
+    int fromViewId,
+  ) async {
+    final from = _groups[fromViewId];
+    if (from == null || from.nativeClosed || !from.tabIds.contains(tabId)) {
+      return false;
+    }
+    _capturePhysicalBounds(fromViewId);
+    ({int viewId, _SharedWindowGroup group}) opened;
+    try {
+      opened = await _openHiddenDetachedWindow(entry.descriptor);
+    } catch (error, stack) {
+      Logger('SharedEngineDetachedTabWindows').warning(
+        'Failed to open a new detached window for $tabId',
+        error,
+        stack,
+      );
+      return false;
+    }
+    final windowId = opened.viewId;
+    final group = opened.group
+      ..tabIds.add(tabId)
+      ..activeTabId = tabId;
+    _groups[windowId] = group;
+    if (_disposed || from.nativeClosed || !identical(_active[tabId], entry)) {
+      _completeNativeShow(windowId);
+      group.showCompleted = true;
+      _groups.remove(windowId);
+      try {
+        await _closeNativeWindow(windowId);
+      } catch (_) {}
+      return false;
+    }
+    from.tabIds.remove(tabId);
+    if (from.activeTabId == tabId) {
+      from.activeTabId = from.tabIds.lastOrNull;
+      if (from.activeTabId != null) {
+        _writeWindowTitle(fromViewId, _titleFor(from.activeTabId!));
+      }
+    }
+    entry.viewId = windowId;
+    entry.contentMayMount = false;
+    notifyListeners();
+    try {
+      await _sourceFrameBarrier();
+    } catch (_) {}
+    if (_disposed || group.nativeClosed || !identical(_active[tabId], entry)) {
+      // Restore the tab into its source strip on a mid-move teardown, then
+      // drop the half-opened window.
+      if (!from.nativeClosed && !from.tabIds.contains(tabId)) {
+        from.tabIds.add(tabId);
+        from.activeTabId ??= tabId;
+        if (identical(_active[tabId], entry)) {
+          entry.viewId = fromViewId;
+        }
+        entry.contentMayMount = true;
+        notifyListeners();
+      }
+      _groups.remove(windowId);
+      if (!group.nativeClosed) {
+        try {
+          _completeNativeShow(windowId);
+          group.showCompleted = true;
+        } catch (_) {}
+        try {
+          await _closeNativeWindow(windowId);
+        } catch (_) {}
+      }
+      return false;
+    }
+    entry.contentMayMount = true;
+    notifyListeners();
+    try {
+      await group.contentMounted.future.timeout(const Duration(seconds: 15));
+    } catch (_) {}
+    final ready =
+        identical(_active[tabId], entry) && !group.nativeClosed && !_disposed;
+    if (!ready) {
+      return false;
+    }
+    // The content mounted while the window was still hidden, so its text
+    // input client is already registered before the first keystroke.
+    _completeNativeShow(windowId);
+    group.showCompleted = true;
+    if (from.tabIds.isEmpty) {
+      unawaited(closeWindowTabs(fromViewId));
+    }
+    return true;
   }
 
   /// Moves [tabId] from window [fromViewId] into [toViewId]'s strip. The

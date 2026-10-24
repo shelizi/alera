@@ -350,6 +350,7 @@ enum _TabMenuAction {
   splitDown,
   splitLeft,
   splitRight,
+  moveToMainWindow,
   keepOpen,
   togglePin,
   reloadDocument,

@@ -113,15 +113,16 @@ void main() {
       expect(service.willShareSession(editor), isFalse);
       service.useExperimentalSharedBackend(backend);
       expect(service.willShareSession(editor), isTrue);
-      // Windows has a shared Engine by default, but only Editor widgets
-      // have a verified per-view lifecycle. Never silently route Terminal,
-      // Git Diff, Markdown, PDF or Git History through that backend.
+      // The service must respect each backend's own supports() gate: this
+      // fake only hosts Editor, so every other kind keeps the legacy
+      // child-process path. Production's SharedEngineDetachedTabWindows
+      // accepts all kinds except an opted-out Terminal.
       for (final kind in WorkspaceTabKind.values) {
         if (kind == WorkspaceTabKind.editor) continue;
         expect(
           service.willShareSession(fixture(kind)),
           isFalse,
-          reason: '${kind.name} must retain the legacy child-process path',
+          reason: '${kind.name} must not route through an unsupported backend',
         );
       }
       final snapshots = <String>[];

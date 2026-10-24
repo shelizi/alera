@@ -21,6 +21,7 @@ final class _SharedDetachedTabWindow extends ConsumerWidget {
       AleraToast.publish(
         message: 'Could not save this file: $error',
         tone: AleraToastTone.error,
+        viewId: viewId,
       );
     }
   }
@@ -175,7 +176,7 @@ final class _DetachedWindowTabStrip extends StatelessWidget {
   }
 }
 
-final class _DetachedWindowTabChip extends StatelessWidget {
+final class _DetachedWindowTabChip extends ConsumerWidget {
   const _DetachedWindowTabChip({
     required this.controller,
     required this.viewId,
@@ -188,9 +189,112 @@ final class _DetachedWindowTabChip extends StatelessWidget {
   final DetachedTabDescriptor descriptor;
   final bool active;
 
+  Future<void> _openChipMenu(
+    BuildContext context,
+    WidgetRef ref,
+    Offset globalPosition,
+    WorkspaceTabRecord tab,
+  ) async {
+    final liveTabs = ref
+        .read(workbenchControllerProvider)
+        .tabsFor(descriptor.workspace.id);
+    final groupTabs = <WorkspaceTabRecord>[
+      for (final entry in controller.tabsForView(viewId))
+        liveTabs
+                .where((candidate) => candidate.id == entry.tab.id)
+                .firstOrNull ??
+            entry.tab,
+    ];
+    await showWorkspaceTabContextMenu(
+      context,
+      globalPosition: globalPosition,
+      ref: ref,
+      workspace: descriptor.workspace,
+      sourceControlScope: null,
+      tab: tab,
+      terminalSession: tab.kind == WorkspaceTabKind.terminal
+          ? ref.read(terminalRuntimeProvider).peekSession(tab.id)
+          : null,
+      groupTabs: groupTabs,
+      onSplit: null,
+      onClose: () => unawaited(_closeTabs(context, ref, <String>[tab.id])),
+      onCloseTabs: (tabIds) => unawaited(_closeTabs(context, ref, tabIds)),
+      onRename: (title) => unawaited(
+        ref
+            .read(workbenchControllerProvider.notifier)
+            .renameWorkspaceTab(tabId: tab.id, title: title),
+      ),
+      onOpenExternalTerminal: tab.kind == WorkspaceTabKind.terminal
+          ? (target) async {
+              final result = await ref
+                  .read(externalTerminalLauncherProvider)
+                  .open(
+                    ExternalTerminalOpenRequest(
+                      workspacePath: descriptor.workspace.path,
+                      terminalSessionId: target.terminalSessionId,
+                      title: target.title,
+                    ),
+                  );
+              if (!result.ok) {
+                AleraToast.publish(
+                  message:
+                      result.message ??
+                      'Could not open the terminal externally.',
+                  tone: AleraToastTone.error,
+                  duration: const Duration(seconds: 6),
+                  viewId: viewId,
+                );
+              }
+            }
+          : null,
+      detachedActions: WorkspaceTabDetachedMenuActions(
+        onMoveToMainWindow: () => controller.closeTabWindow(tab.id, viewId),
+        onMoveToNewWindow: () => controller.moveTabToNewWindow(tab.id, viewId),
+      ),
+    );
+  }
+
+  /// Closes the tab records like the primary strip does. The record close
+  /// releases the PTY/editor session; [SharedEngineDetachedTabWindows
+  /// .forgetClosedTab] then retires the detach bookkeeping instead of
+  /// restoring a tab that no longer exists.
+  Future<void> _closeTabs(
+    BuildContext context,
+    WidgetRef ref,
+    List<String> tabIds,
+  ) async {
+    if (tabIds.isEmpty) {
+      return;
+    }
+    final tabs = ref
+        .read(workbenchControllerProvider)
+        .tabsFor(descriptor.workspace.id);
+    if (!context.mounted ||
+        !await confirmCloseWorkspaceTabs(context, ref, tabs, tabIds)) {
+      return;
+    }
+    await ref
+        .read(workbenchControllerProvider.notifier)
+        .closeWorkspaceTabs(workspace: descriptor.workspace, tabIds: tabIds);
+    for (final tabId in tabIds) {
+      await controller.forgetClosedTab(tabId);
+    }
+  }
+
   @override
-  Widget build(BuildContext context) {
-    final tab = descriptor.tab;
+  Widget build(BuildContext context, WidgetRef ref) {
+    // The stored descriptor predates renames and pin toggles, so resolve the
+    // live record for both the label and the menu's item state.
+    final tab =
+        ref.watch(
+          workbenchControllerProvider.select(
+            (state) => state
+                .tabsFor(descriptor.workspace.id)
+                .where((candidate) => candidate.id == descriptor.tab.id)
+                .firstOrNull,
+          ),
+        ) ??
+        descriptor.tab;
     final chip = Container(
       margin: const EdgeInsets.symmetric(vertical: 5),
       padding: const EdgeInsets.symmetric(horizontal: AleraTokens.space8),
@@ -279,6 +383,12 @@ final class _DetachedWindowTabChip extends StatelessWidget {
         childWhenDragging: Opacity(opacity: 0.45, child: chip),
         child: GestureDetector(
           onTap: () => controller.selectDetachedTab(tab.id, viewId),
+          onSecondaryTapDown: (details) => unawaited(
+            _openChipMenu(context, ref, details.globalPosition, tab),
+          ),
+          // Middle-click release closes the tab, same as the primary strip.
+          onTertiaryTapUp: (_) =>
+              unawaited(_closeTabs(context, ref, <String>[tab.id])),
           child: chip,
         ),
       ),

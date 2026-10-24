@@ -61,11 +61,13 @@ void main() {
       Platform.isWindows,
     );
     for (final kind in WorkspaceTabKind.values) {
-      if (kind == WorkspaceTabKind.editor ||
-          kind == WorkspaceTabKind.terminal) {
+      if (kind == WorkspaceTabKind.terminal) {
         continue;
       }
-      expect(experimental.supports(fixture(kind: kind)), isFalse);
+      // Editor, markdown, PDF and git surfaces always use the shared
+      // backend; only Terminal stays opt-in.
+      expect(regular.supports(fixture(kind: kind)), Platform.isWindows);
+      expect(experimental.supports(fixture(kind: kind)), Platform.isWindows);
     }
   });
 
@@ -281,40 +283,49 @@ void main() {
     },
   );
 
-  test(
-    'dragging a shared Editor off its child only docks on the main HWND',
-    () async {
-      var overMain = false;
-      final closed = <int>[];
-      final bridge = SharedEngineDetachedTabWindows(
-        openNativeWindow: (_, _) async => 12,
-        sourceFrameBarrier: () async {},
-        closeNativeWindow: (id) async {
-          closed.add(id);
-          return true;
-        },
-        isCursorOverMainWindow: () async => overMain,
-        cursorWindowProbe: () => null,
-      );
-      addTearDown(bridge.dispose);
-      final launched = bridge.detach(fixture());
-      await Future<void>.delayed(Duration.zero);
-      bridge.reportContentMounted('tab-a', 12);
-      expect(await launched, isTrue);
+  test('dragging a shared Editor off its child docks on the main HWND and '
+      'spawns a window on empty space', () async {
+    var overMain = false;
+    var nextViewId = 12;
+    final closed = <int>[];
+    final bridge = SharedEngineDetachedTabWindows(
+      openNativeWindow: (_, _) async => nextViewId++,
+      sourceFrameBarrier: () async {},
+      closeNativeWindow: (id) async {
+        closed.add(id);
+        return true;
+      },
+      isCursorOverMainWindow: () async => overMain,
+      cursorWindowProbe: () => null,
+    );
+    addTearDown(bridge.dispose);
+    final launched = bridge.detach(fixture());
+    await Future<void>.delayed(Duration.zero);
+    bridge.reportContentMounted('tab-a', 12);
+    expect(await launched, isTrue);
 
-      expect(await bridge.tryReturnTabAtPointer('tab-a', 12), isFalse);
-      expect(closed, isEmpty);
-      expect(bridge.isDetached('tab-a'), isTrue);
-      expect(await bridge.tryReturnTabAtPointer('tab-a', 999), isFalse);
+    // Off the main window and off every detached window: a fresh
+    // detached window opens for the dragged tab.
+    final moved = bridge.tryReturnTabAtPointer('tab-a', 12);
+    await Future<void>.delayed(Duration.zero);
+    bridge.reportContentMounted('tab-a', 13);
+    expect(await moved, isTrue);
+    expect(bridge.isDetached('tab-a'), isTrue);
+    expect(bridge.tabsForView(13).map((d) => d.tab.id), ['tab-a']);
+    expect(closed, [12]);
+    bridge.onWindowClosed(12);
+    await Future<void>.delayed(Duration.zero);
 
-      overMain = true;
-      expect(await bridge.tryReturnTabAtPointer('tab-a', 12), isTrue);
-      expect(closed, [12]);
-      bridge.onWindowClosed(12);
-      await Future<void>.delayed(Duration.zero);
-      expect(bridge.isDetached('tab-a'), isFalse);
-    },
-  );
+    // A stale drag end with an unknown source view id is still refused.
+    expect(await bridge.tryReturnTabAtPointer('tab-a', 999), isFalse);
+
+    overMain = true;
+    expect(await bridge.tryReturnTabAtPointer('tab-a', 13), isTrue);
+    expect(closed, [12, 13]);
+    bridge.onWindowClosed(13);
+    await Future<void>.delayed(Duration.zero);
+    expect(bridge.isDetached('tab-a'), isFalse);
+  });
 
   test(
     'stale native drag hit-test cannot close an already recycled Editor window',
@@ -698,42 +709,180 @@ void main() {
     expect(bridge.isDetached('tab-a'), isTrue);
   });
 
-  test('a chip dropped on a foreign window or itself stays put', () async {
+  test(
+    'a chip dropped outside Alera opens a new window, on itself stays put',
+    () async {
+      if (!Platform.isWindows) return;
+      var foreign = false;
+      int? probeViewId;
+      var nextViewId = 12;
+      final closed = <int>[];
+      final bridge = SharedEngineDetachedTabWindows(
+        openNativeWindow: (_, _) async => nextViewId++,
+        sourceFrameBarrier: () async {},
+        closeNativeWindow: (id) async {
+          closed.add(id);
+          return true;
+        },
+        isCursorOverMainWindow: () async => true,
+        cursorWindowProbe: () =>
+            (viewId: probeViewId, onForeignWindow: foreign),
+      );
+      addTearDown(bridge.dispose);
+      final launched = bridge.detach(fixture());
+      await Future<void>.delayed(Duration.zero);
+      bridge.reportContentMounted('tab-a', 12);
+      expect(await launched, isTrue);
+
+      // Dropped outside Alera entirely (desktop or another application): the
+      // primary strip opens a fresh detached window, so a child chip does too.
+      foreign = true;
+      final moved = bridge.tryReturnTabAtPointer('tab-a', 12);
+      await Future<void>.delayed(Duration.zero);
+      bridge.reportContentMounted('tab-a', 13);
+      expect(await moved, isTrue);
+      expect(bridge.isDetached('tab-a'), isTrue);
+      expect(bridge.tabsForView(13).map((d) => d.tab.id), ['tab-a']);
+      expect(bridge.tabsForView(12), isEmpty);
+      // The emptied source window closed once the new one was shown.
+      expect(closed, [12]);
+      bridge.onWindowClosed(12);
+      await Future<void>.delayed(Duration.zero);
+
+      // Dropped back on its own window.
+      foreign = false;
+      probeViewId = 13;
+      expect(await bridge.tryReturnTabAtPointer('tab-a', 13), isFalse);
+      expect(bridge.isDetached('tab-a'), isTrue);
+
+      // Over the primary window: the probe names no detached view and the
+      // main HWND check docks it.
+      probeViewId = null;
+      expect(await bridge.tryReturnTabAtPointer('tab-a', 13), isTrue);
+      bridge.onWindowClosed(13);
+      await Future<void>.delayed(Duration.zero);
+      expect(bridge.isDetached('tab-a'), isFalse);
+    },
+  );
+
+  test('a chip dropped on empty desktop opens a new detached window', () async {
     if (!Platform.isWindows) return;
-    var foreign = false;
-    var self = false;
+    var nextViewId = 20;
+    final closed = <int>[];
     final bridge = SharedEngineDetachedTabWindows(
-      openNativeWindow: (_, _) async => 12,
+      openNativeWindow: (_, _) async => nextViewId++,
       sourceFrameBarrier: () async {},
-      closeNativeWindow: (_) async => true,
-      isCursorOverMainWindow: () async => true,
-      cursorWindowProbe: () =>
-          (viewId: self ? 12 : null, onForeignWindow: foreign),
+      closeNativeWindow: (id) async {
+        closed.add(id);
+        return true;
+      },
+      isCursorOverMainWindow: () async => false,
+      cursorWindowProbe: () => null,
+    );
+    addTearDown(bridge.dispose);
+    final first = bridge.detach(fixture());
+    await Future<void>.delayed(Duration.zero);
+    bridge.reportContentMounted('tab-a', 20);
+    expect(await first, isTrue);
+    // Merge tab-b into tab-a's window so the source keeps a sibling tab.
+    expect(
+      await bridge.mergeDetachedTab(
+        fixture(id: 'tab-b', title: 'other.dart'),
+        20,
+      ),
+      isTrue,
+    );
+    expect(bridge.tabsForView(20).map((d) => d.tab.id), ['tab-a', 'tab-b']);
+
+    // The probe sees no Alera window and the main check is false: the tab
+    // moves into a brand-new detached window while its sibling stays.
+    final moved = bridge.tryReturnTabAtPointer('tab-a', 20);
+    await Future<void>.delayed(Duration.zero);
+    bridge.reportContentMounted('tab-a', 21);
+    expect(await moved, isTrue);
+    expect(bridge.tabsForView(21).map((d) => d.tab.id), ['tab-a']);
+    expect(bridge.tabsForView(20).map((d) => d.tab.id), ['tab-b']);
+    expect(closed, isEmpty); // Source still hosts tab-b.
+    expect(bridge.canRender('tab-a', 21), isTrue);
+    expect(bridge.canRender('tab-a', 20), isFalse);
+  });
+
+  test('the strip menu moves a tab into a fresh detached window', () async {
+    if (!Platform.isWindows) return;
+    var nextViewId = 30;
+    final closed = <int>[];
+    final bridge = SharedEngineDetachedTabWindows(
+      openNativeWindow: (_, _) async => nextViewId++,
+      sourceFrameBarrier: () async {},
+      closeNativeWindow: (id) async {
+        closed.add(id);
+        return true;
+      },
+      isCursorOverMainWindow: () async => false,
+      cursorWindowProbe: () => null,
     );
     addTearDown(bridge.dispose);
     final launched = bridge.detach(fixture());
     await Future<void>.delayed(Duration.zero);
-    bridge.reportContentMounted('tab-a', 12);
+    bridge.reportContentMounted('tab-a', 30);
     expect(await launched, isTrue);
 
-    // Dropped over another application: do not dock even if the main check
-    // would have allowed it.
-    foreign = true;
-    expect(await bridge.tryReturnTabAtPointer('tab-a', 12), isFalse);
-    expect(bridge.isDetached('tab-a'), isTrue);
-
-    // Dropped back on its own window.
-    foreign = false;
-    self = true;
-    expect(await bridge.tryReturnTabAtPointer('tab-a', 12), isFalse);
-    expect(bridge.isDetached('tab-a'), isTrue);
-
-    // Over the primary window: the probe names no detached view and the
-    // main HWND check docks it.
-    self = false;
-    expect(await bridge.tryReturnTabAtPointer('tab-a', 12), isTrue);
-    bridge.onWindowClosed(12);
+    final moved = bridge.moveTabToNewWindow('tab-a', 30);
     await Future<void>.delayed(Duration.zero);
-    expect(bridge.isDetached('tab-a'), isFalse);
+    bridge.reportContentMounted('tab-a', 31);
+    expect(await moved, isTrue);
+    expect(bridge.tabsForView(31).map((d) => d.tab.id), ['tab-a']);
+    expect(bridge.tabsForView(30), isEmpty);
+    expect(closed, [30]);
+    expect(bridge.canRender('tab-a', 31), isTrue);
+    bridge.onWindowClosed(30);
+    await Future<void>.delayed(Duration.zero);
   });
+
+  test(
+    'closing a tab record retires the chip without restoring a window',
+    () async {
+      if (!Platform.isWindows) return;
+      var nextViewId = 40;
+      final closed = <int>[];
+      final bridge = SharedEngineDetachedTabWindows(
+        openNativeWindow: (_, _) async => nextViewId++,
+        sourceFrameBarrier: () async {},
+        closeNativeWindow: (id) async {
+          closed.add(id);
+          return true;
+        },
+        isCursorOverMainWindow: () async => false,
+        cursorWindowProbe: () => null,
+      );
+      addTearDown(bridge.dispose);
+      final launched = bridge.detach(fixture());
+      await Future<void>.delayed(Duration.zero);
+      bridge.reportContentMounted('tab-a', 40);
+      expect(await launched, isTrue);
+      expect(
+        await bridge.mergeDetachedTab(
+          fixture(id: 'tab-b', title: 'other.dart'),
+          40,
+        ),
+        isTrue,
+      );
+
+      // A closed record is forgotten, not docked: the sibling stays detached
+      // and the main strip must not resurrect the dead tab.
+      await bridge.forgetClosedTab('tab-a');
+      expect(bridge.isDetached('tab-a'), isFalse);
+      expect(bridge.isDetached('tab-b'), isTrue);
+      expect(bridge.tabsForView(40).map((d) => d.tab.id), ['tab-b']);
+      expect(closed, isEmpty);
+
+      // Closing the last record tears the native window down entirely.
+      await bridge.forgetClosedTab('tab-b');
+      expect(bridge.isDetached('tab-b'), isFalse);
+      expect(closed, [40]);
+      bridge.onWindowClosed(40);
+      await Future<void>.delayed(Duration.zero);
+      expect(bridge.tabsForView(40), isEmpty);
+    },
+  );
 }
