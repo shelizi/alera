@@ -6,6 +6,7 @@ import 'package:alera/src/features/workbench/infra/terminal_host/terminal_host_c
 import 'package:alera/src/features/workbench/infra/terminal_host/terminal_host_pty_session.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 import 'package:alera/src/features/workbench/presentation/terminal_runtime.dart';
+import 'package:alera/src/platform/runtime_host/runtime_host_transport_errors.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ghostty_vte_flutter/ghostty_vte_flutter.dart';
 
@@ -363,7 +364,7 @@ void main() {
       expect(session.writeBytes(<int>[9]), isTrue);
       await _flushAsync();
 
-      expect(client.attachCalls, hasLength(1));
+      expect(client.attachCalls, hasLength(2));
       expect(client.writes, isEmpty);
       final error = events.whereType<TerminalPtyErrorEvent>().single.error;
       expect(
@@ -374,6 +375,122 @@ void main() {
           contains('Terminal host connection closed'),
         ),
       );
+    },
+  );
+
+  test(
+    'host PTY session reattaches the same PTY after the transport drops',
+    () async {
+      final client = FakeTerminalHostClient(
+        attachment: TerminalHostAttachment(
+          sessionId: 'session-1',
+          created: true,
+          running: true,
+          snapshot: Uint8List(0),
+        ),
+        attachments: <TerminalHostAttachment>[
+          TerminalHostAttachment(
+            sessionId: 'session-1',
+            created: true,
+            running: true,
+            snapshot: Uint8List(0),
+          ),
+          TerminalHostAttachment(
+            sessionId: 'session-1',
+            created: false,
+            running: true,
+            snapshot: Uint8List(0),
+          ),
+        ],
+      );
+      final session = TerminalHostPtySession(
+        client: client,
+        sessionId: 'session-1',
+        workspaceId: 'workspace-1',
+        tabId: 'tab-1',
+      );
+      addTearDown(session.dispose);
+      final events = <TerminalPtySessionEvent>[];
+      final sub = session.events.listen(events.add);
+      addTearDown(sub.cancel);
+
+      await session.start(
+        launch: _launch(),
+        workingDirectory: '/repo',
+        cols: 80,
+        rows: 24,
+      );
+      client.emit(
+        const TerminalHostErrorEvent(
+          'session-1',
+          TerminalHostConnectionClosedException('socket_eof'),
+        ),
+      );
+      await _flushAsync();
+
+      expect(client.attachCalls, hasLength(2));
+      expect(client.attachCalls.last.sessionId, 'session-1');
+      expect(events.whereType<TerminalPtyErrorEvent>(), isEmpty);
+      expect(session.writeBytes(<int>[65]), isTrue);
+      await _flushAsync();
+      expect(client.writes, <List<int>>[
+        <int>[65],
+      ]);
+    },
+  );
+
+  test(
+    'host PTY session stops transport recovery after repeated attach failures',
+    () async {
+      final client = FakeTerminalHostClient(
+        attachment: TerminalHostAttachment(
+          sessionId: 'session-1',
+          created: true,
+          running: true,
+          snapshot: Uint8List(0),
+        ),
+      );
+      final session = TerminalHostPtySession(
+        client: client,
+        sessionId: 'session-1',
+        workspaceId: 'workspace-1',
+        tabId: 'tab-1',
+      );
+      addTearDown(session.dispose);
+      final events = <TerminalPtySessionEvent>[];
+      final sub = session.events.listen(events.add);
+      addTearDown(sub.cancel);
+
+      await session.start(
+        launch: _launch(),
+        workingDirectory: '/repo',
+        cols: 80,
+        rows: 24,
+      );
+      client.attachErrors.addAll(<Object>[
+        const TerminalHostConnectionClosedException('socket_eof'),
+        const TerminalHostConnectionClosedException('socket_eof'),
+        const TerminalHostConnectionClosedException('socket_eof'),
+        const TerminalHostConnectionClosedException('socket_eof'),
+      ]);
+      client.emit(
+        const TerminalHostErrorEvent(
+          'session-1',
+          TerminalHostConnectionClosedException('socket_eof'),
+        ),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      client.emit(
+        const TerminalHostErrorEvent(
+          'session-1',
+          TerminalHostConnectionClosedException('socket_eof'),
+        ),
+      );
+      await _flushAsync();
+
+      expect(client.attachCalls, hasLength(4));
+      expect(events.whereType<TerminalPtyErrorEvent>(), isNotEmpty);
+      expect(client.writes, isEmpty);
     },
   );
 

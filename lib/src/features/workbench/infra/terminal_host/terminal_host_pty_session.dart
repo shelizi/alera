@@ -69,6 +69,8 @@ final class TerminalHostPtySession._(
 
   StreamSubscription<TerminalHostEvent>? _hostSub;
   Future<TerminalHostAttachment>? _reattachFuture;
+  Future<void>? _transportRecovery;
+  int _transportRecoveryFailures = 0;
   Future<void>? _outputResyncFuture;
   GhosttyTerminalShellLaunch? _launch;
   String? _workingDirectory;
@@ -289,17 +291,13 @@ final class TerminalHostPtySession._(
     });
   }
 
-  Future<void> _writeBytes(
-    List<int> bytes, {
-    bool deferredEnter = false,
-  }) async {
-    await _withReattach(
+  Future<void> _writeBytes(List<int> bytes, {bool deferredEnter = false}) {
+    return _sendBytesAcrossTransportLoss(
       () => _client.write(
         sessionId: _sessionId,
         bytes: bytes,
         deferredEnter: deferredEnter,
       ),
-      shouldRecover: _isDefinitivelyNotAttached,
     );
   }
 
@@ -415,6 +413,9 @@ final class TerminalHostPtySession._(
     next = _createOrAttach()
         .then((attachment) async {
           await _applyAttachment(attachment);
+          if (!attachment.created) {
+            _transportRecoveryFailures = 0;
+          }
           return attachment;
         })
         .whenComplete(() {
@@ -471,9 +472,7 @@ final class TerminalHostPtySession._(
       case TerminalHostExitEvent(:final exitCode):
         _events.add(TerminalPtyExitEvent(exitCode));
       case TerminalHostErrorEvent(:final error):
-        if (!_isInputBackpressure(error)) {
-          _events.add(TerminalPtyErrorEvent(error));
-        }
+        _onHostSessionError(error);
       case TerminalHostDriverChangedEvent():
         // Driver presence is consumed by the workbench overlay, not the PTY
         // session stream.

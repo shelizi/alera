@@ -4,6 +4,8 @@ Future<SocketTerminalHostClient> _connectedClient(
   _TerminalHostTestServer server, {
   Duration heartbeatInterval = const Duration(seconds: 15),
   Duration heartbeatTimeout = const Duration(seconds: 5),
+  Duration startupTimeout = const Duration(seconds: 8),
+  Duration connectRetryCooldown = const Duration(seconds: 2),
 }) async {
   final tempDir = await Directory.systemTemp.createTemp('alera-host-timeout-');
   addTearDown(() async {
@@ -19,8 +21,10 @@ Future<SocketTerminalHostClient> _connectedClient(
   final client = SocketTerminalHostClient(
     launcher: _NoopTerminalHostLauncher(),
     applicationSupportDirectory: () async => tempDir,
+    startupTimeout: startupTimeout,
     heartbeatInterval: heartbeatInterval,
     heartbeatTimeout: heartbeatTimeout,
+    connectRetryCooldown: connectRetryCooldown,
   );
   addTearDown(client.dispose);
   return client;
@@ -214,5 +218,54 @@ void _registerTerminalHostClientTimeoutTests() {
       throwsA(anything),
     );
     expect(server.acceptedConnections, greaterThan(1));
+  });
+
+  test('connect failures pace the next attempt instead of storming', () async {
+    // A wedged host accepts the socket but never answers hello, so every
+    // attempt burns an auth timeout. A single failure still retries right
+    // away; repeated failures must not each open another doomed socket.
+    final server = await _TerminalHostTestServer.start(
+      beforeResponse: (type) async {
+        if (type == 'hello') {
+          await Future.pause(const Duration(seconds: 5));
+        }
+      },
+    );
+    addTearDown(server.dispose);
+    final client = await _connectedClient(
+      server,
+      startupTimeout: const Duration(milliseconds: 2300),
+      connectRetryCooldown: const Duration(milliseconds: 400),
+    );
+
+    await expectLater(
+      client.ensureStarted(config: TerminalHostConfig.defaults),
+      throwsA(anything),
+    );
+    final acceptedAfterFirst = server.acceptedConnections;
+    expect(acceptedAfterFirst, greaterThan(0));
+
+    // The first failure is not paced: the next call is a real attempt.
+    await expectLater(
+      client.ensureStarted(config: TerminalHostConfig.defaults),
+      throwsA(anything),
+    );
+    final acceptedAfterSecond = server.acceptedConnections;
+    expect(acceptedAfterSecond, greaterThan(acceptedAfterFirst));
+
+    // Repeated failures now cool down: the call fails closed with no socket.
+    await expectLater(
+      client.ensureStarted(config: TerminalHostConfig.defaults),
+      throwsA(isA<TerminalHostConnectionClosedException>()),
+    );
+    expect(server.acceptedConnections, acceptedAfterSecond);
+
+    // Past the cooldown a real connect is attempted again.
+    await Future.pause(const Duration(milliseconds: 500));
+    await expectLater(
+      client.ensureStarted(config: TerminalHostConfig.defaults),
+      throwsA(anything),
+    );
+    expect(server.acceptedConnections, greaterThan(acceptedAfterSecond));
   });
 }

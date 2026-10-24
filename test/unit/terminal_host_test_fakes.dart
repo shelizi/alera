@@ -53,6 +53,7 @@ final class FakeTerminalHostClient({
   Map<String, TerminalSessionDriver> drivers =
       <String, TerminalSessionDriver>{};
   final List<Object> writeErrors = <Object>[];
+  final List<Object> attachErrors = <Object>[];
   final List<Object> resizeErrors = <Object>[];
   final List<Object> outputPausedErrors = <Object>[];
   final List<Object> pulseStatusErrors = <Object>[];
@@ -122,6 +123,9 @@ final class FakeTerminalHostClient({
     final gate = attachCalls.length == 1 ? attachCompleter : reattachCompleter;
     if (gate case final completer?) {
       await completer.future;
+    }
+    if (attachErrors.isNotEmpty) {
+      throw attachErrors.removeAt(0);
     }
     final index = attachCalls.length - 1;
     return _attachments[index < _attachments.length

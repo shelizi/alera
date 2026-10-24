@@ -46,6 +46,7 @@ final class SocketTerminalHostClient._(
   var TerminalHostConfig _config,
   this._heartbeatInterval,
   final Duration _heartbeatTimeout,
+  final Duration _connectRetryCooldown,
 ) with
         _TerminalHostClientHeartbeat,
         _TerminalHostClientSessionEvents,
@@ -64,6 +65,7 @@ final class SocketTerminalHostClient._(
     TerminalHostConfig initialConfig = TerminalHostConfig.defaults,
     Duration heartbeatInterval = _terminalHostHeartbeatInterval,
     Duration heartbeatTimeout = _terminalHostHeartbeatTimeout,
+    Duration connectRetryCooldown = const Duration(seconds: 2),
   }) {
     return SocketTerminalHostClient._(
       launcher ?? DefaultTerminalHostProcessLauncher(),
@@ -72,6 +74,7 @@ final class SocketTerminalHostClient._(
       initialConfig,
       heartbeatInterval,
       heartbeatTimeout,
+      connectRetryCooldown,
     );
   }
 
@@ -93,6 +96,11 @@ final class SocketTerminalHostClient._(
   @override
   _TerminalHostConnection? _runtimeConnection;
   StreamSubscription<Object?>? _runtimeLineSub;
+  // Pacing between independent connect attempts: a wedged host accepts the
+  // TCP handshake but never answers hello, so without a cooldown every
+  // failed attempt would let the next caller open another doomed socket.
+  int _connectFailureStreak = 0;
+  DateTime? _connectRetryNotBefore;
   int _nextRequestId = 1;
   int? _runtimeSettingsRevision;
   @override
@@ -453,6 +461,37 @@ final class SocketTerminalHostClient._(
     return _runtimeRequest(type, payload, timeout);
   }
 
+  void _throwIfConnectRetryCoolingDown() {
+    final notBefore = _connectRetryNotBefore;
+    if (notBefore != null && DateTime.now().isBefore(notBefore)) {
+      throw const TerminalHostConnectionClosedException();
+    }
+  }
+
+  Future<_TerminalHostConnection> _trackConnectOutcome(
+    Future<_TerminalHostConnection> future,
+  ) async {
+    try {
+      final connection = await future;
+      _connectFailureStreak = 0;
+      _connectRetryNotBefore = null;
+      return connection;
+    } catch (error) {
+      // Semantic rejections such as a missing orchestration capability are
+      // not transport failures and must not pace later connects.
+      if (error is! StateError) {
+        _connectFailureStreak += 1;
+        if (_connectFailureStreak >= 2) {
+          final factor = (_connectFailureStreak - 1).clamp(1, 4);
+          _connectRetryNotBefore = DateTime.now().add(
+            _connectRetryCooldown * factor,
+          );
+        }
+      }
+      rethrow;
+    }
+  }
+
   Future<_TerminalHostConnection> _connectTerminal() {
     if (_disposed) {
       throw const TerminalHostConnectionClosedException();
@@ -469,8 +508,9 @@ final class SocketTerminalHostClient._(
     if (future != null) {
       return future;
     }
+    _throwIfConnectRetryCoolingDown();
     late final Future<_TerminalHostConnection> next;
-    next = _openTerminalConnection().whenComplete(() {
+    next = _trackConnectOutcome(_openTerminalConnection()).whenComplete(() {
       if (identical(_terminalConnectionFuture, next)) {
         _terminalConnectionFuture = null;
       }
@@ -534,11 +574,14 @@ final class SocketTerminalHostClient._(
         return connection;
       }
     }
+    _throwIfConnectRetryCoolingDown();
     late final Future<_TerminalHostConnection> next;
     next =
-        _openRuntimeConnection(
-          requireOrchestration: requireOrchestration,
-          launchIfMissing: launchIfMissing,
+        _trackConnectOutcome(
+          _openRuntimeConnection(
+            requireOrchestration: requireOrchestration,
+            launchIfMissing: launchIfMissing,
+          ),
         ).whenComplete(() {
           if (identical(_runtimeConnectionFuture, next)) {
             _runtimeConnectionFuture = null;
