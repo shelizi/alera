@@ -95,13 +95,25 @@ class const _DraggableWorkspaceTabChip({
           if (tab.isPreview) {
             _KeepPreviewTabScope.maybeOf(context)?.call(tab.id);
           }
+          // Dropping over an existing shared detached window merges the tab
+          // into its strip instead of spawning another native window. Kinds
+          // the shared backend cannot host keep the legacy detach path.
+          final mergeTarget = sharesSession
+              ? detachedTabWindows.sharedViewUnderCursor()
+              : null;
           unawaited(
-            detachedTabWindows
-                .detach(descriptor)
+            (mergeTarget == null
+                    ? detachedTabWindows.detach(descriptor)
+                    : detachedTabWindows.mergeSharedDetachedTab(
+                        descriptor,
+                        mergeTarget,
+                      ))
                 .then((created) {
                   if (!created) {
                     AleraToast.publish(
-                      message: 'Could not open detached window.',
+                      message: mergeTarget == null
+                          ? 'Could not open detached window.'
+                          : 'Could not merge tab into that window.',
                     );
                   } else if (!sharesSession &&
                       tab.kind == WorkspaceTabKind.terminal) {

@@ -14,9 +14,9 @@ final class _SharedDetachedTabWindow extends ConsumerWidget {
   final int viewId;
   final SharedEngineDetachedTabWindows controller;
 
-  Future<void> _saveEditor(WidgetRef ref) async {
+  Future<void> _saveEditor(WidgetRef ref, String tabId) async {
     try {
-      await ref.read(editorSessionRegistryProvider).save(descriptor.tab.id);
+      await ref.read(editorSessionRegistryProvider).save(tabId);
     } catch (error) {
       AleraToast.publish(
         message: 'Could not save this file: $error',
@@ -55,63 +55,275 @@ final class _SharedDetachedTabWindow extends ConsumerWidget {
         ],
       ),
       home: Scaffold(
-        appBar: AppBar(
-          title: Draggable<String>(
-            data: descriptor.tab.id,
-            dragAnchorStrategy: pointerDragAnchorStrategy,
-            onDragEnd: (_) => unawaited(
-              controller.tryReturnTabAtPointer(descriptor.tab.id, viewId),
-            ),
-            feedback: Material(
-              color: Colors.transparent,
-              child: DecoratedBox(
-                decoration: const BoxDecoration(color: Color(0xFF303030)),
-                child: Padding(
-                  padding: const EdgeInsets.all(10),
-                  child: Text(
-                    descriptor.tab.title,
-                    style: const TextStyle(color: Colors.white, fontSize: 13),
-                  ),
+        body: Column(
+          children: <Widget>[
+            _DetachedWindowTabStrip(controller: controller, viewId: viewId),
+            Expanded(
+              child: EarlyInputAttachScope(
+                child: ListenableBuilder(
+                  listenable: controller,
+                  builder: (context, _) {
+                    final tabs = controller.tabsForView(viewId);
+                    final activeId = controller.activeTabIdForView(viewId);
+                    DetachedTabDescriptor? active;
+                    for (final candidate in tabs) {
+                      if (candidate.tab.id == activeId) {
+                        active = candidate;
+                        break;
+                      }
+                    }
+                    active ??= tabs.isEmpty ? null : tabs.last;
+                    final current = active;
+                    if (current == null) {
+                      return const Center(child: CircularProgressIndicator());
+                    }
+                    final canRender = controller.canRender(
+                      current.tab.id,
+                      viewId,
+                    );
+                    return DetachedTabSaveShortcuts(
+                      kind: current.tab.kind,
+                      onSave: () => unawaited(_saveEditor(ref, current.tab.id)),
+                      child: canRender
+                          ? _SharedTabFrame(
+                              key: ValueKey(
+                                'shared-tab-${current.tab.id}-$viewId',
+                              ),
+                              descriptor: current,
+                              controller: controller,
+                              viewId: viewId,
+                            )
+                          : const Center(child: CircularProgressIndicator()),
+                    );
+                  },
                 ),
-              ),
-            ),
-            child: Tooltip(
-              message: 'Drag onto the main Alera window to return this tab',
-              child: Text(descriptor.tab.title),
-            ),
-          ),
-          actions: <Widget>[
-            IconButton(
-              tooltip: 'Return tab to main window',
-              icon: const Icon(Icons.call_merge),
-              onPressed: () => unawaited(
-                controller.closeTabWindow(descriptor.tab.id, viewId),
               ),
             ),
           ],
         ),
-        body: EarlyInputAttachScope(
-          child: DetachedTabSaveShortcuts(
-            kind: descriptor.tab.kind,
-            onSave: () => unawaited(_saveEditor(ref)),
-            child: ListenableBuilder(
-              listenable: controller,
-              builder: (context, _) {
-                if (!controller.canRender(descriptor.tab.id, viewId)) {
-                  return const Center(child: CircularProgressIndicator());
-                }
-                return _SharedTabFrame(
-                  key: ValueKey('shared-tab-${descriptor.tab.id}-$viewId'),
-                  descriptor: descriptor,
-                  controller: controller,
-                  viewId: viewId,
-                );
-              },
+      ),
+    );
+  }
+}
+
+/// Slim strip that replaces the old Material AppBar in detached windows:
+/// one chip per hosted tab, active chip highlighted, a per-chip merge-back
+/// affordance and a trailing button that returns every tab to the main
+/// window. Chips stay draggable onto the main window or another detached
+/// window to move the tab.
+final class _DetachedWindowTabStrip extends StatelessWidget {
+  const _DetachedWindowTabStrip({
+    required this.controller,
+    required this.viewId,
+  });
+
+  final SharedEngineDetachedTabWindows controller;
+  final int viewId;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: controller,
+      builder: (context, _) {
+        final tabs = controller.tabsForView(viewId);
+        final activeId = controller.activeTabIdForView(viewId);
+        return Container(
+          height: 34,
+          decoration: const BoxDecoration(
+            color: AleraTokens.surface,
+            border: Border(bottom: BorderSide(color: AleraTokens.borderSubtle)),
+          ),
+          child: Row(
+            children: <Widget>[
+              const SizedBox(width: AleraTokens.space8),
+              Expanded(
+                child: ListView(
+                  scrollDirection: Axis.horizontal,
+                  children: <Widget>[
+                    for (final entry in tabs)
+                      _DetachedWindowTabChip(
+                        controller: controller,
+                        viewId: viewId,
+                        descriptor: entry,
+                        active: entry.tab.id == activeId,
+                      ),
+                  ],
+                ),
+              ),
+              Tooltip(
+                message: 'Return all tabs to the main window',
+                child: InkWell(
+                  onTap: () => unawaited(controller.closeWindowTabs(viewId)),
+                  mouseCursor: SystemMouseCursors.click,
+                  borderRadius: BorderRadius.circular(AleraTokens.radiusSm),
+                  child: const Padding(
+                    padding: EdgeInsets.all(AleraTokens.space6),
+                    child: Icon(
+                      Icons.call_merge,
+                      size: 14,
+                      color: AleraTokens.foregroundMuted,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: AleraTokens.space8),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+final class _DetachedWindowTabChip extends StatelessWidget {
+  const _DetachedWindowTabChip({
+    required this.controller,
+    required this.viewId,
+    required this.descriptor,
+    required this.active,
+  });
+
+  final SharedEngineDetachedTabWindows controller;
+  final int viewId;
+  final DetachedTabDescriptor descriptor;
+  final bool active;
+
+  @override
+  Widget build(BuildContext context) {
+    final tab = descriptor.tab;
+    final chip = Container(
+      margin: const EdgeInsets.symmetric(vertical: 5),
+      padding: const EdgeInsets.symmetric(horizontal: AleraTokens.space8),
+      decoration: BoxDecoration(
+        color: active ? AleraTokens.surfaceElevated : Colors.transparent,
+        borderRadius: BorderRadius.circular(AleraTokens.radiusMd),
+        border: Border.all(
+          color: active ? AleraTokens.border : AleraTokens.borderSubtle,
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          _DetachedTabIcon(
+            kind: tab.kind,
+            tab: tab,
+            color: active
+                ? AleraTokens.foreground
+                : AleraTokens.foregroundMuted,
+          ),
+          const SizedBox(width: AleraTokens.space6),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 140),
+            child: Text(
+              tab.title,
+              maxLines: 1,
+              softWrap: false,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: active
+                    ? AleraTokens.foreground
+                    : AleraTokens.foregroundMuted,
+              ),
+            ),
+          ),
+          const SizedBox(width: AleraTokens.space6),
+          Tooltip(
+            message: 'Return this tab to the main window',
+            child: InkWell(
+              onTap: () => unawaited(controller.closeTabWindow(tab.id, viewId)),
+              mouseCursor: SystemMouseCursors.click,
+              borderRadius: BorderRadius.circular(AleraTokens.radiusSm),
+              child: const Padding(
+                padding: EdgeInsets.all(2),
+                child: Icon(
+                  Icons.close,
+                  size: 11,
+                  color: AleraTokens.foregroundMuted,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+    return Padding(
+      padding: const EdgeInsets.only(right: AleraTokens.space4),
+      child: Draggable<String>(
+        data: tab.id,
+        dragAnchorStrategy: pointerDragAnchorStrategy,
+        onDragEnd: (_) =>
+            unawaited(controller.tryReturnTabAtPointer(tab.id, viewId)),
+        feedback: Material(
+          color: Colors.transparent,
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: AleraTokens.surfaceElevated,
+              borderRadius: BorderRadius.circular(AleraTokens.radiusMd),
+              border: Border.all(color: AleraTokens.border),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(
+                horizontal: AleraTokens.space8,
+                vertical: AleraTokens.space4,
+              ),
+              child: Text(
+                tab.title,
+                style: const TextStyle(
+                  color: AleraTokens.foreground,
+                  fontSize: 11,
+                ),
+              ),
             ),
           ),
         ),
+        childWhenDragging: Opacity(opacity: 0.45, child: chip),
+        child: GestureDetector(
+          onTap: () => controller.selectDetachedTab(tab.id, viewId),
+          child: chip,
+        ),
       ),
     );
+  }
+}
+
+final class _DetachedTabIcon extends StatelessWidget {
+  const _DetachedTabIcon({
+    required this.kind,
+    required this.tab,
+    required this.color,
+  });
+
+  final WorkspaceTabKind kind;
+  final WorkspaceTabRecord tab;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return switch (kind) {
+      WorkspaceTabKind.editor ||
+      WorkspaceTabKind.markdownViewer ||
+      WorkspaceTabKind.pdf => AleraFileIcon(
+        pathOrName: tab.filePath ?? tab.title,
+        kind: .file,
+        size: 12,
+        fallbackColor: color,
+      ),
+      WorkspaceTabKind.gitDiff => Icon(
+        AleraIcons.gitBranch,
+        size: 12,
+        color: color,
+      ),
+      WorkspaceTabKind.gitHistory => Icon(
+        AleraIcons.gitGraph,
+        size: 12,
+        color: color,
+      ),
+      WorkspaceTabKind.terminal => Icon(
+        AleraIcons.terminal,
+        size: 12,
+        color: color,
+      ),
+    };
   }
 }
 

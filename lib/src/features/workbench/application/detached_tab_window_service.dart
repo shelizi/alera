@@ -63,6 +63,15 @@ typedef DetachedTabProcessStarter = Future<void> Function(
 abstract interface class SharedEngineDetachedTabBackend implements Listenable {
   bool supports(DetachedTabDescriptor descriptor);
   Future<bool> detach(DetachedTabDescriptor descriptor);
+
+  /// Adds [descriptor] to the tab strip of the already open detached window
+  /// [viewId] instead of creating a new native window.
+  Future<bool> mergeDetachedTab(DetachedTabDescriptor descriptor, int viewId);
+
+  /// The shared detached window under the OS cursor, natively hit tested.
+  /// Null when the pointer is over the primary window or outside Alera.
+  int? detachedViewUnderCursor();
+
   Set<String> get detachedTabIds;
   bool isDetached(String tabId);
   bool isLaunching(String tabId);
@@ -114,6 +123,28 @@ class DetachedTabWindowService extends ChangeNotifier {
 
   bool willShareSession(DetachedTabDescriptor descriptor) =>
       _sharedBackend?.supports(descriptor) ?? false;
+
+  /// The shared detached window currently under the OS cursor, if the
+  /// shared backend can hit test it. Used to merge a dragged tab into an
+  /// existing child window instead of opening another HWND.
+  int? sharedViewUnderCursor() => _sharedBackend?.detachedViewUnderCursor();
+
+  /// Merges [descriptor] into the tab strip of shared detached window
+  /// [viewId]. Returns false when no shared backend can host it.
+  Future<bool> mergeSharedDetachedTab(
+    DetachedTabDescriptor descriptor,
+    int viewId,
+  ) async {
+    final shared = _sharedBackend;
+    if (shared == null ||
+        !shared.supports(descriptor) ||
+        _disposed ||
+        isDetached(descriptor.tab.id) ||
+        isLaunching(descriptor.tab.id)) {
+      return false;
+    }
+    return shared.mergeDetachedTab(descriptor, viewId);
+  }
 
   /// Only the opt-in same-Engine backend needs an app-quit dirty-document
   /// gate. A legacy child process has its own independent quit lifecycle.

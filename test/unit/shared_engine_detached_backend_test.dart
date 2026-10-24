@@ -10,8 +10,10 @@ class _FakeBackend extends ChangeNotifier
     implements SharedEngineDetachedTabBackend {
   final pending = <String>{};
   final active = <String>{};
+  final merges = <(String, int)>[];
   final Completer<bool> result = Completer<bool>();
   int launches = 0;
+  int? cursorView;
 
   @override
   bool supports(DetachedTabDescriptor d) =>
@@ -25,6 +27,23 @@ class _FakeBackend extends ChangeNotifier
 
   @override
   bool isLaunching(String id) => pending.contains(id);
+
+  @override
+  Future<bool> mergeDetachedTab(
+    DetachedTabDescriptor descriptor,
+    int viewId,
+  ) async {
+    final id = descriptor.tab.id;
+    if (active.contains(id) || !pending.add(id)) return false;
+    merges.add((id, viewId));
+    active.add(id);
+    pending.remove(id);
+    notifyListeners();
+    return true;
+  }
+
+  @override
+  int? detachedViewUnderCursor() => cursorView;
 
   @override
   Future<bool> detach(DetachedTabDescriptor d) async {
@@ -153,4 +172,38 @@ void main() {
     expect(service.isLaunching('editor-tab'), isFalse);
     expect(service.isDetached('editor-tab'), isFalse);
   });
+
+  test(
+    'a dragged tab merges into the shared window under the cursor',
+    () async {
+      final backend = _FakeBackend()..cursorView = 77;
+      final service = DetachedTabWindowService(
+        starter: (_, _) => throw StateError('unexpected fallback'),
+      );
+      addTearDown(() {
+        service.dispose();
+        backend.dispose();
+      });
+      expect(service.sharedViewUnderCursor(), isNull);
+
+      service.useExperimentalSharedBackend(backend);
+      expect(service.sharedViewUnderCursor(), 77);
+
+      final editor = fixture(WorkspaceTabKind.editor);
+      expect(await service.mergeSharedDetachedTab(editor, 77), isTrue);
+      expect(backend.merges, [(editor.tab.id, 77)]);
+      expect(service.isDetached(editor.tab.id), isTrue);
+      // A detached tab is not merged a second time.
+      expect(await service.mergeSharedDetachedTab(editor, 77), isFalse);
+      expect(backend.merges, hasLength(1));
+      // Terminal tabs stay on the legacy path even when a view is hovered.
+      expect(
+        await service.mergeSharedDetachedTab(
+          fixture(WorkspaceTabKind.terminal),
+          77,
+        ),
+        isFalse,
+      );
+    },
+  );
 }
