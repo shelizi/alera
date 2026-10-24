@@ -73,6 +73,7 @@ extension _XtermTerminalSessionPty on _XtermTerminalSessionHandle {
         _flushPendingPtyResize();
         _running = !_exitedPtyGenerations.contains(generation);
         _prunePtyGenerationState();
+        _flushPendingTerminalInput();
         _notifySessionListeners();
         return !_disposed &&
             _activePtyGeneration == generation &&
@@ -226,6 +227,8 @@ extension _XtermTerminalSessionPty on _XtermTerminalSessionHandle {
     final session = _ptySession;
     _ptySession = null;
     _ptyOutputPaused = false;
+    _pendingTerminalInput.clear();
+    _pendingTerminalInputLength = 0;
     if (terminate) {
       session?.terminate();
     } else {

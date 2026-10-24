@@ -63,6 +63,8 @@ class _XtermTerminalSessionHandle(
   @override
   TerminalPtySession? _ptySession;
   StreamSubscription<TerminalPtySessionEvent>? _ptySessionSub;
+  final List<String> _pendingTerminalInput = <String>[];
+  int _pendingTerminalInputLength = 0;
   Timer? _pendingPtyResizeTimer;
   Timer? _selectionCopyTimer;
   Timer? _deferredSubmitEnterTimer;

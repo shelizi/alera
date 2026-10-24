@@ -204,6 +204,38 @@ void _registerTerminalRuntimeSessionOwnerTests() {
       }
     },
   );
+
+  test('input typed while the PTY session is attaching is not lost', () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    final startGate = Completer<void>();
+    final pty = _FakeTerminalPtySession(startCompleter: startGate);
+    final runtime = XtermTerminalRuntime(
+      ptySessionFactory: _FakeTerminalPtySessionFactory(
+        sessions: <_FakeTerminalPtySession>[pty],
+      ),
+      shellLaunchesBuilder: () => <GhosttyTerminalShellLaunch>[
+        _launch('shell', shell: '/bin/sh'),
+      ],
+    );
+    addTearDown(runtime.dispose);
+    try {
+      final session = runtime.sessionFor(workspace: _workspace(), tab: _tab());
+      final starting = session.ensureStarted();
+      await Future.pause(.zero);
+
+      feedTerminalInputForTesting(session, 'echo first-char');
+      feedTerminalInputForTesting(session, ' tail');
+      expect(pty.writes, isEmpty);
+
+      startGate.complete();
+      await starting;
+      await Future.pause(.zero);
+
+      expect(pty.writes, <List<int>>[utf8.encode('echo first-char tail')]);
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
 }
 
 final class _SharedTerminalPtySessionFactory

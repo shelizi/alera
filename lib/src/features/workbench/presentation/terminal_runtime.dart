@@ -36,6 +36,7 @@ import 'package:flutter/services.dart';
 import 'package:ghostty_vte_flutter/ghostty_vte_flutter.dart';
 import 'package:portable_pty/portable_pty.dart';
 import 'package:path/path.dart' as p;
+import 'package:xterm2/ui.dart' show traceTerminalInput;
 import 'package:xterm2/xterm.dart' as xterm;
 
 part 'terminal_runtime_posix_adapter.dart';
