@@ -12,13 +12,16 @@ param(
  [ValidatePattern('^Alera - [A-Za-z0-9_ .-]{1,90}$')][string]$ChildTitle='Alera - handoff_test.dart',
  [ValidatePattern('^[A-Za-z0-9_-]+\.json$')][string]$ReportName='real_editor_native_cycles.json',
  [ValidateSet('EDITOR','TERMINAL')][string]$Scenario='EDITOR',
- [switch]$PreflightOnly
+ [switch]$PreflightOnly,
+ [switch]$NativeMenuClick
 )
 $ErrorActionPreference='Stop'
 $base=(Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
 $exe=Join-Path $base 'build/windows/shared_gui_ninja/runner/Debug/alera-dev.exe'
 $buildConfig=Join-Path $base 'windows/flutter/ephemeral/generated_config.cmake'
 if($Scenario -eq 'TERMINAL') {
+  if(-not $PSBoundParameters.ContainsKey('MenuX')){$MenuX=400}
+  if(-not $PSBoundParameters.ContainsKey('MenuY')){$MenuY=268}
   # Terminal is intentionally disabled in standard Alera builds. Avoid
   # mistaking process-backed windows for this experimental one-engine test.
   $define=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes('ALERA_EXPERIMENTAL_SHARED_TERMINAL_TABS=true'))
@@ -33,6 +36,9 @@ if($Scenario -eq 'TERMINAL') {
   }
 }
 $procs=@(Get-Process alera-dev -ErrorAction SilentlyContinue | Where-Object Path -eq $exe)
+if($NativeMenuClick -and $Scenario -ne 'TERMINAL'){
+  throw 'NativeMenuClick is only calibrated for the isolated E2E Terminal context menu'
+}
 if($procs.Count -ne 1){throw "Expected exactly one E2E Alera process; found $($procs.Count)"}
 $app=$procs[0]
 $pidToProbe=$app.Id
@@ -150,7 +156,16 @@ try{
      # Popup menus are async frame-scheduled: never click immediately after
      # synthetic WM_RBUTTONUP, especially on high-DPI monitors.
      Start-Sleep -Milliseconds 500
-     if(-not [AleraE2ECyclesNative]::Mouse($main,$MenuX,$MenuY,$false)){throw "Cycle $i attempt $attempts menu click failed"}
+     if($NativeMenuClick){
+       # The Win32 synthetic click can be accepted without selecting a Flutter
+       # popup row after crossing DPI boundaries; target the actual HWND with
+       # per-monitor physical coordinates and fail closed on ownership changes.
+       & pwsh -NoProfile -File (Join-Path $PSScriptRoot 'probe_isolated_e2e_mouse.ps1') `
+         -Mode click -X $MenuX -Y $MenuY -TargetPid $pidToProbe -Configuration Debug
+       if($LASTEXITCODE -ne 0){throw "Cycle $i attempt $attempts guarded real menu click failed"}
+     }elseif(-not [AleraE2ECyclesNative]::Mouse($main,$MenuX,$MenuY,$false)){
+       throw "Cycle $i attempt $attempts synthetic menu click failed"
+     }
      $end=[DateTime]::UtcNow.AddSeconds(3)
      do {
        $child=[AleraE2ECyclesNative]::FindTopLevel($pidToProbe,$childTitle)

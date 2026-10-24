@@ -4,19 +4,19 @@
 
 ## Windows 啟動政策
 
-| 執行方式 | 主視窗 Flutter Engine | Editor 拆窗 | 非 Editor 拆窗 |
-|---|---|---|---|
-| `alera-dev.exe`（沒有參數） | 共用 Flutter Engine / `runMultiApp` | 同程序新原生 HWND / Flutter View | 原本的獨立程序 |
-| `alera-dev.exe --alera-shared-engine-tabs` | 共用 Flutter Engine（舊參數相容） | 同程序 | 原本的獨立程序 |
-| `alera-dev.exe --alera-legacy-detached-tabs` | 原本 `FlutterViewController` | 原本的獨立程序 | 原本的獨立程序 |
-| `alera-dev.exe --alera-detached-tab ...` | 原本的獨立子程序 Engine | 不再作為主窗拆窗 | 子程序依舊 |
-| 未知／複合啟動參數 | 為了相容性採原本模式 | 原本的獨立程序 | 原本的獨立程序 |
+| 執行方式 | 主視窗 Flutter Engine | Editor 拆窗 | Terminal 拆窗 | 其他拆窗 |
+|---|---|---|---|---|
+| `alera-dev.exe`（沒有參數） | 共用 Flutter Engine / `runMultiApp` | 同程序新原生 HWND / Flutter View | 同程序（編譯期預設） | 原本的獨立程序 |
+| `alera-dev.exe --alera-shared-engine-tabs` | 共用 Flutter Engine（舊參數相容） | 同程序 | 同程序（編譯期預設） | 原本的獨立程序 |
+| `alera-dev.exe --alera-legacy-detached-tabs` | 原本 `FlutterViewController` | 原本的獨立程序 | 原本的獨立程序 | 原本的獨立程序 |
+| `alera-dev.exe --alera-detached-tab ...` | 原本的獨立子程序 Engine | 不再作為主窗拆窗 | 子程序依舊 | 子程序依舊 |
+| 未知／複合啟動參數 | 為了相容性採原本模式 | 原本的獨立程序 | 原本的獨立程序 | 原本的獨立程序 |
 
 macOS、Linux、Android、iOS 不變；Windows 的 Dart 和 Win32 啟動判斷在 `lib/main.dart` 與 `windows/runner/shared_engine_startup_mode.h`，各有自動化測試。已啟動的 Alera 執行個體有 single-instance gate：要使用回退參數，需先**完整 Quit**，再以該參數重新啟動；只關閉到系統匣不算重新啟動。
 
 ## 資料安全及目前限制
 
-- 新版同程序只接管一般 Editor。Terminal、Git Diff、Git History、PDF、Markdown 還未具備完整每窗生命週期，繼續走已驗證的多程序實作；對不能安全直接拆出的 Dirty 舊程序 Editor，維持原有先儲存要求。
+- 新版同程序接管一般 Editor，以及 Windows 上的 Terminal（`experimentalSharedTerminalTabs` 預設 true）。可用 `--dart-define=ALERA_EXPERIMENTAL_SHARED_TERMINAL_TABS=false` 把 Terminal 留在子程序。Git Diff、Git History、PDF、Markdown 繼續走多程序實作。對不能安全直接拆出的 Dirty 舊程序 Editor，維持原有先儲存要求。Transport 中斷會自動 `createOrAttach` 同一個仍在跑的 PTY，不會重送遺失的按鍵；連續失敗三次，或宿主改開了新 shell，才顯示 Terminal host unavailable。
 - Editor 的 Dirty Buffer 在拆出、Return 或原生 WM_CLOSE 時保留；真正 Quit 會檢查 Dirty Editor，允許 Cancel 或 Save and Quit，磁碟寫入失敗則取消退出。
 - Windows Native `WM_CLOSE` 仍經 Dart window lifecycle / hide-on-close 處理；**不要將關閉主視窗的 X 和明確 Quit 視為同一件事。**
 - 本變更並未將新架構設為 macOS/Linux 預設，也沒有驗證各種 IME、跨螢幕拖回手勢、Release 下完整互動延遲與長期記憶體洩漏。保留參數回退以應對未知 plugin 不相容。

@@ -8,7 +8,7 @@ Windows Alera now starts in shared-engine mode by default for Editor tabs. Every
 
 ## Experimental Terminal handoff
 
-The Terminal path can be enabled **only in a separately compiled test build** with the Dart define `ALERA_EXPERIMENTAL_SHARED_TERMINAL_TABS=true`. Its default is `false`. The define does not override `--alera-legacy-detached-tabs`, which continues to use the original child process for every tab. Git Diff, Git History, PDF, and Markdown remain on the original child-process route even when this define is enabled.
+On Windows the Terminal path now defaults on through `experimentalSharedTerminalTabs` (`bool.fromEnvironment`, `defaultValue: true`). A build can still force the child-process Terminal path with `--dart-define=ALERA_EXPERIMENTAL_SHARED_TERMINAL_TABS=false`. The define does not override `--alera-legacy-detached-tabs`, which continues to use the original child process for every tab, including Terminal. Git Diff, Git History, PDF, and Markdown remain on the original child-process route even when Terminal sharing is on. Historical sections below describe the earlier default-off experiment and are not a claim that this revision passed those runs.
 
 The opt-in reuses the existing shared root ProviderScope, TerminalRuntime and durable session handle. The source tab is hidden and unmounted before the child tab surface may mount. Native child close waits for a teardown frame before restoring the source. This is intended to prevent simultaneous attachment of the same TerminalView GlobalKey, focus node and PTY. A Terminal widget's disposal releases its visibility lease; it must not call closeTab or terminate the durable PTY.
 

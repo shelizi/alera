@@ -1,7 +1,9 @@
 @echo off
 setlocal
 set "ALERA_E2E_DESKTOP=1"
-set "ALERA_E2E_REUSE_CLI=1"
+rem Keep fast reuse as the default, but permit one explicit isolated rebuild
+rem after the Rust Host code changes. Never reuse a stale test CLI silently.
+if not defined ALERA_E2E_REUSE_CLI set "ALERA_E2E_REUSE_CLI=1"
 set "CommonProgramFiles=C:\Program Files\Common Files"
 set "CommonProgramW6432=C:\Program Files\Common Files"
 set "CommonProgramFiles(x86)=C:\Program Files (x86)\Common Files"

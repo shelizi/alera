@@ -3,7 +3,8 @@ param(
   [Parameter(Mandatory=$true)][ValidateRange(1,6000)][int]$X,
   [Parameter(Mandatory=$true)][ValidateRange(1,4000)][int]$Y,
   [Parameter(Mandatory=$true)][ValidateRange(1,2147483647)][int]$TargetPid,
-  [ValidateSet('Debug','Release')][string]$Configuration='Debug'
+  [ValidateSet('Debug','Release')][string]$Configuration='Debug',
+  [switch]$PreflightOnly
 )
 $ErrorActionPreference='Stop'
 $root=(Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
@@ -31,24 +32,20 @@ public static class AleraE2ERealMouse {
   [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h,out uint id);
   [DllImport("user32.dll")] public static extern bool SetCursorPos(int x,int y);
   [DllImport("user32.dll")] public static extern bool GetCursorPos(out POINT p);
+  [DllImport("user32.dll")] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
   [DllImport("user32.dll")] public static extern void mouse_event(uint flags,uint dx,uint dy,uint data,UIntPtr extra);
 }
 '@
 $hwnd=$app.MainWindowHandle
-$rect=New-Object AleraE2ERealMouse+RECT
-if(-not [AleraE2ERealMouse]::GetWindowRect($hwnd,[ref]$rect)) {
+$logical=New-Object AleraE2ERealMouse+RECT
+if(-not [AleraE2ERealMouse]::GetWindowRect($hwnd,[ref]$logical)) {
   throw 'Could not determine isolated E2E window bounds'
 }
-$width=$rect.Right-$rect.Left
-$height=$rect.Bottom-$rect.Top
+$width=$logical.Right-$logical.Left
+$height=$logical.Bottom-$logical.Top
 if($X -ge $width -or $Y -ge $height) {
   throw "Refusing input outside E2E main HWND: relative=$X,$Y size=${width}x$height"
 }
-$screenX=$rect.Left+$X
-$screenY=$rect.Top+$Y
-$point=New-Object AleraE2ERealMouse+POINT
-$point.X=$screenX
-$point.Y=$screenY
 function Assert-E2EOwner([IntPtr]$candidate,[string]$stage) {
   if($candidate -eq [IntPtr]::Zero){throw "Refusing ${stage}: no native window"}
   $rootHwnd=[AleraE2ERealMouse]::GetAncestor($candidate,2)
@@ -58,13 +55,34 @@ function Assert-E2EOwner([IntPtr]$candidate,[string]$stage) {
     throw "Refusing ${stage}: pointer belongs to another process"
   }
 }
-[void][AleraE2ERealMouse]::SetForegroundWindow($hwnd)
-Start-Sleep -Milliseconds 120
-Assert-E2EOwner ([AleraE2ERealMouse]::GetForegroundWindow()) 'foreground'
-Assert-E2EOwner ([AleraE2ERealMouse]::WindowFromPoint($point)) 'hit test'
-$original=New-Object AleraE2ERealMouse+POINT
-$canRestore=[AleraE2ERealMouse]::GetCursorPos([ref]$original)
+# The HWND-only PrintWindow screenshot and DPI-unaware PowerShell APIs expose
+# virtualized logical coordinates; SetCursorPos/WindowFromPoint require real
+# physical screen coordinates. Work in PMv2 context for both latter APIs.
+$previousDpi=[AleraE2ERealMouse]::SetThreadDpiAwarenessContext([IntPtr]::new(-4))
+if($previousDpi -eq [IntPtr]::Zero){throw 'Could not enable per-monitor DPI awareness'}
 try {
+  $physical=New-Object AleraE2ERealMouse+RECT
+  if(-not [AleraE2ERealMouse]::GetWindowRect($hwnd,[ref]$physical)){
+    throw 'Could not read physical E2E window bounds'
+  }
+  $scaleX=($physical.Right-$physical.Left)/[double]$width
+  $scaleY=($physical.Bottom-$physical.Top)/[double]$height
+  if($scaleX -lt 0.5 -or $scaleX -gt 4 -or
+      $scaleY -lt 0.5 -or $scaleY -gt 4){throw 'Unexpected E2E DPI coordinate scale'}
+  $screenX=$physical.Left+[int][math]::Round($X*$scaleX)
+  $screenY=$physical.Top+[int][math]::Round($Y*$scaleY)
+  $point=New-Object AleraE2ERealMouse+POINT
+  $point.X=$screenX
+  $point.Y=$screenY
+  [void][AleraE2ERealMouse]::SetForegroundWindow($hwnd)
+  Start-Sleep -Milliseconds 120
+  Assert-E2EOwner ([AleraE2ERealMouse]::GetForegroundWindow()) 'foreground'
+  Assert-E2EOwner ([AleraE2ERealMouse]::WindowFromPoint($point)) 'hit test'
+  Write-Output "E2E_DPI_COORDINATES_OK=1 LOGICAL=$X,$Y PHYSICAL=$screenX,$screenY SCALE=$scaleX,$scaleY"
+  if($PreflightOnly){exit 0}
+  $original=New-Object AleraE2ERealMouse+POINT
+  $canRestore=[AleraE2ERealMouse]::GetCursorPos([ref]$original)
+  try {
   if(-not [AleraE2ERealMouse]::SetCursorPos($screenX,$screenY)){
     throw 'SetCursorPos failed'
   }
@@ -77,6 +95,9 @@ try {
     [AleraE2ERealMouse]::mouse_event(0x4,0,0,0,[UIntPtr]::Zero)
   }
   Write-Output "E2E_REAL_MOUSE_POSTED=1 PID=$TargetPid MODE=$Mode CLIENT=$X,$Y"
+  }finally{
+    if($canRestore){[void][AleraE2ERealMouse]::SetCursorPos($original.X,$original.Y)}
+  }
 }finally{
-  if($canRestore){[void][AleraE2ERealMouse]::SetCursorPos($original.X,$original.Y)}
+  [void][AleraE2ERealMouse]::SetThreadDpiAwarenessContext($previousDpi)
 }
