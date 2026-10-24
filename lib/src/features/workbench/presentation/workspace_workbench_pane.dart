@@ -269,6 +269,32 @@ class const _PaneDropTarget({
 
 class _PaneDropTargetState extends State<_PaneDropTarget> {
   WorkbenchDropZone? _hoverZone;
+  _WorkbenchTabDragController? _dragController;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final controller = _WorkbenchTabDragScope.controllerOf(context);
+    if (!identical(controller, _dragController)) {
+      _dragController?.removeListener(_handleDragStateChanged);
+      _dragController = controller..addListener(_handleDragStateChanged);
+    }
+  }
+
+  @override
+  void dispose() {
+    _dragController?.removeListener(_handleDragStateChanged);
+    super.dispose();
+  }
+
+  // DragTarget's onLeave is not guaranteed when a drag ends outside the
+  // Flutter view (e.g. a chip dropped on the desktop to detach); the shared
+  // drag controller is the fallback that always observes drag end.
+  void _handleDragStateChanged() {
+    if (_dragController!.value == false && _hoverZone != null) {
+      setState(() => _hoverZone = null);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
