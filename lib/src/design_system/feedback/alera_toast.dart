@@ -9,6 +9,7 @@ class const AleraToastData({
   required final String message,
   required final AleraToastTone tone,
   required final Duration duration,
+  final int? viewId,
 });
 
 abstract final class AleraToast {
@@ -27,13 +28,19 @@ abstract final class AleraToast {
       return;
     }
 
-    publish(message: context.tr(message), tone: tone, duration: duration);
+    publish(
+      message: context.tr(message),
+      tone: tone,
+      duration: duration,
+      viewId: View.maybeOf(context)?.viewId,
+    );
   }
 
   static void publish({
     required String message,
     AleraToastTone tone = AleraToastTone.info,
     Duration? duration,
+    int? viewId,
   }) {
     final trimmedMessage = message.trim();
     if (trimmedMessage.isEmpty) {
@@ -45,6 +52,7 @@ abstract final class AleraToast {
         message: trimmedMessage,
         tone: tone,
         duration: duration ?? const Duration(seconds: 4),
+        viewId: viewId,
       ),
     );
   }

@@ -20,7 +20,9 @@ class const AleraApp({super.key}) extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final language = ref.watch(
-      settingsControllerProvider.select((settings) => settings.general.language),
+      settingsControllerProvider.select(
+        (settings) => settings.general.language,
+      ),
     );
     return MaterialApp(
       title: kAleraAppName,
@@ -46,7 +48,7 @@ class const AleraApp({super.key}) extends ConsumerWidget {
                 child: Stack(
                   children: <Widget>[
                     TextActionsScope(child: child ?? const SizedBox.shrink()),
-                    const AleraToastHost(),
+                    const AleraToastHost(primary: true),
                   ],
                 ),
               ),

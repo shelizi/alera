@@ -110,12 +110,67 @@ void main() {
 
     expect(find.text('設定已在其他位置變更。你的變更未儲存。請檢查最新值後再試一次。'), findsOneWidget);
   });
+
+  testWidgets('the primary host ignores toasts tagged for another view', (
+    tester,
+  ) async {
+    await _pumpToastHarness(
+      tester,
+      onPressed: (_) {
+        AleraToast.publish(
+          message: 'Detached window toast',
+          duration: const Duration(milliseconds: 20),
+          viewId: 999,
+        );
+        AleraToast.publish(
+          message: 'Orphan toast',
+          duration: const Duration(milliseconds: 20),
+        );
+      },
+    );
+
+    await tester.tap(find.text('Show'));
+    await tester.pump();
+
+    expect(find.text('Detached window toast'), findsNothing);
+    expect(find.text('Orphan toast'), findsOneWidget);
+  });
+
+  testWidgets('a detached host ignores orphans and shows own-view toasts', (
+    tester,
+  ) async {
+    await _pumpToastHarness(
+      tester,
+      primary: false,
+      onPressed: (_) {
+        final ownViewId = View.of(_testContext!).viewId;
+        AleraToast.publish(
+          message: 'Orphan toast',
+          duration: const Duration(milliseconds: 20),
+        );
+        AleraToast.publish(
+          message: 'Detached window toast',
+          duration: const Duration(milliseconds: 20),
+          viewId: ownViewId,
+        );
+      },
+    );
+
+    await tester.tap(find.text('Show'));
+    await tester.pump();
+
+    expect(find.text('Orphan toast'), findsNothing);
+    expect(find.text('Detached window toast'), findsOneWidget);
+  });
 }
+
+BuildContext? _testContext;
 
 Future<void> _pumpToastHarness(
   WidgetTester tester, {
   required void Function(BuildContext context) onPressed,
   Locale? locale,
+  bool primary = true,
 }) async {
   await tester.pumpWidget(
     MaterialApp(
@@ -131,6 +186,7 @@ Future<void> _pumpToastHarness(
             Center(
               child: Builder(
                 builder: (context) {
+                  _testContext = context;
                   return FilledButton(
                     onPressed: () => onPressed(context),
                     child: const Text('Show'),
@@ -138,7 +194,7 @@ Future<void> _pumpToastHarness(
                 },
               ),
             ),
-            const AleraToastHost(),
+            AleraToastHost(primary: primary),
           ],
         ),
       ),

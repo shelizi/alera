@@ -7,7 +7,12 @@ import 'package:alera/src/design_system/feedback/alera_toast.dart';
 import 'package:alera/src/design_system/icons/alera_icons.dart';
 import 'package:flutter/material.dart';
 
-class const AleraToastHost({super.key}) extends StatefulWidget {
+class const AleraToastHost({super.key, this.primary = false})
+    extends StatefulWidget {
+  /// Only the primary window's host renders toasts that carry no `viewId`;
+  /// every host renders toasts tagged with its own view's ID.
+  final bool primary;
+
   @override
   State<AleraToastHost> createState() => _AleraToastHostState();
 }
@@ -20,11 +25,18 @@ class _AleraToastHostState extends State<AleraToastHost> {
   final Map<String, Timer> _dismissTimers = <String, Timer>{};
 
   StreamSubscription<AleraToastData>? _subscription;
+  int? _viewId;
 
   @override
   void initState() {
     super.initState();
     _subscription = AleraToast.stream.listen(_enqueue);
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _viewId = View.maybeOf(context)?.viewId;
   }
 
   @override
@@ -38,7 +50,7 @@ class _AleraToastHostState extends State<AleraToastHost> {
   }
 
   void _enqueue(AleraToastData toast) {
-    if (!mounted) {
+    if (!mounted || !_accepts(toast)) {
       return;
     }
 
@@ -49,6 +61,9 @@ class _AleraToastHostState extends State<AleraToastHost> {
 
     _pending.add(toast);
   }
+
+  bool _accepts(AleraToastData toast) =>
+      toast.viewId == _viewId || (widget.primary && toast.viewId == null);
 
   void _showToast(AleraToastData toast) {
     final entry = _ToastEntry(id: UniqueKey().toString(), data: toast);
