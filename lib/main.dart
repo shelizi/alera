@@ -6,7 +6,7 @@ import 'package:alera/src/features/workbench/application/detached_tab_window_ser
 import 'package:alera/src/features/workbench/application/detached_tab_bootstrap.dart';
 import 'package:alera/src/features/workbench/presentation/detached_tab_child_app.dart';
 import 'package:alera/src/features/workbench/presentation/shared_engine_detached_tab_window.dart';
-import 'package:window_manager/window_manager.dart';
+import 'package:window_manager/window_manager.dart' hide WindowOptions;
 import 'package:alera/src/app/resource_manager_terminal_composition.dart';
 import 'package:alera/src/app/runtime_host_window_exit_composition.dart';
 import 'package:alera/src/app/terminal_runtime_composition.dart';
@@ -29,9 +29,32 @@ import 'package:multiview_desktop/multiview_desktop.dart';
 const sharedEngineTabsCompatFlag = '--alera-shared-engine-tabs';
 
 /// Explicit recovery switch for Windows users who need the original
-/// per-process detached Editor windows. Non-Editor tab types still use that
-/// implementation automatically, regardless of this setting.
+/// per-process detached windows. Editor and Terminal both use a separate
+/// process when this flag is present. Git Diff, PDF and other types use that
+/// process even when the shared engine is on.
 const legacyDetachedTabsFlag = '--alera-legacy-detached-tabs';
+
+/// Anchor options for [runMultiApp].
+///
+/// [WindowOptions] defaults `alignment` to [Alignment.center]. Multiview
+/// applies that to the runner window after [bootstrapAppWindowBeforeRunApp]
+/// has already restored the saved frame. The center call keeps the restored
+/// size and replaces the saved origin. A null alignment leaves that frame
+/// where it was saved. The same value is the global default so a child that
+/// passes a null alignment is not merged back to center.
+const WindowOptions sharedEngineMainWindowOptions = WindowOptions(
+  alignment: null,
+);
+
+/// Windows Terminal windows share the Flutter engine with the main window.
+/// Compile with `--dart-define=ALERA_EXPERIMENTAL_SHARED_TERMINAL_TABS=false`
+/// to keep Terminal on the child-process path. This does not change
+/// [shouldUseSharedEngineTabsInvocation]: `--alera-legacy-detached-tabs` still
+/// uses a separate process for every tab, including Terminal.
+const experimentalSharedTerminalTabs = bool.fromEnvironment(
+  'ALERA_EXPERIMENTAL_SHARED_TERMINAL_TABS',
+  defaultValue: true,
+);
 
 /// Must exactly match ShouldUseSharedEngineTabs in Windows runner/main.cpp.
 /// Default Windows primary launch uses one Flutter Engine; independent
@@ -207,9 +230,7 @@ Future<void> _startApp({bool sharedEngineTabs = false}) async {
     // ProviderScope per child would silently duplicate EditorSessionRegistry,
     // Rust-backed runtime state and the SQLite owner.
     final windows = SharedEngineDetachedTabWindows(
-      experimentalTerminalTabs: const bool.fromEnvironment(
-        'ALERA_EXPERIMENTAL_SHARED_TERMINAL_TABS',
-      ),
+      experimentalTerminalTabs: experimentalSharedTerminalTabs,
     );
     detachedTabWindows.useExperimentalSharedBackend(windows);
     runMultiApp(
@@ -217,6 +238,8 @@ Future<void> _startApp({bool sharedEngineTabs = false}) async {
       globalScope: appScope,
       config: MultiAppConfig(
         observers: <WindowObserver>[windows],
+        mainWindowOptions: sharedEngineMainWindowOptions,
+        globalWindowOptions: sharedEngineMainWindowOptions,
         generalParams: MultiPlatformParams(
           closeMode: CloseMode.softCascade,
           animation: ViewAnimationConfig.disabled,
