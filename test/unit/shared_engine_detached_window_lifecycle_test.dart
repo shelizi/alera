@@ -5,7 +5,9 @@ import 'package:alera/src/features/workbench/application/detached_tab_window_ser
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 import 'package:alera/src/features/workbench/presentation/shared_engine_detached_tab_window.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:multiview_desktop/multiview_desktop.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -168,6 +170,60 @@ void main() {
       expect(closed, isEmpty);
     },
   );
+
+  test(
+    'detached window stays hidden until mounted content owns input',
+    () async {
+      final shown = <int>[];
+      var sawShowOnInitFalse = false;
+      final bridge = SharedEngineDetachedTabWindows(
+        openNativeWindow: (builder, options) async {
+          sawShowOnInitFalse = options.showOnInit == false;
+          return 60;
+        },
+        completeNativeShow: shown.add,
+        sourceFrameBarrier: () => Future<void>.value(),
+        closeNativeWindow: (_) async => true,
+      );
+      addTearDown(bridge.dispose);
+      final launched = bridge.detach(fixture());
+      await Future<void>.delayed(Duration.zero);
+      expect(sawShowOnInitFalse, isTrue);
+      // The window is created hidden; the show waiter is released only once
+      // the child's input client had a chance to attach during the mount.
+      expect(shown, isEmpty);
+      bridge.reportContentMounted('tab-a', 60);
+      expect(await launched, isTrue);
+      expect(shown, <int>[60]);
+    },
+  );
+
+  test('close before mount releases the pending show waiter first', () async {
+    final shown = <int>[];
+    final closed = <int>[];
+    final bridge = SharedEngineDetachedTabWindows(
+      openNativeWindow: (builder, options) async => 61,
+      completeNativeShow: shown.add,
+      sourceFrameBarrier: () => Future<void>.value(),
+      closeNativeWindow: (id) async {
+        closed.add(id);
+        return true;
+      },
+    );
+    addTearDown(bridge.dispose);
+    final launched = bridge.detach(fixture());
+    await Future<void>.delayed(Duration.zero);
+    expect(shown, isEmpty);
+    await bridge.closeTabWindow('tab-a', 61);
+    // The pending openWindow future is released before the view is torn
+    // down, otherwise its showOnInit wait would leak.
+    expect(shown, <int>[61]);
+    expect(closed, <int>[61]);
+    bridge.onWindowClosed(61);
+    expect(await launched, isFalse);
+    await Future<void>.delayed(Duration.zero);
+    expect(bridge.isDetached('tab-a'), isFalse);
+  });
 
   test(
     'native close during unmount prevents duplicate editor and restores',
@@ -353,4 +409,142 @@ void main() {
       expect(bridge.detachedTabIds, isEmpty);
     },
   );
+
+  test('a reopened child keeps the last physical frame', () async {
+    if (!Platform.isWindows) return;
+    final opened = <WindowOptions>[];
+    final written = <(int, Rect)>[];
+    var nextViewId = 80;
+    Rect? live;
+    final bridge = SharedEngineDetachedTabWindows(
+      experimentalTerminalTabs: true,
+      openNativeWindow: (_, options) async {
+        opened.add(options);
+        return nextViewId++;
+      },
+      sourceFrameBarrier: () async {},
+      closeNativeWindow: (_) async => true,
+      readPhysicalBounds: (_) => live,
+      writePhysicalBounds: (viewId, bounds) {
+        written.add((viewId, bounds));
+        return true;
+      },
+    );
+    addTearDown(bridge.dispose);
+    final terminal = fixture(kind: WorkspaceTabKind.terminal);
+
+    final first = bridge.detach(terminal);
+    await Future<void>.delayed(Duration.zero);
+    bridge.reportContentMounted(terminal.tab.id, 80);
+    expect(await first, isTrue);
+    expect(opened.single.alignment, Alignment.center);
+    expect(opened.single.size, const Size(1050, 720));
+    expect(written, isEmpty);
+
+    live = const Rect.fromLTWH(-1700, 40, 1500, 900);
+    bridge.onWindowEvent(80, 'moved');
+    bridge.onWindowEvent(80, 'close');
+    bridge.onWindowClosed(80);
+    await Future<void>.delayed(Duration.zero);
+    expect(bridge.isDetached(terminal.tab.id), isFalse);
+
+    final second = bridge.detach(terminal);
+    await Future<void>.delayed(Duration.zero);
+    bridge.reportContentMounted(terminal.tab.id, 81);
+    expect(await second, isTrue);
+    expect(opened, hasLength(2));
+    expect(opened[1].alignment, isNull);
+    expect(written, <(int, Rect)>[(81, live!)]);
+  });
+
+  test('a move event remembers a drag that never emits moved', () async {
+    if (!Platform.isWindows) return;
+    final opened = <WindowOptions>[];
+    final written = <(int, Rect)>[];
+    var nextViewId = 90;
+    Rect? live;
+    final bridge = SharedEngineDetachedTabWindows(
+      experimentalTerminalTabs: true,
+      physicalBoundsPollInterval: Duration.zero,
+      openNativeWindow: (_, options) async {
+        opened.add(options);
+        return nextViewId++;
+      },
+      sourceFrameBarrier: () async {},
+      closeNativeWindow: (_) async => true,
+      readPhysicalBounds: (_) => live,
+      writePhysicalBounds: (viewId, bounds) {
+        written.add((viewId, bounds));
+        return true;
+      },
+    );
+    addTearDown(bridge.dispose);
+    final terminal = fixture(kind: WorkspaceTabKind.terminal);
+    const dragged = Rect.fromLTWH(120, 100, 1600, 1000);
+
+    final first = bridge.detach(terminal);
+    await Future<void>.delayed(Duration.zero);
+    bridge.reportContentMounted(terminal.tab.id, 90);
+    expect(await first, isTrue);
+
+    live = dragged;
+    bridge.onWindowEvent(90, 'move');
+    live = null;
+    bridge.onWindowClosed(90);
+    await Future<void>.delayed(Duration.zero);
+
+    final second = bridge.detach(terminal);
+    await Future<void>.delayed(Duration.zero);
+    bridge.reportContentMounted(terminal.tab.id, 91);
+    expect(await second, isTrue);
+    expect(opened[1].alignment, isNull);
+    expect(written, <(int, Rect)>[(91, dragged)]);
+  });
+
+  test('a bounds poll remembers a drag that never emits an event', () async {
+    if (!Platform.isWindows) return;
+    final opened = <WindowOptions>[];
+    final written = <(int, Rect)>[];
+    var nextViewId = 100;
+    Rect? live;
+    final bridge = SharedEngineDetachedTabWindows(
+      experimentalTerminalTabs: true,
+      physicalBoundsPollInterval: const Duration(milliseconds: 20),
+      openNativeWindow: (_, options) async {
+        opened.add(options);
+        return nextViewId++;
+      },
+      sourceFrameBarrier: () async {},
+      closeNativeWindow: (_) async => true,
+      readPhysicalBounds: (_) => live,
+      writePhysicalBounds: (viewId, bounds) {
+        written.add((viewId, bounds));
+        return true;
+      },
+    );
+    addTearDown(bridge.dispose);
+    final terminal = fixture(kind: WorkspaceTabKind.terminal);
+    const dragged = Rect.fromLTWH(1900, 80, 1400, 900);
+
+    final first = bridge.detach(terminal);
+    await Future<void>.delayed(Duration.zero);
+    bridge.reportContentMounted(terminal.tab.id, 100);
+    expect(await first, isTrue);
+    expect(opened.single.alignment, Alignment.center);
+    expect(written, isEmpty);
+
+    live = dragged;
+    await Future<void>.delayed(const Duration(milliseconds: 150));
+    live = null;
+    bridge.onWindowClosed(100);
+    await Future<void>.delayed(Duration.zero);
+    expect(bridge.isDetached(terminal.tab.id), isFalse);
+
+    final second = bridge.detach(terminal);
+    await Future<void>.delayed(Duration.zero);
+    bridge.reportContentMounted(terminal.tab.id, 101);
+    expect(await second, isTrue);
+    expect(opened[1].alignment, isNull);
+    expect(written, <(int, Rect)>[(101, dragged)]);
+  });
 }

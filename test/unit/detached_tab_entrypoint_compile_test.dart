@@ -8,6 +8,14 @@ void main() {
     expect(app.main, isNotNull);
   });
 
+  test('Windows shared terminal windows default on', () {
+    expect(app.experimentalSharedTerminalTabs, isTrue);
+  });
+
+  test('shared engine startup does not recenter a restored main window', () {
+    expect(app.sharedEngineMainWindowOptions.alignment, isNull);
+  });
+
   test('Windows main window enables the shared Engine by default', () {
     expect(
       app.shouldUseSharedEngineTabsInvocation(const [], isWindows: true),
