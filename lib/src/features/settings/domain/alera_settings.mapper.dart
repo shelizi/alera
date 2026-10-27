@@ -401,6 +401,13 @@ class GeneralSettingsMapper extends ClassMapperBase<GeneralSettings> {
     opt: true,
     def: false,
   );
+  static bool _$autoGitFetchEnabled(GeneralSettings v) => v.autoGitFetchEnabled;
+  static const Field<GeneralSettings, bool> _f$autoGitFetchEnabled = Field(
+    'autoGitFetchEnabled',
+    _$autoGitFetchEnabled,
+    opt: true,
+    def: true,
+  );
   static int _$autoArchiveWorkspacesAfterDays(GeneralSettings v) =>
       v.autoArchiveWorkspacesAfterDays;
   static const Field<GeneralSettings, int> _f$autoArchiveWorkspacesAfterDays =
@@ -425,6 +432,7 @@ class GeneralSettingsMapper extends ClassMapperBase<GeneralSettings> {
     #showPullRequestStatusInSidebar: _f$showPullRequestStatusInSidebar,
     #pullRequestFailureNotificationsEnabled:
         _f$pullRequestFailureNotificationsEnabled,
+    #autoGitFetchEnabled: _f$autoGitFetchEnabled,
     #autoArchiveWorkspacesAfterDays: _f$autoArchiveWorkspacesAfterDays,
   };
 
@@ -445,6 +453,7 @@ class GeneralSettingsMapper extends ClassMapperBase<GeneralSettings> {
       pullRequestFailureNotificationsEnabled: data.dec(
         _f$pullRequestFailureNotificationsEnabled,
       ),
+      autoGitFetchEnabled: data.dec(_f$autoGitFetchEnabled),
       autoArchiveWorkspacesAfterDays: data.dec(
         _f$autoArchiveWorkspacesAfterDays,
       ),
@@ -525,6 +534,7 @@ abstract class GeneralSettingsCopyWith<$R, $In extends GeneralSettings, $Out>
     bool? showTrayBadge,
     bool? showPullRequestStatusInSidebar,
     bool? pullRequestFailureNotificationsEnabled,
+    bool? autoGitFetchEnabled,
     int? autoArchiveWorkspacesAfterDays,
   });
   GeneralSettingsCopyWith<$R2, $In, $Out2> $chain<$R2, $Out2>(
@@ -553,6 +563,7 @@ class _GeneralSettingsCopyWithImpl<$R, $Out>
     bool? showTrayBadge,
     bool? showPullRequestStatusInSidebar,
     bool? pullRequestFailureNotificationsEnabled,
+    bool? autoGitFetchEnabled,
     int? autoArchiveWorkspacesAfterDays,
   }) => $apply(
     FieldCopyWithData({
@@ -572,6 +583,8 @@ class _GeneralSettingsCopyWithImpl<$R, $Out>
       if (pullRequestFailureNotificationsEnabled != null)
         #pullRequestFailureNotificationsEnabled:
             pullRequestFailureNotificationsEnabled,
+      if (autoGitFetchEnabled != null)
+        #autoGitFetchEnabled: autoGitFetchEnabled,
       if (autoArchiveWorkspacesAfterDays != null)
         #autoArchiveWorkspacesAfterDays: autoArchiveWorkspacesAfterDays,
     }),
@@ -603,6 +616,10 @@ class _GeneralSettingsCopyWithImpl<$R, $Out>
     pullRequestFailureNotificationsEnabled: data.get(
       #pullRequestFailureNotificationsEnabled,
       or: $value.pullRequestFailureNotificationsEnabled,
+    ),
+    autoGitFetchEnabled: data.get(
+      #autoGitFetchEnabled,
+      or: $value.autoGitFetchEnabled,
     ),
     autoArchiveWorkspacesAfterDays: data.get(
       #autoArchiveWorkspacesAfterDays,

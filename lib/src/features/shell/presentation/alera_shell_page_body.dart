@@ -72,6 +72,7 @@ class _AleraShellPageBodyState extends ConsumerState<_AleraShellPageBody> {
     ref.watch(terminalRuntimeActiveWorkspaceCoordinatorProvider);
     ref.watch(workspaceActivityPersistenceCoordinatorProvider);
     ref.watch(workbenchArchiveSweepCoordinatorProvider);
+    ref.watch(workbenchGitAutoFetchCoordinatorProvider);
     ref.watch(workspaceLanguageIntelligencePrewarmCoordinatorProvider);
     final shell = ref.watch(
       workbenchControllerProvider.select((state) {

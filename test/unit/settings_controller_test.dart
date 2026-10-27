@@ -66,6 +66,37 @@ void main() {
       },
     );
 
+    test('auto git fetch defaults on and persists the opt-out', () async {
+      expect(AleraSettings.defaults.general.autoGitFetchEnabled, isTrue);
+      final legacyJson = AleraSettings.defaults.toMap();
+      legacyJson['general'] = Map<String, dynamic>.from(
+        legacyJson['general'] as Map,
+      )..remove('autoGitFetchEnabled');
+      expect(
+        AleraSettings.fromJson(legacyJson).general.autoGitFetchEnabled,
+        isTrue,
+      );
+      final db = AleraDatabase(executor: NativeDatabase.memory());
+      addTearDown(db.close);
+      final repository = DriftSettingsRepository(db);
+      final container = ProviderContainer(
+        overrides: [settingsRepositoryProvider.overrideWithValue(repository)],
+      );
+      addTearDown(container.dispose);
+      final controller = container.read(settingsControllerProvider.notifier);
+      await controller.load();
+
+      await controller.setAutoGitFetchEnabled(false);
+      expect(
+        container.read(settingsControllerProvider).general.autoGitFetchEnabled,
+        isFalse,
+      );
+      expect((await repository.load()).general.autoGitFetchEnabled, isFalse);
+
+      await controller.setAutoGitFetchEnabled(true);
+      expect((await repository.load()).general.autoGitFetchEnabled, isTrue);
+    });
+
     test('autosaves terminal updates', () async {
       final db = AleraDatabase(executor: NativeDatabase.memory());
       addTearDown(db.close);

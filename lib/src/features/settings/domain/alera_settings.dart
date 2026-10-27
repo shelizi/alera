@@ -44,6 +44,7 @@ class const GeneralSettings({
   this.showTrayBadge = true,
   this.showPullRequestStatusInSidebar = true,
   this.pullRequestFailureNotificationsEnabled = false,
+  this.autoGitFetchEnabled = true,
   this.autoArchiveWorkspacesAfterDays = 30,
 }) with GeneralSettingsMappable {
   /// Language used by the Alera interface. System resolves Chinese locales to
@@ -81,6 +82,9 @@ class const GeneralSettings({
 
   /// Keep monitoring while hidden and notify when checks enter a failed state.
   final bool pullRequestFailureNotificationsEnabled;
+
+  /// Periodically update remote-tracking Git refs without changing local files.
+  final bool autoGitFetchEnabled;
 
   /// Days of inactivity before a workspace moves to the Archived section.
   /// `0` disables automatic archiving.
