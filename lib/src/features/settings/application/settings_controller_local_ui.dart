@@ -141,6 +141,31 @@ mixin _SettingsControllerLocalUiSettings on _$SettingsController {
         );
       });
 
+  Future<void> setAutoGitFetchEnabled(bool value) =>
+      _controller._serialize(() async {
+        if (state.general.autoGitFetchEnabled == value) {
+          return;
+        }
+        await _controller._save(
+          state.copyWith(
+            general: state.general.copyWith(autoGitFetchEnabled: value),
+          ),
+        );
+      });
+
+  Future<void> setAutoGitFetchIntervalMinutes(int value) =>
+      _controller._serialize(() async {
+        if (value < 1 || value > 60) {
+          throw RangeError.range(value, 1, 60, 'value');
+        }
+        if (state.general.autoGitFetchIntervalMinutes == value) return;
+        await _controller._save(
+          state.copyWith(
+            general: state.general.copyWith(autoGitFetchIntervalMinutes: value),
+          ),
+        );
+      });
+
   Future<void> setClaudeQuotaProfiles({
     required String hostId,
     required List<ClaudeQuotaProfileSettings> profiles,

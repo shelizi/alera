@@ -91,8 +91,24 @@ class const ApplicationSettingsPane({
           key: groupKeys['workspaces'],
           child: AleraSettingsGroup(
             title: 'Workspaces',
-            description: 'Automatic archiving for inactive workspaces.',
+            description: 'Background maintenance for local workspaces.',
             children: <Widget>[
+              SettingsSwitchRow(
+                title: 'Automatically Fetch Git Remotes',
+                description: 'Periodically fetch remote branch information for Git projects. Does not pull, merge, or modify local files.',
+                value: general.autoGitFetchEnabled,
+                onChanged: controller.setAutoGitFetchEnabled,
+              ),
+              SettingsIntegerRow(
+                title: 'Auto Git Fetch Interval',
+                description: 'Minutes between automatic Git fetches. Default: 5 minutes. Changes apply without restarting Alera.',
+                value: general.autoGitFetchIntervalMinutes.clamp(1, 60),
+                min: 1,
+                max: 60,
+                step: 1,
+                suffix: 'min',
+                onChanged: controller.setAutoGitFetchIntervalMinutes,
+              ),
               SettingsIntegerRow(
                 title: 'Auto-Archive After Inactivity',
                 description: 'Days without activity before a workspace moves to the Archived section. Set to 0 to keep workspaces listed.',
