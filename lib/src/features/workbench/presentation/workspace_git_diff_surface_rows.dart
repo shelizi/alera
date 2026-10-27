@@ -1224,18 +1224,21 @@ class const _DiffLine({
             ],
           )
         : TextSpan(text: line.text, style: baseStyle);
-    return DecoratedBox(
-      decoration: BoxDecoration(color: background),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(
-          horizontal: AleraTokens.space12,
-          vertical: AleraTokens.space2,
-        ),
-        child: Text.rich(
-          renderedSpan,
-          maxLines: 1,
-          overflow: .visible,
-          softWrap: false,
+    return SizedBox(
+      height: _readOnlyDiffLineHeight(context),
+      child: DecoratedBox(
+        decoration: BoxDecoration(color: background),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(
+            horizontal: AleraTokens.space12,
+            vertical: AleraTokens.space2,
+          ),
+          child: Text.rich(
+            renderedSpan,
+            maxLines: 1,
+            overflow: .visible,
+            softWrap: false,
+          ),
         ),
       ),
     );

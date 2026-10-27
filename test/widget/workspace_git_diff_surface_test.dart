@@ -955,6 +955,250 @@ void main() {
     },
   );
 
+  testWidgets(
+    'diff-only unified and side-by-side rows retain consistent pixel heights',
+    (tester) async {
+      final backend = FakeGitBackend()
+        ..gitDiffResult = const GitDiffResult(
+          files: <GitDiffFile>[
+            GitDiffFile(
+              path: 'lib/main.dart',
+              area: .staged,
+              status: .modified,
+              lines: <GitDiffLine>[
+                GitDiffLine.hunk('@@ -1,8 +1,8 @@'),
+                GitDiffLine.context(' const label = "unchanged";'),
+                GitDiffLine.deletion('-const oldValue = 123;'),
+                GitDiffLine.addition('+const newValue = 129;'),
+                GitDiffLine.context(' '),
+                GitDiffLine.deletion('-'),
+                GitDiffLine.addition('+'),
+                GitDiffLine.context(' void main() {}'),
+                GitDiffLine.context(' // next'),
+                GitDiffLine.hunk('@@ -32,3 +32,4 @@'),
+                GitDiffLine.context(' void second() {}'),
+                GitDiffLine.addition('+  print("new");'),
+                GitDiffLine.context(' }'),
+              ],
+            ),
+          ],
+        );
+      await _pumpDiffSurface(
+        tester,
+        backend: backend,
+        tab: _diffTab(
+          filePath: 'lib/main.dart',
+          title: 'main.dart staged',
+          area: .staged,
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Switch to Diff Only'));
+      await tester.pumpAndSettle();
+
+      final unifiedHeights = <double>[];
+      for (var index = 1; index <= 8; index++) {
+        final row = find.byKey(ValueKey<String>('git-diff-unified-row-$index'));
+        expect(row, findsOneWidget);
+        unifiedHeights.add(tester.getSize(row).height);
+      }
+      expect(
+        unifiedHeights.every(
+          (height) => (height - unifiedHeights.first).abs() < .1,
+        ),
+        isTrue,
+        reason:
+            'diff-only hunk, context, empty, insertion and deletion rows must share a stable height: $unifiedHeights',
+      );
+
+      await tester.tap(find.byTooltip('Switch to Side-by-Side View'));
+      await tester.pumpAndSettle();
+      final pairedHeights = <double>[];
+      for (var index = 2; index <= 9; index++) {
+        final left = find.byKey(ValueKey<String>('git-diff-left-row-$index'));
+        final right = find.byKey(ValueKey<String>('git-diff-right-row-$index'));
+        expect(left, findsOneWidget);
+        expect(right, findsOneWidget);
+        final leftHeight = tester.getSize(left).height;
+        final rightHeight = tester.getSize(right).height;
+        expect(
+          leftHeight,
+          closeTo(rightHeight, .1),
+          reason: 'diff-only side-by-side row $index',
+        );
+        pairedHeights.add(leftHeight);
+      }
+      expect(
+        pairedHeights.every(
+          (height) => (height - pairedHeights.first).abs() < .1,
+        ),
+        isTrue,
+        reason:
+            'diff-only hunk and side cells must share a stable height: $pairedHeights',
+      );
+    },
+  );
+
+  testWidgets(
+    'diff-only native projected rows align both pane heights and vertical scroll',
+    (tester) async {
+      final lines = <GitDiffLine>[
+        const GitDiffLine.hunk('@@ -1,75 +1,76 @@'),
+        const GitDiffLine.deletion('-old first'),
+        const GitDiffLine.addition('+new first'),
+        const GitDiffLine.addition('+extra added'),
+        for (var index = 0; index < 72; index++)
+          GitDiffLine.context(' keep $index'),
+        const GitDiffLine.hunk('@@ -75 +76 @@'),
+        const GitDiffLine.deletion('-old last'),
+        const GitDiffLine.addition('+new last'),
+      ];
+      final projectedRows = <GitDiffSideBySideRow>[
+        const GitDiffSideBySideRow(kind: .passthrough, lineIndex: 0),
+        const GitDiffSideBySideRow(
+          kind: .pair,
+          leftLineIndex: 1,
+          rightLineIndex: 2,
+          leftLineNumber: 1,
+          rightLineNumber: 1,
+        ),
+        const GitDiffSideBySideRow(
+          kind: .pair,
+          rightLineIndex: 3,
+          rightLineNumber: 2,
+        ),
+        for (var index = 0; index < 72; index++)
+          GitDiffSideBySideRow(
+            kind: .pair,
+            leftLineIndex: 4 + index,
+            rightLineIndex: 4 + index,
+            leftLineNumber: 2 + index,
+            rightLineNumber: 3 + index,
+          ),
+        const GitDiffSideBySideRow(kind: .passthrough, lineIndex: 76),
+        const GitDiffSideBySideRow(
+          kind: .pair,
+          leftLineIndex: 77,
+          rightLineIndex: 78,
+          leftLineNumber: 75,
+          rightLineNumber: 76,
+        ),
+      ];
+      final backend = FakeGitBackend()
+        ..gitDiffResult = GitDiffResult(
+          files: <GitDiffFile>[
+            GitDiffFile(
+              path: 'lib/projected.dart',
+              area: .staged,
+              status: .modified,
+              lines: lines,
+              sideBySideRows: projectedRows,
+              oldPath: 'old/path/to/projected.dart',
+            ),
+          ],
+        );
+      await _pumpDiffSurface(
+        tester,
+        backend: backend,
+        tab: _diffTab(
+          filePath: 'lib/projected.dart',
+          title: 'projected.dart staged',
+          area: .staged,
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Switch to Diff Only'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Switch to Side-by-Side View'));
+      await tester.pumpAndSettle();
+
+      final leftList = tester.widget<ListView>(
+        find.byKey(const ValueKey<String>('git-diff-side-by-side-left-list')),
+      );
+      final rightList = tester.widget<ListView>(
+        find.byKey(const ValueKey<String>('git-diff-side-by-side-right-list')),
+      );
+      final leftScroll = leftList.controller!;
+      final rightScroll = rightList.controller!;
+      // The first-change navigator scrolls to its hunk by default. Return to
+      // the top before measuring the lazily instantiated file/header rows.
+      leftScroll.jumpTo(0);
+      await tester.pump();
+      for (var index = 0; index <= 10; index++) {
+        final left = find.byKey(ValueKey<String>('git-diff-left-row-$index'));
+        final right = find.byKey(ValueKey<String>('git-diff-right-row-$index'));
+        expect(left, findsOneWidget);
+        expect(right, findsOneWidget);
+        expect(
+          tester.getSize(left).height,
+          closeTo(tester.getSize(right).height, .1),
+          reason: 'native projected row $index (including unmatched insertion)',
+        );
+      }
+      expect(leftScroll.position.maxScrollExtent, greaterThan(0));
+      expect(
+        leftScroll.position.maxScrollExtent,
+        closeTo(rightScroll.position.maxScrollExtent, .5),
+        reason: 'both projected panes must have identical total visual height',
+      );
+      leftScroll.jumpTo(leftScroll.position.maxScrollExtent * .65);
+      await tester.pump();
+      expect(rightScroll.offset, closeTo(leftScroll.offset, .5));
+      rightScroll.jumpTo(rightScroll.position.maxScrollExtent * .95);
+      await tester.pump();
+      expect(leftScroll.offset, closeTo(rightScroll.offset, .5));
+    },
+  );
+
+  testWidgets(
+    'diff-only working tree stays read-only after editable full-file',
+    (tester) async {
+      const oldCode = 'const count = 1;\n';
+      const newCode = 'const count = 2;\n';
+      final backend = FakeGitBackend()
+        ..gitDiffResult = const GitDiffResult(
+          files: <GitDiffFile>[
+            GitDiffFile(
+              path: 'lib/main.dart',
+              area: .unstaged,
+              status: .modified,
+              lines: <GitDiffLine>[
+                GitDiffLine.hunk('@@ -1 +1 @@'),
+                GitDiffLine.deletion('-const count = 1;'),
+                GitDiffLine.addition('+const count = 2;'),
+              ],
+            ),
+          ],
+        )
+        ..diffBlobBytesBySide[(filePath: 'lib/main.dart', oldSide: true)] =
+            Uint8List.fromList(oldCode.codeUnits)
+        ..diffBlobBytesBySide[(filePath: 'lib/main.dart', oldSide: false)] =
+            Uint8List.fromList(newCode.codeUnits);
+      final files = _EditableDiffFileService(content: newCode);
+      await _pumpDiffSurface(
+        tester,
+        backend: backend,
+        workspaceFileService: files,
+        tab: _diffTab(filePath: 'lib/main.dart', title: 'main.dart unstaged'),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Switch to Side-by-Side View'));
+      await tester.pumpAndSettle();
+      final editor = find.byKey(
+        const ValueKey<String>('git-diff-working-tree-editor-lib/main.dart'),
+      );
+      expect(editor, findsOneWidget);
+      await tester.tap(find.byTooltip('Switch to Diff Only'));
+      await tester.pumpAndSettle();
+      expect(editor, findsNothing);
+      expect(find.text('Original'), findsOneWidget);
+      expect(find.text('Modified'), findsOneWidget);
+      expect(find.text('const count = 1;'), findsOneWidget);
+      expect(find.text('const count = 2;'), findsOneWidget);
+      expect(files.writes, isEmpty);
+    },
+  );
+
   testWidgets('oversized tracked full-file preview falls back to diff only', (
     tester,
   ) async {
