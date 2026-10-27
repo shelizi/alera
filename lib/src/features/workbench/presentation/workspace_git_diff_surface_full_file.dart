@@ -77,52 +77,55 @@ class const _FullFileDiffLine({required final _FullFileLine line})
             background: intralineBackground,
           )
         : baseSpan;
-    return DecoratedBox(
-      decoration: BoxDecoration(color: background),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(
-          horizontal: AleraTokens.space8,
-          vertical: AleraTokens.space2,
-        ),
-        child: Row(
-          children: <Widget>[
-            SizedBox(
-              width: 42,
-              child: SelectionContainer.disabled(
-                child: Text(
-                  line.lineNumber?.toString() ?? '',
-                  textAlign: TextAlign.right,
-                  style: AleraTokens.monoStyle.copyWith(
-                    fontSize: 11,
-                    color: AleraTokens.foregroundMuted.withValues(alpha: 0.5),
+    return SizedBox(
+      height: _readOnlyDiffLineHeight(context),
+      child: DecoratedBox(
+        decoration: BoxDecoration(color: background),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(
+            horizontal: AleraTokens.space8,
+            vertical: AleraTokens.space2,
+          ),
+          child: Row(
+            children: <Widget>[
+              SizedBox(
+                width: 42,
+                child: SelectionContainer.disabled(
+                  child: Text(
+                    line.lineNumber?.toString() ?? '',
+                    textAlign: TextAlign.right,
+                    style: AleraTokens.monoStyle.copyWith(
+                      fontSize: 11,
+                      color: AleraTokens.foregroundMuted.withValues(alpha: 0.5),
+                    ),
                   ),
                 ),
               ),
-            ),
-            const SizedBox(width: AleraTokens.space8),
-            SizedBox(
-              width: 12,
-              child: SelectionContainer.disabled(
-                child: Text(
-                  marker,
-                  textAlign: TextAlign.center,
-                  style: AleraTokens.monoStyle.copyWith(
-                    fontSize: 12,
-                    color: color,
+              const SizedBox(width: AleraTokens.space8),
+              SizedBox(
+                width: 12,
+                child: SelectionContainer.disabled(
+                  child: Text(
+                    marker,
+                    textAlign: TextAlign.center,
+                    style: AleraTokens.monoStyle.copyWith(
+                      fontSize: 12,
+                      color: color,
+                    ),
                   ),
                 ),
               ),
-            ),
-            const SizedBox(width: AleraTokens.space6),
-            Expanded(
-              child: Text.rich(
-                renderedSpan,
-                maxLines: 1,
-                overflow: TextOverflow.visible,
-                softWrap: false,
+              const SizedBox(width: AleraTokens.space6),
+              Expanded(
+                child: Text.rich(
+                  renderedSpan,
+                  maxLines: 1,
+                  overflow: TextOverflow.visible,
+                  softWrap: false,
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );

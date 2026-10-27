@@ -244,7 +244,7 @@ class const _SideBySideCell({
         ),
       ),
     );
-    return cell;
+    return SizedBox(height: _readOnlyDiffLineHeight(context), child: cell);
   }
 }
 

@@ -1,5 +1,15 @@
 part of 'workspace_git_diff_surface.dart';
 
+// Both read-only side-by-side panes are independent ListViews synchronized by
+// pixel offset. In a blank/missing cell Text.rich can measure 24px while the
+// matching populated cell measures 22px, accumulating vertical drift.
+const double _readOnlyDiffSourceRowHeight = 24.0;
+
+double _readOnlyDiffLineHeight(BuildContext context) => math.max(
+  _readOnlyDiffSourceRowHeight,
+  MediaQuery.textScalerOf(context).scale(12) * 1.5 + 6,
+);
+
 bool _hasEditableDiffBaseline(GitDiffFile file, _FullFileContents? contents) {
   if (contents?.newDecoded == null) return false;
   return switch (file.status) {
@@ -299,11 +309,11 @@ class _ReadOnlySideBySideDiffListState
     _leftHorizontalController = ScrollController(keepScrollOffset: false);
     _rightHorizontalController = ScrollController(keepScrollOffset: false);
     _leftVerticalController = AutoScrollController(
-      suggestedRowHeight: 22,
+      suggestedRowHeight: _readOnlyDiffSourceRowHeight,
       keepScrollOffset: false,
     );
     _rightVerticalController = AutoScrollController(
-      suggestedRowHeight: 22,
+      suggestedRowHeight: _readOnlyDiffSourceRowHeight,
       keepScrollOffset: false,
     );
     _leftHorizontalController.addListener(_syncHorizontalFromLeft);
@@ -526,7 +536,7 @@ class _SingleColumnDiffListState extends State<_SingleColumnDiffList> {
   void initState() {
     super.initState();
     _scrollController = AutoScrollController(
-      suggestedRowHeight: 22,
+      suggestedRowHeight: _readOnlyDiffSourceRowHeight,
       keepScrollOffset: false,
     );
     widget.navigation.addListener(_navigateToSelectedChange);

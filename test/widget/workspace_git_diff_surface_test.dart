@@ -870,6 +870,86 @@ void main() {
     expect(find.text('line two'), findsNothing);
   });
 
+  testWidgets(
+    'full-file read-only paired lines keep matching pixel heights, including blank and inserted lines',
+    (tester) async {
+      const oldCode =
+          'const label = "before";\n\nvoid main() {\n  print(label);\n}\n';
+      const newCode =
+          'const label = "after";\n\nvoid main() {\n  print(label);\n  print("new");\n}\n';
+      final backend = FakeGitBackend()
+        ..gitDiffResult = const GitDiffResult(
+          files: <GitDiffFile>[
+            GitDiffFile(
+              path: 'lib/main.dart',
+              area: .staged,
+              status: .modified,
+              lines: <GitDiffLine>[
+                GitDiffLine.hunk('@@ -1,5 +1,6 @@'),
+                GitDiffLine.deletion('-const label = "before";'),
+                GitDiffLine.addition('+const label = "after";'),
+                GitDiffLine.context(' '),
+                GitDiffLine.context(' void main() {'),
+                GitDiffLine.context('   print(label);'),
+                GitDiffLine.addition('+  print("new");'),
+                GitDiffLine.context(' }'),
+              ],
+            ),
+          ],
+        )
+        ..diffBlobBytesBySide[(filePath: 'lib/main.dart', oldSide: true)] =
+            Uint8List.fromList(oldCode.codeUnits)
+        ..diffBlobBytesBySide[(filePath: 'lib/main.dart', oldSide: false)] =
+            Uint8List.fromList(newCode.codeUnits);
+      await _pumpDiffSurface(
+        tester,
+        backend: backend,
+        tab: _diffTab(
+          filePath: 'lib/main.dart',
+          title: 'main.dart staged',
+          area: .staged,
+        ),
+      );
+      await tester.pumpAndSettle();
+      final unifiedHeights = <double>[];
+      for (var index = 1; index < 8; index++) {
+        final row = find.byKey(ValueKey<String>('git-diff-unified-row-$index'));
+        expect(row, findsOneWidget, reason: 'unified row $index');
+        unifiedHeights.add(tester.getSize(row).height);
+      }
+      expect(
+        unifiedHeights.every(
+          (height) => (height - unifiedHeights.first).abs() < 0.1,
+        ),
+        isTrue,
+        reason: 'full-file unified source lines should have a uniform height',
+      );
+      await tester.tap(find.byTooltip('Switch to Side-by-Side View'));
+      await tester.pumpAndSettle();
+
+      final heights = <double>[];
+      for (var index = 2; index < 8; index++) {
+        final left = find.byKey(ValueKey<String>('git-diff-left-row-$index'));
+        final right = find.byKey(ValueKey<String>('git-diff-right-row-$index'));
+        expect(left, findsOneWidget, reason: 'left row $index');
+        expect(right, findsOneWidget, reason: 'right row $index');
+        final leftHeight = tester.getSize(left).height;
+        final rightHeight = tester.getSize(right).height;
+        expect(
+          leftHeight,
+          closeTo(rightHeight, 0.1),
+          reason: 'paired row $index',
+        );
+        heights.add(leftHeight);
+      }
+      expect(
+        heights.every((height) => (height - heights.first).abs() < 0.1),
+        isTrue,
+        reason: 'full-file source line heights must be stable across syntax, empty lines and gaps',
+      );
+    },
+  );
+
   testWidgets('oversized tracked full-file preview falls back to diff only', (
     tester,
   ) async {
