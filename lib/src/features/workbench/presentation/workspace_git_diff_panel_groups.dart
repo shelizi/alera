@@ -304,22 +304,6 @@ extension _WorkspaceGitDiffPanelGrouping on _WorkspaceGitDiffPanelState {
     });
   }
 
-  bool get _isFilterVisible =>
-      _filterVisible || _filterController.text.trim().isNotEmpty;
-
-  void _toggleFilterVisibility() {
-    _setPanelState(() {
-      _filterVisible = !_isFilterVisible;
-    });
-    if (_isFilterVisible) {
-      // autofocus is skipped while the terminal or editor holds focus, so the
-      // field asks for it once it has been mounted.
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted && _isFilterVisible) _filterFocusNode.requestFocus();
-      });
-    }
-  }
-
   bool _allVisibleNodesCollapsed(WorkspaceSourceControlState? state) {
     final keys = _visibleCollapsibleKeys(state);
     return keys.isNotEmpty &&

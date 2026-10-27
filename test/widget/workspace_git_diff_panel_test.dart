@@ -1315,14 +1315,15 @@ void main() {
     await _pumpPanel(tester, backend: backend);
     await tester.pumpAndSettle();
 
-    expect(_filterField(), findsNothing);
-    // autofocus alone yields to an already focused field, as the terminal or
-    // editor usually is in the app.
+    // Like Explorer, Source Control keeps its filter mounted at all times.
+    expect(_filterField(), findsOneWidget);
+    expect(find.byTooltip('Search Files'), findsNothing);
+    expect(find.byTooltip('Hide File Filter'), findsNothing);
     await tester.tap(_messageField());
     await tester.pumpAndSettle();
     expect(_messageEditable(tester).focusNode.hasFocus, isTrue);
 
-    await tester.tap(find.byTooltip('Search Files'));
+    await tester.tap(_filterField());
     await tester.pumpAndSettle();
 
     expect(_filterEditable(tester).focusNode.hasFocus, isTrue);
@@ -1334,16 +1335,10 @@ void main() {
     expect(find.text('lib/visible.dart'), findsOneWidget);
     expect(find.text('test/hidden.dart'), findsNothing);
 
-    await tester.tap(find.byTooltip('Hide File Filter'));
-    await tester.pumpAndSettle();
-
-    expect(_filterField(), findsOneWidget);
-    expect(find.text('test/hidden.dart'), findsNothing);
-
     await tester.tap(find.byTooltip('Clear'));
     await tester.pumpAndSettle();
 
-    expect(_filterField(), findsNothing);
+    expect(_filterField(), findsOneWidget);
     expect(find.text('lib/visible.dart'), findsOneWidget);
     expect(find.text('test/hidden.dart'), findsOneWidget);
   });

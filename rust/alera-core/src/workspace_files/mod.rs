@@ -13,6 +13,7 @@ mod move_file;
 mod prompts;
 mod quick_open;
 mod trash;
+mod worktree_boundaries;
 
 use mime::{mime_type_for_path, path_has_binary_preview_mime};
 pub use move_file::move_workspace_text_from_root;
@@ -28,6 +29,7 @@ pub use trash::{
     list_workspace_text_trash, move_workspace_text_to_trash, open_workspace_text_trash,
     restore_workspace_text_from_trash, WorkspaceTextTrashEntry, WorkspaceTextTrashRoot,
 };
+pub use worktree_boundaries::nested_git_worktree_paths;
 
 pub const MAX_REMOTE_READ_BYTES: u64 = 256 * 1024;
 pub const MAX_REMOTE_EDIT_BYTES: usize = 256 * 1024;

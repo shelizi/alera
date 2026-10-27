@@ -26,12 +26,16 @@ pub(super) fn run_search(
     let mut truncated = false;
     let mut walker = WalkBuilder::new(&compiled.root);
     let root = compiled.root.clone();
+    // Do not walk other linked worktrees, even when ignored files are included.
+    let nested_worktrees = alera_core::workspace_files::nested_git_worktree_paths(&root);
     walker
         .hidden(false)
         .git_ignore(true)
         .git_exclude(true)
         .parents(true)
-        .filter_entry(move |entry| should_walk_entry(&root, entry.path()));
+        .filter_entry(move |entry| {
+            should_walk_entry(&root, entry.path()) && !nested_worktrees.contains(entry.path())
+        });
     if compiled.include_ignored {
         walker
             .ignore(false)

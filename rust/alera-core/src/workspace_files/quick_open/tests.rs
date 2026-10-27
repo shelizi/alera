@@ -55,6 +55,73 @@ fn indexes_and_ranks_workspace_files() {
 }
 
 #[test]
+fn nested_linked_worktrees_are_not_indexed_even_when_including_ignored_files() {
+    let workspace = tempfile::tempdir().unwrap();
+    let root = workspace.path();
+    let repo = git2::Repository::init(root).unwrap();
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(root.join(".gitignore"), ".worktrees/\n").unwrap();
+    fs::write(root.join("src/local_target.dart"), "local").unwrap();
+    let mut index = repo.index().unwrap();
+    index.add_path(Path::new(".gitignore")).unwrap();
+    index.add_path(Path::new("src/local_target.dart")).unwrap();
+    index.write().unwrap();
+    let tree_id = index.write_tree().unwrap();
+    let tree = repo.find_tree(tree_id).unwrap();
+    let signature = git2::Signature::now("Alera tests", "tests@alera.build").unwrap();
+    let oid = repo
+        .commit(Some("HEAD"), &signature, &signature, "initial", &tree, &[])
+        .unwrap();
+    drop(tree);
+
+    let head = repo.find_commit(oid).unwrap();
+    let reference = repo
+        .branch("feature/nested", &head, false)
+        .unwrap()
+        .into_reference();
+    let mut options = git2::WorktreeAddOptions::new();
+    options.reference(Some(&reference));
+    fs::create_dir(root.join(".worktrees")).unwrap();
+    let nested = root.join(".worktrees/feature");
+    repo.worktree("feature", &nested, Some(&options)).unwrap();
+    fs::write(nested.join("nested_target.dart"), "should not appear").unwrap();
+
+    // A similarly located ordinary gitignored directory remains searchable.
+    fs::create_dir_all(root.join(".worktrees/ordinary")).unwrap();
+    fs::write(
+        root.join(".worktrees/ordinary/ordinary_target.dart"),
+        "visible",
+    )
+    .unwrap();
+
+    let session = start(&workspace);
+    let quick_open = paths_including_gitignored(&session, "target", 100);
+    assert!(quick_open.contains(&"src/local_target.dart".to_string()));
+    assert!(quick_open.contains(&".worktrees/ordinary/ordinary_target.dart".to_string()));
+    assert!(!quick_open
+        .iter()
+        .any(|path| path.starts_with(".worktrees/feature")));
+
+    let explorer =
+        search_workspace_explorer_filter_session(session.clone(), "feature".into(), 100, true)
+            .unwrap();
+    assert!(!explorer
+        .iter()
+        .any(|item| item.relative_path.starts_with(".worktrees/feature")));
+    stop_workspace_quick_open_session(session);
+
+    // A selected linked worktree still searches its own files.
+    let child_session =
+        start_workspace_quick_open_session(nested.to_string_lossy().into_owned(), Vec::new())
+            .unwrap();
+    assert_eq!(
+        paths(&child_session, "nested_target", 20),
+        vec!["nested_target.dart"]
+    );
+    stop_workspace_quick_open_session(child_session);
+}
+
+#[test]
 fn explorer_indexes_unloaded_empty_deep_folders_without_changing_quick_open() {
     let workspace = tempfile::tempdir().unwrap();
     fs::create_dir_all(workspace.path().join("src/deep/empty-config")).unwrap();

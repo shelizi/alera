@@ -8,8 +8,8 @@ use ignore::WalkBuilder;
 use uuid::Uuid;
 
 use super::{
-    is_protected_workspace_path, relative_string, workspace_root, WorkspaceFileError,
-    WorkspaceFileErrorKind,
+    is_protected_workspace_path, nested_git_worktree_paths, relative_string, workspace_root,
+    WorkspaceFileError, WorkspaceFileErrorKind,
 };
 
 mod index;
@@ -170,8 +170,10 @@ fn collect_quick_open_files(
     exclusions: &QuickOpenExclusions,
 ) -> Result<Vec<QuickOpenFile>, WorkspaceFileError> {
     let filter_root = root.to_path_buf();
-    let git_visible_paths = collect_git_visible_paths(root, exclusions)?;
+    let nested_worktrees = nested_git_worktree_paths(root);
+    let git_visible_paths = collect_git_visible_paths(root, exclusions, &nested_worktrees)?;
     let entry_exclusions = exclusions.clone();
+    let excluded_worktrees = nested_worktrees.clone();
     let walker = WalkBuilder::new(root)
         .hidden(false)
         .parents(true)
@@ -182,7 +184,9 @@ fn collect_quick_open_files(
         .follow_links(false)
         .sort_by_file_path(|left, right| left.cmp(right))
         .filter_entry(move |entry| {
-            entry.path() == filter_root || !entry_exclusions.excludes_entry(entry.path())
+            entry.path() == filter_root
+                || (!excluded_worktrees.contains(entry.path())
+                    && !entry_exclusions.excludes_entry(entry.path()))
         })
         .build();
     let mut files = Vec::new();
@@ -263,9 +267,11 @@ fn collect_quick_open_files(
 fn collect_git_visible_paths(
     root: &Path,
     exclusions: &QuickOpenExclusions,
+    nested_worktrees: &HashSet<PathBuf>,
 ) -> Result<HashSet<PathBuf>, WorkspaceFileError> {
     let filter_root = root.to_path_buf();
     let entry_exclusions = exclusions.clone();
+    let excluded_worktrees = nested_worktrees.clone();
     let walker = WalkBuilder::new(root)
         .hidden(false)
         .parents(true)
@@ -275,7 +281,9 @@ fn collect_git_visible_paths(
         .git_exclude(true)
         .follow_links(false)
         .filter_entry(move |entry| {
-            entry.path() == filter_root || !entry_exclusions.excludes_entry(entry.path())
+            entry.path() == filter_root
+                || (!excluded_worktrees.contains(entry.path())
+                    && !entry_exclusions.excludes_entry(entry.path()))
         })
         .build();
     let mut visible = HashSet::new();

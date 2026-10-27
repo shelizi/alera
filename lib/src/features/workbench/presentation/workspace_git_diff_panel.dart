@@ -111,7 +111,6 @@ class _WorkspaceGitDiffPanelState extends ConsumerState<WorkspaceGitDiffPanel> {
   final Set<String> _collapsedTreeNodes = <String>{};
   final Set<String> _expandedSubmodules = <String>{};
   late final AiAssistService _aiAssistService;
-  bool _filterVisible = false;
   bool _generatingCommitMessage = false;
   bool _historyCollapsed = true;
   late final WorkspaceGitHistoryLoader _historyLoader;
@@ -191,7 +190,6 @@ class _WorkspaceGitDiffPanelState extends ConsumerState<WorkspaceGitDiffPanel> {
       _collapsedSections.clear();
       _collapsedTreeNodes.clear();
       _expandedSubmodules.clear();
-      _filterVisible = false;
       _generatingCommitMessage = false;
       _historyCollapsed = true;
       _restorePanelUiState(widget.sourceControlScope.path);
@@ -296,13 +294,11 @@ class _WorkspaceGitDiffPanelState extends ConsumerState<WorkspaceGitDiffPanel> {
           aiAssistSettings: aiAssistSettings,
           generatingCommitMessage: _generatingCommitMessage,
           allCollapsed: _allVisibleNodesCollapsed(state.asData?.value),
-          filterVisible: _isFilterVisible,
           sourceControlRootLabel: widget.sourceControlScope.relativeRoot,
           onMessageChanged: () => setState(() {}),
           onGenerateCommitMessage: () => unawaited(_generateCommitMessage()),
           onCancelGenerateCommitMessage: _cancelGenerateCommitMessage,
           onFilterChanged: () => setState(() {}),
-          onToggleFilter: _toggleFilterVisibility,
           onRefresh: () => unawaited(_refresh()),
           onClearSourceControlRoot: widget.onClearSourceControlRoot,
           onToggleCollapseAll: () =>
@@ -326,83 +322,91 @@ class _WorkspaceGitDiffPanelState extends ConsumerState<WorkspaceGitDiffPanel> {
         ),
         const Divider(height: 1, color: AleraTokens.borderSubtle),
         Expanded(
-          child: Column(
-            children: <Widget>[
-              Expanded(
-                child: state.when(
-                  loading: () =>
-                      const Center(child: CircularProgressIndicator()),
-                  error: (error, _) =>
-                      _GitDiffMessage(message: _messageFor(error)),
-                  data: (data) {
-                    final status = _filteredStatus(data.status);
-                    final entries = status.entries;
-                    if (entries.isEmpty) {
-                      return _GitDiffMessage(
-                        message: _filterController.text.trim().isEmpty
-                            ? 'No changes'
-                            : 'No files match the current filter',
+          child: LayoutBuilder(
+            builder: (context, constraints) => Column(
+              children: <Widget>[
+                Expanded(
+                  child: state.when(
+                    loading: () =>
+                        const Center(child: CircularProgressIndicator()),
+                    error: (error, _) =>
+                        _GitDiffMessage(message: _messageFor(error)),
+                    data: (data) {
+                      final status = _filteredStatus(data.status);
+                      final entries = status.entries;
+                      if (entries.isEmpty) {
+                        return _GitDiffMessage(
+                          message: _filterController.text.trim().isEmpty
+                              ? 'No changes'
+                              : 'No files match the current filter',
+                        );
+                      }
+                      return _GitDiffGroups(
+                        groups: _groupsFor(status),
+                        filterQuery: _filterController.text,
+                        workspacePath: widget.sourceControlScope.path,
+                        viewMode: widget.viewMode,
+                        busy: data.isBusy,
+                        collapsedSections: _collapsedSections,
+                        collapsedTreeNodes: _collapsedTreeNodes,
+                        expandedSubmodules: _expandedSubmodules,
+                        onToggleSection: _toggleSectionCollapsed,
+                        onToggleTreeNode: _toggleTreeNodeCollapsed,
+                        onToggleSubmodule: _toggleSubmodule,
+                        onOpenGitDiff: _openGitDiff,
+                        onOpenFile: widget.onOpenFile == null
+                            ? null
+                            : _openWorkspaceFile,
+                        onOpenWithDefaultApplication:
+                            _openWorkspaceFileWithDefaultApplication,
+                        onOpenExternally: _openWorkspaceFileExternally,
+                        externalEditor: resolvedEditor,
+                        installedExternalEditors: installedEditors,
+                        onRevealInExplorer: _revealInExplorer,
+                        onViewFileHistory: _openSourceFileHistory,
+                        onCompareLatestGitRevision:
+                            _compareSourceFileWithLatestGitRevision,
+                        onCompareGitBranch: _compareSourceFileWithBranch,
+                        onAddToGitIgnore: _addToGitIgnore,
+                        onStage: _stageEntry,
+                        onUnstage: _unstageEntry,
+                        onDiscard: _discardEntry,
+                        onStageArea: _stageArea,
+                        onUnstageArea: _unstageArea,
+                        onDiscardArea: _discardAreaWithConfirmation,
+                        onStagePath: _stage,
+                        onUnstagePath: _unstage,
+                        onDiscardPath: _discard,
                       );
-                    }
-                    return _GitDiffGroups(
-                      groups: _groupsFor(status),
-                      filterQuery: _filterController.text,
-                      workspacePath: widget.sourceControlScope.path,
-                      viewMode: widget.viewMode,
-                      busy: data.isBusy,
-                      collapsedSections: _collapsedSections,
-                      collapsedTreeNodes: _collapsedTreeNodes,
-                      expandedSubmodules: _expandedSubmodules,
-                      onToggleSection: _toggleSectionCollapsed,
-                      onToggleTreeNode: _toggleTreeNodeCollapsed,
-                      onToggleSubmodule: _toggleSubmodule,
-                      onOpenGitDiff: _openGitDiff,
-                      onOpenFile: widget.onOpenFile == null
-                          ? null
-                          : _openWorkspaceFile,
-                      onOpenWithDefaultApplication:
-                          _openWorkspaceFileWithDefaultApplication,
-                      onOpenExternally: _openWorkspaceFileExternally,
-                      externalEditor: resolvedEditor,
-                      installedExternalEditors: installedEditors,
-                      onRevealInExplorer: _revealInExplorer,
-                      onViewFileHistory: _openSourceFileHistory,
-                      onCompareLatestGitRevision:
-                          _compareSourceFileWithLatestGitRevision,
-                      onCompareGitBranch: _compareSourceFileWithBranch,
-                      onAddToGitIgnore: _addToGitIgnore,
-                      onStage: _stageEntry,
-                      onUnstage: _unstageEntry,
-                      onDiscard: _discardEntry,
-                      onStageArea: _stageArea,
-                      onUnstageArea: _unstageArea,
-                      onDiscardArea: _discardAreaWithConfirmation,
-                      onStagePath: _stage,
-                      onUnstagePath: _unstage,
-                      onDiscardPath: _discard,
-                    );
-                  },
+                    },
+                  ),
                 ),
-              ),
-              _GitHistoryPanel(
-                state: _historyPanelState,
-                collapsed: _historyCollapsed,
-                onToggle: _toggleGitHistory,
-                onRefresh: _refreshGitHistory,
-                onLoadCommitFiles: _loadCommitFiles,
-                onOpenCommit: _openCommitDiff,
-                onOpenCommitFile: _openCommitFile,
-                onCopyCommitText: _copyCommitText,
-                onCheckoutCommit: _checkoutCommit,
-                onRevertCommit: _revertCommit,
-                onResetToCommit: _resetToCommit,
-                onRefAction: _handleGitHistoryRefAction,
-                onBoundaryAction: _handleGitHistoryBoundaryAction,
-                currentUpstream: state.asData?.value.repositoryState.upstream,
-                onCommitChanges: _focusCommitMessage,
-                onOpenCommitGraph: () => unawaited(_openCommitGraph()),
-              ),
-            ],
+                _GitHistoryPanel(
+                  maxBodyHeight:
+                      (constraints.maxHeight -
+                              AleraTokens.sidebarHeaderHeight -
+                              AleraTokens.space6 -
+                              AleraTokens.space32)
+                          .clamp(0.0, double.infinity),
+                  state: _historyPanelState,
+                  collapsed: _historyCollapsed,
+                  onToggle: _toggleGitHistory,
+                  onRefresh: _refreshGitHistory,
+                  onLoadCommitFiles: _loadCommitFiles,
+                  onOpenCommit: _openCommitDiff,
+                  onOpenCommitFile: _openCommitFile,
+                  onCopyCommitText: _copyCommitText,
+                  onCheckoutCommit: _checkoutCommit,
+                  onRevertCommit: _revertCommit,
+                  onResetToCommit: _resetToCommit,
+                  onRefAction: _handleGitHistoryRefAction,
+                  onBoundaryAction: _handleGitHistoryBoundaryAction,
+                  currentUpstream: state.asData?.value.repositoryState.upstream,
+                  onCommitChanges: _focusCommitMessage,
+                  onOpenCommitGraph: () => unawaited(_openCommitGraph()),
+                ),
+              ],
+            ),
           ),
         ),
       ],

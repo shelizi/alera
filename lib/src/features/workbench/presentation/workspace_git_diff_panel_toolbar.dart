@@ -11,13 +11,11 @@ class const _SourceControlToolbar({
   required final AiAssistSettings aiAssistSettings,
   required final bool generatingCommitMessage,
   required final bool allCollapsed,
-  required final bool filterVisible,
   required final String? sourceControlRootLabel,
   required final VoidCallback onMessageChanged,
   required final VoidCallback onGenerateCommitMessage,
   required final VoidCallback onCancelGenerateCommitMessage,
   required final VoidCallback onFilterChanged,
-  required final VoidCallback onToggleFilter,
   required final VoidCallback onRefresh,
   required final VoidCallback? onClearSourceControlRoot,
   required final VoidCallback onToggleCollapseAll,
@@ -118,14 +116,6 @@ class const _SourceControlToolbar({
                       ),
                       const SizedBox(width: AleraTokens.space2),
                       AleraIconButton(
-                        tooltip: filterVisible
-                            ? 'Hide File Filter'
-                            : 'Search Files',
-                        icon: AleraIcons.search,
-                        onPressed: busy ? null : onToggleFilter,
-                      ),
-                      const SizedBox(width: AleraTokens.space2),
-                      AleraIconButton(
                         tooltip: allCollapsed ? 'Expand All' : 'Collapse All',
                         icon: allCollapsed
                             ? AleraIcons.expandAll
@@ -198,16 +188,14 @@ class const _SourceControlToolbar({
                   ?.copyWith(color: AleraTokens.foregroundFaint),
             ),
           ],
-          if (filterVisible) ...<Widget>[
-            const SizedBox(height: AleraTokens.space8),
-            AleraSearchField(
-              controller: filterController,
-              focusNode: filterFocusNode,
-              hintText: 'Filter files...',
-              dense: true,
-              onChanged: (_) => onFilterChanged(),
-            ),
-          ],
+          const SizedBox(height: AleraTokens.space8),
+          AleraSearchField(
+            controller: filterController,
+            focusNode: filterFocusNode,
+            hintText: 'Filter files...',
+            dense: true,
+            onChanged: (_) => onFilterChanged(),
+          ),
         ],
       ),
     );

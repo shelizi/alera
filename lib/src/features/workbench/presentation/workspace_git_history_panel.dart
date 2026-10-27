@@ -28,6 +28,7 @@ class const _GitHistoryPanelLoadState._({
 }
 
 class const _GitHistoryPanel({
+  required final double maxBodyHeight,
   required final _GitHistoryPanelLoadState state,
   required final bool collapsed,
   required final VoidCallback onToggle,
@@ -131,7 +132,10 @@ class _GitHistoryPanelState extends State<_GitHistoryPanel> {
             ),
           ),
           if (!widget.collapsed)
-            SizedBox(height: _height, child: _buildBody(context)),
+            SizedBox(
+              height: _height.clamp(0.0, widget.maxBodyHeight),
+              child: _buildBody(context),
+            ),
         ],
       ),
     );
