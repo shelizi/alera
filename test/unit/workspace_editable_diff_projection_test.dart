@@ -3,6 +3,42 @@ import 'package:alera/src/shared/infra/git/git_diff_models.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('editable alignment includes CodeForge terminal visual rows', () {
+    final newlineOnly = workspaceEditableDiffAlignmentForTesting(
+      baseline: 'first\nlast\n',
+      current: 'first\nlast',
+    );
+    expect(newlineOnly.oldSpacers, isEmpty);
+    expect(newlineOnly.newSpacers, <({int afterLine, int count})>[
+      (afterLine: 1, count: 1),
+    ]);
+    expect(newlineOnly.visualLineCount, 3);
+
+    final insertedAndNewline = workspaceEditableDiffAlignmentForTesting(
+      baseline: 'first\nlast\n',
+      current: 'first\ninserted\nlast',
+    );
+    expect(insertedAndNewline.oldSpacers, <({int afterLine, int count})>[
+      (afterLine: 0, count: 1),
+    ]);
+    expect(insertedAndNewline.newSpacers, <({int afterLine, int count})>[
+      (afterLine: 2, count: 1),
+    ]);
+    expect(insertedAndNewline.visualLineCount, 4);
+
+    final emptyBaseline = workspaceEditableDiffAlignmentForTesting(
+      baseline: '',
+      current: 'first\nlast',
+    );
+    expect(emptyBaseline.oldSpacers, <({int afterLine, int count})>[
+      (afterLine: -1, count: 2),
+    ]);
+    expect(emptyBaseline.newSpacers, <({int afterLine, int count})>[
+      (afterLine: 1, count: 1),
+    ]);
+    expect(emptyBaseline.visualLineCount, 3);
+  });
+
   test(
     'editable diff memo skips repeated parent updates, invalidates options',
     () {

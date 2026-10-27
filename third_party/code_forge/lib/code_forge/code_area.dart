@@ -5574,6 +5574,14 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
     _rebuildDiagnosticIndex();
     _rebuildSearchHighlightIndex();
     _rebuildLineDecorationIndex();
+    // Git Diff installs virtual alignment spacers on the controller before
+    // the editor RenderObject is mounted. Seed the layout from those blocks;
+    // waiting for a later decoration notification leaves one pane shorter
+    // than the other on its initial full-file render.
+    _virtualRemovedTotalLineCount = controller.virtualRemovedBlocks.fold<int>(
+      0,
+      (total, block) => total + block.lineCount,
+    );
     final fontSize = _textStyle?.fontSize ?? 14.0;
     final fontFamily = _textStyle?.fontFamily;
     final color =
@@ -6294,7 +6302,11 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
       controller.searchHighlightsChanged = false;
       _rebuildSearchHighlightIndex();
       markNeedsPaint();
-      return;
+      // Alera updates syntax highlights and Git Diff virtual spacers in the
+      // same revision. Never drop the layout-changing decoration update when
+      // the highlight flag is also set; otherwise the old gap remains visible
+      // after edits that cleared or changed the spacers.
+      if (!controller.decorationsChanged) return;
     }
 
     if (controller.multiCursorsChanged) {
@@ -7093,7 +7105,11 @@ class _CodeFieldRenderer extends RenderBox implements MouseTrackerAnnotation {
     }
 
     final hasActiveFolds = _hasActiveFolds;
-    final targetY = _getLineYOffset(line, hasActiveFolds);
+    // A logical document line can be displaced by virtual Git Diff spacers
+    // inserted before it. Navigate to the rendered position, not the raw
+    // line-only offset, or "next change" lands above its actual row.
+    final targetY =
+        _getLineYOffset(line, hasActiveFolds) + _getTotalVirtualOffset(line);
     final targetLineHeight = lineWrap
         ? _getWrappedLineHeight(line)
         : _lineHeight;

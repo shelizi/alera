@@ -127,11 +127,24 @@ final class _EditableDiffInputs {
     required this.oldLines,
     required this.newLines,
     required this.steps,
+    required this.oldRenderedLineCount,
+    required this.newRenderedLineCount,
   });
 
   final List<String> oldLines;
   final List<String> newLines;
   final List<_EditableLineDiffStep> steps;
+  // The native CodeForge rope renders a trailing empty row after a final
+  // newline, and an empty document still has one editable visual row. The
+  // diff matcher deliberately excludes those rows for source comparison.
+  final int oldRenderedLineCount;
+  final int newRenderedLineCount;
+}
+
+int _editableRenderedLineCount(String text, List<String> normalizedLines) {
+  final hasTerminalRow =
+      text.isEmpty || text.endsWith('\n') || text.endsWith('\r');
+  return normalizedLines.length + (hasTerminalRow ? 1 : 0);
 }
 
 /// Parse and align once per editor revision. Both the spacer projection and
@@ -160,6 +173,8 @@ _EditableDiffInputs _prepareEditableDiff(
     oldLines: oldLines,
     newLines: newLines,
     steps: steps,
+    oldRenderedLineCount: _editableRenderedLineCount(baseline, oldLines),
+    newRenderedLineCount: _editableRenderedLineCount(current, newLines),
   );
 }
 
@@ -259,12 +274,32 @@ _EditableDiffAlignment _editableDiffAlignmentFromInputs(
   }
   flushChangeRun();
 
-  final oldVisualCount =
-      oldLines.length +
+  var oldVisualCount =
+      inputs.oldRenderedLineCount +
       oldSpacers.fold<int>(0, (sum, item) => sum + item.count);
-  final newVisualCount =
-      newLines.length +
+  var newVisualCount =
+      inputs.newRenderedLineCount +
       newSpacers.fold<int>(0, (sum, item) => sum + item.count);
+  // The source comparison excludes the terminal empty row, but CodeForge's
+  // scroll extents include it. Balance the remaining visual row on the pane
+  // that lacks a final newline (or represents an empty document).
+  if (oldVisualCount > newVisualCount) {
+    newSpacers.add(
+      _EditableDiffSpacer(
+        afterLine: newLines.length - 1,
+        count: oldVisualCount - newVisualCount,
+      ),
+    );
+    newVisualCount = oldVisualCount;
+  } else if (newVisualCount > oldVisualCount) {
+    oldSpacers.add(
+      _EditableDiffSpacer(
+        afterLine: oldLines.length - 1,
+        count: newVisualCount - oldVisualCount,
+      ),
+    );
+    oldVisualCount = newVisualCount;
+  }
   return _EditableDiffAlignment(
     oldChangedLines: oldChanged,
     newChangedLines: newChanged,
@@ -1232,9 +1267,12 @@ class _EditableWorkingTreeDiffState extends State<_EditableWorkingTreeDiff> {
       if (!mounted) return;
       final line = target.editableLine!;
       if (_usesCodeForge) {
-        // CodeForge knows line heights and folded/aligned coordinates.
-        _leftController!.scrollToLine(line);
-        _controller!.scrollToLine(line);
+        // Hunk headers locate lines on the new/editable side. Their raw line
+        // numbers may differ on the original side after insertions/deletions.
+        // Drive only the editable pane and let existing Y synchronization
+        // position the original, avoiding two competing scroll animations.
+        final editor = _controller!;
+        editor.scrollToLine(line.clamp(0, editor.lineCount - 1));
       } else {
         for (final controller in <ScrollController>[
           _leftVerticalController,

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/app/providers.dart'
@@ -28,12 +29,16 @@ import 'package:alera/src/features/workbench/presentation/workspace_editor_surfa
 import 'package:alera/src/features/workbench/presentation/workspace_git_diff_surface.dart';
 import 'package:alera/src/shared/infra/git/git_diff_models.dart';
 import 'package:alera/src/shared/infra/git/git_providers.dart';
+import 'package:code_forge/code_forge.dart' as code_forge;
+import 'package:code_forge/src/rust/frb_generated.dart' as code_forge_rust;
 import 'package:flutter/foundation.dart'
     show debugDefaultTargetPlatformOverride;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart'
+    show ExternalLibrary;
 import 'package:path/path.dart' as p;
 
 import '../unit/fake_git_backend.dart';
@@ -1835,4 +1840,225 @@ void main() {
       expect(_textSpanColors(text.textSpan!).length, greaterThan(1));
     }
   });
+
+  // Unlike the normal widget tests, this group uses the real Rust-backed
+  // CodeForge editor. The normal tests cover TextField fallback only because
+  // the generated Rope FFI is not initialized in flutter_test by default.
+  final nativeDiffDll = Platform.environment['ALERA_CODE_FORGE_TEST_DLL'];
+  final hasNativeDiffDll =
+      Platform.isWindows &&
+      nativeDiffDll != null &&
+      File(nativeDiffDll).existsSync();
+  group('editable full-file native CodeForge alignment', () {
+    setUpAll(() async {
+      if (!hasNativeDiffDll) return;
+      await code_forge_rust.RustLib.init(
+        externalLibrary: ExternalLibrary.open(nativeDiffDll),
+      );
+    });
+
+    testWidgets(
+      'editable panes align scroll ranges after inserted and removed lines',
+      (tester) async {
+        final oldLines = List<String>.generate(100, (index) => 'line $index');
+        final newLines = List<String>.from(oldLines)
+          ..insertAll(20, <String>['insert one', 'insert two', 'insert three'])
+          ..removeRange(61, 63);
+        final oldCode = '${oldLines.join('\n')}\n';
+        final newCode = '${newLines.join('\n')}\n';
+        final backend = FakeGitBackend()
+          ..gitDiffResult = const GitDiffResult(
+            files: <GitDiffFile>[
+              GitDiffFile(
+                path: 'lib/main.dart',
+                area: .unstaged,
+                status: .modified,
+                lines: <GitDiffLine>[
+                  GitDiffLine.hunk('@@ -1,1 +1,1 @@'),
+                  GitDiffLine.deletion('-line 0'),
+                  GitDiffLine.addition('+line 0'),
+                ],
+              ),
+            ],
+          )
+          ..diffBlobBytesBySide[(filePath: 'lib/main.dart', oldSide: true)] =
+              Uint8List.fromList(oldCode.codeUnits)
+          ..diffBlobBytesBySide[(filePath: 'lib/main.dart', oldSide: false)] =
+              Uint8List.fromList(newCode.codeUnits);
+        await _pumpDiffSurface(
+          tester,
+          backend: backend,
+          workspaceFileService: _EditableDiffFileService(content: newCode),
+          tab: _diffTab(filePath: 'lib/main.dart', title: 'main.dart unstaged'),
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(find.byTooltip('Switch to Side-by-Side View'));
+        // CodeForge has a perpetual caret animation; it never settles.
+        for (var frame = 0; frame < 12; frame++) {
+          await tester.pump(const Duration(milliseconds: 100));
+        }
+
+        expect(find.byType(code_forge.CodeForge), findsNWidgets(2));
+        final left = tester.widget<code_forge.CodeForge>(
+          find.byKey(
+            const ValueKey<String>(
+              'git-diff-working-tree-original-lib/main.dart',
+            ),
+          ),
+        );
+        final right = tester.widget<code_forge.CodeForge>(
+          find.byKey(
+            const ValueKey<String>(
+              'git-diff-working-tree-editor-lib/main.dart',
+            ),
+          ),
+        );
+        expect(left.controller!.virtualRemovedBlocks, isNotEmpty);
+        expect(right.controller!.virtualRemovedBlocks, isNotEmpty);
+        final leftTotalLines =
+            left.controller!.lineCount +
+            left.controller!.virtualRemovedBlocks.fold<int>(
+              0,
+              (total, block) => total + block.lineCount,
+            );
+        final rightTotalLines =
+            right.controller!.lineCount +
+            right.controller!.virtualRemovedBlocks.fold<int>(
+              0,
+              (total, block) => total + block.lineCount,
+            );
+        expect(
+          leftTotalLines,
+          rightTotalLines,
+          reason:
+              'CodeForge logical visual counts: left actual ${left.controller!.lineCount}, right actual ${right.controller!.lineCount}, left virtual ${left.controller!.virtualRemovedBlocks.map((block) => block.lineCount).toList()}, right virtual ${right.controller!.virtualRemovedBlocks.map((block) => block.lineCount).toList()}',
+        );
+
+        final leftY = tester
+            .widget<Scrollbar>(
+              find.byKey(
+                const ValueKey<String>(
+                  'git-diff-working-tree-original-y-scrollbar-lib/main.dart',
+                ),
+              ),
+            )
+            .controller!;
+        final rightY = tester
+            .widget<Scrollbar>(
+              find.byKey(
+                const ValueKey<String>(
+                  'git-diff-working-tree-editor-y-scrollbar-lib/main.dart',
+                ),
+              ),
+            )
+            .controller!;
+        expect(
+          leftY.position.maxScrollExtent,
+          closeTo(rightY.position.maxScrollExtent, 1),
+          reason: 'virtual spacer rows should equalize the rendered panes',
+        );
+        leftY.jumpTo(leftY.position.maxScrollExtent * .7);
+        await tester.pump();
+        expect(leftY.offset, closeTo(rightY.offset, 1));
+
+        // The real editable renderer must invalidate its spacer geometry
+        // whenever the user removes or restores the edits.
+        right.controller!.text = oldCode;
+        for (var frame = 0; frame < 10; frame++) {
+          await tester.pump(const Duration(milliseconds: 50));
+        }
+        expect(left.controller!.virtualRemovedBlocks, isEmpty);
+        expect(right.controller!.virtualRemovedBlocks, isEmpty);
+        expect(
+          leftY.position.maxScrollExtent,
+          closeTo(rightY.position.maxScrollExtent, 1),
+          reason: 'editing back to the baseline must remove all spacer rows',
+        );
+
+        right.controller!.text = newCode;
+        for (var frame = 0; frame < 10; frame++) {
+          await tester.pump(const Duration(milliseconds: 50));
+        }
+        expect(left.controller!.virtualRemovedBlocks, isNotEmpty);
+        expect(right.controller!.virtualRemovedBlocks, isNotEmpty);
+        expect(
+          leftY.position.maxScrollExtent,
+          closeTo(rightY.position.maxScrollExtent, 1),
+          reason: 'reintroducing inserts and deletes must refresh the layout',
+        );
+
+        right.controller!.text = newCode.substring(0, newCode.length - 1);
+        for (var frame = 0; frame < 10; frame++) {
+          await tester.pump(const Duration(milliseconds: 50));
+        }
+        expect(
+          leftY.position.maxScrollExtent,
+          closeTo(rightY.position.maxScrollExtent, 1),
+          reason: 'missing trailing newline must not leave an extra visual row',
+        );
+      },
+    );
+
+    testWidgets(
+      'native CodeForge scrollToLine includes preceding virtual diff spacers',
+      (tester) async {
+        final controller = code_forge.CodeForgeController()
+          ..text =
+              '${List<String>.generate(100, (index) => 'line $index').join('\n')}\n';
+        final vertical = ScrollController();
+        addTearDown(controller.dispose);
+        addTearDown(vertical.dispose);
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: SizedBox(
+                width: 700,
+                height: 480,
+                child: code_forge.CodeForge(
+                  controller: controller,
+                  verticalScrollController: vertical,
+                  readOnly: true,
+                  autoFocus: false,
+                  lineWrap: false,
+                  enableFolding: false,
+                  enableGuideLines: false,
+                  enableGutter: false,
+                  enableNativeSyntax: false,
+                  textStyle: AleraTokens.monoStyle.copyWith(height: 1.5),
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.pump(const Duration(milliseconds: 100));
+        expect(vertical.hasClients, isTrue);
+        expect(vertical.position.maxScrollExtent, greaterThan(0));
+
+        controller.scrollToLine(60);
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 350));
+        await tester.pump();
+        final withoutSpacers = vertical.offset;
+        expect(withoutSpacers, greaterThan(0));
+
+        controller.setGitDiffDecorations(
+          removedRanges: <({int afterLine, String content})>[
+            (afterLine: 10, content: '\n\n'),
+          ],
+          removedColor: Colors.transparent,
+        );
+        await tester.pump(const Duration(milliseconds: 50));
+        controller.scrollToLine(60);
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 350));
+        await tester.pump();
+        expect(
+          vertical.offset - withoutSpacers,
+          closeTo(54, 0.5),
+          reason:
+              'scrollToLine must count three 18px virtual rows before line 60',
+        );
+      },
+    );
+  }, skip: !hasNativeDiffDll);
 }
