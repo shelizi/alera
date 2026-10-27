@@ -1328,7 +1328,7 @@ void main() {
 
     expect(_filterEditable(tester).focusNode.hasFocus, isTrue);
 
-    await tester.enterText(_filterField(), 'visible');
+    await tester.enterText(_filterField(), 'vse');
     await tester.pumpAndSettle();
 
     expect(find.text('Unstaged'), findsOneWidget);

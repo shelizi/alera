@@ -101,7 +101,7 @@ class _FakeWorkspaceFileService({
         .where(
           (entry) =>
               normalizedQuery.isEmpty ||
-              entry.$1.toLowerCase().contains(normalizedQuery),
+              aleraFuzzyTextContains(entry.$1, normalizedQuery),
         )
         .take(limit)
         .map(

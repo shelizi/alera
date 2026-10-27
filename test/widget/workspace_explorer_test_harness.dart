@@ -75,6 +75,42 @@ class _WorkspaceExplorerModeHarnessState
   }
 }
 
+class const _SwitchingWorkspaceExplorerHarness({
+  required final Workspace first,
+  required final Workspace second,
+  required final ValueChanged<String> onOpenFile,
+}) extends StatefulWidget {
+  @override
+  State<_SwitchingWorkspaceExplorerHarness> createState() =>
+      _SwitchingWorkspaceExplorerHarnessState();
+}
+
+class _SwitchingWorkspaceExplorerHarnessState
+    extends State<_SwitchingWorkspaceExplorerHarness> {
+  bool _showSecond = false;
+
+  @override
+  Widget build(BuildContext context) => Column(
+    children: <Widget>[
+      TextButton(
+        onPressed: () => setState(() => _showSecond = !_showSecond),
+        child: const Text('Switch workspace'),
+      ),
+      Expanded(
+        child: WorkspaceExplorer(
+          workspace: _showSecond ? widget.second : widget.first,
+          mode: .hideIgnored,
+          onModeChanged: (_) {},
+          showHiddenFiles: false,
+          onShowHiddenFilesChanged: (_) {},
+          onOpenFile: widget.onOpenFile,
+          onPathMoved: (_, _) async {},
+        ),
+      ),
+    ],
+  );
+}
+
 Widget _withWorkspaceFiles(
   _FakeWorkspaceFileService service, {
   required Widget child,

@@ -184,6 +184,7 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
   bool _filterLoading = false;
   Object? _filterError;
   int _filterGeneration = 0;
+  int _treeRevealGeneration = 0;
   PageStorageBucket? _pageStorageBucket;
   final Set<String> _expandedDirectoryPaths = <String>{};
   String? _selectedRelativePath;
@@ -228,6 +229,7 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
       _filterLoading = false;
       _filterError = null;
       _filterGeneration++;
+      _treeRevealGeneration++;
       _expandedDirectoryPaths.clear();
       _selectedRelativePath = null;
       _resetExplorerProjection();
@@ -248,6 +250,7 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
 
   @override
   void dispose() {
+    _treeRevealGeneration++;
     _saveWorkspaceUiState(widget.workspace);
     unawaited(_stopNativeWatcher());
     _disposeNativeProjectionSession();
@@ -898,6 +901,20 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
         _filterLoading = false;
         _filterError = null;
       });
+      // Reattach the real tree and scroll to the file selected while
+      // filtering, without disrupting search-result multi-selection.
+      if (_selectedRelativePath case final target?) {
+        final revealGeneration = _treeRevealGeneration;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted ||
+              _isFiltering ||
+              _selectedRelativePath != target ||
+              revealGeneration != _treeRevealGeneration) {
+            return;
+          }
+          unawaited(_revealPathInTree(target));
+        });
+      }
       return;
     }
     if (refreshIndex) {
@@ -1016,7 +1033,7 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
     final folders = <String>{
       for (final entry in _entryByPath.values)
         if (_isDirectoryEntry(entry) &&
-            entry.relativePath.toLowerCase().contains(query))
+            aleraFuzzyTextContains(entry.relativePath, query))
           entry.relativePath,
       for (final match in _filterMatches)
         if (match.isDirectory) match.relativePath,
@@ -1024,7 +1041,7 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
     for (final match in _filterMatches) {
       var parent = _parentPath(match.relativePath);
       while (parent.isNotEmpty) {
-        if (parent.toLowerCase().contains(query)) folders.add(parent);
+        if (aleraFuzzyTextContains(parent, query)) folders.add(parent);
         parent = _parentPath(parent);
       }
     }
@@ -1102,19 +1119,14 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
       unawaited(_openFilteredDirectory(path));
     } else {
       widget.onOpenFile(path);
+      // Keep the filtered list available for Ctrl/Shift multi-selection,
+      // clipboard and native drag while revealing in the backing tree.
+      unawaited(_revealPathInTree(path));
     }
   }
 
   Future<void> _openFilteredDirectory(String path) async {
-    _filterController.clear();
-    _onFilterChanged('');
-    await _ensureAncestorsLoaded(path);
-    if (!mounted) return;
-    _rebuildTree();
-    await _controller.reveal(
-      nodeId: _nodeIdForRelativePath(path),
-      select: true,
-    );
+    await _revealPathInTree(path, clearFilter: true, expandDirectory: true);
   }
 
   Widget _buildFilterResults(_ExplorerMenuDelegate entryMenuDelegate) {

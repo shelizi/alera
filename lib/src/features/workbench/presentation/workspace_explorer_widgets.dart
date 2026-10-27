@@ -131,6 +131,7 @@ class const _ExplorerRow({
                     child: AleraSearchHighlightedText(
                       text: name,
                       query: filterQuery,
+                      fuzzy: true,
                       maxLines: 1,
                       overflow: .ellipsis,
                       style: Theme.of(context).textTheme.bodySmall?.copyWith(

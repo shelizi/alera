@@ -295,6 +295,7 @@ class const _GitDiffDirectoryRow({
                     child: AleraSearchHighlightedText(
                       text: row.name,
                       query: filterQuery,
+                      fuzzy: true,
                       maxLines: 1,
                       overflow: .ellipsis,
                       style: Theme.of(context).textTheme.bodySmall
@@ -419,6 +420,7 @@ class const _GitDiffFileRow({
                           ? entry.path
                           : entry.path.split('/').last,
                       query: filterQuery,
+                      fuzzy: true,
                       maxLines: 1,
                       overflow: .ellipsis,
                       style: Theme.of(context).textTheme.bodySmall

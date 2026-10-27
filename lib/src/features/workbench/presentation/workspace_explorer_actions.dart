@@ -459,13 +459,10 @@ extension _WorkspaceExplorerActions on _WorkspaceExplorerState {
     if (targetPath == null) {
       return;
     }
-    await _ensureAncestorsLoaded(targetPath);
-    if (!mounted) {
+    final revealed = await _revealPathInTree(targetPath, clearFilter: true);
+    if (!mounted || !revealed) {
       return;
     }
-    _rebuildTree();
-    final nodeId = _nodeIdForRelativePath(targetPath);
-    await _controller.reveal(nodeId: nodeId, select: true);
     if (request != null &&
         request.workspaceId == widget.workspace.id &&
         request.relativePath == targetPath) {
@@ -473,6 +470,79 @@ extension _WorkspaceExplorerActions on _WorkspaceExplorerState {
           .read(workspaceExplorerRevealControllerProvider.notifier)
           .consume(request);
     }
+  }
+
+  /// The tree's native reveal expands ancestors in its own controller; mirror
+  /// those changes to the workspace snapshot as well. Otherwise switching
+  /// workspaces restores the state before the search/reveal.
+  Future<bool> _revealPathInTree(
+    String relativePath, {
+    bool clearFilter = false,
+    bool expandDirectory = false,
+  }) async {
+    final generation = ++_treeRevealGeneration;
+    final workspaceId = widget.workspace.id;
+    final workspacePath = widget.workspace.path;
+    bool stillCurrent() =>
+        mounted &&
+        generation == _treeRevealGeneration &&
+        widget.workspace.id == workspaceId &&
+        widget.workspace.path == workspacePath;
+
+    if (clearFilter && _isFiltering) {
+      _filterController.clear();
+      _onFilterChanged('');
+    }
+    try {
+      await _ensureAncestorsLoaded(relativePath);
+    } catch (_) {
+      // A stale search-index result can disappear before Explorer loads its
+      // ancestors. Opening the requested file is still handled separately.
+      return false;
+    }
+    if (!stillCurrent()) return false;
+    final target = _entryByPath[relativePath];
+    if (target == null) return false;
+
+    if (expandDirectory &&
+        _isDirectoryEntry(target) &&
+        !_childrenByDirectory.containsKey(relativePath)) {
+      await _loadDirectory(relativePath);
+      if (!stillCurrent()) return false;
+    }
+    _rebuildTree();
+    final targetNodeId = _nodeIdForRelativePath(relativePath);
+    if (targetNodeId == null) return false;
+    final ancestors = <String>[];
+    var parent = _parentPath(relativePath);
+    while (parent.isNotEmpty) {
+      if (_isDirectoryEntry(_entryByPath[parent])) ancestors.add(parent);
+      parent = _parentPath(parent);
+    }
+    for (final path in ancestors.reversed) {
+      final nodeId = _nodeIdForRelativePath(path);
+      if (nodeId == null) continue;
+      _expandedDirectoryPaths.add(path);
+      _controller.expansions.setExpanded(nodeId, true);
+    }
+    if (expandDirectory && _isDirectoryEntry(target)) {
+      _expandedDirectoryPaths.add(relativePath);
+      _controller.expansions.setExpanded(targetNodeId, true);
+    }
+    _selectedRelativePath = relativePath;
+    _controller.selection.selectOnly(targetNodeId);
+    // Save immediately, not only on widget disposal or the next project
+    // switch. An in-flight scroll animation must not lose expansion state.
+    _saveWorkspaceUiState(widget.workspace);
+    // DirectoryTreeView is unmounted while filtered results are showing.
+    // Retain its expansion/selection; scrolling resumes after filter clears.
+    if (_isFiltering) return true;
+    await WidgetsBinding.instance.endOfFrame;
+    if (!stillCurrent()) return false;
+    await _controller.reveal(nodeId: targetNodeId, select: true);
+    if (!stillCurrent()) return false;
+    _saveWorkspaceUiState(widget.workspace);
+    return true;
   }
 
   Future<void> _ensureAncestorsLoaded(String relativePath) async {

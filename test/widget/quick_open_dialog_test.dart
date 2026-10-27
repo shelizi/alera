@@ -10,6 +10,7 @@ import 'package:alera/src/features/workbench/application/workbench_state.dart';
 import 'package:alera/src/features/workbench/application/workspace_file_open_coordinator.dart';
 import 'package:alera/src/features/workbench/application/workspace_file_open_coordinator_provider.dart';
 import 'package:alera/src/features/workbench/application/workspace_file_service.dart';
+import 'package:alera/src/features/workbench/application/workspace_explorer_reveal.dart';
 import 'package:alera/src/features/workbench/application/workspace_folder_opener.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
@@ -325,6 +326,12 @@ void main() {
     await tester.pumpAndSettle();
     expect(controller.openedFiles, <String>['lib/main_test.dart']);
     expect(controller.openedPreviews, <bool>[false]);
+    final container = ProviderScope.containerOf(
+      tester.element(find.text('Open Quick Open')),
+    );
+    final reveal = container.read(workspaceExplorerRevealControllerProvider);
+    expect(reveal?.workspaceId, workspace.id);
+    expect(reveal?.relativePath, 'lib/main_test.dart');
   });
 
   testWidgets('shows cached results while the background index refreshes', (

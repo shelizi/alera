@@ -15,8 +15,9 @@ extension on _WorkspaceGitDiffPanelState {
     if (query.isNotEmpty) {
       final entries = status.entries
           .where((entry) {
-            return entry.path.toLowerCase().contains(query) ||
-                (entry.oldPath?.toLowerCase().contains(query) ?? false);
+            return aleraFuzzyTextContains(entry.path, query) ||
+                (entry.oldPath != null &&
+                    aleraFuzzyTextContains(entry.oldPath!, query));
           })
           .toList(growable: false);
       filtered = GitStatusResult(

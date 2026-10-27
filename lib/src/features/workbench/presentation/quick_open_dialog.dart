@@ -318,6 +318,12 @@ class _QuickOpenDialogState extends ConsumerState<QuickOpenDialog> {
   void _openFile(String relativePath, {bool forceAlera = false}) {
     final workspace = ref.read(workbenchControllerProvider).activeWorkspace;
     if (workspace == null) return;
+    // Opening a Ctrl+P result also selects it in the real Explorer tree.
+    // Queue the reveal before closing the dialog, so an Explorer tab that
+    // mounts afterward can consume the request.
+    ref
+        .read(workbenchControllerProvider.notifier)
+        .revealInExplorer(workspace: workspace, relativePath: relativePath);
     Navigator.of(context).pop();
     if (forceAlera) {
       unawaited(
@@ -580,6 +586,7 @@ class _QuickOpenDialogState extends ConsumerState<QuickOpenDialog> {
                     child: AleraSearchHighlightedText(
                       text: match.relativePath,
                       query: _queryController.text,
+                      fuzzy: true,
                       maxLines: 1,
                       overflow: .ellipsis,
                       style: theme.textTheme.bodyMedium,

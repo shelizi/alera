@@ -4,6 +4,24 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('fuzzy matching accepts ordered characters without exact substring', () {
+    expect(aleraFuzzyTextContains('src/my_widget.dart', 'SMWD'), isTrue);
+    expect(aleraFuzzyTextContains('src/my_widget.dart', 'dwms'), isFalse);
+    expect(aleraFuzzyTextContains('alpha.txt', 'alpha'), isTrue);
+    expect(aleraFuzzyTextContains('alpha.txt', ''), isTrue);
+  });
+
+  test('fuzzy highlights separated matching characters', () {
+    final matches = aleraFuzzyTextMatches('workspace.dart', 'wse');
+    expect(
+      matches.map((match) => (match.start, match.end)).toList(),
+      <(int, int)>[(0, 1), (4, 5), (8, 9)],
+    );
+    final contiguous = aleraFuzzyTextMatches('workspace.dart', 'work');
+    expect(contiguous, hasLength(1));
+    expect((contiguous.single.start, contiguous.single.end), (0, 4));
+  });
+
   test('search text matches are case-insensitive and keep source offsets', () {
     final matches = aleraSearchTextMatches('Alpha beta ALPHA', 'alpha');
 

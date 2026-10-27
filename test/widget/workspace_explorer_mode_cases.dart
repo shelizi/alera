@@ -97,6 +97,23 @@ void _registerWorkspaceExplorerModeTests() {
     expect(find.text('main.dart'), findsOneWidget);
   });
 
+  testWidgets(
+    'Explorer fuzzy filter matches a loaded folder without a literal substring',
+    (tester) async {
+      final service = _FakeWorkspaceFileService()
+        ..childrenByDirectory[''] = <native.WorkspaceFileEntry>[
+          _directory('workspace_settings', hasChildrenHint: false),
+          _file('readme.txt'),
+        ];
+      await _pumpExplorer(tester, service);
+      await tester.enterText(find.byType(TextField), 'wsst');
+      await tester.pumpAndSettle();
+
+      expect(find.text('workspace_settings'), findsOneWidget);
+      expect(find.text('readme.txt'), findsNothing);
+    },
+  );
+
   testWidgets('active filter updates automatically after index rebuild', (
     tester,
   ) async {
