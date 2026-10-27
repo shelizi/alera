@@ -16,6 +16,82 @@ import '../unit/fake_git_backend.dart';
 import 'workspace_git_history_surface_test_harness.dart';
 
 void main() {
+  testWidgets('compare and merged visibility controls share right-side group', (
+    tester,
+  ) async {
+    final backend = gitHistoryBackend(<GitHistoryItem>[
+      gitHistoryCommit('c1', parents: <String>[], subject: 'Only Commit'),
+    ]);
+    final repository = GitHistoryFakeWorkbenchRepository()
+      ..tabs.add(gitHistoryTab());
+
+    await pumpGitHistorySurface(
+      tester,
+      backend: backend,
+      repository: repository,
+    );
+    await tester.pumpAndSettle();
+
+    final group = find.byKey(
+      const ValueKey<String>('git-history-right-branch-actions'),
+    );
+    final merged = find.byKey(
+      const ValueKey<String>('git-history-merged-visibility-menu'),
+    );
+    final compare = find.byKey(
+      const ValueKey<String>('git-history-compare-branches'),
+    );
+    final surface = tester.getRect(find.byType(WorkspaceGitHistorySurface));
+    final refresh = tester.getRect(find.byTooltip('Refresh Commits'));
+    final actions = tester.getRect(group);
+
+    expect(find.descendant(of: group, matching: merged), findsOneWidget);
+    expect(find.descendant(of: group, matching: compare), findsOneWidget);
+    expect(actions.right, closeTo(surface.right - 50, 1));
+    expect(actions.center.dx, greaterThan(surface.center.dx));
+    expect(
+      tester.getRect(merged).right,
+      lessThan(tester.getRect(compare).left),
+    );
+    expect(tester.getRect(compare).right, lessThan(refresh.left));
+  });
+
+  testWidgets('compact graph toolbar keeps the right actions usable', (
+    tester,
+  ) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(560, 720);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    addTearDown(tester.view.resetPhysicalSize);
+    final backend = gitHistoryBackend(<GitHistoryItem>[
+      gitHistoryCommit('c1', parents: <String>[], subject: 'Only Commit'),
+    ]);
+    final repository = GitHistoryFakeWorkbenchRepository()
+      ..tabs.add(gitHistoryTab());
+
+    await pumpGitHistorySurface(
+      tester,
+      backend: backend,
+      repository: repository,
+    );
+    await tester.pumpAndSettle();
+
+    final compare = find.byKey(
+      const ValueKey<String>('git-history-compare-branches'),
+    );
+    final merged = find.byKey(
+      const ValueKey<String>('git-history-merged-visibility-menu'),
+    );
+    expect(tester.takeException(), isNull);
+    expect(compare, findsOneWidget);
+    expect(merged, findsOneWidget);
+    final refresh = tester.getRect(find.byTooltip('Refresh Commits'));
+    expect(tester.getRect(compare).right, lessThan(refresh.left));
+    await tester.tap(merged);
+    await tester.pumpAndSettle();
+    expect(find.text('Hide Merged Names'), findsOneWidget);
+  });
+
   testWidgets('commit graph refresh stays aligned to the right edge', (
     tester,
   ) async {
@@ -645,6 +721,13 @@ void main() {
     await tester.pumpAndSettle();
     final targetMenu = find.byKey(
       const ValueKey<String>('git-history-merged-target-menu'),
+    );
+    final rightActions = find.byKey(
+      const ValueKey<String>('git-history-right-branch-actions'),
+    );
+    expect(
+      find.descendant(of: rightActions, matching: targetMenu),
+      findsOneWidget,
     );
     await tester.ensureVisible(targetMenu);
     await tester.tap(targetMenu);
