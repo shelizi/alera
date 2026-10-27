@@ -68,13 +68,19 @@ void main() {
 
     test('auto git fetch defaults on and persists the opt-out', () async {
       expect(AleraSettings.defaults.general.autoGitFetchEnabled, isTrue);
+      expect(AleraSettings.defaults.general.autoGitFetchIntervalMinutes, 5);
       final legacyJson = AleraSettings.defaults.toMap();
-      legacyJson['general'] = Map<String, dynamic>.from(
-        legacyJson['general'] as Map,
-      )..remove('autoGitFetchEnabled');
+      legacyJson['general'] =
+          Map<String, dynamic>.from(legacyJson['general'] as Map)
+            ..remove('autoGitFetchEnabled')
+            ..remove('autoGitFetchIntervalMinutes');
       expect(
         AleraSettings.fromJson(legacyJson).general.autoGitFetchEnabled,
         isTrue,
+      );
+      expect(
+        AleraSettings.fromJson(legacyJson).general.autoGitFetchIntervalMinutes,
+        5,
       );
       final db = AleraDatabase(executor: NativeDatabase.memory());
       addTearDown(db.close);
@@ -95,6 +101,27 @@ void main() {
 
       await controller.setAutoGitFetchEnabled(true);
       expect((await repository.load()).general.autoGitFetchEnabled, isTrue);
+
+      await controller.setAutoGitFetchIntervalMinutes(15);
+      expect(
+        container
+            .read(settingsControllerProvider)
+            .general
+            .autoGitFetchIntervalMinutes,
+        15,
+      );
+      expect((await repository.load()).general.autoGitFetchIntervalMinutes, 15);
+      await controller.setAutoGitFetchIntervalMinutes(60);
+      expect((await repository.load()).general.autoGitFetchIntervalMinutes, 60);
+      await expectLater(
+        controller.setAutoGitFetchIntervalMinutes(0),
+        throwsA(isA<RangeError>()),
+      );
+      await expectLater(
+        controller.setAutoGitFetchIntervalMinutes(61),
+        throwsA(isA<RangeError>()),
+      );
+      expect((await repository.load()).general.autoGitFetchIntervalMinutes, 60);
     });
 
     test('autosaves terminal updates', () async {

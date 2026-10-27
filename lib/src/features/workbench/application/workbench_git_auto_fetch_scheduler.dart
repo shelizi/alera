@@ -44,7 +44,7 @@ final class GitAutoFetchScheduler {
   final void Function(String path) _onFetched;
   final void Function(String path, Object error, StackTrace stackTrace)
   _onError;
-  final Duration _interval;
+  Duration _interval;
   final Duration _startupDelay;
   final Timer Function(Duration duration, void Function() callback)
   _createTimer;
@@ -55,22 +55,40 @@ final class GitAutoFetchScheduler {
   bool _running = false;
   bool _disposed = false;
   bool _changedDuringRun = false;
+  Duration _changeDelay = workbenchGitAutoFetchStartupDelay;
   int _failedRounds = 0;
 
-  void configure({required bool enabled, required List<String> paths}) {
+  void configure({
+    required bool enabled,
+    required List<String> paths,
+    Duration? interval,
+  }) {
     if (_disposed) return;
+    final nextInterval = interval ?? _interval;
+    if (nextInterval <= Duration.zero) {
+      throw ArgumentError.value(nextInterval, 'interval', 'Must be positive');
+    }
     final nextEnabled = enabled && paths.isNotEmpty;
-    if (_enabled == nextEnabled && _samePaths(_paths, paths)) return;
+    final sameTargets = _samePaths(_paths, paths);
+    final intervalChanged = nextInterval != _interval;
+    if (_enabled == nextEnabled && sameTargets && !intervalChanged) return;
+    // Frequency-only changes re-arm the periodic timer at the selected
+    // interval without triggering another startup-delay fetch.
+    final nextDelay = _enabled == nextEnabled && sameTargets && intervalChanged
+        ? nextInterval
+        : _startupDelay;
     _enabled = nextEnabled;
     _paths = List<String>.unmodifiable(paths);
+    _interval = nextInterval;
     _timer?.cancel();
     _timer = null;
     _failedRounds = 0;
     if (_running) {
       _changedDuringRun = true;
+      _changeDelay = nextDelay;
     } else {
       _changedDuringRun = false;
-      if (_enabled) _schedule(_startupDelay);
+      if (_enabled) _schedule(nextDelay);
     }
   }
 
@@ -99,13 +117,17 @@ final class GitAutoFetchScheduler {
       if (!_disposed && _enabled) {
         if (_changedDuringRun) {
           _changedDuringRun = false;
-          _schedule(_startupDelay);
+          _schedule(_changeDelay);
         } else {
           _failedRounds = failed ? _failedRounds + 1 : 0;
           // Offline/broken remotes must not hammer the network repeatedly.
           final multiplier = 1 << _failedRounds.clamp(0, 3).toInt();
           final delay = _interval * multiplier;
-          _schedule(delay > _maxRetryDelay ? _maxRetryDelay : delay);
+          // Avoid retrying more often than the user's selected interval.
+          final maximumDelay = _interval > _maxRetryDelay
+              ? _interval
+              : _maxRetryDelay;
+          _schedule(delay > maximumDelay ? maximumDelay : delay);
         }
       }
     }

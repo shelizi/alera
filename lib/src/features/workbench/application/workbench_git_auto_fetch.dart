@@ -49,12 +49,18 @@ GitAutoFetchScheduler workbenchGitAutoFetchCoordinator(Ref ref) {
     scheduler.configure(
       enabled: workbench.bootstrapped && settings.general.autoGitFetchEnabled,
       paths: gitAutoFetchRepositoryPaths(workbench.projects),
+      interval: Duration(
+        minutes: settings.general.autoGitFetchIntervalMinutes.clamp(1, 60),
+      ),
     );
   }
 
   ref.listen(
     settingsControllerProvider.select(
-      (settings) => settings.general.autoGitFetchEnabled,
+      (settings) => (
+        settings.general.autoGitFetchEnabled,
+        settings.general.autoGitFetchIntervalMinutes,
+      ),
     ),
     (_, __) => configure(),
   );

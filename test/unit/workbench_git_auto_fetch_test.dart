@@ -128,6 +128,75 @@ void main() {
   });
 
   test(
+    'changing fetch frequency reschedules without an immediate fetch',
+    () async {
+      final timer = _TimerRecorder();
+      final fetched = <String>[];
+      final scheduler = GitAutoFetchScheduler(
+        fetch: (path) async => fetched.add(path),
+        onFetched: (_) {},
+        onError: (_, _, _) => fail('unexpected error'),
+        createTimer: timer.schedule,
+      );
+      addTearDown(scheduler.dispose);
+
+      scheduler.configure(enabled: true, paths: <String>['/project']);
+      await scheduler.fetchNow();
+      expect(timer.delays.last, const Duration(minutes: 5));
+      final oldTimer = timer.latest;
+
+      scheduler.configure(
+        enabled: true,
+        paths: <String>['/project'],
+        interval: const Duration(minutes: 15),
+      );
+      expect(oldTimer.isActive, isFalse);
+      expect(timer.delays.last, const Duration(minutes: 15));
+      expect(fetched, <String>['/project']);
+
+      final rescheduled = timer.latest;
+      scheduler.configure(
+        enabled: true,
+        paths: <String>['/project'],
+        interval: const Duration(minutes: 15),
+      );
+      expect(timer.latest, same(rescheduled));
+
+      await scheduler.fetchNow();
+      expect(fetched, <String>['/project', '/project']);
+      expect(timer.delays.last, const Duration(minutes: 15));
+    },
+  );
+
+  test('frequency change during fetch waits for current round', () async {
+    final timer = _TimerRecorder();
+    final gate = Completer<void>();
+    final fetched = <String>[];
+    final scheduler = GitAutoFetchScheduler(
+      fetch: (path) async {
+        fetched.add(path);
+        await gate.future;
+      },
+      onFetched: (_) {},
+      onError: (_, _, _) => fail('unexpected error'),
+      createTimer: timer.schedule,
+    );
+    addTearDown(scheduler.dispose);
+
+    scheduler.configure(enabled: true, paths: <String>['/one']);
+    final pending = scheduler.fetchNow();
+    scheduler.configure(
+      enabled: true,
+      paths: <String>['/one'],
+      interval: const Duration(minutes: 30),
+    );
+    expect(fetched, <String>['/one']);
+    gate.complete();
+    await pending;
+    expect(timer.delays.last, const Duration(minutes: 30));
+  });
+
+  test(
     'fetch is serialized and disabling stops remaining repositories',
     () async {
       final timer = _TimerRecorder();
@@ -186,6 +255,30 @@ void main() {
       failFirst = false;
       await scheduler.fetchNow();
       expect(timer.delays.last, workbenchGitAutoFetchInterval);
+    },
+  );
+
+  test(
+    'long user intervals are respected even during failure backoff',
+    () async {
+      final timer = _TimerRecorder();
+      final scheduler = GitAutoFetchScheduler(
+        fetch: (_) async => throw StateError('offline'),
+        onFetched: (_) => fail('unexpected fetch success'),
+        onError: (_, _, _) {},
+        createTimer: timer.schedule,
+      );
+      addTearDown(scheduler.dispose);
+
+      scheduler.configure(
+        enabled: true,
+        paths: <String>['/offline'],
+        interval: const Duration(minutes: 60),
+      );
+      await scheduler.fetchNow();
+      expect(timer.delays.last, const Duration(minutes: 60));
+      await scheduler.fetchNow();
+      expect(timer.delays.last, const Duration(minutes: 60));
     },
   );
 

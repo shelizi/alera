@@ -45,6 +45,7 @@ class const GeneralSettings({
   this.showPullRequestStatusInSidebar = true,
   this.pullRequestFailureNotificationsEnabled = false,
   this.autoGitFetchEnabled = true,
+  this.autoGitFetchIntervalMinutes = 5,
   this.autoArchiveWorkspacesAfterDays = 30,
 }) with GeneralSettingsMappable {
   /// Language used by the Alera interface. System resolves Chinese locales to
@@ -85,6 +86,9 @@ class const GeneralSettings({
 
   /// Periodically update remote-tracking Git refs without changing local files.
   final bool autoGitFetchEnabled;
+
+  /// Minutes between automatic fetch rounds (1..60). Defaults to 5 minutes.
+  final int autoGitFetchIntervalMinutes;
 
   /// Days of inactivity before a workspace moves to the Archived section.
   /// `0` disables automatic archiving.

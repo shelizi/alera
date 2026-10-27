@@ -29,9 +29,17 @@ void _registerSettingsDialogCoreTests() {
     expect(find.text('Confirm Project Removal'), findsOneWidget);
     expect(find.text('Confirm Workspace Removal'), findsOneWidget);
 
-    await tester.ensureVisible(find.byType(Switch).at(0));
+    final projectRemovalSwitch = find.descendant(
+      of: find.widgetWithText(SettingsSwitchRow, 'Confirm Project Removal'),
+      matching: find.byType(Switch),
+    );
+    final workspaceRemovalSwitch = find.descendant(
+      of: find.widgetWithText(SettingsSwitchRow, 'Confirm Workspace Removal'),
+      matching: find.byType(Switch),
+    );
+    await tester.ensureVisible(projectRemovalSwitch);
     await tester.pump();
-    await tester.tap(find.byType(Switch).at(0));
+    await tester.tap(projectRemovalSwitch);
     await tester.pump(const Duration(milliseconds: 50));
 
     expect(
@@ -39,11 +47,9 @@ void _registerSettingsDialogCoreTests() {
       isFalse,
     );
 
-    await tester.ensureVisible(find.byType(Switch).at(1));
+    await tester.ensureVisible(workspaceRemovalSwitch);
     await tester.pump();
-    final workspaceConfirmation = tester.widget<Switch>(
-      find.byType(Switch).at(1),
-    );
+    final workspaceConfirmation = tester.widget<Switch>(workspaceRemovalSwitch);
     expect(workspaceConfirmation.value, isTrue);
     expect(workspaceConfirmation.onChanged, isNull);
 
@@ -77,6 +83,37 @@ void _registerSettingsDialogCoreTests() {
       container.read(settingsControllerProvider).general.workspaceDirectory,
       isNull,
     );
+  });
+
+  testWidgets('auto Git fetch frequency defaults to five minutes and saves', (
+    tester,
+  ) async {
+    final container = await _pumpSettingsDialog(tester);
+    final row = find.widgetWithText(
+      SettingsIntegerRow,
+      'Auto Git Fetch Interval',
+    );
+    expect(row, findsOneWidget);
+    final field = find.descendant(
+      of: row,
+      matching: find.byType(AleraNumberField),
+    );
+    expect(tester.widget<AleraNumberField>(field).value, 5);
+    await tester.ensureVisible(field);
+    await tester.pump();
+    final input = find.descendant(of: field, matching: find.byType(TextField));
+    await tester.enterText(input, '15');
+    await tester.testTextInput.receiveAction(.done);
+    await tester.pump(const Duration(milliseconds: 50));
+
+    expect(
+      container
+          .read(settingsControllerProvider)
+          .general
+          .autoGitFetchIntervalMinutes,
+      15,
+    );
+    expect(tester.widget<AleraNumberField>(field).value, 15);
   });
 
   testWidgets(
