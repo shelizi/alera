@@ -1,15 +1,31 @@
 part of 'alera_shell_page.dart';
 
-class _AleraShellPageBodyState extends ConsumerState<_AleraShellPageBody> {
+class _AleraShellPageBodyState extends ConsumerState<_AleraShellPageBody>
+    with WidgetsBindingObserver {
   String? _lastErrorMessage;
+  late final WorkbenchGitRepositoryLifecycleMonitor _gitRepositoryMonitor;
 
   @override
   void initState() {
     super.initState();
+    _gitRepositoryMonitor = WorkbenchGitRepositoryLifecycleMonitor(
+      refreshProject: (projectId) async {
+        await ref
+            .read(workbenchControllerProvider.notifier)
+            .refreshProjectGitRepository(projectId);
+      },
+      onError: (error) =>
+          Logger('AleraGitRepositoryDetection')
+              .fine('Automatic Git repository re-detection failed: $error'),
+    );
+    WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       final controller = ref.read(workbenchControllerProvider.notifier);
       await controller.bootstrap();
       if (!mounted) return;
+      _gitRepositoryMonitor.selectProject(
+        ref.read(workbenchControllerProvider).activeProject,
+      );
 
       // Test-only navigation: the Windows E2E runner keeps its SQLite profile
       // separate from the installed app, but a new process normally starts on
@@ -58,7 +74,51 @@ class _AleraShellPageBodyState extends ConsumerState<_AleraShellPageBody> {
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _gitRepositoryMonitor.onAppResumed();
+    }
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _gitRepositoryMonitor.dispose();
+    super.dispose();
+  }
+
+  Future<void> _refreshGitRepository(
+    Project project, {
+    bool announceResult = true,
+  }) async {
+    try {
+      final result = await ref
+          .read(workbenchControllerProvider.notifier)
+          .refreshProjectGitRepository(project.id);
+      if (!mounted || !announceResult) return;
+      AleraToast.show(
+        context,
+        message: result.isGitRepository
+            ? 'Git repository detected'
+            : 'No Git repository found',
+      );
+    } catch (error) {
+      if (mounted) {
+        AleraToast.show(
+          context,
+          message: 'Git repository detection failed: $error',
+          tone: AleraToastTone.error,
+        );
+      }
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
+    ref.listen<Project?>(
+      workbenchControllerProvider.select((state) => state.activeProject),
+      (_, project) => _gitRepositoryMonitor.selectProject(project),
+    );
     ref.watch(terminalHostWarmupCoordinatorProvider);
     ref.watch(runtimeAgentStatusSyncProvider);
     ref.watch(agentHookInstallerCoordinatorProvider);
@@ -172,6 +232,12 @@ class _AleraShellPageBodyState extends ConsumerState<_AleraShellPageBody> {
                             workspace: workspace,
                             prefs: shell.viewPrefs,
                             sourceControlScope: sourceControlScope,
+                            onRefreshRepository: project == null
+                                ? null
+                                : () => _refreshGitRepository(
+                                    project,
+                                    announceResult: sourceControlScope == null,
+                                  ),
                             focusedSourceControlRoot: canSelectSourceControlRoot
                                 ? shell
                                       .viewPrefs

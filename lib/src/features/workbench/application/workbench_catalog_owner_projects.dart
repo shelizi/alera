@@ -76,6 +76,25 @@ extension WorkbenchCatalogOwnerProjects on WorkbenchCatalogOwner {
     }
   }
 
+  Future<Project> refreshProjectGitRepository(String projectId) async {
+    final previous = _projectById(_host.readState().projects, projectId);
+    final project = await _host.projectsService.refreshGitRepository(projectId);
+    if (_host.isDisposed) return project;
+    _host.emitState(
+      applyWorkbenchProjectUpdateState(
+        state: _host.readState(),
+        project: project,
+      ).copyWith(error: null),
+    );
+    if (previous?.kind != project.kind) {
+      // Rebind the main workspace's branch without replacing its tabs.
+      await _ensureMainWorkspaceForProject(project);
+    }
+    // Automatic checks are best-effort; their errors are logged by the
+    // monitor. Manual checks report errors through the invoking UI callback.
+    return project;
+  }
+
   Future<void> sleepWorkspace(Workspace workspace) async {
     await _host.workspaceTabClosingScope.run(workspace.id, () async {
       try {

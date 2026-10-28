@@ -156,6 +156,30 @@ class ProjectsService({
     return next;
   }
 
+  /// Recheck an existing project after `git init` or Git metadata removal.
+  /// Read the latest record before writing so concurrent renames survive.
+  Future<Project> refreshGitRepository(String projectId) async {
+    final projects = await _projectRepository.listAll();
+    final project = projects.where((item) => item.id == projectId).firstOrNull;
+    if (project == null) {
+      throw StateError('Project not found: $projectId');
+    }
+    final kind = await _projectService.detectExistingProjectKind(
+      project.repoPath,
+    );
+    final latestProjects = await _projectRepository.listAll();
+    final latest = latestProjects
+        .where((item) => item.id == projectId)
+        .firstOrNull;
+    if (latest == null || !isSamePath(project.repoPath, latest.repoPath)) {
+      throw StateError('Project changed during Git detection: $projectId');
+    }
+    if (latest.kind == kind) return latest;
+    return _projectRepository.update(
+      latest.copyWith(kind: kind, updatedAt: _now()),
+    );
+  }
+
   Future<void> removeProject(String projectId) async {
     final runtime = runtimeProjectManagement;
     if (runtime != null) {

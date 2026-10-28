@@ -87,8 +87,10 @@ extension _WorkspaceGitDiffPanelActions on _WorkspaceGitDiffPanelState {
     });
   }
 
-  Future<void> _refresh() {
-    return _run(
+  Future<void> _refresh() async {
+    await widget.onRefreshRepository?.call();
+    if (!mounted) return;
+    await _run(
       () => _notifier.refresh(),
       successMessage: 'Source control refreshed',
     );

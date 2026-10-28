@@ -18,6 +18,7 @@ class const WorkspaceContextSidebar({
   required final Workspace workspace,
   required final WorkbenchViewPrefs prefs,
   final WorkspaceSourceControlScope? sourceControlScope,
+  final Future<void> Function()? onRefreshRepository,
   final String? focusedSourceControlRoot,
   required final VoidCallback onToggleVisible,
   required final ValueChanged<double> onResize,
@@ -110,14 +111,24 @@ class const WorkspaceContextSidebar({
                             ),
                           WorkbenchContextPanelTab.gitDiff =>
                             sourceControlScope == null
-                                ? const AleraEmptyState(
+                                ? AleraEmptyState(
                                     icon: AleraIcons.gitBranch,
                                     title: 'Source Control Unavailable',
                                     message: 'This workspace is not connected to a Git repository, so there are no changes to show.',
+                                    action: onRefreshRepository == null
+                                        ? null
+                                        : OutlinedButton.icon(
+                                            onPressed: onRefreshRepository,
+                                            icon: const Icon(
+                                              AleraIcons.gitRefresh,
+                                            ),
+                                            label: const Text('Re-detect Git'),
+                                          ),
                                   )
                                 : WorkspaceGitDiffPanel(
                                     workspace: workspace,
                                     sourceControlScope: sourceControlScope,
+                                    onRefreshRepository: onRefreshRepository,
                                     viewMode: prefs.gitDiffViewMode,
                                     onViewModeChanged: onSetGitDiffViewMode,
                                     groupMode: prefs.gitDiffGroupMode,

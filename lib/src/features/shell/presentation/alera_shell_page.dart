@@ -25,6 +25,7 @@ import 'package:alera/src/features/pull_requests/application/workspace_pull_requ
 import 'package:alera/src/features/pull_requests/application/workspace_pull_request_notification_providers.dart';
 import 'package:alera/src/features/workbench/application/workbench_archive_sweep.dart';
 import 'package:alera/src/features/workbench/application/workbench_git_auto_fetch.dart';
+import 'package:alera/src/features/workbench/application/workbench_git_repository_lifecycle_monitor.dart';
 import 'package:alera/src/features/workbench/application/workspace_language_intelligence_prewarm_coordinator.dart';
 import 'package:alera/src/features/workbench/application/workspace_source_control_controller.dart';
 import 'package:alera/src/features/workbench/application/workspace_file_service.dart';

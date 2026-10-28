@@ -5,6 +5,7 @@ import 'package:alera/src/features/projects/application/project_repository.dart'
 import 'package:alera/src/features/projects/application/project_service.dart';
 import 'package:alera/src/features/projects/application/projects_service.dart';
 import 'package:alera/src/features/projects/domain/project.dart';
+import 'package:alera/src/shared/infra/git/git_exception.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 
@@ -67,6 +68,74 @@ void main() {
       expect(project.kind, ProjectKind.gitRepository);
       expect(gitBackend.calls, isEmpty);
     });
+
+    test(
+      'refreshGitRepository promotes and demotes an existing project',
+      () async {
+        final folder = Directory(p.join(tempDir.path, 'late-git'))
+          ..createSync(recursive: true);
+        final original = await service.addLocalProject(path: folder.path);
+        expect(original.kind, ProjectKind.folder);
+
+        // A real `git init` creates a `.git` directory and changes the native
+        // backend answer, but does not re-register the project.
+        Directory(p.join(folder.path, '.git')).createSync();
+        gitBackend.isRepository = true;
+        final promoted = await service.refreshGitRepository(original.id);
+        expect(promoted.id, original.id);
+        expect(promoted.name, original.name);
+        expect(promoted.kind, ProjectKind.gitRepository);
+        expect(repository.projects.single.kind, ProjectKind.gitRepository);
+
+        final unchanged = await service.refreshGitRepository(original.id);
+        expect(unchanged, same(promoted));
+
+        Directory(p.join(folder.path, '.git')).deleteSync(recursive: true);
+        gitBackend.isRepository = false;
+        final demoted = await service.refreshGitRepository(original.id);
+        expect(demoted.kind, ProjectKind.folder);
+        expect(repository.projects.single.kind, ProjectKind.folder);
+      },
+    );
+
+    test(
+      'refreshGitRepository recognises linked worktree pointer files',
+      () async {
+        final folder = Directory(p.join(tempDir.path, 'linked'))
+          ..createSync(recursive: true);
+        final original = await service.addLocalProject(path: folder.path);
+        File(p.join(folder.path, '.git'))
+            .writeAsStringSync('gitdir: ../main/.git/worktrees/linked');
+        gitBackend.isRepository = true;
+
+        expect(
+          (await service.refreshGitRepository(original.id)).kind,
+          ProjectKind.gitRepository,
+        );
+      },
+    );
+
+    test(
+      'refreshGitRepository leaves persisted kind unchanged on failure',
+      () async {
+        final folder = Directory(p.join(tempDir.path, 'readonly'))
+          ..createSync(recursive: true);
+        final original = await service.addLocalProject(path: folder.path);
+        gitBackend.isRepositoryError = const AccessDeniedException('denied');
+        await expectLater(
+          service.refreshGitRepository(original.id),
+          throwsA(isA<AccessDeniedException>()),
+        );
+        expect(repository.projects.single.kind, ProjectKind.folder);
+
+        folder.deleteSync(recursive: true);
+        await expectLater(
+          service.refreshGitRepository(original.id),
+          throwsA(isA<FileSystemException>()),
+        );
+        expect(repository.projects.single.kind, ProjectKind.folder);
+      },
+    );
 
     test('rejects blank local project paths', () async {
       await expectLater(service.addLocalProject(path: '   '), throwsStateError);

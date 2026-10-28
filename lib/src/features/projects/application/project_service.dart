@@ -37,6 +37,17 @@ class const LocalProjectInspectionResult._({
 }
 
 class ProjectService(final GitBackend _gitBackend) {
+  /// Recheck a registered directory without treating an inaccessible folder
+  /// or native Git failure as a missing repository.
+  Future<ProjectKind> detectExistingProjectKind(String path) async {
+    if (!await Directory(path).exists()) {
+      throw FileSystemException('Project directory is not accessible', path);
+    }
+    return await _gitBackend.isGitRepository(path)
+        ? ProjectKind.gitRepository
+        : ProjectKind.folder;
+  }
+
   Future<bool> isGitRepository(String path) async {
     final result = await validateGitRepository(path);
     return result.isValidGitRepository;

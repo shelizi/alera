@@ -31,6 +31,9 @@ mixin _WorkbenchControllerProjects
     required String name,
   }) => _catalogOwner.renameProject(projectId: projectId, name: name);
 
+  Future<Project> refreshProjectGitRepository(String projectId) =>
+      _catalogOwner.refreshProjectGitRepository(projectId);
+
   Future<void> sleepWorkspace(Workspace workspace) =>
       _catalogOwner.sleepWorkspace(workspace);
 

@@ -96,6 +96,7 @@ class const WorkspaceGitDiffPanel({
   final ValueChanged<String>? onOpenFile,
   final ValueChanged<String>? onRevealInExplorer,
   final VoidCallback? onClearSourceControlRoot,
+  final Future<void> Function()? onRefreshRepository,
 }) extends ConsumerStatefulWidget {
   @override
   ConsumerState<WorkspaceGitDiffPanel> createState() =>
