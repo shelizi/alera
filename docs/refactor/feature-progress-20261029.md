@@ -1,5 +1,17 @@
 # Alera 功能優先續做：第八批四線隔離（2026-10-29）
 
+## 最新：T2-D2 Host／Client／跨視窗 Watcher 三線已整合（2026-10-30）
+
+以乾淨整合 `0b1f9f441` 為基準，重用三個沒有未提交變更的 D1 worktree，切出 D2 獨立分支平行修正後提交：
+
+| 範圍 | 已落地的實際安全措施 | 整合提交 |
+| --- | --- | --- |
+| Rust Host | `terminate`／`createOrAttach`／`restart` 驗證移動後的 Session Workspace/Tab，防止舊窗關閉或錯誤 remint；帶收據 Tab 的 `tab.remove` 要求目前 `expectedWorkspaceId`；拒絕後不取消 Agent title | **`df69aece0`**（隔離 `f215ce93a`） |
+| Dart Client | PTY terminate 帶來源檢視的預期身分；Workspace-scoped Tab Close 及相同身分的 timeout replay；Xterm 舊 Handle 同視窗重用時更新顯示 Workspace，不更動執行路徑／PTY | **`817fcf7e1`**（隔離 `faab3f691`） |
+| Flutter Workbench | 其他視窗的 Tab watcher 檢測 Terminal 轉移收據，抑制舊版 provisional Layout 背景寫入，從 Host 重取雙側權威 Layout；epoch 阻止過期回覆回寫 UI | **`333afb30e`**（隔離 `2f0914e41`） |
+
+此輪補齊了**部分**跨視窗移動、關閉與附加的安全界線，但 **`tab.transfer.capabilities.supported:false` 持續停用跨專案拖放**。下一輪宜補 Runtime Host 端全域 Layout 版本檢查、不同程序的 PTY lease／Close/Detach race，以及 crash/restart 後 PTY+Tab owner 不一致時的保守復原。**仍未執行 Flutter/Cargo tests、Analyze、Check、Build、實機驗證**；只有格式化及 Git staged whitespace check，無 push／release；原有 dirty `main` 不變。
+
 ## 最新：T2-D1 平行 Host／Recovery／Undo 三線已整合（2026-10-29）
 
 本批基準 `97f21ab02e23cb7eba39791080dedd7f52bd10ae`；三線獨立 worktree／Git commits 並整合：

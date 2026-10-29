@@ -4,6 +4,12 @@
 > 讀取 `docs/refactor/tdd-roadmap-20261029.md` 了解契約/驗收，然後從下列 pending/in_progress 工作續做。
 > 變更只在隔離整合 worktree；最新 macOS hotfix 來源分支目前與 `main` HEAD 指向同一提交，已依使用者要求將此 hotfix 分支合入整合分支，但沒有在原 `main` worktree 做修改、push 或 release。
 
+## 最新：T2-D2 三線功能安全補強（2026-10-30；Capability OFF）
+
+從前一批完成的 `0b1f9f441`，平行切出 Rust Host 已移動 PTY 的終止／重新附加／重新啟動／Tab Remove workspace owner guard **`df69aece0`**、Desktop PTY/Workbench Scoped Tab Close 與同視窗 Xterm handle display owner 更新 **`817fcf7e1`**、跨視窗 watcher 辨識轉移收據並禁止舊 Layout 反寫 **`333afb30e`**。各線獨立 clean 提交後 cherry-pick 整合；具體做法與剩餘競態見 `docs/terminal-tab-cross-workspace-plan-20261029.md`。
+
+**使用者跨專案移動仍未開啟**（`tab.transfer.capabilities.supported:false`）。不宣稱測試通過／可發布：本批無 Flutter/Cargo Tests、Analyzer、Check、Build、Win/Mac 實機；只格式化與 staged Git diff check。尚需 Host 全域 Layout 同步 CAS、跨程序最後一個 Session View/Detach、Runtime crash 後 PTY owner reconciliation、Undo／失聯 UI、operation contracts；原有 dirty `main` 未動、未 push/release。
+
 ## 最新：T2-D1 三線已整合（2026-10-29，仍未開啟）
 
 從乾淨基準 `97f21ab02e23cb7eba39791080dedd7f52bd10ae` 平行完成三個獨立工作分支：Rust Host 關閉競態／`tab.transfer.status`／Agent Presence／保護收據 **`43591a4be`**，Dart Host 不明結果的權威確認與 unknown exception **`5a0f01bdd`**，Flutter 依最新 Mutation ID 安全反向 Undo 並恢復原 Pane Group **`efce4bea6`**。已依序 cherry-pick，無衝突。三個新工作樹初始 checkout 曾逾時，但只在本輪新建工作樹內完成修復／解除初始化鎖，提交前各自 clean，既有 dirty `main` 未操作。

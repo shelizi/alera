@@ -1,8 +1,22 @@
 # T2 — 跨專案／跨 Workspace Terminal Tab 移動：功能規劃與並行重構邊界
 
-**Priority：P2；Status：D1 Host/Recovery/Undo implementation integrated, feature-gated OFF（2026-10-29）。** 已分三批合入九條來源碼工作線，最近新增 Runtime 關閉競態護欄、失聯回覆權威確認及可逆的 Undo。**尚未開放跨專案拖放，也沒有執行本批的 Flutter/Cargo 測試、靜態分析或編譯。**
+**Priority：P2；Status：D2 Host/Client/Watcher safety implementation integrated, feature-gated OFF（2026-10-30）。** 已依序整合 D1 的關閉競態／失聯確認／Undo，以及 D2 的 stale-view close/attach 防護、桌面關閉身分回傳、跨視窗 Layout 來源權威同步。**尚未開放跨專案拖放，也未執行本批的 Flutter/Cargo 測試、靜態分析或編譯。**
 
 本文件原是 `feat/cross-project-terminal-tabs-20261029` 分支上的設計稿（commit `ec150a493`），現**只收編此規劃檔**至 `refactor/tdd-integrate-20261029`；未合併該舊分支的產品程式。原設計所記載的並行分工為 2026-10-29 第三批的歷史狀態；最新整合已包含第八批功能修正及 macOS Claude Code 貼上 hotfix。
+
+## 最新：T2-D2 再平行三線安全修補（2026-10-30；仍不啟用）
+
+確認前一批 D1 已在整合 HEAD `0b1f9f4416bf263e9c0e7c4a363f5bb6762400c0`；重用三個**已乾淨的 D1 worktree**，各自切出新的 D2 分支，避免 Windows 同步目錄再次大量 checkout。三條修改分別提交後按 Host → Client → Watcher cherry-pick 至 `refactor/tdd-integrate-20261029`。
+
+| 平行工作線 | 本輪具體修正 | 隔離 commit → 整合 commit |
+| --- | --- | --- |
+| D2-H：Rust Host 所有權邊界 | `terminate` 在具轉移收據的 Session 上要求目前的 `expectedWorkspaceId`＋`expectedTabId`；拒絕舊視窗直接終止已移轉 PTY；`createOrAttach`／`restart` 拒絕舊 Workspace 重新附加或錯誤重新建立 Shell。序列化 `tab.remove` 改為核對 `expectedWorkspaceId`，具收據的 Terminal **不能僅憑 Tab ID 刪除**；舊視窗拒絕刪除時不會提早取消新位置的 Agent title job。未轉移的 legacy Tab 保持舊操作。 | `f215ce93a` → **`df69aece0`** |
+| D2-C：Desktop Client 關閉身分 | PTY `terminate` 請求攜帶當前檢視預期的 Workspace／Tab；Workbench Tab Close 透過獨立的 scoped close port 提供原畫面 Workspace，Runtime Repository 重送同一個 `expectedWorkspaceId`，避免 timeout 後誤刪已移動的 Tab。若同視窗沿用既有 Xterm Handle，`sync` 只調整後續附加／關閉請求的 display Workspace，不關閉或重啟原 PTY。現有非 Runtime repo/fakes 保持原介面。 | `faab3f691` → **`817fcf7e1`** |
+| D2-W：跨視窗 Layout watcher | 偵測新進入目的 Workspace 的 `lastTerminalTabTransfer` 收據，或來源 Workspace 已消失但 Host 確認移動的 Terminal；暫停 provisional sanitized Layout 的背景回寫，改讀 Host 權威 Layout 並以 `persist:false` 套用；加上 watcher epoch／tab 清單比對，避免過期的非同步回覆覆蓋最新配置。普通 Terminal Close 在確認沒有搬移後仍可持久化清理結果。 | `2f0914e41` → **`333afb30e`** |
+
+**本批不是支援已上線／測試已通過的聲明。** `tab.transfer.capabilities.supported` 仍明確為 `false`，實驗性 Host transfer 不會被側邊欄接受為可用功能。本次只做 Rust／Dart 格式化與 scoped Git diff/whitespace check，**沒有 Cargo check、Flutter Analyzer、Tests、Build、Windows/macOS 實機驗證，也沒有 merge 到原始 `main`、push 或 release**。原始 `main` 的未提交內容未動。
+
+**剩餘可平行項目**：跨程序共用 Session 的 Close/Detach／輸出交錯與最後一個視窗釋放規則、Runtime crash 後 Store 已提交而 PTY 尚未重新掛接的復原、原始執行目錄不存在時的安全錯誤提示、Watcher 舊版 `layout.upsert` 的 Host 端全域樂觀鎖、跨端能力差異與 operation contracts、Undo/timeout 的 UI 恢復細節。必須完成關鍵路徑的驗證才可開啟 Host capability，不可只靠 format/check 判定可用。
 
 ## 最新：T2-D1 再平行三線合入（2026-10-29，仍停用）
 
