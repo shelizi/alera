@@ -9,7 +9,9 @@ import 'package:alera/src/platform/runtime_host/protocol/terminal_host_protocol.
 /// only after the host negotiates/supports full live-session ownership moves;
 /// do not expose a UI drop callback when this verb is unavailable.
 final class RuntimeTerminalTabTransferPort
-    implements WorkbenchTerminalTabTransferPort {
+    implements
+        WorkbenchTerminalTabTransferPort,
+        WorkbenchTerminalTabTransferRecoveryPort {
   const RuntimeTerminalTabTransferPort({
     required WorkbenchRepository repository,
     required RuntimeHostClient client,
@@ -103,4 +105,9 @@ final class RuntimeTerminalTabTransferPort
       return null;
     }
   }
+
+  @override
+  Future<WorkspaceTabRecord?> confirmCommitted(
+    WorkbenchTerminalTabTransferPlan original,
+  ) => _recoverCommittedReply(original);
 }

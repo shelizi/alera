@@ -31,6 +31,14 @@ abstract interface class WorkbenchTerminalTabTransferPort {
   Future<WorkspaceTabRecord> commit(WorkbenchTerminalTabTransferPlan plan);
 }
 
+/// Optional authoritative receipt lookup for clients whose transfer reply
+/// was lost. The operation ID must never be replaced or blindly replayed.
+abstract interface class WorkbenchTerminalTabTransferRecoveryPort {
+  Future<WorkspaceTabRecord?> confirmCommitted(
+    WorkbenchTerminalTabTransferPlan original,
+  );
+}
+
 /// Source and destination layouts are prepared from the same snapshot and
 /// sent to the Runtime as an optimistic, atomic compare-and-swap request.
 /// The host is responsible for validating/committing both layouts and the
@@ -69,8 +77,36 @@ final class WorkbenchTerminalTabTransferCoordinator {
   final WorkbenchTerminalTabTransferPort _port;
   final Uuid _uuid;
   final Set<String> _transferringTabIds = <String>{};
+  final Map<String, WorkbenchTerminalTabTransferPlan> _unknownTransfers =
+      <String, WorkbenchTerminalTabTransferPlan>{};
 
   bool isTransferring(String tabId) => _transferringTabIds.contains(tabId);
+
+  /// Keep the original receipt for an inconclusive timeout. A second drag
+  /// cannot silently mint a new mutation ID for this same live PTY.
+  bool hasUnknownOutcome(String tabId) => _unknownTransfers.containsKey(tabId);
+
+  Future<WorkspaceTabRecord?> confirmUnknownOutcome(String tabId) async {
+    final original = _unknownTransfers[tabId];
+    if (original == null) return null;
+    final port = _port;
+    if (port is! WorkbenchTerminalTabTransferRecoveryPort) return null;
+    try {
+      final committed = await port.confirmCommitted(original);
+      if (committed == null ||
+          committed.id != original.tabId ||
+          committed.workspaceId != original.targetWorkspaceId ||
+          committed.terminalSessionId != original.sessionId) {
+        return null;
+      }
+      _unknownTransfers.remove(tabId);
+      return committed;
+    } on Object {
+      // Reconnect may still be in flight. Retain the exact unresolved
+      // operation rather than risking a second transfer of the same PTY.
+      return null;
+    }
+  }
 
   Future<WorkspaceTabRecord> transfer({
     required Workspace source,
@@ -83,6 +119,20 @@ final class WorkbenchTerminalTabTransferCoordinator {
       throw StateError('This terminal tab is already being transferred.');
     }
     try {
+      final unresolved = _unknownTransfers[tabId];
+      if (unresolved != null) {
+        final committed = await confirmUnknownOutcome(tabId);
+        if (committed != null) {
+          throw StateError(
+            'The previous Terminal move was confirmed after reconnect. '
+            'Refresh both workspaces before moving it again.',
+          );
+        }
+        throw TerminalTransferOutcomeUnknownException(
+          tabId: tabId,
+          clientMutationId: unresolved.clientMutationId,
+        );
+      }
       if (source.id == destination.id ||
           !source.isActive ||
           source.isArchived ||
@@ -148,7 +198,13 @@ final class WorkbenchTerminalTabTransferCoordinator {
         sourceLayout: nextSource,
         targetLayout: nextTarget,
       );
-      final updated = await _port.commit(plan);
+      final WorkspaceTabRecord updated;
+      try {
+        updated = await _port.commit(plan);
+      } on TerminalTransferOutcomeUnknownException {
+        _unknownTransfers[tabId] = plan;
+        rethrow;
+      }
       if (updated.id != tabId ||
           updated.workspaceId != destination.id ||
           updated.terminalSessionId != tab.terminalSessionId) {
