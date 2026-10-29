@@ -40,6 +40,9 @@ async fn binary_hello_upgrades_in_band_and_frames_everything_after() {
         inbox,
         control_rx,
         terminal_rx,
+        std::sync::Arc::new(tokio::sync::Semaphore::new(
+            crate::terminal_host::client::LOCAL_CLIENT_PENDING_COMMAND_LIMIT,
+        )),
     ));
     let mut actor = test_actor(
         &dir,

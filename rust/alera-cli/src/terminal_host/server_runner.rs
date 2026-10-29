@@ -61,7 +61,18 @@ pub async fn run_terminal_host_server(
         tracing::warn!("alera fx lifecycle receiver unavailable: {error}");
     }
     let next_client_id = Arc::new(AtomicU64::new(1));
-    spawn_accept_loop(listener, inbox.clone(), next_client_id.clone());
+    // Reserve a bounded number of localhost request commands globally across
+    // clients; completions, PTY callbacks, shutdown, and relay commands never
+    // acquire these permits, so backpressure cannot self-deadlock the actor.
+    let ingress_admission = Arc::new(tokio::sync::Semaphore::new(
+        crate::terminal_host::client::LOCAL_CLIENT_PENDING_COMMAND_LIMIT,
+    ));
+    spawn_accept_loop(
+        listener,
+        inbox.clone(),
+        next_client_id.clone(),
+        ingress_admission,
+    );
 
     tokio::spawn(async {
         // Variables first: the PATH cache is filled from the same probe.

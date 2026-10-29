@@ -36,6 +36,9 @@ async fn legacy_hello_keeps_output_as_a_base64_json_event() {
         inbox,
         control_rx,
         terminal_rx,
+        std::sync::Arc::new(tokio::sync::Semaphore::new(
+            crate::terminal_host::client::LOCAL_CLIENT_PENDING_COMMAND_LIMIT,
+        )),
     ));
     let mut session = crate::terminal_host::session::Session::driver_test_stub("s1", 80, 24);
     session.attach(1);

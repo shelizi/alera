@@ -382,6 +382,10 @@ impl ServerActor {
                 );
             }
             ServerCommand::ClientLine { id, line } => self.handle_line(id, line).await,
+            ServerCommand::AdmittedClientLine { id, line, permit } => {
+                self.handle_line(id, line).await;
+                drop(permit);
+            }
             ServerCommand::ClientDisconnected { id, reason } => {
                 self.account_push.relay_presence.remove(&id);
                 self.dispose_client_with_reason(id, reason).await;

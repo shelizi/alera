@@ -4,6 +4,7 @@ use serde_json::Value;
 use tokio::io::{AsyncWriteExt as _, BufReader};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc::{error::TryRecvError, Receiver, UnboundedReceiver, UnboundedSender};
+use tokio::sync::Semaphore;
 
 use crate::terminal_host::frame_codec::{encode_json_frame, encode_output_frame};
 use crate::terminal_host::protocol::BINARY_FRAMES_ENABLED_EVENT;
@@ -194,10 +195,15 @@ pub async fn connection_loop(
     inbox: UnboundedSender<ServerCommand>,
     mut control_out_rx: UnboundedReceiver<ClientFrame>,
     mut terminal_out_rx: Receiver<ClientFrame>,
+    ingress_admission: Arc<Semaphore>,
 ) {
     let (read_half, mut write_half) = stream.into_split();
     let mut lines = BufReader::new(read_half);
     let mut pending_client_line = Vec::new();
+    // At most one completed yet-unadmitted message per connection. When the
+    // shared semaphore fills, keep writing replies and terminal frames; never
+    // park the entire socket on a permit acquire.
+    let mut queued_client_line: Option<String> = None;
     let mut binary = false;
     let mut ordering = ClientFrameOrdering::default();
     loop {
@@ -246,7 +252,7 @@ pub async fn connection_loop(
                 &mut lines,
                 client_line_reader::MAX_LOCAL_REQUEST_LINE_BYTES,
                 &mut pending_client_line,
-            ) => {
+            ), if queued_client_line.is_none() => {
                 if let Some(reason) = reason_for_read_termination(&line) {
                     // Never include the raw error: OS socket diagnostics may
                     // contain device details, and input is terminal content.
@@ -258,11 +264,18 @@ pub async fn connection_loop(
                 }
                 match line {
                     Ok(Some(line)) => {
-                        if inbox.send(ServerCommand::ClientLine { id, line }).is_err() {
-                            break;
-                        }
+                        queued_client_line = Some(line);
                     }
                     _ => unreachable!("termination classified before dispatch"),
+                }
+            }
+            permit = ingress_admission.clone().acquire_owned(), if queued_client_line.is_some() => {
+                let Ok(permit) = permit else {
+                    break;
+                };
+                let line = queued_client_line.take().expect("permit only acquired with a ready line");
+                if inbox.send(ServerCommand::AdmittedClientLine { id, line, permit }).is_err() {
+                    break;
                 }
             }
             message = control_out_rx.recv() => {
@@ -413,6 +426,9 @@ async fn write_json_line(
 }
 
 pub const CLIENT_TERMINAL_OUT_QUEUE_CAPACITY: usize = 8;
+/// Maximum localhost client request lines queued or executing in the actor
+/// concurrently. This is a command-count admission cap, NOT a total byte cap.
+pub const LOCAL_CLIENT_PENDING_COMMAND_LIMIT: usize = 64;
 
 /// The mobile gateway writes over a WAN socket where a single `send` can stall
 /// for hundreds of milliseconds. The desktop lane's 8 frames is roughly 64 ms of
@@ -467,7 +483,14 @@ mod tests {
         handle
             .try_send_terminal(json!({"event": "output-b"}).into())
             .unwrap();
-        let task = tokio::spawn(connection_loop(server, 1, inbox, control_rx, terminal_rx));
+        let task = tokio::spawn(connection_loop(
+            server,
+            1,
+            inbox,
+            control_rx,
+            terminal_rx,
+            Arc::new(Semaphore::new(LOCAL_CLIENT_PENDING_COMMAND_LIMIT)),
+        ));
         let mut lines = BufReader::new(client).lines();
 
         let first: Value =
@@ -482,5 +505,90 @@ mod tests {
 
         drop(handle);
         task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn multi_client_local_ingress_is_bounded_without_blocking_control_or_shutdown() {
+        use tokio::time::{timeout, Duration};
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let admission = Arc::new(tokio::sync::Semaphore::new(2));
+        let (inbox, mut inbox_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut clients = Vec::new();
+        let mut controls = Vec::new();
+        let mut terminals = Vec::new();
+        let mut tasks = Vec::new();
+        for id in 1..=2 {
+            let client = TcpStream::connect(address).await.unwrap();
+            let (server, _) = listener.accept().await.unwrap();
+            let (control_tx, control_rx) = tokio::sync::mpsc::unbounded_channel();
+            let (terminal_tx, terminal_rx) =
+                tokio::sync::mpsc::channel(CLIENT_TERMINAL_OUT_QUEUE_CAPACITY);
+            let task = tokio::spawn(connection_loop(
+                server,
+                id,
+                inbox.clone(),
+                control_rx,
+                terminal_rx,
+                admission.clone(),
+            ));
+            clients.push(client);
+            controls.push(control_tx);
+            terminals.push(terminal_tx);
+            tasks.push(task);
+        }
+
+        clients[0].write_all(b"one\ntwo\nthree\n").await.unwrap();
+        clients[1].write_all(b"four\n").await.unwrap();
+        let first = timeout(Duration::from_secs(2), inbox_rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        let second = timeout(Duration::from_secs(2), inbox_rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(&first, ServerCommand::AdmittedClientLine { .. }));
+        assert!(matches!(&second, ServerCommand::AdmittedClientLine { .. }));
+        assert_eq!(admission.available_permits(), 0);
+        tokio::task::yield_now().await;
+        assert!(
+            inbox_rx.try_recv().is_err(),
+            "inbound queue exceeded the shared 2-slot cap"
+        );
+
+        // An inbox command from another producer is never blocked by this
+        // local request budget; this must also hold when all slots are full.
+        inbox.send(ServerCommand::RequestedShutdown).unwrap();
+        assert!(matches!(
+            timeout(Duration::from_secs(2), inbox_rx.recv())
+                .await
+                .unwrap(),
+            Some(ServerCommand::RequestedShutdown),
+        ));
+
+        // Even while waiting for a slot the socket must keep writing queued
+        // control responses rather than deadlocking the client transport.
+        controls[0]
+            .send(json!({"response":"still-alive"}).into())
+            .unwrap();
+        let mut reader = BufReader::new(clients.remove(0)).lines();
+        let response = timeout(Duration::from_secs(2), reader.next_line())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(response.contains("still-alive"));
+
+        drop(first);
+        let third = timeout(Duration::from_secs(2), inbox_rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(third, ServerCommand::AdmittedClientLine { .. }));
+        drop(second);
+        for task in tasks {
+            task.abort();
+        }
     }
 }

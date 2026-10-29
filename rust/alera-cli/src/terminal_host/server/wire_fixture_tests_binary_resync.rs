@@ -76,6 +76,9 @@ async fn observe_binary_resync_and_terminal_control_order() {
         inbox,
         control_rx,
         terminal_rx,
+        std::sync::Arc::new(tokio::sync::Semaphore::new(
+            crate::terminal_host::client::LOCAL_CLIENT_PENDING_COMMAND_LIMIT,
+        )),
     ));
     let mut session = Session::driver_test_stub("s1", 80, 24);
     session.attach(1);

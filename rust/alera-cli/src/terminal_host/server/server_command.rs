@@ -40,6 +40,14 @@ pub enum ServerCommand {
         id: u64,
         line: String,
     },
+    /// A localhost request that holds its shared ingress slot until the
+    /// single Actor finishes dispatching it. PTY completions, shutdown,
+    /// restart, relay, and mobile events use their existing independent path.
+    AdmittedClientLine {
+        id: u64,
+        line: String,
+        permit: tokio::sync::OwnedSemaphorePermit,
+    },
     #[allow(dead_code)]
     RelayClientLine {
         id: u64,
