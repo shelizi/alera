@@ -4,6 +4,12 @@
 > 讀取 `docs/refactor/tdd-roadmap-20261029.md` 了解契約/驗收，然後從下列 pending/in_progress 工作續做。
 > 變更只在隔離 worktree，未合併 main／未 push／未 release。
 
+## 最新：第八批改為功能優先（2026-10-29，依使用者指示暫停測試／分析）
+
+四個互不衝突的隔離工作樹從第七批乾淨 HEAD `54d6280c1815f5311b2907e86deded483648bd01` 接續，**只做實際功能修正、格式化、程式碼差異檢視及最小 Git diff check**，不執行 Cargo/Flutter Tests、Analyzer、架構守門、效能量測或純拆檔。詳細的每條功能、原始／整合提交、適用範圍和剩餘風險記錄在 **`docs/refactor/feature-progress-20261029.md`**。
+
+已整合四條來源碼提交：Rust localhost 未 admission 64 MiB byte quota **`48a45b5f3`**、Mobile view prefs timeout 後讀回權威狀態 **`4437ee71e`**、Terminal 保留共用 PTY 檢視 **`45941055a`**、Workbench 丟棄舊背景 layout **`a7ee48fbd`**。**本批刻意未測試／未分析／未跨平台編譯，不能視為 green 或可發布。**原始 `main` dirty 工作資料不動，未 merge main／push／release。
+
 ## 最新：第七批四線隔離 TDD（2026-10-29）
 
 **此節為當前續做起點。以乾淨整合 HEAD `e38e8191c8bd3d2622ac9fb6171f656df1df8c8c` 建立第七批四個獨立 worktree，四線完成 Red→Green、獨立提交、驗證後依序 cherry-pick 至 `refactor/tdd-integrate-20261029`。未碰原本 dirty 的 `main`、未 push／release；focused regressions 不代表完整跨平台 CI。**

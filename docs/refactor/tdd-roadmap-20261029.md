@@ -14,6 +14,7 @@
 > **第六批四線均已整合（2026-10-29）**：W1 `5794f93b1`（完整 Workbench Controller 133 pass）、Q0 `5a67f87c9`（完整 Explorer 78 pass）、G1 `6aea669b4`（Diff Surface 54 pass + 2 skipped）、Rust R1 `996962ef4`（Client 11 + Wire 48 + priority 2 + deferred 9 = 70 Cargo tests pass）；整合 Flutter 26 pass、兩守門 exit0；官方 Q0 **161 oversized／128 offenders**，baseline 未修改。此訊息覆蓋上一行「Rust 待驗證」的歷史狀態，往後從進度檔最上方第六批接續。
 > **第七批四線進行中（2026-10-29）**：從上一批乾淨整合 HEAD `e38e8191c` 分別處理 W1 同工作區 Git Focus Probe race、G1 巢狀 Repo file revision narrow port、Q0 Branch Status Bar hierarchy part 拆分、R1 localhost socket connection admission cap。各線已新增真實 Red→Green 測試；具體驗證狀態請讀進度檔最上方「第七批四線隔離 TDD」，未完成完整回歸前勿誤記整合綠燈。
 > **第七批四線均已完成並整合（2026-10-29）**：R1 `da33328ea`（socket 同時 32、Cargo 71 tests pass）；W1 `262b18526`（Git Focus Probe race，Controller + service 140 pass）；G1 `116dce5cd`（1-method file revision port, Diff Surface 54 pass + 2 skipped）；Q0 `29b455da2`（Branch status 538→456，Shell/Favorites 109 pass），全部 Red→Green，Dart 三線 analyze No issues；整合 Flutter 142 pass、兩 guards exit0。官方 Q0 **160 oversized／127 offenders**（前 161／128），baseline 未改。以進度檔最上方第七批為最新事實，下一批繼續四線獨立 worktree，不碰 `main` 的既存 dirty 資料。
+> **第八批功能優先四線已整合（2026-10-29）**：依使用者指示跳過本批測試／靜態分析／效能量測及純拆檔，從 `54d6280c1` 平行實作 R1 未 admission localhost 64 MiB quota `48a45b5f3`、C1 Mobile 偏好值 timeout 讀回確認 `4437ee71e`、T1 共用 PTY 最後本機視圖才 kill `45941055a`、W1 過期背景 Layout 忽略 `a7ee48fbd`。**此批未驗證 green、不可直接發布**，詳細資訊請讀 `docs/refactor/feature-progress-20261029.md`；前面批次的 TDD DoD 是歷史驗證契約，不應誤認為這批有跑。
 > 目標是可逐批合併的 TDD 重構；不改產品語意、不清理第三方既有工作樹、不自動推送或發布。
 
 ## Spec
