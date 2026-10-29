@@ -1095,14 +1095,26 @@ impl RuntimeStore {
         &self,
         layout: WorkbenchLayoutRecord,
     ) -> Result<WorkbenchLayoutRecord> {
+        // Persist normal Layout edits only if they still agree with the
+        // currently stored ownership of any cross-workspace Terminal. Read
+        // and write under one SQLite transaction to avoid a stale watcher
+        // undoing an already committed PTY transfer.
+        let mut tx = self.pool.begin().await?;
+        tab_transfer::ensure_layout_matches_transferred_terminals(
+            &mut tx,
+            &layout.workspace_id,
+            &layout.data,
+        )
+        .await?;
         sqlx::query(
             "INSERT INTO workbenchLayouts (workspaceId, dataJson) VALUES (?, ?) \
              ON CONFLICT(workspaceId) DO UPDATE SET dataJson = excluded.dataJson",
         )
         .bind(&layout.workspace_id)
         .bind(serde_json::to_string(&layout.data)?)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
+        tx.commit().await?;
         Ok(layout)
     }
 

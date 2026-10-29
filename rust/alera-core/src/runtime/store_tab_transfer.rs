@@ -275,6 +275,68 @@ async fn workspace_tab_ids(
         .collect()
 }
 
+/// Reject a stale legacy layout write if it would resurrect a moved
+/// Terminal in the former workspace, or remove it from its current pane.
+/// The caller holds the same SQLite transaction for validation and insert.
+/// Only rows with a durable terminal-transfer receipt are guarded, so
+/// preexisting non-transfer layout behavior remains unchanged.
+pub(super) async fn ensure_layout_matches_transferred_terminals(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    workspace_id: &str,
+    proposed: &Value,
+) -> Result<()> {
+    let groups = proposed.get("groups").and_then(Value::as_object);
+    let mut proposed_ids = BTreeSet::new();
+    if let Some(groups) = groups {
+        for group in groups.values() {
+            let ids = group
+                .get("tabIds")
+                .and_then(Value::as_array)
+                .ok_or_else(|| anyhow::anyhow!("Layout contains an invalid pane tab list."))?;
+            for id in ids {
+                let id = id
+                    .as_str()
+                    .ok_or_else(|| anyhow::anyhow!("Layout contains an invalid pane tab id."))?;
+                proposed_ids.insert(id.to_owned());
+            }
+        }
+    }
+
+    // Current ownership, not the last transfer's historical "to" field,
+    // determines where a previously moved tab must occur. A future reverse
+    // transfer uses the same receipt-bearing row and remains protected.
+    let moved_rows = sqlx::query(
+        "SELECT id, workspaceId, payloadJson FROM workspaceTabs \
+         WHERE payloadJson LIKE '%lastTerminalTabTransfer%'",
+    )
+    .fetch_all(&mut **tx)
+    .await?;
+    for row in moved_rows {
+        let id: String = row.try_get("id")?;
+        let owner: String = row.try_get("workspaceId")?;
+        let payload_json: String = row.try_get("payloadJson")?;
+        let payload: Value = serde_json::from_str(&payload_json)?;
+        if !payload
+            .get("lastTerminalTabTransfer")
+            .is_some_and(Value::is_object)
+        {
+            continue;
+        }
+        if owner == workspace_id {
+            ensure!(
+                proposed_ids.contains(&id),
+                "Layout predates a Terminal transfer; refresh the destination workspace."
+            );
+        } else {
+            ensure!(
+                !proposed_ids.contains(&id),
+                "Layout still contains a Terminal transferred out; refresh the source workspace."
+            );
+        }
+    }
+    Ok(())
+}
+
 async fn active_workspace_host(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     workspace_id: &str,
