@@ -7,6 +7,7 @@ import 'package:alera/src/design_system/icons/alera_icons.dart';
 import 'package:alera/src/design_system/layout/alera_dialog.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/domain/workspace_source_control_scope.dart';
+import 'package:alera/src/features/workbench/application/workspace_git_file_revision_reader.dart';
 import 'package:alera/src/shared/infra/git/git_backend.dart';
 import 'package:alera/src/shared/infra/git/git_providers.dart';
 import 'package:flutter/material.dart';
@@ -210,11 +211,12 @@ Future<void> _openGitFileRevisionComparison({
   required _GitFileCompareTarget target,
   required String compareRef,
 }) async {
-  final revision = await target.backend.latestFileRevision(
-    path: target.scope.path,
-    filePath: target.sourceFilePath,
-    gitRef: compareRef,
-  );
+  final revision = await WorkspaceGitFileRevisionReader(target.backend)
+      .latestForScopedFile(
+        scope: target.scope,
+        workspaceRelativePath: target.workspaceRelativePath,
+        gitRef: compareRef,
+      );
   if (!context.mounted) return;
   if (revision == null) {
     AleraToast.show(

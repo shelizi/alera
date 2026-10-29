@@ -12,6 +12,7 @@ import 'package:alera/src/shared/infra/git/git_source_control_query_port.dart';
 import 'package:alera/src/shared/infra/git/git_index_mutation_port.dart';
 import 'package:alera/src/shared/infra/git/git_working_tree_diff_query_port.dart';
 import 'package:alera/src/shared/infra/git/git_diff_blob_query_port.dart';
+import 'package:alera/src/shared/infra/git/git_file_revision_query_port.dart';
 
 /// Injectable boundary for git operations. Mirrors the raw git plumbing only;
 /// orchestration (paths, slugs, persistence, reconciliation) lives in the
@@ -30,7 +31,8 @@ abstract interface class GitBackend
         GitSourceControlQueryPort,
         GitIndexMutationPort,
         GitWorkingTreeDiffQueryPort,
-        GitDiffBlobQueryPort {
+        GitDiffBlobQueryPort,
+        GitFileRevisionQueryPort {
   /// Whether [path] resolves to a git repository work tree.
   @override
   Future<bool> isGitRepository(String path);
@@ -165,6 +167,7 @@ abstract interface class GitBackend
   /// Resolves the most recent commit on [gitRef] that established the current
   /// blob version of [filePath]. Returns null when the file does not exist on
   /// that ref.
+  @override
   Future<GitFileRevision?> latestFileRevision({
     required String path,
     required String filePath,
