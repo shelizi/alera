@@ -252,6 +252,92 @@ void _registerWorkbenchControllerSourceControlFocusTests() {
   );
 
   test(
+    'newer source-control folder focus wins over slower same-workspace probe',
+    () async {
+      await _controller.bootstrap();
+      final folderPath = p.join(_harness.tempDir.path, 'focus-race');
+      final oldPath = p.join(folderPath, 'old');
+      final newPath = p.join(folderPath, 'new');
+      Directory(p.join(oldPath, '.git')).createSync(recursive: true);
+      Directory(p.join(newPath, '.git')).createSync(recursive: true);
+      final now = DateTime.utc(2026, 5, 22);
+      final folderProject = Project(
+        id: 'project-focus-race',
+        name: 'Focus Race',
+        repoPath: folderPath,
+        createdAt: now,
+        updatedAt: now,
+        kind: .folder,
+      );
+      await _harness.projectRepository.add(folderProject);
+      await _flushUntil(
+        () => _controller.state.workspacesFor(folderProject.id).isNotEmpty,
+      );
+      final workspace = _controller.state
+          .workspacesFor(folderProject.id)
+          .single;
+      await _controller.selectWorkspace(
+        project: folderProject,
+        workspace: workspace,
+      );
+
+      final oldStarted = Completer<void>();
+      final releaseOld = Completer<void>();
+      _harness.gitBackend.beforeIsGitRepository = (path) {
+        if (path == oldPath) {
+          if (!oldStarted.isCompleted) oldStarted.complete();
+          return releaseOld.future;
+        }
+        return Future<void>.value();
+      };
+      final oldFocus = _controller.focusSourceControlFolder(
+        workspace: workspace,
+        relativePath: 'old',
+      );
+      await oldStarted.future;
+      final newFocused = await _controller.focusSourceControlFolder(
+        workspace: workspace,
+        relativePath: 'new',
+      );
+      expect(newFocused, isTrue);
+      expect(
+        _controller.state.viewPrefs.sourceControlRootByWorkspaceId[workspace
+            .id],
+        'new',
+      );
+      releaseOld.complete();
+      expect(await oldFocus, isFalse);
+      expect(
+        _controller.state.viewPrefs.sourceControlRootByWorkspaceId[workspace
+            .id],
+        'new',
+      );
+
+      final clearStarted = Completer<void>();
+      final releaseClear = Completer<void>();
+      _harness.gitBackend.beforeIsGitRepository = (path) {
+        if (path == oldPath) {
+          clearStarted.complete();
+          return releaseClear.future;
+        }
+        return Future<void>.value();
+      };
+      final afterClear = _controller.focusSourceControlFolder(
+        workspace: workspace,
+        relativePath: 'old',
+      );
+      await clearStarted.future;
+      _controller.clearFocusedSourceControlFolder(workspace: workspace);
+      releaseClear.complete();
+      expect(await afterClear, isFalse);
+      expect(
+        _controller.state.viewPrefs.sourceControlRootByWorkspaceId,
+        isNot(contains(workspace.id)),
+      );
+    },
+  );
+
+  test(
     'folder workspace does not focus a non-git source control root',
     () async {
       await _controller.bootstrap();

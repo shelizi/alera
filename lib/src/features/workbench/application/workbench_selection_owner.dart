@@ -78,6 +78,7 @@ final class WorkbenchSelectionOwner {
   final WorkbenchWorkspaceSelectionEpoch _selectionEpoch =
       WorkbenchWorkspaceSelectionEpoch();
   int _tabSelectionGeneration = 0;
+  int _sourceControlFocusGeneration = 0;
 
   bool get canGoBack => _navigationHistory.canGoBack(_host.readState());
 
@@ -99,6 +100,9 @@ final class WorkbenchSelectionOwner {
     required bool ensureInitialTerminal,
     bool recordHistory = true,
   }) {
+    // A pending nested repository probe must not restore an older Git root
+    // if the user navigates away and later returns to the same workspace.
+    ++_sourceControlFocusGeneration;
     final selectionGeneration = _selectionEpoch.begin();
     return WorkbenchWorkspaceSelectionCoordinator(
       activateSelection: () {
@@ -150,6 +154,7 @@ final class WorkbenchSelectionOwner {
     // another workspace, even when the project ID itself stays the same.
     _selectionEpoch.begin();
     ++_tabSelectionGeneration;
+    ++_sourceControlFocusGeneration;
     _host.emitState(
       activateWorkbenchProject(state: _host.readState(), project: project),
     );
@@ -310,6 +315,9 @@ final class WorkbenchSelectionOwner {
     required Workspace workspace,
     required String relativePath,
   }) async {
+    // Same-workspace focus operations can race while the native Git probe
+    // awaits. The latest explicit focus or clear action always wins.
+    final focusGeneration = ++_sourceControlFocusGeneration;
     final project = _projectById(
       _host.readState().projects,
       workspace.projectId,
@@ -326,7 +334,9 @@ final class WorkbenchSelectionOwner {
           relativePath: relativePath,
           isSelectionActive: () {
             final state = _host.readState();
-            return state.activeProjectId == project.id &&
+            return !_host.isDisposed &&
+                focusGeneration == _sourceControlFocusGeneration &&
+                state.activeProjectId == project.id &&
                 state.activeWorkspaceId == workspace.id;
           },
         );
@@ -345,6 +355,7 @@ final class WorkbenchSelectionOwner {
   }
 
   void clearFocusedSourceControlFolder({required Workspace workspace}) {
+    ++_sourceControlFocusGeneration;
     final prefs = clearWorkbenchSourceControlRootPrefs(
       prefs: _host.readState().viewPrefs,
       workspaceId: workspace.id,
