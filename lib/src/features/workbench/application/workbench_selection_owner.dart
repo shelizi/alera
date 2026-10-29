@@ -145,6 +145,11 @@ final class WorkbenchSelectionOwner {
   }
 
   void activateProject(Project project) {
+    // Project-level selection explicitly deselects a workspace. It must
+    // invalidate in-flight workspace hydration/navigation just like selecting
+    // another workspace, even when the project ID itself stays the same.
+    _selectionEpoch.begin();
+    ++_tabSelectionGeneration;
     _host.emitState(
       activateWorkbenchProject(state: _host.readState(), project: project),
     );

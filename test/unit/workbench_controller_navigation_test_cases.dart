@@ -89,6 +89,43 @@ void _registerWorkbenchControllerNavigationTests() {
     },
   );
 
+  test('project activation while back navigation hydrates does not move history cursor', () async {
+    await _controller.bootstrap();
+    await _selectMainWorkspace(_controller, _harness);
+    final first = (await _controller.createWorkspace(
+      project: _harness.project,
+      sourceBranch: 'main',
+      newBranchName: 'feature/back-project-invalidation-first',
+    )).workspace;
+    final second = (await _controller.createWorkspace(
+      project: _harness.project,
+      sourceBranch: 'main',
+      newBranchName: 'feature/back-project-invalidation-second',
+    )).workspace;
+    expect(_controller.state.activeWorkspaceId, second.id);
+    expect(_controller.canGoForward, isFalse);
+
+    final started = Completer<void>();
+    final release = Completer<void>();
+    _harness.workbenchRepository.blockNextWorkspaceTabsList(
+      workspaceId: first.id,
+      started: started,
+      release: release,
+    );
+    final navigating = _controller.goBack();
+    await started.future;
+    // activateProject does not call selectWorkspace. Its explicit deselection
+    // must still invalidate the older navigation transaction.
+    await _controller.activateProject(_harness.project);
+    expect(_controller.state.activeWorkspaceId, isNull);
+    release.complete();
+    await navigating;
+    expect(_controller.state.activeWorkspaceId, isNull);
+    expect(_controller.canGoForward, isFalse);
+    await _controller.goBack();
+    expect(_controller.state.activeWorkspaceId, first.id);
+  });
+
   test('skips deleted workspaces in navigation history', () async {
     await _controller.bootstrap();
     final mainWorkspace = await _selectMainWorkspace(_controller, _harness);
