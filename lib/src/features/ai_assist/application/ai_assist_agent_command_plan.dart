@@ -51,15 +51,9 @@ extension on CliAgentTaskRunner {
     }
     Directory? promptDirectory;
     File? outputFile;
-    final environmentOverrides = <String, String>{};
-    if (agentType == AgentType.fx) {
-      environmentOverrides.addAll(<String, String>{
-        'FX_PERMISSION_MODE': 'ask',
-        'FX_AUTO_UPGRADE': '0',
-        'FX_HERDR': '0',
-        if (model.id.trim().isNotEmpty) 'FX_MODEL': model.id.trim(),
-      });
-    }
+    final environmentOverrides = <String, String>{
+      ...?spec.environmentOverridesForModel?.call(model.id),
+    };
     var deliveredPrompt = '';
     if (spec.promptDelivery == AiPromptDelivery.argv) {
       deliveredPrompt = request.prompt;
@@ -73,16 +67,15 @@ extension on CliAgentTaskRunner {
         );
         await promptFile.writeAsString(request.prompt, flush: true);
         deliveredPrompt = promptFile.path;
-        if (agentType == AgentType.grok) {
-          final grokHome = Directory(p.join(promptDirectory.path, 'grok-home'));
-          await grokHome.create();
-          await _copyGrokRuntimeConfiguration(
-            grokHome,
-            environment,
-            authenticationOnly:
-                request.accessPolicy == AgentTaskAccessPolicy.diffOnly,
+        if (spec.preparePromptFileEnvironment case final prepare?) {
+          environmentOverrides.addAll(
+            await prepare(
+              promptDirectoryPath: promptDirectory.path,
+              environment: environment,
+              authenticationOnly:
+                  request.accessPolicy == AgentTaskAccessPolicy.diffOnly,
+            ),
           );
-          environmentOverrides['GROK_HOME'] = grokHome.path;
         }
       } catch (_) {
         try {
@@ -171,39 +164,6 @@ extension on CliAgentTaskRunner {
       return;
     }
     args.addAll(const <String>['--output-format', 'json']);
-  }
-
-  Future<void> _copyGrokRuntimeConfiguration(
-    Directory isolatedHome,
-    Map<String, String> environment, {
-    required bool authenticationOnly,
-  }) async {
-    final configuredHome = environment['GROK_HOME']?.trim();
-    final userHome = (environment['HOME'] ?? environment['USERPROFILE'])
-        ?.trim();
-    final sourceHome = configuredHome != null && configuredHome.isNotEmpty
-        ? configuredHome
-        : userHome != null && userHome.isNotEmpty
-        ? p.join(userHome, '.grok')
-        : null;
-    if (sourceHome == null) {
-      return;
-    }
-    final fileNames = authenticationOnly
-        ? const <String>['auth.json']
-        : const <String>[
-            'auth.json',
-            'config.toml',
-            'managed_config.toml',
-            'requirements.toml',
-          ];
-    // Reading Diff excludes configuration that can enable plugins or MCPs.
-    for (final fileName in fileNames) {
-      final source = File(p.join(sourceHome, fileName));
-      if (await source.exists()) {
-        await source.copy(p.join(isolatedHome.path, fileName));
-      }
-    }
   }
 
   _AgentTaskCommandPlan _planCustomCommand(String template, String prompt) {

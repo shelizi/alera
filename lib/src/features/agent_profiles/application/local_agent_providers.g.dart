@@ -55,7 +55,7 @@ final class LocalAgentDetectionProvider
 }
 
 String _$localAgentDetectionHash() =>
-    r'13818982f80c0f8381c0448305884da522cbbee2';
+    r'f9a975b5b72d31fb8787fd945ce90e784fb193f3';
 
 /// Agent CLIs found on this machine's PATH. Probed once per session and kept
 /// alive so the workspace tab strip's new-tab menu does not rescan on every

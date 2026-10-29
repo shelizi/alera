@@ -75,6 +75,31 @@ Future<ProcessResult> _runFixture({
       'lib/src/features/agent_status/domain/agent_status.dart',
       "enum AgentType(this.key) { synthetic('synthetic'); final String key; }\n",
     );
+    // A positive fixture must satisfy the per-agent adapter contract as well
+    // as the touchpoint ratchet. Keep those independent policies testable.
+    _write(
+      root,
+      'lib/src/features/agent_status/infra/normalizers/synthetic_agent_hook_normalizer.dart',
+      '// synthetic hook adapter fixture\n',
+    );
+    _write(
+      root,
+      'lib/src/features/agent_status/infra/managed_hooks/synthetic_managed_agent_hook.dart',
+      '// synthetic managed hook adapter fixture\n',
+    );
+    for (final path in const <String>[
+      'lib/src/features/agent_status/infra/agent_hook_event_normalizer.dart',
+      'lib/src/features/agent_status/infra/managed_agent_hook_installer.dart',
+      'lib/src/features/agent_status/infra/managed_agent_hook_descriptors.dart',
+      'lib/src/features/agent_status/infra/managed_agent_hook_scripts.dart',
+      'lib/src/features/agent_status/infra/normalizers/agent_hook_status_helpers.dart',
+      'lib/src/features/agent_status/infra/normalizers/agent_hook_tool_preview.dart',
+      'lib/src/features/agent_status/infra/normalizers/agent_hook_tool_snapshot.dart',
+      'lib/src/features/agent_status/application/agent_hook_lifecycle_guard.dart',
+      'lib/src/features/agent_status/application/agent_status_identity_resolver.dart',
+    ]) {
+      _write(root, path, '// generic hook policy fixture\n');
+    }
     for (final entry in files.entries) {
       _write(root, entry.key, entry.value);
     }

@@ -46,6 +46,7 @@ Future<AleraDatabase> _pumpTestApp(WidgetTester tester) async {
       overrides: [
         resourceManagerTerminalBindingOverride(),
         terminalRuntimeBindingOverride(),
+        terminalSessionTitleSourceOverride(),
         runtimeHostWindowExitOverride(),
         aleraDatabaseProvider.overrideWith((ref) => db),
       ],

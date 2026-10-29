@@ -11,6 +11,13 @@ final List<AgentType> spawnableAgentProfileAdapters = <AgentType>[
     AgentType.values.firstWhere((adapter) => adapter.key == descriptor.id),
 ];
 
+/// Health probes that must succeed after PATH lookup, as adapter policy rather
+/// than a special case inside the shared detector. The AGY executable can be
+/// present but fail to initialize; other CLIs need only PATH resolution.
+const Set<AgentType> agentProfileAdaptersRequiringVersionProbe = <AgentType>{
+  .agy,
+};
+
 /// The default launch command each adapter uses when a profile does not
 /// override it. Reads `defaultCommand` from the checked-in descriptor
 /// snapshot.

@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:alera/src/features/agent_profiles/domain/agent_descriptor_registry.dart';
 import 'package:alera/src/features/agent_profiles/domain/agent_descriptor_snapshot.dart';
 import 'package:alera/src/features/agent_status/domain/agent_status.dart';
+import 'package:alera/src/features/ai_assist/application/ai_assist_grok_prompt_home.dart';
 import 'package:alera/src/features/ai_assist/domain/ai_assist_settings.dart';
 
 part 'grok_ai_assist.dart';
@@ -13,6 +14,13 @@ part 'ai_assist_model_labels.dart';
 part 'ai_assist_output_capabilities.dart';
 
 enum AiAssistDiffOnlyAccess { unsupported, toolFree, codexRestrictedFilesystem }
+
+typedef AiAssistPromptFileEnvironmentPreparer =
+    Future<Map<String, String>> Function({
+      required String promptDirectoryPath,
+      required Map<String, String> environment,
+      required bool authenticationOnly,
+    });
 
 class const AiThinkingLevel({
   required final String id,
@@ -68,6 +76,9 @@ abstract interface class AiAssistCapability {
   bool get readOnlyGuarantee;
   AiAssistDiffOnlyAccess get diffOnlyAccess;
   List<String> get diffOnlyArgs;
+  Map<String, String> Function(String modelId)?
+  get environmentOverridesForModel;
+  AiAssistPromptFileEnvironmentPreparer? get preparePromptFileEnvironment;
   int get maxPromptBytes;
   List<String> Function({
     required String prompt,
@@ -79,12 +90,14 @@ abstract interface class AiAssistCapability {
 }
 
 class const AiAssistCapabilitySpec({
-  required final AgentType agentType,
-  required final AiPromptDelivery promptDelivery,
-  required final List<String>? modelsCommand,
+  @override required final AgentType agentType,
+  @override required final AiPromptDelivery promptDelivery,
+  @override required final List<String>? modelsCommand,
+  @override
   required final List<AiAssistModel> Function(String stdout) parseModels,
-  required final List<AiAssistModel> models,
-  required final String? defaultModelId,
+  @override required final List<AiAssistModel> models,
+  @override required final String? defaultModelId,
+  @override
   required final List<String> Function({
     required String prompt,
     required String model,
@@ -92,15 +105,22 @@ class const AiAssistCapabilitySpec({
     required int timeoutSeconds,
   })
   buildArgs,
-  final bool modelCanInherit = false,
+  @override final bool modelCanInherit = false,
+  @override
   final AiNativeStructuredOutput nativeStructuredOutput =
       AiNativeStructuredOutput.none,
-  final bool supportsRepositoryRead = false,
-  final bool readOnlyGuarantee = false,
+  @override final bool supportsRepositoryRead = false,
+  @override final bool readOnlyGuarantee = false,
+  @override
   final AiAssistDiffOnlyAccess diffOnlyAccess =
       AiAssistDiffOnlyAccess.unsupported,
-  final List<String> diffOnlyArgs = const <String>[],
-  final int maxPromptBytes = 1024 * 1024,
+  @override final List<String> diffOnlyArgs = const <String>[],
+  @override
+  final Map<String, String> Function(String modelId)?
+  environmentOverridesForModel,
+  @override
+  final AiAssistPromptFileEnvironmentPreparer? preparePromptFileEnvironment,
+  @override final int maxPromptBytes = 1024 * 1024,
 }) implements AiAssistCapability {
   AgentDescriptorSnapshot get descriptor => agentDescriptorFor(agentType);
 
@@ -140,10 +160,18 @@ const List<AiThinkingLevel> onOffThinkingLevels = <AiThinkingLevel>[
   AiThinkingLevel(id: 'off', label: 'Off'),
 ];
 
-final Map<AgentType, AiAssistCapability>
-aiAssistCapabilities = <AgentType, AiAssistCapability>{
-  AgentType.claude: claudeAiAssistAgentSpec,
-  AgentType.codex: AiAssistCapabilitySpec(
+/// A capability already declares its agent type; derive lookup keys from the
+/// registered specifications instead of maintaining duplicate enum branches.
+final Map<AgentType, AiAssistCapability> aiAssistCapabilities =
+    <AgentType, AiAssistCapability>{
+      for (final capability in _registeredAiAssistCapabilities)
+        capability.agentType: capability,
+    };
+
+final List<AiAssistCapability>
+_registeredAiAssistCapabilities = <AiAssistCapability>[
+  claudeAiAssistAgentSpec,
+  AiAssistCapabilitySpec(
     agentType: .codex,
     promptDelivery: .stdin,
     modelsCommand: const <String>['debug', 'models'],
@@ -192,7 +220,7 @@ aiAssistCapabilities = <AgentType, AiAssistCapability>{
           if (thinkingLevel != null) 'model_reasoning_effort=$thinkingLevel',
         ].where((arg) => arg.isNotEmpty).toList(growable: false),
   ),
-  AgentType.copilot: AiAssistCapabilitySpec(
+  AiAssistCapabilitySpec(
     agentType: .copilot,
     promptDelivery: .argv,
     modelsCommand: null,
@@ -240,7 +268,7 @@ aiAssistCapabilities = <AgentType, AiAssistCapability>{
           if (thinkingLevel != null) ...<String>['--effort', thinkingLevel],
         ],
   ),
-  AgentType.cursor: AiAssistCapabilitySpec(
+  AiAssistCapabilitySpec(
     agentType: .cursor,
     promptDelivery: .argv,
     modelsCommand: const <String>['--list-models'],
@@ -266,7 +294,7 @@ aiAssistCapabilities = <AgentType, AiAssistCapability>{
           prompt,
         ],
   ),
-  AgentType.agy: AiAssistCapabilitySpec(
+  AiAssistCapabilitySpec(
     agentType: .agy,
     promptDelivery: .stdin,
     modelsCommand: const <String>['models'],
@@ -288,9 +316,9 @@ aiAssistCapabilities = <AgentType, AiAssistCapability>{
           if (model.trim().isNotEmpty) ...<String>['--model', model],
         ],
   ),
-  AgentType.opencode: openCodeAiAssistSpec(agentType: .opencode),
-  AgentType.opencode2: openCodeAiAssistSpec(agentType: .opencode2),
-  AgentType.pi: AiAssistCapabilitySpec(
+  openCodeAiAssistSpec(agentType: .opencode),
+  openCodeAiAssistSpec(agentType: .opencode2),
+  AiAssistCapabilitySpec(
     agentType: .pi,
     promptDelivery: .stdin,
     modelsCommand: const <String>['--list-models'],
@@ -325,7 +353,7 @@ aiAssistCapabilities = <AgentType, AiAssistCapability>{
           if (thinkingLevel != null) ...<String>['--thinking', thinkingLevel],
         ],
   ),
-  AgentType.amp: AiAssistCapabilitySpec(
+  AiAssistCapabilitySpec(
     agentType: .amp,
     promptDelivery: .stdin,
     modelsCommand: null,
@@ -363,8 +391,8 @@ aiAssistCapabilities = <AgentType, AiAssistCapability>{
           if (thinkingLevel != null) ...<String>['--effort', thinkingLevel],
         ],
   ),
-  AgentType.grok: grokAiAssistAgentSpec,
-  AgentType.devin: AiAssistCapabilitySpec(
+  grokAiAssistAgentSpec,
+  AiAssistCapabilitySpec(
     agentType: .devin,
     promptDelivery: .argv,
     modelsCommand: const <String>['models', 'list'],
@@ -389,8 +417,8 @@ aiAssistCapabilities = <AgentType, AiAssistCapability>{
           prompt,
         ],
   ),
-  AgentType.fx: fxAiAssistAgentSpec,
-};
+  fxAiAssistAgentSpec,
+];
 
 AiAssistCapability? aiAssistCapabilityFor(AgentType? agentType) =>
     agentType == null ? null : aiAssistCapabilities[agentType];

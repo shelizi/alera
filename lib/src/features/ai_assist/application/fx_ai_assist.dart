@@ -8,6 +8,12 @@ final AiAssistCapability fxAiAssistAgentSpec = AiAssistCapabilitySpec(
   models: const <AiAssistModel>[],
   defaultModelId: null,
   modelCanInherit: true,
+  environmentOverridesForModel: (modelId) => <String, String>{
+    'FX_PERMISSION_MODE': 'ask',
+    'FX_AUTO_UPGRADE': '0',
+    'FX_HERDR': '0',
+    if (modelId.trim().isNotEmpty) 'FX_MODEL': modelId.trim(),
+  },
   buildArgs: ({
     required model,
     thinkingLevel,

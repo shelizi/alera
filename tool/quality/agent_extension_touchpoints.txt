@@ -6,7 +6,6 @@ lib/src/features/agent_profiles/domain/agent_descriptor_registry.dart
 lib/src/features/agent_quota/presentation/agent_quota_provider_icon.dart
 lib/src/features/agent_status/infra/codex_transcript_status_watcher.dart
 lib/src/features/agent_status/presentation/agent_identity_icon.dart
-lib/src/features/shell/presentation/alera_shell_page_body_content.dart
 lib/src/features/settings/presentation/panes/agent_profiles_pane.dart
 lib/src/features/settings/presentation/panes/agent_profiles_pane_discovery.dart
 lib/src/features/settings/presentation/panes/agent_profiles_pane_profile_actions.dart

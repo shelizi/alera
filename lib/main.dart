@@ -158,6 +158,7 @@ Future<void> _finishDetachedTabInitialization(
         overrides: [
           resourceManagerTerminalBindingOverride(),
           terminalRuntimeBindingOverride(),
+          terminalSessionTitleSourceOverride(),
           runtimeHostWindowExitOverride(),
           aleraDatabaseProvider.overrideWith((ref) {
             ref.onDispose(() async {
@@ -210,6 +211,7 @@ Future<void> _startApp({bool sharedEngineTabs = false}) async {
     overrides: [
       resourceManagerTerminalBindingOverride(),
       terminalRuntimeBindingOverride(),
+      terminalSessionTitleSourceOverride(),
       runtimeHostWindowExitOverride(),
       if (windowBootstrap.database case final db?)
         aleraDatabaseProvider.overrideWith((ref) {

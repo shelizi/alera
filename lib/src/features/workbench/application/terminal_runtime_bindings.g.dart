@@ -201,3 +201,60 @@ final class TerminalRuntimeFocusProvider
 
 String _$terminalRuntimeFocusHash() =>
     r'4329a9d7feabd7769f7bff19984469b7e9d9871e';
+
+/// The composition root binds this read-only metadata port to the same runtime
+/// as terminalRuntimeBindings. Application consumers never touch view handles.
+
+@ProviderFor(terminalSessionTitleSource)
+final terminalSessionTitleSourceProvider =
+    TerminalSessionTitleSourceProvider._();
+
+/// The composition root binds this read-only metadata port to the same runtime
+/// as terminalRuntimeBindings. Application consumers never touch view handles.
+
+final class TerminalSessionTitleSourceProvider
+    extends
+        $FunctionalProvider<
+          TerminalSessionTitleSource,
+          TerminalSessionTitleSource,
+          TerminalSessionTitleSource
+        >
+    with $Provider<TerminalSessionTitleSource> {
+  /// The composition root binds this read-only metadata port to the same runtime
+  /// as terminalRuntimeBindings. Application consumers never touch view handles.
+  TerminalSessionTitleSourceProvider._()
+    : super(
+        from: null,
+        argument: null,
+        retry: null,
+        name: r'terminalSessionTitleSourceProvider',
+        isAutoDispose: false,
+        dependencies: null,
+        $allTransitiveDependencies: null,
+      );
+
+  @override
+  String debugGetCreateSourceHash() => _$terminalSessionTitleSourceHash();
+
+  @$internal
+  @override
+  $ProviderElement<TerminalSessionTitleSource> $createElement(
+    $ProviderPointer pointer,
+  ) => $ProviderElement(pointer);
+
+  @override
+  TerminalSessionTitleSource create(Ref ref) {
+    return terminalSessionTitleSource(ref);
+  }
+
+  /// {@macro riverpod.override_with_value}
+  Override overrideWithValue(TerminalSessionTitleSource value) {
+    return $ProviderOverride(
+      origin: this,
+      providerOverride: $SyncValueProvider<TerminalSessionTitleSource>(value),
+    );
+  }
+}
+
+String _$terminalSessionTitleSourceHash() =>
+    r'ec46c683293eff08c34f6ecca5e78e22c1bced53';

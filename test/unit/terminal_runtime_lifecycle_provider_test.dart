@@ -1,5 +1,6 @@
 import 'package:alera/src/app/terminal_runtime_composition.dart';
 import 'package:alera/src/features/workbench/application/terminal_runtime_bindings.dart';
+import 'package:alera/src/features/workbench/application/terminal_session_title_source.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 import 'package:alera/src/features/workbench/presentation/terminal_runtime.dart';
@@ -16,6 +17,7 @@ void main() {
         overrides: [
           terminalRuntimeProvider.overrideWithValue(runtime),
           terminalRuntimeBindingOverride(),
+          terminalSessionTitleSourceOverride(),
         ],
       );
       addTearDown(container.dispose);
@@ -27,6 +29,12 @@ void main() {
         same(runtime),
       );
       expect(container.read(terminalRuntimeFocusProvider), same(runtime));
+      expect(
+        container
+            .read(terminalSessionTitleSourceProvider)
+            .peekTitleForTab('missing'),
+        isNull,
+      );
     },
   );
 }

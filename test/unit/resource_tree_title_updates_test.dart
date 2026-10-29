@@ -1,3 +1,4 @@
+import 'package:alera/src/app/terminal_runtime_composition.dart';
 import 'package:alera/src/features/agent_status/application/agent_status_controller.dart';
 import 'package:alera/src/features/agent_status/domain/agent_status.dart';
 import 'package:alera/src/features/projects/domain/project.dart';
@@ -114,6 +115,7 @@ void main() {
         resourceSnapshotProvider.overrideWith((ref) async => snapshot),
         workbenchControllerProvider.overrideWith(() => _Workbench(state)),
         terminalRuntimeProvider.overrideWith((ref) => _Runtime(session)),
+        terminalSessionTitleSourceOverride(),
       ],
     );
     addTearDown(container.dispose);

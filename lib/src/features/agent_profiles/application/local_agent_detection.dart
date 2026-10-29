@@ -27,8 +27,8 @@ class const LocalAgentDetection({
       if (executable == null) {
         continue;
       }
-      if (agentType == AgentType.agy &&
-          !await _isHealthyAgy(executable, environment)) {
+      if (agentProfileAdaptersRequiringVersionProbe.contains(agentType) &&
+          !await _hasHealthyVersionCommand(executable, environment)) {
         continue;
       }
       detected.add(agentType);
@@ -62,7 +62,7 @@ class const LocalAgentDetection({
     );
   }
 
-  Future<bool> _isHealthyAgy(
+  Future<bool> _hasHealthyVersionCommand(
     String executable,
     Map<String, String> environment,
   ) async {

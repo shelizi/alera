@@ -47,12 +47,12 @@ Set<AgentType> aiAssistAgentTypesForModelDiscovery(
   AiAssistSettings settings,
   Iterable<AiAssistOperation> operations,
 ) => <AgentType>{
-  if (settings.agentType case final agentType?) agentType,
+  ?settings.agentType,
   for (final operation in operations)
     if (operation == AiAssistOperation.readingDiff)
       readingDiffAgentTypeForSettings(settings)
-    else if (settings.agentTypeFor(operation) case final agentType?)
-      agentType,
+    else
+      ?settings.agentTypeFor(operation),
 };
 
 AgentType readingDiffAgentTypeForSettings(AiAssistSettings settings) {
@@ -61,7 +61,15 @@ AgentType readingDiffAgentTypeForSettings(AiAssistSettings settings) {
   if (supportsDiffOnlyAiAssistAgentType(configured)) {
     return configured!;
   }
-  return AgentType.codex;
+  // Pick the registered backend that owns restricted-filesystem isolation;
+  // do not duplicate an agent-specific fallback in the common policy.
+  return aiAssistCapabilities.values
+      .firstWhere(
+        (spec) =>
+            spec.diffOnlyAccess ==
+            AiAssistDiffOnlyAccess.codexRestrictedFilesystem,
+      )
+      .agentType;
 }
 
 String? readingDiffModelForSettingsType(

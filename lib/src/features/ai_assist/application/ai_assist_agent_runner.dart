@@ -78,7 +78,8 @@ class CliAgentTaskRunner({
           request.agentType ?? request.settings.agentType;
       if (request.accessPolicy == AgentTaskAccessPolicy.diffOnly &&
           !request.useCustomCommand &&
-          requestedAgentType == AgentType.codex) {
+          aiAssistCapabilityFor(requestedAgentType)?.diffOnlyAccess ==
+              AiAssistDiffOnlyAccess.codexRestrictedFilesystem) {
         final missing = codexDiffOnlyEnvironmentVariableNames
             .where((name) => !environment.containsKey(name))
             .toList(growable: false);

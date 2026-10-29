@@ -11,7 +11,7 @@ import 'package:alera/src/features/resource_manager/domain/resource_tree.dart';
 import 'package:alera/src/features/workbench/application/workbench_controller.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
-import 'package:alera/src/features/workbench/presentation/terminal_runtime_providers.dart';
+import 'package:alera/src/features/workbench/application/terminal_runtime_bindings.dart';
 import 'package:alera/src/platform/runtime_host/protocol/terminal_host_protocol.dart';
 import 'package:alera/src/shared/infra/runtime/runtime_host_providers.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -125,7 +125,7 @@ ResourceTree resourceTree(Ref ref, ResourceSortColumn sortColumn) {
   }
   final workbench = ref.watch(workbenchControllerProvider);
   final open = ref.watch(resourcePanelOpenProvider);
-  final runtime = ref.watch(terminalRuntimeProvider);
+  final titleSource = ref.watch(terminalSessionTitleSourceProvider);
   final terminalTitles = <String, String>{};
   final agentStatuses = <String, AgentStatusEntry>{};
   for (final session in snapshot.sessions) {
@@ -144,16 +144,16 @@ ResourceTree resourceTree(Ref ref, ResourceSortColumn sortColumn) {
     if (status != null) {
       agentStatuses[session.sessionId] = status;
     }
-    final handle = runtime.peekSession(session.tabId);
-    if (handle == null ||
-        handle.workspaceId != session.workspaceId ||
-        (handle.terminalSessionId != null &&
-            handle.terminalSessionId != session.sessionId)) {
+    final title = titleSource.peekTitleForTab(session.tabId);
+    if (title == null ||
+        title.workspaceId != session.workspaceId ||
+        (title.terminalSessionId != null &&
+            title.terminalSessionId != session.sessionId)) {
       continue;
     }
-    terminalTitles[session.sessionId] = handle.displayTitle;
+    terminalTitles[session.sessionId] = title.displayTitle;
     if (open) {
-      final titles = handle.titleListenable;
+      final titles = title.titleUpdates;
       titles.addListener(ref.invalidateSelf);
       ref.onDispose(() => titles.removeListener(ref.invalidateSelf));
     }

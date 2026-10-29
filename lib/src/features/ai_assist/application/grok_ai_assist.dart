@@ -27,6 +27,7 @@ final AiAssistCapability grokAiAssistAgentSpec = AiAssistCapabilitySpec(
   defaultModelId: 'grok-4.6',
   nativeStructuredOutput: .jsonSchemaArgument,
   diffOnlyAccess: .toolFree,
+  preparePromptFileEnvironment: prepareGrokPromptFileEnvironment,
   buildArgs:
       ({
         required model,
