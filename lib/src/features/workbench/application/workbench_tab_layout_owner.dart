@@ -122,6 +122,7 @@ final class WorkbenchTabLayoutOwner {
       WorkbenchFileTabMutationQueue();
   final WorkspaceTabFocusHistory _tabFocusHistory = WorkspaceTabFocusHistory();
   final Map<String, int> _terminalTransferFences = <String, int>{};
+  final Map<String, int> _remoteTerminalTransferWatcherEpochs = <String, int>{};
 
   /// While the Host commits a two-workspace transfer, watcher snapshots may
   /// arrive in either order. Applying a single side early would sanitize a
@@ -309,6 +310,14 @@ final class WorkbenchTabLayoutOwner {
         _terminalTransferFences.containsKey(workspaceId)) {
       return;
     }
+    final watcherEpoch = _remoteTerminalTransferWatcherEpochs.update(
+      workspaceId,
+      (epoch) => epoch + 1,
+      ifAbsent: () => 1,
+    );
+    final previouslyVisibleIds = <String>{
+      for (final tab in _host.readState().tabsFor(workspaceId)) tab.id,
+    };
     final layoutWasCleared = _clearedLayouts.contains(workspaceId);
     final plan = planWorkbenchTabSetSync(
       state: _host.readState(),
@@ -317,6 +326,21 @@ final class WorkbenchTabLayoutOwner {
       layoutWasCleared: layoutWasCleared,
     );
     final removedTabs = plan.removedTabs;
+    // A transfer broadcasts both sides, but different windows may receive
+    // their tab list events in different orders. New transferred terminal
+    // arrivals are authoritative Host layout updates, NOT local UI placement.
+    final incomingTransferredTerminal = tabs.any((tab) {
+      if (tab.kind != WorkspaceTabKind.terminal ||
+          previouslyVisibleIds.contains(tab.id)) {
+        return false;
+      }
+      final receipt = tab.payload['lastTerminalTabTransfer'];
+      return receipt is Map && receipt['to'] == workspaceId;
+    });
+    final possiblyMovedTerminals = <WorkspaceTabRecord>[
+      for (final tab in removedTabs)
+        if (tab.kind == WorkspaceTabKind.terminal) tab,
+    ];
     // A tab record that disappeared from persisted state can never reach its
     // live terminal handle again, so release the hosted-review retention and
     // client-local terminal/editor resources without terminating a PTY that
@@ -335,9 +359,99 @@ final class WorkbenchTabLayoutOwner {
       unawaited(loadLayoutForWorkspace(workspaceId));
     }
     final layoutToPersist = plan.layoutToPersist;
-    if (layoutToPersist != null) {
+    if (incomingTransferredTerminal || possiblyMovedTerminals.isNotEmpty) {
+      // Do not serialize the provisional sanitized layout before confirming
+      // whether the absent tab was closed or moved elsewhere. Otherwise a
+      // second app window can overwrite the Host's atomic source/destination
+      // pane placement with an old version.
+      unawaited(
+        _reconcileRemoteTerminalTransferLayout(
+          workspaceId: workspaceId,
+          watcherEpoch: watcherEpoch,
+          tabs: tabs,
+          possibleDepartures: possiblyMovedTerminals,
+          incomingTransferredTerminal: incomingTransferredTerminal,
+          provisionalLayout: layoutToPersist,
+        ).catchError(_recordLayoutError),
+      );
+    } else if (layoutToPersist != null) {
       _persistLayoutInBackground(layoutToPersist);
     }
     ensureSelectionHasTab();
+  }
+
+  Future<void> _reconcileRemoteTerminalTransferLayout({
+    required String workspaceId,
+    required int watcherEpoch,
+    required List<WorkspaceTabRecord> tabs,
+    required List<WorkspaceTabRecord> possibleDepartures,
+    required bool incomingTransferredTerminal,
+    required WorkbenchLayout? provisionalLayout,
+  }) async {
+    var moved = incomingTransferredTerminal;
+    if (!moved) {
+      for (final departed in possibleDepartures) {
+        final current = await _host.findPersistedWorkspaceTab(departed.id);
+        final receipt = current?.payload['lastTerminalTabTransfer'];
+        if (current != null &&
+            current.workspaceId != workspaceId &&
+            receipt is Map &&
+            receipt['from'] == workspaceId &&
+            receipt['to'] == current.workspaceId) {
+          moved = true;
+          break;
+        }
+      }
+    }
+    if (!_isCurrentTerminalTransferWatcherSnapshot(
+      workspaceId,
+      watcherEpoch,
+      tabs,
+    )) {
+      return;
+    }
+    if (!moved) {
+      if (provisionalLayout != null &&
+          _host.readState().layoutFor(workspaceId) == provisionalLayout) {
+        _persistLayoutInBackground(provisionalLayout);
+      }
+      return;
+    }
+    final authoritative = await _sequencedLayoutRepository.findWorkbenchLayout(
+      workspaceId,
+    );
+    if (!_isCurrentTerminalTransferWatcherSnapshot(
+      workspaceId,
+      watcherEpoch,
+      tabs,
+    )) {
+      return;
+    }
+    if (authoritative == null) {
+      throw StateError(
+        'Terminal moved but the authoritative workspace layout is missing.',
+      );
+    }
+    // The Rust CAS already committed this layout. Applying it without
+    // persistence keeps the original split/group positioning intact.
+    await applyWorkspaceLayout(authoritative, persist: false);
+    ensureSelectionHasTab();
+  }
+
+  bool _isCurrentTerminalTransferWatcherSnapshot(
+    String workspaceId,
+    int epoch,
+    List<WorkspaceTabRecord> tabs,
+  ) {
+    if (_host.isDisposed ||
+        !_host.isWorkspaceTabSubscriptionActive(workspaceId) ||
+        _terminalTransferFences.containsKey(workspaceId) ||
+        _remoteTerminalTransferWatcherEpochs[workspaceId] != epoch) {
+      return false;
+    }
+    final expected = <String>{for (final tab in tabs) tab.id};
+    final live = _host.readState().tabsFor(workspaceId);
+    return live.length == tabs.length &&
+        live.every((tab) => expected.contains(tab.id));
   }
 }
