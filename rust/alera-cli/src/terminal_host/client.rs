@@ -1,13 +1,16 @@
 use std::sync::Arc;
 
 use serde_json::Value;
-use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
+use tokio::io::{AsyncWriteExt as _, BufReader};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc::{error::TryRecvError, Receiver, UnboundedReceiver, UnboundedSender};
 
 use crate::terminal_host::frame_codec::{encode_json_frame, encode_output_frame};
 use crate::terminal_host::protocol::BINARY_FRAMES_ENABLED_EVENT;
 use crate::terminal_host::server::{DisconnectReason, ServerCommand};
+
+#[path = "client_line_reader.rs"]
+mod client_line_reader;
 
 /// One outbound item on a client's lane.
 ///
@@ -193,7 +196,8 @@ pub async fn connection_loop(
     mut terminal_out_rx: Receiver<ClientFrame>,
 ) {
     let (read_half, mut write_half) = stream.into_split();
-    let mut lines = BufReader::new(read_half).lines();
+    let mut lines = BufReader::new(read_half);
+    let mut pending_client_line = Vec::new();
     let mut binary = false;
     let mut ordering = ClientFrameOrdering::default();
     loop {
@@ -238,7 +242,11 @@ pub async fn connection_loop(
             }
         }
         tokio::select! {
-            line = lines.next_line() => {
+            line = client_line_reader::next_client_line(
+                &mut lines,
+                client_line_reader::MAX_LOCAL_REQUEST_LINE_BYTES,
+                &mut pending_client_line,
+            ) => {
                 if let Some(reason) = reason_for_read_termination(&line) {
                     // Never include the raw error: OS socket diagnostics may
                     // contain device details, and input is terminal content.
@@ -422,6 +430,7 @@ const _: () = assert!(
 mod tests {
     use super::*;
     use serde_json::json;
+    use tokio::io::AsyncBufReadExt as _;
     use tokio::net::TcpListener;
 
     #[test]
