@@ -44,6 +44,7 @@ import 'package:path/path.dart' as p;
 
 part 'workspace_explorer_actions.dart';
 part 'workspace_explorer_refresh.dart';
+part 'workspace_explorer_watcher.dart';
 part 'workspace_explorer_widgets.dart';
 
 bool _isDirectoryEntry(native.WorkspaceFileEntry? entry) =>
