@@ -74,6 +74,61 @@ void main() {
     expect(aiAssistCapabilityFor(null), isNull);
   });
 
+  test('Codex Copilot and Cursor preserve secure launch contracts', () {
+    expect(selectableAiAssistAgentTypes.take(4), <AgentType>[
+      .claude,
+      .codex,
+      .copilot,
+      .cursor,
+    ]);
+    final codex = aiAssistCapabilityFor(.codex)!;
+    expect(codex.defaultModelId, 'gpt-5.5');
+    expect(
+      codex.diffOnlyAccess,
+      AiAssistDiffOnlyAccess.codexRestrictedFilesystem,
+    );
+    expect(codex.readOnlyGuarantee, isTrue);
+    expect(
+      codex.buildArgs(
+        prompt: 'check',
+        model: 'gpt-5.5',
+        thinkingLevel: 'high',
+        timeoutSeconds: 60,
+      ),
+      containsAllInOrder(<String>[
+        'exec',
+        '--ephemeral',
+        '--skip-git-repo-check',
+        '-s',
+        'read-only',
+        '--model',
+        'gpt-5.5',
+        '-c',
+        'model_reasoning_effort=high',
+      ]),
+    );
+    final copilot = aiAssistCapabilityFor(.copilot)!;
+    expect(copilot.diffOnlyAccess, AiAssistDiffOnlyAccess.toolFree);
+    expect(copilot.diffOnlyArgs, contains('--excluded-tools=*'));
+    expect(copilot.maxPromptBytes, 24000);
+    final cursor = aiAssistCapabilityFor(.cursor)!;
+    expect(cursor.maxPromptBytes, 24000);
+    expect(
+      cursor.buildArgs(prompt: 'compare', model: 'auto', timeoutSeconds: 30),
+      containsAllInOrder(<String>[
+        '--print',
+        '--mode',
+        'ask',
+        '--trust',
+        '--output-format',
+        'text',
+        '--model',
+        'auto',
+        'compare',
+      ]),
+    );
+  });
+
   test('AI Assist settings expose canonical AgentType identity', () {
     const settings = AiAssistSettings();
     const prompt = AiAssistPromptSettings(agent: 'devin');

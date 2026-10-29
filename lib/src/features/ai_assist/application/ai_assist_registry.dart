@@ -10,6 +10,9 @@ part 'grok_ai_assist.dart';
 part 'fx_ai_assist.dart';
 part 'opencode_ai_assist.dart';
 part 'claude_ai_assist.dart';
+part 'codex_ai_assist.dart';
+part 'copilot_ai_assist.dart';
+part 'cursor_ai_assist.dart';
 part 'ai_assist_model_labels.dart';
 part 'ai_assist_output_capabilities.dart';
 
@@ -171,129 +174,9 @@ final Map<AgentType, AiAssistCapability> aiAssistCapabilities =
 final List<AiAssistCapability>
 _registeredAiAssistCapabilities = <AiAssistCapability>[
   claudeAiAssistAgentSpec,
-  AiAssistCapabilitySpec(
-    agentType: .codex,
-    promptDelivery: .stdin,
-    modelsCommand: const <String>['debug', 'models'],
-    parseModels: parseCodexModels,
-    models: const <AiAssistModel>[
-      AiAssistModel(
-        id: 'gpt-5.5',
-        label: 'GPT-5.5',
-        thinkingLevels: openAiThinkingLevels,
-        defaultThinkingLevel: 'low',
-      ),
-      AiAssistModel(
-        id: 'gpt-5.4',
-        label: 'GPT-5.4',
-        thinkingLevels: openAiThinkingLevels,
-        defaultThinkingLevel: 'low',
-      ),
-      AiAssistModel(
-        id: 'gpt-5.4-mini',
-        label: 'GPT-5.4 Mini',
-        thinkingLevels: openAiThinkingLevels,
-        defaultThinkingLevel: 'low',
-      ),
-    ],
-    defaultModelId: 'gpt-5.5',
-    nativeStructuredOutput: .codexSchemaFile,
-    supportsRepositoryRead: true,
-    readOnlyGuarantee: true,
-    diffOnlyAccess: .codexRestrictedFilesystem,
-    maxPromptBytes: 1024 * 1024,
-    buildArgs:
-        ({
-          required model,
-          thinkingLevel,
-          required prompt,
-          required timeoutSeconds,
-        }) => <String>[
-          'exec',
-          '--ephemeral',
-          '--skip-git-repo-check',
-          '-s',
-          'read-only',
-          '--model',
-          model,
-          if (thinkingLevel != null) '-c' else '',
-          if (thinkingLevel != null) 'model_reasoning_effort=$thinkingLevel',
-        ].where((arg) => arg.isNotEmpty).toList(growable: false),
-  ),
-  AiAssistCapabilitySpec(
-    agentType: .copilot,
-    promptDelivery: .argv,
-    modelsCommand: null,
-    parseModels: parseLineModels,
-    models: const <AiAssistModel>[
-      AiAssistModel(id: 'auto', label: 'Auto'),
-      AiAssistModel(
-        id: 'gpt-5.4',
-        label: 'GPT-5.4',
-        thinkingLevels: openAiThinkingLevels,
-        defaultThinkingLevel: 'low',
-      ),
-      AiAssistModel(
-        id: 'gpt-5.4-mini',
-        label: 'GPT-5.4 Mini',
-        thinkingLevels: openAiThinkingLevels,
-        defaultThinkingLevel: 'low',
-      ),
-    ],
-    defaultModelId: 'gpt-5.4',
-    diffOnlyAccess: .toolFree,
-    diffOnlyArgs: const <String>[
-      '--available-tools=',
-      '--excluded-tools=*',
-      '--disable-builtin-mcps',
-      '--no-ask-user',
-      '--no-auto-update',
-    ],
-    maxPromptBytes: 24000,
-    buildArgs:
-        ({
-          required prompt,
-          required model,
-          thinkingLevel,
-          required timeoutSeconds,
-        }) => <String>[
-          '--prompt',
-          prompt,
-          '--silent',
-          '--stream',
-          'off',
-          '--no-custom-instructions',
-          '--model',
-          model,
-          if (thinkingLevel != null) ...<String>['--effort', thinkingLevel],
-        ],
-  ),
-  AiAssistCapabilitySpec(
-    agentType: .cursor,
-    promptDelivery: .argv,
-    modelsCommand: const <String>['--list-models'],
-    parseModels: parseCursorModels,
-    models: const <AiAssistModel>[AiAssistModel(id: 'auto', label: 'Auto')],
-    defaultModelId: 'auto',
-    maxPromptBytes: 24000,
-    buildArgs:
-        ({
-          required prompt,
-          required model,
-          thinkingLevel,
-          required timeoutSeconds,
-        }) => <String>[
-          '--print',
-          '--mode',
-          'ask',
-          '--trust',
-          '--output-format',
-          'text',
-          '--model',
-          model,
-          prompt,
-        ],
-  ),
+  codexAiAssistAgentSpec,
+  copilotAiAssistAgentSpec,
+  cursorAiAssistAgentSpec,
   AiAssistCapabilitySpec(
     agentType: .agy,
     promptDelivery: .stdin,
