@@ -232,6 +232,7 @@ mod terminal_session_requests;
 mod terminal_spawn;
 mod terminal_spawn_startup_delivery;
 mod terminal_startup_commands;
+mod terminal_tab_transfer;
 #[cfg(test)]
 mod wire_fixture_tests;
 #[cfg(test)]

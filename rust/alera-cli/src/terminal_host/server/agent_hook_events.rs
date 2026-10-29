@@ -19,13 +19,38 @@ impl ServerActor {
         let Some(session) = self.sessions.get(&event.terminal_session_id) else {
             return;
         };
+        let display_workspace_id = session.workspace_id.clone();
+        let tab_id = session.tab_id.clone();
         if event.agent_type == "fx" && event.workspace_id.is_empty() && event.tab_id.is_empty() {
-            event.workspace_id = session.workspace_id.clone();
-            event.tab_id = session.tab_id.clone();
+            event.workspace_id = display_workspace_id.clone();
+            event.tab_id = tab_id.clone();
         }
-        if session.workspace_id != event.workspace_id || session.tab_id != event.tab_id {
+        if tab_id != event.tab_id {
             return;
         }
+        if display_workspace_id != event.workspace_id {
+            // A shell started in an earlier workspace retains the original
+            // ALERA_WORKSPACE_ID even when its live PTY is reparented. Accept
+            // this *exact* recorded origin, never arbitrary hook identities.
+            let recorded_origin = self
+                .runtime_store
+                .find_workspace_tab(&tab_id)
+                .await
+                .ok()
+                .flatten()
+                .and_then(|tab| {
+                    tab.payload
+                        .get("terminalExecutionWorkspaceId")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_owned)
+                });
+            if recorded_origin.as_deref() != Some(event.workspace_id.as_str()) {
+                return;
+            }
+        }
+        // Agent status is displayed with the tab's *new* workspace, while
+        // the running process and original shell environment stay unchanged.
+        event.workspace_id = display_workspace_id;
         let pending_prompt = self
             .runtime_store
             .find_workspace_tab(&session.tab_id)

@@ -476,6 +476,7 @@ pub(super) fn request_route_policy(request_type: &str) -> RequestRoutePolicy {
         | "orchestration.terminalPrune"
         | "project.upsert"
         | "tab.upsert"
+        | "tab.transfer"
         | "workspace.upsert"
         | "workspaceActivity.remove"
         | "workspaceActivity.upsertAll"

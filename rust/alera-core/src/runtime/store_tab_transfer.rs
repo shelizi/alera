@@ -13,6 +13,7 @@ use super::{format_timestamp, tab_from_row, RuntimeStore, WorkspaceTabRecord};
 
 const TRANSFER_RECEIPT_KEY: &str = "lastTerminalTabTransfer";
 const EXECUTION_WORKSPACE_KEY: &str = "terminalExecutionWorkspaceId";
+const EXECUTION_LAUNCH_DIRECTORY_KEY: &str = "terminalExecutionWorkingDirectory";
 
 impl RuntimeStore {
     /// Compare-and-swap both serialized layouts and tab ownership inside one
@@ -35,6 +36,7 @@ impl RuntimeStore {
         expected_target_layout: Option<&Value>,
         source_layout: &Value,
         target_layout: &Value,
+        execution_launch_directory: &str,
     ) -> Result<WorkspaceTabRecord> {
         ensure!(
             !tab_id.trim().is_empty()
@@ -120,6 +122,13 @@ impl RuntimeStore {
             // remain tied to where the terminal was launched, even after
             // the tab is displayed in another project.
             tab.payload[EXECUTION_WORKSPACE_KEY] = json!(source_workspace_id);
+        }
+        if tab.payload[EXECUTION_LAUNCH_DIRECTORY_KEY].is_null()
+            && !execution_launch_directory.trim().is_empty()
+        {
+            // This is the original *launch* directory, not a claim that a
+            // running shell has not subsequently changed its CWD.
+            tab.payload[EXECUTION_LAUNCH_DIRECTORY_KEY] = json!(execution_launch_directory);
         }
         tab.payload[TRANSFER_RECEIPT_KEY] = json!({
             "id": client_mutation_id,

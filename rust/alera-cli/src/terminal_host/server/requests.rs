@@ -753,6 +753,22 @@ impl ServerActor {
                 let value = self.upsert_workspace_tab_and_spawn(tab).await?;
                 Ok(json!(self.workspace_tab_for_client(client_id, value)))
             }
+            "tab.transfer" => {
+                self.require_auth(client_id)?;
+                self.transfer_terminal_tab(client_id, payload).await
+            }
+            "tab.transfer.capabilities" => {
+                self.require_auth(client_id)?;
+                // T2-B2 implements the store/actor mechanics, but UI watcher
+                // recovery, detach/close race handling and restart semantics
+                // still need integration before enabling user-facing drops.
+                Ok(json!({
+                    "supported": false,
+                    "livePtyTransfer": false,
+                    "atomicLayouts": true,
+                    "reason": "Terminal transfer reconciliation is not yet enabled."
+                }))
+            }
             "tab.rename" => {
                 self.require_auth(client_id)?;
                 let id = require_string_key(payload, "id")?;
