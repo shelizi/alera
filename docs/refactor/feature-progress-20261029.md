@@ -1,5 +1,13 @@
 # Alera 功能優先續做：第八批四線隔離（2026-10-29）
 
+## 最新：合入 macOS Claude Code CLI 貼上多出 V 的修正（2026-10-29）
+
+已將本地最新修正分支 `fix/macos-claude-kitty-paste-v-20261029`（分支 HEAD `3d232acff`，同時是觀察到的 `main` HEAD）以 **`git merge --no-ff`** 合併至獨立整合分支 `refactor/tdd-integrate-20261029`，產生 merge commit **`f49ee344944f85036c2798f33ba3b5e01e290e35`**，無衝突。分支僅比共同祖先 `3501b0555` 多兩個 commit：`4ee872d7f` 將 `third_party/xterm` gitlink 更新為 **`6b365fc3a6eecae1865e9e8da3b7b5de8fb160aa`**（xterm2 的 `fix(mac): prevent Claude Code Kitty V key-up after paste`），`3d232acff` 將 `pubspec.yaml` 版號改成 **`0.91.15+308`**；舊的 10/27 `fix/macos-paste-extra-v-20261027` 不是本次合併目標。
+
+已核對遠端 `shelizi/xterm2` 的 `alera` 分支確實發布上述 xterm commit，並在**整合工作樹**透過 `git submodule update --init -- third_party/xterm` 成功 checkout 相同 SHA。因整合樹原先有沒有 `.git` 的舊 xterm 依賴檔案副本，標準 init 初輪拒絕覆蓋；已先將副本**保留**至 `.worktrees/_xterm-copy-before-mac-hotfix-20261029`，再重新初始化，沒有刪除該副本。原始 `main` 的 dirty 檔案／子模組 working tree 未 checkout、未清理、未提交、未推送。
+
+**本輪只確認 Git 合併、遠端 gitlink 可取得、整合子模組 checkout 與 Git 工作樹狀態；依使用者之前的要求沒有執行 Flutter/Cargo 測試、Analyzer、macOS 編譯或實機 Claude Code 貼上驗證。因此不能宣稱此修正已在 Mac 實機驗證或正式發布。**
+
 > 使用者決策：暫停新增測試、靜態分析、效能量測與純粹為降低 500 行違規的拆檔；這一批改為四條互不衝突的功能實作。**本批尚未執行 Flutter/Cargo 測試、Analyzer、Guard、跨平台編譯或發行驗證，不得宣稱本批編譯／測試通過。**程式碼已格式化、做過變更檢視及 Git staged diff whitespace check。
 >
 > 起點：第七批已驗證、乾淨的整合 HEAD `54d6280c1815f5311b2907e86deded483648bd01`。實作分支均以此點切出。第七批交接時記錄的 `main` HEAD 為 `3501b0555`，但**第八批收尾實際查到 `main` 已由其他並行作業更新至 `3d232acff9822154c68049ee63c57ed5966b84e0`**，仍有既存未提交資料（包括 `third_party/xterm`）；本批**沒有**在 `main` 上提交、清理、merge、push 或 release。切勿以第七批的 `main` SHA 當作新現況。

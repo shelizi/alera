@@ -2,7 +2,9 @@
 
 > 起點：2026-10-29；Worktree `.worktrees/refactor-tdd-boundaries-20261029`；Branch `refactor/tdd-boundaries-20261029`；main 基準 `3501b0555`。
 > 讀取 `docs/refactor/tdd-roadmap-20261029.md` 了解契約/驗收，然後從下列 pending/in_progress 工作續做。
-> 變更只在隔離 worktree，未合併 main／未 push／未 release。
+> 變更只在隔離整合 worktree；最新 macOS hotfix 來源分支目前與 `main` HEAD 指向同一提交，已依使用者要求將此 hotfix 分支合入整合分支，但沒有在原 `main` worktree 做修改、push 或 release。
+
+> **最新 macOS 貼上修正合入（2026-10-29）**：`fix/macos-claude-kitty-paste-v-20261029` 已透過 no-ff merge **`f49ee344944f85036c2798f33ba3b5e01e290e35`** 合入 `refactor/tdd-integrate-20261029`；xterm2 子模組 pin `6b365fc3a` 並在隔離整合 worktree 完成 `git submodule update --init`，版本 `0.91.15+308`。本輪無測試、靜態分析或 Mac 實機驗證；詳 `docs/refactor/feature-progress-20261029.md`。本次沒有操作原本有未提交資料的 `main` worktree。
 
 ## 最新：第八批改為功能優先（2026-10-29，依使用者指示暫停測試／分析）
 
