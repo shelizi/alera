@@ -8,6 +8,7 @@ import 'package:alera/src/shared/infra/git/git_remote.dart';
 import 'package:alera/src/shared/infra/git/git_query_ports.dart';
 import 'package:alera/src/shared/infra/git/git_repository_probe_port.dart';
 import 'package:alera/src/shared/infra/git/git_hosted_review_retention_port.dart';
+import 'package:alera/src/shared/infra/git/git_source_control_query_port.dart';
 
 /// Injectable boundary for git operations. Mirrors the raw git plumbing only;
 /// orchestration (paths, slugs, persistence, reconciliation) lives in the
@@ -22,7 +23,8 @@ abstract interface class GitBackend
         GitHistoryQueryPort,
         GitCommitCompareQueryPort,
         GitRepositoryProbePort,
-        GitHostedReviewRetentionPort {
+        GitHostedReviewRetentionPort,
+        GitSourceControlQueryPort {
   /// Whether [path] resolves to a git repository work tree.
   @override
   Future<bool> isGitRepository(String path);
@@ -108,6 +110,7 @@ abstract interface class GitBackend
   Future<void> clone({required String url, required String destinationPath});
 
   /// Lists changed files in the working tree split by Git area.
+  @override
   Future<GitStatusResult> status(String path);
 
   /// Compact file and ancestor status projection for the workspace explorer.
@@ -258,6 +261,7 @@ abstract interface class GitBackend
 
   /// Branch/upstream/divergence information for the repository containing
   /// [path].
+  @override
   Future<GitRepositoryState> repositoryState(String path);
 
   /// Stages all visible changes under [path], or a single workspace-relative
@@ -449,6 +453,7 @@ abstract interface class GitBackend
 
   Future<void> push(String path);
 
+  @override
   Future<List<GitStashEntry>> listStashes(String path);
 
   /// Stashes tracked changes for the repository containing [path].

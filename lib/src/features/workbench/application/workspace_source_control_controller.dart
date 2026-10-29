@@ -1,12 +1,14 @@
 import 'dart:async';
 
 import 'package:alera/src/features/workbench/application/source_control_watcher.dart';
+import 'package:alera/src/features/workbench/application/workspace_source_control_snapshot_loader.dart';
 import 'package:alera/src/rust/api/workspace_files.dart' as native;
 import 'package:alera/src/shared/infra/git/git_backend.dart';
 import 'package:alera/src/shared/infra/git/git_commit_ops_models.dart';
 import 'package:alera/src/shared/infra/git/git_diff_models.dart';
 import 'package:alera/src/shared/infra/git/git_exception.dart';
 import 'package:alera/src/shared/infra/git/git_providers.dart';
+import 'package:alera/src/shared/infra/git/git_source_control_query_port.dart';
 import 'package:flutter/foundation.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
@@ -257,17 +259,14 @@ class WorkspaceSourceControlController
   );
 
   Future<WorkspaceSourceControlState> _load() async {
-    final backend = ref.read(gitBackendProvider);
-    final results = await Future.wait<Object>([
-      backend.status(workspacePath),
-      backend.repositoryState(workspacePath),
-      backend.listStashes(workspacePath),
-    ]);
+    final snapshot = await WorkspaceSourceControlSnapshotLoader(
+      ref.read(gitBackendProvider),
+    ).load(workspacePath);
     return _reconcileLoadedState(
       previous: state.asData?.value,
-      status: results[0] as GitStatusResult,
-      repositoryState: results[1] as GitRepositoryState,
-      stashes: results[2] as List<GitStashEntry>,
+      status: snapshot.status,
+      repositoryState: snapshot.repositoryState,
+      stashes: snapshot.stashes,
     );
   }
 
@@ -387,7 +386,7 @@ class WorkspaceSourceControlController
 
   Future<WorkspaceSourceControlState> _loadStatusOnly(
     WorkspaceSourceControlState previous,
-    GitBackend backend,
+    GitSourceControlQueryPort backend,
   ) async {
     final status = await backend.status(workspacePath);
     return _reconcileLoadedState(
@@ -399,7 +398,7 @@ class WorkspaceSourceControlController
   }
 
   Future<void> _refreshRepositoryStateAfterFastAction({
-    required GitBackend backend,
+    required GitSourceControlQueryPort backend,
     required int loadGeneration,
   }) async {
     try {
