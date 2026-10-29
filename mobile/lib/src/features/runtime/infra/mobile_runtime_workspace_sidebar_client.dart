@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:alera_mobile/src/features/runtime/domain/workspace_section_summary.dart';
 import 'package:alera_mobile/src/core/json_payload_fields.dart';
 import 'package:alera_mobile/src/features/runtime/domain/runtime_client_surfaces.dart';
@@ -80,12 +82,53 @@ mixin MobileRuntimeWorkspaceSidebarClient
         shared['groupBy'] = 'project';
       }
     }
-    return _prefsForRuntime(
-      await requestMap('workbenchViewPrefs.update', <String, Object?>{
-        'expectedRevision': prefs.revision,
-        'prefs': shared,
-      }),
-    );
+    try {
+      return _prefsForRuntime(
+        await requestMap('workbenchViewPrefs.update', <String, Object?>{
+          'expectedRevision': prefs.revision,
+          'prefs': shared,
+        }),
+      );
+    } on TimeoutException {
+      // The host may have committed before its response was lost. Retrying
+      // this mutation would race another device's newer revision, so only
+      // re-read the authoritative snapshot. Return success *only* when every
+      // submitted field is already reflected; otherwise preserve the original
+      // unknown-outcome timeout for the caller.
+      try {
+        final current = await loadWorkbenchViewPrefs();
+        if (_containsUpdatedWorkspacePrefs(current, shared)) {
+          return current;
+        }
+      } on Object {
+        // A failed recovery read does not make the original write safe to
+        // repeat. The caller may reconnect and refresh normally.
+      }
+      rethrow;
+    }
+  }
+
+  bool _containsUpdatedWorkspacePrefs(
+    MobileViewPrefs current,
+    Map<String, Object?> submitted,
+  ) {
+    final actual = current.toJson();
+    for (final entry in submitted.entries) {
+      final received = actual[entry.key];
+      final expected = entry.value;
+      if (expected is List) {
+        // Selection/collapse lists are sets on the wire; independent clients
+        // may serialize the same selection in a different insertion order.
+        if (received is! List ||
+            expected.length != received.length ||
+            !expected.toSet().containsAll(received)) {
+          return false;
+        }
+      } else if (received != expected) {
+        return false;
+      }
+    }
+    return true;
   }
 
   MobileViewPrefs _prefsForRuntime(Map<String, Object?> record) {
