@@ -154,8 +154,16 @@ final class WorkbenchTabLayoutOwner {
       listTabs: tabService.listTabs,
       resolveLayout: tabLayoutResolver.resolve,
       applyLayout: (layout) => applyWorkspaceLayout(layout, persist: false),
-      isLoadCurrent: () =>
-          !_host.isDisposed && _host.workspaceById(workspaceId) != null,
+      isLoadCurrent: () {
+        if (_host.isDisposed || _host.workspaceById(workspaceId) == null) {
+          return false;
+        }
+        // This background load only fills an absent layout. While listTabs or
+        // resolveLayout was awaiting storage, the user may have split panes,
+        // focused another tab, or selected this workspace via hydration. Never
+        // let that older snapshot replace an already active layout.
+        return _host.readState().layoutFor(workspaceId) == null;
+      },
       onError: (error) {
         if (!_host.isDisposed) {
           _host.emitState(_host.readState().copyWith(error: error.toString()));
