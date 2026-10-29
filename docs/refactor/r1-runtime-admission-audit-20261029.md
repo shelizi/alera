@@ -1,5 +1,7 @@
 # R1 — Rust runtime admission / Actor 調查與 TDD 驗收契約
 
+> **第二批更新**：`b3b0757e4` 新增 bounded queue wait latency histogram (19 buckets / request type, <=256B)，`status.get` 新增 `queueWaitSamples` / `queueWaitP95Ms` / `queueWaitP99Ms`；保留 queueWaitMs 累計與 maxQueueWaitMs。單獨 rustc TDD 2 fail→2 pass，Cargo 新 metrics 3 pass，原 admission/control 9 pass。**主 Actor inbox 仍 unbounded，本輪未改排程**；原驗收規格後續仍要進行 control p95/p99 / backlog / quit tests。
+
 日期：2026-10-29。Code baseline：`3501b0555`，工作分支：`refactor/tdd-boundaries-20261029`。
 
 ## 實際已存在的能力（避免重複造輪子）

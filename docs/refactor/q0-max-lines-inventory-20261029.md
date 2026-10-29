@@ -1,5 +1,7 @@
 # Q0 — Max-lines ratchet 分類及降低計畫（2026-10-29）
 
+> **第二批更新**：`refactor/tdd-quality-20261029` 已以 TDD 將 `ai_assist_registry.dart` 由約 616 行拆為 466 行（Codex/Copilot/Cursor 獨立 agent adapter），`--list-oversized` 檔案 167 → 166、未獲 baseline 許可者 134 → **133**。下表仍是原始盤點快照，總分布需在每輪重新量測，沒有放寬 baseline。
+
 本文件與 `tdd-progress-20261029.md` 一起追蹤，僅代表本工作樹當下靜態掃描，非整個產品的缺陷數。
 
 ## 重現步驟

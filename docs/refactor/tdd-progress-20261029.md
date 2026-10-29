@@ -4,6 +4,28 @@
 > 讀取 `docs/refactor/tdd-roadmap-20261029.md` 了解契約/驗收，然後從下列 pending/in_progress 工作續做。
 > 變更只在隔離 worktree，未合併 main／未 push／未 release。
 
+## 最新整合狀態 — 第二批三線平行（2026-10-29）
+
+**接手以此節與下方新驗收紀錄為準；以下原有 134 項等數字為第一批歷史快照。**
+
+- 整合工作樹 `.worktrees/refactor-tdd-integrate-20261029`，分支 `refactor/tdd-integrate-20261029`，包含首批 `552c6152e` 和第二批三項已驗證重構：
+  - Q0 原分支 `refactor/tdd-quality-20261029`：`b56dbffd6`；整合 `94f900812`。將 Codex/Copilot/Cursor 能力規格移至各自 adapter，保留 registry 登記順序、完整 read-only/diff-only 安全 CLI 參數。
+  - G1 原分支 `refactor/tdd-git-20261029`：`722750370`；整合 `3f3eff27b`。抽 `GitRepositoryProbePort`（一方法）與 `GitHostedReviewRetentionPort`（兩方法），不分裂 RustGitBackend。
+  - R1 原分支 `refactor/tdd-rust-runtime-20261029`：`b3b0757e4`；整合 `669f93275`。Rust `DeferredAdmission` 依 request type 新增 **常數記憶體** queue-wait histogram，向 `status.get.deferredAdmission.requestTypes[]` 加入 `queueWaitSamples`／`queueWaitP95Ms`／`queueWaitP99Ms`，不改排程/PTY/DB/FRB，保留既有 sum/max。
+- Q0 當下超過 500 行檔案 **166**，**133** 項違規（歷史 167/134 → 166/133）；`ai_assist_registry.dart` 約 616 → 466 行；未重設 baseline。`Agent` guard 仍有 8 manual touchpoints（target <=5）。
+- **驗證**：Q0 AI Assist 63 tests passed、characterization 15 passed（有重疊）；5 個檔案 targeted Flutter analyze **No issues found**。G1 hosted-review/probe/workbench lifecycle **12 tests passed**；architecture guard passed；擴大 Dart analyze 曾有 4 項 info 已補註記，第二次 analyzer 因高負載 timeout，**不能宣稱第二輪 analyze 通過**。R1 Rust histogram pure test 2 個先紅後綠；Cargo integration metrics 測試先紅後綠（`queue_wait` 篩選 3 passed，另 1 ignored benchmark）；原生 admission/control 9 tests passed。Rust 單一 pending/queue metrics 測試如未有 exit 0 則記為未確認。
+- 三批各自 source/test commit 已保存，不合併 dirty `main`，未 push／release。完整 Flutter/Rust/mobile CI 未跑；`check_max_lines.dart` **仍紅（133）**。下次先在整合工作樹 `git status`／`git log -4 --oneline` 並跑 scoped checks，再開下批 worktree。
+
+### 下批互不衝突的工作所有權
+
+| 議題 | 狀態 | 下一個確定性紅測／執行 |
+| --- | --- | --- |
+| Q0 | 部分完成（133 violations） | 針對 Explorer/Terminal/Diff 的具體責任邊界寫測試再減少；禁止重設 baseline |
+| A0 | guard 綠，但尚有 8 manual files | 以 per-agent adapter 鑑別特殊政策，把 touchpoint 逐一消除，驗收 <=5 |
+| G1 | 四個 narrow ports 已驗證 | 針對 Git status/diff/mutation 的 consumer/fake 縮減做 TDD |
+| R1 | 排隊指標實作、排程不變 | 真正未受控 inbox 的多 client/backlog/quit latency TDD；量 status/quit/cancel p95/p99；避免替換全 bounded inbox 導致死鎖 |
+| W1/T1/D1/F1/C1 | 未實作 | 依 roadmap 的所有權與 race/相容測試分 worktree 同步進行 |
+
 ## 已完成的 scoped commits
 
 - `57fdaf2349b80d604226fdc1d0aa3b101f44ca37` — `refactor: isolate terminal metadata and agent launch capabilities`（G0/A0；包含必要的 Riverpod 產碼與測試）。
