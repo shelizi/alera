@@ -1,5 +1,11 @@
 # Alera 功能優先續做：第八批四線隔離（2026-10-29）
 
+## 最新後續待辦：T2 Terminal Tab 跨專案移轉（2026-10-29）
+
+**狀態：已納入規劃，尚未實作。** 依使用者要求將跨 Project/Workspace 拖放既有 Terminal Tab 列為 **P2 功能待辦 T2**。目標是直接移動**同一個** Tab／Rust 持久 PTY Session（保留 Process、scrollback、原 CWD、Shell 歷史及畫面），而非新開 Terminal、關閉舊 PTY 或自動 `cd`。目的地有多個 Workspace 時必須供使用者選擇，不偷偷建立 Workspace；成功後更新來源／目的 Tab 與 Pane Layout，可反向移轉以復原。
+
+既有設計源自 `feat/cross-project-terminal-tabs-20261029` 的 `ec150a493`，本次只將規劃文件 `docs/terminal-tab-cross-workspace-plan-20261029.md` 收編至本整合工作樹並補上最新 T1/W1/C1 相依與分期。**UI 拖曳預覽與 Rust Host 契約設計可平行**，但 Host/Store atomic transfer、PTY ownership 與 Workbench Tab/Layout 接線須分清擁有者再整合。詳細階段、風險、復原及未來驗收條件見該文件。這次**只有文件變動，沒有功能程式碼、測試或發布**。
+
 ## 最新：合入 macOS Claude Code CLI 貼上多出 V 的修正（2026-10-29）
 
 已將本地最新修正分支 `fix/macos-claude-kitty-paste-v-20261029`（分支 HEAD `3d232acff`，同時是觀察到的 `main` HEAD）以 **`git merge --no-ff`** 合併至獨立整合分支 `refactor/tdd-integrate-20261029`，產生 merge commit **`f49ee344944f85036c2798f33ba3b5e01e290e35`**，無衝突。分支僅比共同祖先 `3501b0555` 多兩個 commit：`4ee872d7f` 將 `third_party/xterm` gitlink 更新為 **`6b365fc3a6eecae1865e9e8da3b7b5de8fb160aa`**（xterm2 的 `fix(mac): prevent Claude Code Kitty V key-up after paste`），`3d232acff` 將 `pubspec.yaml` 版號改成 **`0.91.15+308`**；舊的 10/27 `fix/macos-paste-extra-v-20261027` 不是本次合併目標。

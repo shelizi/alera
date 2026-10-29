@@ -15,6 +15,7 @@
 > **第七批四線進行中（2026-10-29）**：從上一批乾淨整合 HEAD `e38e8191c` 分別處理 W1 同工作區 Git Focus Probe race、G1 巢狀 Repo file revision narrow port、Q0 Branch Status Bar hierarchy part 拆分、R1 localhost socket connection admission cap。各線已新增真實 Red→Green 測試；具體驗證狀態請讀進度檔最上方「第七批四線隔離 TDD」，未完成完整回歸前勿誤記整合綠燈。
 > **第七批四線均已完成並整合（2026-10-29）**：R1 `da33328ea`（socket 同時 32、Cargo 71 tests pass）；W1 `262b18526`（Git Focus Probe race，Controller + service 140 pass）；G1 `116dce5cd`（1-method file revision port, Diff Surface 54 pass + 2 skipped）；Q0 `29b455da2`（Branch status 538→456，Shell/Favorites 109 pass），全部 Red→Green，Dart 三線 analyze No issues；整合 Flutter 142 pass、兩 guards exit0。官方 Q0 **160 oversized／127 offenders**（前 161／128），baseline 未改。以進度檔最上方第七批為最新事實，下一批繼續四線獨立 worktree，不碰 `main` 的既存 dirty 資料。
 > **第八批功能優先四線已整合（2026-10-29）**：依使用者指示跳過本批測試／靜態分析／效能量測及純拆檔，從 `54d6280c1` 平行實作 R1 未 admission localhost 64 MiB quota `48a45b5f3`、C1 Mobile 偏好值 timeout 讀回確認 `4437ee71e`、T1 共用 PTY 最後本機視圖才 kill `45941055a`、W1 過期背景 Layout 忽略 `a7ee48fbd`。**此批未驗證 green、不可直接發布**，詳細資訊請讀 `docs/refactor/feature-progress-20261029.md`；前面批次的 TDD DoD 是歷史驗證契約，不應誤認為這批有跑。
+> **後續功能新增 T2（2026-10-29，僅列規劃）**：跨專案／跨 Workspace 拖曳既有 Terminal Tab，**PTY、Session ID、執行程序、scrollback、原 CWD 維持不變**，支援原子歸屬轉移、目的地選擇與 Undo。已將既有設計稿 `ec150a493` 的**單一文件**收編為 `docs/terminal-tab-cross-workspace-plan-20261029.md`；未合併設計分支的程式碼、未實作／測試本功能。Flutter drag/drop 可與 Rust Host transfer 契約設計平行，Store/PTY ownership、Workbench hydration/close 接線不得同檔平行修改。
 > 目標是可逐批合併的 TDD 重構；不改產品語意、不清理第三方既有工作樹、不自動推送或發布。
 
 ## Spec
@@ -45,6 +46,7 @@
 | R1 | P1 | Runtime scheduler（Rust，與 G0/A0 可平行研究） | blocked heavy request + status/quit/cancel、超限拒絕、client disconnect、stale completion 確保成功；採樣 queue wait/latency | 全部 Rust | read-only audit complete；Rust TDD pending |
 | W1 | P2 | Workbench | 針對 workspace switch/tab removed/late hydration 設 red race；縮 Owner Host 介面後保持狀態不變式 | 純 UI/owner Dart，IO 走 Rust | pending |
 | T1 | P2 | Terminal | detach≠kill、兩個 view 的同一 session、背景 output/order、buffer release、restore 不回退 | PTY Rust owner；Renderer/畫面 Dart，必要 native parser 用 benchmark 再決定 | pending |
+| T2 | P2 | Terminal 跨專案移轉；依賴 T1/W1/C1 Runtime/Store 權威一致性 | 拖放到其他 Project／Workspace 保留同一 PTY/Session、CWD/scrollback；原子更新 tab 與雙側 Layout、Session workspace owner，失敗不遺失 Tab，復原可逆；原有重排／Detach 不退化 | Rust Host + Store `tab.transfer`；Flutter Sidebar/Tab 目的地選擇與協調；不重建 Shell | **planned only**，設計見 `docs/terminal-tab-cross-workspace-plan-20261029.md` |
 | D1 | P2 | Git Diff / Editor | 長行 Myers、side-by-side/editable、scope cache/in-flight、第一差異與水平位置回歸；CPU projections 可基準後 native 化 | Rust 優先算法，UI Dart | pending |
 | F1 | P2 | Explorer / Files | 隔離 nested worktree、模糊查找、reveal/persist、conflict/rename、watch cancellation、path traversal parity | index/IO 優先 Rust；UI Dart | pending |
 | C1 | P2 | Contract / Store / Mobile | lost reply after DB commit / replay，direct↔relay、restart/resume、old/new host wire fixtures | Rust store/transport，Mobile view Dart | pending |
