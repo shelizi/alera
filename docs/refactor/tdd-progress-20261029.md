@@ -4,6 +4,19 @@
 > 讀取 `docs/refactor/tdd-roadmap-20261029.md` 了解契約/驗收，然後從下列 pending/in_progress 工作續做。
 > 變更只在隔離 worktree，未合併 main／未 push／未 release。
 
+## 最新：第五批四線隔離 TDD（2026-10-29）
+
+**本節為最新續做起點。從乾淨整合 HEAD `56f0658f9` 建立四個互不衝突的工作樹，四線獨立提交並逐一 cherry-pick 至 `refactor/tdd-integrate-20261029`；原本已有未提交項目的 `main` 完全不動。未實際 exit0 的測試不得宣稱 green。**
+
+| 專線 | 實作與紅測證據 | 已知驗證結果 | 尚待完成／風險 |
+| --- | --- | --- | --- |
+| W1 `refactor/tdd-b5-workbench-20261029` | `WorkbenchNavigationHistoryService.navigateBack/Forward` 新增 `canCommit` async gate，`WorkbenchSelectionOwner` 用共享 epoch 檢查舊導航不能事後提交歷史游標；TDD red 因缺 canCommit parameter 無法編譯，修復後保留正常前進／後退 | 兩個 unit suites **16 passed、exit0**，scoped Flutter analyze **No issues found、exit0**；隔離 `38fa2a766` → 整合 **`35c8d1a03`** | Workbench 全量／跨平台 UI CI 未跑 |
+| G1 `refactor/tdd-b5-git-20261029` | 新增只含 `status/diff/diffAll/diffAllPage` 的 `GitWorkingTreeDiffQueryPort` 與小型 Fake；抽 `WorkspaceGitDiffPageReader` 供實際 Diff UI 使用，status path 去重、nested submodule 回退 Rust combined diff、失敗分頁保留畫面；後續抽 `gitDiffPreviewBytes` 純函式（保留 UTF-16 `String.length+1` 規則） | 初輪 Red 缺 port/service → 4 unit pass；後續 Red 缺 preview helper → **5 unit tests passed、exit0**，Diff Surface widget **54 passed、2 skipped、exit0**；scoped Flutter analyze **No issues found、exit0**。隔離 `bb8f13579` + `2100e908e` → 整合 **`c35ce883f` + `721b82b9a`** | 仍保留單一 RustGitBackend，不代表 Git 完整系統 CI 綠 |
+| Q0 `refactor/tdd-b5-q0-20261029` | `workspace_git_history_ref_actions.dart` 將 branch delete / remote checkout / mutation feedback 私有 helpers 移至 Dart part；主檔 517 → **334 行**；另外 G1 Diff loader 504→**494 行**、R1 Rust Client 594→**447 行**（測試移至 `client_tests.rs`），均為真正責任拆分 | Git Diff+History 兩個 Widget suites **60 passed、exit0**；scoped Flutter analyze **No issues found、exit0**；最終整合 `check_max_lines.dart --list-oversized` **162 oversized、129 offenders**（前 164／131），無 baseline 重設。隔離 `36ddb45bc` → 整合 **`0299ba00e`** | 全域 max-lines CI 仍紅（129 offenders），不得重設 baseline |
+| R1 `refactor/tdd-b5-rust-20261029` | localhost 多 client 共用 64 pending command permit；新 `AdmittedClientLine` 直到 Actor `handle_line` 結束才釋放；單 client 至多暫存一筆未 admission 的 16 MiB 請求，配額滿仍可收發 control/terminal reply。新多 client backlog/控制寫入/獨立 shutdown 紅測編譯失敗（缺新參數、command variant）；後續將 cfg(test) 從 Client 主檔移至獨立測試模組 | 正式 Cargo **client 9 + priority 2 + deferred admission 9 = 20 tests passed、exit0**；測試抽檔後 client **9 passed、exit0**；rustfmt / diff check green。初輪 Rust Wire Fixture 47/48，查明固定 JSON 漏 12 個現有 Mobile 能力，修正**僅測資**後直接執行編譯好的 Rust test binary **48/48 passed、exit0**。隔離 `e29c66920` + `9dc76ddd7` + `4e01bd587` → 整合 **`e369c2232` + `00cc090c9` + `262a8d16d`** | 主 Actor 其它生產者/mobile/relay/byte budget 仍無界；尚未測真實 status/cancel/quit p95/p99，無全量 Rust / 跨平台 CI 綠結論 |
+
+**第五批來源與品質重構均已整合**；整合 Flutter `workbench navigation/coordinator + Git diff reader + App Shell` **23 passed、exit0**；另 `test/unit/terminal_host_wire_lifecycle_fixtures_test.dart` Flutter 共用 Wire Fixture **7 passed、exit0**；`runtime_architecture_guard.dart`、`agent_extension_guard.dart` 均 **exit0**（Agent 仍 5 touchpoints）；最終整合正式 max-lines 為 **162／129**。Mobile Hello 固定測資修正後 Rust Wire Fixture **48 passed、exit0**（不改 Runtime 宣告）。完整跨平台 CI／macOS／mobile／release／push 皆未執行，`main` 保持原本 dirty，不動它。下一批可平行：R1 多 client 入站 byte-weighted budget、mobile/relay limit、status/cancel p95/p99；Q0 Explorer/Terminal 大檔；G1 file revision/blob narrow ports；W1 concurrent navigation/activation 和 layout-await owner race。UI/Focus 不盲目 Rust 化。
+
 ## 最新：第四批四線隔離 TDD（2026-10-29）
 
 **本節為續做起點。起始整合 HEAD `569a77abe`；各線獨立 worktree，不修改原本有未提交工作之 `main`。**

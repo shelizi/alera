@@ -7,6 +7,8 @@
 > **第四批 2026-10-29**：W1 同 workspace hydrate race、G1 六方法 index mutation、Q0 Git Diff UI History lifecycle、R1 bounded client line 已平行切分。**現況與驗證狀態先讀進度檔最上方〈第四批四線隔離 TDD〉**。W1/G1 已各 12／15 focused green；其餘測試未 complete 不標 PASS。
 > 第四批 W1/G1 已整合為 `c845fbe2e`／`6e4f0d48e`。Q0 實際 oversized 165→164、offenders 132→131，無 baseline 重設。Rust 本機 request line 16 MiB 限制已有 Cargo 6 tests green；主 Actor inbox 仍 unbounded。
 > **第四批已四線整合**：W1 `c845fbe2e`、G1 `6e4f0d48e`、Q0 `cb7ad9d97`、Rust R1 `89ac5306e`。Q0 60 Widget tests green、全域 164 oversized / 131 offenders，Rust 8 Cargo tests green；整合 Flutter 29 tests green。下批請以進度文件最上方第四批完成記錄為最新起點。
+> **第五批進行中**：從上一批乾淨 HEAD `56f0658f9` 四線獨立 worktree 平行進行 W1 stale history cursor、G1 read-only diff page port、Q0 Git History actions 分拆、R1 localhost 多 client pending count admission。請先讀進度檔最上方「第五批四線隔離 TDD」以取得實際驗證狀態，不要把未完成的 Rust/Flutter 全套驗收標成 green。
+> **第五批四線已整合（2026-10-29）**：W1 `35c8d1a03`、Q0 `0299ba00e`、G1 `c35ce883f` + preview follow-up `721b82b9a`、R1 `e369c2232` + test isolation `00cc090c9`；Mobile Hello shared fixture 更新 `262a8d16d`。整合 Flutter 23 green、Flutter shared wire fixture 7 green、Git History UI 60 green、Diff Surface 54 green+2 skipped、Rust Client+priority+deferred 20 green、Rust wire fixture corrected後48 green。整合官方 Q0 **162 oversized / 129 offenders**，baseline 未重設。最新事實與下一批分工請讀進度檔最上方。
 > 目標是可逐批合併的 TDD 重構；不改產品語意、不清理第三方既有工作樹、不自動推送或發布。
 
 ## Spec
