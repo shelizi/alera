@@ -64,9 +64,12 @@ pub async fn run_terminal_host_server(
     // Reserve a bounded number of localhost request commands globally across
     // clients; completions, PTY callbacks, shutdown, and relay commands never
     // acquire these permits, so backpressure cannot self-deadlock the actor.
-    let ingress_admission = Arc::new(tokio::sync::Semaphore::new(
-        crate::terminal_host::client::LOCAL_CLIENT_PENDING_COMMAND_LIMIT,
-    ));
+    let ingress_admission = Arc::new(
+        crate::terminal_host::client::LocalClientIngressAdmission::new(
+            crate::terminal_host::client::LOCAL_CLIENT_PENDING_COMMAND_LIMIT,
+            crate::terminal_host::client::MAX_LOCAL_PENDING_REQUEST_BYTES,
+        ),
+    );
     spawn_accept_loop(
         listener,
         inbox.clone(),

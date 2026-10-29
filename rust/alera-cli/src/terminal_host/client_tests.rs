@@ -42,7 +42,10 @@ async fn control_response_stays_between_its_causal_terminal_frames() {
         inbox,
         control_rx,
         terminal_rx,
-        Arc::new(Semaphore::new(LOCAL_CLIENT_PENDING_COMMAND_LIMIT)),
+        Arc::new(LocalClientIngressAdmission::new(
+            LOCAL_CLIENT_PENDING_COMMAND_LIMIT,
+            MAX_LOCAL_PENDING_REQUEST_BYTES,
+        )),
     ));
     let mut lines = BufReader::new(client).lines();
 
@@ -62,7 +65,10 @@ async fn multi_client_local_ingress_is_bounded_without_blocking_control_or_shutd
     use tokio::time::{timeout, Duration};
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
     let address = listener.local_addr().unwrap();
-    let admission = Arc::new(tokio::sync::Semaphore::new(2));
+    let admission = Arc::new(LocalClientIngressAdmission::new(
+        2,
+        MAX_LOCAL_PENDING_REQUEST_BYTES,
+    ));
     let (inbox, mut inbox_rx) = tokio::sync::mpsc::unbounded_channel();
     let mut clients = Vec::new();
     let mut controls = Vec::new();
@@ -100,7 +106,7 @@ async fn multi_client_local_ingress_is_bounded_without_blocking_control_or_shutd
         .unwrap();
     assert!(matches!(&first, ServerCommand::AdmittedClientLine { .. }));
     assert!(matches!(&second, ServerCommand::AdmittedClientLine { .. }));
-    assert_eq!(admission.available_permits(), 0);
+    assert_eq!(admission.commands.available_permits(), 0);
     tokio::task::yield_now().await;
     assert!(
         inbox_rx.try_recv().is_err(),
@@ -136,6 +142,87 @@ async fn multi_client_local_ingress_is_bounded_without_blocking_control_or_shutd
         .unwrap()
         .unwrap();
     assert!(matches!(third, ServerCommand::AdmittedClientLine { .. }));
+    drop(second);
+    for task in tasks {
+        task.abort();
+    }
+}
+
+#[test]
+fn request_byte_units_charge_utf8_and_round_up_with_a_nonzero_floor() {
+    assert_eq!(local_request_byte_permits("".len()), 1);
+    assert_eq!(local_request_byte_permits("a".len()), 1);
+    assert_eq!(local_request_byte_permits("a".repeat(4096).len()), 1);
+    assert_eq!(local_request_byte_permits("a".repeat(4097).len()), 2);
+    assert_eq!(local_request_byte_permits("😀".len()), 1);
+    assert_eq!(local_request_byte_permits("😀".repeat(1025).len()), 2);
+    assert_eq!(
+        local_request_byte_permits(client_line_reader::MAX_LOCAL_REQUEST_LINE_BYTES),
+        (client_line_reader::MAX_LOCAL_REQUEST_LINE_BYTES / LOCAL_REQUEST_BYTE_UNIT_BYTES) as u32,
+    );
+}
+
+#[tokio::test]
+async fn local_multi_client_byte_budget_blocks_second_request_without_blocking_controls() {
+    use tokio::time::{timeout, Duration};
+    let admission = Arc::new(LocalClientIngressAdmission::new(3, 4096));
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (inbox, mut inbox_rx) = tokio::sync::mpsc::unbounded_channel();
+    let mut clients = Vec::new();
+    let mut tasks = Vec::new();
+    let mut controls = Vec::new();
+    let mut terminals = Vec::new();
+    for id in 1..=2 {
+        let client = TcpStream::connect(addr).await.unwrap();
+        let (server, _) = listener.accept().await.unwrap();
+        let (control_tx, control_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (terminal_tx, terminal_rx) =
+            tokio::sync::mpsc::channel(CLIENT_TERMINAL_OUT_QUEUE_CAPACITY);
+        tasks.push(tokio::spawn(connection_loop(
+            server,
+            id,
+            inbox.clone(),
+            control_rx,
+            terminal_rx,
+            admission.clone(),
+        )));
+        controls.push(control_tx);
+        terminals.push(terminal_tx);
+        clients.push(client);
+    }
+    clients[0].write_all(b"first\n").await.unwrap();
+    let first = timeout(Duration::from_secs(2), inbox_rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(first, ServerCommand::AdmittedClientLine { .. }));
+    clients[1].write_all(b"second\n").await.unwrap();
+    assert_eq!(admission.commands.available_permits(), 2);
+    assert_eq!(admission.bytes.available_permits(), 0);
+    tokio::task::yield_now().await;
+    assert!(inbox_rx.try_recv().is_err());
+    inbox.send(ServerCommand::RequestedShutdown).unwrap();
+    assert!(matches!(
+        inbox_rx.recv().await,
+        Some(ServerCommand::RequestedShutdown)
+    ));
+    controls[1]
+        .send(json!({"response":"alive"}).into())
+        .unwrap();
+    let mut reader = BufReader::new(clients.remove(1)).lines();
+    let reply = timeout(Duration::from_secs(2), reader.next_line())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(reply.contains("alive"));
+    drop(first);
+    let second = timeout(Duration::from_secs(2), inbox_rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(second, ServerCommand::AdmittedClientLine { .. }));
     drop(second);
     for task in tasks {
         task.abort();

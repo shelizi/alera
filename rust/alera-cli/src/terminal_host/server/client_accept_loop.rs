@@ -4,7 +4,6 @@ use std::sync::Arc;
 
 use tokio::net::TcpListener;
 use tokio::sync::mpsc::{self, UnboundedSender};
-use tokio::sync::Semaphore;
 
 use super::{
     connection_loop, ClientFrame, ClientHandle, ClientKind, ServerCommand,
@@ -16,7 +15,7 @@ pub(super) fn spawn_accept_loop(
     listener: TcpListener,
     inbox: UnboundedSender<ServerCommand>,
     next_client_id: Arc<AtomicU64>,
-    ingress_admission: Arc<Semaphore>,
+    ingress_admission: Arc<crate::terminal_host::client::LocalClientIngressAdmission>,
 ) {
     tokio::spawn(async move {
         while let Ok((stream, _)) = listener.accept().await {

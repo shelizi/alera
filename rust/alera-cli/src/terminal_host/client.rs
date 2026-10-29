@@ -4,7 +4,7 @@ use serde_json::Value;
 use tokio::io::{AsyncWriteExt as _, BufReader};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc::{error::TryRecvError, Receiver, UnboundedReceiver, UnboundedSender};
-use tokio::sync::Semaphore;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use crate::terminal_host::frame_codec::{encode_json_frame, encode_output_frame};
 use crate::terminal_host::protocol::BINARY_FRAMES_ENABLED_EVENT;
@@ -195,7 +195,7 @@ pub async fn connection_loop(
     inbox: UnboundedSender<ServerCommand>,
     mut control_out_rx: UnboundedReceiver<ClientFrame>,
     mut terminal_out_rx: Receiver<ClientFrame>,
-    ingress_admission: Arc<Semaphore>,
+    ingress_admission: Arc<LocalClientIngressAdmission>,
 ) {
     let (read_half, mut write_half) = stream.into_split();
     let mut lines = BufReader::new(read_half);
@@ -269,12 +269,14 @@ pub async fn connection_loop(
                     _ => unreachable!("termination classified before dispatch"),
                 }
             }
-            permit = ingress_admission.clone().acquire_owned(), if queued_client_line.is_some() => {
-                let Ok(permit) = permit else {
+            admission = ingress_admission.admit(
+                queued_client_line.as_ref().map_or(0, String::len)
+            ), if queued_client_line.is_some() => {
+                let Ok((permit, byte_permit)) = admission else {
                     break;
                 };
                 let line = queued_client_line.take().expect("permit only acquired with a ready line");
-                if inbox.send(ServerCommand::AdmittedClientLine { id, line, permit }).is_err() {
+                if inbox.send(ServerCommand::AdmittedClientLine { id, line, permit, byte_permit }).is_err() {
                     break;
                 }
             }
@@ -429,6 +431,47 @@ pub const CLIENT_TERMINAL_OUT_QUEUE_CAPACITY: usize = 8;
 /// Maximum localhost client request lines queued or executing in the actor
 /// concurrently. This is a command-count admission cap, NOT a total byte cap.
 pub const LOCAL_CLIENT_PENDING_COMMAND_LIMIT: usize = 64;
+/// Sum of admitted localhost request payloads, rounded to 4 KiB units.
+/// Does not include read buffers and queued-but-not-admitted line per socket.
+pub const MAX_LOCAL_PENDING_REQUEST_BYTES: usize = 32 * 1024 * 1024;
+pub const LOCAL_REQUEST_BYTE_UNIT_BYTES: usize = 4096;
+
+fn local_request_byte_permits(byte_length: usize) -> u32 {
+    byte_length.max(1).div_ceil(LOCAL_REQUEST_BYTE_UNIT_BYTES) as u32
+}
+
+/// Request-count and byte-weighted admission share one owner across all
+/// localhost connections. Both owned permits live until Actor dispatch returns.
+pub struct LocalClientIngressAdmission {
+    commands: Arc<Semaphore>,
+    bytes: Arc<Semaphore>,
+}
+
+impl LocalClientIngressAdmission {
+    pub fn new(command_slots: usize, byte_budget_bytes: usize) -> Self {
+        Self {
+            commands: Arc::new(Semaphore::new(command_slots)),
+            bytes: Arc::new(Semaphore::new(
+                byte_budget_bytes.div_ceil(LOCAL_REQUEST_BYTE_UNIT_BYTES),
+            )),
+        }
+    }
+
+    async fn admit(
+        &self,
+        byte_length: usize,
+    ) -> Result<(OwnedSemaphorePermit, OwnedSemaphorePermit), tokio::sync::AcquireError> {
+        // Acquire bytes first; a client waiting for the byte budget cannot
+        // unnecessarily exhaust the independent command-count budget.
+        let bytes = self
+            .bytes
+            .clone()
+            .acquire_many_owned(local_request_byte_permits(byte_length))
+            .await?;
+        let command = self.commands.clone().acquire_owned().await?;
+        Ok((command, bytes))
+    }
+}
 
 /// The mobile gateway writes over a WAN socket where a single `send` can stall
 /// for hundreds of milliseconds. The desktop lane's 8 frames is roughly 64 ms of

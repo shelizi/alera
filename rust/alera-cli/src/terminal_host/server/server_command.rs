@@ -47,6 +47,7 @@ pub enum ServerCommand {
         id: u64,
         line: String,
         permit: tokio::sync::OwnedSemaphorePermit,
+        byte_permit: tokio::sync::OwnedSemaphorePermit,
     },
     #[allow(dead_code)]
     RelayClientLine {

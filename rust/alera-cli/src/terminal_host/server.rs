@@ -382,8 +382,14 @@ impl ServerActor {
                 );
             }
             ServerCommand::ClientLine { id, line } => self.handle_line(id, line).await,
-            ServerCommand::AdmittedClientLine { id, line, permit } => {
+            ServerCommand::AdmittedClientLine {
+                id,
+                line,
+                permit,
+                byte_permit,
+            } => {
                 self.handle_line(id, line).await;
+                drop(byte_permit);
                 drop(permit);
             }
             ServerCommand::ClientDisconnected { id, reason } => {
