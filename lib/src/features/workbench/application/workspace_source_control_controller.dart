@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:alera/src/features/workbench/application/source_control_watcher.dart';
 import 'package:alera/src/features/workbench/application/workspace_source_control_snapshot_loader.dart';
+import 'package:alera/src/features/workbench/application/workspace_source_control_index_mutations.dart';
 import 'package:alera/src/rust/api/workspace_files.dart' as native;
 import 'package:alera/src/shared/infra/git/git_backend.dart';
 import 'package:alera/src/shared/infra/git/git_commit_ops_models.dart';
@@ -109,14 +110,17 @@ class WorkspaceSourceControlController
 
   Future<void> stage(String? filePath) => _run(
     .stage,
-    (backend) => backend.stage(path: workspacePath, filePath: filePath),
+    (backend) =>
+        WorkspaceSourceControlIndexMutations(backend)
+            .stage(workspacePath, filePath),
     statusFirst: true,
   );
 
   Future<void> stageArea(GitChangeArea area, {String? filePath}) => _run(
     .stage,
     (backend) =>
-        backend.stageArea(path: workspacePath, area: area, filePath: filePath),
+        WorkspaceSourceControlIndexMutations(backend)
+            .stageArea(workspacePath, area, filePath: filePath),
     statusFirst: true,
   );
 
@@ -124,26 +128,28 @@ class WorkspaceSourceControlController
     if (!entry.canStageFromParent) {
       return Future<void>.value();
     }
-    return _run(.stage, (backend) async {
-      for (final filePath in _actionPaths(entry)) {
-        await backend.stage(path: workspacePath, filePath: filePath);
-      }
-    }, statusFirst: true);
+    return _run(
+      .stage,
+      (backend) =>
+          WorkspaceSourceControlIndexMutations(backend)
+              .stageEntry(workspacePath, entry),
+      statusFirst: true,
+    );
   }
 
   Future<void> unstage(String? filePath) => _run(
     .unstage,
-    (backend) => backend.unstage(path: workspacePath, filePath: filePath),
+    (backend) =>
+        WorkspaceSourceControlIndexMutations(backend)
+            .unstage(workspacePath, filePath),
     statusFirst: true,
   );
 
   Future<void> unstageArea(GitChangeArea area, {String? filePath}) => _run(
     .unstage,
-    (backend) => backend.unstageArea(
-      path: workspacePath,
-      area: area,
-      filePath: filePath,
-    ),
+    (backend) =>
+        WorkspaceSourceControlIndexMutations(backend)
+            .unstageArea(workspacePath, area, filePath: filePath),
     statusFirst: true,
   );
 
@@ -151,36 +157,39 @@ class WorkspaceSourceControlController
     if (!entry.canUnstageFromParent) {
       return Future<void>.value();
     }
-    return _run(.unstage, (backend) async {
-      for (final filePath in _actionPaths(entry)) {
-        await backend.unstage(path: workspacePath, filePath: filePath);
-      }
-    }, statusFirst: true);
+    return _run(
+      .unstage,
+      (backend) =>
+          WorkspaceSourceControlIndexMutations(backend)
+              .unstageEntry(workspacePath, entry),
+      statusFirst: true,
+    );
   }
 
   Future<void> discard(String? filePath) => _run(
     .discard,
-    (backend) => backend.discard(path: workspacePath, filePath: filePath),
+    (backend) =>
+        WorkspaceSourceControlIndexMutations(backend)
+            .discard(workspacePath, filePath),
   );
 
   Future<void> discardArea(GitChangeArea area, {String? filePath}) => _run(
     .discard,
-    (backend) => backend.discardArea(
-      path: workspacePath,
-      area: area,
-      filePath: filePath,
-    ),
+    (backend) =>
+        WorkspaceSourceControlIndexMutations(backend)
+            .discardArea(workspacePath, area, filePath: filePath),
   );
 
   Future<void> discardEntry(GitChangeEntry entry) {
     if (!entry.canDiscardFromParent) {
       return Future<void>.value();
     }
-    return _run(.discard, (backend) async {
-      for (final filePath in _actionPaths(entry)) {
-        await backend.discard(path: workspacePath, filePath: filePath);
-      }
-    });
+    return _run(
+      .discard,
+      (backend) =>
+          WorkspaceSourceControlIndexMutations(backend)
+              .discardEntry(workspacePath, entry),
+    );
   }
 
   Future<void> commit(String message) => _run(
@@ -542,17 +551,5 @@ class WorkspaceSourceControlController
     } catch (_) {
       return previous;
     }
-  }
-
-  List<String> _actionPaths(GitChangeEntry entry) {
-    final paths = <String>[];
-    final oldPath = entry.oldPath;
-    if (entry.status == GitChangeStatus.renamed &&
-        oldPath != null &&
-        oldPath != entry.path) {
-      paths.add(oldPath);
-    }
-    paths.add(entry.path);
-    return paths;
   }
 }

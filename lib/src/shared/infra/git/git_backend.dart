@@ -9,6 +9,7 @@ import 'package:alera/src/shared/infra/git/git_query_ports.dart';
 import 'package:alera/src/shared/infra/git/git_repository_probe_port.dart';
 import 'package:alera/src/shared/infra/git/git_hosted_review_retention_port.dart';
 import 'package:alera/src/shared/infra/git/git_source_control_query_port.dart';
+import 'package:alera/src/shared/infra/git/git_index_mutation_port.dart';
 
 /// Injectable boundary for git operations. Mirrors the raw git plumbing only;
 /// orchestration (paths, slugs, persistence, reconciliation) lives in the
@@ -24,7 +25,8 @@ abstract interface class GitBackend
         GitCommitCompareQueryPort,
         GitRepositoryProbePort,
         GitHostedReviewRetentionPort,
-        GitSourceControlQueryPort {
+        GitSourceControlQueryPort,
+        GitIndexMutationPort {
   /// Whether [path] resolves to a git repository work tree.
   @override
   Future<bool> isGitRepository(String path);
@@ -266,10 +268,12 @@ abstract interface class GitBackend
 
   /// Stages all visible changes under [path], or a single workspace-relative
   /// [filePath] when provided.
+  @override
   Future<void> stage({required String path, String? filePath});
 
   /// Stages visible changes in [area], optionally limited to a workspace
   /// relative file or directory [filePath].
+  @override
   Future<void> stageArea({
     required String path,
     required GitChangeArea area,
@@ -278,10 +282,12 @@ abstract interface class GitBackend
 
   /// Removes all visible staged changes under [path] from the index, or a
   /// single workspace-relative [filePath] when provided.
+  @override
   Future<void> unstage({required String path, String? filePath});
 
   /// Removes visible changes in [area] from the index, optionally limited to a
   /// workspace relative file or directory [filePath].
+  @override
   Future<void> unstageArea({
     required String path,
     required GitChangeArea area,
@@ -290,10 +296,12 @@ abstract interface class GitBackend
 
   /// Discards unstaged/untracked changes under [path], or a single
   /// workspace-relative [filePath] when provided.
+  @override
   Future<void> discard({required String path, String? filePath});
 
   /// Discards visible changes in [area], optionally limited to a workspace
   /// relative file or directory [filePath].
+  @override
   Future<void> discardArea({
     required String path,
     required GitChangeArea area,
