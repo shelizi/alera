@@ -33,6 +33,7 @@ pub(crate) enum RuntimeMutationRequest {
     },
     RemoveTab {
         tab_id: String,
+        expected_workspace_id: Option<String>,
     },
     RemoveWorkspaceTabs {
         workspace_id: String,
@@ -197,12 +198,27 @@ pub(super) async fn run_runtime_mutation(
                     closed_tab_ids: Vec::new(),
                 })
             }
-            RuntimeMutationRequest::RemoveTab { tab_id } => {
-                let workspace_id = runtime_store
+            RuntimeMutationRequest::RemoveTab {
+                tab_id,
+                expected_workspace_id,
+            } => {
+                let existing = runtime_store
                     .find_workspace_tab(&tab_id)
                     .await
-                    .map_err(runtime_store_error)?
-                    .map(|tab| tab.workspace_id);
+                    .map_err(runtime_store_error)?;
+                if let Some(tab) = &existing {
+                    if expected_workspace_id
+                        .as_deref()
+                        .is_some_and(|expected| expected != tab.workspace_id.as_str())
+                        || (tab.payload["lastTerminalTabTransfer"].is_object()
+                            && expected_workspace_id.as_deref() != Some(tab.workspace_id.as_str()))
+                    {
+                        return Err(HostError::state(
+                            "Tab moved to another workspace. Refresh before closing the terminal.",
+                        ));
+                    }
+                }
+                let workspace_id = existing.map(|tab| tab.workspace_id);
                 runtime_store
                     .remove_workspace_tab(&tab_id)
                     .await

@@ -222,6 +222,10 @@ impl ServerActor {
                 tab_id,
                 workspace_id,
             } => {
+                // A stale, refused tab.remove must not cancel a moved tab's
+                // agent-title job. Cancel only after the serialized removal
+                // has actually committed.
+                self.cancel_agent_title_job(&tab_id);
                 if let Some(server) = self.codex.as_ref() {
                     server.forget_thread_hydration(&tab_id).await;
                 }

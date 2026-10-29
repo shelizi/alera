@@ -58,8 +58,14 @@ impl ServerActor {
             }
             SerializedRuntimeMutation::RemoveTab => {
                 let tab_id = require_string_key(payload, "id")?;
-                self.cancel_agent_title_job(&tab_id);
-                RuntimeMutationRequest::RemoveTab { tab_id }
+                RuntimeMutationRequest::RemoveTab {
+                    tab_id,
+                    expected_workspace_id: payload
+                        .get("expectedWorkspaceId")
+                        .and_then(Value::as_str)
+                        .filter(|value| !value.is_empty())
+                        .map(str::to_owned),
+                }
             }
             SerializedRuntimeMutation::RemoveWorkspaceTabs => {
                 RuntimeMutationRequest::RemoveWorkspaceTabs {

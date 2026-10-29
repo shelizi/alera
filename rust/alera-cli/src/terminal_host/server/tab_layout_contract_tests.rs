@@ -45,6 +45,7 @@ async fn tab_remove_is_idempotent_for_retries() {
             actor.runtime_store.clone(),
             RuntimeMutationRequest::RemoveTab {
                 tab_id: "tab-1".to_string(),
+                expected_workspace_id: None,
             },
         )
         .await;

@@ -25,7 +25,7 @@ pub(super) async fn for_request(
             hosted_review_retention::for_workspace(runtime_store, &request.id).await
         }
         RuntimeMutationRequest::SwitchWorkspaceBranch { .. } => Vec::new(),
-        RuntimeMutationRequest::RemoveTab { tab_id } => {
+        RuntimeMutationRequest::RemoveTab { tab_id, .. } => {
             hosted_review_retention::for_tab(runtime_store, tab_id).await
         }
         RuntimeMutationRequest::RemoveWorkspace {

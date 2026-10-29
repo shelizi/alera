@@ -51,6 +51,8 @@ impl ServerActor {
         let tab_id = require_string(payload, "tabId")?;
         let working_directory = require_string(payload, "workingDirectory")?;
         let resume_cursor = payload.get("resumeCursor").and_then(Value::as_u64);
+        self.verify_terminal_attachment_owner(&session_id, &workspace_id, &tab_id)
+            .await?;
 
         // Attaching a user client to a tab created for an automation is the
         // durable takeover signal. It prevents a later successful completion
@@ -191,6 +193,8 @@ impl ServerActor {
         let workspace_id = require_string(payload, "workspaceId")?;
         let tab_id = require_string(payload, "tabId")?;
         let working_directory = require_string(payload, "workingDirectory")?;
+        self.verify_terminal_attachment_owner(&session_id, &workspace_id, &tab_id)
+            .await?;
         let launch = TerminalHostLaunch::from_json(&Value::Object(
             require_object(payload.get("launch"), "launch")?.clone(),
         ))?;

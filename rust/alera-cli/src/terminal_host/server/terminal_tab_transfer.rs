@@ -20,6 +20,80 @@ fn string_field<'a>(payload: &'a Value, name: &str) -> HostResult<&'a str> {
 }
 
 impl ServerActor {
+    /// A stale view in another window must not terminate a PTY whose Tab has
+    /// since moved. Unscoped legacy termination remains available only for
+    /// sessions without a persisted cross-workspace transfer receipt.
+    pub(super) async fn verify_terminal_termination_owner(
+        &self,
+        session_id: &str,
+        payload: &Value,
+    ) -> HostResult<()> {
+        let expected_workspace = payload.get("expectedWorkspaceId").and_then(Value::as_str);
+        let expected_tab = payload.get("expectedTabId").and_then(Value::as_str);
+        let Some(session) = self.sessions.get(session_id) else {
+            return Ok(());
+        };
+        if expected_workspace.is_some_and(|value| value != session.workspace_id.as_str())
+            || expected_tab.is_some_and(|value| value != session.tab_id.as_str())
+        {
+            return Err(HostError::state(
+                "Terminal ownership changed while this window was closing it. Refresh the tab instead.",
+            ));
+        }
+        if let Some(stored) = self
+            .runtime_store
+            .find_workspace_tab(&session.tab_id)
+            .await
+            .map_err(|error| HostError::state(error.to_string()))?
+        {
+            if stored.payload["lastTerminalTabTransfer"].is_object()
+                && (expected_workspace != Some(session.workspace_id.as_str())
+                    || expected_tab != Some(session.tab_id.as_str())
+                    || stored.workspace_id != session.workspace_id)
+            {
+                return Err(HostError::state(
+                    "Moved Terminal requires current Workspace and Tab identity before termination.",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// An obsolete workspace view cannot attach to a moved PTY or resurrect
+    /// its process in the old project after host recovery.
+    pub(super) async fn verify_terminal_attachment_owner(
+        &self,
+        session_id: &str,
+        workspace_id: &str,
+        tab_id: &str,
+    ) -> HostResult<()> {
+        if let Some(session) = self.sessions.get(session_id) {
+            if session.running()
+                && (session.workspace_id != workspace_id || session.tab_id != tab_id)
+            {
+                return Err(HostError::state(
+                    "Terminal moved to a different workspace. Refresh before attaching.",
+                ));
+            }
+        }
+        if let Some(stored) = self
+            .runtime_store
+            .find_workspace_tab(tab_id)
+            .await
+            .map_err(|error| HostError::state(error.to_string()))?
+        {
+            if stored.payload["lastTerminalTabTransfer"].is_object()
+                && (stored.workspace_id != workspace_id
+                    || terminal_session_id(&stored) != session_id)
+            {
+                return Err(HostError::state(
+                    "Transferred Terminal metadata is stale. Refresh workspace before restarting.",
+                ));
+            }
+        }
+        Ok(())
+    }
+
     /// A read-only, authoritative lost-reply check. A persisted receipt alone
     /// is insufficient: the process may have exited or the host may have
     /// crashed between SQLite commit and the in-memory Session reparenting.
