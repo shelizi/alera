@@ -4,6 +4,12 @@
 > 讀取 `docs/refactor/tdd-roadmap-20261029.md` 了解契約/驗收，然後從下列 pending/in_progress 工作續做。
 > 變更只在隔離整合 worktree；最新 macOS hotfix 來源分支目前與 `main` HEAD 指向同一提交，已依使用者要求將此 hotfix 分支合入整合分支，但沒有在原 `main` worktree 做修改、push 或 release。
 
+## 最新：T2-D3 三條獨立安全修正已整合（2026-10-30，Capability OFF）
+
+以 D2 的乾淨整合 `ca42a1be7` 作為起點，平行實作並提交 Rust Store 的轉移 Tab 版面歸屬交易守衛 **`4c6fc975d`**、Dart Coordinator 保留未知操作收據避免二次不確定轉移 **`76e093931`**，及 Terminal/Host 新 PTY 建立前保留原執行目錄、原路徑缺失時保留 Tab **`0809bbe3f`**。三線無衝突 Cherry-pick 到 `refactor/tdd-integrate-20261029`，另見 `docs/refactor/feature-progress-20261029.md` 與 `docs/terminal-tab-cross-workspace-plan-20261029.md`。
+
+**跨專案拖曳仍未上線，Host `tab.transfer.capabilities.supported=false` 沒有變動**。原 `main` 有未提交資料且未碰；本批未跑 Flutter/Cargo Test、Analyze/Check、Build、Windows/macOS 實機，沒有 Push／Release。下一個 T2-D4 優先解決全域多程序 Session lease、最後視窗 Close/Detach、Crash 恢復與正式驗證的阻擋，勿把 D3 的有限轉移收據 Layout Guard 寫成通用 CAS。
+
 ## 最新：T2-D2 三線功能安全補強（2026-10-30；Capability OFF）
 
 從前一批完成的 `0b1f9f441`，平行切出 Rust Host 已移動 PTY 的終止／重新附加／重新啟動／Tab Remove workspace owner guard **`df69aece0`**、Desktop PTY/Workbench Scoped Tab Close 與同視窗 Xterm handle display owner 更新 **`817fcf7e1`**、跨視窗 watcher 辨識轉移收據並禁止舊 Layout 反寫 **`333afb30e`**。各線獨立 clean 提交後 cherry-pick 整合；具體做法與剩餘競態見 `docs/terminal-tab-cross-workspace-plan-20261029.md`。

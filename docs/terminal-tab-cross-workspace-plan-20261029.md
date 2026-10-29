@@ -1,8 +1,22 @@
 # T2 — 跨專案／跨 Workspace Terminal Tab 移動：功能規劃與並行重構邊界
 
-**Priority：P2；Status：D2 Host/Client/Watcher safety implementation integrated, feature-gated OFF（2026-10-30）。** 已依序整合 D1 的關閉競態／失聯確認／Undo，以及 D2 的 stale-view close/attach 防護、桌面關閉身分回傳、跨視窗 Layout 來源權威同步。**尚未開放跨專案拖放，也未執行本批的 Flutter/Cargo 測試、靜態分析或編譯。**
+**Priority：P2；Status：D3 Host Layout authority / Client receipt recovery / safe PTY remint integrated, feature-gated OFF（2026-10-30）。** 已整合 D1 關閉競態／失聯確認／Undo、D2 stale-view close/attach／跨視窗權威同步，及 D3 原子 Layout 轉移歸屬守衛／未知結果阻止新操作／原執行路徑失效時的安全恢復。**仍未開放跨專案拖放，也未執行本批的 Flutter/Cargo 測試、靜態分析或編譯。**
 
 本文件原是 `feat/cross-project-terminal-tabs-20261029` 分支上的設計稿（commit `ec150a493`），現**只收編此規劃檔**至 `refactor/tdd-integrate-20261029`；未合併該舊分支的產品程式。原設計所記載的並行分工為 2026-10-29 第三批的歷史狀態；最新整合已包含第八批功能修正及 macOS Claude Code 貼上 hotfix。
+
+## 最新：T2-D3 三線平行修正（2026-10-30；尚未啟用）
+
+以 D2 整合 HEAD `ca42a1be76e967580921f3ece25299765c5eba35` 為基準，重用乾淨既有 D2 worktree、各切新 D3 分支，避免 Windows Dropbox 同步資料夾大量重建 checkout。
+
+| D3 工作線 | 確實修補 | 獨立 → 整合 commit |
+| --- | --- | --- |
+| D3-H：Rust Store 的全 Host Layout membership guard | `layout.upsert` 與 transfer row 讀取置於**同一 SQLite transaction**，對每個已轉移過的 Tab 檢查建議布局：在目前所屬 Workspace 必須包含它，在其他 Workspace 不得再引用；舊視窗使用 legacy `layout.upsert` 也無法繞過 Flutter watcher 保護 | `01109e5c1` → **`4c6fc975d`** |
+| D3-C：Client ambiguous transfer 收據 | 逾時或斷線後查不到 Host 權威 Receipt，就在 Coordinator 以同一 Tab 儲存**原 Mutation ID 與原操作計畫**；不准新 Drop 直接 mint 不同 ID。新增 `WorkbenchTerminalTabTransferRecoveryPort.confirmCommitted`，只有 Host 原收據＋活 Session 佐證成功才釋放本機未知狀態 | `69a81acd7` → **`76e093931`** |
+| D3-O：Terminal 原執行資料夾與 Restart | Dart 在**明確 Restart** 前檢查預期工作目錄，拒絕不存在的原啟動路徑；Rust Host 的 `createOrAttach` 在活 PTY 存在時仍准 Attach，只有需要建新程序時才檢查移動後的原路徑；`terminal.restart` 在退出與清除 Agent 前比對原路徑（canonical）；`spawnOnCreate` 以原路徑重建，若失敗則保存已移轉 Tab 而不是刪除 | `e9e22859d` → **`0809bbe3f`** |
+
+**嚴格界線**：D3-H 只守護**有持久化轉移收據的 Terminal membership**，不等於全系統每一筆 Layout 都有 Revision/CAS；D3-C 的未知操作在證實完成之前維持阻擋，不是無條件重試；D3-O 儲存的是**原啟動目錄**，不是偵測 Shell 在執行中 `cd` 之後的目前 CWD。功能旗標仍為 `tab.transfer.capabilities.supported=false`，未做跨程序多視窗 PTY Lease/Close/Detach 可靠性整合，也未跑 Flutter/Cargo 測試、Analyze、Build、Windows/macOS 實機。**不可把這三條原始碼提交等同功能已正式支援**。
+
+**下批 T2-D4 可平行分工**：一條 Host/PTY 唯一 owner 負責跨進程終止/Detach 最後使用者的規則與 Crash 重新掛接；另一條處理 Watcher/Client 重新連接後 Layout/Receipt 的權威重新同步；第三條完成 `docs/tab-layout-operation-contract.md`／`docs/terminal-operation-contract.md` 及高風險情境的狀態 UX。先確認目前整合 HEAD 與 clean worktree，避免在同一檔案平行編輯。依使用者先前決定測試/分析暫停，若要打開 capability 必須先恢復核心驗證。
 
 ## 最新：T2-D2 再平行三線安全修補（2026-10-30；仍不啟用）
 

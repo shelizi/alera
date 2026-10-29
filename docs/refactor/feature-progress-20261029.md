@@ -1,5 +1,19 @@
 # Alera 功能優先續做：第八批四線隔離（2026-10-29）
 
+## 最新：T2-D3 三線安全補強已合入（2026-10-30，仍關閉跨專案拖曳）
+
+確認 D1／D2 已在乾淨整合 HEAD `ca42a1be76e967580921f3ece25299765c5eba35`，重用三個既有乾淨 worktree，從最新整合點分別切出獨立 D3 分支，不新建大量檢出工作樹：
+
+| 工作線 | 已修改的實際程式碼與防護 | 獨立提交 → 整合提交 |
+| --- | --- | --- |
+| D3-H Rust Store Layout | `RuntimeStore::upsert_workbench_layout` 改在**單一 SQLite Transaction** 內核對有 `lastTerminalTabTransfer` 收據的 Tab 目前真正所屬 Workspace；舊視窗 `layout.upsert` 不得把已轉移的 Tab 恢復到來源，或從目的 Layout 移除。一般無轉移收據的 Layout 行為維持原契約 | `01109e5c1` → **`4c6fc975d`** |
+| D3-C Flutter lost reply | `WorkbenchTerminalTabTransferCoordinator` 保留 timeout/disconnect 後的原 `WorkbenchTerminalTabTransferPlan` 與原 Mutation ID；同 Tab 的第二筆移動被擋住，直到 Runtime 確認原 Receipt 及 Session。新增可明確查詢未知結果的 Recovery Port；不可盲目重送或 mint 新 ID | `69a81acd7` → **`76e093931`** |
+| D3-O Terminal 起源/Host Restore | Desktop 明確 Restart 前確認原啟動資料夾仍存在；Rust Host 的 `createOrAttach` 只在要**建立新 PTY** 時比對移動收據的原啟動路徑（活 PTY 仍可附加）；`terminal.restart` 在結束原程序前驗證；Host `spawnOnCreate` 重建使用原路徑，失敗保留移動過的 Tab 而不刪除 | `e9e22859d` → **`0809bbe3f`** |
+
+三線皆有 `rustfmt`／`dart format` 與 `git diff --cached --check`，逐一提交、無 cherry-pick 衝突。**本批依使用者此前指示未跑 Cargo/Flutter Tests、Analyze、Build、實機、跨程序及效能驗證，不能宣稱已可用。** `tab.transfer.capabilities.supported=false` 沒有改，跨專案 Drop 仍停用；原始有未提交資料的 `main` 未改動，未 Push／Release。
+
+剩餘主要阻擋：**全域跨程序 PTY lease／Close/Detach 的最後 owner 規則**、Host Crash/Restart 與跨視窗 Tab/PTY 恢復一致性、SQLite 轉移收據／布局已更新但尚未重掛 PTY 的結果處理、實際編譯及 Win/Mac 回歸。D3 的 Runtime Store 保護僅限**具轉移收據的 Terminal**，不等於所有一般 Layout 都有版本化 CAS。接手見 `docs/terminal-tab-cross-workspace-plan-20261029.md`。
+
 ## 最新：T2-D2 Host／Client／跨視窗 Watcher 三線已整合（2026-10-30）
 
 以乾淨整合 `0b1f9f441` 為基準，重用三個沒有未提交變更的 D1 worktree，切出 D2 獨立分支平行修正後提交：
