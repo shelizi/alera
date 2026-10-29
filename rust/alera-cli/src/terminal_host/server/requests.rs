@@ -757,6 +757,10 @@ impl ServerActor {
                 self.require_auth(client_id)?;
                 self.transfer_terminal_tab(client_id, payload).await
             }
+            "tab.transfer.status" => {
+                self.require_auth(client_id)?;
+                self.terminal_tab_transfer_status(client_id, payload).await
+            }
             "tab.transfer.capabilities" => {
                 self.require_auth(client_id)?;
                 // T2-B2 implements the store/actor mechanics, but UI watcher

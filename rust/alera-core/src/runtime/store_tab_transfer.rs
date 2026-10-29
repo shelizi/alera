@@ -100,6 +100,8 @@ impl RuntimeStore {
                 && actual_target.as_ref() == expected_target_layout,
             "A workspace layout changed; refresh before transferring the terminal."
         );
+        let previous_source_group_id =
+            expected_source_layout.and_then(|layout| layout_group_for_tab(layout, tab_id));
 
         // Compare against the *actual* authoritative tab registry, not just
         // the client-supplied layout. No unrelated tab may be lost/duplicated.
@@ -133,7 +135,8 @@ impl RuntimeStore {
         tab.payload[TRANSFER_RECEIPT_KEY] = json!({
             "id": client_mutation_id,
             "from": source_workspace_id,
-            "to": target_workspace_id
+            "to": target_workspace_id,
+            "sourceGroupId": previous_source_group_id
         });
         tab.workspace_id = target_workspace_id.to_owned();
         tab.updated_at = Utc::now();
@@ -166,6 +169,21 @@ impl RuntimeStore {
         tx.commit().await?;
         Ok(tab)
     }
+}
+
+fn layout_group_for_tab<'a>(layout: &'a Value, tab_id: &str) -> Option<&'a str> {
+    layout
+        .get("groups")?
+        .as_object()?
+        .iter()
+        .find_map(|(id, group)| {
+            group
+                .get("tabIds")?
+                .as_array()?
+                .iter()
+                .any(|tab| tab.as_str() == Some(tab_id))
+                .then_some(id.as_str())
+        })
 }
 
 fn tab_ids_in_layout(layout: &Value, workspace_id: &str) -> Result<BTreeSet<String>> {

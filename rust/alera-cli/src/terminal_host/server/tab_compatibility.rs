@@ -5,7 +5,7 @@ use alera_core::runtime::WorkspaceTabRecord;
 use super::terminal_pulse::TERMINAL_PULSE_PAYLOAD_KEY;
 use super::{ClientKind, ServerActor};
 
-const HOST_OWNED_TAB_PAYLOAD_KEYS: [&str; 8] = [
+const HOST_OWNED_TAB_PAYLOAD_KEYS: [&str; 11] = [
     "agentProfileLaunchV1",
     "initialPrompt",
     "pendingAgentPrompt",
@@ -14,6 +14,11 @@ const HOST_OWNED_TAB_PAYLOAD_KEYS: [&str; 8] = [
     "agentTitleRevision",
     "agentTitleStatus",
     "agentTitleSource",
+    // Immutable transfer receipt and execution provenance: old client tab
+    // snapshots must not erase a successful move on the next title update.
+    "lastTerminalTabTransfer",
+    "terminalExecutionWorkspaceId",
+    "terminalExecutionWorkingDirectory",
 ];
 
 /// Removes host-owned bootstrap text from a tab before it crosses the runtime

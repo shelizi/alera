@@ -158,6 +158,22 @@ impl ServerActor {
         &mut self,
         mut tab: WorkspaceTabRecord,
     ) -> HostResult<WorkspaceTabRecord> {
+        if let Some(stored) = self
+            .runtime_store
+            .find_workspace_tab(&tab.id)
+            .await
+            .map_err(|error| HostError::state(error.to_string()))?
+        {
+            // A stale window can still send a projected tab.upsert after the
+            // terminal was moved in another window. Never silently put that
+            // running PTY's persisted tab back into its old workspace; only
+            // the atomic Host tab.transfer route may change terminal owners.
+            if stored.kind == "terminal" && stored.workspace_id != tab.workspace_id {
+                return Err(HostError::state(
+                    "Terminal belongs to another workspace. Use tab.transfer to move its existing PTY.",
+                ));
+            }
+        }
         self.initialize_agent_title_if_new(&mut tab).await?;
         let saved = TerminalSpawnPersistence::new(&self.runtime_store)
             .upsert_tab(tab)

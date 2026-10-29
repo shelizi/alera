@@ -20,6 +20,50 @@ fn string_field<'a>(payload: &'a Value, name: &str) -> HostResult<&'a str> {
 }
 
 impl ServerActor {
+    /// A read-only, authoritative lost-reply check. A persisted receipt alone
+    /// is insufficient: the process may have exited or the host may have
+    /// crashed between SQLite commit and the in-memory Session reparenting.
+    /// Callers may only treat the transfer as acknowledged when both agree.
+    pub(super) async fn terminal_tab_transfer_status(
+        &self,
+        client_id: u64,
+        payload: &Value,
+    ) -> HostResult<Value> {
+        let tab_id = string_field(payload, "tabId")?;
+        let session_id = string_field(payload, "sessionId")?;
+        let source = string_field(payload, "sourceWorkspaceId")?;
+        let target = string_field(payload, "targetWorkspaceId")?;
+        let mutation_id = string_field(payload, "clientMutationId")?;
+        let Some(tab) = self
+            .runtime_store
+            .find_workspace_tab(tab_id)
+            .await
+            .map_err(|err| HostError::state(err.to_string()))?
+        else {
+            return Ok(json!({"applied": false}));
+        };
+        let receipt = &tab.payload["lastTerminalTabTransfer"];
+        if tab.kind != "terminal"
+            || tab.workspace_id != target
+            || terminal_session_id(&tab) != session_id
+            || receipt["id"].as_str() != Some(mutation_id)
+            || receipt["from"].as_str() != Some(source)
+            || receipt["to"].as_str() != Some(target)
+        {
+            return Ok(json!({"applied": false}));
+        }
+        let Some(live) = self.sessions.get(session_id) else {
+            return Ok(json!({"applied": false}));
+        };
+        if !live.running() || live.tab_id != tab_id || live.workspace_id != target {
+            return Ok(json!({"applied": false}));
+        }
+        Ok(json!({
+            "applied": true,
+            "tab": self.workspace_tab_for_client(client_id, tab)
+        }))
+    }
+
     pub(super) async fn transfer_terminal_tab(
         &mut self,
         client_id: u64,
@@ -30,6 +74,23 @@ impl ServerActor {
         let target = string_field(payload, "targetWorkspaceId")?;
         let session_id = string_field(payload, "sessionId")?;
         let mutation_id = string_field(payload, "clientMutationId")?;
+        // Workspace and project removal may have been queued before this
+        // request. Their asynchronous file/PTY shutdown is not a safe window
+        // in which to change the display owner of a running terminal.
+        if self.mutation_queue.has_runtime_mutations()
+            || self
+                .mutation_queue
+                .pending_workspace_shutdowns
+                .contains_key(source)
+            || self
+                .mutation_queue
+                .pending_workspace_shutdowns
+                .contains_key(target)
+        {
+            return Err(HostError::state(
+                "A workspace mutation or shutdown is still in progress. Retry the Terminal move after it completes.",
+            ));
+        }
         let source_layout = payload
             .get("sourceLayout")
             .filter(|value| value.is_object())
@@ -148,6 +209,12 @@ impl ServerActor {
         self.broadcast_workspace_tabs_changed(Some(source));
         self.broadcast_workspace_tabs_changed(Some(target));
         self.broadcast_authenticated(event("workbenchLayoutsChanged", json!({})));
+        // The current Agent Presence payload derives workspaceId from the
+        // live Session. Refetch once so other windows replace the old source
+        // badge immediately, even before the next Claude/Codex hook event.
+        if self.agent_presence.get(session_id).is_some() {
+            self.broadcast_agent_presence_changed();
+        }
         Ok(json!(self.workspace_tab_for_client(client_id, moved)))
     }
 }
