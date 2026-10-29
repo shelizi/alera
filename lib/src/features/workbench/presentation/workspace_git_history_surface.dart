@@ -17,6 +17,7 @@ import 'package:alera/src/features/workbench/domain/workspace_source_control_sco
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 import 'package:alera/src/features/workbench/domain/workbench_view_prefs.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_git_history_actions.dart';
+import 'package:alera/src/features/workbench/presentation/git_history_relative_time.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_git_branch_compare_dialog.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_git_history_graph.dart';
 import 'package:alera/src/shared/infra/git/git_commit_ops_models.dart';
@@ -476,31 +477,5 @@ class _WorkspaceGitHistorySurfaceState
         ),
       ),
     );
-  }
-
-  static String _relativeTime(DateTime? timestamp) {
-    if (timestamp == null) {
-      return '';
-    }
-    final difference = DateTime.now().difference(timestamp.toLocal());
-    if (difference.isNegative) {
-      return 'just now';
-    }
-    if (difference.inMinutes < 1) {
-      return 'just now';
-    }
-    if (difference.inHours < 1) {
-      return '${difference.inMinutes}m ago';
-    }
-    if (difference.inDays < 1) {
-      return '${difference.inHours}h ago';
-    }
-    if (difference.inDays < 30) {
-      return '${difference.inDays}d ago';
-    }
-    final local = timestamp.toLocal();
-    final month = local.month.toString().padLeft(2, '0');
-    final day = local.day.toString().padLeft(2, '0');
-    return '${local.year}-$month-$day';
   }
 }

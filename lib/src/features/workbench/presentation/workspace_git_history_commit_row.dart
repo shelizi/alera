@@ -127,9 +127,7 @@ class const _CommitGraphRow({
                   SizedBox(
                     width: _metaWidth,
                     child: Text(
-                      _WorkspaceGitHistorySurfaceState._relativeTime(
-                        item.timestamp,
-                      ),
+                      gitHistoryRelativeTime(item.timestamp),
                       maxLines: 1,
                       overflow: .ellipsis,
                       textAlign: .end,
