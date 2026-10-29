@@ -1,5 +1,7 @@
 # R1 — Rust runtime admission / Actor 調查與 TDD 驗收契約
 
+> **第三批 R1 實作驗收進行中**：`rust/alera-cli/src/terminal_host/server_runner.rs` 新增 64-command bounded lookahead buffer，僅 `RequestedShutdown`／`RequestedRestart` 可以超前，`ClientConnected`／`ClientLine`／PTY／completion 等一般命令維持 FIFO。獨立 Rust 單測 2 Red→3 Green；正式 Cargo async actor tests 2 pass。**沒有把主 `unbounded_channel` 改為 bounded**；真實 status.get/cancel latency 分布、inbox bytes、極端多 client backlog、actor blocked await 仍待補測；不能宣稱已完成整個 control-plane admission。
+
 > **第二批更新**：`b3b0757e4` 新增 bounded queue wait latency histogram (19 buckets / request type, <=256B)，`status.get` 新增 `queueWaitSamples` / `queueWaitP95Ms` / `queueWaitP99Ms`；保留 queueWaitMs 累計與 maxQueueWaitMs。單獨 rustc TDD 2 fail→2 pass，Cargo 新 metrics 3 pass，原 admission/control 9 pass。**主 Actor inbox 仍 unbounded，本輪未改排程**；原驗收規格後續仍要進行 control p95/p99 / backlog / quit tests。
 
 日期：2026-10-29。Code baseline：`3501b0555`，工作分支：`refactor/tdd-boundaries-20261029`。

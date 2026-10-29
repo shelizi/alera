@@ -3,6 +3,7 @@
 > 狀態：執行中。工作分支 `refactor/tdd-boundaries-20261029`，基準 `3501b05550f6ca476528ca63c3bb7673c444b985`。
 > 每次接手先讀此檔、`docs/refactor/tdd-progress-20261029.md` 與 `skills/alera-di-architecture/SKILL.md`，以進度文件中的下一個未完成驗收項目繼續。
 > 2026-10-29 第二批已將 Q0/G1/R1 各自獨立工作樹的 verified commits cherry-pick 至 `refactor/tdd-integrate-20261029`。第一批表格僅作歷史狀態，**現況請先讀進度檔最上方〈第二批三線平行〉**。
+> 2026-10-29 **第三批**同時切出 A0/Q0/G1/R1 四個獨立工作樹，A0 已達 5 touchpoints、Q0 max-lines 132、G1 已獨立狹義 SourceControl 讀取；R1 增進 shutdown/restart 控制面，主 inbox 仍 unbounded。**現況優先讀進度檔〈第三批四線平行重構〉**，本節既存 Spec 不變。
 > 目標是可逐批合併的 TDD 重構；不改產品語意、不清理第三方既有工作樹、不自動推送或發布。
 
 ## Spec

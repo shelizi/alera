@@ -4,6 +4,21 @@
 > 讀取 `docs/refactor/tdd-roadmap-20261029.md` 了解契約/驗收，然後從下列 pending/in_progress 工作續做。
 > 變更只在隔離 worktree，未合併 main／未 push／未 release。
 
+## 最新：第三批四線平行重構（2026-10-29）
+
+**以整合分支 `refactor/tdd-integrate-20261029` 為續做起點，舊儀表板的 134/133 與 R1 pending 欄位是歷史快照；請先讀本節。**
+
+| 線 | 已獨立提交的範圍／整合 SHA | 紅綠與實際回歸 | 狀態／仍缺 |
+| --- | --- | --- | --- |
+| A0 Agent | `a6f79e569` → `62590dbec`；Quota 改由 canonical ID 配對 AgentType、Persona 查詢與預設值交回 discovery、Profile 預設 adapter 單一來源 | guard 預期因 3 條 stale baseline **Red** → ratchet 後 **Green：8→5 touchpoints**；14 Flutter tests passed | 已達 <=5 target，不取消未能移除的 legit Codex transcript/圖示特殊實作 |
+| Q0 Git History | `76489a839` → `427f3151c`；時間格式化移出 Git History StatefulWidget，純函式注入時鐘 | 11 Flutter tests passed；`--list-oversized` **165**、未符合 max-lines **132**（前次 166／133） | Guard 仍紅，沒有重設 baseline；原版格式保持一致 |
+| G1 Git read | `c5e7dfb31` → `9ac3ae928`；3-method `GitSourceControlQueryPort`、獨立並行 Snapshot Loader，原 status controller 保留 generation/reconciliation owner | 8 Flutter tests passed；Runtime Architecture Guard exit 0 | mutation port 與 race/backpressure 待下批，仍使用唯一 RustGitBackend |
+| R1 Rust inbox | `refactor/tdd-b3-rust-20261029`；64 件 bounded lookahead + shutdown/restart 優先、其他命令 FIFO；source 尚在獨立 worktree | 純 Rust 2 fail→3 pass；正式 `cargo test priority_receiver_tests` **2 passed**，首次 module path 編譯失敗已修復 | 原 `deferred_admission_tests` 回歸進行中；確認後提交／整合，不宣稱完整 Rust CI |
+
+以上三批 Dart commit 已 cherry-pick 到整合分支，原 `main` 尚有原本的 dirty history／release 工作，本輪未接觸，也未 push/release。整合 Flutter analyzer 及 app smoke 已排程執行，**只有取得 exit 0 後才能在此表標為 PASS**。
+
+下一輪平行所有權：A0 目前達 5/5，持續做 per-agent declarative contract；Q0 從 132 violations 依測試拆 Explorer/Terminal/Diff；G1 依小型 Fake 擴 mutation/status/diff；R1 主 inbox **仍為 unbounded**，本次只有固定前瞻的 shutdown/restart 優先，尚須真實多 client 超載、status/cancel/quit p95/p99、pending bytes 與無界入站防護。Rust 不搬簡單 UI formatter 跨 FFI。
+
 ## 最新整合狀態 — 第二批三線平行（2026-10-29）
 
 **接手以此節與下方新驗收紀錄為準；以下原有 134 項等數字為第一批歷史快照。**
