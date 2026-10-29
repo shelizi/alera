@@ -4,11 +4,13 @@ import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/buttons/alera_icon_button.dart';
 import 'package:alera/src/design_system/feedback/alera_toast.dart';
+import 'package:alera/src/design_system/forms/alera_search_focus.dart';
 import 'package:alera/src/design_system/forms/alera_text_field.dart';
 import 'package:alera/src/design_system/icons/alera_file_icon.dart';
 import 'package:alera/src/design_system/icons/alera_icons.dart';
 import 'package:alera/src/features/workbench/application/workbench_providers.dart';
 import 'package:alera/src/features/workbench/application/workspace_search_controller.dart';
+import 'package:alera/src/features/workbench/application/workspace_search_focus_request.dart';
 import 'package:alera/src/features/workbench/application/workspace_search_projection.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/rust/api/workspace_search.dart' as native;
@@ -34,6 +36,7 @@ class const WorkspaceSearchPanel({
   super.key,
   required final Workspace workspace,
   required final ValueChanged<WorkspaceSearchMatchTarget> onOpenMatch,
+  final bool visible = true,
 }) extends ConsumerStatefulWidget {
   @override
   ConsumerState<WorkspaceSearchPanel> createState() =>
@@ -42,6 +45,7 @@ class const WorkspaceSearchPanel({
 
 class _WorkspaceSearchPanelState extends ConsumerState<WorkspaceSearchPanel> {
   late final TextEditingController _queryController;
+  late final FocusNode _queryFocusNode;
   late final TextEditingController _replacementController;
   late final TextEditingController _includeController;
   late final TextEditingController _excludeController;
@@ -60,14 +64,32 @@ class _WorkspaceSearchPanelState extends ConsumerState<WorkspaceSearchPanel> {
   void initState() {
     super.initState();
     _queryController = TextEditingController();
+    _queryFocusNode = FocusNode(debugLabel: 'workspace-search-query');
     _replacementController = TextEditingController();
     _includeController = TextEditingController();
     _excludeController = TextEditingController();
+    _focusQuery();
+  }
+
+  @override
+  void didUpdateWidget(covariant WorkspaceSearchPanel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!oldWidget.visible && widget.visible) _focusQuery();
+  }
+
+  void _focusQuery() {
+    aleraFocusSearchInput(
+      focusNode: _queryFocusNode,
+      controller: _queryController,
+      canFocus: () =>
+          mounted && widget.visible && _queryFocusNode.canRequestFocus,
+    );
   }
 
   @override
   void dispose() {
     _queryController.dispose();
+    _queryFocusNode.dispose();
     _replacementController.dispose();
     _includeController.dispose();
     _excludeController.dispose();
@@ -76,6 +98,10 @@ class _WorkspaceSearchPanelState extends ConsumerState<WorkspaceSearchPanel> {
 
   @override
   Widget build(BuildContext context) {
+    ref.listen<int>(
+      workspaceSearchFocusRequestProvider,
+      (_, _) => _focusQuery(),
+    );
     final provider = workspaceSearchControllerProvider(widget.workspace.id);
     final state = ref.watch(provider);
     _syncController(_queryController, state.query);
@@ -118,6 +144,8 @@ class _WorkspaceSearchPanelState extends ConsumerState<WorkspaceSearchPanel> {
             children: <Widget>[
               _WorkspaceSearchInputs(
                 queryController: _queryController,
+                queryFocusNode: _queryFocusNode,
+                queryAutofocus: widget.visible,
                 replacementController: _replacementController,
                 includeController: _includeController,
                 excludeController: _excludeController,

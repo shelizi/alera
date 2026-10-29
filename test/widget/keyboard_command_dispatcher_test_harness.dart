@@ -84,6 +84,20 @@ class _DispatcherTestWorkbenchController(
   }
 
   @override
+  void setContextPanelTab(WorkbenchContextPanelTab tab) {
+    state = state.copyWith(
+      viewPrefs: state.viewPrefs.copyWith(activeContextPanelTab: tab),
+    );
+  }
+
+  @override
+  void setRightSidebarVisible(bool visible) {
+    state = state.copyWith(
+      viewPrefs: state.viewPrefs.copyWith(rightSidebarVisible: visible),
+    );
+  }
+
+  @override
   Future<WorkspaceTabRecord> splitWorkbenchGroupWithTerminal({
     required Workspace workspace,
     required String groupId,

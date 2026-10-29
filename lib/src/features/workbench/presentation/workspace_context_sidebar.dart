@@ -102,6 +102,7 @@ class const WorkspaceContextSidebar({
                           WorkbenchContextPanelTab.search =>
                             WorkspaceSearchPanel(
                               workspace: workspace,
+                              visible: prefs.rightSidebarVisible,
                               onOpenMatch: onOpenSearchMatch,
                             ),
                           WorkbenchContextPanelTab.references =>

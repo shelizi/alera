@@ -25,6 +25,86 @@ import 'package:alera/src/shared/infra/process/process_runner.dart';
 import 'package:path/path.dart' as p;
 
 void main() {
+  testWidgets('repeated Ctrl+P refocuses Quick Open without nesting dialogs', (
+    tester,
+  ) async {
+    final workspace = _workspace('workspace-1', 'Main', '/repo/main');
+    final controller = _QuickOpenTestController(_state(workspace));
+    await _pumpQuickOpen(
+      tester,
+      controller: controller,
+      service: _QuickOpenFileService(entries: <String>['lib/main.dart']),
+    );
+    await tester.tap(find.text('Open Quick Open'));
+    await tester.pumpAndSettle();
+
+    final input = find.descendant(
+      of: find.byKey(const ValueKey('quick-open-query-input')),
+      matching: find.byType(TextField),
+    );
+    final query = tester.widget<TextField>(input);
+    expect(query.focusNode?.hasFocus, isTrue);
+    await tester.enterText(input, 'main');
+    await tester.pumpAndSettle();
+
+    // Pointer taps on the checkbox don't take keyboard focus. Request it on
+    // a result row to reproduce a query that really lost focus.
+    Focus.of(tester.element(find.text('lib/main.dart'))).requestFocus();
+    await tester.pump();
+    expect(query.focusNode?.hasFocus, isFalse);
+
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyP);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+    await tester.pumpAndSettle();
+
+    expect(query.focusNode?.hasFocus, isTrue);
+    expect(query.controller?.text, 'main');
+    expect(
+      query.controller?.selection,
+      const TextSelection(baseOffset: 0, extentOffset: 4),
+    );
+    expect(find.text('Quick Open'), findsOneWidget);
+    expect(controller.openedFiles, isEmpty);
+  });
+
+  testWidgets('Quick Open query can undo, Ctrl+Y redo, and keep results', (
+    tester,
+  ) async {
+    final workspace = _workspace('workspace-1', 'Main', '/repo/main');
+    await _pumpQuickOpen(
+      tester,
+      controller: _QuickOpenTestController(_state(workspace)),
+      service: _QuickOpenFileService(
+        entries: <String>['lib/first.dart', 'lib/second.dart'],
+      ),
+    );
+    await tester.tap(find.text('Open Quick Open'));
+    await tester.pumpAndSettle();
+    final input = find.descendant(
+      of: find.byKey(const ValueKey('quick-open-query-input')),
+      matching: find.byType(TextField),
+    );
+
+    await tester.enterText(input, 'first');
+    await tester.pump(const Duration(milliseconds: 650));
+    await tester.enterText(input, 'second');
+    await tester.pump(const Duration(milliseconds: 650));
+
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyZ);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+    await tester.pump();
+    expect(tester.widget<TextField>(input).controller?.text, 'first');
+
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyY);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+    await tester.pumpAndSettle();
+    expect(tester.widget<TextField>(input).controller?.text, 'second');
+    expect(find.text('lib/second.dart'), findsOneWidget);
+  });
+
   testWidgets(
     'Ctrl+P results share Explorer file menu and retain Enter opening',
     (tester) async {

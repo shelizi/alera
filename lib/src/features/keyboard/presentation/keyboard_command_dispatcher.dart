@@ -9,6 +9,7 @@ import 'package:alera/src/features/workbench/domain/workbench_layout.dart';
 import 'package:alera/src/features/workbench/domain/workbench_view_prefs.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 import 'package:alera/src/features/workbench/application/workspace_file_service.dart';
+import 'package:alera/src/features/workbench/application/workspace_search_focus_request.dart';
 import 'package:alera/src/features/workbench/presentation/terminal_runtime.dart';
 import 'package:alera/src/features/workbench/presentation/workbench_close_confirmation.dart';
 import 'package:alera/src/features/workbench/presentation/workbench_dialog_launchers.dart';
@@ -157,6 +158,9 @@ class const KeyboardCommandDispatcher({
     final controller = ref.read(workbenchControllerProvider.notifier);
     controller.setContextPanelTab(tab);
     controller.setRightSidebarVisible(true);
+    if (tab == WorkbenchContextPanelTab.search) {
+      ref.read(workspaceSearchFocusRequestProvider.notifier).request();
+    }
   }
 
   void _openTerminalSearch() {

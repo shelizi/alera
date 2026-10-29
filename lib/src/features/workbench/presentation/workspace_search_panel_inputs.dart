@@ -4,6 +4,8 @@ const double _searchInlineButtonSize = AleraTokens.space24;
 
 class const _WorkspaceSearchInputs({
   required final TextEditingController queryController,
+  required final FocusNode queryFocusNode,
+  required final bool queryAutofocus,
   required final TextEditingController replacementController,
   required final TextEditingController includeController,
   required final TextEditingController excludeController,
@@ -47,8 +49,9 @@ class const _WorkspaceSearchInputs({
                 children: <Widget>[
                   AleraTextField(
                     controller: queryController,
+                    focusNode: queryFocusNode,
                     dense: true,
-                    autofocus: true,
+                    autofocus: queryAutofocus,
                     hintText: 'Search',
                     suffix: _SearchInputActions(
                       children: <Widget>[

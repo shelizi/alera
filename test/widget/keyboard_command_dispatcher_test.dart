@@ -14,7 +14,9 @@ import 'package:alera/src/features/settings/domain/alera_settings.dart';
 import 'package:alera/src/features/workbench/application/workspace_file_service.dart';
 import 'package:alera/src/features/workbench/application/workbench_state.dart';
 import 'package:alera/src/features/workbench/application/workspace_file_service.dart';
+import 'package:alera/src/features/workbench/application/workspace_search_focus_request.dart';
 import 'package:alera/src/features/workbench/domain/workbench_layout.dart';
+import 'package:alera/src/features/workbench/domain/workbench_view_prefs.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 import 'package:alera/src/features/workbench/application/terminal_runtime_lifecycle.dart';
@@ -32,6 +34,40 @@ class _DispatcherAgentProfiles extends AgentProfiles {
 }
 
 void main() {
+  testWidgets('repeat Find in Files requests search focus every time', (
+    tester,
+  ) async {
+    final workspace = _workspace();
+    final controller = _DispatcherTestWorkbenchController(
+      WorkbenchState(
+        workspacesByProject: <String, List<Workspace>>{
+          workspace.projectId: <Workspace>[workspace],
+        },
+        activeWorkspaceId: workspace.id,
+      ),
+    );
+    final harness = await _pumpDispatcherHarness(
+      tester,
+      controller: controller,
+      runtime: _FakeTerminalRuntime(),
+    );
+    final dispatcher = KeyboardCommandDispatcher(
+      ref: harness.ref,
+      context: harness.context,
+    );
+
+    expect(harness.ref.read(workspaceSearchFocusRequestProvider), 0);
+    dispatcher.dispatch(.findInFiles);
+    dispatcher.dispatch(.findInFiles);
+    dispatcher.dispatch(.replaceInFiles);
+    expect(harness.ref.read(workspaceSearchFocusRequestProvider), 3);
+    expect(
+      controller.state.viewPrefs.activeContextPanelTab,
+      WorkbenchContextPanelTab.search,
+    );
+    expect(controller.state.viewPrefs.rightSidebarVisible, isTrue);
+  });
+
   testWidgets('split command stays safe after the dispatcher host unmounts', (
     tester,
   ) async {

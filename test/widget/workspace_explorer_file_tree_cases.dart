@@ -1,6 +1,50 @@
 part of 'workspace_explorer_test.dart';
 
 void _registerWorkspaceExplorerFileTreeTests() {
+  testWidgets('Ctrl+F from Explorer tree refocuses its file filter', (
+    tester,
+  ) async {
+    final service = _FakeWorkspaceFileService()
+      ..childrenByDirectory[''] = <native.WorkspaceFileEntry>[
+        _file('readme.md'),
+      ];
+    await _pumpExplorer(tester, service);
+    final input = find.descendant(
+      of: find.byKey(const ValueKey('workspace-explorer-filter-input')),
+      matching: find.byType(TextField),
+    );
+    final field = tester.widget<TextField>(input);
+    await tester.enterText(input, 'read');
+    await tester.pumpAndSettle();
+
+    // The file-tree background owns focus, not the filter input.
+    await tester.tapAt(const Offset(220, 450));
+    await tester.pump();
+    expect(field.focusNode?.hasFocus, isFalse);
+
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyF);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+    await tester.pumpAndSettle();
+    expect(field.focusNode?.hasFocus, isTrue);
+    expect(field.controller?.text, 'read');
+    expect(
+      field.controller?.selection,
+      const TextSelection(baseOffset: 0, extentOffset: 4),
+    );
+
+    // Repeating Ctrl+F in the filter selects its query again.
+    field.controller!.selection = const TextSelection.collapsed(offset: 2);
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyF);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+    await tester.pump();
+    expect(
+      field.controller?.selection,
+      const TextSelection(baseOffset: 0, extentOffset: 4),
+    );
+  });
+
   testWidgets('long Explorer names show their full text on hover', (
     tester,
   ) async {

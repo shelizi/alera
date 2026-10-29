@@ -1,5 +1,6 @@
 import 'package:alera/src/design_system/icons/alera_icons.dart';
 import 'package:alera/src/features/workbench/application/workspace_search_controller.dart';
+import 'package:alera/src/features/workbench/application/workspace_search_focus_request.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_search_panel.dart';
 import 'package:flutter/material.dart';
@@ -7,6 +8,72 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  testWidgets(
+    'file search refocus requests restore query focus and selection',
+    (tester) async {
+      final container = ProviderContainer();
+      addTearDown(container.dispose);
+      final workspace = _workspace(id: 'workspace-a', path: '/workspace-a');
+      await _pumpSearchPanel(
+        tester,
+        container: container,
+        workspace: workspace,
+      );
+      await tester.pumpAndSettle();
+
+      final input = find.byType(TextField).first;
+      final field = tester.widget<TextField>(input);
+      expect(field.focusNode?.hasFocus, isTrue);
+      await tester.enterText(input, 'sample');
+      await tester.pump();
+      await tester.tap(find.byTooltip('View as tree'));
+      await tester.pump();
+      // Clicking the toolbar does not necessarily move keyboard focus.
+      Focus.of(tester.element(find.byIcon(AleraIcons.listView))).requestFocus();
+      await tester.pump();
+      expect(field.focusNode?.hasFocus, isFalse);
+
+      container.read(workspaceSearchFocusRequestProvider.notifier).request();
+      await tester.pump();
+      expect(field.focusNode?.hasFocus, isTrue);
+      expect(field.controller?.text, 'sample');
+      expect(
+        field.controller?.selection,
+        const TextSelection(baseOffset: 0, extentOffset: 6),
+      );
+      // Cancel the controller's debounced filesystem search before teardown.
+      container
+          .read(workspaceSearchControllerProvider(workspace.id).notifier)
+          .setQuery(workspace.path, '');
+      await tester.pump();
+    },
+  );
+
+  testWidgets('reopening hidden file search restores focus', (tester) async {
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+    final workspace = _workspace(id: 'workspace-a', path: '/workspace-a');
+    await _pumpSearchPanel(
+      tester,
+      container: container,
+      workspace: workspace,
+      visible: false,
+    );
+    await tester.pumpAndSettle();
+    final input = find.byType(TextField).first;
+    final field = tester.widget<TextField>(input);
+    expect(field.focusNode?.hasFocus, isFalse);
+
+    await _pumpSearchPanel(
+      tester,
+      container: container,
+      workspace: workspace,
+      visible: true,
+    );
+    await tester.pumpAndSettle();
+    expect(field.focusNode?.hasFocus, isTrue);
+  });
+
   testWidgets('search toolbar keeps refresh rightmost and toggles view icon', (
     tester,
   ) async {
@@ -92,6 +159,7 @@ Future<void> _pumpSearchPanel(
   WidgetTester tester, {
   required ProviderContainer container,
   required Workspace workspace,
+  bool visible = true,
 }) {
   return tester.pumpWidget(
     UncontrolledProviderScope(
@@ -103,6 +171,7 @@ Future<void> _pumpSearchPanel(
             height: 520,
             child: WorkspaceSearchPanel(
               workspace: workspace,
+              visible: visible,
               onOpenMatch: (_) {},
             ),
           ),

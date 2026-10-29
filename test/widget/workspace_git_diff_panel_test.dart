@@ -28,6 +28,7 @@ import 'package:alera/src/shared/infra/process/process_runner.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -1293,6 +1294,196 @@ void main() {
     expect(_scrollOffset(tester, changeList), scrolledOffset);
   });
 
+  testWidgets(
+    'Ctrl+F refocuses source control file filter from commit message',
+    (tester) async {
+      final backend = FakeGitBackend()
+        ..gitStatusResult = const GitStatusResult(
+          entries: <GitChangeEntry>[
+            GitChangeEntry(
+              path: 'lib/visible.dart',
+              area: .unstaged,
+              status: .modified,
+            ),
+          ],
+        );
+
+      await _pumpPanel(tester, backend: backend);
+      await tester.pumpAndSettle();
+      await tester.enterText(_filterField(), 'visible');
+      await tester.pumpAndSettle();
+
+      await tester.tap(_messageField());
+      await tester.pump();
+      expect(_messageEditable(tester).focusNode.hasFocus, isTrue);
+      expect(_filterEditable(tester).focusNode.hasFocus, isFalse);
+
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyF);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      await tester.pump();
+
+      expect(_filterEditable(tester).focusNode.hasFocus, isTrue);
+      expect(
+        tester.widget<TextField>(_filterField()).controller!.text,
+        'visible',
+      );
+      expect(
+        tester.widget<TextField>(_filterField()).controller!.selection,
+        const TextSelection(baseOffset: 0, extentOffset: 7),
+      );
+
+      // Repeated Ctrl+F selects the existing query, even if it has a caret.
+      tester.widget<TextField>(_filterField()).controller!.selection =
+          const TextSelection.collapsed(offset: 3);
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyF);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      await tester.pump();
+      expect(
+        tester.widget<TextField>(_filterField()).controller!.selection,
+        const TextSelection(baseOffset: 0, extentOffset: 7),
+      );
+    },
+  );
+
+  testWidgets('Ctrl+F from source control change rows focuses filter', (
+    tester,
+  ) async {
+    final backend = FakeGitBackend()
+      ..gitStatusResult = const GitStatusResult(
+        entries: <GitChangeEntry>[
+          GitChangeEntry(
+            path: 'lib/visible.dart',
+            area: .unstaged,
+            status: .modified,
+          ),
+        ],
+      );
+
+    await _pumpPanel(tester, backend: backend);
+    await tester.pumpAndSettle();
+    await tester.tap(_filterField());
+    await tester.pump();
+    expect(_filterEditable(tester).focusNode.hasFocus, isTrue);
+
+    await tester.tap(find.text('lib/visible.dart').first);
+    await tester.pump();
+    expect(_filterEditable(tester).focusNode.hasFocus, isFalse);
+
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyF);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+    await tester.pump();
+    expect(_filterEditable(tester).focusNode.hasFocus, isTrue);
+  });
+
+  testWidgets('source control uses Cmd+F on macOS and leaves Ctrl+F alone', (
+    tester,
+  ) async {
+    final backend = FakeGitBackend()
+      ..gitStatusResult = const GitStatusResult(
+        entries: <GitChangeEntry>[
+          GitChangeEntry(
+            path: 'lib/visible.dart',
+            area: .unstaged,
+            status: .modified,
+          ),
+        ],
+      );
+    await _pumpPanel(tester, backend: backend, platform: TargetPlatform.macOS);
+    await tester.pumpAndSettle();
+    await tester.tap(_messageField());
+    await tester.pump();
+
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyF);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+    await tester.pump();
+    expect(_messageEditable(tester).focusNode.hasFocus, isTrue);
+    expect(_filterEditable(tester).focusNode.hasFocus, isFalse);
+
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyF);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
+    await tester.pump();
+    expect(_filterEditable(tester).focusNode.hasFocus, isTrue);
+  });
+
+  testWidgets('Ctrl+Shift+F is reserved for workspace-wide file search', (
+    tester,
+  ) async {
+    final backend = FakeGitBackend()
+      ..gitStatusResult = const GitStatusResult(
+        entries: <GitChangeEntry>[
+          GitChangeEntry(
+            path: 'lib/visible.dart',
+            area: .unstaged,
+            status: .modified,
+          ),
+        ],
+      );
+    await _pumpPanel(tester, backend: backend);
+    await tester.pumpAndSettle();
+    await tester.tap(_messageField());
+    await tester.pump();
+
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyF);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+    await tester.pump();
+    expect(_messageEditable(tester).focusNode.hasFocus, isTrue);
+    expect(_filterEditable(tester).focusNode.hasFocus, isFalse);
+  });
+
+  testWidgets('source control file filter can undo and redo search query', (
+    tester,
+  ) async {
+    final backend = FakeGitBackend()
+      ..gitStatusResult = const GitStatusResult(
+        entries: <GitChangeEntry>[
+          GitChangeEntry(
+            path: 'lib/visible.dart',
+            area: .unstaged,
+            status: .modified,
+          ),
+          GitChangeEntry(
+            path: 'test/hidden.dart',
+            area: .unstaged,
+            status: .modified,
+          ),
+        ],
+      );
+
+    await _pumpPanel(tester, backend: backend);
+    await tester.pumpAndSettle();
+    await tester.enterText(_filterField(), 'visible');
+    await tester.pump(const Duration(milliseconds: 700));
+    await tester.enterText(_filterField(), 'hidden');
+    await tester.pump(const Duration(milliseconds: 700));
+
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyZ);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+    await tester.pumpAndSettle();
+    expect(
+      tester.widget<TextField>(_filterField()).controller?.text,
+      'visible',
+    );
+    expect(find.text('lib/visible.dart'), findsOneWidget);
+    expect(find.text('test/hidden.dart'), findsNothing);
+
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyY);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+    await tester.pumpAndSettle();
+    expect(tester.widget<TextField>(_filterField()).controller?.text, 'hidden');
+    expect(find.text('lib/visible.dart'), findsNothing);
+    expect(find.text('test/hidden.dart'), findsOneWidget);
+  });
+
   testWidgets('filter narrows visible files without flattening groups', (
     tester,
   ) async {
@@ -1532,6 +1723,7 @@ Future<void> _pumpPanel(
   ValueChanged<String>? onRevealInExplorer,
   VoidCallback? onClearSourceControlRoot,
   double width = 420,
+  TargetPlatform? platform,
   bool showPanel = true,
 }) {
   final resolvedWorkspace = workspace ?? _workspace();
@@ -1572,6 +1764,7 @@ Future<void> _pumpPanel(
         ],
       ],
       child: MaterialApp(
+        theme: platform == null ? null : ThemeData(platform: platform),
         home: Scaffold(
           body: SizedBox(
             width: width,

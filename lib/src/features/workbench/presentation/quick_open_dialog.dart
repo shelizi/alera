@@ -6,6 +6,7 @@ import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/feedback/alera_toast.dart';
 import 'package:alera/src/design_system/forms/alera_checkbox.dart';
+import 'package:alera/src/design_system/forms/alera_search_focus.dart';
 import 'package:alera/src/design_system/forms/alera_text_field.dart';
 import 'package:alera/src/design_system/icons/alera_file_icon.dart';
 import 'package:alera/src/design_system/icons/alera_icons.dart';
@@ -15,6 +16,9 @@ import 'package:alera/src/design_system/layout/alera_dialog.dart';
 import 'package:alera/src/features/external_editor/application/external_editor_providers.dart';
 import 'package:alera/src/features/external_editor/domain/external_editor_launcher.dart';
 import 'package:alera/src/features/external_editor/domain/external_editor_spec.dart';
+import 'package:alera/src/features/keyboard/application/keybinding_resolver.dart';
+import 'package:alera/src/features/keyboard/domain/key_chord.dart';
+import 'package:alera/src/features/keyboard/domain/keyboard_action.dart';
 import 'package:alera/src/features/workbench/application/workspace_file_open_coordinator_provider.dart';
 import 'package:alera/src/features/workbench/application/workspace_file_service.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
@@ -363,6 +367,17 @@ class _QuickOpenDialogState extends ConsumerState<QuickOpenDialog> {
     if (event is! KeyDownEvent) {
       return KeyEventResult.ignored;
     }
+    final action =
+        KeybindingResolver(
+          settings: ref.read(settingsControllerProvider).keyboard,
+        ).resolveAction(
+          event,
+          KeyModifierState.fromKeyboard(HardwareKeyboard.instance),
+        );
+    if (action?.id == KeyboardActionId.openQuickOpen) {
+      _focusQuery();
+      return KeyEventResult.handled;
+    }
     switch (event.logicalKey) {
       case LogicalKeyboardKey.escape:
         Navigator.of(context).pop();
@@ -379,6 +394,14 @@ class _QuickOpenDialogState extends ConsumerState<QuickOpenDialog> {
       default:
         return KeyEventResult.ignored;
     }
+  }
+
+  void _focusQuery() {
+    aleraFocusSearchInput(
+      focusNode: _queryFocusNode,
+      controller: _queryController,
+      canFocus: () => mounted && (ModalRoute.of(context)?.isCurrent ?? true),
+    );
   }
 
   @override
@@ -431,6 +454,7 @@ class _QuickOpenDialogState extends ConsumerState<QuickOpenDialog> {
                 ),
                 const SizedBox(height: AleraTokens.space16),
                 AleraTextField(
+                  key: const ValueKey<String>('quick-open-query-input'),
                   controller: _queryController,
                   focusNode: _queryFocusNode,
                   autofocus: true,

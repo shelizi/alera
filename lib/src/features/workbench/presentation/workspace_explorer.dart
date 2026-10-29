@@ -6,6 +6,7 @@ import 'package:alera/src/app/providers.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/buttons/alera_icon_button.dart';
 import 'package:alera/src/design_system/feedback/alera_toast.dart';
+import 'package:alera/src/design_system/forms/alera_search_focus.dart';
 import 'package:alera/src/design_system/forms/alera_search_field.dart';
 import 'package:alera/src/design_system/forms/alera_text_field.dart';
 import 'package:alera/src/design_system/icons/alera_file_icon.dart';
@@ -283,6 +284,27 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
       onMenuOpening: _suppressBackgroundMenuOnce,
       onAction: _handleMenuAction,
     );
+    return CallbackShortcuts(
+      bindings: <ShortcutActivator, VoidCallback>{
+        SingleActivator(
+          LogicalKeyboardKey.keyF,
+          control: Theme.of(context).platform != TargetPlatform.macOS,
+          meta: Theme.of(context).platform == TargetPlatform.macOS,
+        ): _focusFilter,
+      },
+      child: _buildExplorerContents(entryMenuDelegate),
+    );
+  }
+
+  void _focusFilter() {
+    aleraFocusSearchInput(
+      focusNode: _filterFocusNode,
+      controller: _filterController,
+      canFocus: () => mounted && _filterFocusNode.canRequestFocus,
+    );
+  }
+
+  Widget _buildExplorerContents(_ExplorerMenuDelegate entryMenuDelegate) {
     return Column(
       crossAxisAlignment: .stretch,
       children: <Widget>[
@@ -314,6 +336,7 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
             AleraTokens.space8,
           ),
           child: AleraSearchField(
+            key: const ValueKey<String>('workspace-explorer-filter-input'),
             controller: _filterController,
             focusNode: _filterFocusNode,
             hintText: 'Filter files...',

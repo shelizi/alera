@@ -4,6 +4,7 @@ import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/buttons/alera_icon_button.dart';
 import 'package:alera/src/design_system/feedback/alera_toast.dart';
+import 'package:alera/src/design_system/forms/alera_search_focus.dart';
 import 'package:alera/src/design_system/forms/alera_search_field.dart';
 import 'package:alera/src/design_system/forms/alera_text_actions_scope.dart';
 import 'package:alera/src/design_system/icons/alera_file_icon.dart';
@@ -108,6 +109,9 @@ class _WorkspaceGitDiffPanelState extends ConsumerState<WorkspaceGitDiffPanel> {
   final FocusNode _messageFocusNode = FocusNode();
   final TextEditingController _filterController = TextEditingController();
   final FocusNode _filterFocusNode = FocusNode(debugLabel: 'git-diff-filter');
+  final FocusNode _changesListFocusNode = FocusNode(
+    debugLabel: 'git-changes-list',
+  );
   final Set<String> _collapsedSections = <String>{};
   final Set<String> _collapsedTreeNodes = <String>{};
   final Set<String> _expandedSubmodules = <String>{};
@@ -212,10 +216,28 @@ class _WorkspaceGitDiffPanelState extends ConsumerState<WorkspaceGitDiffPanel> {
     _messageFocusNode.dispose();
     _filterController.dispose();
     _filterFocusNode.dispose();
+    _changesListFocusNode.dispose();
     super.dispose();
   }
 
   void _setPanelState(VoidCallback fn) => setState(fn);
+
+  void _focusFilter() {
+    aleraFocusSearchInput(
+      focusNode: _filterFocusNode,
+      controller: _filterController,
+      canFocus: () => mounted && _filterFocusNode.canRequestFocus,
+    );
+  }
+
+  Widget _focusableChangesList(Widget child) => Focus(
+    focusNode: _changesListFocusNode,
+    child: Listener(
+      behavior: HitTestBehavior.deferToChild,
+      onPointerDown: (_) => _changesListFocusNode.requestFocus(),
+      child: child,
+    ),
+  );
 
   Object _panelUiStateIdentifier(String scopePath) =>
       'workspace-git-diff-ui:$scopePath';
@@ -281,7 +303,7 @@ class _WorkspaceGitDiffPanelState extends ConsumerState<WorkspaceGitDiffPanel> {
     final installedEditors =
         ref.watch(installedExternalEditorsProvider).value ??
         const <ExternalEditorSpec>[];
-    return Column(
+    final panel = Column(
       crossAxisAlignment: .stretch,
       children: <Widget>[
         _SourceControlToolbar(
@@ -342,42 +364,44 @@ class _WorkspaceGitDiffPanelState extends ConsumerState<WorkspaceGitDiffPanel> {
                               : 'No files match the current filter',
                         );
                       }
-                      return _GitDiffGroups(
-                        groups: _groupsFor(status),
-                        filterQuery: _filterController.text,
-                        workspacePath: widget.sourceControlScope.path,
-                        viewMode: widget.viewMode,
-                        busy: data.isBusy,
-                        collapsedSections: _collapsedSections,
-                        collapsedTreeNodes: _collapsedTreeNodes,
-                        expandedSubmodules: _expandedSubmodules,
-                        onToggleSection: _toggleSectionCollapsed,
-                        onToggleTreeNode: _toggleTreeNodeCollapsed,
-                        onToggleSubmodule: _toggleSubmodule,
-                        onOpenGitDiff: _openGitDiff,
-                        onOpenFile: widget.onOpenFile == null
-                            ? null
-                            : _openWorkspaceFile,
-                        onOpenWithDefaultApplication:
-                            _openWorkspaceFileWithDefaultApplication,
-                        onOpenExternally: _openWorkspaceFileExternally,
-                        externalEditor: resolvedEditor,
-                        installedExternalEditors: installedEditors,
-                        onRevealInExplorer: _revealInExplorer,
-                        onViewFileHistory: _openSourceFileHistory,
-                        onCompareLatestGitRevision:
-                            _compareSourceFileWithLatestGitRevision,
-                        onCompareGitBranch: _compareSourceFileWithBranch,
-                        onAddToGitIgnore: _addToGitIgnore,
-                        onStage: _stageEntry,
-                        onUnstage: _unstageEntry,
-                        onDiscard: _discardEntry,
-                        onStageArea: _stageArea,
-                        onUnstageArea: _unstageArea,
-                        onDiscardArea: _discardAreaWithConfirmation,
-                        onStagePath: _stage,
-                        onUnstagePath: _unstage,
-                        onDiscardPath: _discard,
+                      return _focusableChangesList(
+                        _GitDiffGroups(
+                          groups: _groupsFor(status),
+                          filterQuery: _filterController.text,
+                          workspacePath: widget.sourceControlScope.path,
+                          viewMode: widget.viewMode,
+                          busy: data.isBusy,
+                          collapsedSections: _collapsedSections,
+                          collapsedTreeNodes: _collapsedTreeNodes,
+                          expandedSubmodules: _expandedSubmodules,
+                          onToggleSection: _toggleSectionCollapsed,
+                          onToggleTreeNode: _toggleTreeNodeCollapsed,
+                          onToggleSubmodule: _toggleSubmodule,
+                          onOpenGitDiff: _openGitDiff,
+                          onOpenFile: widget.onOpenFile == null
+                              ? null
+                              : _openWorkspaceFile,
+                          onOpenWithDefaultApplication:
+                              _openWorkspaceFileWithDefaultApplication,
+                          onOpenExternally: _openWorkspaceFileExternally,
+                          externalEditor: resolvedEditor,
+                          installedExternalEditors: installedEditors,
+                          onRevealInExplorer: _revealInExplorer,
+                          onViewFileHistory: _openSourceFileHistory,
+                          onCompareLatestGitRevision:
+                              _compareSourceFileWithLatestGitRevision,
+                          onCompareGitBranch: _compareSourceFileWithBranch,
+                          onAddToGitIgnore: _addToGitIgnore,
+                          onStage: _stageEntry,
+                          onUnstage: _unstageEntry,
+                          onDiscard: _discardEntry,
+                          onStageArea: _stageArea,
+                          onUnstageArea: _unstageArea,
+                          onDiscardArea: _discardAreaWithConfirmation,
+                          onStagePath: _stage,
+                          onUnstagePath: _unstage,
+                          onDiscardPath: _discard,
+                        ),
                       );
                     },
                   ),
@@ -411,6 +435,16 @@ class _WorkspaceGitDiffPanelState extends ConsumerState<WorkspaceGitDiffPanel> {
           ),
         ),
       ],
+    );
+    return CallbackShortcuts(
+      bindings: <ShortcutActivator, VoidCallback>{
+        SingleActivator(
+          LogicalKeyboardKey.keyF,
+          control: Theme.of(context).platform != TargetPlatform.macOS,
+          meta: Theme.of(context).platform == TargetPlatform.macOS,
+        ): _focusFilter,
+      },
+      child: panel,
     );
   }
 
