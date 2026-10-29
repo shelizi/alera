@@ -127,7 +127,15 @@ final class TerminalRuntimeSessionOwner
   void closeTab(String tabId) {
     final session = _sessions.remove(tabId);
     if (session != null) {
-      _disposeSession(session, terminatePty: true);
+      final sessionId = session.terminalSessionId;
+      // Multiple views may point at the same durable PTY (for example after
+      // a tab is moved between windows). An explicit close releases this
+      // view, but must not terminate the process while another local view
+      // still owns that same session. The final view retains close-to-kill.
+      final anotherViewOwnsSession =
+          sessionId.isNotEmpty &&
+          _sessions.values.any((other) => other.terminalSessionId == sessionId);
+      _disposeSession(session, terminatePty: !anotherViewOwnsSession);
     }
   }
 
@@ -137,10 +145,9 @@ final class TerminalRuntimeSessionOwner
         .map((entry) => entry.key)
         .toList(growable: false);
     for (final tabId in removed) {
-      final session = _sessions.remove(tabId);
-      if (session != null) {
-        _disposeSession(session, terminatePty: true);
-      }
+      // Closing a workspace must respect other live views of the same
+      // durable PTY, including a view in a different workspace/window.
+      closeTab(tabId);
     }
   }
 
