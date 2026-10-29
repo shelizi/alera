@@ -197,14 +197,23 @@ final class WorkbenchSelectionOwner {
   }
 
   Future<void> goBack() async {
+    int? navigationGeneration;
     final changed = await _navigationHistory.navigateBack(
       _host.readState(),
-      select: (selection) => selectWorkspace(
-        project: selection.project,
-        workspace: selection.workspace,
-        ensureInitialTerminal: true,
-        recordHistory: false,
-      ),
+      select: (selection) {
+        final pending = selectWorkspace(
+          project: selection.project,
+          workspace: selection.workspace,
+          ensureInitialTerminal: true,
+          recordHistory: false,
+        );
+        navigationGeneration = _selectionEpoch.current;
+        return pending;
+      },
+      canCommit: () =>
+          !_host.isDisposed &&
+          navigationGeneration != null &&
+          _selectionEpoch.isCurrent(navigationGeneration!),
     );
     if (changed) {
       _notifyNavigationHistoryChanged();
@@ -212,14 +221,23 @@ final class WorkbenchSelectionOwner {
   }
 
   Future<void> goForward() async {
+    int? navigationGeneration;
     final changed = await _navigationHistory.navigateForward(
       _host.readState(),
-      select: (selection) => selectWorkspace(
-        project: selection.project,
-        workspace: selection.workspace,
-        ensureInitialTerminal: true,
-        recordHistory: false,
-      ),
+      select: (selection) {
+        final pending = selectWorkspace(
+          project: selection.project,
+          workspace: selection.workspace,
+          ensureInitialTerminal: true,
+          recordHistory: false,
+        );
+        navigationGeneration = _selectionEpoch.current;
+        return pending;
+      },
+      canCommit: () =>
+          !_host.isDisposed &&
+          navigationGeneration != null &&
+          _selectionEpoch.isCurrent(navigationGeneration!),
     );
     if (changed) {
       _notifyNavigationHistoryChanged();

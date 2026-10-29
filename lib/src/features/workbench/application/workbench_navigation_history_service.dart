@@ -69,12 +69,18 @@ final class WorkbenchNavigationHistoryService {
   Future<bool> navigateBack(
     WorkbenchState state, {
     required WorkbenchNavigationSelectionHandler select,
+    bool Function()? canCommit,
   }) async {
     final selection = peekBack(state);
     if (selection == null) {
       return false;
     }
     await select(selection);
+    // A second workspace selection may supersede the first while hydration
+    // awaits IO. Do not advance history for a selection that never won.
+    if (canCommit != null && !canCommit()) {
+      return false;
+    }
     commitBack(selection);
     return true;
   }
@@ -82,12 +88,16 @@ final class WorkbenchNavigationHistoryService {
   Future<bool> navigateForward(
     WorkbenchState state, {
     required WorkbenchNavigationSelectionHandler select,
+    bool Function()? canCommit,
   }) async {
     final selection = peekForward(state);
     if (selection == null) {
       return false;
     }
     await select(selection);
+    if (canCommit != null && !canCommit()) {
+      return false;
+    }
     commitForward(selection);
     return true;
   }

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:alera/src/features/projects/domain/project.dart';
 import 'package:alera/src/features/workbench/application/workbench_navigation_history_service.dart';
 import 'package:alera/src/features/workbench/application/workbench_state.dart';
@@ -5,6 +7,53 @@ import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test(
+    'stale back navigation does not commit history after a newer selection',
+    () async {
+      final service = WorkbenchNavigationHistoryService();
+      final state = _navigationState();
+      for (final workspace in state.workspacesFor('p')) {
+        service.record(project: state.projects.first, workspace: workspace);
+      }
+      final delayedHydration = Completer<void>();
+      var selectionIsCurrent = true;
+      final pending = service.navigateBack(
+        state,
+        select: (_) => delayedHydration.future,
+        canCommit: () => selectionIsCurrent,
+      );
+      selectionIsCurrent = false;
+      delayedHydration.complete();
+      expect(await pending, isFalse);
+      expect(service.peekBack(state)?.workspace.id, 'w1');
+      expect(service.peekForward(state), isNull);
+    },
+  );
+
+  test(
+    'stale forward navigation leaves the previous cursor untouched',
+    () async {
+      final service = WorkbenchNavigationHistoryService();
+      final state = _navigationState();
+      for (final workspace in state.workspacesFor('p')) {
+        service.record(project: state.projects.first, workspace: workspace);
+      }
+      service.commitBack(service.peekBack(state)!);
+      final delayedHydration = Completer<void>();
+      var selectionIsCurrent = true;
+      final pending = service.navigateForward(
+        state,
+        select: (_) => delayedHydration.future,
+        canCommit: () => selectionIsCurrent,
+      );
+      selectionIsCurrent = false;
+      delayedHydration.complete();
+      expect(await pending, isFalse);
+      expect(service.peekForward(state)?.workspace.id, 'w2');
+      expect(service.peekBack(state), isNull);
+    },
+  );
+
   test(
     'resolves back and forward entries to live project/workspace objects',
     () {
