@@ -213,7 +213,7 @@ extension _WorkspaceGitDiffSurfaceLoading on _WorkspaceGitDiffSurfaceState {
       return;
     }
     var accumulated = firstPage.result;
-    var accumulatedBytes = _diffPreviewBytes(firstPage.result);
+    var accumulatedBytes = gitDiffPreviewBytes(firstPage.result);
     if (accumulatedBytes >= _maxProgressiveDiffPreviewBytes) {
       return;
     }
@@ -246,7 +246,7 @@ extension _WorkspaceGitDiffSurfaceLoading on _WorkspaceGitDiffSurfaceState {
         truncated: page.truncated,
       );
       if (result.files.isNotEmpty) {
-        final resultBytes = _diffPreviewBytes(result);
+        final resultBytes = gitDiffPreviewBytes(result);
         if (resultBytes > _maxProgressiveDiffPreviewBytes - accumulatedBytes) {
           _updateDiffState(() {
             _loadedResult = GitDiffResult(
@@ -287,16 +287,6 @@ extension _WorkspaceGitDiffSurfaceLoading on _WorkspaceGitDiffSurfaceState {
     filePaths: filePaths,
     whitespaceMode: _whitespaceMode,
   );
-
-  int _diffPreviewBytes(GitDiffResult result) {
-    var total = 0;
-    for (final file in result.files) {
-      for (final line in file.lines) {
-        total += line.text.length + 1;
-      }
-    }
-    return total;
-  }
 
   bool _isCurrentDiffLoad(
     Future<GitDiffResult> nextFuture,

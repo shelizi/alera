@@ -52,6 +52,27 @@ final class _DiffSnapshotFake implements GitWorkingTreeDiffQueryPort {
 const _file = GitDiffFile(path: 'a.dart', area: .unstaged, status: .modified);
 
 void main() {
+  test('preview limit accounting preserves line text lengths and newlines', () {
+    const result = GitDiffResult(
+      files: [
+        GitDiffFile(
+          path: 'a.dart',
+          area: .unstaged,
+          status: .modified,
+          lines: [
+            GitDiffLine.addition('a'),
+            GitDiffLine.context('你好'),
+            GitDiffLine.deletion('😀'),
+          ],
+        ),
+      ],
+    );
+    // Dart String.length counts UTF-16 code units (the legacy preview limit),
+    // not UTF-8 encoded bytes. Keep this precise parity until benchmarked.
+    expect(gitDiffPreviewBytes(result), 8);
+    expect(gitDiffPreviewBytes(const GitDiffResult(files: [])), 0);
+  });
+
   test(
     'stable status snapshot deduplicates paths before querying the first page',
     () async {

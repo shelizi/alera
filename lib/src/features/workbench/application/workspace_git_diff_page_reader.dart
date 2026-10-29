@@ -1,6 +1,19 @@
 import 'package:alera/src/shared/infra/git/git_diff_models.dart';
 import 'package:alera/src/shared/infra/git/git_working_tree_diff_query_port.dart';
 
+/// Preview budget parity with the existing Dart UI: String.length counts
+/// UTF-16 code units plus one logical separator per diff line.
+/// This is not a UTF-8 allocation estimate.
+int gitDiffPreviewBytes(GitDiffResult result) {
+  var total = 0;
+  for (final file in result.files) {
+    for (final line in file.lines) {
+      total += line.text.length + 1;
+    }
+  }
+  return total;
+}
+
 class const WorkspaceGitDiffFirstPage({
   required final GitDiffResult result,
   required final int? nextIndex,
