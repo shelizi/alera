@@ -105,7 +105,12 @@ class _WorkspaceBranchStatusBarControlState
   Future<void> _copyBranchName(String branch) async {
     await Clipboard.setData(ClipboardData(text: branch));
     if (mounted) {
-      AleraToast.show(context, message: 'Copied branch name: $branch');
+      AleraToast.show(
+        context,
+        message: context.trTemplate('Copied branch name: {branch}', {
+          'branch': branch,
+        }),
+      );
     }
   }
 
@@ -118,8 +123,11 @@ class _WorkspaceBranchStatusBarControlState
         position.dx,
         position.dy,
       ),
-      items: const <PopupMenuEntry<bool>>[
-        PopupMenuItem<bool>(value: true, child: Text('Copy Branch Name')),
+      items: <PopupMenuEntry<bool>>[
+        PopupMenuItem<bool>(
+          value: true,
+          child: Text(context.tr('Copy Branch Name')),
+        ),
       ],
     );
     if (selected == true && mounted) {
@@ -347,8 +355,10 @@ class _WorkspaceBranchStatusBarControlState
                                           ),
                                           tooltip:
                                               favorites.contains(row.branch)
-                                              ? 'Remove From Favorites'
-                                              : 'Add To Favorites',
+                                              ? context.tr(
+                                                  'Remove From Favorites',
+                                                )
+                                              : context.tr('Add To Favorites'),
                                           icon: favorites.contains(row.branch)
                                               ? Icons.star_rounded
                                               : Icons.star_border_rounded,

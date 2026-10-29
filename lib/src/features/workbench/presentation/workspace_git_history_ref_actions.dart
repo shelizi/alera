@@ -1,3 +1,4 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/design_system/feedback/alera_toast.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_git_history_input_dialogs.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_git_history_ref_dialogs.dart';
@@ -76,7 +77,10 @@ Future<void> runGitHistoryRefMenuAction({
           oldName: itemRef.name,
           newName: newName,
         ),
-        successMessage: 'Renamed ${itemRef.name} to $newName',
+        successMessage: context.trTemplate('Renamed {old} to {new}', {
+          'old': itemRef.name,
+          'new': newName,
+        }),
         onMutationSuccess: onMutationSuccess,
         errorMessage: errorMessage,
       );
@@ -106,7 +110,9 @@ Future<void> runGitHistoryRefMenuAction({
         operation: () async {
           await backend.mergeRef(path: path, ref: itemRef.name);
         },
-        successMessage: 'Merged ${itemRef.name}',
+        successMessage: context.trTemplate('Merged {branch}', {
+          'branch': itemRef.name,
+        }),
         onMutationSuccess: onMutationSuccess,
         errorMessage: errorMessage,
         conflictMessage:
@@ -123,7 +129,9 @@ Future<void> runGitHistoryRefMenuAction({
       await _runGitHistoryMutation(
         context: context,
         operation: () => backend.rebaseOnto(path: path, ontoRef: itemRef.name),
-        successMessage: 'Rebased onto ${itemRef.name}',
+        successMessage: context.trTemplate('Rebased onto {branch}', {
+          'branch': itemRef.name,
+        }),
         onMutationSuccess: onMutationSuccess,
         errorMessage: errorMessage,
         conflictMessage: 'Rebase conflicts were aborted. Resolve conflicts in Source Control.',
@@ -147,7 +155,9 @@ Future<void> runGitHistoryRefMenuAction({
           outputPath: outputPath,
           format: format,
         ),
-        successMessage: 'Created archive $outputPath',
+        successMessage: context.trTemplate('Created archive {path}', {
+          'path': outputPath,
+        }),
         onMutationSuccess: onMutationSuccess,
         errorMessage: errorMessage,
       );
@@ -192,7 +202,9 @@ Future<void> runGitHistoryRefMenuAction({
       await _runGitHistoryMutation(
         context: context,
         operation: onPull,
-        successMessage: 'Pulled ${itemRef.name}',
+        successMessage: context.trTemplate('Pulled {branch}', {
+          'branch': itemRef.name,
+        }),
         onMutationSuccess: onMutationSuccess,
         errorMessage: errorMessage,
       );
@@ -201,7 +213,9 @@ Future<void> runGitHistoryRefMenuAction({
         context: context,
         operation: () =>
             backend.pushTag(path: path, name: itemRef.name, remote: 'origin'),
-        successMessage: 'Pushed tag ${itemRef.name}',
+        successMessage: context.trTemplate('Pushed tag {tag}', {
+          'tag': itemRef.name,
+        }),
         onMutationSuccess: onMutationSuccess,
         errorMessage: errorMessage,
       );
@@ -216,7 +230,9 @@ Future<void> runGitHistoryRefMenuAction({
       await _runGitHistoryMutation(
         context: context,
         operation: () => backend.deleteTag(path: path, name: itemRef.name),
-        successMessage: 'Deleted tag ${itemRef.name}',
+        successMessage: context.trTemplate('Deleted tag {tag}', {
+          'tag': itemRef.name,
+        }),
         onMutationSuccess: onMutationSuccess,
         errorMessage: errorMessage,
       );
@@ -306,7 +322,11 @@ Future<void> runGitHistoryOpenInWorktree({
     await onMutationSuccess();
   } catch (error) {
     if (context.mounted) {
-      AleraToast.show(context, message: errorMessage(error), tone: .error);
+      AleraToast.show(
+        context,
+        message: context.tr(errorMessage(error)),
+        tone: .error,
+      );
     }
   }
 }
@@ -340,14 +360,20 @@ Future<void> _deleteBranch({
       return;
     }
     if (!force) {
-      AleraToast.show(context, message: errorMessage(error), tone: .error);
+      AleraToast.show(
+        context,
+        message: context.tr(errorMessage(error)),
+        tone: .error,
+      );
       return;
     }
     await _runGitHistoryMutation(
       context: context,
       operation: () =>
           backend.deleteBranch(repoPath: path, branch: branch, force: true),
-      successMessage: 'Deleted branch $branch',
+      successMessage: context.trTemplate('Deleted branch {branch}', {
+        'branch': branch,
+      }),
       onMutationSuccess: onMutationSuccess,
       errorMessage: errorMessage,
     );
@@ -358,7 +384,9 @@ Future<void> _deleteBranch({
   }
   await _completeGitHistoryMutation(
     context: context,
-    successMessage: 'Deleted branch $branch',
+    successMessage: context.trTemplate('Deleted branch {branch}', {
+      'branch': branch,
+    }),
     onMutationSuccess: onMutationSuccess,
   );
 }
@@ -376,7 +404,9 @@ Future<void> _deleteRemoteBranch({
     if (context.mounted) {
       AleraToast.show(
         context,
-        message: 'Could not parse remote branch $remoteBranch',
+        message: context.trTemplate('Could not parse remote branch {branch}', {
+          'branch': remoteBranch,
+        }),
         tone: .error,
       );
     }
@@ -396,7 +426,10 @@ Future<void> _deleteRemoteBranch({
     context: context,
     operation: () =>
         backend.deleteRemoteBranch(path: path, remote: remote, branch: branch),
-    successMessage: 'Deleted $branch on $remote',
+    successMessage: context.trTemplate('Deleted {branch} on {remote}', {
+      'branch': branch,
+      'remote': remote,
+    }),
     onMutationSuccess: onMutationSuccess,
     errorMessage: errorMessage,
   );
@@ -420,12 +453,18 @@ Future<void> _checkoutRemoteBranch({
     }
     await _completeGitHistoryMutation(
       context: context,
-      successMessage: 'Checked out $localBranch',
+      successMessage: context.trTemplate('Checked out {name}', {
+        'name': localBranch,
+      }),
       onMutationSuccess: onMutationSuccess,
     );
   } catch (error) {
     if (context.mounted) {
-      AleraToast.show(context, message: errorMessage(error), tone: .error);
+      AleraToast.show(
+        context,
+        message: context.tr(errorMessage(error)),
+        tone: .error,
+      );
     }
   }
 }
@@ -455,7 +494,7 @@ Future<void> _runGitHistoryMutation({
     final message = error is GitConflictException && conflictMessage != null
         ? conflictMessage
         : errorMessage(error);
-    AleraToast.show(context, message: message, tone: .error);
+    AleraToast.show(context, message: context.tr(message), tone: .error);
   }
 }
 
@@ -467,7 +506,7 @@ Future<void> _completeGitHistoryMutation({
   if (!context.mounted) {
     return;
   }
-  AleraToast.show(context, message: successMessage, tone: .success);
+  AleraToast.show(context, message: context.tr(successMessage), tone: .success);
   await onMutationSuccess();
 }
 

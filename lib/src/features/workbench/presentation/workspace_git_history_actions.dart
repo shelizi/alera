@@ -196,9 +196,11 @@ Future<bool> showGitCheckoutCommitConfirmation(
     context: context,
     builder: (_) => AleraConfirmDialog(
       title: 'Checkout Commit?',
-      message:
-          'Detaches HEAD at ${gitHistoryItemShortId(item)} "${item.subject}". '
-          'Commits made in this state do not belong to a branch.',
+      message: context.trTemplate(
+        'Detaches HEAD at {commit} "{subject}". '
+        'Commits made in this state do not belong to a branch.',
+        {'commit': gitHistoryItemShortId(item), 'subject': item.subject},
+      ),
       confirmLabel: 'Checkout',
     ),
   );
@@ -214,9 +216,11 @@ Future<bool> showGitRevertCommitConfirmation(
     context: context,
     builder: (_) => AleraConfirmDialog(
       title: 'Revert Commit?',
-      message:
-          'Creates a new commit that reverts the changes in '
-          '${gitHistoryItemShortId(item)} "${item.subject}".',
+      message: context.trTemplate(
+        'Creates a new commit that reverts the changes in '
+        '{commit} "{subject}".',
+        {'commit': gitHistoryItemShortId(item), 'subject': item.subject},
+      ),
       confirmLabel: 'Revert',
     ),
   );
@@ -233,15 +237,21 @@ Future<bool> showGitResetToCommitConfirmation(
   final shortId = gitHistoryItemShortId(item);
   final subject = item.subject;
   final message = switch (mode) {
-    GitResetMode.soft =>
-      'Moves the current branch to $shortId "$subject". Staged and working '
-          'tree changes are kept.',
-    GitResetMode.mixed =>
-      'Moves the current branch to $shortId "$subject". Working tree '
-          'changes are kept but become unstaged.',
-    GitResetMode.hard =>
-      'Moves the current branch to $shortId "$subject" and discards all '
-          'working tree changes. This cannot be undone.',
+    GitResetMode.soft => context.trTemplate(
+      'Moves the current branch to {commit} "{subject}". '
+      'Staged and working tree changes are kept.',
+      {'commit': shortId, 'subject': subject},
+    ),
+    GitResetMode.mixed => context.trTemplate(
+      'Moves the current branch to {commit} "{subject}". '
+      'Working tree changes are kept but become unstaged.',
+      {'commit': shortId, 'subject': subject},
+    ),
+    GitResetMode.hard => context.trTemplate(
+      'Moves the current branch to {commit} "{subject}" and discards all '
+      'working tree changes. This cannot be undone.',
+      {'commit': shortId, 'subject': subject},
+    ),
   };
   final confirmed = await showDialog<bool>(
     context: context,

@@ -187,9 +187,9 @@ void registerAppLocalizationTailTests() {
     expect(l10n.translate('Changes discarded'), '已捨棄變更');
     expect(l10n.translate('Change discarded'), '已捨棄變更');
     expect(l10n.translate('Discard Changes?'), '捨棄變更？');
-    expect(l10n.translate('Checkout Commit?'), 'Checkout Commit？');
-    expect(l10n.translate('Revert Commit?'), 'Revert Commit？');
-    expect(l10n.translate('Reset Current Branch?'), '重設目前 Branch？');
+    expect(l10n.translate('Checkout Commit?'), '要簽出此 Commit 嗎？');
+    expect(l10n.translate('Revert Commit?'), '要還原此 Commit 嗎？');
+    expect(l10n.translate('Reset Current Branch?'), '要重設目前分支嗎？');
     expect(l10n.translate('Checked out abc1234'), '已 Checkout abc1234');
     expect(l10n.translate('Reverted abc1234'), '已 Revert abc1234');
     expect(l10n.translate('Reset to abc1234'), '已重設至 abc1234');

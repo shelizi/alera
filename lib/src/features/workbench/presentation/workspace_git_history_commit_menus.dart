@@ -1,3 +1,4 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/features/ai_assist/application/ai_assist_errors.dart';
 import 'package:alera/src/features/workbench/application/workspace_service.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_git_history_ref_actions.dart';
@@ -57,7 +58,8 @@ Future<bool> runGitHistoryCommitMenuAction({
           name: input.name,
           message: input.message,
         ),
-        successMessage: () => 'Added tag ${input.name}',
+        successMessage: () =>
+            context.trTemplate('Added tag {tag}', {'tag': input.name}),
         onMutationSuccess: onMutationSuccess,
       );
     case GitHistoryCommitMenuAction.createBranch:
@@ -72,8 +74,10 @@ Future<bool> runGitHistoryCommitMenuAction({
           commitId: item.id,
           branch: branch,
         ),
-        successMessage: () =>
-            'Created branch $branch at ${gitHistoryItemShortId(item)}',
+        successMessage: () => context.trTemplate(
+          'Created branch {branch} at {commit}',
+          {'branch': branch, 'commit': gitHistoryItemShortId(item)},
+        ),
         onMutationSuccess: onMutationSuccess,
       );
     case GitHistoryCommitMenuAction.openInWorktree:
@@ -98,7 +102,9 @@ Future<bool> runGitHistoryCommitMenuAction({
             mainlineParent: item.parentIds.length > 1 ? 1 : null,
           );
         },
-        successMessage: () => 'Cherry-picked ${gitHistoryItemShortId(item)}',
+        successMessage: () => context.trTemplate('Cherry-picked {commit}', {
+          'commit': gitHistoryItemShortId(item),
+        }),
         conflictMessage: 'Cherry pick was aborted because of conflicts.',
         onMutationSuccess: onMutationSuccess,
       );
@@ -113,7 +119,9 @@ Future<bool> runGitHistoryCommitMenuAction({
       await _runGitHistoryMutation(
         context: context,
         operation: () => backend.dropCommit(path: path, commitId: item.id),
-        successMessage: () => 'Dropped ${gitHistoryItemShortId(item)}',
+        successMessage: () => context.trTemplate('Dropped {commit}', {
+          'commit': gitHistoryItemShortId(item),
+        }),
         conflictMessage: 'Drop was aborted because of conflicts.',
         onMutationSuccess: onMutationSuccess,
       );
@@ -137,8 +145,12 @@ Future<bool> runGitHistoryCommitMenuAction({
           mergeCommitId = await backend.mergeRef(path: path, ref: item.id);
         },
         successMessage: () => mergeCommitId == null
-            ? 'Current branch fast-forwarded to ${gitHistoryItemShortId(item)}'
-            : 'Merge commit created from ${gitHistoryItemShortId(item)}',
+            ? context.trTemplate('Current branch fast-forwarded to {commit}', {
+                'commit': gitHistoryItemShortId(item),
+              })
+            : context.trTemplate('Merge commit created from {commit}', {
+                'commit': gitHistoryItemShortId(item),
+              }),
         conflictMessage: 'Merge stopped with conflicts. Resolve conflicts in Source Control.',
         onMutationSuccess: onMutationSuccess,
       );
@@ -158,8 +170,10 @@ Future<bool> runGitHistoryCommitMenuAction({
       await _runGitHistoryMutation(
         context: context,
         operation: () => backend.rebaseOnto(path: path, ontoRef: item.id),
-        successMessage: () =>
-            'Rebased $branch onto ${gitHistoryItemShortId(item)}',
+        successMessage: () => context.trTemplate(
+          'Rebased {branch} onto {commit}',
+          {'branch': branch, 'commit': gitHistoryItemShortId(item)},
+        ),
         conflictMessage: 'Rebase was aborted because of conflicts.',
         onMutationSuccess: onMutationSuccess,
       );
@@ -187,7 +201,9 @@ Future<bool> runGitHistoryCommitMenuAction({
           outputPath: outputPath,
           format: format,
         ),
-        successMessage: () => 'Created archive at $outputPath',
+        successMessage: () => context.trTemplate('Created archive at {path}', {
+          'path': outputPath,
+        }),
         onMutationSuccess: onMutationSuccess,
         refreshAfterSuccess: false,
       );
@@ -216,7 +232,11 @@ Future<void> _runGitHistoryMutation({
     if (!context.mounted) {
       return;
     }
-    AleraToast.show(context, message: successMessage(), tone: .success);
+    AleraToast.show(
+      context,
+      message: context.tr(successMessage()),
+      tone: .success,
+    );
     if (refreshAfterSuccess) {
       await onMutationSuccess();
     }
@@ -226,7 +246,7 @@ Future<void> _runGitHistoryMutation({
     }
     AleraToast.show(
       context,
-      message: conflictMessage ?? gitHistoryErrorMessage(error),
+      message: context.tr(conflictMessage ?? gitHistoryErrorMessage(error)),
       tone: .error,
     );
   }
@@ -275,9 +295,11 @@ Future<bool> showGitDropCommitConfirmation(
     context: context,
     builder: (_) => AleraConfirmDialog(
       title: 'Drop Commit?',
-      message:
-          'Removes ${gitHistoryItemShortId(item)} "${item.subject}" from '
-          'the current branch. This cannot be undone.',
+      message: context.trTemplate(
+        'Removes {commit} "{subject}" from the current branch. '
+        'This cannot be undone.',
+        {'commit': gitHistoryItemShortId(item), 'subject': item.subject},
+      ),
       confirmLabel: 'Drop',
       destructive: true,
     ),
@@ -295,7 +317,10 @@ Future<bool> showGitMergeCommitConfirmation(
     context: context,
     builder: (_) => AleraConfirmDialog(
       title: 'Merge Commit?',
-      message: 'Merge ${gitHistoryItemShortId(item)} into $currentBranchName?',
+      message: context.trTemplate('Merge {commit} into {branch}?', {
+        'commit': gitHistoryItemShortId(item),
+        'branch': currentBranchName,
+      }),
       confirmLabel: 'Merge',
     ),
   );
@@ -312,9 +337,15 @@ Future<bool> showGitRebaseCommitConfirmation(
     context: context,
     builder: (_) => AleraConfirmDialog(
       title: 'Rebase Current Branch?',
-      message:
-          'Rebase $currentBranchName onto ${gitHistoryItemShortId(item)} '
-          '"${item.subject}". This rewrites the current branch history.',
+      message: context.trTemplate(
+        'Rebase {branch} onto {commit} "{subject}". '
+        'This rewrites the current branch history.',
+        {
+          'branch': currentBranchName,
+          'commit': gitHistoryItemShortId(item),
+          'subject': item.subject,
+        },
+      ),
       confirmLabel: 'Rebase',
       destructive: true,
     ),

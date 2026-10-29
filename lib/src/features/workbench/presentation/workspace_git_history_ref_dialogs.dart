@@ -27,7 +27,9 @@ Future<bool> showGitHistoryDeleteBranchConfirmation(
     context: context,
     builder: (_) => AleraConfirmDialog(
       title: 'Delete Branch?',
-      message: 'Delete the local branch "$branch"?',
+      message: context.trTemplate('Delete the local branch "{branch}"?', {
+        'branch': branch,
+      }),
       confirmLabel: 'Delete',
       destructive: true,
     ),
@@ -43,9 +45,11 @@ Future<bool> showGitHistoryForceDeleteBranchConfirmation(
     context: context,
     builder: (_) => AleraConfirmDialog(
       title: 'Force Delete Branch?',
-      message:
-          'Branch "$branch" was not fully merged. Force deletion removes '
-          'the branch reference and cannot be undone.',
+      message: context.trTemplate(
+        'Branch "{branch}" was not fully merged. Force deletion removes '
+        'the branch reference and cannot be undone.',
+        {'branch': branch},
+      ),
       confirmLabel: 'Delete Forcefully',
       destructive: true,
     ),
@@ -61,7 +65,10 @@ Future<bool> showGitHistoryDeleteRemoteBranchConfirmation(
   final result = await showDialog<bool>(
     context: context,
     builder: (_) => AleraConfirmDialog(
-      title: 'Delete $branch on $remote?',
+      title: context.trTemplate('Delete {branch} on {remote}?', {
+        'branch': branch,
+        'remote': remote,
+      }),
       message: 'This deletes the remote branch and cannot be undone.',
       confirmLabel: 'Delete',
       destructive: true,
@@ -78,7 +85,9 @@ Future<bool> showGitHistoryDeleteTagConfirmation(
     context: context,
     builder: (_) => AleraConfirmDialog(
       title: 'Delete Tag?',
-      message: 'Delete the local tag "$tag"?',
+      message: context.trTemplate('Delete the local tag "{tag}"?', {
+        'tag': tag,
+      }),
       confirmLabel: 'Delete',
       destructive: true,
     ),
@@ -94,7 +103,10 @@ Future<bool> showGitHistoryMergeConfirmation(
   final result = await showDialog<bool>(
     context: context,
     builder: (_) => AleraConfirmDialog(
-      title: 'Merge $branch into $currentBranch?',
+      title: context.trTemplate('Merge {branch} into {current}?', {
+        'branch': branch,
+        'current': currentBranch,
+      }),
       message: 'This creates a merge or fast-forward on the current branch.',
       confirmLabel: 'Merge',
     ),
@@ -109,8 +121,13 @@ Future<bool> showGitHistoryRebaseConfirmation(
   final result = await showDialog<bool>(
     context: context,
     builder: (_) => AleraConfirmDialog(
-      title: 'Rebase Current Branch onto $branch?',
-      message: 'The current branch will be replayed onto "$branch".',
+      title: context.trTemplate('Rebase Current Branch onto {branch}?', {
+        'branch': branch,
+      }),
+      message: context.trTemplate(
+        'The current branch will be replayed onto "{branch}".',
+        {'branch': branch},
+      ),
       confirmLabel: 'Rebase',
     ),
   );

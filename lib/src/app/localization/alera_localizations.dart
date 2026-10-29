@@ -5,6 +5,7 @@ import 'package:flutter/widgets.dart';
 part 'alera_localizations_dynamic.dart';
 part 'alera_localizations_dynamic_ja.dart';
 part 'alera_localizations_dynamic_zh_cn.dart';
+part 'alera_localizations_git_history.dart';
 part 'alera_localizations_ja_agents.dart';
 part 'alera_localizations_ja_settings.dart';
 part 'alera_localizations_ja_settings_extra.dart';
@@ -144,6 +145,16 @@ class AleraLocalizations {
     };
   }
 
+  /// Translates a message template before inserting runtime values. This keeps
+  /// branch names, commit subjects, and paths intact while letting locales
+  /// reorder the placeholders for natural grammar.
+  String translateTemplate(String source, Map<String, String> values) {
+    return translate(source).replaceAllMapped(
+      RegExp(r'\{([a-zA-Z][a-zA-Z0-9]*)\}'),
+      (match) => values[match.group(1)] ?? match.group(0)!,
+    );
+  }
+
   /// Static table lookup used by the dynamic pattern rules to translate the
   /// embedded label of a composed string. Falls back to the English source so
   /// runtime values such as branch names pass through untouched.
@@ -190,6 +201,7 @@ class AleraLocalizations {
     ..._traditionalChineseShell,
     ..._traditionalChineseAgents,
     ..._traditionalChineseSettings,
+    ..._traditionalChineseGitHistory,
   };
 
   static const Map<String, String> _simplifiedChinese = <String, String>{
@@ -227,6 +239,7 @@ class AleraLocalizations {
     ..._simplifiedChineseShell,
     ..._simplifiedChineseAgents,
     ..._simplifiedChineseSettings,
+    ..._simplifiedChineseGitHistory,
   };
 
   static const Map<String, String> _japanese = <String, String>{
@@ -264,6 +277,7 @@ class AleraLocalizations {
     ..._japaneseShell,
     ..._japaneseAgents,
     ..._japaneseSettings,
+    ..._japaneseGitHistory,
   };
 
   /// Source keys covered by every static table, used by parity tests.
@@ -313,4 +327,7 @@ extension AleraLocalizationContext on BuildContext {
       const AleraLocalizations(_localeEnglish);
 
   String tr(String source) => aleraLocalizations.translate(source);
+
+  String trTemplate(String source, Map<String, String> values) =>
+      aleraLocalizations.translateTemplate(source, values);
 }

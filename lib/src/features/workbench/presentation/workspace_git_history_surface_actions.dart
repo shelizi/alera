@@ -153,7 +153,7 @@ extension _WorkspaceGitHistorySurfaceActions
       if (mounted) {
         AleraToast.show(
           context,
-          message: gitHistoryErrorMessage(error),
+          message: context.tr(gitHistoryErrorMessage(error)),
           tone: .error,
         );
       }
@@ -191,7 +191,9 @@ extension _WorkspaceGitHistorySurfaceActions
     }
     await _runCommitMutation(
       (notifier) => notifier.checkoutCommit(item.id),
-      'Checked out ${gitHistoryItemShortId(item)}',
+      context.trTemplate('Checked out {name}', {
+        'name': gitHistoryItemShortId(item),
+      }),
     );
   }
 
@@ -206,7 +208,9 @@ extension _WorkspaceGitHistorySurfaceActions
         item.id,
         mainlineParent: item.parentIds.length > 1 ? 1 : null,
       ),
-      'Reverted ${gitHistoryItemShortId(item)}',
+      context.trTemplate('Reverted {commit}', {
+        'commit': gitHistoryItemShortId(item),
+      }),
     );
   }
 
@@ -221,7 +225,9 @@ extension _WorkspaceGitHistorySurfaceActions
     }
     await _runCommitMutation(
       (notifier) => notifier.resetToCommit(item.id, mode: mode),
-      'Reset to ${gitHistoryItemShortId(item)}',
+      context.trTemplate('Reset to {commit}', {
+        'commit': gitHistoryItemShortId(item),
+      }),
     );
   }
 
@@ -234,12 +240,20 @@ extension _WorkspaceGitHistorySurfaceActions
       if (!mounted) {
         return;
       }
-      AleraToast.show(context, message: successMessage, tone: .success);
+      AleraToast.show(
+        context,
+        message: context.tr(successMessage),
+        tone: .success,
+      );
       _compareCache.clear();
       await _reload();
     } catch (error) {
       if (mounted) {
-        AleraToast.show(context, message: error.toString(), tone: .error);
+        AleraToast.show(
+          context,
+          message: context.tr(error.toString()),
+          tone: .error,
+        );
       }
     }
   }
@@ -320,7 +334,7 @@ extension _WorkspaceGitHistorySurfaceActions
       if (mounted) {
         AleraToast.show(
           context,
-          message: 'Could not create a worktree: project not found',
+          message: context.tr('Could not create a worktree: project not found'),
           tone: .error,
         );
       }
@@ -340,7 +354,9 @@ extension _WorkspaceGitHistorySurfaceActions
     }
     AleraToast.show(
       context,
-      message: 'Created workspace $newBranchName',
+      message: context.trTemplate('Created workspace {branch}', {
+        'branch': newBranchName,
+      }),
       tone: .success,
     );
   }
@@ -355,7 +371,10 @@ extension _WorkspaceGitHistorySurfaceActions
       if (mounted) {
         AleraToast.show(
           context,
-          message: 'Could not switch to ${itemRef.name}: project not found',
+          message: context.trTemplate(
+            'Could not switch to {branch}: project not found',
+            {'branch': itemRef.name},
+          ),
           tone: .error,
         );
       }
@@ -374,7 +393,9 @@ extension _WorkspaceGitHistorySurfaceActions
       }
       AleraToast.show(
         context,
-        message: 'Switched to ${itemRef.name}',
+        message: context.trTemplate('Switched to {branch}', {
+          'branch': itemRef.name,
+        }),
         tone: .success,
       );
       _compareCache.clear();
@@ -385,7 +406,11 @@ extension _WorkspaceGitHistorySurfaceActions
       await _withSourceControl((notifier) => notifier.refresh());
     } catch (error) {
       if (mounted) {
-        AleraToast.show(context, message: error.toString(), tone: .error);
+        AleraToast.show(
+          context,
+          message: context.tr(error.toString()),
+          tone: .error,
+        );
       }
     }
   }
@@ -396,12 +421,24 @@ extension _WorkspaceGitHistorySurfaceActions
       if (!mounted) {
         return;
       }
-      AleraToast.show(context, message: '$label copied', tone: .success);
+      AleraToast.show(
+        context,
+        message: context.trTemplate('{label} copied', {
+          'label': context.tr(label),
+        }),
+        tone: .success,
+      );
     } catch (_) {
       if (!mounted) {
         return;
       }
-      AleraToast.show(context, message: 'Could not copy $label', tone: .error);
+      AleraToast.show(
+        context,
+        message: context.trTemplate('Could not copy {label}', {
+          'label': context.tr(label),
+        }),
+        tone: .error,
+      );
     }
   }
 }

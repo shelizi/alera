@@ -1,4 +1,6 @@
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/design_system/buttons/alera_icon_button.dart';
+import 'package:alera/src/design_system/feedback/alera_toast.dart';
 import 'package:alera/src/features/shell/presentation/alera_shell_page.dart';
 import 'package:alera/src/features/workbench/application/workbench_branch_favorites.dart';
 import 'package:alera/src/features/workbench/application/workbench_controller.dart';
@@ -12,12 +14,89 @@ import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_git_history_surface.dart';
 import 'package:alera/src/shared/infra/git/git_providers.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'workspace_git_history_surface_test_harness.dart';
 
 void main() {
+  testWidgets('branch status right-click copy menu and toast are localized', (
+    tester,
+  ) async {
+    final toasts = captureAleraToasts();
+    String? copied;
+    mockGitHistoryClipboard(tester, (value) => copied = value);
+    final backend = gitHistoryBranchBackend()
+      ..sourceBranches = ['main', 'feature']
+      ..headBranch = 'main';
+    final workspace = Workspace(
+      id: 'workspace-1',
+      projectId: 'project-1',
+      name: 'Main',
+      path: '/tmp/project',
+      createdAt: DateTime.utc(2026, 10, 10),
+      updatedAt: DateTime.utc(2026, 10, 10),
+      kind: .main,
+      status: .active,
+    );
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          gitBackendProvider.overrideWithValue(backend),
+          workbenchRepositoryProvider.overrideWithValue(
+            GitHistoryFakeWorkbenchRepository(),
+          ),
+          workbenchViewPrefsRepositoryProvider.overrideWithValue(
+            _MemoryViewPrefsRepository(),
+          ),
+        ],
+        child: MaterialApp(
+          locale: const Locale('zh', 'TW'),
+          supportedLocales: supportedAleraLocales,
+          localizationsDelegates: const <LocalizationsDelegate<dynamic>>[
+            AleraLocalizationsDelegate(),
+            ...GlobalMaterialLocalizations.delegates,
+          ],
+          home: Scaffold(
+            body: WorkspaceBranchStatusBarControl(
+              workspace: workspace,
+              sourceControlScope: WorkspaceSourceControlScope(
+                workspaceId: workspace.id,
+                workspacePath: workspace.path,
+                path: workspace.path,
+              ),
+              onSwitchBranch: (_) async {},
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey('workspace-branch-status')),
+      buttons: kSecondaryMouseButton,
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('複製 Branch 名稱'), findsOneWidget);
+    await tester.tap(find.text('複製 Branch 名稱'));
+    await tester.pumpAndSettle();
+    expect(copied, 'main');
+    expect(toasts.last.message, '已複製分支名稱：main');
+
+    await tester.tap(find.byKey(const ValueKey('workspace-branch-status')));
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<AleraIconButton>(
+            find.byKey(const ValueKey('workspace-branch-favorite:feature')),
+          )
+          .tooltip,
+      '加入我的最愛',
+    );
+  });
+
   testWidgets('status menu pins favorites and graph marks the same branch', (
     tester,
   ) async {
