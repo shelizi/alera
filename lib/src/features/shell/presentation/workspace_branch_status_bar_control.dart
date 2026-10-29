@@ -70,15 +70,11 @@ class _WorkspaceBranchStatusBarControlState
         // Keep local branch discovery usable when remote metadata is unavailable.
       }
       if (!mounted || generation != _generation) return;
-      final remotePrefixes = <String>[
-        for (final remote in remotes)
-          if (remote.name.trim().isNotEmpty) '${remote.name.trim()}/',
-      ];
-      final localBranches = <String>{
-        for (final branch in branches)
-          if (!remotePrefixes.any(branch.startsWith)) branch,
-        if (current != 'HEAD' && current.trim().isNotEmpty) current,
-      }.toList()..sort();
+      final localBranches = filterWorkspaceLocalBranches(
+        branches: branches,
+        currentBranch: current,
+        remoteNames: <String>[for (final remote in remotes) remote.name],
+      );
       setState(() {
         _branches = localBranches;
         _current = _normalizedWorkspaceBranch(current) ?? _current;
@@ -457,82 +453,4 @@ class _WorkspaceBranchStatusBarControlState
       ),
     );
   }
-}
-
-@visibleForTesting
-List<WorkspaceBranchTreeRow> buildWorkspaceBranchTreeRows(
-  List<String> branches,
-) {
-  final roots = <String, _WorkspaceBranchTreeNode>{};
-  for (final raw in branches) {
-    final branch = raw.trim();
-    if (branch.isEmpty) continue;
-    final segments = branch
-        .split('/')
-        .where((segment) => segment.isNotEmpty)
-        .toList(growable: false);
-    var nodes = roots;
-    var path = '';
-    _WorkspaceBranchTreeNode? node;
-    for (final segment in segments) {
-      path = path.isEmpty ? segment : '$path/$segment';
-      node = nodes.putIfAbsent(
-        segment,
-        () => _WorkspaceBranchTreeNode(segment: segment, fullPath: path),
-      );
-      nodes = node.children;
-    }
-    node?.branch = branch;
-  }
-
-  final rows = <WorkspaceBranchTreeRow>[];
-  void append(Map<String, _WorkspaceBranchTreeNode> nodes, int depth) {
-    final sorted = nodes.values.toList()
-      ..sort((a, b) => a.segment.compareTo(b.segment));
-    for (final node in sorted) {
-      rows.add(
-        WorkspaceBranchTreeRow(
-          segment: node.segment,
-          fullPath: node.fullPath,
-          branch: node.branch,
-          depth: depth,
-          hasChildren: node.children.isNotEmpty,
-        ),
-      );
-      append(node.children, depth + 1);
-    }
-  }
-
-  append(roots, 0);
-  return rows;
-}
-
-@visibleForTesting
-class const WorkspaceBranchTreeRow({
-  required this.segment,
-  required this.fullPath,
-  required this.branch,
-  required this.depth,
-  required this.hasChildren,
-}) {
-  final String segment;
-  final String fullPath;
-  final String? branch;
-  final int depth;
-  final bool hasChildren;
-}
-
-final class _WorkspaceBranchTreeNode {
-  _WorkspaceBranchTreeNode({required this.segment, required this.fullPath});
-
-  final String segment;
-  final String fullPath;
-  final Map<String, _WorkspaceBranchTreeNode> children =
-      <String, _WorkspaceBranchTreeNode>{};
-  String? branch;
-}
-
-String? _normalizedWorkspaceBranch(String? value) {
-  final branch = value?.trim();
-  return branch == null || branch.isEmpty || branch == 'HEAD' ? null : branch;
 }

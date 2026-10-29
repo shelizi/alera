@@ -48,7 +48,6 @@ import 'package:alera/src/features/workbench/presentation/workspace_workbench_vi
 import 'package:alera/src/shared/infra/git/git_providers.dart';
 import 'package:alera/src/shared/infra/git/git_remote.dart';
 import 'package:alera/src/features/settings/presentation/github_star_prompt_watch.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -56,6 +55,7 @@ import 'package:logging/logging.dart';
 
 part 'alera_shell_page_body.dart';
 part 'workspace_branch_status_bar_control.dart';
+part 'workspace_branch_tree_projection.dart';
 part 'alera_shell_page_body_content.dart';
 
 class const AleraShellPage({super.key}) extends ConsumerWidget {
