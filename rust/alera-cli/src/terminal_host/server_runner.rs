@@ -1,5 +1,9 @@
 use super::*;
 
+#[path = "server_runner/priority_command_queue.rs"]
+mod priority_command_queue;
+use priority_command_queue::PriorityCommandQueue;
+
 #[derive(Debug, Clone, Copy)]
 pub enum TerminalHostExit {
     Shutdown,
@@ -148,7 +152,8 @@ pub async fn run_terminal_host_server(
     // host is running on, not any of the state the actor owns.
     let mut sleep_detector = SleepDetector::default();
     let mut exit = TerminalHostExit::Shutdown;
-    while let Some(command) = rx.recv().await {
+    let mut control_lookahead = PriorityCommandQueue::default();
+    while let Some(command) = next_actor_command(&mut rx, &mut control_lookahead).await {
         if let Some(slept) = sleep_detector.observe() {
             // The first thing to happen after a wake says so, which is what
             // keeps a lid closed overnight from being read later as a freeze.
@@ -171,6 +176,98 @@ pub async fn run_terminal_host_server(
         shutdown_signal.abort();
     }
     Ok(exit)
+}
+
+/// Look ahead at no more than 64 pending messages. An urgent shutdown/restart
+/// can bypass an already enqueued burst without changing the single actor's
+/// ownership or disrupting ordinary ClientConnected/ClientLine ordering.
+/// The upstream inbox is still unbounded: this is control-plane prioritization,
+/// not an ingress memory cap.
+async fn next_actor_command(
+    rx: &mut mpsc::UnboundedReceiver<ServerCommand>,
+    buffer: &mut PriorityCommandQueue<ServerCommand>,
+) -> Option<ServerCommand> {
+    if buffer.is_empty() {
+        buffer.push(rx.recv().await?);
+    }
+    while buffer.len() < PriorityCommandQueue::<ServerCommand>::MAX_LOOKAHEAD {
+        match rx.try_recv() {
+            Ok(command) => buffer.push(command),
+            Err(mpsc::error::TryRecvError::Empty | mpsc::error::TryRecvError::Disconnected) => {
+                break;
+            }
+        }
+    }
+    buffer.next(|command| {
+        matches!(
+            command,
+            ServerCommand::RequestedShutdown | ServerCommand::RequestedRestart
+        )
+    })
+}
+
+#[cfg(test)]
+mod priority_receiver_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn shutdown_bypasses_a_burst_of_client_lines_without_reordering_them() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        for id in 0..32 {
+            tx.send(ServerCommand::ClientLine {
+                id,
+                line: r#"{"type":"test.fill","payload":{}}"#.into(),
+            })
+            .unwrap();
+        }
+        tx.send(ServerCommand::RequestedShutdown).unwrap();
+        let mut buffer = PriorityCommandQueue::default();
+        assert!(matches!(
+            next_actor_command(&mut rx, &mut buffer).await,
+            Some(ServerCommand::RequestedShutdown)
+        ));
+        for id in 0..32 {
+            let Some(ServerCommand::ClientLine { id: actual, .. }) =
+                next_actor_command(&mut rx, &mut buffer).await
+            else {
+                panic!("expected FIFO client line");
+            };
+            assert_eq!(actual, id);
+        }
+    }
+
+    #[tokio::test]
+    async fn restart_keeps_precedence_and_bounded_buffer_does_not_lose_commands() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        for id in 0..128 {
+            tx.send(ServerCommand::ClientLine {
+                id,
+                line: "noop".into(),
+            })
+            .unwrap();
+        }
+        tx.send(ServerCommand::RequestedRestart).unwrap();
+        drop(tx);
+        let mut buffer = PriorityCommandQueue::default();
+        let mut observed = Vec::new();
+        while let Some(command) = next_actor_command(&mut rx, &mut buffer).await {
+            assert!(buffer.len() <= PriorityCommandQueue::<ServerCommand>::MAX_LOOKAHEAD);
+            match command {
+                ServerCommand::ClientLine { id, .. } => observed.push(id),
+                ServerCommand::RequestedRestart => observed.push(999),
+                _ => panic!("unexpected command"),
+            }
+        }
+        assert_eq!(observed.iter().filter(|id| **id == 999).count(), 1);
+        assert!(observed.iter().position(|id| *id == 999).unwrap() < 128);
+        assert_eq!(
+            observed
+                .into_iter()
+                .filter(|id| *id != 999)
+                .collect::<Vec<_>>(),
+            (0..128).collect::<Vec<_>>()
+        );
+    }
 }
 
 #[cfg(unix)]
