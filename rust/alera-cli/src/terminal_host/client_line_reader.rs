@@ -1,9 +1,63 @@
 use std::io::{Error, ErrorKind, Result};
+use std::sync::Arc;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt as _};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 /// Reject oversized local protocol frames before they build an unbounded
 /// String. This is a per-frame safety limit, not mailbox admission.
 pub(super) const MAX_LOCAL_REQUEST_LINE_BYTES: usize = 16 * 1024 * 1024;
+
+const PENDING_READ_BYTE_UNIT: usize = 4096;
+
+/// Shared quota held from the first byte read until the completed line has
+/// been admitted to the actor. It includes partial lines and decoded lines
+/// waiting for the independent actor admission semaphore.
+///
+/// Never await the quota while retaining bytes of an incomplete line: two
+/// large partial requests could otherwise consume all permits and deadlock
+/// each other. Instead, reject the connection that cannot reserve its next
+/// read chunk, releasing its permits when the socket loop exits.
+pub(super) struct PendingLocalLineBudget {
+    quota: Arc<Semaphore>,
+    reservations: Vec<OwnedSemaphorePermit>,
+    reserved_units: usize,
+}
+
+impl PendingLocalLineBudget {
+    pub(super) fn new(quota: Arc<Semaphore>) -> Self {
+        Self {
+            quota,
+            reservations: Vec::new(),
+            reserved_units: 0,
+        }
+    }
+
+    fn reserve_for_length(&mut self, bytes: usize) -> Result<()> {
+        let units = bytes.div_ceil(PENDING_READ_BYTE_UNIT);
+        if units <= self.reserved_units {
+            return Ok(());
+        }
+        let new_units = units - self.reserved_units;
+        let permit = self
+            .quota
+            .clone()
+            .try_acquire_many_owned(new_units as u32)
+            .map_err(|_| {
+                Error::new(
+                    ErrorKind::OutOfMemory,
+                    "localhost pending request read budget exhausted",
+                )
+            })?;
+        self.reserved_units = units;
+        self.reservations.push(permit);
+        Ok(())
+    }
+
+    pub(super) fn release_completed_line(&mut self) {
+        self.reservations.clear();
+        self.reserved_units = 0;
+    }
+}
 
 /// `pending` belongs to the connection loop, NOT this future. The reader is
 /// used inside tokio::select!, and dropping a partially read future must not
@@ -12,6 +66,24 @@ pub(super) async fn next_client_line<R: AsyncBufRead + Unpin>(
     reader: &mut R,
     max_bytes: usize,
     pending: &mut Vec<u8>,
+) -> Result<Option<String>> {
+    next_client_line_inner(reader, max_bytes, pending, None).await
+}
+
+pub(super) async fn next_client_line_budgeted<R: AsyncBufRead + Unpin>(
+    reader: &mut R,
+    max_bytes: usize,
+    pending: &mut Vec<u8>,
+    budget: &mut PendingLocalLineBudget,
+) -> Result<Option<String>> {
+    next_client_line_inner(reader, max_bytes, pending, Some(budget)).await
+}
+
+async fn next_client_line_inner<R: AsyncBufRead + Unpin>(
+    reader: &mut R,
+    max_bytes: usize,
+    pending: &mut Vec<u8>,
+    mut budget: Option<&mut PendingLocalLineBudget>,
 ) -> Result<Option<String>> {
     loop {
         let (consumed, terminated) = {
@@ -33,6 +105,12 @@ pub(super) async fn next_client_line<R: AsyncBufRead + Unpin>(
                     ErrorKind::InvalidData,
                     "client request line exceeds limit",
                 ));
+            }
+            // Reserve quota before copying socket bytes into a connection's
+            // owned buffer. This stays held across tokio::select! cancellation
+            // because the connection loop owns `budget`, not this future.
+            if let Some(budget) = budget.as_deref_mut() {
+                budget.reserve_for_length(pending.len() + consumed)?;
             }
             let terminated = available[consumed - 1] == b'\n';
             pending.extend_from_slice(&available[..consumed]);

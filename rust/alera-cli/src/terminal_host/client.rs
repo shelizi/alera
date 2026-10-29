@@ -200,6 +200,9 @@ pub async fn connection_loop(
     let (read_half, mut write_half) = stream.into_split();
     let mut lines = BufReader::new(read_half);
     let mut pending_client_line = Vec::new();
+    let mut pending_line_budget = client_line_reader::PendingLocalLineBudget::new(
+        ingress_admission.pending_read_bytes.clone(),
+    );
     // At most one completed yet-unadmitted message per connection. When the
     // shared semaphore fills, keep writing replies and terminal frames; never
     // park the entire socket on a permit acquire.
@@ -248,10 +251,11 @@ pub async fn connection_loop(
             }
         }
         tokio::select! {
-            line = client_line_reader::next_client_line(
+            line = client_line_reader::next_client_line_budgeted(
                 &mut lines,
                 client_line_reader::MAX_LOCAL_REQUEST_LINE_BYTES,
                 &mut pending_client_line,
+                &mut pending_line_budget,
             ), if queued_client_line.is_none() => {
                 if let Some(reason) = reason_for_read_termination(&line) {
                     // Never include the raw error: OS socket diagnostics may
@@ -279,6 +283,7 @@ pub async fn connection_loop(
                 if inbox.send(ServerCommand::AdmittedClientLine { id, line, permit, byte_permit }).is_err() {
                     break;
                 }
+                pending_line_budget.release_completed_line();
             }
             message = control_out_rx.recv() => {
                 match message {
@@ -434,6 +439,10 @@ pub const LOCAL_CLIENT_PENDING_COMMAND_LIMIT: usize = 64;
 /// Sum of admitted localhost request payloads, rounded to 4 KiB units.
 /// Does not include read buffers and queued-but-not-admitted line per socket.
 pub const MAX_LOCAL_PENDING_REQUEST_BYTES: usize = 32 * 1024 * 1024;
+/// Also bound completed *unadmitted* lines and partially read lines held by
+/// localhost socket loops. Separate from the actor's admitted payload budget.
+/// Over-budget readers are disconnected rather than waiting with partial data.
+pub const MAX_LOCAL_UNADMITTED_REQUEST_BYTES: usize = 64 * 1024 * 1024;
 pub const LOCAL_REQUEST_BYTE_UNIT_BYTES: usize = 4096;
 
 fn local_request_byte_permits(byte_length: usize) -> u32 {
@@ -445,6 +454,7 @@ fn local_request_byte_permits(byte_length: usize) -> u32 {
 pub struct LocalClientIngressAdmission {
     commands: Arc<Semaphore>,
     bytes: Arc<Semaphore>,
+    pending_read_bytes: Arc<Semaphore>,
 }
 
 impl LocalClientIngressAdmission {
@@ -453,6 +463,9 @@ impl LocalClientIngressAdmission {
             commands: Arc::new(Semaphore::new(command_slots)),
             bytes: Arc::new(Semaphore::new(
                 byte_budget_bytes.div_ceil(LOCAL_REQUEST_BYTE_UNIT_BYTES),
+            )),
+            pending_read_bytes: Arc::new(Semaphore::new(
+                MAX_LOCAL_UNADMITTED_REQUEST_BYTES.div_ceil(LOCAL_REQUEST_BYTE_UNIT_BYTES),
             )),
         }
     }
