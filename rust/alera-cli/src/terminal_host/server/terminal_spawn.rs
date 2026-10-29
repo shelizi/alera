@@ -145,6 +145,21 @@ impl ServerActor {
                         tab.id,
                         error.wire_message()
                     );
+                    if tab
+                        .payload
+                        .get("lastTerminalTabTransfer")
+                        .is_some_and(Value::is_object)
+                    {
+                        // Never delete a moved tab just because its original
+                        // launch folder is no longer mounted on Host restart.
+                        // Keep its owner and transcript so the user can
+                        // recover the directory and reattach explicitly.
+                        tracing::warn!(
+                            "preserving transferred terminal {} after unsafe restart was refused",
+                            tab.id
+                        );
+                        continue;
+                    }
                     let _ = TerminalSpawnPersistence::new(&self.runtime_store)
                         .remove_tab(&tab.id)
                         .await;
@@ -219,18 +234,40 @@ impl ServerActor {
                 workspace.id
             )));
         }
+        let moved = tab
+            .payload
+            .get("lastTerminalTabTransfer")
+            .is_some_and(Value::is_object);
+        let launch_directory = if moved {
+            let original = tab
+                .payload
+                .get("terminalExecutionWorkingDirectory")
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| {
+                    HostError::state("Moved terminal lacks its original launch directory; refusing to run in the destination project.")
+                })?;
+            if !std::path::Path::new(original).is_dir() {
+                return Err(HostError::state(format!(
+                    "Moved terminal original launch directory no longer exists: {original}. The tab remains saved."
+                )));
+            }
+            original.to_owned()
+        } else {
+            workspace.path.clone()
+        };
 
         let max_bytes = self.config.scrollback_bytes as usize;
         let (initial_scrollback, initial_output_stream_bytes) = self
             .take_terminal_restart_state(&session_id, &workspace.id, &tab.id, max_bytes)
             .await;
         let default_launch =
-            default_terminal_launch(&workspace.path, self.config.login_shell).await;
+            default_terminal_launch(&launch_directory, self.config.login_shell).await;
         self.start_new_terminal_session(
             session_id.clone(),
             workspace.id,
             tab.id.clone(),
-            workspace.path,
+            launch_directory,
             default_launch.launch,
             DEFAULT_TERMINAL_COLS,
             DEFAULT_TERMINAL_ROWS,

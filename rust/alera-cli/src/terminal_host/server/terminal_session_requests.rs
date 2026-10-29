@@ -41,6 +41,54 @@ impl<'a> TerminalAttachPersistence<'a> {
 }
 
 impl ServerActor {
+    /// The display workspace may differ from the original process working
+    /// directory. Only validate this when reminting a dead PTY or explicitly
+    /// restarting one; a live process must still be attachable if its old
+    /// checkout was later deleted.
+    async fn verify_moved_terminal_launch_directory(
+        &self,
+        tab_id: &str,
+        requested_directory: &str,
+    ) -> HostResult<()> {
+        let tab = self
+            .runtime_store
+            .find_workspace_tab(tab_id)
+            .await
+            .map_err(|error| HostError::state(error.to_string()))?
+            .ok_or_else(|| HostError::state("Terminal tab does not exist."))?;
+        if !tab
+            .payload
+            .get("lastTerminalTabTransfer")
+            .is_some_and(Value::is_object)
+        {
+            return Ok(());
+        }
+        let original = tab
+            .payload
+            .get("terminalExecutionWorkingDirectory")
+            .and_then(Value::as_str)
+            .filter(|path| !path.trim().is_empty())
+            .ok_or_else(|| HostError::state(
+                "Transferred terminal lacks its original execution path; refusing to start a shell in another project.",
+            ))?;
+        let original_path = std::fs::canonicalize(original).map_err(|_| {
+            HostError::state(format!(
+                "Transferred Terminal original launch directory is unavailable: {original}. The tab was preserved."
+            ))
+        })?;
+        let requested_path = std::fs::canonicalize(requested_directory).map_err(|_| {
+            HostError::state(
+                "Requested Terminal launch directory does not exist; no new process was started.",
+            )
+        })?;
+        if original_path != requested_path {
+            return Err(HostError::state(
+                "Transferred Terminal must restart in its original execution directory, not the destination project.",
+            ));
+        }
+        Ok(())
+    }
+
     pub(super) async fn create_or_attach(
         &mut self,
         client_id: u64,
@@ -157,6 +205,8 @@ impl ServerActor {
                 return Ok(session.attachment_payload(false, restore_bytes));
             }
         }
+        self.verify_moved_terminal_launch_directory(&tab_id, &working_directory)
+            .await?;
         let (initial_scrollback, initial_output_stream_bytes) = self
             .take_terminal_restart_state(&session_id, &workspace_id, &tab_id, max_bytes)
             .await;
@@ -194,6 +244,10 @@ impl ServerActor {
         let tab_id = require_string(payload, "tabId")?;
         let working_directory = require_string(payload, "workingDirectory")?;
         self.verify_terminal_attachment_owner(&session_id, &workspace_id, &tab_id)
+            .await?;
+        // Validate before any terminal exit/agent cleanup, so a missing
+        // original project cannot destroy the still-running PTY.
+        self.verify_moved_terminal_launch_directory(&tab_id, &working_directory)
             .await?;
         let launch = TerminalHostLaunch::from_json(&Value::Object(
             require_object(payload.get("launch"), "launch")?.clone(),

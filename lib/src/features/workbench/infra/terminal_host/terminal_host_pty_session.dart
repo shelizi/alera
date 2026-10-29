@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io' show Directory;
 
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 import 'package:alera/src/features/workbench/infra/terminal_host/terminal_host_client.dart';
@@ -396,6 +397,18 @@ final class TerminalHostPtySession._(
         cols == null ||
         rows == null) {
       throw StateError('PTY session has not been started.');
+    }
+    // A moved tab retains its original launch directory. Never send an
+    // explicit restart to the Host if that folder has since been deleted:
+    // the old PTY might still be alive, and silently using the destination
+    // project would execute Claude/Codex in an unrelated repository.
+    if (!await Directory(workingDirectory).exists()) {
+      throw StateError(
+        'Cannot restart Terminal: its original launch directory '
+        '"$workingDirectory" no longer exists. The running PTY was not '
+        'restarted. Restore that directory or open a new Terminal in the '
+        'destination project.',
+      );
     }
     _retainedOutputCursor = null;
     final attachment = await _client.restart(
