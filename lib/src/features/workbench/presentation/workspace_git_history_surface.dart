@@ -26,6 +26,7 @@ import 'package:alera/src/shared/infra/git/git_history_graph.dart';
 import 'package:alera/src/shared/infra/git/git_providers.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show ScrollDirection;
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -90,6 +91,9 @@ class _WorkspaceGitHistorySurfaceState
   bool _loadingMore = false;
   bool _hasMore = false;
   bool _pageFailed = false;
+  // Initial all-branches navigation follows HEAD; subsequent manual scrolling
+  // and explicit branch filters take priority over automatic positioning.
+  bool _headAutofocusPending = true;
   String? _error;
   int _generation = 0;
 
@@ -140,6 +144,52 @@ class _WorkspaceGitHistorySurfaceState
     }
     final position = _verticalController.position;
     if (position.pixels >= position.maxScrollExtent - 160) {
+      unawaited(_loadMore());
+    }
+  }
+
+  void _focusHeadIfNeeded(int generation) {
+    if (!_headAutofocusPending || generation != _generation || !mounted) {
+      return;
+    }
+    if (!_allBranches ||
+        _favoritesOnly ||
+        widget.tab.gitHistoryFilePath != null) {
+      _headAutofocusPending = false;
+      return;
+    }
+    final revision = _currentRef?.revision;
+    if (revision == null || revision.isEmpty) {
+      _headAutofocusPending = false;
+      return;
+    }
+    final index = _viewModels.indexWhere(
+      (row) => row.historyItem.id == revision,
+    );
+    if (index >= 0) {
+      if (!_verticalController.hasClients) return;
+      final position = _verticalController.position;
+      const height = GitHistoryGraphPainter.laneHeight;
+      final targetOffset =
+          index * height - (position.viewportDimension - height) / 2;
+      // The next history page can complete during a post-frame callback,
+      // before ListView has recomputed its maxScrollExtent for the new rows.
+      // Derive the extent from fixed-height commit rows so HEAD is not left
+      // exactly one row below the viewport.
+      final projectedMaxExtent = math.max(
+        position.maxScrollExtent,
+        math.max(0.0, _viewModels.length * height - position.viewportDimension),
+      );
+      _headAutofocusPending = false;
+      _verticalController.jumpTo(
+        targetOffset.clamp(0.0, projectedMaxExtent).toDouble(),
+      );
+      return;
+    }
+    if (!_hasMore || _pageFailed) {
+      _headAutofocusPending = false;
+    } else if (!_loadingMore) {
+      // HEAD may be deeper than the first page in a multi-branch history.
       unawaited(_loadMore());
     }
   }
@@ -197,6 +247,7 @@ class _WorkspaceGitHistorySurfaceState
       // listener never fires, so pull the next page eagerly instead.
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted && generation == _generation) {
+          _focusHeadIfNeeded(generation);
           _onScroll();
         }
       });
@@ -244,6 +295,7 @@ class _WorkspaceGitHistorySurfaceState
       });
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted && generation == _generation) {
+          _focusHeadIfNeeded(generation);
           _onScroll();
         }
       });
@@ -341,37 +393,49 @@ class _WorkspaceGitHistorySurfaceState
               width: contentWidth,
               child: Scrollbar(
                 controller: _verticalController,
-                child: ListView.builder(
-                  controller: _verticalController,
-                  itemCount:
-                      _viewModels.length +
-                      ((_loadingMore || _pageFailed) ? 1 : 0),
-                  itemBuilder: (context, index) {
-                    if (index >= _viewModels.length) {
-                      return _buildFooter();
+                child: NotificationListener<UserScrollNotification>(
+                  onNotification: (notification) {
+                    if (notification.direction != ScrollDirection.idle) {
+                      _headAutofocusPending = false;
                     }
-                    final viewModel = _viewModels[index];
-                    final boundary = _isBoundary(viewModel);
-                    return _CommitGraphRow(
-                      viewModel: viewModel,
-                      favoriteBranches: _favoriteBranches,
-                      onToggleFavorite: _toggleFavorite,
-                      graphWidth: graphWidth,
-                      isCompareAnchor:
-                          _compareAnchorId == viewModel.historyItem.id,
-                      onTap: () =>
-                          unawaited(_handleCommitTap(viewModel.historyItem)),
-                      onOpenActions: boundary
-                          ? (position) => unawaited(_openBoundaryMenu(position))
-                          : (position) => unawaited(
-                              _openCommitMenu(viewModel.historyItem, position),
-                            ),
-                      onOpenRefActions: boundary
-                          ? null
-                          : (itemRef, position) =>
-                                unawaited(_openRefMenu(itemRef, position)),
-                    );
+                    return false;
                   },
+                  child: ListView.builder(
+                    controller: _verticalController,
+                    itemCount:
+                        _viewModels.length +
+                        ((_loadingMore || _pageFailed) ? 1 : 0),
+                    itemBuilder: (context, index) {
+                      if (index >= _viewModels.length) {
+                        return _buildFooter();
+                      }
+                      final viewModel = _viewModels[index];
+                      final boundary = _isBoundary(viewModel);
+                      return _CommitGraphRow(
+                        viewModel: viewModel,
+                        favoriteBranches: _favoriteBranches,
+                        onToggleFavorite: _toggleFavorite,
+                        graphWidth: graphWidth,
+                        isCompareAnchor:
+                            _compareAnchorId == viewModel.historyItem.id,
+                        onTap: () =>
+                            unawaited(_handleCommitTap(viewModel.historyItem)),
+                        onOpenActions: boundary
+                            ? (position) =>
+                                  unawaited(_openBoundaryMenu(position))
+                            : (position) => unawaited(
+                                _openCommitMenu(
+                                  viewModel.historyItem,
+                                  position,
+                                ),
+                              ),
+                        onOpenRefActions: boundary
+                            ? null
+                            : (itemRef, position) =>
+                                  unawaited(_openRefMenu(itemRef, position)),
+                      );
+                    },
+                  ),
                 ),
               ),
             ),

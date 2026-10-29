@@ -1,5 +1,4 @@
 import 'package:alera/src/design_system/buttons/alera_icon_button.dart';
-import 'package:alera/src/design_system/icons/alera_icons.dart';
 import 'package:alera/src/features/shell/presentation/alera_shell_page.dart';
 import 'package:alera/src/features/workbench/application/workbench_branch_favorites.dart';
 import 'package:alera/src/features/workbench/application/workbench_controller.dart';
@@ -23,7 +22,7 @@ void main() {
     tester,
   ) async {
     final backend = gitHistoryBranchBackend()
-      ..sourceBranches = ['aaa', 'feature']
+      ..sourceBranches = ['aaa', 'feature', 'zzz']
       ..headBranch = 'aaa';
     final repository = GitHistoryFakeWorkbenchRepository()
       ..tabs.add(gitHistoryTab());
@@ -77,7 +76,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(
       find.byKey(const ValueKey('git-history-ref-favorite:refs/heads/feature')),
-      findsNothing,
+      findsOneWidget,
     );
     await tester.tap(find.byKey(const ValueKey('workspace-branch-status')));
     await tester.pumpAndSettle();
@@ -107,7 +106,7 @@ void main() {
             find.byKey(const ValueKey('workspace-branch-favorite:feature')),
           )
           .icon,
-      AleraIcons.add,
+      Icons.star_border_rounded,
     );
     await tester.tap(
       find.byKey(const ValueKey('workspace-branch-favorite:feature')),
@@ -136,24 +135,23 @@ void main() {
       '',
     );
     await tester.pumpAndSettle();
-    expect(
-      tester
-          .getTopLeft(
-            find.byKey(const ValueKey('workspace-branch-option:feature')),
-          )
-          .dy,
-      lessThan(
-        tester
-            .getTopLeft(
-              find.byKey(const ValueKey('workspace-branch-option:aaa')),
-            )
-            .dy,
-      ),
-    );
+    final currentTop = tester
+        .getTopLeft(find.byKey(const ValueKey('workspace-branch-option:aaa')))
+        .dy;
+    final favoriteTop = tester
+        .getTopLeft(
+          find.byKey(const ValueKey('workspace-branch-option:feature')),
+        )
+        .dy;
+    final ordinaryTop = tester
+        .getTopLeft(find.byKey(const ValueKey('workspace-branch-option:zzz')))
+        .dy;
+    expect(currentTop, lessThan(favoriteTop));
+    expect(favoriteTop, lessThan(ordinaryTop));
     final badge = tester.widget<AleraIconButton>(
       find.byKey(const ValueKey('git-history-ref-favorite:refs/heads/feature')),
     );
-    expect(badge.icon, AleraIcons.favorite);
+    expect(badge.icon, Icons.star_rounded);
     expect(prefsRepository.prefs.favoriteBranchesByRepository.values.single, {
       'feature',
     });
@@ -174,7 +172,17 @@ void main() {
     expect(switches, isEmpty);
     expect(
       find.byKey(const ValueKey('git-history-ref-favorite:refs/heads/feature')),
-      findsNothing,
+      findsOneWidget,
+    );
+    expect(
+      tester
+          .widget<AleraIconButton>(
+            find.byKey(
+              const ValueKey('git-history-ref-favorite:refs/heads/feature'),
+            ),
+          )
+          .icon,
+      Icons.star_border_rounded,
     );
   });
 
@@ -203,7 +211,7 @@ void main() {
               find.byKey(const ValueKey('git-history-branch-favorite:feature')),
             )
             .icon,
-        AleraIcons.add,
+        Icons.star_border_rounded,
       );
       await tester.tap(
         find.byKey(const ValueKey('git-history-branch-favorite:feature')),

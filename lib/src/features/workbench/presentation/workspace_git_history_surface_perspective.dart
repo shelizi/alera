@@ -119,6 +119,14 @@ class _GitHistoryBranchPerspectiveMenu extends StatefulWidget {
 
 class _GitHistoryBranchPerspectiveMenuState
     extends State<_GitHistoryBranchPerspectiveMenu> {
+  static const ButtonStyle _compactMenuStyle = ButtonStyle(
+    minimumSize: WidgetStatePropertyAll(Size(0, 32)),
+    maximumSize: WidgetStatePropertyAll(Size.fromHeight(32)),
+    padding: WidgetStatePropertyAll(
+      EdgeInsets.symmetric(horizontal: AleraTokens.space8),
+    ),
+    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+  );
   final MenuController _menuController = MenuController();
   final TextEditingController _searchController = TextEditingController();
   final FocusNode _searchFocusNode = FocusNode();
@@ -164,6 +172,23 @@ class _GitHistoryBranchPerspectiveMenuState
               branch.toLowerCase().contains(normalizedQuery),
         )
         .toList(growable: false);
+    final currentBranches = filteredBranches
+        .where((branch) => branch == widget.currentBranch)
+        .toList(growable: false);
+    final favoriteBranches = filteredBranches
+        .where(
+          (branch) =>
+              branch != widget.currentBranch &&
+              widget.favoriteBranches.contains(branch),
+        )
+        .toList(growable: false);
+    final otherBranches = filteredBranches
+        .where(
+          (branch) =>
+              branch != widget.currentBranch &&
+              !widget.favoriteBranches.contains(branch),
+        )
+        .toList(growable: false);
     final showAllBranches =
         normalizedQuery.isEmpty ||
         'all branches'.contains(normalizedQuery) ||
@@ -204,20 +229,28 @@ class _GitHistoryBranchPerspectiveMenuState
                       if (showFavorites)
                         MenuItemButton(
                           key: const ValueKey('git-history-favorites-only'),
+                          style: _compactMenuStyle,
                           onPressed: () => _select(_favoritesPerspective),
                           leadingIcon: Icon(
                             widget.favoritesOnly
                                 ? AleraIcons.check
-                                : AleraIcons.favorite,
+                                : Icons.star_rounded,
                             size: AleraIconButton.defaultIconSize,
+                            color: widget.favoritesOnly
+                                ? AleraTokens.accent
+                                : AleraTokens.warning,
                           ),
-                          child: Text(context.tr('Favorite Branches')),
+                          child: Text(
+                            '${context.tr('Favorite Branches')} '
+                            '(${widget.branches.where(widget.favoriteBranches.contains).length})',
+                          ),
                         ),
                       if (showHead)
                         MenuItemButton(
                           key: const ValueKey<String>(
                             'git-history-head-perspective',
                           ),
+                          style: _compactMenuStyle,
                           onPressed: () => _select(_headPerspective),
                           leadingIcon:
                               (!widget.allBranches &&
@@ -231,6 +264,7 @@ class _GitHistoryBranchPerspectiveMenuState
                         ),
                       if (showAllBranches)
                         MenuItemButton(
+                          style: _compactMenuStyle,
                           onPressed: () => _select(_allBranchesPerspective),
                           leadingIcon:
                               widget.allBranches && !widget.favoritesOnly
@@ -241,47 +275,30 @@ class _GitHistoryBranchPerspectiveMenuState
                             query: _query,
                           ),
                         ),
-                      for (final branch in filteredBranches)
-                        MenuItemButton(
-                          key: ValueKey('git-history-branch-option:$branch'),
-                          trailingIcon: AleraIconButton(
-                            key: ValueKey(
-                              'git-history-branch-favorite:$branch',
-                            ),
-                            tooltip: widget.favoriteBranches.contains(branch)
-                                ? 'Remove From Favorites'
-                                : 'Add To Favorites',
-                            icon: widget.favoriteBranches.contains(branch)
-                                ? AleraIcons.favorite
-                                : AleraIcons.add,
-                            iconColor: widget.favoriteBranches.contains(branch)
-                                ? AleraTokens.accent
-                                : AleraTokens.foregroundFaint,
-                            onPressed: () => widget.onToggleFavorite(branch),
-                          ),
-                          onPressed: () => _select(branch),
-                          leadingIcon:
-                              (!widget.allBranches &&
-                                  (widget.selectedRef == branch ||
-                                      (widget.selectedRef == null &&
-                                          branch == widget.currentBranch)))
-                              ? const Icon(Icons.check, size: 16)
-                              : const SizedBox(width: 16),
-                          child: Tooltip(
-                            message: branch,
-                            child: Align(
-                              alignment: .centerLeft,
-                              child: AleraSearchHighlightedText(
-                                text: branch == widget.currentBranch
-                                    ? '$branch (${context.tr('Current')})'
-                                    : branch,
-                                query: _query,
-                                maxLines: 1,
-                                overflow: .ellipsis,
-                              ),
-                            ),
-                          ),
+                      if (filteredBranches.isNotEmpty)
+                        const Divider(height: AleraTokens.space12),
+                      if (currentBranches.isNotEmpty)
+                        _sectionHeader(
+                          context.tr('Current Branch'),
+                          AleraTokens.accent,
                         ),
+                      for (final branch in currentBranches)
+                        _branchOption(branch),
+                      if (favoriteBranches.isNotEmpty)
+                        _sectionHeader(
+                          '${context.tr('Favorite Branches')} · '
+                          '${favoriteBranches.length}',
+                          AleraTokens.warning,
+                          icon: Icons.star_rounded,
+                        ),
+                      for (final branch in favoriteBranches)
+                        _branchOption(branch),
+                      if (otherBranches.isNotEmpty)
+                        _sectionHeader(
+                          context.tr('Other Branches'),
+                          AleraTokens.foregroundMuted,
+                        ),
+                      for (final branch in otherBranches) _branchOption(branch),
                       if (!showHead &&
                           !showFavorites &&
                           !showAllBranches &&
@@ -337,6 +354,94 @@ class _GitHistoryBranchPerspectiveMenuState
               ],
             ),
           ),
+        ),
+      ),
+    );
+  }
+
+  Widget _sectionHeader(String title, Color color, {IconData? icon}) {
+    return Padding(
+      padding: const EdgeInsets.only(
+        left: AleraTokens.space12,
+        top: AleraTokens.space4,
+        bottom: AleraTokens.space2,
+      ),
+      child: Row(
+        children: <Widget>[
+          if (icon != null) ...<Widget>[
+            Icon(icon, size: 14, color: color),
+            const SizedBox(width: AleraTokens.space4),
+          ],
+          Text(
+            title,
+            style: Theme.of(context).textTheme.labelSmall
+                ?.copyWith(color: color, fontWeight: .w700),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _branchOption(String branch) {
+    final isFavorite = widget.favoriteBranches.contains(branch);
+    final isCurrent = branch == widget.currentBranch;
+    final isSelected =
+        !widget.allBranches &&
+        (widget.selectedRef == branch ||
+            (widget.selectedRef == null && isCurrent));
+    return MenuItemButton(
+      key: ValueKey('git-history-branch-option:$branch'),
+      style: ButtonStyle(
+        minimumSize: _compactMenuStyle.minimumSize,
+        maximumSize: _compactMenuStyle.maximumSize,
+        padding: _compactMenuStyle.padding,
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        backgroundColor: WidgetStateProperty.resolveWith((states) {
+          if (states.contains(WidgetState.hovered)) {
+            return isFavorite
+                ? AleraTokens.warning.withValues(alpha: 0.2)
+                : AleraTokens.accent.withValues(alpha: 0.12);
+          }
+          if (isCurrent) return AleraTokens.accent.withValues(alpha: 0.1);
+          return isFavorite ? AleraTokens.warning.withValues(alpha: 0.1) : null;
+        }),
+      ),
+      trailingIcon: AleraIconButton(
+        key: ValueKey('git-history-branch-favorite:$branch'),
+        tooltip: isFavorite ? 'Remove From Favorites' : 'Add To Favorites',
+        icon: isFavorite ? Icons.star_rounded : Icons.star_border_rounded,
+        iconSize: 18,
+        minSize: 28,
+        iconColor: isFavorite
+            ? AleraTokens.warning
+            : AleraTokens.foregroundMuted,
+        onPressed: () => widget.onToggleFavorite(branch),
+      ),
+      onPressed: () => _select(branch),
+      leadingIcon: isSelected
+          ? const Icon(Icons.check, size: 16, color: AleraTokens.accent)
+          : const SizedBox(width: 16),
+      child: Tooltip(
+        message: branch,
+        child: Row(
+          children: <Widget>[
+            Expanded(
+              child: AleraSearchHighlightedText(
+                text: branch,
+                query: _query,
+                maxLines: 1,
+                overflow: .ellipsis,
+              ),
+            ),
+            if (isCurrent) ...<Widget>[
+              const SizedBox(width: AleraTokens.space4),
+              Text(
+                context.tr('Current'),
+                style: Theme.of(context).textTheme.labelSmall
+                    ?.copyWith(color: AleraTokens.accent, fontWeight: .w700),
+              ),
+            ],
+          ],
         ),
       ),
     );

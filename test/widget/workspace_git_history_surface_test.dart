@@ -253,6 +253,117 @@ void main() {
     );
   });
 
+  testWidgets('initial graph centers HEAD when newer commits are above it', (
+    tester,
+  ) async {
+    const currentRef = GitHistoryItemRef(
+      id: 'refs/heads/main',
+      name: 'main',
+      revision: 'commit-30',
+      category: GitHistoryRefCategory.branches,
+    );
+    final items = <GitHistoryItem>[
+      for (var index = 0; index < 50; index++)
+        gitHistoryCommit(
+          'commit-$index',
+          parents: index == 49 ? <String>[] : <String>['commit-${index + 1}'],
+          subject: 'Commit $index',
+          references: index == 30
+              ? const <GitHistoryItemRef>[currentRef]
+              : const <GitHistoryItemRef>[],
+        ),
+    ];
+    final backend = FakeGitBackend()
+      ..gitHistoryResult = GitHistoryResult(
+        currentRef: currentRef,
+        items: items,
+        hasIncomingChanges: false,
+        hasOutgoingChanges: false,
+        hasMore: false,
+        limit: 200,
+      );
+    final repository = GitHistoryFakeWorkbenchRepository()
+      ..tabs.add(gitHistoryTab());
+    await pumpGitHistorySurface(
+      tester,
+      backend: backend,
+      repository: repository,
+    );
+    await tester.pumpAndSettle();
+
+    final scroll = tester.widget<ListView>(find.byType(ListView)).controller!;
+    expect(scroll.offset, greaterThan(500));
+    expect(
+      find.byKey(const ValueKey('git-history-head-row-commit-30')),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('initial graph loads more pages until HEAD is visible', (
+    tester,
+  ) async {
+    const currentRef = GitHistoryItemRef(
+      id: 'refs/heads/main',
+      name: 'main',
+      revision: 'old-head',
+      category: GitHistoryRefCategory.branches,
+    );
+    final firstPage = <GitHistoryItem>[
+      for (var index = 0; index < 40; index++)
+        gitHistoryCommit(
+          'new-$index',
+          parents: <String>['new-${index + 1}'],
+          subject: 'New $index',
+        ),
+    ];
+    final secondPage = <GitHistoryItem>[
+      gitHistoryCommit(
+        'old-head',
+        parents: const <String>[],
+        subject: 'Current HEAD',
+        references: const <GitHistoryItemRef>[currentRef],
+      ),
+    ];
+    final backend = FakeGitBackend()
+      ..gitHistoryResultQueue.add(
+        Future.value(
+          GitHistoryResult(
+            currentRef: currentRef,
+            items: firstPage,
+            hasIncomingChanges: false,
+            hasOutgoingChanges: false,
+            hasMore: true,
+            limit: 200,
+          ),
+        ),
+      )
+      ..gitHistoryResultQueue.add(Future.value(gitHistoryResult(secondPage)));
+    final repository = GitHistoryFakeWorkbenchRepository()
+      ..tabs.add(gitHistoryTab());
+    await pumpGitHistorySurface(
+      tester,
+      backend: backend,
+      repository: repository,
+    );
+    await tester.pumpAndSettle();
+
+    final historyCalls = backend.calls
+        .where((call) => call.method == 'history')
+        .toList();
+    expect(historyCalls, hasLength(2));
+    expect(historyCalls.last.args['offset'], firstPage.length);
+    final scroll = tester.widget<ListView>(find.byType(ListView)).controller!;
+    expect(
+      scroll.offset,
+      greaterThan(0),
+      reason: 'HEAD page must cause an initial scroll',
+    );
+    expect(
+      find.byKey(const ValueKey('git-history-head-row-old-head')),
+      findsOneWidget,
+    );
+  });
+
   testWidgets('commit graph tab loads all-branch history into the list', (
     tester,
   ) async {
@@ -437,7 +548,8 @@ void main() {
     await tester.tap(find.text('All Branches'));
     await tester.pumpAndSettle();
     expect(find.text('feature'), findsOneWidget);
-    expect(find.text('main (Current)'), findsOneWidget);
+    expect(find.text('main'), findsOneWidget);
+    expect(find.text('Current'), findsOneWidget);
 
     await tester.enterText(
       find.byKey(
@@ -447,7 +559,7 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(find.text('feature'), findsOneWidget);
-    expect(find.text('main (Current)'), findsNothing);
+    expect(find.text('main'), findsNothing);
 
     await tester.tap(find.text('feature'));
     await tester.pumpAndSettle();

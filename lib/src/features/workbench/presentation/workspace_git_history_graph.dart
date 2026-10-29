@@ -249,16 +249,27 @@ class const GitRefBadge({
           GitHistoryRefCategory.commits => AleraTokens.accent,
           null => AleraTokens.accent,
         };
+    final favorite = isFavorite && onToggleFavorite != null;
     final badge = DecoratedBox(
       key: isCurrent
           ? ValueKey<String>('git-history-current-ref-${itemRef.id}')
           : null,
       decoration: BoxDecoration(
-        color: color.withValues(alpha: isCurrent ? 0.28 : 0.14),
+        color: favorite
+            ? AleraTokens.warning.withValues(alpha: 0.16)
+            : color.withValues(alpha: isCurrent ? 0.28 : 0.14),
         borderRadius: BorderRadius.circular(AleraTokens.radiusPill),
         border: Border.all(
-          color: isCurrent ? AleraTokens.accent : color.withValues(alpha: 0.72),
-          width: isCurrent ? 2 : 1,
+          color: isCurrent
+              ? AleraTokens.accent
+              : favorite
+              ? AleraTokens.warning
+              : color.withValues(alpha: 0.72),
+          width: isCurrent
+              ? 2
+              : favorite
+              ? 1.5
+              : 1,
         ),
         boxShadow: isCurrent
             ? <BoxShadow>[
@@ -278,14 +289,18 @@ class const GitRefBadge({
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (isFavorite && onToggleFavorite != null)
+            if (onToggleFavorite != null)
               AleraIconButton(
                 key: ValueKey('git-history-ref-favorite:${itemRef.id}'),
-                tooltip: 'Remove From Favorites',
-                icon: AleraIcons.favorite,
-                iconSize: AleraTokens.space12,
-                minSize: AleraTokens.space16,
-                iconColor: AleraTokens.accent,
+                tooltip: favorite
+                    ? 'Remove From Favorites'
+                    : 'Add To Favorites',
+                icon: favorite ? Icons.star_rounded : Icons.star_border_rounded,
+                iconSize: 16,
+                minSize: 20,
+                iconColor: favorite
+                    ? AleraTokens.warning
+                    : AleraTokens.foregroundMuted,
                 onPressed: onToggleFavorite,
               ),
             Flexible(
@@ -304,7 +319,10 @@ class const GitRefBadge({
         ),
       ),
     );
-    final tooltipBadge = Tooltip(message: itemRef.name, child: badge);
+    final tooltipBadge = Tooltip(
+      message: favorite ? '${itemRef.name} · Favorite' : itemRef.name,
+      child: badge,
+    );
     final onOpenActions = this.onOpenActions;
     if (onOpenActions == null) {
       return tooltipBadge;

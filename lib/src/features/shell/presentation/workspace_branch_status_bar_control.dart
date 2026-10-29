@@ -170,11 +170,24 @@ class _WorkspaceBranchStatusBarControlState
             const <String>{},
       ),
     );
+    final visibleCurrent = filtered.where((branch) => branch == _current);
     final pinned = favoriteBranchesFirst(
-      filtered.where(favorites.contains),
+      filtered.where(
+        (branch) => branch != _current && favorites.contains(branch),
+      ),
       favorites,
     );
     final rows = <WorkspaceBranchTreeRow>[
+      // The checked-out branch always leads, even when other branches are
+      // favorited. Never duplicate it in the favorites or tree sections.
+      for (final branch in visibleCurrent)
+        WorkspaceBranchTreeRow(
+          segment: branch,
+          fullPath: branch,
+          branch: branch,
+          depth: 0,
+          hasChildren: false,
+        ),
       for (final branch in pinned)
         WorkspaceBranchTreeRow(
           segment: branch,
@@ -184,7 +197,11 @@ class _WorkspaceBranchStatusBarControlState
           hasChildren: false,
         ),
       ...buildWorkspaceBranchTreeRows(
-        filtered.where((branch) => !favorites.contains(branch)).toList(),
+        filtered
+            .where(
+              (branch) => branch != _current && !favorites.contains(branch),
+            )
+            .toList(),
       ),
     ];
 
@@ -259,14 +276,21 @@ class _WorkspaceBranchStatusBarControlState
                                     : ValueKey<String>(
                                         'workspace-branch-option:${row.branch}',
                                       ),
-                                style: const ButtonStyle(
-                                  minimumSize: WidgetStatePropertyAll(
+                                style: ButtonStyle(
+                                  backgroundColor: selected
+                                      ? WidgetStatePropertyAll(
+                                          AleraTokens.accent.withValues(
+                                            alpha: 0.12,
+                                          ),
+                                        )
+                                      : null,
+                                  minimumSize: const WidgetStatePropertyAll(
                                     Size(0, 32),
                                   ),
-                                  maximumSize: WidgetStatePropertyAll(
+                                  maximumSize: const WidgetStatePropertyAll(
                                     Size.fromHeight(32),
                                   ),
-                                  padding: WidgetStatePropertyAll(
+                                  padding: const WidgetStatePropertyAll(
                                     EdgeInsets.symmetric(
                                       horizontal: AleraTokens.space4,
                                     ),
@@ -307,8 +331,11 @@ class _WorkspaceBranchStatusBarControlState
                                             row.segment,
                                             maxLines: 1,
                                             overflow: .ellipsis,
-                                            style: const TextStyle(
+                                            style: TextStyle(
                                               fontSize: 12,
+                                              fontWeight: selected
+                                                  ? .w700
+                                                  : .w400,
                                             ),
                                           ),
                                         ),
@@ -323,13 +350,13 @@ class _WorkspaceBranchStatusBarControlState
                                               ? 'Remove From Favorites'
                                               : 'Add To Favorites',
                                           icon: favorites.contains(row.branch)
-                                              ? AleraIcons.favorite
-                                              : AleraIcons.add,
-                                          iconSize: 13,
+                                              ? Icons.star_rounded
+                                              : Icons.star_border_rounded,
+                                          iconSize: 16,
                                           minSize: 24,
                                           iconColor:
                                               favorites.contains(row.branch)
-                                              ? AleraTokens.accent
+                                              ? AleraTokens.warning
                                               : AleraTokens.foregroundFaint,
                                           onPressed: () => ref
                                               .read(
