@@ -33,13 +33,74 @@ final class RuntimeTerminalTabTransferPort
   ) async {
     // Do not fall back to tab.upsert on older sidecars. A missing route must
     // reject the operation rather than orphan a live PTY.
-    final payload = await _client.runtimeRequest(
-      'tab.transfer',
-      plan.toRuntimePayload(),
-    );
+    final Object? payload;
+    try {
+      payload = await _client.runtimeRequest(
+        'tab.transfer',
+        plan.toRuntimePayload(),
+      );
+    } on TerminalHostRequestTimeoutException catch (error) {
+      if (error.requestType != 'tab.transfer') rethrow;
+      return await _recoverCommittedReply(plan) ??
+          (throw TerminalTransferOutcomeUnknownException(
+            tabId: plan.tabId,
+            clientMutationId: plan.clientMutationId,
+          ));
+    } on TerminalHostConnectionClosedException {
+      // A disconnected transport does not prove the write failed. Query the
+      // original operation's receipt after reconnect; never generate a new
+      // mutation ID or close and recreate its existing PTY.
+      return await _recoverCommittedReply(plan) ??
+          (throw TerminalTransferOutcomeUnknownException(
+            tabId: plan.tabId,
+            clientMutationId: plan.clientMutationId,
+          ));
+    }
     if (payload is! Map) {
       throw StateError('Runtime tab.transfer returned invalid data.');
     }
     return WorkspaceTabRecord.fromJson(Map<String, Object?>.from(payload));
+  }
+
+  Future<WorkspaceTabRecord?> _recoverCommittedReply(
+    WorkbenchTerminalTabTransferPlan plan,
+  ) async {
+    try {
+      final status = await _client.runtimeRequest(
+        'tab.transfer.status',
+        <String, Object?>{
+          'tabId': plan.tabId,
+          'sessionId': plan.sessionId,
+          'sourceWorkspaceId': plan.sourceWorkspaceId,
+          'targetWorkspaceId': plan.targetWorkspaceId,
+          'clientMutationId': plan.clientMutationId,
+        },
+      );
+      if (status is! Map || status['applied'] != true) return null;
+      final stored = status['tab'];
+      if (stored is! Map) return null;
+      final tab = WorkspaceTabRecord.fromJson(
+        Map<String, Object?>.from(stored),
+      );
+      // Even if a future host returns an incomplete/malformed status,
+      // verify the tab, Session and exact original receipt before reporting
+      // success. Only the host can prove the live PTY side of the move.
+      final receipt = tab.payload['lastTerminalTabTransfer'];
+      if (tab.kind != WorkspaceTabKind.terminal ||
+          tab.id != plan.tabId ||
+          tab.workspaceId != plan.targetWorkspaceId ||
+          tab.terminalSessionId != plan.sessionId ||
+          receipt is! Map ||
+          receipt['id'] != plan.clientMutationId ||
+          receipt['from'] != plan.sourceWorkspaceId ||
+          receipt['to'] != plan.targetWorkspaceId) {
+        return null;
+      }
+      return tab;
+    } on Object {
+      // Connection can remain unavailable after the first timeout. Preserve
+      // an *unknown* outcome rather than falsely marking failure or success.
+      return null;
+    }
   }
 }

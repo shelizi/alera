@@ -3,6 +3,25 @@ import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 import 'package:uuid/uuid.dart';
 
+/// The Host might have committed the SQLite transfer before a client timeout
+/// or disconnect. Do not report success, undo, or run a fresh mutation until
+/// the original receipt and live PTY owner can be confirmed.
+final class TerminalTransferOutcomeUnknownException implements Exception {
+  const TerminalTransferOutcomeUnknownException({
+    required this.tabId,
+    required this.clientMutationId,
+  });
+
+  final String tabId;
+  final String clientMutationId;
+
+  @override
+  String toString() =>
+      'Terminal move status is unknown (tab $tabId, operation '
+      '$clientMutationId). Refresh both workspaces before trying again; '
+      'the running command may already be in the destination.';
+}
+
 /// Narrow Runtime capability used exclusively for cross-workspace terminal
 /// transfer. A regular tab.upsert/layout.upsert is *not* a substitute: it
 /// cannot atomically move a running PTY's owner.
