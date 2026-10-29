@@ -1,5 +1,6 @@
 import 'package:alera/src/design_system/forms/alera_search_field.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -9,6 +10,7 @@ void main() {
     FocusNode? focusNode,
     ValueChanged<String>? onChanged,
     Duration? debounce,
+    bool dense = false,
   }) async {
     await tester.pumpWidget(
       MaterialApp(
@@ -19,6 +21,7 @@ void main() {
               focusNode: focusNode,
               onChanged: onChanged,
               debounce: debounce,
+              dense: dense,
             ),
           ),
         ),
@@ -60,6 +63,57 @@ void main() {
     await tester.pump(const Duration(milliseconds: 120));
     expect(values, <String>['alera']);
   });
+
+  for (final dense in <bool>[false, true]) {
+    testWidgets('search input (dense: $dense) supports undo and redo', (
+      tester,
+    ) async {
+      final controller = TextEditingController();
+      final changes = <String>[];
+      addTearDown(controller.dispose);
+      await pumpField(
+        tester,
+        controller: controller,
+        dense: dense,
+        onChanged: changes.add,
+      );
+
+      await tester.tap(find.byType(TextField));
+      await tester.enterText(find.byType(TextField), 'first');
+      await tester.pump(const Duration(milliseconds: 700));
+      await tester.enterText(find.byType(TextField), 'second');
+      await tester.pump(const Duration(milliseconds: 700));
+      expect(controller.text, 'second');
+
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyZ);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      await tester.pump();
+      expect(controller.text, 'first');
+      expect(changes.last, 'first');
+
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyY);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      await tester.pump();
+      expect(controller.text, 'second');
+      expect(changes.last, 'second');
+
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyZ);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      await tester.pump();
+      expect(controller.text, 'first');
+
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyZ);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      await tester.pump();
+      expect(controller.text, 'second');
+    });
+  }
 
   testWidgets(
     'escape clears text first and then unfocuses when already empty',

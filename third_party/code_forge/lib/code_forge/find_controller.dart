@@ -1,12 +1,30 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart' show compute;
+import 'package:flutter/foundation.dart' show compute, visibleForTesting;
 
 import 'package:flutter/material.dart';
 
 import 'controller.dart';
 import 'styling.dart';
 import 'versioned_text_snapshot_cache.dart';
+
+/// Schedules focus after the search field is attached to the widget tree.
+/// A closed/disposed finder must not steal focus with a stale callback.
+@visibleForTesting
+void codeForgeRefocusFindInput({
+  required FocusNode focusNode,
+  required TextEditingController controller,
+  required bool Function() isActive,
+}) {
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    if (!isActive() || focusNode.context == null) return;
+    focusNode.requestFocus();
+    controller.selection = TextSelection(
+      baseOffset: 0,
+      extentOffset: controller.text.length,
+    );
+  });
+}
 
 typedef RegexSearchRequest = ({
   String text,
@@ -207,6 +225,17 @@ class FindController extends ChangeNotifier {
       _clearMatches();
     }
     notifyListeners();
+  }
+
+  /// Opens Find or restores keyboard focus to its input on repeated Ctrl/Cmd+F.
+  /// Waits until the field has mounted, and ignores requests after closing.
+  void focusFindInput() {
+    isActive = true;
+    codeForgeRefocusFindInput(
+      focusNode: findInputFocusNode,
+      controller: findInputController,
+      isActive: () => !_disposed && _isActive,
+    );
   }
 
   /// Sets whether the replace mode is active.

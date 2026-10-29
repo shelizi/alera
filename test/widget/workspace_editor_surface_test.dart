@@ -236,6 +236,55 @@ void main() {
     );
   });
 
+  test('find accelerator matches Ctrl+F or Cmd+F on the active platform', () {
+    final down = KeyDownEvent(
+      physicalKey: PhysicalKeyboardKey.keyF,
+      logicalKey: LogicalKeyboardKey.keyF,
+      timeStamp: Duration.zero,
+    );
+    final up = KeyUpEvent(
+      physicalKey: PhysicalKeyboardKey.keyF,
+      logicalKey: LogicalKeyboardKey.keyF,
+      timeStamp: Duration.zero,
+    );
+    expect(
+      workspaceEditorIsFindShortcut(
+        down,
+        platform: TargetPlatform.windows,
+        controlPressed: true,
+        metaPressed: false,
+      ),
+      isTrue,
+    );
+    expect(
+      workspaceEditorIsFindShortcut(
+        down,
+        platform: TargetPlatform.macOS,
+        controlPressed: false,
+        metaPressed: true,
+      ),
+      isTrue,
+    );
+    expect(
+      workspaceEditorIsFindShortcut(
+        down,
+        platform: TargetPlatform.macOS,
+        controlPressed: true,
+        metaPressed: false,
+      ),
+      isFalse,
+    );
+    expect(
+      workspaceEditorIsFindShortcut(
+        up,
+        platform: TargetPlatform.windows,
+        controlPressed: true,
+        metaPressed: false,
+      ),
+      isFalse,
+    );
+  });
+
   test('go-to-line parser converts valid one-based lines', () {
     expect(workspaceEditorGoToLineIndex('1', lineCount: 20), 0);
     expect(workspaceEditorGoToLineIndex(' 12 ', lineCount: 20), 11);

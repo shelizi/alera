@@ -96,7 +96,7 @@ class const AleraTextField({
           suffixIcon: suffix,
         ),
       );
-      return _withPasteAction(field);
+      return _withTextEditingShortcuts(_withPasteAction(field), context);
     }
 
     final field = SizedBox(
@@ -166,7 +166,24 @@ class const AleraTextField({
         ),
       ),
     );
-    return _withPasteAction(field);
+    return _withTextEditingShortcuts(_withPasteAction(field), context);
+  }
+
+  Widget _withTextEditingShortcuts(Widget field, BuildContext context) {
+    // Flutter's native TextField undo stack already supports Ctrl+Z and
+    // Ctrl+Shift+Z. On Windows/Linux, users also expect Ctrl+Y to redo the
+    // focused field rather than the editor behind it.
+    if (Theme.of(context).platform == TargetPlatform.macOS) {
+      return field;
+    }
+    return Shortcuts(
+      shortcuts: const <ShortcutActivator, Intent>{
+        SingleActivator(LogicalKeyboardKey.keyY, control: true): RedoTextIntent(
+          SelectionChangedCause.keyboard,
+        ),
+      },
+      child: field,
+    );
   }
 
   Widget _withPasteAction(Widget field) {

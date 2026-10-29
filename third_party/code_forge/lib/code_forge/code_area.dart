@@ -2119,8 +2119,8 @@ class _CodeForgeState extends State<CodeForge> with TickerProviderStateMixin {
                                                   final isAlt = HardwareKeyboard
                                                       .instance
                                                       .isAltPressed;
-                                                  _findController.isActive =
-                                                      true;
+                                                  _findController
+                                                      .focusFindInput();
                                                   _findController
                                                           .isReplaceMode =
                                                       isAlt;
@@ -2135,8 +2135,8 @@ class _CodeForgeState extends State<CodeForge> with TickerProviderStateMixin {
                                                   if (!HardwareKeyboard
                                                       .instance
                                                       .isMetaPressed) {
-                                                    _findController.isActive =
-                                                        true;
+                                                    _findController
+                                                        .focusFindInput();
                                                     _findController
                                                             .isReplaceMode =
                                                         true;

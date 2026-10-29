@@ -23,7 +23,23 @@ bool workspaceEditorIsSaveShortcut(
     event.logicalKey == LogicalKeyboardKey.keyS &&
     (controlPressed || metaPressed);
 
+@visibleForTesting
+bool workspaceEditorIsFindShortcut(
+  KeyEvent event, {
+  required TargetPlatform platform,
+  required bool controlPressed,
+  required bool metaPressed,
+}) =>
+    event is KeyDownEvent &&
+    event.logicalKey == LogicalKeyboardKey.keyF &&
+    (platform == TargetPlatform.macOS ? metaPressed : controlPressed);
+
 extension _WorkspaceEditorFindActions on _WorkspaceEditorSurfaceState {
+  void _openEditorFind() {
+    if (_loading || _loadError != null) return;
+    _findController.focusFindInput();
+  }
+
   KeyEventResult _handleEditorKeyboardKey(FocusNode node, KeyEvent event) {
     if (workspaceEditorIsSaveShortcut(
       event,
@@ -124,20 +140,21 @@ class _WorkspaceEditorFindBarState extends State<_WorkspaceEditorFindBar> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      final findController = widget.controller;
-      findController.findInputFocusNode.requestFocus();
-      findController.findInputController.selection = TextSelection(
-        baseOffset: 0,
-        extentOffset: findController.findInputController.text.length,
-      );
-    });
+    widget.controller.focusFindInput();
   }
 
   KeyEventResult _handleKey(FocusNode node, KeyEvent event) {
     if (event is! KeyDownEvent) {
       return KeyEventResult.ignored;
+    }
+    if (workspaceEditorIsFindShortcut(
+      event,
+      platform: Theme.of(context).platform,
+      controlPressed: HardwareKeyboard.instance.isControlPressed,
+      metaPressed: HardwareKeyboard.instance.isMetaPressed,
+    )) {
+      widget.controller.focusFindInput();
+      return KeyEventResult.handled;
     }
     if (event.logicalKey == LogicalKeyboardKey.escape) {
       widget.onClose();

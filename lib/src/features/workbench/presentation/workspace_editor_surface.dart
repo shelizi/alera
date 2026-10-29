@@ -450,74 +450,83 @@ class _WorkspaceEditorSurfaceState
         ],
       );
     }
-    return DecoratedBox(
-      decoration: const BoxDecoration(color: AleraTokens.bg),
-      child: Column(
-        crossAxisAlignment: .stretch,
-        children: <Widget>[
-          _EditorFileBar(
-            path: workspaceEditorDisplayPath(
-              workspace: widget.workspace,
-              filePath: filePath,
+    return CallbackShortcuts(
+      bindings: <ShortcutActivator, VoidCallback>{
+        workspaceEditorKeyboardShortcutsForPlatform(Theme.of(context).platform)
+                .showFindBar:
+            _openEditorFind,
+      },
+      child: DecoratedBox(
+        decoration: const BoxDecoration(color: AleraTokens.bg),
+        child: Column(
+          crossAxisAlignment: .stretch,
+          children: <Widget>[
+            _EditorFileBar(
+              path: workspaceEditorDisplayPath(
+                workspace: widget.workspace,
+                filePath: filePath,
+              ),
+              dirty: _document.isDirty,
+              saving: _saving,
+              encodingSelection: WorkspaceTextEncodingSelection.fromEncoding(
+                _document.requestedEncoding,
+              ),
+              detectedEncoding: _document.encoding,
+              onEncodingSelected: _loading || _saving
+                  ? null
+                  : (selection) => unawaited(_changeEncoding(selection)),
+              onViewDiff: !_loading
+                  ? () => unawaited(_openDiffForFile())
+                  : null,
+              onSave: _document.isDirty && !_loading && !_saving
+                  ? () => unawaited(_save())
+                  : null,
+              onDiscard: _document.isDirty && !_loading && !_saving
+                  ? () => unawaited(_discardChanges())
+                  : null,
+              onOpenPreview: _openPreviewActionFor(filePath),
+              outlineOpen: _outlineOpen,
+              onToggleOutline: _loading || _loadError != null
+                  ? null
+                  : _toggleOutline,
             ),
-            dirty: _document.isDirty,
-            saving: _saving,
-            encodingSelection: WorkspaceTextEncodingSelection.fromEncoding(
-              _document.requestedEncoding,
-            ),
-            detectedEncoding: _document.encoding,
-            onEncodingSelected: _loading || _saving
-                ? null
-                : (selection) => unawaited(_changeEncoding(selection)),
-            onViewDiff: !_loading ? () => unawaited(_openDiffForFile()) : null,
-            onSave: _document.isDirty && !_loading && !_saving
-                ? () => unawaited(_save())
-                : null,
-            onDiscard: _document.isDirty && !_loading && !_saving
-                ? () => unawaited(_discardChanges())
-                : null,
-            onOpenPreview: _openPreviewActionFor(filePath),
-            outlineOpen: _outlineOpen,
-            onToggleOutline: _loading || _loadError != null
-                ? null
-                : _toggleOutline,
-          ),
-          if (_goToLineOpen)
-            _WorkspaceEditorGoToLineBar(
-              controller: _goToLineController,
-              focusNode: _goToLineFocusNode,
-              lineCount: _controller.lineCount,
-              onSubmit: _goToLine,
-              onClose: _closeGoToLine,
-            ),
-          const Divider(height: 1, color: AleraTokens.borderSubtle),
-          Expanded(
-            child: Row(
-              crossAxisAlignment: .stretch,
-              children: <Widget>[
-                Expanded(child: content),
-                if (_outlineOpen) ...<Widget>[
-                  const VerticalDivider(
-                    width: 1,
-                    thickness: 1,
-                    color: AleraTokens.borderSubtle,
-                  ),
-                  SizedBox(
-                    width: 280,
-                    child: _EditorOutlinePanel(
-                      loading: _outlineLoading,
-                      symbols: _outlineSymbols,
-                      truncated: _outlineTruncated,
-                      source: _outlineSource,
-                      onRefresh: _loading ? null : _refreshOutline,
-                      onSelect: _navigateToOutlineSymbol,
+            if (_goToLineOpen)
+              _WorkspaceEditorGoToLineBar(
+                controller: _goToLineController,
+                focusNode: _goToLineFocusNode,
+                lineCount: _controller.lineCount,
+                onSubmit: _goToLine,
+                onClose: _closeGoToLine,
+              ),
+            const Divider(height: 1, color: AleraTokens.borderSubtle),
+            Expanded(
+              child: Row(
+                crossAxisAlignment: .stretch,
+                children: <Widget>[
+                  Expanded(child: content),
+                  if (_outlineOpen) ...<Widget>[
+                    const VerticalDivider(
+                      width: 1,
+                      thickness: 1,
+                      color: AleraTokens.borderSubtle,
                     ),
-                  ),
+                    SizedBox(
+                      width: 280,
+                      child: _EditorOutlinePanel(
+                        loading: _outlineLoading,
+                        symbols: _outlineSymbols,
+                        truncated: _outlineTruncated,
+                        source: _outlineSource,
+                        onRefresh: _loading ? null : _refreshOutline,
+                        onSelect: _navigateToOutlineSymbol,
+                      ),
+                    ),
+                  ],
                 ],
-              ],
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
