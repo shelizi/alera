@@ -1,12 +1,12 @@
 import 'dart:async';
 
-import 'package:alera/src/shared/infra/git/git_backend.dart';
+import 'package:alera/src/shared/infra/git/git_query_ports.dart';
 import 'package:alera/src/shared/infra/git/git_diff_models.dart';
 
 /// Owns the repository history request and its scope-sensitive state.
 final class WorkspaceGitHistoryLoader {
   factory WorkspaceGitHistoryLoader({
-    required GitBackend backend,
+    required GitHistoryQueryPort backend,
     required String scopePath,
     required void Function() onChanged,
     int limit = 50,
@@ -19,7 +19,7 @@ final class WorkspaceGitHistoryLoader {
     this.limit,
   );
 
-  final GitBackend _backend;
+  final GitHistoryQueryPort _backend;
   final void Function() _onChanged;
   final int limit;
 

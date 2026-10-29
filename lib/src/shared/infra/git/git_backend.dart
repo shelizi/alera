@@ -5,6 +5,7 @@ import 'package:alera/src/shared/infra/git/git_commit_ops_models.dart';
 import 'package:alera/src/shared/infra/git/git_diff_models.dart';
 import 'package:alera/src/shared/infra/git/git_explorer_status.dart';
 import 'package:alera/src/shared/infra/git/git_remote.dart';
+import 'package:alera/src/shared/infra/git/git_query_ports.dart';
 
 /// Injectable boundary for git operations. Mirrors the raw git plumbing only;
 /// orchestration (paths, slugs, persistence, reconciliation) lives in the
@@ -14,7 +15,8 @@ import 'package:alera/src/shared/infra/git/git_remote.dart';
 /// failure. The production implementation (`RustGitBackend`) is backed by Rust
 /// (libgit2 for local operations, the `git` CLI for clone) through
 /// flutter_rust_bridge; tests use an in-memory fake.
-abstract interface class GitBackend {
+abstract interface class GitBackend
+    implements GitHistoryQueryPort, GitCommitCompareQueryPort {
   /// Whether [path] resolves to a git repository work tree.
   Future<bool> isGitRepository(String path);
 
@@ -207,6 +209,7 @@ abstract interface class GitBackend {
   /// [filePath] selects an exact workspace-relative file across all branches,
   /// preserving connections through omitted commits. It overrides branch
   /// perspective arguments and pages matching commits only.
+  @override
   Future<GitHistoryResult> history(
     String path, {
     int? limit,
@@ -218,6 +221,7 @@ abstract interface class GitBackend {
   });
 
   /// Lists files changed by [commitId] compared with its first parent.
+  @override
   Future<GitCommitCompareResult> commitCompare({
     required String path,
     required String commitId,

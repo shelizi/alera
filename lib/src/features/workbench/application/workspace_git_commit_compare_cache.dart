@@ -1,17 +1,17 @@
-import 'package:alera/src/shared/infra/git/git_backend.dart';
+import 'package:alera/src/shared/infra/git/git_query_ports.dart';
 import 'package:alera/src/shared/infra/git/git_diff_models.dart';
 import 'package:alera/src/shared/infra/git/git_exception.dart';
 
 /// Caches commit comparisons only within the currently bound repository scope.
 final class WorkspaceGitCommitCompareCache {
   factory WorkspaceGitCommitCompareCache({
-    required GitBackend backend,
+    required GitCommitCompareQueryPort backend,
     required String scopePath,
   }) => WorkspaceGitCommitCompareCache._(backend, scopePath);
 
   WorkspaceGitCommitCompareCache._(this._backend, this._scopePath);
 
-  final GitBackend _backend;
+  final GitCommitCompareQueryPort _backend;
   final Map<String, GitCommitCompareResult> _results =
       <String, GitCommitCompareResult>{};
   final Map<String, Future<GitCommitCompareResult>> _inFlight =
