@@ -121,6 +121,39 @@ final class WorkbenchTabLayoutOwner {
   final WorkbenchFileTabMutationQueue _fileTabMutations =
       WorkbenchFileTabMutationQueue();
   final WorkspaceTabFocusHistory _tabFocusHistory = WorkspaceTabFocusHistory();
+  final Map<String, int> _terminalTransferFences = <String, int>{};
+
+  /// While the Host commits a two-workspace transfer, watcher snapshots may
+  /// arrive in either order. Applying a single side early would sanitize a
+  /// stale local layout and overwrite the Host's atomic two-side CAS. The
+  /// caller must explicitly hydrate both layouts before releasing the fence.
+  void beginTerminalTransfer(
+    String sourceWorkspaceId,
+    String targetWorkspaceId,
+  ) {
+    for (final id in <String>{sourceWorkspaceId, targetWorkspaceId}) {
+      _terminalTransferFences.update(
+        id,
+        (value) => value + 1,
+        ifAbsent: () => 1,
+      );
+    }
+  }
+
+  void finishTerminalTransfer(
+    String sourceWorkspaceId,
+    String targetWorkspaceId,
+  ) {
+    for (final id in <String>{sourceWorkspaceId, targetWorkspaceId}) {
+      final count = _terminalTransferFences[id];
+      if (count == null) continue;
+      if (count <= 1) {
+        _terminalTransferFences.remove(id);
+      } else {
+        _terminalTransferFences[id] = count - 1;
+      }
+    }
+  }
 
   /// Serializes explicit tab closes and workspace sleeps per workspace.
   WorkbenchWorkspaceTabClosingScope get tabClosingScope => _tabClosingScope;
@@ -272,7 +305,8 @@ final class WorkbenchTabLayoutOwner {
   /// Reconciles the tracked tab list and layout of [workspaceId] with the
   /// persisted set pushed by the tab watcher.
   void handleTabsChanged(String workspaceId, List<WorkspaceTabRecord> tabs) {
-    if (!_host.isWorkspaceTabSubscriptionActive(workspaceId)) {
+    if (!_host.isWorkspaceTabSubscriptionActive(workspaceId) ||
+        _terminalTransferFences.containsKey(workspaceId)) {
       return;
     }
     final layoutWasCleared = _clearedLayouts.contains(workspaceId);

@@ -12,6 +12,7 @@ import 'package:alera/src/features/workbench/application/terminal_runtime_bindin
 import 'package:alera/src/features/workbench/application/workbench_controller.dart';
 import 'package:alera/src/features/workbench/application/workbench_listing.dart';
 import 'package:alera/src/features/workbench/application/workbench_repository.dart';
+import 'package:alera/src/features/workbench/application/workbench_terminal_tab_transfer_coordinator.dart';
 import 'package:alera/src/features/workbench/application/workbench_state.dart';
 import 'package:alera/src/features/workbench/application/workbench_tab_acknowledgements.dart';
 import 'package:alera/src/features/workbench/application/workbench_view_prefs_repository.dart';
@@ -33,6 +34,8 @@ import 'package:alera/src/features/workbench/infra/alera_cli_terminal_shim.dart'
 import 'package:alera/src/features/workbench/infra/runtime_managed_workspace_client.dart';
 import 'package:alera/src/features/workbench/infra/runtime_workspace_graph_repository.dart';
 import 'package:alera/src/features/workbench/infra/runtime_workbench_repository.dart';
+import 'package:alera/src/features/workbench/infra/runtime_terminal_tab_transfer_port.dart';
+import 'package:alera/src/features/workbench/infra/runtime_terminal_transfer_capability.dart';
 import 'package:alera/src/features/workbench/infra/terminal_host/terminal_host_client.dart';
 import 'package:alera/src/features/workbench/infra/terminal_shell_startup_preparer.dart';
 import 'package:alera/src/shared/infra/git/git_providers.dart';
@@ -52,6 +55,30 @@ export 'package:alera/src/features/workbench/application/terminal_runtime_bindin
         terminalRuntimeFocusProvider;
 
 part 'workbench_providers.g.dart';
+
+/// Cross-project terminal moves use one atomic host transaction; these ports
+/// are separate from the ordinary tab/layout repository to avoid unsafe
+/// fallback writes on older sidecars.
+final workbenchTerminalTransferPortProvider =
+    Provider<WorkbenchTerminalTabTransferPort>((ref) {
+      return RuntimeTerminalTabTransferPort(
+        repository: ref.watch(workbenchRepositoryProvider),
+        client: ref.watch(runtimeHostClientProvider),
+      );
+    });
+
+final workbenchTerminalTransferCoordinatorProvider =
+    Provider<WorkbenchTerminalTabTransferCoordinator>((ref) {
+      return WorkbenchTerminalTabTransferCoordinator(
+        ref.watch(workbenchTerminalTransferPortProvider),
+      );
+    });
+
+final workbenchTerminalTransferAvailabilityProvider = FutureProvider<bool>(
+  (ref) => RuntimeTerminalTransferCapability.supportsLiveTransfer(
+    ref.watch(runtimeHostClientProvider),
+  ),
+);
 
 @Riverpod(keepAlive: true)
 WorkbenchRepository workbenchRepository(Ref ref) {

@@ -2,6 +2,65 @@ part of 'workbench_controller.dart';
 
 mixin _WorkbenchControllerTabs
     on _$WorkbenchController, _WorkbenchControllerInternals {
+  /// Commits the *existing* PTY to the new workspace. The current sidecar
+  /// advertises this as disabled until full transfer/restart reconciliation
+  /// is ready, so old builds never simulate a transfer with separate writes.
+  Future<void> transferTerminalTab({
+    required Workspace source,
+    required Workspace destination,
+    required String tabId,
+  }) async {
+    final available = await ref.read(
+      workbenchTerminalTransferAvailabilityProvider.future,
+    );
+    if (!available) {
+      throw StateError(
+        'Cross-project Terminal transfer is not supported by this Runtime.',
+      );
+    }
+    final port = ref.read(workbenchTerminalTransferPortProvider);
+    final coordinator = ref.read(workbenchTerminalTransferCoordinatorProvider);
+    _tabLayoutOwner.beginTerminalTransfer(source.id, destination.id);
+    try {
+      await coordinator.transfer(
+        source: source,
+        destination: destination,
+        tabId: tabId,
+      );
+      if (_disposed) return;
+      await WorkbenchTerminalTransferReconciliation(
+        port: port,
+        applyTabs: _tabLayoutOwner.applyWorkspaceTabs,
+        applyLayoutWithoutPersistence: (layout) =>
+            _tabLayoutOwner.applyWorkspaceLayout(layout, persist: false),
+      ).reconcile(
+        tabId: tabId,
+        sourceWorkspaceId: source.id,
+        targetWorkspaceId: destination.id,
+      );
+      final projects = state.projects;
+      final projectIndex = projects.indexWhere(
+        (project) => project.id == destination.projectId,
+      );
+      if (projectIndex < 0) {
+        throw StateError('Destination project is no longer available.');
+      }
+      await _selectionOwner.selectWorkspace(
+        project: projects[projectIndex],
+        workspace: destination,
+        ensureInitialTerminal: false,
+      );
+      if (!_disposed) {
+        _tabLayoutOwner.activateWorkspaceTab(
+          workspaceId: destination.id,
+          tabId: tabId,
+        );
+      }
+    } finally {
+      _tabLayoutOwner.finishTerminalTransfer(source.id, destination.id);
+    }
+  }
+
   Future<void> closeWorkspaceTab({
     required Workspace workspace,
     required String tabId,

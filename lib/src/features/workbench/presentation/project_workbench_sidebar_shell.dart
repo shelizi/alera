@@ -52,6 +52,15 @@ class _ProjectWorkbenchSidebarState
       collapsed: sidebar.collapsed,
     );
     final controller = ref.read(workbenchControllerProvider.notifier);
+    // A partial/older Host must not accept the Flutter drag at all. The
+    // transfer capability is intentionally false until atomic live PTY
+    // lifecycle, watcher reconciliation and restart semantics are ready.
+    final terminalTransferSupported =
+        ref
+            .watch(workbenchTerminalTransferAvailabilityProvider)
+            .asData
+            ?.value ==
+        true;
     final commands = _WorkbenchSidebarCommands(
       toggleSectionCollapsed: controller.toggleSectionCollapsed,
       deleteWorkspaceSection: controller.deleteWorkspaceSection,
@@ -152,6 +161,35 @@ class _ProjectWorkbenchSidebarState
                                     workspaceFolderOpener.fileManagerLabel,
                                 onSelectTerminal: _selectTerminal,
                                 onCloseTerminal: _closeTerminal,
+                                onTransferTerminalTab:
+                                    !terminalTransferSupported
+                                    ? null
+                                    : (data, destination) async {
+                                        Workspace? source;
+                                        for (final workspaces
+                                            in state
+                                                .workspacesByProject
+                                                .values) {
+                                          for (final workspace in workspaces) {
+                                            if (workspace.id ==
+                                                data.workspaceId) {
+                                              source = workspace;
+                                              break;
+                                            }
+                                          }
+                                          if (source != null) break;
+                                        }
+                                        if (source == null) {
+                                          throw StateError(
+                                            'Source Terminal workspace no longer exists.',
+                                          );
+                                        }
+                                        await controller.transferTerminalTab(
+                                          source: source,
+                                          destination: destination,
+                                          tabId: data.tabId,
+                                        );
+                                      },
                               );
                             },
                           ),
