@@ -4,6 +4,9 @@
 > 每次接手先讀此檔、`docs/refactor/tdd-progress-20261029.md` 與 `skills/alera-di-architecture/SKILL.md`，以進度文件中的下一個未完成驗收項目繼續。
 > 2026-10-29 第二批已將 Q0/G1/R1 各自獨立工作樹的 verified commits cherry-pick 至 `refactor/tdd-integrate-20261029`。第一批表格僅作歷史狀態，**現況請先讀進度檔最上方〈第二批三線平行〉**。
 > 2026-10-29 **第三批**同時切出 A0/Q0/G1/R1 四個獨立工作樹，A0 已達 5 touchpoints、Q0 max-lines 132、G1 已獨立狹義 SourceControl 讀取；R1 增進 shutdown/restart 控制面，主 inbox 仍 unbounded。**現況優先讀進度檔〈第三批四線平行重構〉**，本節既存 Spec 不變。
+> **第四批 2026-10-29**：W1 同 workspace hydrate race、G1 六方法 index mutation、Q0 Git Diff UI History lifecycle、R1 bounded client line 已平行切分。**現況與驗證狀態先讀進度檔最上方〈第四批四線隔離 TDD〉**。W1/G1 已各 12／15 focused green；其餘測試未 complete 不標 PASS。
+> 第四批 W1/G1 已整合為 `c845fbe2e`／`6e4f0d48e`。Q0 實際 oversized 165→164、offenders 132→131，無 baseline 重設。Rust 本機 request line 16 MiB 限制已有 Cargo 6 tests green；主 Actor inbox 仍 unbounded。
+> **第四批已四線整合**：W1 `c845fbe2e`、G1 `6e4f0d48e`、Q0 `cb7ad9d97`、Rust R1 `89ac5306e`。Q0 60 Widget tests green、全域 164 oversized / 131 offenders，Rust 8 Cargo tests green；整合 Flutter 29 tests green。下批請以進度文件最上方第四批完成記錄為最新起點。
 > 目標是可逐批合併的 TDD 重構；不改產品語意、不清理第三方既有工作樹、不自動推送或發布。
 
 ## Spec

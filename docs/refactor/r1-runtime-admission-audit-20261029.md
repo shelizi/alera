@@ -1,5 +1,7 @@
 # R1 — Rust runtime admission / Actor 調查與 TDD 驗收契約
 
+> **第四批 ingress 改善已整合 `89ac5306e`**（原隔離 commit `d4dabecc0`）：本機 TcpStream 的 `BufReader.lines()` 原本可對單一無換行輸入持續配置記憶體。第三批 Actor 64 command lookahead 並不限制該行為。本輪本機 request line 新增 16 MiB 硬上限及取消安全的 partial bytes，append 前檢查容量，紅測 4 fail / 1 pass → green 6/6；再次 Cargo 複驗含原 client Socket EOF/causal control order **8/8 passed、exit0**，rustfmt --check exit0。**只限制單一 localhost request line**，不是 actor unbounded channel、mobile gateway 或 relay 的解決方案。仍需真實 multi-client pending/inbox bytes、status/cancel/quit p95/p99、封包接收背壓。
+
 > **第三批 R1 實作 `4be5d7f5a`，已整合為 `dc5067e11`**：`rust/alera-cli/src/terminal_host/server_runner.rs` 新增 64-command bounded lookahead buffer，僅 `RequestedShutdown`／`RequestedRestart` 可以超前，`ClientConnected`／`ClientLine`／PTY／completion 等一般命令維持 FIFO。獨立 Rust 單測 2 Red→3 Green；正式 Cargo async actor tests 2 pass；原 `deferred_admission_tests` 9 pass、exit 0。**沒有把主 `unbounded_channel` 改為 bounded**；真實 status.get/cancel latency 分布、inbox bytes、極端多 client backlog、actor blocked await 仍待補測；不能宣稱已完成整個 control-plane admission。
 
 > **第二批更新**：`b3b0757e4` 新增 bounded queue wait latency histogram (19 buckets / request type, <=256B)，`status.get` 新增 `queueWaitSamples` / `queueWaitP95Ms` / `queueWaitP99Ms`；保留 queueWaitMs 累計與 maxQueueWaitMs。單獨 rustc TDD 2 fail→2 pass，Cargo 新 metrics 3 pass，原 admission/control 9 pass。**主 Actor inbox 仍 unbounded，本輪未改排程**；原驗收規格後續仍要進行 control p95/p99 / backlog / quit tests。

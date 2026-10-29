@@ -1,5 +1,7 @@
 # Q0 — Max-lines ratchet 分類及降低計畫（2026-10-29）
 
+> **第四批更新**：`workspace_git_diff_panel.dart` 將 Git History collapse/load/refresh/invalidation/commit compare/copy/open 操作移至獨立 Dart part；主檔實際 **452 physical lines**，原品質工具基準掃描為 514（新 500 以下）。正式 `dart tool/quality/check_max_lines.dart --list-oversized` 掃描 **164 oversized／131 offenders**（前次 165/132）；不更改歷史 baseline。兩個 Git diff/history Widget suites 最終抽取後 **60 passed、exit0**；Flutter scoped analyze **No issues found、exit0**。原有 `workspace_git_history_panel_scope_cases.dart` fixture 對 `FakeGitBackend.history` 遺漏 `includedRefs:null`／`filePath:null`，已於上一批未改 source 的整合分支重現並補齊預期，非這輪產品行為修復。
+
 > **第三批更新**：`refactor/tdd-b3-q0-20261029` 將 Git History commit age UI 的相對／絕對時間格式化拆為可注入時鐘的純函式，新增 3 筆 deterministic 邊界測試及原 graph 8 筆回歸，共 11 PASS。`check_max_lines.dart --list-oversized` 由 166/133 降為 **165 oversized / 132 offenders**，仍未放寬 baseline。下方表格為第一批歷史盤點。
 
 > **第二批更新**：`refactor/tdd-quality-20261029` 已以 TDD 將 `ai_assist_registry.dart` 由約 616 行拆為 466 行（Codex/Copilot/Cursor 獨立 agent adapter），`--list-oversized` 檔案 167 → 166、未獲 baseline 許可者 134 → **133**。下表仍是原始盤點快照，總分布需在每輪重新量測，沒有放寬 baseline。

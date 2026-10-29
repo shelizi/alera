@@ -4,6 +4,21 @@
 > 讀取 `docs/refactor/tdd-roadmap-20261029.md` 了解契約/驗收，然後從下列 pending/in_progress 工作續做。
 > 變更只在隔離 worktree，未合併 main／未 push／未 release。
 
+## 最新：第四批四線隔離 TDD（2026-10-29）
+
+**本節為續做起點。起始整合 HEAD `569a77abe`；各線獨立 worktree，不修改原本有未提交工作之 `main`。**
+
+| 專線 | 變更 | 紅測 → 綠測與驗證 | 待完成／風險 |
+| --- | --- | --- | --- |
+| W1 工作區選取競態 | `refactor/tdd-b4-workbench-20261029`：同一 workspace 重複非同步 hydrate 使用 owner-scoped epoch 避免舊結果覆蓋新結果；Tab 切換續行也驗證 generation | 新測一開始因缺 epoch compile red；補實作後選取 coordinator + hydrator **12 tests passed**；隔離 `6c31c9ac7`、整合 `c845fbe2e` | scoped analyze 7 項 `prefer_initializing_formals` info（既存公開 named API 初始化形式，非編譯錯誤）；完整 CI 未跑 |
+| G1 Git mutation | `refactor/tdd-b4-git-20261029`：抽六方法 `GitIndexMutationPort` 與 `WorkspaceSourceControlIndexMutations`，rename 先 oldPath 再 newPath、submodule 不可從父 scope mutate；保留唯一 RustGitBackend | 新小型 fake compile red，實作後新 4 + controller 原 11 = **15 tests passed**；隔離 `73bf5a394`、整合 `6e4f0d48e`；5 檔分析 **No issues found** | 與 W1 的整合 Flutter App Smoke 共 **29 tests passed，exit 0**；完整 Git CI 未跑 |
+| Q0 Git Diff UI | `refactor/tdd-b4-q0-20261029`：Git History 的 loading/collapse/refresh/invalidation、commit compare/copy/open 生命週期移至獨立 part extension，主面板**452 行**（原約 551） | 最終抽取後雙 Widget suites **60 passed，exit 0**；3 檔 `flutter analyze --no-pub` **No issues found，exit 0**；隔離 `9701b97aa`、整合 `cb7ad9d97`；原 baseline fixture 漂移已查證修正。正式 max-lines oversized **164**、offenders **131**（前 165／132），baseline 未放寬 | 全域 max-lines CI 仍紅（131），完整跨平台驗收未跑 |
+| R1 本機 ingress | `refactor/tdd-b4-rust-20261029`：Tokio 本機 Socket 單一請求行新增 16 MiB 上限；`fill_buf` 追加 bytes 前先檢查；因 `tokio::select!` 會中止 pending read，保留跨呼叫 partial-buffer 以免截斷訊息；CRLF/UTF8/EOF parity | Rust/Tokio 首輪 red **4 failed / 1 passed**，實作後 reader 6 passed；最終 Cargo 覆蓋 parser + 原 Socket EOF/控制回覆順序 **8 passed、exit 0**，且移除原 unused import warning；rustfmt/diff check exit0。隔離 `d4dabecc0` → 整合 **`89ac5306e`** | 未改主 Actor 無界 inbox、不涵蓋 mobile/relay，真正 queued bytes、multiclient p95/p99/backpressure 仍未解 |
+
+**第四批四條線都已獨立 commit 並 cherry-pick**，Git/Agent 架構 guards 都 exit0（Agent 保持 5 touchpoints），Flutter 整合 focused tests + App Shell smoke 共 **29 passed，exit0**，Git Diff/History Widget **60 passed，exit0**，Rust client parser/transport **8 passed，exit0**，Q0/G1 scoped Flutter analyzer **No issues found**。W1 scoped analyzer 的 7 個 info 皆為現有 public constructor named parameter 與 private field 形式引起的 `prefer_initializing_formals`，不能宣稱整體 analyzer 無警告。全域 max-lines guard **131 offenders 仍紅**、完整跨平台與 release CI 未跑，不宣稱全綠。
+
+下批可繼續平行：Q0 剩餘大檔拆 Explorer/Terminal；G1 diff query/mutation；W1 同 workspace 載入／layout await race；R1 多 client admission／cancel/quit/status latency。不可未經 benchmark 將簡單 Dart UI formatter 強制移至 Rust。
+
 ## 最新：第三批四線平行重構（2026-10-29）
 
 **以整合分支 `refactor/tdd-integrate-20261029` 為續做起點，舊儀表板的 134/133 與 R1 pending 欄位是歷史快照；請先讀本節。**
