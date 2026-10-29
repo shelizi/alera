@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use serde_json::{json, Value};
 
 use super::deferred_admission::DeferredRequestClass;
+use super::queue_wait_histogram::QueueWaitHistogram;
 
 #[derive(Default)]
 struct RequestTypeMetrics {
@@ -15,6 +16,7 @@ struct RequestTypeMetrics {
     disconnected: u64,
     queue_wait_ms: u64,
     max_queue_wait_ms: u64,
+    queue_wait_histogram: QueueWaitHistogram,
 }
 
 #[derive(Default)]
@@ -57,6 +59,7 @@ impl AdmissionMetrics {
         }
         metrics.queue_wait_ms = metrics.queue_wait_ms.saturating_add(queue_wait_ms);
         metrics.max_queue_wait_ms = metrics.max_queue_wait_ms.max(queue_wait_ms);
+        metrics.queue_wait_histogram.record(queue_wait_ms);
     }
 
     pub(super) fn completed(&mut self, request_type: &str, class: DeferredRequestClass) {
@@ -111,6 +114,9 @@ impl AdmissionMetrics {
                     "disconnected": metrics.disconnected,
                     "queueWaitMs": metrics.queue_wait_ms,
                     "maxQueueWaitMs": metrics.max_queue_wait_ms,
+                    "queueWaitSamples": metrics.queue_wait_histogram.samples(),
+                    "queueWaitP95Ms": metrics.queue_wait_histogram.percentile_upper_ms(95),
+                    "queueWaitP99Ms": metrics.queue_wait_histogram.percentile_upper_ms(99),
                 })
             })
             .collect();
@@ -124,5 +130,57 @@ impl AdmissionMetrics {
             "staleCompletions": self.stale_completions,
             "requestTypes": request_types,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn request_type<'a>(snapshot: &'a Value, name: &str) -> &'a Value {
+        snapshot["requestTypes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["requestType"] == name)
+            .expect("request type metrics should be present")
+    }
+
+    #[test]
+    fn queue_wait_percentiles_use_bounded_buckets_without_distorting_the_existing_sum() {
+        let mut metrics = AdmissionMetrics::default();
+        for _ in 0..98 {
+            metrics.started("test.bulk", DeferredRequestClass::Bulk, false, 0);
+        }
+        metrics.started("test.bulk", DeferredRequestClass::Bulk, true, 7);
+        metrics.started("test.bulk", DeferredRequestClass::Bulk, true, 500);
+        let snapshot = metrics.snapshot(0, 0, 8, 64);
+        let bulk = request_type(&snapshot, "test.bulk");
+        assert_eq!(bulk["queueWaitSamples"], 100);
+        assert_eq!(bulk["queueWaitMs"], 507);
+        assert_eq!(bulk["maxQueueWaitMs"], 500);
+        assert_eq!(bulk["queueWaitP95Ms"], 0);
+        assert_eq!(bulk["queueWaitP99Ms"], 8);
+    }
+
+    #[test]
+    fn unstarted_queued_work_is_not_a_sample_and_classes_stay_isolated() {
+        let mut metrics = AdmissionMetrics::default();
+        metrics.queued("test.bulk", DeferredRequestClass::Bulk);
+        metrics.started(
+            "test.critical",
+            DeferredRequestClass::DispatchCritical,
+            false,
+            5,
+        );
+        let snapshot = metrics.snapshot(1, 1, 8, 64);
+        let bulk = request_type(&snapshot, "test.bulk");
+        assert_eq!(bulk["queueWaitSamples"], 0);
+        assert_eq!(bulk["queueWaitP95Ms"], 0);
+        assert_eq!(bulk["queueWaitP99Ms"], 0);
+        let critical = request_type(&snapshot, "test.critical");
+        assert_eq!(critical["queueWaitSamples"], 1);
+        assert_eq!(critical["queueWaitP95Ms"], 8);
+        assert_eq!(critical["queueWaitP99Ms"], 8);
     }
 }

@@ -180,6 +180,7 @@ mod pty_event_forwarder;
 mod pty_events;
 mod pty_events_session_lifecycle;
 mod push_delivery;
+mod queue_wait_histogram;
 mod remote_relay;
 mod request_payloads;
 mod request_route_policy;
