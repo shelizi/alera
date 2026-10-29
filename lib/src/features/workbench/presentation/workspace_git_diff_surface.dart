@@ -22,6 +22,7 @@ import 'package:alera/src/features/reading_diff/presentation/reading_diff_view.d
 import 'package:alera/src/features/settings/domain/editor_syntax_theme_catalog.dart';
 import 'package:alera/src/features/workbench/application/workspace_file_open_coordinator_provider.dart';
 import 'package:alera/src/features/workbench/application/workspace_git_branch_compare_cache.dart';
+import 'package:alera/src/features/workbench/application/workspace_git_diff_page_reader.dart';
 import 'package:alera/src/features/workbench/application/workspace_text_encoding.dart';
 import 'package:alera/src/features/workbench/application/workspace_file_preview_kind.dart';
 import 'package:alera/src/features/workbench/domain/workbench_view_prefs.dart';

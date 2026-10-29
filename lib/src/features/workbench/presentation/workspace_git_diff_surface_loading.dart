@@ -6,12 +6,7 @@ const _maxFullFileRenderBytes = 2 * 1024 * 1024;
 const _progressiveFirstDiffPageSize = 1;
 const _progressiveDiffPageSize = 4;
 
-class _ProgressiveDiffPage {
-  const _ProgressiveDiffPage({required this.result, required this.nextIndex});
-
-  final GitDiffResult result;
-  final int? nextIndex;
-}
+typedef _ProgressiveDiffPage = WorkspaceGitDiffFirstPage;
 
 extension _WorkspaceGitDiffSurfaceLoading on _WorkspaceGitDiffSurfaceState {
   GitDiffContentMode get _contentModeForLoading {
@@ -192,60 +187,18 @@ extension _WorkspaceGitDiffSurfaceLoading on _WorkspaceGitDiffSurfaceState {
   Future<List<String>?> _loadProgressiveAllPaths({
     required GitBackend backend,
     required String sourceControlPath,
-  }) async {
-    final status = await backend.status(sourceControlPath);
-    final hasNestedSubmoduleChanges = status.entries.any((entry) {
-      final submodule = entry.submodule;
-      return submodule != null &&
-          (submodule.trackedChanges || submodule.untrackedChanges);
-    });
-    if (hasNestedSubmoduleChanges) {
-      // The combined Rust operation includes nested submodule worktree files;
-      // keep that path as one operation until it has a paged equivalent.
-      return null;
-    }
-    final paths = <String>{};
-    for (final entry in status.entries) {
-      paths.add(entry.path);
-    }
-    return paths.toList(growable: false);
-  }
+  }) => WorkspaceGitDiffPageReader(backend).changedPaths(sourceControlPath);
 
   Future<_ProgressiveDiffPage> _loadFirstProgressiveAllPage({
     required GitBackend backend,
     required String sourceControlPath,
     required Future<List<String>?> pathsFuture,
-  }) async {
-    final paths = await pathsFuture;
-    if (paths == null) {
-      return _ProgressiveDiffPage(
-        result: await backend.diffAll(
-          path: sourceControlPath,
-          whitespaceMode: _whitespaceMode,
-        ),
-        nextIndex: null,
-      );
-    }
-    if (paths.isEmpty) {
-      return const _ProgressiveDiffPage(
-        result: GitDiffResult(files: []),
-        nextIndex: null,
-      );
-    }
-    final page = await backend.diffAllPage(
-      path: sourceControlPath,
-      filePaths: paths
-          .take(_progressiveFirstDiffPageSize)
-          .toList(growable: false),
-      whitespaceMode: _whitespaceMode,
-    );
-    return _ProgressiveDiffPage(
-      result: GitDiffResult(files: page.files, truncated: page.truncated),
-      nextIndex: paths.length > _progressiveFirstDiffPageSize
-          ? _progressiveFirstDiffPageSize
-          : null,
-    );
-  }
+  }) => WorkspaceGitDiffPageReader(backend).firstPage(
+    path: sourceControlPath,
+    pathsFuture: pathsFuture,
+    whitespaceMode: _whitespaceMode,
+    pageSize: _progressiveFirstDiffPageSize,
+  );
 
   Future<void> _loadRemainingProgressiveAllDiff({
     required GitBackend backend,
@@ -329,19 +282,11 @@ extension _WorkspaceGitDiffSurfaceLoading on _WorkspaceGitDiffSurfaceState {
     required GitBackend backend,
     required String sourceControlPath,
     required List<String> filePaths,
-  }) async {
-    try {
-      return await backend.diffAllPage(
-        path: sourceControlPath,
-        filePaths: filePaths,
-        whitespaceMode: _whitespaceMode,
-      );
-    } catch (_) {
-      // A later page is best-effort once the first page is visible. Keep the
-      // already-rendered pages usable if a file changes or disappears.
-      return null;
-    }
-  }
+  }) => WorkspaceGitDiffPageReader(backend).nextPage(
+    path: sourceControlPath,
+    filePaths: filePaths,
+    whitespaceMode: _whitespaceMode,
+  );
 
   int _diffPreviewBytes(GitDiffResult result) {
     var total = 0;

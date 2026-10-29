@@ -10,6 +10,7 @@ import 'package:alera/src/shared/infra/git/git_repository_probe_port.dart';
 import 'package:alera/src/shared/infra/git/git_hosted_review_retention_port.dart';
 import 'package:alera/src/shared/infra/git/git_source_control_query_port.dart';
 import 'package:alera/src/shared/infra/git/git_index_mutation_port.dart';
+import 'package:alera/src/shared/infra/git/git_working_tree_diff_query_port.dart';
 
 /// Injectable boundary for git operations. Mirrors the raw git plumbing only;
 /// orchestration (paths, slugs, persistence, reconciliation) lives in the
@@ -26,7 +27,8 @@ abstract interface class GitBackend
         GitRepositoryProbePort,
         GitHostedReviewRetentionPort,
         GitSourceControlQueryPort,
-        GitIndexMutationPort {
+        GitIndexMutationPort,
+        GitWorkingTreeDiffQueryPort {
   /// Whether [path] resolves to a git repository work tree.
   @override
   Future<bool> isGitRepository(String path);
@@ -132,6 +134,7 @@ abstract interface class GitBackend
   });
 
   /// Loads a read-only diff for [filePath] in [area].
+  @override
   Future<GitDiffResult> diff({
     required String path,
     required String filePath,
@@ -141,6 +144,7 @@ abstract interface class GitBackend
 
   /// Loads a combined read-only diff for all changed files, or a single file
   /// when [filePath] is provided.
+  @override
   Future<GitDiffResult> diffAll({
     required String path,
     String? filePath,
@@ -149,6 +153,7 @@ abstract interface class GitBackend
 
   /// Loads one bounded page of a combined working-tree diff. [filePaths] is
   /// the current page from a stable snapshot returned by [status].
+  @override
   Future<GitDiffPage> diffAllPage({
     required String path,
     required List<String> filePaths,
