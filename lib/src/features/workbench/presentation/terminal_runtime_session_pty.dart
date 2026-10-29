@@ -8,10 +8,26 @@ extension _XtermTerminalSessionPty on _XtermTerminalSessionHandle {
     if (launches.isEmpty) {
       throw StateError(_noTerminalShellCandidatesMessage());
     }
+    // A tab's display workspace may change while its PTY/session identity
+    // stays intact. If a process later needs to be re-minted (explicit
+    // restart or host recovery), preserve the original launch directory and
+    // hook environment rather than silently running Claude/Codex against
+    // the destination repository.
+    final executionWorkspace = _tab.payload['terminalExecutionWorkspaceId'];
+    final executionDirectory =
+        _tab.payload['terminalExecutionWorkingDirectory'];
+    final launchWorkspaceId =
+        executionWorkspace is String && executionWorkspace.trim().isNotEmpty
+        ? executionWorkspace
+        : _workspace.id;
+    final launchDirectory =
+        executionDirectory is String && executionDirectory.trim().isNotEmpty
+        ? executionDirectory
+        : _workspace.path;
     final agentHookEnvironment = await _launchInputOwner
         .buildAgentHookEnvironment(
           terminalSessionId: _tab.terminalSessionId,
-          workspaceId: _workspace.id,
+          workspaceId: launchWorkspaceId,
           tabId: _tab.id,
         );
     Object? lastError;
@@ -29,13 +45,13 @@ extension _XtermTerminalSessionPty on _XtermTerminalSessionHandle {
       try {
         final prepared = await _launchInputOwner.prepareLaunch(
           launch: launch,
-          workspacePath: _workspace.path,
+          workspacePath: launchDirectory,
           resolvedLoginShell: _settings.resolvedLoginShell,
           agentHookEnvironment: agentHookEnvironment,
         );
         await session.start(
           launch: prepared.workspaceLaunch,
-          workingDirectory: withoutWindowsPathPrefix(_workspace.path),
+          workingDirectory: withoutWindowsPathPrefix(launchDirectory),
           cols: _requestedCols,
           rows: _requestedRows,
           onProcessCreated: () => _launchInputOwner.onProcessCreated(

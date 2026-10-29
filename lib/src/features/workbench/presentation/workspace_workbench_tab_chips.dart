@@ -293,6 +293,7 @@ class const _WorkspaceTabChip({
                   ),
                 ),
                 const SizedBox(width: AleraTokens.space4),
+                TerminalExecutionOriginBadge(tab: tab),
                 if (detachedTabWindows.isLaunching(tab.id)) ...<Widget>[
                   const Tooltip(
                     message: 'Opening separate window...',
