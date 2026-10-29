@@ -2,6 +2,10 @@ import 'package:alera/src/features/agent_profiles/domain/agent_descriptor_regist
 import 'package:alera/src/features/agent_profiles/domain/agent_descriptor_snapshot.dart';
 import 'package:alera/src/features/agent_status/domain/agent_status.dart';
 
+/// The one default for new/cleared agent profiles; views must not fork this
+/// policy into additional AgentType-specific branches.
+const AgentType defaultAgentProfileAdapter = .codex;
+
 /// The agent adapters a profile may target.
 ///
 /// The checked-in descriptor snapshot is generated from the Rust registry and

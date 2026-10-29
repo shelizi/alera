@@ -18,12 +18,12 @@ extension _AgentProfilesPaneDiscovery on _AgentProfilesSettingsPaneState {
     if (discovered != null) {
       return discovered;
     }
-    return switch (adapter) {
-      AgentType.opencode || AgentType.opencode2 => const <ManagedAgentOption>[
-        ManagedAgentOption('build', 'Build'),
-      ],
-      _ => const <ManagedAgentOption>[],
-    };
+    return <ManagedAgentOption>[
+      for (final persona in AgentProfilePersonaDiscovery.defaultPersonasFor(
+        adapter,
+      ))
+        ManagedAgentOption(persona, _titleFromId(persona)),
+    ];
   }
 
   bool _canDiscoverModels(AgentType adapter) {
@@ -31,9 +31,7 @@ extension _AgentProfilesPaneDiscovery on _AgentProfilesSettingsPaneState {
   }
 
   bool _canDiscoverPersonas(AgentType adapter) {
-    return adapter == AgentType.agy ||
-        adapter == AgentType.opencode ||
-        adapter == AgentType.opencode2;
+    return AgentProfilePersonaDiscovery.supportsAdapter(adapter);
   }
 
   void _scheduleDiscovery(AgentType adapter) {

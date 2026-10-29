@@ -1,5 +1,5 @@
 import 'package:alera/src/app/theme/alera_tokens.dart';
-import 'package:alera/src/features/agent_status/domain/agent_status.dart';
+import 'package:alera/src/features/agent_quota/domain/agent_quota_provider_agent_type.dart';
 import 'package:alera/src/features/agent_status/presentation/agent_identity_icon.dart';
 import 'package:alera/src/features/settings/domain/alera_settings.dart';
 import 'package:flutter/material.dart';
@@ -13,16 +13,7 @@ class const AgentQuotaProviderIcon({
 }) extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
-    final agentType = switch (provider) {
-      AgentQuotaProviderId.claude => AgentType.claude,
-      AgentQuotaProviderId.codex => AgentType.codex,
-      AgentQuotaProviderId.grok => AgentType.grok,
-      AgentQuotaProviderId.cursor => AgentType.cursor,
-      AgentQuotaProviderId.devin => AgentType.devin,
-      AgentQuotaProviderId.agy => AgentType.agy,
-      AgentQuotaProviderId.opencode => AgentType.opencode,
-      _ => null,
-    };
+    final agentType = agentTypeForQuotaProvider(provider);
     if (agentType != null) {
       return AgentIdentityIcon(
         agentType: agentType,

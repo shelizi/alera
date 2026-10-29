@@ -3,9 +3,6 @@
 # descriptor/provider refactor removes coupling. Target: <= 5 manual files.
 lib/src/features/agent_profiles/application/agent_profile_persona_discovery.dart
 lib/src/features/agent_profiles/domain/agent_descriptor_registry.dart
-lib/src/features/agent_quota/presentation/agent_quota_provider_icon.dart
 lib/src/features/agent_status/infra/codex_transcript_status_watcher.dart
 lib/src/features/agent_status/presentation/agent_identity_icon.dart
-lib/src/features/settings/presentation/panes/agent_profiles_pane.dart
-lib/src/features/settings/presentation/panes/agent_profiles_pane_discovery.dart
 lib/src/features/settings/presentation/panes/agent_profiles_pane_profile_actions.dart

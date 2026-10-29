@@ -17,19 +17,18 @@ class AgentProfilePersonaDiscovery({
   static const Duration _timeout = Duration(seconds: 30);
   static const int _maxOutputBytes = 1024 * 1024;
 
+  /// The UI must ask the discovery owner, not maintain a separate agent list.
+  static bool supportsAdapter(AgentType adapter) =>
+      _commandFor(adapter) != null;
+
+  static List<String> defaultPersonasFor(AgentType adapter) =>
+      switch (adapter) {
+        AgentType.opencode || AgentType.opencode2 => const <String>['build'],
+        _ => const <String>[],
+      };
+
   Future<AgentProfilePersonaDiscoveryResult> discover(AgentType adapter) async {
-    final command = switch (adapter) {
-      AgentType.agy => (executable: 'agy', arguments: const <String>['agents']),
-      AgentType.opencode => (
-        executable: 'opencode',
-        arguments: const <String>['agent', 'list'],
-      ),
-      AgentType.opencode2 => (
-        executable: 'opencode2',
-        arguments: const <String>['agent', 'list'],
-      ),
-      _ => null,
-    };
+    final command = _commandFor(adapter);
     if (command == null) {
       return const AgentProfilePersonaDiscoveryResult(personas: <String>[]);
     }
@@ -82,6 +81,21 @@ class AgentProfilePersonaDiscovery({
       );
     }
   }
+
+  static ({String executable, List<String> arguments})? _commandFor(
+    AgentType adapter,
+  ) => switch (adapter) {
+    AgentType.agy => (executable: 'agy', arguments: const <String>['agents']),
+    AgentType.opencode => (
+      executable: 'opencode',
+      arguments: const <String>['agent', 'list'],
+    ),
+    AgentType.opencode2 => (
+      executable: 'opencode2',
+      arguments: const <String>['agent', 'list'],
+    ),
+    _ => null,
+  };
 
   Future<ProcessRunOutput> _collect(StartedProcess process) async {
     final stdout = StringBuffer();

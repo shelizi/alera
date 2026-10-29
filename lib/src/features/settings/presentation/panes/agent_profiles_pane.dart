@@ -9,6 +9,7 @@ import 'package:alera/src/design_system/icons/alera_icons.dart';
 import 'package:alera/src/design_system/layout/alera_confirm_dialog.dart';
 import 'package:alera/src/design_system/layout/alera_master_detail.dart';
 import 'package:alera/src/features/agent_profiles/application/agent_profile_providers.dart';
+import 'package:alera/src/features/agent_profiles/application/agent_profile_persona_discovery.dart';
 import 'package:alera/src/features/ai_assist/application/ai_assist_providers.dart';
 import 'package:alera/src/features/ai_assist/application/ai_assist_registry.dart';
 import 'package:alera/src/features/ai_assist/domain/ai_assist_settings.dart';
@@ -45,10 +46,10 @@ class _AgentProfilesSettingsPaneState
   String? _selectedProfileId;
   int? _selectedProfileRevision;
   bool _creatingNew = false;
-  AgentType _adapter = .codex;
+  AgentType _adapter = defaultAgentProfileAdapter;
   AgentProfileLaunchMode _launchMode = .managed;
   Map<String, Object?> _managedConfig = <String, Object?>{};
-  AgentType _originalAdapter = .codex;
+  AgentType _originalAdapter = defaultAgentProfileAdapter;
   AgentProfileLaunchMode _originalLaunchMode = .managed;
   Map<String, Object?> _originalManagedConfig = <String, Object?>{};
   final Map<AgentType, List<ManagedAgentOption>> _discoveredModels =
@@ -252,7 +253,9 @@ class _AgentProfilesSettingsPaneState
     _customPromptController.text = profile.customPrompt;
     _descriptionController.text = profile.description;
     _quotaGroupController.text = profile.quotaGroup ?? '';
-    _adapter = agentProfileAdapterFromKey(profile.agentType) ?? AgentType.codex;
+    _adapter =
+        agentProfileAdapterFromKey(profile.agentType) ??
+        defaultAgentProfileAdapter;
     _launchMode = profile.launchMode;
     _managedConfig = <String, Object?>{...profile.managedConfig};
     _originalAdapter = _adapter;
@@ -271,10 +274,10 @@ class _AgentProfilesSettingsPaneState
     _customPromptController.clear();
     _descriptionController.clear();
     _quotaGroupController.clear();
-    _adapter = AgentType.codex;
+    _adapter = defaultAgentProfileAdapter;
     _launchMode = AgentProfileLaunchMode.managed;
     _managedConfig = <String, Object?>{};
-    _originalAdapter = AgentType.codex;
+    _originalAdapter = defaultAgentProfileAdapter;
     _originalLaunchMode = AgentProfileLaunchMode.managed;
     _originalManagedConfig = <String, Object?>{};
     _commandController.text = agentProfileDefaultCommands[_adapter] ?? '';
