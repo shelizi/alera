@@ -75,6 +75,9 @@ final class WorkbenchSelectionOwner {
   final WorkbenchSelectionOwnerHost _host;
   final WorkbenchNavigationHistoryService _navigationHistory =
       WorkbenchNavigationHistoryService();
+  final WorkbenchWorkspaceSelectionEpoch _selectionEpoch =
+      WorkbenchWorkspaceSelectionEpoch();
+  int _tabSelectionGeneration = 0;
 
   bool get canGoBack => _navigationHistory.canGoBack(_host.readState());
 
@@ -95,48 +98,51 @@ final class WorkbenchSelectionOwner {
     required Workspace workspace,
     required bool ensureInitialTerminal,
     bool recordHistory = true,
-  }) =>
-      WorkbenchWorkspaceSelectionCoordinator(
-        activateSelection: () {
-          _host.emitState(
-            selectWorkbenchWorkspace(
-              state: _host.readState(),
-              project: project,
-              workspace: workspace,
-            ),
-          );
-          _host.workspaceActivityRecorder.recordActivity(
-            workspace.id,
-            DateTime.now().toUtc(),
-          );
-        },
-        hydrate: ({required workspaceId, required ensureInitialTerminal}) =>
-            WorkbenchWorkspaceSelectionHydrator(
-              tabStore: _host.selectionTabStore,
-              layoutResolver: _host.selectionLayoutResolver,
-            ).hydrate(
-              workspaceId: workspaceId,
-              ensureInitialTerminal: ensureInitialTerminal,
-            ),
-        applyTabs: (tabs) => _host.applyWorkspaceTabs(workspace.id, tabs),
-        applyLayout: (layout) =>
-            _host.applyWorkspaceLayout(layout, persist: false),
-        isSelectionCurrent: () {
-          if (_host.isDisposed) {
-            return false;
-          }
-          final state = _host.readState();
-          return state.activeProjectId == project.id &&
-              state.activeWorkspaceId == workspace.id;
-        },
-        recordHistory: () =>
-            _navigationHistory.record(project: project, workspace: workspace),
-        notifyHistoryChanged: _notifyNavigationHistoryChanged,
-      ).select(
-        workspaceId: workspace.id,
-        ensureInitialTerminal: ensureInitialTerminal,
-        shouldRecordHistory: recordHistory,
-      );
+  }) {
+    final selectionGeneration = _selectionEpoch.begin();
+    return WorkbenchWorkspaceSelectionCoordinator(
+      activateSelection: () {
+        _host.emitState(
+          selectWorkbenchWorkspace(
+            state: _host.readState(),
+            project: project,
+            workspace: workspace,
+          ),
+        );
+        _host.workspaceActivityRecorder.recordActivity(
+          workspace.id,
+          DateTime.now().toUtc(),
+        );
+      },
+      hydrate: ({required workspaceId, required ensureInitialTerminal}) =>
+          WorkbenchWorkspaceSelectionHydrator(
+            tabStore: _host.selectionTabStore,
+            layoutResolver: _host.selectionLayoutResolver,
+          ).hydrate(
+            workspaceId: workspaceId,
+            ensureInitialTerminal: ensureInitialTerminal,
+          ),
+      applyTabs: (tabs) => _host.applyWorkspaceTabs(workspace.id, tabs),
+      applyLayout: (layout) =>
+          _host.applyWorkspaceLayout(layout, persist: false),
+      isSelectionCurrent: () {
+        if (_host.isDisposed ||
+            !_selectionEpoch.isCurrent(selectionGeneration)) {
+          return false;
+        }
+        final state = _host.readState();
+        return state.activeProjectId == project.id &&
+            state.activeWorkspaceId == workspace.id;
+      },
+      recordHistory: () =>
+          _navigationHistory.record(project: project, workspace: workspace),
+      notifyHistoryChanged: _notifyNavigationHistoryChanged,
+    ).select(
+      workspaceId: workspace.id,
+      ensureInitialTerminal: ensureInitialTerminal,
+      shouldRecordHistory: recordHistory,
+    );
+  }
 
   void activateProject(Project project) {
     _host.emitState(
@@ -148,6 +154,7 @@ final class WorkbenchSelectionOwner {
     required String workspaceId,
     required String tabId,
   }) async {
+    final tabSelectionGeneration = ++_tabSelectionGeneration;
     final current = _host.readState();
     final workspace = current.workspacesByProject.values
         .expand((workspaces) => workspaces)
@@ -158,11 +165,19 @@ final class WorkbenchSelectionOwner {
         : _projectById(current.projects, workspace.projectId);
     if (workspace == null || project == null) return;
     if (current.activeWorkspaceId != workspaceId) {
-      await selectWorkspace(
+      final pending = selectWorkspace(
         project: project,
         workspace: workspace,
         ensureInitialTerminal: true,
       );
+      final selectionGeneration = _selectionEpoch.current;
+      await pending;
+      if (_host.isDisposed ||
+          tabSelectionGeneration != _tabSelectionGeneration ||
+          !_selectionEpoch.isCurrent(selectionGeneration) ||
+          _host.readState().activeWorkspaceId != workspaceId) {
+        return;
+      }
       if (!_host
           .readState()
           .tabsFor(workspaceId)

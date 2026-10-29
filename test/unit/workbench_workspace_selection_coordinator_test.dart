@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:alera/src/features/workbench/application/workbench_workspace_selection_coordinator.dart';
 import 'package:alera/src/features/workbench/application/workbench_workspace_selection_hydrator.dart';
 import 'package:alera/src/features/workbench/domain/workbench_layout.dart';
@@ -5,6 +7,68 @@ import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('a slower first hydration must not replace a newer same-workspace selection', () async {
+    final generation = WorkbenchWorkspaceSelectionEpoch();
+    final firstGate = Completer<WorkbenchWorkspaceSelectionHydration>();
+    final calls = <String>[];
+    final firstToken = generation.begin();
+    final first = WorkbenchWorkspaceSelectionCoordinator(
+      activateSelection: () => calls.add('activate:first'),
+      hydrate: ({required workspaceId, required ensureInitialTerminal}) =>
+          firstGate.future,
+      applyTabs: (_) => calls.add('tabs:first'),
+      applyLayout: (_) async => calls.add('layout:first'),
+      isSelectionCurrent: () => generation.isCurrent(firstToken),
+      recordHistory: () {
+        calls.add('history:first');
+        return true;
+      },
+      notifyHistoryChanged: () => calls.add('notify:first'),
+    );
+    final pending = first.select(
+      workspaceId: 'workspace',
+      ensureInitialTerminal: false,
+      shouldRecordHistory: true,
+    );
+    final secondToken = generation.begin();
+    final second = WorkbenchWorkspaceSelectionCoordinator(
+      activateSelection: () => calls.add('activate:second'),
+      hydrate: ({required workspaceId, required ensureInitialTerminal}) async =>
+          WorkbenchWorkspaceSelectionHydration(
+            tabs: <WorkspaceTabRecord>[_tab('new')],
+            layout: _layout(<String>['new']),
+          ),
+      applyTabs: (_) => calls.add('tabs:second'),
+      applyLayout: (_) async => calls.add('layout:second'),
+      isSelectionCurrent: () => generation.isCurrent(secondToken),
+      recordHistory: () {
+        calls.add('history:second');
+        return true;
+      },
+      notifyHistoryChanged: () => calls.add('notify:second'),
+    );
+    await second.select(
+      workspaceId: 'workspace',
+      ensureInitialTerminal: false,
+      shouldRecordHistory: true,
+    );
+    firstGate.complete(
+      WorkbenchWorkspaceSelectionHydration(
+        tabs: <WorkspaceTabRecord>[_tab('old')],
+        layout: _layout(<String>['old']),
+      ),
+    );
+    await pending;
+    expect(calls, <String>[
+      'activate:first',
+      'activate:second',
+      'tabs:second',
+      'layout:second',
+      'history:second',
+      'notify:second',
+    ]);
+  });
+
   test(
     'activates, hydrates, applies tabs and layout, then records history',
     () async {

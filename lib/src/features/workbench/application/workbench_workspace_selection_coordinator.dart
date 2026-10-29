@@ -18,6 +18,16 @@ typedef WorkbenchWorkspaceSelectionIsCurrent = bool Function();
 typedef WorkbenchWorkspaceSelectionHistoryRecorder = bool Function();
 typedef WorkbenchWorkspaceSelectionHistoryNotifier = void Function();
 
+/// Version the selection request, not just its workspace ID: multiple
+/// concurrent hydrations can target the very same workspace.
+final class WorkbenchWorkspaceSelectionEpoch {
+  int _generation = 0;
+
+  int begin() => ++_generation;
+  int get current => _generation;
+  bool isCurrent(int generation) => _generation == generation;
+}
+
 final class WorkbenchWorkspaceSelectionCoordinator {
   const WorkbenchWorkspaceSelectionCoordinator({
     required WorkbenchWorkspaceSelectionActivator activateSelection,
