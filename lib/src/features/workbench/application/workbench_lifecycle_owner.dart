@@ -12,7 +12,7 @@ import 'package:alera/src/features/workbench/application/workbench_tab_subscript
 import 'package:alera/src/features/workbench/application/workbench_workspace_subscription_registry.dart';
 import 'package:alera/src/features/workbench/application/workbench_worktree_metadata_watcher_registry.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_focus_history.dart';
-import 'package:alera/src/shared/infra/git/git_backend.dart';
+import 'package:alera/src/shared/infra/git/git_hosted_review_retention_port.dart';
 
 /// The narrow capabilities [WorkbenchLifecycleOwner] needs from
 /// `WorkbenchController`. Composed in `workbench_controller_internals.dart`
@@ -47,7 +47,7 @@ abstract interface class WorkbenchLifecycleOwnerHost {
   WorkbenchExplicitAsyncResourceIdConsumer get clearTerminalOverlays;
 
   /// Git backend behind the hosted-review retention service.
-  GitBackend get gitBackend;
+  GitHostedReviewRetentionPort get gitBackend;
 
   /// Per-workspace MRU tab history forgotten during retired cleanup.
   WorkspaceTabFocusHistory get tabFocusHistory;

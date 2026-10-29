@@ -6,6 +6,8 @@ import 'package:alera/src/shared/infra/git/git_diff_models.dart';
 import 'package:alera/src/shared/infra/git/git_explorer_status.dart';
 import 'package:alera/src/shared/infra/git/git_remote.dart';
 import 'package:alera/src/shared/infra/git/git_query_ports.dart';
+import 'package:alera/src/shared/infra/git/git_repository_probe_port.dart';
+import 'package:alera/src/shared/infra/git/git_hosted_review_retention_port.dart';
 
 /// Injectable boundary for git operations. Mirrors the raw git plumbing only;
 /// orchestration (paths, slugs, persistence, reconciliation) lives in the
@@ -16,8 +18,13 @@ import 'package:alera/src/shared/infra/git/git_query_ports.dart';
 /// (libgit2 for local operations, the `git` CLI for clone) through
 /// flutter_rust_bridge; tests use an in-memory fake.
 abstract interface class GitBackend
-    implements GitHistoryQueryPort, GitCommitCompareQueryPort {
+    implements
+        GitHistoryQueryPort,
+        GitCommitCompareQueryPort,
+        GitRepositoryProbePort,
+        GitHostedReviewRetentionPort {
   /// Whether [path] resolves to a git repository work tree.
+  @override
   Future<bool> isGitRepository(String path);
 
   /// The absolute work-tree root containing [path], or null when [path] is not
@@ -425,12 +432,14 @@ abstract interface class GitBackend
   });
 
   /// Promotes fetched objects after the hosted-review tab is persisted.
+  @override
   Future<void> persistHostedReviewRange({
     required String path,
     required String retentionId,
   });
 
   /// Releases the exact objects retained while a hosted-review tab was open.
+  @override
   Future<void> releaseHostedReviewRange({
     required String path,
     required String retentionId,

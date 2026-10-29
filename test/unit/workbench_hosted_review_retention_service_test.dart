@@ -2,7 +2,7 @@ import 'package:alera/src/features/workbench/application/workbench_hosted_review
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/domain/workspace_source_control_scope.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
-import 'package:alera/src/shared/infra/git/git_backend.dart';
+import 'package:alera/src/shared/infra/git/git_hosted_review_retention_port.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -138,7 +138,7 @@ final class _HostedReviewCall {
   int get hashCode => Object.hash(path, retentionId);
 }
 
-final class _RecordingGitBackend implements GitBackend {
+final class _RecordingGitBackend implements GitHostedReviewRetentionPort {
   final List<_HostedReviewCall> releaseCalls = <_HostedReviewCall>[];
   final List<_HostedReviewCall> persistCalls = <_HostedReviewCall>[];
   final Set<String> failingReleasePaths = <String>{};
@@ -161,7 +161,4 @@ final class _RecordingGitBackend implements GitBackend {
   }) async {
     persistCalls.add(_HostedReviewCall(path: path, retentionId: retentionId));
   }
-
-  @override
-  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }

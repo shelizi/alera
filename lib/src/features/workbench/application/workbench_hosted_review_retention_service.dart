@@ -3,7 +3,7 @@ import 'dart:async';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/domain/workspace_source_control_scope.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
-import 'package:alera/src/shared/infra/git/git_backend.dart';
+import 'package:alera/src/shared/infra/git/git_hosted_review_retention_port.dart';
 
 abstract interface class WorkbenchHostedReviewTabRetention {
   Future<void> releaseTab(
@@ -32,11 +32,15 @@ final class WorkbenchHostedReviewRetentionService
     implements
         WorkbenchHostedReviewTabRetention,
         WorkbenchHostedReviewRangeRetention {
-  const WorkbenchHostedReviewRetentionService({required GitBackend gitBackend})
-    : _gitBackend = gitBackend;
+  // Retain existing named constructor parameter; inject only the narrow port.
+  // ignore: prefer_initializing_formals
+  const WorkbenchHostedReviewRetentionService({
+    required GitHostedReviewRetentionPort gitBackend,
+  }) : _gitBackend = gitBackend;
 
-  final GitBackend _gitBackend;
+  final GitHostedReviewRetentionPort _gitBackend;
 
+  @override
   Future<void> persist({
     required Workspace workspace,
     required String? relativeRoot,
@@ -48,6 +52,7 @@ final class WorkbenchHostedReviewRetentionService
     );
   }
 
+  @override
   Future<void> release({
     required Workspace workspace,
     required String? relativeRoot,
@@ -77,6 +82,7 @@ final class WorkbenchHostedReviewRetentionService
     }
   }
 
+  @override
   Future<void> releaseTab(
     Workspace workspace,
     WorkspaceTabRecord tab, {
