@@ -1,5 +1,17 @@
 # Alera 功能優先續做：第八批四線隔離（2026-10-29）
 
+## 最新：T2-D1 平行 Host／Recovery／Undo 三線已整合（2026-10-29）
+
+本批基準 `97f21ab02e23cb7eba39791080dedd7f52bd10ae`；三線獨立 worktree／Git commits 並整合：
+
+| 線路 | 新增的功能／風險處理 | 整合提交 |
+| --- | --- | --- |
+| Rust Host | `tab.transfer.status` 以精確 mutation receipt 與**當下活 PTY owner**雙重證明逾時轉移；擋進行中 Workspace Mutation／Shutdown；原移轉收據、原啟動路徑在 `tab.upsert` 保留，阻擋 Terminal 直接以 `tab.upsert` 跨 Workspace 移動；移動後通知 Agent Presence；保存原 Pane Group | **`43591a4be`**（隔離 `c1f8aa185`） |
+| Dart recovery | Host timeout／disconnect 後不重送，向 `tab.transfer.status` 查原 Mutation＋活 Session；無法證實則顯示 `TerminalTransferOutcomeUnknownException`，不把未知當成功或失敗 | **`5a0f01bdd`**（隔離 `c340bc6fb`） |
+| Flutter Undo | 正向轉移後保留準確 receipt ID，Sidebar 顯示可點 Undo；反向轉移前確認原 Workspace 和收據仍有效，盡量放回原 Pane Group，不關閉／重建 PTY | **`efce4bea6`**（隔離 `8ddc98a97`） |
+
+**功能仍停用：Host capability `supported:false`，使用者跨專案 Drop 不接受。** 這批是生命週期安全防護及失聯確認／Undo 的原始碼成果，仍未驗證跨程序／視窗 Close、Detach、Output、重啟路徑、事件序列與相關回歸。依使用者指示只有格式化及 staged Git whitespace check，沒有 Flutter/Cargo Tests、Analyzer、Build、實機，**不可推送／發布為已支援功能**。原本 dirty `main` 未動，整合進 `refactor/tdd-integrate-20261029`。完整交接見 `docs/terminal-tab-cross-workspace-plan-20261029.md`。
+
 ## 最新：T2-B2 Host／Workbench／Terminal UX 平行三線已整合（2026-10-29）
 
 | 線路 | 實際新增功能／安全措施 | 整合提交 |

@@ -1,8 +1,22 @@
 # T2 — 跨專案／跨 Workspace Terminal Tab 移動：功能規劃與並行重構邊界
 
-**Priority：P2；Status：B2 Host/Workbench/Terminal implementation integrated, feature-gated OFF（2026-10-29）。** 已分兩批合入六條來源碼工作線，包含早期 UI／Dart Coordinator／Rust Store 基礎，以及最新 Rust Host live Session／Workbench watcher／原執行來源處理。**尚未開放跨專案拖放，也沒有執行本批的 Flutter/Cargo 測試、靜態分析或編譯。**
+**Priority：P2；Status：D1 Host/Recovery/Undo implementation integrated, feature-gated OFF（2026-10-29）。** 已分三批合入九條來源碼工作線，最近新增 Runtime 關閉競態護欄、失聯回覆權威確認及可逆的 Undo。**尚未開放跨專案拖放，也沒有執行本批的 Flutter/Cargo 測試、靜態分析或編譯。**
 
 本文件原是 `feat/cross-project-terminal-tabs-20261029` 分支上的設計稿（commit `ec150a493`），現**只收編此規劃檔**至 `refactor/tdd-integrate-20261029`；未合併該舊分支的產品程式。原設計所記載的並行分工為 2026-10-29 第三批的歷史狀態；最新整合已包含第八批功能修正及 macOS Claude Code 貼上 hotfix。
+
+## 最新：T2-D1 再平行三線合入（2026-10-29，仍停用）
+
+從乾淨整合 HEAD `97f21ab02e23cb7eba39791080dedd7f52bd10ae` 分出三個獨立 worktree，各自完成 scoped 修改、`rustfmt`／`dart format` 與 `git diff --cached --check`，獨立 commit 後依 Host→Recovery→Undo 順序 cherry-pick 回整合分支（無合併衝突）：
+
+| 線路 | 本批完成的實際功能／保護 | 隔離 → 整合提交 |
+| --- | --- | --- |
+| T2-D1 Host / race | `tab.transfer` 遇到背景 Runtime Mutation、來源或目的 Workspace 尚有未完成 shutdown 時拒絕移轉；來源 Workspace 切換後，Host 即時發送 Agent Presence refresh；杜絕舊視窗的 Terminal `tab.upsert` 將已移轉 Tab 靜默搬回原 Workspace。Host-owned `lastTerminalTabTransfer`、原 Execution Workspace、launch directory 在後續 Tab 更新時不可被覆蓋。轉移收據記錄先前 `sourceGroupId`。新增只讀 `tab.transfer.status`，以**精確 Mutation ID＋資料庫收據＋仍在執行且歸屬目的 Workspace 的 PTY**共同確認不明結果。 | `c1f8aa185` → **`43591a4be`** |
+| T2-D1 Recovery / lost reply | Dart 轉移 RPC 收到 Timeout／Connection Closed，先用同一 `clientMutationId` 呼叫 Host `tab.transfer.status`，只有收據、Tab、Session、目的地全部一致才能視為已提交。若 Host 無法確認，回報 `TerminalTransferOutcomeUnknownException`，**不重送新 Mutation、不將未知視為失敗成功**。 | `c340bc6fb` → **`5a0f01bdd`** |
+| T2-D1 Undo / UX | Controller 正向轉移成功後傳回原 Host mutation receipt id；在側欄顯示 10 秒的 Undo Snackbar。點擊 Undo 時再查目前權威 Tab 收據，只有**最後一次**轉移的 ID 相符、來源仍存在且未封存才用另一筆 `tab.transfer` 反向移回；原 pane group 尚在則恢復到原 group，否則用目前的 active group。**同一個原 PTY 不重啟、不重建**。 | `8ddc98a97` → **`efce4bea6`** |
+
+**這批仍未解決／不可啟用的界線**：Host `tab.transfer.capabilities` 依然回報 `supported:false`；需明確驗證 Terminal explicit close／Detach 在多視窗與多程序同時發生時不會終止已移轉 PTY；清理後若來源 Workspace／原啟動路徑不存在，Shell Restart／Hook 仍需安全降級；確認 Watcher fence、同步、Undo 回讀與不同 process runtime owner 的行為。Host 暫時拒絕有 Pulse、Automation／Orchestration、Pending Agent Prompt 的 Session 移轉，這些拒絕條件及提示仍須產品級整理。正式開關前也要更新 `docs/tab-layout-operation-contract.md` 和 `docs/terminal-operation-contract.md` 並執行目標測試／編譯；目前依使用者先前指示**沒有測試、Analyze、Cargo check、Build 或實機驗證**，不宣稱 green、未推送／發布。
+
+**本批 Git worktree 初始化事件**：三個新 worktree 在 Windows＋同步資料夾大量檔案 checkout 時超過初始命令時限，留下部分檢出與零長度工作樹專用 `index.lock`；已核對無運行中 Git 程序，只針對**這三個新 worktree** 修復缺少的 tracked files、用 `git reset --mixed HEAD` 修復不完整的 index、解除 `locked initializing`，三線提交前均確認 clean。**原本 dirty 的 `main` 和既存工作樹未清除或重設。**
 
 ## 最新：T2-B2 再平行三線合入（2026-10-29，仍停用）
 

@@ -4,6 +4,12 @@
 > 讀取 `docs/refactor/tdd-roadmap-20261029.md` 了解契約/驗收，然後從下列 pending/in_progress 工作續做。
 > 變更只在隔離整合 worktree；最新 macOS hotfix 來源分支目前與 `main` HEAD 指向同一提交，已依使用者要求將此 hotfix 分支合入整合分支，但沒有在原 `main` worktree 做修改、push 或 release。
 
+## 最新：T2-D1 三線已整合（2026-10-29，仍未開啟）
+
+從乾淨基準 `97f21ab02e23cb7eba39791080dedd7f52bd10ae` 平行完成三個獨立工作分支：Rust Host 關閉競態／`tab.transfer.status`／Agent Presence／保護收據 **`43591a4be`**，Dart Host 不明結果的權威確認與 unknown exception **`5a0f01bdd`**，Flutter 依最新 Mutation ID 安全反向 Undo 並恢復原 Pane Group **`efce4bea6`**。已依序 cherry-pick，無衝突。三個新工作樹初始 checkout 曾逾時，但只在本輪新建工作樹內完成修復／解除初始化鎖，提交前各自 clean，既有 dirty `main` 未操作。
+
+**仍需**：Host capability 仍是 `supported:false`，不開啟使用者跨 Workspace Drop；多進程/多視窗 explicit Close/Detach、stale watcher 及 output cursor、原 CWD 消失或重新啟動、Pulse/Automation 拒絕 UX 與 operation contracts 還要整合確認。這輪只跑 `dart format`、`rustfmt` 與 Git whitespace check，沒有 Flutter/Cargo tests、Analyzer、Build、macOS/Windows 實機驗證，不能宣稱完成或正式發布。請以 `docs/terminal-tab-cross-workspace-plan-20261029.md` 的最新 D1 段落接續，不要把歷史 B2 誤認為目前未接線。
+
 ## 最新：T2-B2 三線已整合（2026-10-29；Host route 已寫，但產品仍停用）
 
 從乾淨 HEAD `845886d57879b9a5b5801e55ab2d6b549ccb915f` 平行實作並各自提交：Rust Host `tab.transfer` + 原 Hook 身分／安全拒絕條件 **`f3977fa99`**；Workbench controller／兩側 watcher fence／Host capability probe **`8443c2f0e`**；Terminal 原執行路徑提醒及重新啟動路徑保留 **`683b99dc8`**。三條線已合入整合分支。**Host `tab.transfer.capabilities` 仍刻意回報不支援（supported=false），Flutter 的跨 Workspace Drop 保持關閉；請勿描述成正式完成的功能。** 待做 T2-D1：跨視窗/跨程序 Detach/Close、Watcher race、失聯重送、Agent Presence、Undo、源目錄消失與真實測試／編譯。詳 `docs/terminal-tab-cross-workspace-plan-20261029.md` 和 `docs/refactor/feature-progress-20261029.md`。本批依要求不跑測試、分析與編譯；原 `main` 未動，未 push、未 release。
