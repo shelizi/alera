@@ -5,10 +5,11 @@ mixin _WorkbenchControllerTabs
   /// Commits the *existing* PTY to the new workspace. The current sidecar
   /// advertises this as disabled until full transfer/restart reconciliation
   /// is ready, so old builds never simulate a transfer with separate writes.
-  Future<void> transferTerminalTab({
+  Future<String> transferTerminalTab({
     required Workspace source,
     required Workspace destination,
     required String tabId,
+    String? targetGroupId,
   }) async {
     final available = await ref.read(
       workbenchTerminalTransferAvailabilityProvider.future,
@@ -22,12 +23,17 @@ mixin _WorkbenchControllerTabs
     final coordinator = ref.read(workbenchTerminalTransferCoordinatorProvider);
     _tabLayoutOwner.beginTerminalTransfer(source.id, destination.id);
     try {
-      await coordinator.transfer(
+      final moved = await coordinator.transfer(
         source: source,
         destination: destination,
         tabId: tabId,
+        targetGroupId: targetGroupId,
       );
-      if (_disposed) return;
+      if (_disposed) {
+        throw StateError(
+          'Terminal transfer committed while Workbench was closing. Refresh to find the moved tab.',
+        );
+      }
       await WorkbenchTerminalTransferReconciliation(
         port: port,
         applyTabs: _tabLayoutOwner.applyWorkspaceTabs,
@@ -56,9 +62,68 @@ mixin _WorkbenchControllerTabs
           tabId: tabId,
         );
       }
+      final receipt = moved.payload['lastTerminalTabTransfer'];
+      final id = receipt is Map ? receipt['id'] : null;
+      if (id is! String || id.isEmpty) {
+        throw StateError(
+          'Terminal transfer was committed but the Undo receipt is unavailable.',
+        );
+      }
+      return id;
     } finally {
       _tabLayoutOwner.finishTerminalTransfer(source.id, destination.id);
     }
+  }
+
+  /// Undo is a new, guarded reverse transfer of the exact most-recent move,
+  /// not an unsafe tab.upsert or a PTY close + recreate. Reject a stale Undo
+  /// click if another window subsequently moved the same terminal elsewhere.
+  Future<void> undoTerminalTransfer({
+    required String tabId,
+    required String expectedMutationId,
+  }) async {
+    final tab = await ref
+        .read(workbenchRepositoryProvider)
+        .findWorkspaceTabById(tabId);
+    final receipt = tab?.payload['lastTerminalTabTransfer'];
+    if (tab == null ||
+        tab.kind != WorkspaceTabKind.terminal ||
+        receipt is! Map ||
+        receipt['id'] != expectedMutationId ||
+        receipt['to'] != tab.workspaceId) {
+      throw StateError(
+        'Terminal has changed since the move; Undo cannot safely restore the old workspace.',
+      );
+    }
+    final fromId = receipt['from'];
+    if (fromId is! String || fromId.isEmpty) {
+      throw StateError('Terminal transfer receipt has no original workspace.');
+    }
+    final current = _workspaceById(tab.workspaceId);
+    final original = _workspaceById(fromId);
+    if (current == null ||
+        original == null ||
+        !original.isActive ||
+        original.isArchived) {
+      throw StateError(
+        'The original workspace is no longer available; Undo cannot move the running process.',
+      );
+    }
+    final previousGroup = receipt['sourceGroupId'];
+    final restoredLayout = await ref
+        .read(workbenchRepositoryProvider)
+        .findWorkbenchLayout(original.id);
+    final groupId =
+        previousGroup is String &&
+            restoredLayout?.groups.containsKey(previousGroup) == true
+        ? previousGroup
+        : null;
+    await transferTerminalTab(
+      source: current,
+      destination: original,
+      tabId: tabId,
+      targetGroupId: groupId,
+    );
   }
 
   Future<void> closeWorkspaceTab({

@@ -184,10 +184,46 @@ class _ProjectWorkbenchSidebarState
                                             'Source Terminal workspace no longer exists.',
                                           );
                                         }
-                                        await controller.transferTerminalTab(
-                                          source: source,
-                                          destination: destination,
-                                          tabId: data.tabId,
+                                        final receiptId = await controller
+                                            .transferTerminalTab(
+                                              source: source,
+                                              destination: destination,
+                                              tabId: data.tabId,
+                                            );
+                                        if (!mounted) return;
+                                        ScaffoldMessenger.maybeOf(
+                                          context,
+                                        )?.showSnackBar(
+                                          SnackBar(
+                                            duration: const Duration(
+                                              seconds: 10,
+                                            ),
+                                            content: Text(
+                                              'Terminal moved to ${destination.name}. '
+                                              'The running shell keeps its original directory.',
+                                            ),
+                                            action: SnackBarAction(
+                                              label: 'Undo',
+                                              onPressed: () {
+                                                unawaited(
+                                                  controller
+                                                      .undoTerminalTransfer(
+                                                        tabId: data.tabId,
+                                                        expectedMutationId:
+                                                            receiptId,
+                                                      )
+                                                      .catchError((
+                                                        Object error,
+                                                      ) {
+                                                        AleraToast.publish(
+                                                          message:
+                                                              'Could not undo Terminal move: $error',
+                                                        );
+                                                      }),
+                                                );
+                                              },
+                                            ),
+                                          ),
                                         );
                                       },
                               );
