@@ -4,6 +4,21 @@
 > 讀取 `docs/refactor/tdd-roadmap-20261029.md` 了解契約/驗收，然後從下列 pending/in_progress 工作續做。
 > 變更只在隔離 worktree，未合併 main／未 push／未 release。
 
+## 最新：第七批四線隔離 TDD（2026-10-29）
+
+**此節為當前續做起點。以乾淨整合 HEAD `e38e8191c8bd3d2622ac9fb6171f656df1df8c8c` 建立第七批四個獨立 worktree，四線完成 Red→Green、獨立提交、驗證後依序 cherry-pick 至 `refactor/tdd-integrate-20261029`。未碰原本 dirty 的 `main`、未 push／release；focused regressions 不代表完整跨平台 CI。**
+
+| 線／工作樹 | 已寫入實作 | 本批確實完成的紅綠證據 | 邊界／仍待 |
+| --- | --- | --- | --- |
+| W1 `refactor/tdd-b7-workbench-20261029` | `WorkbenchSelectionOwner` 增加 Source Control Focus owner-scoped generation；新的根目錄選取、清除、切專案或工作區都使未完成的同工作區 Git Probe 失效。 | 真實 Controller 新測同工作區慢舊 Repo 後選新 Repo **Red：Expected false, Actual true** → race + clear **Green**；完整 Controller+focus service **140 tests PASS exit0**、scoped Flutter analyze **No issues exit0**。隔離 `40f55f0c0` → 整合 **`262b18526`** | 全量跨平台 UI/E2E 未跑 |
+| G1 `refactor/tdd-b7-git-20261029` | 一方法 `GitFileRevisionQueryPort` 和注入式 `WorkspaceGitFileRevisionReader`，工作區根／巢狀 repo 相對路徑先 normalize、拒絕跨 repository 與 `../`，Diff UI 實際呼叫該 service，保留單一 Rust Git backend。 | Red 缺 service/port 編譯失敗 → 小 fake **3 PASS exit0**；Git Diff Surface Widget **54 PASS／2 skipped**；scoped Flutter analyze **No issues exit0**。隔離 `0d6be7882` → 整合 **`116dce5cd`** | Git 完整 E2E／跨平台 CI 未跑 |
+| Q0 `refactor/tdd-b7-q0-20261029` | 將 Branch Picker 純樹投影／row model／normalized branch 抽到獨立 `workspace_branch_tree_projection.dart` part；抽出 `filterWorkspaceLocalBranches` 保留遠端 prefix 排除、去重排序、當前分支、detached HEAD；原 `workspace_branch_status_bar_control.dart` **538→456 行**。 | Red 缺 pure filter 無法編譯 → **3 unit PASS exit0**，Shell + Branch Favorites 全量相關 Widget **109 PASS exit0**；scoped analyzer 初輪一個冗餘 foundation import info，修正後 **No issues exit0**。官方整合 `check_max_lines.dart --list-oversized` **160 oversized／127 offenders**（前 161／128），無 baseline 重設。隔離 `152347521` → 整合 **`29b455da2`** | 全域 max-lines guard 仍紅：127 個違規檔 |
+| R1 `refactor/tdd-b7-rust-20261029` | Rust localhost accept loop 限制同時 **32 socket 連線**；超額 socket 立即關閉、不建立 Actor `ClientConnected` 或 Writer 佇列；每個連線 `OwnedSemaphorePermit` 跟隨 socket lifecycle、釋放後可再接納。保留已有 64 pending command＋32 MiB 已 admitted request budget。 | 新 Tokio 測試缺 `spawn_accept_loop_with_limit` **Red compile fail** → **Green 1 PASS**；正式 Cargo `--bin alera` Client **11** + Socket **1** + Wire Fixture **48** + Priority **2** + Deferred **9** = **71 tests PASS exit0**；rustfmt --check、Git staged diff check exit0。隔離 `8763ca289` → 整合 **`da33328ea`** | **socket 數上限不等於所有 ingress bytes 有界**；Mobile/Relay/Hook、Actor unbounded、最多 32 socket × 未 admitted 16 MiB 仍不受已 admission 配額限制；status/cancel/quit p95/p99 尚未實測 |
+
+**第七批四線均已整合**：Rust `da33328ea`、W1 `262b18526`、G1 `116dce5cd`、Q0 `29b455da2`。整合 `flutter test --no-pub test/unit/workbench_controller_test.dart test/unit/workspace_branch_local_filter_test.dart test/unit/workspace_git_file_revision_reader_test.dart test/widget_test.dart` **142 PASS exit0**；兩個架構 guards **exit0**（Agent manual touchpoints 仍 5）；最終官方 Q0 **160 oversized／127 offenders**，未變更 baseline。所有獨立工作樹應於提交後保持乾淨；`main` 的 dirty 資料不動。**未做完整跨平台 CI、Release、Push、Merge main**。
+
+**第八批可繼續平行**：R1 mobile/relay/hook backlog、Socket 全域未 admitted bytes、真實 status/cancel/quit queue wait p95/p99；Q0 Explorer/Terminal 大檔下一個 500+ 拆分；G1 Git Commit/File history query 狹義 port＋子模組保護；W1 Focus 切換 Generation 與 layout apply 的 owner 競態。保留同一 Runtime/GitBackend/transaction ownership；Flutter UI/Focus 不強行 Rust 化。
+
 ## 最新：第六批四線隔離 TDD（2026-10-29）
 
 **新續做起點：上一批乾淨整合 HEAD `7063e72df93a6eece197912fb8e78e78bcc2cb67`；四個工作樹均從此 SHA 獨立切出、完成四線獨立提交並 cherry-pick 到 `refactor/tdd-integrate-20261029`。`main` 仍有使用者既存未提交資料，不碰它。以下分別記實際 Red / Green，不把 focused regression 說成完整 CI。**

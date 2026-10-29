@@ -12,6 +12,8 @@
 > **第六批四線進行中（2026-10-29）**：從第五批整合 HEAD `7063e72df` 平行進行 W1 project activation invalidation、G1 two-method diff blob query、Q0 Explorer watcher ownership、Rust R1 localhost 32MiB admitted pending byte budget。Red→Green 與真實剩餘 blocker 一律以進度檔最上方第六批為準；原本 dirty `main` 不動。
 > **第六批三條 Dart 線已整合**：W1 `5794f93b1`、Q0 `5a67f87c9`、G1 `6aea669b4`；整合 Flutter focused 26 tests green，兩個架構 guards green、官方 Q0 **161 oversized／128 offenders**，不改 baseline。Rust 新 byte-budget Red→Green 尚在 Cargo 多組回歸，勿誤認整批已完成。
 > **第六批四線均已整合（2026-10-29）**：W1 `5794f93b1`（完整 Workbench Controller 133 pass）、Q0 `5a67f87c9`（完整 Explorer 78 pass）、G1 `6aea669b4`（Diff Surface 54 pass + 2 skipped）、Rust R1 `996962ef4`（Client 11 + Wire 48 + priority 2 + deferred 9 = 70 Cargo tests pass）；整合 Flutter 26 pass、兩守門 exit0；官方 Q0 **161 oversized／128 offenders**，baseline 未修改。此訊息覆蓋上一行「Rust 待驗證」的歷史狀態，往後從進度檔最上方第六批接續。
+> **第七批四線進行中（2026-10-29）**：從上一批乾淨整合 HEAD `e38e8191c` 分別處理 W1 同工作區 Git Focus Probe race、G1 巢狀 Repo file revision narrow port、Q0 Branch Status Bar hierarchy part 拆分、R1 localhost socket connection admission cap。各線已新增真實 Red→Green 測試；具體驗證狀態請讀進度檔最上方「第七批四線隔離 TDD」，未完成完整回歸前勿誤記整合綠燈。
+> **第七批四線均已完成並整合（2026-10-29）**：R1 `da33328ea`（socket 同時 32、Cargo 71 tests pass）；W1 `262b18526`（Git Focus Probe race，Controller + service 140 pass）；G1 `116dce5cd`（1-method file revision port, Diff Surface 54 pass + 2 skipped）；Q0 `29b455da2`（Branch status 538→456，Shell/Favorites 109 pass），全部 Red→Green，Dart 三線 analyze No issues；整合 Flutter 142 pass、兩 guards exit0。官方 Q0 **160 oversized／127 offenders**（前 161／128），baseline 未改。以進度檔最上方第七批為最新事實，下一批繼續四線獨立 worktree，不碰 `main` 的既存 dirty 資料。
 > 目標是可逐批合併的 TDD 重構；不改產品語意、不清理第三方既有工作樹、不自動推送或發布。
 
 ## Spec
