@@ -7,6 +7,15 @@ abstract interface class WorkbenchWorkspaceTabRemovalRepository {
   Future<void> removeWorkspaceTabsForWorkspace(String workspaceId);
 }
 
+/// Optional runtime-owned, workspace-scoped close. In-memory/fake repositories
+/// retain their existing unscoped interface for legacy behavior.
+abstract interface class WorkbenchScopedTabRemovalRepository {
+  Future<void> removeWorkspaceTabForWorkspace(
+    String tabId,
+    String expectedWorkspaceId,
+  );
+}
+
 abstract interface class WorkbenchRepository
     implements
         WorkbenchLayoutRepository,

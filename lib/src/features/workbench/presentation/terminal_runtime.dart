@@ -312,6 +312,13 @@ abstract interface class RecoverableTerminalPtySession
   Future<void> restartProcess();
 }
 
+/// The PTY process persists while a Tab's visible workspace changes. Keep
+/// future attach, restart, and close requests scoped to the new view owner.
+abstract interface class WorkspaceAwareTerminalPtySession
+    implements TerminalPtySession {
+  void updateDisplayWorkspaceId(String workspaceId);
+}
+
 /// A backend that can queue the submit CR as its own delayed write, kept
 /// adjacent to its payload so no other client can interleave between them.
 abstract interface class DeferredEnterTerminalPtySession

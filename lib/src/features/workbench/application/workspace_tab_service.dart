@@ -15,7 +15,10 @@ class WorkspaceTabService._(
   final WorkbenchRepository _repository,
   final Uuid _uuid,
   final DateTime Function() _now,
-) implements WorkbenchTabCloseStore, WorkbenchWorkspaceSelectionTabStore {
+) implements
+    WorkbenchTabCloseStore,
+    WorkbenchScopedTabCloseStore,
+    WorkbenchWorkspaceSelectionTabStore {
   factory({
     required WorkbenchRepository repository,
     Uuid? uuid,
@@ -124,6 +127,15 @@ class WorkspaceTabService._(
 
   Future<void> closeTab(String tabId) {
     return _repository.removeWorkspaceTab(tabId);
+  }
+
+  @override
+  Future<void> closeTabInWorkspace(String tabId, String workspaceId) {
+    final repository = _repository;
+    if (repository is WorkbenchScopedTabRemovalRepository) {
+      return repository.removeWorkspaceTabForWorkspace(tabId, workspaceId);
+    }
+    return repository.removeWorkspaceTab(tabId);
   }
 
   Future<WorkspaceTabRecord> renameTab({

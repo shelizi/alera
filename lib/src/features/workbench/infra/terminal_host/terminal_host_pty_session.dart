@@ -36,12 +36,13 @@ final class TerminalHostPtySessionFactory._(final TerminalHostClient _client)
 final class TerminalHostPtySession._(
   this._client,
   this._sessionId,
-  final String _workspaceId,
+  String _workspaceId,
   final String _tabId,
   final _TerminalHostPtySessionLease? _lease,
 ) with _TerminalPulsePtySessionSupport
     implements
         RecoverableTerminalPtySession,
+        WorkspaceAwareTerminalPtySession,
         DeferredEnterTerminalPtySession,
         TerminalPulsePtySession {
   factory({
@@ -63,6 +64,14 @@ final class TerminalHostPtySession._(
   final TerminalHostClient _client;
   @override
   final String _sessionId;
+
+  @override
+  void updateDisplayWorkspaceId(String workspaceId) {
+    if (!_disposed && workspaceId.isNotEmpty) {
+      // Metadata only: never restart the live PTY or change its Shell CWD.
+      _workspaceId = workspaceId;
+    }
+  }
 
   final StreamController<TerminalPtySessionEvent> _events =
       StreamController<TerminalPtySessionEvent>.broadcast();
@@ -454,7 +463,18 @@ final class TerminalHostPtySession._(
     _hostSub = null;
     _lease?.terminate();
     _client.releaseSession(_sessionId);
-    unawaited(_client.terminate(_sessionId).catchError((_) {}));
+    // The view may outlive its original workspace while another window moves
+    // the same live PTY. Let the Host compare the expected owner before any
+    // termination, rather than killing a moved Claude/Codex session.
+    unawaited(
+      _client
+          .terminate(
+            _sessionId,
+            expectedWorkspaceId: _workspaceId,
+            expectedTabId: _tabId,
+          )
+          .catchError((_) {}),
+    );
     unawaited(_events.close());
   }
 

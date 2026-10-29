@@ -18,7 +18,8 @@ class RuntimeWorkbenchRepository(
   @override final RuntimeHostClient _client, {
   final Future<void> Function()? beforeAccess,
   RuntimeChangeCoalescer? coalescer,
-}) with _RuntimeWorkbenchSections implements WorkbenchRepository {
+}) with _RuntimeWorkbenchSections
+    implements WorkbenchRepository, WorkbenchScopedTabRemovalRepository {
   this : _coalescer = coalescer ?? RuntimeChangeCoalescer();
 
   @override
@@ -162,9 +163,30 @@ class RuntimeWorkbenchRepository(
 
   @override
   Future<void> removeWorkspaceTab(String tabId) async {
+    await _removeWorkspaceTabWithRetry(tabId);
+  }
+
+  @override
+  Future<void> removeWorkspaceTabForWorkspace(
+    String tabId,
+    String expectedWorkspaceId,
+  ) async {
+    await _removeWorkspaceTabWithRetry(
+      tabId,
+      expectedWorkspaceId: expectedWorkspaceId,
+    );
+  }
+
+  Future<void> _removeWorkspaceTabWithRetry(
+    String tabId, {
+    String? expectedWorkspaceId,
+  }) async {
     await _ensureReady();
     try {
-      await _removeWorkspaceTab(tabId);
+      await _removeWorkspaceTab(
+        tabId,
+        expectedWorkspaceId: expectedWorkspaceId,
+      );
     } on TerminalHostRequestTimeoutException catch (error) {
       if (error.requestType != 'tab.remove') {
         rethrow;
@@ -172,16 +194,29 @@ class RuntimeWorkbenchRepository(
       // The host may commit after the client stops waiting. Replaying this
       // idempotent removal obtains an authoritative response instead of
       // treating an ambiguous timeout as success.
-      await _removeWorkspaceTab(tabId);
+      await _removeWorkspaceTab(
+        tabId,
+        expectedWorkspaceId: expectedWorkspaceId,
+      );
     } on TerminalHostConnectionClosedException {
       // The request may have reached the host before the disconnect. The
       // sidecar's remove contract is idempotent, so one replay is safe.
-      await _removeWorkspaceTab(tabId);
+      await _removeWorkspaceTab(
+        tabId,
+        expectedWorkspaceId: expectedWorkspaceId,
+      );
     }
   }
 
-  Future<void> _removeWorkspaceTab(String tabId) async {
-    await _client.runtimeRequest('tab.remove', <String, Object?>{'id': tabId});
+  Future<void> _removeWorkspaceTab(
+    String tabId, {
+    String? expectedWorkspaceId,
+  }) async {
+    await _client.runtimeRequest('tab.remove', <String, Object?>{
+      'id': tabId,
+      if (expectedWorkspaceId != null)
+        'expectedWorkspaceId': expectedWorkspaceId,
+    });
   }
 
   @override

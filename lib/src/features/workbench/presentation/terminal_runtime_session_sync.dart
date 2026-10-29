@@ -14,6 +14,10 @@ extension _XtermTerminalSessionSync on _XtermTerminalSessionHandle {
         _tab.hasManualTitle != tab.hasManualTitle;
     _workspace = workspace;
     _tab = tab;
+    final livePty = _ptySession;
+    if (livePty is WorkspaceAwareTerminalPtySession) {
+      livePty.updateDisplayWorkspaceId(workspace.id);
+    }
     _syncTerminalPulseConfiguration(tab);
     _titleNotifier.value = displayTitle;
     if (metadataChanged) {

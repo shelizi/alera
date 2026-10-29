@@ -311,7 +311,11 @@ final class SocketTerminalHostClient._(
   }
 
   @override
-  Future<void> terminate(String sessionId) async {
+  Future<void> terminate(
+    String sessionId, {
+    String? expectedWorkspaceId,
+    String? expectedTabId,
+  }) async {
     final clientMutationId = _pendingTerminateMutationIds.putIfAbsent(
       sessionId,
       () => const Uuid().v4(),
@@ -319,6 +323,9 @@ final class SocketTerminalHostClient._(
     await _terminalRequest('terminate', <String, Object?>{
       'sessionId': sessionId,
       'clientMutationId': clientMutationId,
+      if (expectedWorkspaceId != null)
+        'expectedWorkspaceId': expectedWorkspaceId,
+      if (expectedTabId != null) 'expectedTabId': expectedTabId,
     });
     _pendingTerminateMutationIds.remove(sessionId);
   }

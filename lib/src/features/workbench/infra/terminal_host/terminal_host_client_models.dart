@@ -67,7 +67,13 @@ abstract interface class TerminalHostClient {
 
   Future<void> detach(String sessionId);
 
-  Future<void> terminate(String sessionId);
+  /// Supply the calling view's expected owner when it has a Terminal tab.
+  /// A stale view must not terminate a process moved to another Workspace.
+  Future<void> terminate(
+    String sessionId, {
+    String? expectedWorkspaceId,
+    String? expectedTabId,
+  });
 
   /// Takes the viewport back from a mobile driver, restoring the last desktop
   /// dims. Returns whether there was a claim to undo.
