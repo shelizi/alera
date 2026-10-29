@@ -11,6 +11,7 @@ import 'package:alera/src/shared/infra/git/git_hosted_review_retention_port.dart
 import 'package:alera/src/shared/infra/git/git_source_control_query_port.dart';
 import 'package:alera/src/shared/infra/git/git_index_mutation_port.dart';
 import 'package:alera/src/shared/infra/git/git_working_tree_diff_query_port.dart';
+import 'package:alera/src/shared/infra/git/git_diff_blob_query_port.dart';
 
 /// Injectable boundary for git operations. Mirrors the raw git plumbing only;
 /// orchestration (paths, slugs, persistence, reconciliation) lives in the
@@ -28,7 +29,8 @@ abstract interface class GitBackend
         GitHostedReviewRetentionPort,
         GitSourceControlQueryPort,
         GitIndexMutationPort,
-        GitWorkingTreeDiffQueryPort {
+        GitWorkingTreeDiffQueryPort,
+        GitDiffBlobQueryPort {
   /// Whether [path] resolves to a git repository work tree.
   @override
   Future<bool> isGitRepository(String path);
@@ -180,6 +182,7 @@ abstract interface class GitBackend
 
   /// Raw bytes for a file-revision comparison. [oldSide] reads the file from
   /// [revisionOid]; the new side reads the current working-tree file.
+  @override
   Future<Uint8List?> fileRevisionBlobBytes({
     required String path,
     required String filePath,
@@ -204,6 +207,7 @@ abstract interface class GitBackend
   /// Pass [area] for worktree diffs or [commitOid]/[parentOid] for commit
   /// diffs. Returns null when that side does not exist (added or deleted
   /// files) or exceeds the preview size cap.
+  @override
   Future<Uint8List?> diffBlobBytes({
     required String path,
     required String filePath,

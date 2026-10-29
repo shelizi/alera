@@ -307,44 +307,18 @@ extension _WorkspaceGitDiffSurfaceLoading on _WorkspaceGitDiffSurfaceState {
     if (_contentModeForLoading != GitDiffContentMode.fullFile) {
       return;
     }
+    final blobReader = WorkspaceGitDiffBlobReader(backend);
     Future<Uint8List?> loadSide(GitDiffFile file, bool oldSide) async {
-      try {
-        if (_isFileRevisionDiff) {
-          final revisionOid = widget.tab.gitDiffCommitOid;
-          if (revisionOid == null) return null;
-          return await backend.fileRevisionBlobBytes(
-            path: sourceControlScope.path,
-            filePath: file.path,
-            revisionOid: revisionOid,
-            oldSide: oldSide,
-          );
-        }
-        Future<Uint8List?> load() => backend.diffBlobBytes(
-          path: sourceControlScope.path,
-          filePath: file.path,
-          oldPath: file.oldPath,
-          area: _isCommitBackedDiff ? null : file.area,
-          commitOid: _isCommitBackedDiff ? widget.tab.gitDiffCommitOid : null,
-          parentOid: _isCommitBackedDiff ? widget.tab.gitDiffParentOid : null,
-          oldSide: oldSide,
-        );
-        final cache = widget.branchCompareCache;
-        final commitOid = widget.tab.gitDiffCommitOid;
-        if (cache == null || commitOid == null) return await load();
-        return await cache.blob(
-          key: (
-            sourceControlScope.path,
-            commitOid,
-            widget.tab.gitDiffParentOid,
-            file.path,
-            file.oldPath,
-          ),
-          oldSide: oldSide,
-          load: load,
-        );
-      } catch (_) {
-        return null;
-      }
+      return blobReader.loadSide(
+        path: sourceControlScope.path,
+        file: file,
+        oldSide: oldSide,
+        isFileRevisionDiff: _isFileRevisionDiff,
+        isCommitBackedDiff: _isCommitBackedDiff,
+        revisionOid: widget.tab.gitDiffCommitOid,
+        parentOid: widget.tab.gitDiffParentOid,
+        branchCompareCache: widget.branchCompareCache,
+      );
     }
 
     // Show the diff preview first, then hydrate one file at a time. Loading
