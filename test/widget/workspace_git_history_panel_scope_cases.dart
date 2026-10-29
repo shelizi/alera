@@ -134,7 +134,9 @@ void _registerHistoryScopeTests() {
         'limit': 50,
         'baseRef': null,
         'includeAllRefs': false,
+        'includedRefs': null,
         'offset': null,
+        'filePath': null,
       },
     );
     expect(
