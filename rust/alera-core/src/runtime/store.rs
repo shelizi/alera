@@ -8,6 +8,8 @@ use sqlx::{Row, SqlitePool};
 use uuid::Uuid;
 
 use super::runtime_schema::RUNTIME_SCHEMA;
+#[path = "store_tab_transfer.rs"]
+mod tab_transfer;
 use super::store_error::RuntimeStoreError;
 use super::{harden_sqlite_files, open_private_runtime_file, prepare_private_runtime_directory};
 use super::{
