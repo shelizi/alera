@@ -4,6 +4,21 @@
 > 讀取 `docs/refactor/tdd-roadmap-20261029.md` 了解契約/驗收，然後從下列 pending/in_progress 工作續做。
 > 變更只在隔離 worktree，未合併 main／未 push／未 release。
 
+## 最新：第六批四線隔離 TDD（2026-10-29）
+
+**新續做起點：上一批乾淨整合 HEAD `7063e72df93a6eece197912fb8e78e78bcc2cb67`；四個工作樹均從此 SHA 獨立切出、完成四線獨立提交並 cherry-pick 到 `refactor/tdd-integrate-20261029`。`main` 仍有使用者既存未提交資料，不碰它。以下分別記實際 Red / Green，不把 focused regression 說成完整 CI。**
+
+| 工作線 | 目前改動 | 測試證據 | 未完成項 |
+| --- | --- | --- | --- |
+| W1 `refactor/tdd-b6-workbench-20261029` | `WorkbenchSelectionOwner.activateProject` 明確使 workspace epoch 與 tab selection generation 失效，避免 project-level 手動切換期間，先前的非同步 Go Back 向 history cursor 提交舊選取 | Controller 紅測 `project activation while back navigation hydrates does not move history cursor` **實際 fail**：Expected false Actual true → 修正後 pass；既有 selection coordinator + navigation history **16 pass**，完整 WorkbenchController **133 pass**；scoped Flutter analyze **No issues found**，全 exit0。隔離 `3ac5331e3` → 整合 **`5794f93b1`** | 完整跨平台 UI/E2E 尚未執行 |
+| G1 `refactor/tdd-b6-git-20261029` | 新增只含 `fileRevisionBlobBytes/diffBlobBytes` 的 `GitDiffBlobQueryPort`，`WorkspaceGitDiffBlobReader` 封裝 renamed oldPath、commit/worktree area、immutable branch compare cache、失敗容錯；真實 Diff Surface UI 改用小介面，單一 `RustGitBackend` 不變 | 紅測缺 port/service 無法編譯 → 小 fake **4 unit pass**；Diff Surface UI **54 pass／2 skipped**；scoped Flutter analyze **No issues found**，全 exit0。隔離 `394ea8e4c` → 整合 **`6aea669b4`** | Git 完整 E2E／跨平台 CI 未執行 |
+| Q0 `refactor/tdd-b6-q0-20261029` | Explorer watcher lifecycle / batch / quick-open invalidation 移至 `workspace_explorer_watcher.dart`；`workspace_explorer_refresh.dart` **536→415** 行；新增純函式 `workspaceExplorerWatcherTouchesSearch` 保留 VCS/設定排除、大小寫與空事件語意 | 紅測缺函式無法編譯 → **4 unit pass**；完整 Explorer Widget **78 pass**；scoped Flutter analyze **No issues found**，全 exit0；正式整合品質工具 **161 oversized／128 offenders**（前 162／129），未修改 baseline。隔離 `99fbda5d3` → 整合 **`5a67f87c9`** | 全域 max-lines guard 仍有 128 項違規 |
+| R1 `refactor/tdd-b6-rust-20261029` | localhost 64-command 限制再加總計 **32 MiB 已 admission 請求**預算，以每 4 KiB `OwnedSemaphorePermit` 計費，Actor `handle_line` 結束才同時釋放，避免 command 數有限仍允許多筆 16 MiB 巨大請求；控制/PTY 完成訊息仍不受限制；`client.rs` **490 行** | 新 UTF8/整數邊界與 2-client byte-pressure／shutdown／socket-control 紅測缺型別／演算法 **compile red**；首輪修正測試將單筆 16 MiB 與合計 32 MiB 混淆的 assertion 後，正式 Cargo `--bin alera` **client 11 + wire fixture 48 + priority 2 + deferred admission 9 = 70 passed、exit0**；rustfmt --check / Git diff --cached --check exit0。隔離 `cbf78ff11` → 整合 **`996962ef4`** | 不涵蓋 socket 暫存未 admission 行、mobile/relay/hook、actor `unbounded_channel`；全 Socket memory、status/cancel/quit 真實 p95/p99 未量測 |
+
+**第六批四條線均完成獨立提交與整合：** W1 `5794f93b1`、Q0 `5a67f87c9`、G1 `6aea669b4`、Rust R1 `996962ef4`。三條 Dart 線 scoped Flutter analyze **No issues found、exit0**；W1 完整 WorkbenchController **133 tests pass**，Q0 Explorer **78 widget pass**，G1 Diff Surface **54 pass／2 skipped**；Rust 4 組專項 **70 pass**。整合工作樹 `flutter test --no-pub ...` （navigation + watcher policy + blob reader + app shell）**26 tests passed、exit0**；`runtime_architecture_guard.dart`、`agent_extension_guard.dart` **exit0**，Agent 仍 5 touchpoints；官方 `check_max_lines.dart --list-oversized` **161 oversized／128 offenders**（第五批 162／129），無 baseline 修改。
+
+**下一批可平行**：R1 mobile/relay/backlog（含 socket 未 admission 行、總 byte budget）與真實 status/cancel/quit p95/p99；Q0 Explorer/Terminal/長測試檔下一個 >500 拆分；G1 Git file history/commit query 狹義能力；W1 project-level/tab stale continuation 與 layout await 的更深競態。無需為了 Rust 比例把 Dart UI/Focus 綁到原生。**不能宣稱完整 CI、跨平台 build、main merge、push 或 release 完成。**
+
 ## 最新：第五批四線隔離 TDD（2026-10-29）
 
 **本節為最新續做起點。從乾淨整合 HEAD `56f0658f9` 建立四個互不衝突的工作樹，四線獨立提交並逐一 cherry-pick 至 `refactor/tdd-integrate-20261029`；原本已有未提交項目的 `main` 完全不動。未實際 exit0 的測試不得宣稱 green。**
