@@ -1,10 +1,24 @@
 # T2 — 跨專案／跨 Workspace Terminal Tab 移動：功能規劃與並行重構邊界
 
-**Priority：P2；Status：planned / not implemented（2026-10-29）。** 本次依使用者要求列為後續功能並落檔，**沒有修改產品功能或執行測試、靜態分析**。
+**Priority：P2；Status：partial foundations integrated / user-facing transfer disabled（2026-10-29）。** 本次已分三條隔離線實作 UI、Dart Coordinator 和 Rust Store 基礎，但 **沒有開放跨專案拖放，也沒有執行測試、靜態分析或編譯**。
 
 本文件原是 `feat/cross-project-terminal-tabs-20261029` 分支上的設計稿（commit `ec150a493`），現**只收編此規劃檔**至 `refactor/tdd-integrate-20261029`；未合併該舊分支的產品程式。原設計所記載的並行分工為 2026-10-29 第三批的歷史狀態；最新整合已包含第八批功能修正及 macOS Claude Code 貼上 hotfix。
 
 歷史 Feature worktree：`.worktrees/feat-cross-project-terminal-tabs-20261029`；歷史基準 `e1ef633ca87e408c0ab5e651c1e827bc161a51f6`。**真正實作時必須從當時最新、乾淨的整合分支另切工作樹，不能沿用此舊基準直接修改。**
+
+## 最新：T2 三條平行功能基礎（2026-10-29）
+
+從乾淨整合 HEAD `061216941` 切出三個隔離 worktree 並各自提交，之後成功 cherry-pick 回 `refactor/tdd-integrate-20261029`：
+
+| 工作線 | 已新增的來源碼／能力 | 隔離提交 → 整合提交 | 尚未完成 |
+| --- | --- | --- | --- |
+| T2-A Flutter UI | `WorkbenchTabDragData` 增加 tab kind／來源 Workspace／Host，Workspace 側欄和 Project 標題有 Terminal-only Drop Target、同 Host 與未封存限制；Project 多個 Workspace 時顯示選擇對話框 | `42c28ea1e` → **`8c119f0a1`** | 接收 callback 刻意留空（null），沒有 Host 支援時不會接受跨 Workspace Drop；仍未接線實際轉移與 Undo |
+| T2-B1 Rust Store | `RuntimeStore::transfer_terminal_tab_storage` 的 SQLite 原子 compare-and-swap：核對來源／目的 Workspaces、Host、終端種類、兩側 Layout 快照與所有 Tab membership，一個交易更新 Tab 歸屬和兩側 Layout；保存來源 execution workspace 和 mutation receipt，方便回應遺失後辨識重送 | `800124981` → **`0fc27062b`** | 目前**只有 Store 方法**，沒有 `tab.transfer` Actor route、Session owner 轉移或 watcher 廣播；此方法在正式 Host flow 中尚未使用 |
+| T2-C0 Dart 協調準備 | `WorkbenchTerminalTabTransferCoordinator`、窄 `WorkbenchTerminalTabTransferPort`、`RuntimeTerminalTabTransferPort`：先取得雙側布局與 Tab 清單、建立預期值／新布局、限制同時移動同一 Tab、送出固定 mutation ID，確認返回的 Tab/Session ID | `12cd69a41` → **`97e02eedb`** | 尚未在 Workbench/Riverpod 組合、未呼叫；Client adapter 預備的 `tab.transfer` RPC **還不存在**，禁止先接 UI |
+
+**硬性啟用前提（T2-B2）**：Rust ServerActor 活 Session 的 `workspace_id` 目前同時影響 source workspace 移除時的 Session 終止、terminal restart 的 tab/workspace 驗證、Agent hook `workspace_id` 核對、terminal pulse／自動化路由。必須在同一 Runtime owner 下設計並完成「顯示 Workspace 歸屬」與「實際執行 Workspace／工作目錄」的區分，協調原子 Store commit、活 PTY reconciliation、雙端事件廣播、同時 Detach/Close/Exit、unknown-outcome replay，才可接上 UI callback。**不准直接改寫 Tab DB 的 `workspaceId` 假裝功能已完成**。
+
+本批只執行格式化、差異檢視與 `git diff --cached --check`；**Flutter／Rust 測試、Analyzer、Build 和 macOS/Windows 實機尚未執行，沒有任何 green 或已發版聲明**。既存的同 Workspace 重排、Split、Windows detach 預期保持原狀，但本批尚未回歸驗證。
 
 ## Goal and visible behavior
 
@@ -27,7 +41,7 @@
 
 ## Other refactor: file ownership and collision risks
 
-目前整合分支是 `refactor/tdd-integrate-20261029`；W1/T1/C1 都已有部分實作，但**尚無跨 Workspace Terminal 的持久化 transfer transaction 或 PTY ownership transfer**。最新 T1 `45941055a` 僅保障**同一 Desktop runtime registry** 中多個檢視共用 PTY 不會因關閉其中一個檢視而被殺死，不等於跨專案轉移已完成。
+目前整合分支是 `refactor/tdd-integrate-20261029`；W1/T1/C1 都已有部分實作。**現在已有尚未接線的 Rust Store 原子 transfer 基礎，但仍沒有完整的活 PTY ownership transfer 或可呼叫的 Host RPC。** 最新 T1 `45941055a` 僅保障**同一 Desktop runtime registry** 中多個檢視共用 PTY 不會因關閉其中一個檢視而被殺死，不等於跨專案轉移已完成。
 
 | Concurrent branch / workstream | Observed edits on 2026-10-29 | Overlap decision |
 | --- | --- | --- |
@@ -60,6 +74,8 @@ Use an explicit, authenticated transfer operation (proposed `tab.transfer`); do 
 | T2-C：Coordinator + UI 接線 | Workbench application owner；**依賴 T2-B 完整契約** | 轉移中鎖定拖曳、等待 Host ack 再切換 UI；成功清理來源／定位目的地並更新雙側 watcher；失敗維持原 Session/Tab；反向 transfer 支援 Undo | 和 W1 Tab/Layout hydration、T1 Close/Detach 不得併行編輯同檔 |
 | T2-D：復原與相容性 | Desktop／Mobile／Runtime 跨層契約；T2-C 後 | 重開 App、Host 重啟、斷線重試、來源 Workspace 移除後仍可尋得同一 PTY；終端輸出不丟序；原 cwd/env 與執行位置清楚標示 | 若 Host 版本不支援 `tab.transfer`，UI 必須停用跨專案拖移，而非退化成關閉後重建 |
 
+**目前分期狀態**：T2-A UI 框架已落地但仍停用；T2-B1 Store CAS 方法已落地；**T2-B2 Live Session owner／Host RPC 待做**；T2-C0 Dart Coordinator/Port 已落地但未接線；T2-C1 實際 UI/Workbench 連通與 Undo、T2-D 重啟復原皆待做。T2-B2 與其共享 PTY/Store 的程式碼應由同一 owner 序列化整合，其他 UI／純契約文件可以平行。
+
 ### 使用者可見的完成定義
 
 - [ ] 將執行中 Terminal Tab 拖至另一專案／Workspace，Session ID、PTY PID、輸出、scrollback、Shell history 不變；不自動 `cd`。
@@ -68,7 +84,7 @@ Use an explicit, authenticated transfer operation (proposed `tab.transfer`); do 
 - [ ] 拖錯目標、重複 Drop、目的工作區已刪除、同時 Close／Detach、失敗／timeout 等情境不會孤立或重複建立 Session。
 - [ ] 同 workspace 重排、Split Pane、Windows detach 保留原功能；Host 不支援時安全拒絕。
 
-> 以上是未來實作完成條件，**不是本次已完成／已測試的成果**。本輪僅盤點及保存規劃；正式實作時再安排契約／UI／跨端驗證，且以當時使用者對測試的優先順序為準。
+> 以上是**整體 T2** 未來實作完成條件，並非這次已支援或測試的功能。首次規劃時只有設計文件；目前已另外合入三條**未啟用**的 UI／Dart／Store 基礎。正式啟用仍待 Rust Actor 活 Session owner 的安全轉移與契約／跨端驗證。
 
 ## TDD acceptance matrix (not yet executed)
 

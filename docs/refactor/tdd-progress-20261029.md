@@ -4,7 +4,11 @@
 > 讀取 `docs/refactor/tdd-roadmap-20261029.md` 了解契約/驗收，然後從下列 pending/in_progress 工作續做。
 > 變更只在隔離整合 worktree；最新 macOS hotfix 來源分支目前與 `main` HEAD 指向同一提交，已依使用者要求將此 hotfix 分支合入整合分支，但沒有在原 `main` worktree 做修改、push 或 release。
 
-> **最新功能待辦 T2（2026-10-29）**：跨 Project/Workspace 拖曳 Terminal Tab、維持同一 PTY/Session/CWD/scrollback，原子搬移 Tab 與兩側 Layout、支援反向復原。已收編 `ec150a493` 舊設計稿的**文件本身**至 `docs/terminal-tab-cross-workspace-plan-20261029.md` 並於 Roadmap 列 P2；仍是 **planned**，未修改產品程式、未執行測試或分析。後續可平行 UI drop preview 和 Rust Host 契約設計，但 C1/T1/W1 的權威狀態及同檔改動要序列化。
+## 最新：T2 三線功能基礎已整合（2026-10-29，未啟用／未驗證）
+
+從乾淨 HEAD `061216941` 平行完成 Flutter sidebar/project Terminal-only DragTarget ＋多 Workspace 選擇器 **`8c119f0a1`**、Dart `WorkbenchTerminalTabTransferCoordinator`／Runtime Port **`97e02eedb`**、Rust Store 原子雙側 Layout+Tab CAS **`0fc27062b`**，三線各自提交並整合。**這不是已完成的跨專案拖曳**：`onTransferTerminalTab` 仍未接線、`tab.transfer` Host route 尚不存在、Rust live PTY Session owner 與 agent hook/restart/termination/pulse 跨 Workspace 的語意尚未建立。下一步唯一阻擋主線為 T2-B2 Actor 轉移；其他非衝突 UI／契約可平行。記錄見 `docs/terminal-tab-cross-workspace-plan-20261029.md` 和 `docs/refactor/feature-progress-20261029.md`。本輪依使用者指示沒有跑 Flutter/Cargo 測試、Analyzer、Build 或實機驗證；未碰 `main` 工作區、未推送／發布。
+
+> **最初列為 T2 規劃（歷史紀錄，已由上方部分實作進度更新）**：跨 Project/Workspace 拖曳 Terminal Tab、維持同一 PTY/Session/CWD/scrollback，原子搬移 Tab 與兩側 Layout、支援反向復原。已收編 `ec150a493` 舊設計稿的文件至 `docs/terminal-tab-cross-workspace-plan-20261029.md`。當時僅規劃；最新進度請以本節上方 T2 三線部分基礎為準。
 
 > **最新 macOS 貼上修正合入（2026-10-29）**：`fix/macos-claude-kitty-paste-v-20261029` 已透過 no-ff merge **`f49ee344944f85036c2798f33ba3b5e01e290e35`** 合入 `refactor/tdd-integrate-20261029`；xterm2 子模組 pin `6b365fc3a` 並在隔離整合 worktree 完成 `git submodule update --init`，版本 `0.91.15+308`。本輪無測試、靜態分析或 Mac 實機驗證；詳 `docs/refactor/feature-progress-20261029.md`。本次沒有操作原本有未提交資料的 `main` worktree。
 

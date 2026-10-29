@@ -1,5 +1,19 @@
 # Alera 功能優先續做：第八批四線隔離（2026-10-29）
 
+## 最新：T2 三條平行實作基礎已整合（2026-10-29）
+
+已從整合 `061216941` 切出三個獨立 worktree，完成 scoped source commits 並 cherry-pick 至 `refactor/tdd-integrate-20261029`：
+
+| 工作線 | 交付內容 | 整合提交 |
+| --- | --- | --- |
+| Flutter T2-A | Terminal-only 跨 Workspace DragTarget（Workspace 側欄／Project 標題）、同 Host 檢查及多 Workspace 目的地選擇器；**缺 Host capability 時 callback=null，實際拖放拒絕** | `8c119f0a1`（隔離 `42c28ea1e`） |
+| Dart T2-C0 | `WorkbenchTerminalTabTransferCoordinator`、Host Port：雙側 Layout snapshot、expected/new CAS payload、Tab／Session ID 保留驗證、同一 Tab in-flight 鎖定；**尚未組合/接 UI** | `97e02eedb`（隔離 `12cd69a41`） |
+| Rust T2-B1 | `RuntimeStore::transfer_terminal_tab_storage`：SQLite transaction 更新 Terminal Tab 和雙側 Layout，核對狀態、Host、tab 集合、原布局與 mutation receipt，紀錄原 execution workspace；**尚未接 Actor live PTY owner** | `0fc27062b`（隔離 `800124981`） |
+
+**實際支援狀態：仍不支援跨專案搬動執行中的 Terminal。** 新 Store 方法尚無 `tab.transfer` Host Request handler，且 live `Session.workspace_id` 會影響來源 Workspace 關閉、Restart、Agent hooks、PTY Pulse；不能單獨更新 DB 而誤殺程序。因此 UI transfer callback 刻意未接線。下一個阻擋項目 **T2-B2：統一 Runtime Actor 的 display owner 與 execution identity、live Session 轉移、事件廣播及失敗／重播語意**；完成後才能連結 Workbench UI、恢復與 Undo。詳細見 `docs/terminal-tab-cross-workspace-plan-20261029.md`。
+
+本輪只做來源碼格式化及 Git staged whitespace check，**沒有 Flutter/Cargo 測試、靜態分析、Build 或實機驗證**；不等於可發布。原本 dirty 的 `main` 未修改、未 merge、未 push、未 release。
+
 ## 最新後續待辦：T2 Terminal Tab 跨專案移轉（2026-10-29）
 
 **狀態：已納入規劃，尚未實作。** 依使用者要求將跨 Project/Workspace 拖放既有 Terminal Tab 列為 **P2 功能待辦 T2**。目標是直接移動**同一個** Tab／Rust 持久 PTY Session（保留 Process、scrollback、原 CWD、Shell 歷史及畫面），而非新開 Terminal、關閉舊 PTY 或自動 `cd`。目的地有多個 Workspace 時必須供使用者選擇，不偷偷建立 Workspace；成功後更新來源／目的 Tab 與 Pane Layout，可反向移轉以復原。
