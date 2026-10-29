@@ -4,6 +4,10 @@
 > 讀取 `docs/refactor/tdd-roadmap-20261029.md` 了解契約/驗收，然後從下列 pending/in_progress 工作續做。
 > 變更只在隔離整合 worktree；最新 macOS hotfix 來源分支目前與 `main` HEAD 指向同一提交，已依使用者要求將此 hotfix 分支合入整合分支，但沒有在原 `main` worktree 做修改、push 或 release。
 
+## 最新：T2-B2 三線已整合（2026-10-29；Host route 已寫，但產品仍停用）
+
+從乾淨 HEAD `845886d57879b9a5b5801e55ab2d6b549ccb915f` 平行實作並各自提交：Rust Host `tab.transfer` + 原 Hook 身分／安全拒絕條件 **`f3977fa99`**；Workbench controller／兩側 watcher fence／Host capability probe **`8443c2f0e`**；Terminal 原執行路徑提醒及重新啟動路徑保留 **`683b99dc8`**。三條線已合入整合分支。**Host `tab.transfer.capabilities` 仍刻意回報不支援（supported=false），Flutter 的跨 Workspace Drop 保持關閉；請勿描述成正式完成的功能。** 待做 T2-D1：跨視窗/跨程序 Detach/Close、Watcher race、失聯重送、Agent Presence、Undo、源目錄消失與真實測試／編譯。詳 `docs/terminal-tab-cross-workspace-plan-20261029.md` 和 `docs/refactor/feature-progress-20261029.md`。本批依要求不跑測試、分析與編譯；原 `main` 未動，未 push、未 release。
+
 ## 最新：T2 三線功能基礎已整合（2026-10-29，未啟用／未驗證）
 
 從乾淨 HEAD `061216941` 平行完成 Flutter sidebar/project Terminal-only DragTarget ＋多 Workspace 選擇器 **`8c119f0a1`**、Dart `WorkbenchTerminalTabTransferCoordinator`／Runtime Port **`97e02eedb`**、Rust Store 原子雙側 Layout+Tab CAS **`0fc27062b`**，三線各自提交並整合。**這不是已完成的跨專案拖曳**：`onTransferTerminalTab` 仍未接線、`tab.transfer` Host route 尚不存在、Rust live PTY Session owner 與 agent hook/restart/termination/pulse 跨 Workspace 的語意尚未建立。下一步唯一阻擋主線為 T2-B2 Actor 轉移；其他非衝突 UI／契約可平行。記錄見 `docs/terminal-tab-cross-workspace-plan-20261029.md` 和 `docs/refactor/feature-progress-20261029.md`。本輪依使用者指示沒有跑 Flutter/Cargo 測試、Analyzer、Build 或實機驗證；未碰 `main` 工作區、未推送／發布。

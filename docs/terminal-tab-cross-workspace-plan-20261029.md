@@ -1,8 +1,20 @@
 # T2 — 跨專案／跨 Workspace Terminal Tab 移動：功能規劃與並行重構邊界
 
-**Priority：P2；Status：partial foundations integrated / user-facing transfer disabled（2026-10-29）。** 本次已分三條隔離線實作 UI、Dart Coordinator 和 Rust Store 基礎，但 **沒有開放跨專案拖放，也沒有執行測試、靜態分析或編譯**。
+**Priority：P2；Status：B2 Host/Workbench/Terminal implementation integrated, feature-gated OFF（2026-10-29）。** 已分兩批合入六條來源碼工作線，包含早期 UI／Dart Coordinator／Rust Store 基礎，以及最新 Rust Host live Session／Workbench watcher／原執行來源處理。**尚未開放跨專案拖放，也沒有執行本批的 Flutter/Cargo 測試、靜態分析或編譯。**
 
 本文件原是 `feat/cross-project-terminal-tabs-20261029` 分支上的設計稿（commit `ec150a493`），現**只收編此規劃檔**至 `refactor/tdd-integrate-20261029`；未合併該舊分支的產品程式。原設計所記載的並行分工為 2026-10-29 第三批的歷史狀態；最新整合已包含第八批功能修正及 macOS Claude Code 貼上 hotfix。
+
+## 最新：T2-B2 再平行三線合入（2026-10-29，仍停用）
+
+本批從整合 `845886d57879b9a5b5801e55ab2d6b549ccb915f` 切出三個**互不修改同檔**的功能 worktree，分別完成來源碼修改、格式化、Git staged whitespace check 與獨立提交；再按 Host→Workbench→Terminal UX 順序 cherry-pick 回 `refactor/tdd-integrate-20261029`。
+
+| 工作線 | 新增內容 | 隔離提交 → 整合提交 | 嚴格限制 |
+| --- | --- | --- | --- |
+| T2-B2 Rust Host | 新增本地 `tab.transfer` Actor route：要求活 PTY／Session ID、同一來源 Tab，對接已實作的 Rust Store CAS；一個交易提交後同步修改活 Session 的顯示 `workspace_id`，**Session ID／PTY process／output buffer／working_directory 不變**，通知來源和目的 Tab watchers 與 Layout watchers；原 Claude/Codex Hook 可用持久化來源身分驗證，再重新歸到目前顯示 Workspace。新增 `terminalExecutionWorkingDirectory` 保存原啟動資料夾 | `a9985034a` → **`f3977fa99`** | 針對已開啟 Pulse、Automation-owned Tab、Pending Agent Prompt、活 Orchestration Dispatch、同 Tab 多個活 PTY 明確拒絕。直接 RPC 存在但**未經編譯／測試**；`tab.transfer.capabilities` 刻意返回 `supported:false` |
+| T2-C1 Flutter Workbench | 新增來源/目的 Workspace watcher fence，避免單側舊 snapshot 把 Rust Store CAS Layout 回寫覆蓋；Host ACK 後讀回兩側 Tabs/Layout **只套用不持久化**，再切換目的地／focus；Runtime transfer capability probe、Provider/Controller/Sidebar callback 接線 | `7d99dc6a5` → **`8443c2f0e`** | Host `supported:false` 時 Sidebar Callback 仍是 `null`，不會接受跨專案拖放；timeout/lost reply、遠端重連與旁路 watcher 等尚未完整驗證 |
+| T2-D0 Terminal UX／重新啟動 | Terminal Tab 若顯示 Workspace 與原始 Execution Workspace 不同，顯示來源及原始啟動目錄的 Tooltip；後續重新建立 PTY（顯式 Restart／Host recovery）時，使用保留的原始啟動路徑及原 Agent Hook Workspace ID，避免突然變成目的專案的命令環境 | `359353a10` → **`683b99dc8`** | 保存的是**原啟動路徑**，不是偵測使用者後續 `cd` 的即時 CWD；原路徑失效／跨平台 Shell 實際行為尚未驗證 |
+
+**啟用前仍需解決**：跨視窗／跨程序 Detach+Close 同時執行的終止競態、Host 不明結果／斷線後的冪等重播與讀回、Watcher 更新序與跨 client 事件、Agent Presence 轉移即時性、Pulse／Orchestration 限制下的拒絕 UX、來源 Workspace 已刪除時的重開處理與 Undo、更新兩份 operation contract。依先前使用者指示**本批只格式化／Git diff check，沒有 Flutter/Cargo Tests、Analyzer、Build、實機測試，也未 push／release；禁止宣稱正式支援**。三線程式碼在隔離整合分支，原始 dirty `main` 未動。
 
 歷史 Feature worktree：`.worktrees/feat-cross-project-terminal-tabs-20261029`；歷史基準 `e1ef633ca87e408c0ab5e651c1e827bc161a51f6`。**真正實作時必須從當時最新、乾淨的整合分支另切工作樹，不能沿用此舊基準直接修改。**
 
@@ -74,7 +86,7 @@ Use an explicit, authenticated transfer operation (proposed `tab.transfer`); do 
 | T2-C：Coordinator + UI 接線 | Workbench application owner；**依賴 T2-B 完整契約** | 轉移中鎖定拖曳、等待 Host ack 再切換 UI；成功清理來源／定位目的地並更新雙側 watcher；失敗維持原 Session/Tab；反向 transfer 支援 Undo | 和 W1 Tab/Layout hydration、T1 Close/Detach 不得併行編輯同檔 |
 | T2-D：復原與相容性 | Desktop／Mobile／Runtime 跨層契約；T2-C 後 | 重開 App、Host 重啟、斷線重試、來源 Workspace 移除後仍可尋得同一 PTY；終端輸出不丟序；原 cwd/env 與執行位置清楚標示 | 若 Host 版本不支援 `tab.transfer`，UI 必須停用跨專案拖移，而非退化成關閉後重建 |
 
-**目前分期狀態**：T2-A UI 框架已落地但仍停用；T2-B1 Store CAS 方法已落地；**T2-B2 Live Session owner／Host RPC 待做**；T2-C0 Dart Coordinator/Port 已落地但未接線；T2-C1 實際 UI/Workbench 連通與 Undo、T2-D 重啟復原皆待做。T2-B2 與其共享 PTY/Store 的程式碼應由同一 owner 序列化整合，其他 UI／純契約文件可以平行。
+**目前分期狀態（以最新 B2 節為準）**：T2-A UI 框架已落地但停用；T2-B1 Store CAS 已落地；T2-B2 Host route／live session 基礎已落地但 capability 仍 OFF；T2-C0 Dart Coordinator/Port 已落地；T2-C1 Workbench watcher fence／controller 接線已落地但仍停用；T2-D0 原執行位置提醒／重新啟動路徑已落地。**T2-D1：驗證和解決跨 client/Detach/Close/丟失回覆／Undo 剩餘風險**，才可對外啟用及宣稱支援。
 
 ### 使用者可見的完成定義
 

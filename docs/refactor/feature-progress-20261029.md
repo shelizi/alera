@@ -1,5 +1,17 @@
 # Alera 功能優先續做：第八批四線隔離（2026-10-29）
 
+## 最新：T2-B2 Host／Workbench／Terminal UX 平行三線已整合（2026-10-29）
+
+| 線路 | 實際新增功能／安全措施 | 整合提交 |
+| --- | --- | --- |
+| Rust Host | Local `tab.transfer`：驗證活 Session、Tab、Pulse／Automation／Orchestration 狀態，呼叫已有的雙布局 CAS，提交後重指派活 Session 顯示 Workspace 而不終止 PTY；Claude／Codex 原 Hook Workspace 可由 `terminalExecutionWorkspaceId` 驗證後關聯至新畫面；來源／目的雙側事件；保存原 Terminal 啟動路徑 | **`f3977fa99`**（隔離 `a9985034a`） |
+| Flutter Workbench | Host capability probe 與 provider、Controller transfer 操作、來源／目的 watcher fence、成功後讀回雙側 Tabs/Layout 並**只套用不反寫**、選擇目的 Tab；Sidebar callback 有實際連通路徑但仍由能力旗標關閉 | **`8443c2f0e`**（隔離 `7d99dc6a5`） |
+| Terminal UX | 跨 Workspace 移動後 Tab 顯示原 Execution Workspace 與原 Shell 啟動路徑提醒；若 PTY 重新建立，使用保留原本的 launch dir 與 Hook Workspace 身分，而非自動切換為目的 Git repo | **`683b99dc8`**（隔離 `359353a10`） |
+
+**最重要的真實狀態：產品仍未開啟跨專案拖曳。** Rust Host 雖已有實驗性 `tab.transfer` RPC，`tab.transfer.capabilities` 仍明確回傳 `supported:false, livePtyTransfer:false, atomicLayouts:true`；新 UI 與 Workbench Controller 在此狀態下拒絕 Drop。嚴格未驗證項目包含 Session close/detach、跨程序 watcher 順序與本機 PTY handle、Agent Presence 即時移轉、意外 timeout/斷線的權威讀回、Undo、原啟動目錄不存在時的 Restart，以及 Windows/macOS 實機。下批應先處理這些 T2-D1 功能邊界並取得明確可用性再開旗標。詳 `docs/terminal-tab-cross-workspace-plan-20261029.md`。
+
+本輪僅 `dart format`、`rustfmt`、`git diff --cached --check`，**未執行測試、Analyzer、Cargo check、Build 或發布**；原 `main` dirty worktree 未操作、未 push。
+
 ## 最新：T2 三條平行實作基礎已整合（2026-10-29）
 
 已從整合 `061216941` 切出三個獨立 worktree，完成 scoped source commits 並 cherry-pick 至 `refactor/tdd-integrate-20261029`：
