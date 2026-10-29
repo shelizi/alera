@@ -40,6 +40,10 @@ class const _SidebarBody({
   required final String fileManagerLabel,
   required final _TerminalTabCallback onSelectTerminal,
   required final _TerminalTabCallback onCloseTerminal,
+
+  /// Unset until an atomic host transfer API is available to the controller.
+  final Future<void> Function(WorkbenchTabDragData data, Workspace destination)?
+  onTransferTerminalTab,
 }) extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -148,26 +152,32 @@ class const _SidebarBody({
           horizontal: AleraTokens.space8,
           vertical: AleraTokens.space2,
         ),
-        child: _ProjectHeaderTile(
+        child: _TerminalTabProjectDropTarget(
           project: row.project,
-          searchQuery: state.searchQuery,
-          expanded: !row.collapsed,
-          workspaceCount: row.workspaceCount,
-          agentCounts: row.agentCounts,
-          onToggle: () => commands.toggleProjectCollapsed(row.project.id),
-          onCreateWorkspace: row.project.supportsLinkedWorkspaces
-              ? () => onCreateWorkspace(row.project)
-              : null,
-          onRefreshWorktrees: row.project.supportsLinkedWorkspaces
-              ? () => unawaited(
-                  commands.reconcileProjectWorkspaces(row.project.id),
-                )
-              : null,
-          onOpenProjectSettings: () =>
-              unawaited(onOpenProjectSettings(row.project)),
-          onSleepProject: () => unawaited(onSleepProject(row.project)),
-          onRenameProject: () => onRenameProject(row.project),
-          onRemoveProject: () => onRemoveProject(row.project),
+          workspaces:
+              state.workspacesByProject[row.project.id] ?? const <Workspace>[],
+          onTransfer: onTransferTerminalTab,
+          child: _ProjectHeaderTile(
+            project: row.project,
+            searchQuery: state.searchQuery,
+            expanded: !row.collapsed,
+            workspaceCount: row.workspaceCount,
+            agentCounts: row.agentCounts,
+            onToggle: () => commands.toggleProjectCollapsed(row.project.id),
+            onCreateWorkspace: row.project.supportsLinkedWorkspaces
+                ? () => onCreateWorkspace(row.project)
+                : null,
+            onRefreshWorktrees: row.project.supportsLinkedWorkspaces
+                ? () => unawaited(
+                    commands.reconcileProjectWorkspaces(row.project.id),
+                  )
+                : null,
+            onOpenProjectSettings: () =>
+                unawaited(onOpenProjectSettings(row.project)),
+            onSleepProject: () => unawaited(onSleepProject(row.project)),
+            onRenameProject: () => onRenameProject(row.project),
+            onRemoveProject: () => onRemoveProject(row.project),
+          ),
         ),
       );
     }
@@ -236,6 +246,7 @@ class const _SidebarBody({
               : null,
           onSelectTerminal: onSelectTerminal,
           onCloseTerminal: onCloseTerminal,
+          onTransferTerminalTab: onTransferTerminalTab,
           onDelete: row.workspace.isMain
               ? null
               : () => onDeleteWorkspace(row.project, row.workspace),

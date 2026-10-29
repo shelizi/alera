@@ -137,6 +137,8 @@ class const _DraggableWorkspaceTabChip({
           workspaceId: workspace.id,
           sourceGroupId: groupId,
           tabId: tab.id,
+          kind: tab.kind,
+          sourceHostId: workspace.hostId,
         ),
         feedback: _DraggedTabFeedback(
           tab: tab,

@@ -49,6 +49,7 @@ import 'package:alera/src/features/workbench/presentation/widgets/workspace_agen
 import 'package:alera/src/features/workbench/presentation/workbench_dialog_launchers.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_graph_dialogs.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_graph_indicators.dart';
+import 'package:alera/src/features/workbench/presentation/workbench_tab_drag_data.dart';
 import 'package:alera/src/features/workbench/presentation/widgets/agent_run_spinner_scope.dart';
 import 'package:alera/src/features/workbench/presentation/widgets/workbench_sidebar_toolbar.dart';
 import 'package:flutter/material.dart';
@@ -62,6 +63,7 @@ part 'project_workbench_sidebar_commands.dart';
 part 'project_workbench_section_header.dart';
 part 'project_workbench_workspace_actions.dart';
 part 'project_workbench_workspace_rows.dart';
+part 'project_workbench_terminal_drop_target.dart';
 part 'project_workbench_workspace_agent_list.dart';
 part 'project_workbench_workspace_context_menu.dart';
 part 'project_workbench_agent_rows.dart';

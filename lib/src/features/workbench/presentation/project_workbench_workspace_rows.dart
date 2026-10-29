@@ -34,6 +34,10 @@ class const _WorkspaceRow({
   required final VoidCallback onSetParent,
   required final _TerminalTabCallback onSelectTerminal,
   required final _TerminalTabCallback onCloseTerminal,
+
+  /// A host-backed transfer callback; null means unsupported, not "copy".
+  final Future<void> Function(WorkbenchTabDragData data, Workspace destination)?
+  onTransferTerminalTab,
   final int visibleChildCount = 0,
   final bool childrenCollapsed = false,
   final VoidCallback? onToggleChildren,
@@ -84,6 +88,29 @@ class _WorkspaceRowState extends State<_WorkspaceRow> {
 
   @override
   Widget build(BuildContext context) {
+    return DragTarget<WorkbenchTabDragData>(
+      onWillAcceptWithDetails: (details) =>
+          widget.onTransferTerminalTab != null &&
+          details.data.canTransferTo(
+            targetWorkspaceId: widget.workspace.id,
+            targetHostId: widget.workspace.hostId,
+            targetArchived: widget.workspace.isArchived,
+          ),
+      onAcceptWithDetails: (details) {
+        final transfer = widget.onTransferTerminalTab;
+        if (transfer == null) return;
+        unawaited(
+          transfer(details.data, widget.workspace).catchError((Object error) {
+            AleraToast.publish(message: 'Could not move Terminal tab: $error');
+          }),
+        );
+      },
+      builder: (context, candidates, rejected) =>
+          _buildWorkspaceRow(context, dropTarget: candidates.isNotEmpty),
+    );
+  }
+
+  Widget _buildWorkspaceRow(BuildContext context, {required bool dropTarget}) {
     final theme = Theme.of(context);
     final isActive = widget.isActive;
     final branchLabel = _buildBranchLabel();
@@ -103,10 +130,10 @@ class _WorkspaceRowState extends State<_WorkspaceRow> {
           child: AnimatedContainer(
             duration: AleraTokens.durationMid,
             decoration: BoxDecoration(
-              color: isActive
+              color: isActive || dropTarget
                   ? AleraTokens.surfaceElevated
                   : (_hovered ? AleraTokens.surface : Colors.transparent),
-              border: isActive
+              border: isActive || dropTarget
                   ? Border.all(
                       color: AleraTokens.accent,
                       width: AleraTokens.strokeThin,

@@ -140,11 +140,17 @@ class _SplitResizeHandleState extends State<_SplitResizeHandle> {
   }
 }
 
-class const _WorkspaceTabDragData({
-  required final String workspaceId,
-  required final String sourceGroupId,
-  required final String tabId,
-});
+/// Existing same-workspace drag data can also be inspected by the sidebar
+/// without weakening the old strip/pane destination rules.
+class _WorkspaceTabDragData extends WorkbenchTabDragData {
+  const _WorkspaceTabDragData({
+    required super.workspaceId,
+    required super.sourceGroupId,
+    required super.tabId,
+    required super.kind,
+    required super.sourceHostId,
+  });
+}
 
 enum _PaneMenuAction { splitRight, splitDown, splitLeft, splitUp, closeSplit }
 
