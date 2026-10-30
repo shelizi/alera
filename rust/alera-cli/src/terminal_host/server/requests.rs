@@ -452,7 +452,7 @@ impl ServerActor {
                         .await
                         .map_err(|error| HostError::state(error.to_string()))?
                         .is_some_and(|tab| {
-                            super::terminal_tab_transfer::has_transfer_receipt_marker(&tab)
+                            super::terminal_tab_transfer::has_transfer_recovery_evidence(&tab)
                         })
                 } else {
                     false
@@ -774,7 +774,7 @@ impl ServerActor {
                     .find(&tab.id)
                     .await?
                 {
-                    if super::terminal_tab_transfer::has_transfer_receipt_marker(&stored) {
+                    if super::terminal_tab_transfer::has_transfer_recovery_evidence(&stored) {
                         if super::terminal_tab_transfer::invalid_transfer_receipt_marker(&stored)
                             || tab.kind != stored.kind
                             || tab.workspace_id != stored.workspace_id

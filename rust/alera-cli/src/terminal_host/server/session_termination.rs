@@ -7,7 +7,9 @@ use super::runtime_mutations::{
     RuntimeMutationEffect, RuntimeMutationFinished, RuntimeMutationOutcome, RuntimeMutationRequest,
 };
 use super::terminal_startup_commands::terminal_session_id;
-use super::terminal_tab_transfer::{has_transfer_receipt_marker, invalid_transfer_receipt_marker};
+use super::terminal_tab_transfer::{
+    has_transfer_recovery_evidence, invalid_transfer_receipt_marker,
+};
 use super::ServerActor;
 
 impl ServerActor {
@@ -31,7 +33,7 @@ impl ServerActor {
             .await
             .map_err(|error| HostError::state(error.to_string()))?
             .iter()
-            .any(has_transfer_receipt_marker)
+            .any(has_transfer_recovery_evidence)
         {
             return Err(HostError::state(
                 "Workspace cleanup would erase a transferred Terminal receipt. Explicitly resolve and close the Terminal Tab before deleting its Workspace or Project.",
@@ -44,7 +46,7 @@ impl ServerActor {
                 .await
                 .map_err(|error| HostError::state(error.to_string()))?;
             if stored.is_some_and(|tab| {
-                has_transfer_receipt_marker(&tab)
+                has_transfer_recovery_evidence(&tab)
                     && (tab.workspace_id == workspace_id || session.workspace_id == workspace_id)
             }) {
                 return Err(HostError::state(

@@ -71,17 +71,20 @@ fn observed_transferred_pty_exit(
     evidence["exitCode"].as_i64()
 }
 
-/// The presence of a corrupted transfer marker is still durable evidence.
+/// The presence of *either* original transfer/exit marker is durable evidence.
 /// It must never silently fall back to never-transferred cleanup semantics.
-pub(super) fn has_transfer_receipt_marker(tab: &WorkspaceTabRecord) -> bool {
+pub(super) fn has_transfer_recovery_evidence(tab: &WorkspaceTabRecord) -> bool {
     tab.payload.get("lastTerminalTabTransfer").is_some()
+        || tab.payload.get("lastTerminalTabExit").is_some()
 }
 
 pub(super) fn invalid_transfer_receipt_marker(tab: &WorkspaceTabRecord) -> bool {
     let Some(receipt) = tab.payload.get("lastTerminalTabTransfer") else {
-        return false;
+        // An exit record without the receipt it refers to is never proof of
+        // an ordinary never-moved Tab, even when the exit record is null.
+        return tab.payload.get("lastTerminalTabExit").is_some();
     };
-    tab.kind != "terminal"
+    if tab.kind != "terminal"
         || ["id", "from", "to", "ptyInstanceToken"]
             .iter()
             .any(|field| {
@@ -89,6 +92,23 @@ pub(super) fn invalid_transfer_receipt_marker(tab: &WorkspaceTabRecord) -> bool 
                     .as_str()
                     .is_some_and(|value| !value.trim().is_empty())
             })
+    {
+        return true;
+    }
+    // A stale/malformed exit marker must not be taken as permission to
+    // terminate or remove the current original PTY generation.
+    if let Some(exit) = tab.payload.get("lastTerminalTabExit") {
+        let session_id = tab.payload["terminalSessionId"]
+            .as_str()
+            .filter(|value| !value.is_empty())
+            .unwrap_or(tab.id.as_str());
+        return exit["transferMutationId"].as_str() != receipt["id"].as_str()
+            || exit["ptyInstanceToken"].as_str() != receipt["ptyInstanceToken"].as_str()
+            || exit["workspaceId"].as_str() != receipt["to"].as_str()
+            || exit["sessionId"].as_str() != Some(session_id)
+            || exit["exitCode"].as_i64().is_none();
+    }
+    false
 }
 
 fn string_field<'a>(payload: &'a Value, name: &str) -> HostResult<&'a str> {
