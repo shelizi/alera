@@ -106,6 +106,32 @@ final class TerminalTransferJournalResolutionInventoryItem {
   bool get requiresHostVerification => true;
 }
 
+/// A local-only cross-reference for a *readable* Pending mutation and audit
+/// archives naming that same Tab. A different mutation might be a legitimate
+/// older move, not evidence of Host tampering or authorization to unlock.
+final class TerminalTransferJournalLocalCrossReference {
+  const TerminalTransferJournalLocalCrossReference({
+    required this.tabId,
+    required this.pendingMutationId,
+    required this.pendingFileKey,
+    required this.matchingLocalArchiveNames,
+    required this.otherMutationLocalArchiveNames,
+  });
+
+  final String tabId;
+  final String pendingMutationId;
+  final String pendingFileKey;
+  final List<String> matchingLocalArchiveNames;
+  final List<String> otherMutationLocalArchiveNames;
+
+  bool get hasMatchingLocalArchive => matchingLocalArchiveNames.isNotEmpty;
+  bool get hasHistoricalOtherMutationArchives =>
+      otherMutationLocalArchiveNames.isNotEmpty;
+
+  /// The local comparison is never a Host-signed transfer outcome.
+  bool get requiresHostVerification => true;
+}
+
 /// The non-atomic, strictly read-only evidence package an operator can
 /// inspect before choosing any *future* manual recovery action. The two
 /// inventories may change between observations. This is neither a process
@@ -132,6 +158,84 @@ final class TerminalTransferJournalManualRecoveryDossier {
 
   /// Even a valid-looking archive cannot prove the original Host/PTY state.
   bool get requiresHostVerification => true;
+
+  /// Correlate *only* independently readable local evidence. A malformed
+  /// Pending JSON or unreadable archive is preserved in its raw inventory
+  /// rather than being guessed into a particular Tab/Mutation.
+  List<TerminalTransferJournalLocalCrossReference>
+  get readablePendingArchiveCrossReferences {
+    final verifiedArchives = localResolutionArchives
+        .where(
+          (archive) =>
+              archive.ordinaryFile &&
+              archive.localArchiveWellFormed &&
+              archive.fileNameMatchesMutation &&
+              archive.tabId != null &&
+              archive.clientMutationId != null,
+        )
+        .toList();
+    return List.unmodifiable(
+      pendingAndLocks
+          .where(
+            (pending) =>
+                pending.pendingPresent &&
+                pending.pendingReadable &&
+                pending.tabId != null &&
+                pending.pendingMutationId != null,
+          )
+          .map((pending) {
+            final sameTab = verifiedArchives
+                .where((archive) => archive.tabId == pending.tabId)
+                .toList();
+            return TerminalTransferJournalLocalCrossReference(
+              tabId: pending.tabId!,
+              pendingMutationId: pending.pendingMutationId!,
+              pendingFileKey: pending.fileKey,
+              matchingLocalArchiveNames: List.unmodifiable(
+                sameTab
+                    .where(
+                      (archive) =>
+                          archive.clientMutationId == pending.pendingMutationId,
+                    )
+                    .map((archive) => archive.fileName),
+              ),
+              otherMutationLocalArchiveNames: List.unmodifiable(
+                sameTab
+                    .where(
+                      (archive) =>
+                          archive.clientMutationId != pending.pendingMutationId,
+                    )
+                    .map((archive) => archive.fileName),
+              ),
+            );
+          }),
+    );
+  }
+
+  /// These archives have no corresponding *readable same-mutation Pending*
+  /// in this non-atomic scan. They are not necessarily abandoned transactions:
+  /// prior resolved operations may legitimately be archived.
+  List<String> get archivesWithoutReadableMatchingPending {
+    final readablePendingKeys = pendingAndLocks
+        .where((pending) => pending.pendingReadable && pending.tabId != null)
+        .map((pending) => (pending.tabId!, pending.pendingMutationId))
+        .toSet();
+    return List.unmodifiable(
+      localResolutionArchives
+          .where(
+            (archive) =>
+                archive.ordinaryFile &&
+                archive.localArchiveWellFormed &&
+                archive.fileNameMatchesMutation &&
+                archive.tabId != null &&
+                !readablePendingKeys.contains((
+                  archive.tabId!,
+                  archive.clientMutationId,
+                )),
+          )
+          .map((archive) => archive.fileName),
+    );
+  }
 
   /// No local PID, timestamp, archive, or missing file can release the lock.
   bool get permitsAutomaticUnlock => false;
