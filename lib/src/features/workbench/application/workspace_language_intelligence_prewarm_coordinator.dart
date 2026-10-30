@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:alera/src/features/language_intelligence/application/language_intelligence_providers.dart';
+import 'package:alera/src/app/language_intelligence_providers.dart';
 import 'package:alera/src/features/language_intelligence/application/language_server_runtime.dart';
 import 'package:alera/src/features/settings/application/settings_controller.dart';
 import 'package:alera/src/features/workbench/application/workbench_controller.dart';

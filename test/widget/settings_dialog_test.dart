@@ -13,7 +13,7 @@ import 'package:alera/src/features/ai_assist/presentation/ai_assist_agent_choice
 import 'package:alera/src/features/agent_status/domain/agent_status.dart';
 import 'package:alera/src/features/language_intelligence/application/language_intelligence_status_port.dart';
 import 'package:alera/src/features/language_intelligence/application/language_intelligence_activity.dart';
-import 'package:alera/src/features/language_intelligence/application/language_intelligence_providers.dart';
+import 'package:alera/src/app/language_intelligence_providers.dart';
 import 'package:alera/src/features/language_intelligence/domain/language_id.dart';
 import 'package:alera/src/features/language_intelligence/domain/language_intelligence_settings.dart';
 import 'package:alera/src/features/language_intelligence/domain/language_intelligence_status.dart';

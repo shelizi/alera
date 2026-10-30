@@ -4,7 +4,7 @@ import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/feedback/alera_toast.dart';
 import 'package:alera/src/design_system/surfaces/alera_hover_card.dart';
 import 'package:alera/src/features/language_intelligence/application/language_intelligence_activity.dart';
-import 'package:alera/src/features/language_intelligence/application/language_intelligence_providers.dart';
+import 'package:alera/src/app/language_intelligence_providers.dart';
 import 'package:alera/src/features/language_intelligence/domain/language_server_session_state.dart';
 import 'package:alera/src/features/workbench/application/workbench_controller.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';

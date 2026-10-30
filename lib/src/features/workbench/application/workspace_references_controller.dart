@@ -1,7 +1,7 @@
 import 'dart:async';
 
 import 'package:alera/src/features/language_intelligence/application/language_intelligence_manager.dart';
-import 'package:alera/src/features/language_intelligence/application/language_intelligence_providers.dart';
+import 'package:alera/src/app/language_intelligence_providers.dart';
 import 'package:alera/src/features/language_intelligence/domain/language_capability.dart';
 import 'package:alera/src/features/language_intelligence/domain/source_location.dart';
 import 'package:alera/src/features/workbench/application/retired_workspace_invalidation.dart';

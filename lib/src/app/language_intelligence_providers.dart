@@ -9,13 +9,15 @@ import 'package:alera/src/shared/infra/process/process_providers.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart' show Provider;
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
-import 'language_intelligence_activity.dart';
-import 'language_intelligence_manager.dart';
-import 'language_intelligence_status_port.dart';
-import 'language_provider_registry.dart';
-import 'language_semantic_adapter_factory.dart';
-import 'language_server_runtime.dart';
-import 'language_server_session_manager.dart';
+// Riverpod Provider wiring belongs at the App composition root. Language
+// Intelligence application/domain remain UI-framework independent.
+import 'package:alera/src/features/language_intelligence/application/language_intelligence_activity.dart';
+import 'package:alera/src/features/language_intelligence/application/language_intelligence_manager.dart';
+import 'package:alera/src/features/language_intelligence/application/language_intelligence_status_port.dart';
+import 'package:alera/src/features/language_intelligence/application/language_provider_registry.dart';
+import 'package:alera/src/features/language_intelligence/application/language_semantic_adapter_factory.dart';
+import 'package:alera/src/features/language_intelligence/application/language_server_runtime.dart';
+import 'package:alera/src/features/language_intelligence/application/language_server_session_manager.dart';
 
 part 'language_intelligence_providers.g.dart';
 
