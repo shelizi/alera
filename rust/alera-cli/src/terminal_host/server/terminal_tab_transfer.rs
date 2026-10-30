@@ -44,6 +44,14 @@ impl ServerActor {
                 "Terminal ownership changed while this window was closing it. Refresh the tab instead.",
             ));
         }
+        // A background tab.remove may already have deleted the SQLite row
+        // while its owning actor has not yet retired the live process. Fence
+        // both sides of that gap, even if find_workspace_tab now returns None.
+        if self.mutation_queue.is_removing_tab(&session.tab_id) {
+            return Err(HostError::state(
+                "Terminal removal is in progress. Wait for its result before terminating the PTY.",
+            ));
+        }
         if let Some(stored) = self
             .runtime_store
             .find_workspace_tab(&session.tab_id)
@@ -94,6 +102,14 @@ impl ServerActor {
         workspace_id: &str,
         tab_id: &str,
     ) -> HostResult<()> {
+        // Check before reading Store. A queued/active removal may already
+        // have committed its row deletion but not retired the PTY, and a new
+        // process must not attach during that actor handoff.
+        if self.mutation_queue.is_removing_tab(tab_id) {
+            return Err(HostError::state(
+                "Terminal removal is in progress. Wait for the Host result before attaching another view.",
+            ));
+        }
         if let Some(session) = self.sessions.get(session_id) {
             if session.running()
                 && (session.workspace_id != workspace_id || session.tab_id != tab_id)
@@ -154,10 +170,21 @@ impl ServerActor {
             return Ok(json!({"applied": false}));
         }
         let Some(live) = self.sessions.get(session_id) else {
-            return Ok(json!({"applied": false}));
+            // The exact SQLite receipt exists but the Host no longer owns a
+            // live process. After a crash (or exit) this is not a confirmed
+            // success or a safe rollback. The client must keep its journal.
+            return Ok(json!({
+                "applied": false,
+                "recoveryRequired": true,
+                "reason": "pty_missing"
+            }));
         };
         if !live.running() || live.tab_id != tab_id || live.workspace_id != target {
-            return Ok(json!({"applied": false}));
+            return Ok(json!({
+                "applied": false,
+                "recoveryRequired": true,
+                "reason": "pty_owner_mismatch"
+            }));
         }
         Ok(json!({
             "applied": true,

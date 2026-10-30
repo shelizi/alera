@@ -21,6 +21,7 @@ struct QueuedMutation {
 #[derive(Default)]
 pub(super) struct RuntimeMutationQueue {
     active: bool,
+    active_tab_removal: Option<String>,
     #[cfg(test)]
     parked: bool,
     pending: VecDeque<QueuedMutation>,
@@ -35,6 +36,22 @@ impl RuntimeMutationQueue {
 
     pub(super) fn has_runtime_mutations(&self) -> bool {
         self.in_flight > 0
+    }
+
+    /// The actor must reject new viewers while a transferred tab is being
+    /// removed. The removal runs on a background task after the actor's
+    /// attached-view preflight; without this fence another process can attach
+    /// between the preflight and the SQLite commit.
+    pub(super) fn is_removing_tab(&self, tab_id: &str) -> bool {
+        self.active_tab_removal.as_deref() == Some(tab_id)
+            || self.pending.iter().any(|queued| {
+                matches!(
+                    &queued.mutation,
+                    RuntimeMutationRequest::RemoveTab {
+                        tab_id: queued_id, ..
+                    } if queued_id.as_str() == tab_id
+                )
+            })
     }
 }
 
@@ -65,6 +82,7 @@ impl ServerActor {
     pub(super) fn complete_runtime_mutation(&mut self) {
         self.mutation_queue.in_flight = self.mutation_queue.in_flight.saturating_sub(1);
         self.mutation_queue.active = false;
+        self.mutation_queue.active_tab_removal = None;
         self.start_next_runtime_mutation();
         self.schedule_shutdown_if_idle();
     }
@@ -107,6 +125,10 @@ impl ServerActor {
                 self.mutation_queue.in_flight = self.mutation_queue.in_flight.saturating_sub(1);
                 continue;
             }
+            self.mutation_queue.active_tab_removal = match &request.mutation {
+                RuntimeMutationRequest::RemoveTab { tab_id, .. } => Some(tab_id.clone()),
+                _ => None,
+            };
             self.mutation_queue.active = true;
             self.spawn_runtime_mutation(request);
             return;
