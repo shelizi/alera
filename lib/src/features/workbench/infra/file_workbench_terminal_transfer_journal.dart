@@ -106,6 +106,37 @@ final class TerminalTransferJournalResolutionInventoryItem {
   bool get requiresHostVerification => true;
 }
 
+/// The non-atomic, strictly read-only evidence package an operator can
+/// inspect before choosing any *future* manual recovery action. The two
+/// inventories may change between observations. This is neither a process
+/// liveness assertion nor a Host-signed terminal.transfer outcome.
+final class TerminalTransferJournalManualRecoveryDossier {
+  const TerminalTransferJournalManualRecoveryDossier({
+    required this.observedAtUtc,
+    required this.pendingAndLocks,
+    required this.localResolutionArchives,
+  });
+
+  final DateTime observedAtUtc;
+  final List<TerminalTransferJournalInventoryItem> pendingAndLocks;
+  final List<TerminalTransferJournalResolutionInventoryItem>
+  localResolutionArchives;
+
+  bool get hasPendingOrLockEvidence => pendingAndLocks.any(
+    (item) => item.pendingPresent || item.lockPresent || item.unknownFileName,
+  );
+
+  bool get hasUnreadableOrUnsafeLocalEvidence =>
+      pendingAndLocks.any((item) => item.requiresManualRecovery) ||
+      localResolutionArchives.any((item) => item.needsLocalEvidenceReview);
+
+  /// Even a valid-looking archive cannot prove the original Host/PTY state.
+  bool get requiresHostVerification => true;
+
+  /// No local PID, timestamp, archive, or missing file can release the lock.
+  bool get permitsAutomaticUnlock => false;
+}
+
 /// Durable, fail-closed record of a Terminal transfer *before* Host commit.
 /// Files are per Tab so unrelated workspaces do not overwrite one another.
 /// Malformed records are surfaced instead of silently authorizing a new move.
@@ -439,6 +470,23 @@ final class FileWorkbenchTerminalTransferJournal
     }
     entries.sort((first, second) => first.fileName.compareTo(second.fileName));
     return entries;
+  }
+
+  /// Combines the entire pending/lock directory with resolved archives for
+  /// a human review, including orphan archives when there are no pending
+  /// transfers. Never creates/deletes files or infers that a process died.
+  /// If either evidence root is unsafe, propagate failure: a partial
+  /// dossier must not be confused with an empty, successfully scanned one.
+  Future<TerminalTransferJournalManualRecoveryDossier>
+  inspectManualRecoveryDossier() async {
+    final observedAtUtc = DateTime.now().toUtc();
+    final pendingAndLocks = await inspectRecoveryInventory();
+    final localResolutionArchives = await inspectResolutionArchiveInventory();
+    return TerminalTransferJournalManualRecoveryDossier(
+      observedAtUtc: observedAtUtc,
+      pendingAndLocks: List.unmodifiable(pendingAndLocks),
+      localResolutionArchives: List.unmodifiable(localResolutionArchives),
+    );
   }
 
   bool _samePlan(
