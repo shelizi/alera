@@ -72,13 +72,25 @@ impl ServerActor {
         let Some((workspace_id, tab_id)) = metadata else {
             return Ok(false);
         };
-        let tab_exists = self
+        let stored_tab = self
             .runtime_store
             .find_workspace_tab(&tab_id)
             .await
-            .map_err(|error| HostError::state(error.to_string()))?
-            .is_some();
-        if !tab_exists {
+            .map_err(|error| HostError::state(error.to_string()))?;
+        let Some(tab) = stored_tab else {
+            return Ok(false);
+        };
+        // This generic exit/terminate handler is *not* an authorized
+        // transferred-Tab removal. Preserve the original persisted receipt
+        // even after the PTY exits or the Host loses its live generation.
+        // The caller must use the guarded tab.remove / future verified
+        // process-generation retirement contract instead.
+        if tab.kind == "terminal" && tab.payload["lastTerminalTabTransfer"].is_object() {
+            tracing::info!(
+                session_id,
+                tab_id,
+                "retaining transferred Terminal Tab after PTY exit/terminate until explicit recovery"
+            );
             return Ok(false);
         }
         self.runtime_store
