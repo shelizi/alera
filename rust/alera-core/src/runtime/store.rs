@@ -76,25 +76,23 @@ impl RuntimeStore {
         }
         // A moved Tab may already live in another Workspace while still
         // referring to this Workspace as its original source / execution
-        // scope. Deleting the *empty source* would erase recovery provenance
-        // just as surely as deleting the current target. Scan every migrated
-        // receipt and fail closed if a damaged receipt cannot identify owner.
+        // scope. Deleting the *empty source* would erase recovery provenance.
+        // Do not, however, globally block unrelated Workspace cleanup for an
+        // orphan or malformed receipt in some *other* Workspace: it cannot
+        // establish a connection to the requested Workspace. The owning Tab
+        // itself was already rejected by the first check above.
         let rows = sqlx::query(
-            "SELECT payloadJson FROM workspaceTabs \
+            "SELECT workspaceId, payloadJson FROM workspaceTabs \
              WHERE payloadJson LIKE '%lastTerminalTabTransfer%' \
                 OR payloadJson LIKE '%lastTerminalTabExit%'",
         )
         .fetch_all(&mut **tx)
         .await?;
         for row in rows {
+            let owner: String = row.try_get("workspaceId")?;
             let raw: String = row.try_get("payloadJson")?;
             let payload: serde_json::Value = serde_json::from_str(&raw)?;
             if let Some(receipt) = payload.get("lastTerminalTabTransfer") {
-                ensure!(
-                    receipt["from"].as_str().is_some()
-                        && receipt["to"].as_str().is_some(),
-                    "Workspace deletion cannot resolve malformed original Terminal transfer provenance."
-                );
                 ensure!(
                     receipt["from"].as_str() != Some(workspace_id)
                         && receipt["to"].as_str() != Some(workspace_id)
@@ -103,8 +101,8 @@ impl RuntimeStore {
                 );
             } else if payload.get("lastTerminalTabExit").is_some() {
                 ensure!(
-                    false,
-                    "Workspace deletion cannot resolve an orphan original PTY exit marker."
+                    owner != workspace_id,
+                    "Workspace deletion cannot erase an orphan original PTY exit marker."
                 );
             }
         }

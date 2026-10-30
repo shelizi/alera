@@ -17,6 +17,10 @@ const TRANSFER_EXIT_EVIDENCE_KEY: &str = "lastTerminalTabExit";
 const EXECUTION_WORKSPACE_KEY: &str = "terminalExecutionWorkspaceId";
 const EXECUTION_LAUNCH_DIRECTORY_KEY: &str = "terminalExecutionWorkingDirectory";
 
+#[cfg(test)]
+#[path = "store_tab_transfer_contract_tests.rs"]
+mod retirement_contract_tests;
+
 impl RuntimeStore {
     /// The only storage path for a moved Tab explicitly closed by its current
     /// Host's verified original live PTY and single attached UI view.

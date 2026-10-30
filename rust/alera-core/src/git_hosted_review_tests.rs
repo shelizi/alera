@@ -344,7 +344,17 @@ fn unshallows_when_the_review_merge_base_is_outside_the_boundary() {
     push(&seed, "refs/heads/feature:refs/pull/9/head");
 
     let client_directory = tempfile::tempdir().expect("client tempdir");
-    let remote_url = format!("file://{}", remote_directory.path().to_string_lossy());
+    // A Windows drive path needs the third slash: file:///C:/..., otherwise
+    // libgit2 interprets the drive letter as a URL authority and cannot
+    // resolve the repository. Keep POSIX URLs unchanged.
+    let remote_url = if cfg!(windows) {
+        format!(
+            "file:///{}",
+            remote_directory.path().to_string_lossy().replace('\\', "/")
+        )
+    } else {
+        format!("file://{}", remote_directory.path().to_string_lossy())
+    };
     let client = Repository::clone(&remote_url, client_directory.path()).expect("client clone");
     let current_main = client
         .refname_to_id("refs/heads/main")
