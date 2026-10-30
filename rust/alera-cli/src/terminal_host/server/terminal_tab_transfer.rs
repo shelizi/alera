@@ -315,6 +315,28 @@ impl ServerActor {
                 "reason": "pty_instance_unverified"
             }));
         }
+        if !self
+            .runtime_store
+            .verify_terminal_transfer_layout_and_receipt(
+                tab_id,
+                session_id,
+                source,
+                target,
+                mutation_id,
+                &current_pty_instance,
+            )
+            .await
+            .map_err(|err| HostError::state(err.to_string()))?
+        {
+            // A matching PTY and receipt cannot prove successful transfer
+            // when one pane lost the Tab or duplicated any other owner.
+            // Never clear the caller's unresolved transfer journal.
+            return Ok(json!({
+                "applied": false,
+                "recoveryRequired": true,
+                "reason": "persisted_layout_inconsistent"
+            }));
+        }
         Ok(json!({
             "applied": true,
             "tab": self.workspace_tab_for_client(client_id, tab)

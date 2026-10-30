@@ -17,6 +17,78 @@ const EXECUTION_WORKSPACE_KEY: &str = "terminalExecutionWorkspaceId";
 const EXECUTION_LAUNCH_DIRECTORY_KEY: &str = "terminalExecutionWorkingDirectory";
 
 impl RuntimeStore {
+    /// A lost-reply transfer is not acknowledged merely because the Tab row
+    /// and its PTY instance match. Read *both* persisted layouts and the
+    /// authoritative Tab registries in one SQLite snapshot: neither pane
+    /// may retain a stale duplicate or silently omit another Tab.
+    ///
+    /// This read-only check does NOT prove a Host process survived a crash,
+    /// nor authorize retirement or another transfer.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn verify_terminal_transfer_layout_and_receipt(
+        &self,
+        tab_id: &str,
+        session_id: &str,
+        source_workspace_id: &str,
+        target_workspace_id: &str,
+        mutation_id: &str,
+        pty_instance_token: &str,
+    ) -> Result<bool> {
+        if tab_id.is_empty()
+            || session_id.is_empty()
+            || mutation_id.is_empty()
+            || pty_instance_token.is_empty()
+            || source_workspace_id == target_workspace_id
+        {
+            return Ok(false);
+        }
+        let mut tx = self.pool.begin().await?;
+        let row = sqlx::query(
+            "SELECT id, workspaceId, kind, title, createdAt, updatedAt, payloadJson \
+             FROM workspaceTabs WHERE id = ?",
+        )
+        .bind(tab_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        let Some(row) = row else {
+            return Ok(false);
+        };
+        let tab = tab_from_row(row)?;
+        let receipt = &tab.payload[TRANSFER_RECEIPT_KEY];
+        let stored_session = tab.payload["terminalSessionId"]
+            .as_str()
+            .filter(|value| !value.is_empty())
+            .unwrap_or(tab_id);
+        if tab.kind != "terminal"
+            || tab.workspace_id != target_workspace_id
+            || stored_session != session_id
+            || receipt["id"].as_str() != Some(mutation_id)
+            || receipt["from"].as_str() != Some(source_workspace_id)
+            || receipt["to"].as_str() != Some(target_workspace_id)
+            || receipt["ptyInstanceToken"].as_str() != Some(pty_instance_token)
+        {
+            return Ok(false);
+        }
+        let (Some(source_layout), Some(target_layout)) = (
+            persisted_layout(&mut tx, source_workspace_id).await?,
+            persisted_layout(&mut tx, target_workspace_id).await?,
+        ) else {
+            return Ok(false);
+        };
+        let (Ok(source_ids), Ok(target_ids)) = (
+            tab_ids_in_layout(&source_layout, source_workspace_id),
+            tab_ids_in_layout(&target_layout, target_workspace_id),
+        ) else {
+            return Ok(false);
+        };
+        if source_ids.contains(tab_id) || !target_ids.contains(tab_id) {
+            return Ok(false);
+        }
+        let stored_source_ids = workspace_tab_ids(&mut tx, source_workspace_id).await?;
+        let stored_target_ids = workspace_tab_ids(&mut tx, target_workspace_id).await?;
+        Ok(source_ids == stored_source_ids && target_ids == stored_target_ids)
+    }
+
     /// Persist one Host-observed exit of the *same original PTY generation*
     /// after a transferred Terminal ends normally. Never infer an exit from a
     /// missing Session or a missing Host process after a crash. This is
