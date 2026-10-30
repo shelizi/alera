@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:alera/src/features/workbench/application/workbench_terminal_tab_transfer_coordinator.dart';
 import 'package:alera/src/features/workbench/domain/workbench_layout.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
@@ -51,9 +53,84 @@ final class WorkbenchTerminalTransferReconciliation {
         'Runtime transfer layout is incomplete; refresh required.',
       );
     }
+    // The moved Tab alone is not sufficient evidence: another pane could
+    // have disappeared or acquired a duplicate Tab while Host notifications
+    // were delivered in different orders.
+    _requireConsistentWorkspace(sourceWorkspaceId, sourceTabs, sourceLayout);
+    _requireConsistentWorkspace(targetWorkspaceId, targetTabs, targetLayout);
+    // Refresh the snapshots a second time before replacing local state.
+    // A concurrent Host layout write must not be hidden by an older pair of
+    // individually valid responses. Failure leaves the local state untouched.
+    final latestSourceTabs = await _port.listTabs(sourceWorkspaceId);
+    final latestTargetTabs = await _port.listTabs(targetWorkspaceId);
+    final latestSourceLayout = await _port.findLayout(sourceWorkspaceId);
+    final latestTargetLayout = await _port.findLayout(targetWorkspaceId);
+    if (_tabSignature(latestSourceTabs) != _tabSignature(sourceTabs) ||
+        _tabSignature(latestTargetTabs) != _tabSignature(targetTabs) ||
+        _layoutSignature(latestSourceLayout) !=
+            _layoutSignature(sourceLayout) ||
+        _layoutSignature(latestTargetLayout) !=
+            _layoutSignature(targetLayout)) {
+      throw StateError(
+        'Terminal transfer changed during reconciliation; refresh both workspaces.',
+      );
+    }
     _applyTabs(sourceWorkspaceId, sourceTabs);
     _applyTabs(targetWorkspaceId, targetTabs);
     await _applyLayoutWithoutPersistence(sourceLayout);
     await _applyLayoutWithoutPersistence(targetLayout);
   }
 }
+
+void _requireConsistentWorkspace(
+  String workspaceId,
+  List<WorkspaceTabRecord> tabs,
+  WorkbenchLayout layout,
+) {
+  if (layout.workspaceId != workspaceId ||
+      !layout.groups.containsKey(layout.activeGroupId)) {
+    throw StateError('Host returned a layout for the wrong workspace.');
+  }
+  final knownTabs = <String>{};
+  for (final tab in tabs) {
+    if (tab.workspaceId != workspaceId || !knownTabs.add(tab.id)) {
+      throw StateError('Host returned duplicate or misplaced Workspace tabs.');
+    }
+  }
+  final paneIds = layout.root.leafGroupIds();
+  if (paneIds.toSet().length != paneIds.length ||
+      paneIds.toSet().length != layout.groups.length ||
+      !paneIds.toSet().containsAll(layout.groups.keys)) {
+    throw StateError('Host transfer layout has an inconsistent split tree.');
+  }
+  final layoutTabs = <String>{};
+  for (final entry in layout.groups.entries) {
+    final group = entry.value;
+    if (group.id != entry.key ||
+        (group.tabIds.isEmpty
+            ? group.activeTabId != null
+            : !group.tabIds.contains(group.activeTabId))) {
+      throw StateError('Host transfer layout has an invalid pane selection.');
+    }
+    for (final id in group.tabIds) {
+      if (!layoutTabs.add(id)) {
+        throw StateError('Host transfer layout contains a duplicate tab.');
+      }
+    }
+  }
+  if (knownTabs.length != layoutTabs.length ||
+      !knownTabs.containsAll(layoutTabs)) {
+    throw StateError(
+      'Host transfer layout does not match its authoritative workspace tabs.',
+    );
+  }
+}
+
+String _tabSignature(List<WorkspaceTabRecord> tabs) {
+  final records = <Map<String, dynamic>>[for (final tab in tabs) tab.toMap()]
+    ..sort((a, b) => (a['id'] as String).compareTo(b['id'] as String));
+  return jsonEncode(records);
+}
+
+String _layoutSignature(WorkbenchLayout? layout) =>
+    layout == null ? '<none>' : jsonEncode(layout.toMap());
