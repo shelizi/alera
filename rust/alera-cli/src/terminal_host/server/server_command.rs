@@ -210,6 +210,7 @@ pub enum ServerCommand {
     },
     RuntimeMutationFinished(runtime_mutations::RuntimeMutationFinished),
     PrepareRuntimeMutation {
+        client_id: u64,
         request: runtime_mutations::RuntimeMutationRequest,
         completion: tokio::sync::oneshot::Sender<
             HostResult<crate::terminal_host::session::workspace_shutdown::WorkspaceShutdown>,

@@ -6,32 +6,33 @@ use crate::terminal_host::session::workspace_shutdown::WorkspaceShutdown;
 use super::runtime_mutations::{
     RuntimeMutationEffect, RuntimeMutationFinished, RuntimeMutationOutcome, RuntimeMutationRequest,
 };
+use super::terminal_startup_commands::terminal_session_id;
 use super::ServerActor;
 
 impl ServerActor {
-    /// A workspace/project cascade must not silently terminate an attached,
+    /// A workspace/project cascade must not silently terminate a running,
     /// previously transferred PTY: it has no per-view receipt like tab.remove.
     /// Serialized runtime mutations block new terminal attachments until the
     /// background SQLite operation completes, after this actor preflight.
-    async fn ensure_moved_terminal_views_detached(
+    async fn ensure_no_live_moved_terminal_for_cleanup(
         &self,
         workspace_id: &str,
     ) -> crate::terminal_host::host_error::HostResult<()> {
         use crate::terminal_host::host_error::HostError;
 
-        for session in self.sessions.values().filter(|session| {
-            session.running() && session.workspace_id == workspace_id && !session.clients.is_empty()
-        }) {
+        for session in self.sessions.values().filter(|session| session.running()) {
             let stored = self
                 .runtime_store
                 .find_workspace_tab(&session.tab_id)
                 .await
                 .map_err(|error| HostError::state(error.to_string()))?;
             if stored.is_some_and(|tab| {
-                tab.kind == "terminal" && tab.payload["lastTerminalTabTransfer"].is_object()
+                tab.kind == "terminal"
+                    && tab.payload["lastTerminalTabTransfer"].is_object()
+                    && (tab.workspace_id == workspace_id || session.workspace_id == workspace_id)
             }) {
                 return Err(HostError::state(
-                    "Workspace cleanup cannot close a transferred Terminal with attached views. Detach every desktop/mobile view before retrying.",
+                    "Workspace cleanup cannot silently terminate a transferred live PTY, even after every view detached. Close its Tab explicitly from the current owning view first.",
                 ));
             }
         }
@@ -40,6 +41,7 @@ impl ServerActor {
 
     pub(super) async fn prepare_runtime_mutation(
         &mut self,
+        client_id: u64,
         request: &RuntimeMutationRequest,
     ) -> crate::terminal_host::host_error::HostResult<WorkspaceShutdown> {
         use crate::terminal_host::host_error::HostError;
@@ -54,23 +56,57 @@ impl ServerActor {
                 .await
                 .map_err(|error| HostError::state(error.to_string()))?
             {
-                if tab.payload["lastTerminalTabTransfer"].is_object()
-                    && self.sessions.values().any(|session| {
-                        session.tab_id == *tab_id && session.running() && session.clients.len() > 1
-                    })
-                {
-                    // Preflight on the actor before the background SQLite
-                    // removal: never retire a transferred terminal record
-                    // when several local/mobile views remain attached.
-                    return Err(HostError::state(
-                        "Moved Terminal has multiple attached views. Detach other views before removing this tab.",
-                    ));
+                if tab.kind == "terminal" && tab.payload["lastTerminalTabTransfer"].is_object() {
+                    let session_id = terminal_session_id(&tab);
+                    let Some(session) = self.sessions.get(&session_id).filter(|session| {
+                        session.running()
+                            && session.tab_id == *tab_id
+                            && session.workspace_id == tab.workspace_id
+                    }) else {
+                        // Do not erase crash evidence by deleting metadata
+                        // while the original PTY's identity is unknown.
+                        return Err(HostError::state(
+                            "Transferred Terminal's original live PTY owner cannot be confirmed. Resolve recovery before deleting its Tab.",
+                        ));
+                    };
+                    let receipt = &tab.payload["lastTerminalTabTransfer"];
+                    let status = self
+                        .terminal_tab_transfer_status(
+                            client_id,
+                            &json!({
+                                "tabId": tab_id,
+                                "sessionId": session_id,
+                                "sourceWorkspaceId": receipt["from"],
+                                "targetWorkspaceId": receipt["to"],
+                                "clientMutationId": receipt["id"],
+                            }),
+                        )
+                        .await?;
+                    if status["applied"] != true {
+                        return Err(HostError::state(
+                            "Transferred Terminal PTY instance is not verified. Resolve its original transfer before deleting the Tab.",
+                        ));
+                    }
+                    if !session.clients.contains(&client_id) {
+                        return Err(HostError::state(
+                            "The requesting client is not attached to this transferred Terminal. Reattach from its current workspace before closing it.",
+                        ));
+                    }
+                    if session
+                        .clients
+                        .iter()
+                        .any(|attached| *attached != client_id)
+                    {
+                        return Err(HostError::state(
+                            "Transferred Terminal has another attached viewer. All other desktop/mobile views must detach before removing the Tab.",
+                        ));
+                    }
                 }
             }
             return Ok(WorkspaceShutdown::default());
         }
         // Other serialized removals can delete the same terminal implicitly.
-        // Require the owning view(s) to detach before any cascade is written.
+        // Detaching all viewers is not consent to kill an existing live PTY.
         let affected_workspace_ids = match request {
             RuntimeMutationRequest::RemoveWorkspace { workspace_id, .. }
             | RuntimeMutationRequest::RemoveWorkspaceTabs { workspace_id }
@@ -89,7 +125,7 @@ impl ServerActor {
             _ => Vec::new(),
         };
         for workspace_id in &affected_workspace_ids {
-            self.ensure_moved_terminal_views_detached(workspace_id)
+            self.ensure_no_live_moved_terminal_for_cleanup(workspace_id)
                 .await?;
         }
         // Check when the queued operation starts, not when it was enqueued:
@@ -130,8 +166,8 @@ impl ServerActor {
             return Err(HostError::state("Workspace is active in the workbench"));
         }
         // close_sessions=true terminates before Git or SQLite cleanup, so
-        // the actor must reject attached moved sessions before capture.
-        self.ensure_moved_terminal_views_detached(&request.id)
+        // the actor must reject even fully detached moved sessions.
+        self.ensure_no_live_moved_terminal_for_cleanup(&request.id)
             .await?;
         if request.close_sessions {
             let mut shutdown = WorkspaceShutdown::capture(

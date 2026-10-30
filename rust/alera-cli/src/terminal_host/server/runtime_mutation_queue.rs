@@ -151,6 +151,7 @@ impl ServerActor {
                     | RuntimeMutationRequest::SleepWorkspace { .. } => {
                         let (completion, receiver) = tokio::sync::oneshot::channel();
                         let _ = inbox.send(ServerCommand::PrepareRuntimeMutation {
+                            client_id: request.client_id,
                             request: request.mutation.clone(),
                             completion,
                         });

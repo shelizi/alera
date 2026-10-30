@@ -591,10 +591,11 @@ impl ServerActor {
                 self.handle_runtime_mutation_finished(finished).await
             }
             ServerCommand::PrepareRuntimeMutation {
+                client_id,
                 request,
                 completion,
             } => {
-                let result = self.prepare_runtime_mutation(&request).await;
+                let result = self.prepare_runtime_mutation(client_id, &request).await;
                 let _ = completion.send(result);
             }
             ServerCommand::OrchestrationWaitTimeout {

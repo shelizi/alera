@@ -131,9 +131,9 @@ impl Fixture {
                 tokio::select! {
                     command = self.commands.recv() => {
                         match command.unwrap() {
-                            ServerCommand::PrepareRuntimeMutation { request, completion }
+                            ServerCommand::PrepareRuntimeMutation { client_id, request, completion }
                                 if self.fail_shutdown_waits > 0 => {
-                                    let mut result = self.actor.prepare_runtime_mutation(&request).await;
+                                    let mut result = self.actor.prepare_runtime_mutation(client_id, &request).await;
                                     if let Ok(shutdown) = &mut result {
                                         shutdown.fail_next_waits(std::mem::take(&mut self.fail_shutdown_waits));
                                     }
