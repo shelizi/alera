@@ -1,6 +1,22 @@
 # Alera 功能優先續做：第八批四線隔離（2026-10-29）
 
-## 下一次對話／其他 Agent 最新交接入口：T2-D7（2026-10-30）
+## 下一次對話／其他 Agent 最新交接入口：T2-D8（2026-10-30）
+
+**起點與 Git 安全**：從乾淨 `refactor/tdd-integrate-20261029` HEAD `379ec62ca` 延續；三條獨立工作樹切新 D8 分支，各線隔離改檔並提交，無衝突 cherry-pick 回整合，**更新本交接前已確認 D8 整合 HEAD `0ffb9b3a3` 乾淨**。本文件提交後 HEAD 還會前進；接手先重新 `git status`／`git log -1`，不得以舊 SHA 推斷現況。原始 dirty `main` 仍是 `3d232acff`，沒有清理、合併或修改其既有文件、xterm 子模組／測試資料。
+
+**T2-D8 已整合的三條獨立安全工作線**：
+
+| 工作線 | 實際安全修補／未涵蓋範圍 | 隔離提交 → 整合提交 |
+| --- | --- | --- |
+| D8-H Rust Host Cascade | Workspace／Project Delete、Project Workspaces、Workspace Tabs Remove／Sleep 改由 Actor 在背景 SQLite 刪除前檢查：只要受影響 Workspace 有**已轉移且仍在執行並有附著觀看者**的 Terminal，整筆拒絕，避免批次關閉繞過 Tab 移轉收據；Managed Workspace Close 亦先檢查再做不可逆的 PTY Cleanup。這只是 Actor 期間的保守拒絕，**不是**持久全域 Lease，也不保護已全部 Detach 的 Session | `6fa141bfc` → **`4bd4a8f96`** |
+| D8-I Rust Store＋Host PTY Instance | 把隨機 Host process epoch + 每個活 PTY 的 `Session.instance_id` 組成 `ptyInstanceToken`，在同一筆 SQLite transfer 交易中存進 `lastTerminalTabTransfer`；`tab.transfer.status` 除 ID／Workspace／Receipt／running PTY 外再核對此 Token，重啟後相同 Session ID 但**新生 PTY**改回 `recoveryRequired:true,reason:pty_instance_unverified`。同 Mutation 的 `tab.transfer` 重播若 PTY Token 不符也拒絕；舊收據沒有 Token 時保守無法核實 | `28612d716` → **`463725075`** |
+| D8-J Desktop Journal Check | `confirmUnknownTerminalTransfer` 的**同 Tab in-flight 排他**涵蓋 Host 狀態查證、兩 Workspace 權威 Layout 讀回、Journal 正確清除與 UI layout fence 釋放；重複點 Check status 或同時新移動不能穿插放行。依然沒有明確 Host「確定失敗」證明或自動安全清 Journal | `b5b654d24` → **`0ffb9b3a3`** |
+
+**D9 仍未完成**：① 真正跨 App／跨 Host 重啟的 PTY Last-view Lease、Close/Detach/RemoveTab requester 身分及完整 Workspace/Project 清理原子性；② Crash 在 SQLite commit 至 live PTY reassignment 間發生的權威復原／確定失敗處理（本批 Token 只防新生 PTY 冒充，**不復活舊程序**）；③ `recoveryRequired`／Host 確定拒絕時的持久 Journal 可審計解除、跨程序安全 UX、Mobile 版相容；④ 恢復正式 Flutter/Cargo 測試、Analyzer、編譯與 Win/Mac 多程序 E2E。請讀 `docs/terminal-tab-cross-workspace-plan-20261029.md` 最上方 D8 與 `docs/refactor/tdd-roadmap-20261029.md`，不要重做 D1–D8。
+
+**發布與驗證限制維持不變**：`tab.transfer.capabilities.supported=false`，使用者跨專案 Terminal Tab 拖放**尚未啟用**。這一批只做 `rustfmt`、`dart format`、各分支 `git diff --check`／staged whitespace check，**沒有新增／執行 Flutter/Cargo 測試、Cargo check、Analyzer、Build、Windows/macOS 實機、Push、Release**。不可宣稱編譯通過或上線安全。
+
+## 歷史：T2-D7 交接入口（2026-10-30）
 
 **最新功能整合分支**：`refactor/tdd-integrate-20261029`，工作樹 `.worktrees/refactor-tdd-integrate-20261029`。本批 D7 程式與契約整合後，更新本交接文件前已確認 **HEAD `375c89568` 且工作樹乾淨**；本文件 Commit 後 HEAD 將再前進，接手務必重新查 `git status`、`git log -1`，**不要硬套舊 SHA**。原始 `main` 確認為 `3d232acff`，已有未提交文件、xterm 子模組和未追蹤資料，整批未動。
 

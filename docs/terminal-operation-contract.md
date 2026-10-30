@@ -12,7 +12,17 @@ Keyed `terminal.terminate` requests use the `terminalHostIdempotencyReceipts` ta
 
 View and attachment state is per client and ephemeral: `output_paused_clients`, `output_resync_pending_clients`, and `delivered_output_cursors` live on the session, and `dispose_client` detaches a disconnected client from every session without touching the PTY.
 
-## T2-D7: queued Tab removal fence and missing-PTY recovery state (2026-10-30)
+## T2-D8: original PTY-instance proof and attached-view cascade guard (2026-10-30)
+
+A `tab.transfer` now writes `lastTerminalTabTransfer.ptyInstanceToken` in the **same SQLite transaction** that moves the Tab and both Layouts. The token combines an unpredictable **per-process Host epoch** with the in-memory `Session.instance_id` captured for the running PTY at commit. The host must check this token, the exact original Mutation ID, source/target Workspace, Session/Tab identity, and the current running PTY before `tab.transfer.status` can report `applied:true`. A restarted Host or reminted PTY may re-use the same public `sessionId`, but not this original token. Absent/mismatched tokens (including older D1–D7 receipts) yield `applied:false,recoveryRequired:true,reason:"pty_instance_unverified"`, and attempting to replay that exact `tab.transfer` with a newly spawned instance is rejected. This is **instance identity verification only**, not PTY resurrection or a proven rollback.
+
+During destructive Workspace/Project operations (including `workspace.sleep` and `tab.removeForWorkspace`), an Actor preflight now rejects an attached, running Terminal with a persisted transfer receipt in any affected Workspace. Managed Workspace `close_sessions` first performs the same guard **before** capturing/terminating Sessions. The global runtime-mutation admission barrier prevents another client from attaching while a serialized cleanup is pending. This deliberately leaves normal unmoved terminals on their existing behavior and does not enforce a durable lease for moved terminals whose viewers are *all detached*. `detach` continues to be view-only; no PTY kill is authorized by a disconnect.
+
+The Desktop `Check status` operation now obtains one per-Tab coordinator lock that persists through the Host receipt verification, two authoritative Layout readbacks, exact Journal removal, and layout-fence release. Concurrent checks or a new move on the **same App coordinator** fail instead of racing; another process and safe Journal cancellation remain separate issues.
+
+These are uncompiled, untested D8 source/contract changes. `tab.transfer.capabilities.supported=false`, and there were no Cargo/Flutter tests, analyzer, build, Windows/macOS multi-process E2E, push, or release. Real cross-process Last-view ownership and Host-crash recovery require further work.
+
+## Historical T2-D7: queued Tab removal fence and missing-PTY recovery state (2026-10-30)
 
 The Host now fences **new Attach and explicit Terminate** for a Tab while a serialized `tab.remove` is queued or active. The Host Actor records the active removal before dispatching its background SQLite mutation, and checks the fence **before** looking up the Tab record. This covers the interval where the row has already been deleted but the live Session has not yet been retired; a second desktop/mobile view cannot attach in that interval. `detach` remains a view-only release, never a PTY termination. This is a narrow per-Actor removal fence, **not** a durable cross-process lease, a global last-view protocol, or protection for every form of Workspace/Project cascade deletion.
 

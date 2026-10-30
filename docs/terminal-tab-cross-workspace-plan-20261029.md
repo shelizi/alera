@@ -1,10 +1,24 @@
 # T2 — 跨專案／跨 Workspace Terminal Tab 移動：功能規劃與並行重構邊界
 
-**Priority：P2；Status：D7 三線已整合（Host Tab removal fence、SQLite 收據與 live PTY 不一致提示、Desktop 持續保留未決 Journal）；feature-gated OFF（2026-10-30）。** 先前 D1–D6 的功能安全修正全部保留。**跨專案拖放仍未開放；Flutter/Cargo 測試、靜態分析、編譯及實機回歸仍未執行。**
+**Priority：P2；Status：D8 三線已整合（批次清理的移轉 PTY 觀看者防護、原 PTY instance 身分憑證、Desktop 同 Tab 未決狀態確認排他）；feature-gated OFF（2026-10-30）。** 先前 D1–D7 的安全修正全部保留。**跨專案拖放仍未開放；Flutter/Cargo 測試、靜態分析、編譯及實機回歸仍未執行。**
 
 本文件原是 `feat/cross-project-terminal-tabs-20261029` 分支上的設計稿（commit `ec150a493`），現**只收編此規劃檔**至 `refactor/tdd-integrate-20261029`；未合併該舊分支的產品程式。原設計所記載的並行分工為 2026-10-29 第三批的歷史狀態；最新整合已包含第八批功能修正及 macOS Claude Code 貼上 hotfix。
 
-## 最新：T2-D7 三線隔離已整合（2026-10-30；Capability 仍 OFF）
+## 最新：T2-D8 三條隔離安全工作線已整合（2026-10-30；Capability 仍 OFF）
+
+從乾淨整合 `379ec62cadf04686255dbb094101a1b2e9c345d7` 重用既有 Host／Rust transfer／Desktop Client 工作樹，分別切 `feat/t2-d8-cascade-20261030`、`feat/t2-d8-pty-identity-20261030`、`feat/t2-d8-journal-concurrency-20261030`。Host Cascade 專責 `session_termination.rs`、`runtime_mutation_queue.rs`；PTY Identity 專責 `terminal_tab_transfer.rs`、`store_tab_transfer.rs`；Desktop 專責 `workbench_controller_tabs.dart`、`workbench_terminal_tab_transfer_coordinator.dart`。各線完整範圍無同檔寫入／衝突：
+
+| 線路 | 確實做了什麼／不保證什麼 | 隔離 → 整合 Commit |
+| --- | --- | --- |
+| D8-H Host cascade | `RemoveWorkspace`、`RemoveProject`、`RemoveProjectWorkspaces` 以及現在會進 Actor preflight 的 `RemoveWorkspaceTabs`、`SleepWorkspace`，只要涉及**仍在執行且有 Host 客戶端附著**的 transferred Terminal，就拒絕背景刪除；`RemoveManagedWorkspace` 也先擋再做不可逆的 Close Sessions。沒有自動 Detach 其他視圖；全數已 Detach 的 Session 不在此防護，亦非持久 Lease | `6fa141bfc` → **`4bd4a8f96`** |
+| D8-I Store + Host 原始 PTY 證據 | 新增 `ptyInstanceToken = random process epoch + Session.instance_id`，在 transfer 的**同一 SQLite Transaction** 存進 `lastTerminalTabTransfer`，維持先前所有 CAS／來源布局保護。Host `tab.transfer.status` 對原 Receipt、來源目的、活 PTY 核對後，還要求 Token 一致；Host 重啟／Shell remint（相同 Session ID）或舊版沒有 Token 的收據回 `applied:false,recoveryRequired:true,reason:pty_instance_unverified`。直接重送同一 `tab.transfer` 若 Token 不符也拒絕，**不能透過相同 ID 欺騙成功** | `28612d716` → **`463725075`** |
+| D8-J Desktop 未決查證排他 | `confirmUnknownTerminalTransfer` 進入時先以原 Journal Mutation ID 占用同 Tab 的 transfer guard，直到確證收據、雙 Layout 權威重讀、Journal 比對刪除及 UI fence 釋放。重複點 `Check status` 或再拖曳同 Tab 被拒絕；Host 不可核實時仍保留原 Journal。這是單 Desktop coordinator 期間的排他，不是不同 App 程序間的全域鎖 | `b5b654d24` → **`0ffb9b3a3`** |
+
+**仍阻擋啟用的 D9 工作**：單 Host Actor 規則不等於跨程序／跨機器最後視圖 Lease，也沒把每筆 `tab.remove` 與發出要求的 Client ID、原視圖 Epoch 透過同一原子 close 契約收攏；對沒有附著觀看者的已轉移 PTY 做 Workspace／Project 清理的政策、跨 Host 關閉與 Mobile 舊版要再明定。Host Crash 時 SQLite 已持久化但原 PTY 消失，新的 Token **只能拒絕新程序冒充**，不能保證修復、補償、確定失敗，也不能直接把 Journal 清掉；需有可稽核的最終狀態與安全恢復／人工介入方案，還有正式 Flutter/Cargo 測試、靜態分析、編譯與 Windows/macOS 雙程序實機驗證。
+
+**本批嚴格限制**：只有 Rust／Dart 格式化與 Git diff、staged whitespace check，**沒有**新增或執行測試、Analyze、Cargo check、Build、Win/Mac E2E、Push、Release；原始 dirty `main` 未變。保留 `tab.transfer.capabilities.supported=false`，不可把此文件當成已正式支援或編譯成功的證明。下一次接手先讀 `docs/refactor/feature-progress-20261029.md` **最上方 D8 入口**，重新核對 HEAD，再做 D9。
+
+## 歷史：T2-D7 三線隔離已整合（2026-10-30；Capability 仍 OFF）
 
 從**乾淨最新整合基準 `f9b36ac29`**，重用三個原本乾淨的 D6 工作樹，切 `feat/t2-d7-host-20261030`／`feat/t2-d7-client-20261030`／`feat/t2-d7-contract-20261030`，無新建大型 checkout，且按檔案擁有者分離 Rust Host、Dart Client/UI、兩份契約文件。各線均獨立提交，cherry-pick 至 `refactor/tdd-integrate-20261029` 無衝突：
 
