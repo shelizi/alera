@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:alera/src/features/agent_profiles/domain/agent_profile_adapters.dart';
 import 'package:alera/src/features/agent_status/domain/agent_status.dart';
 import 'package:alera/src/features/workbench/application/workbench_cleared_layout_registry.dart';
+import 'package:alera/src/features/workbench/application/detached_tab_window_service.dart';
 import 'package:alera/src/features/workbench/application/workbench_closed_tabs_completion_coordinator.dart';
 import 'package:alera/src/features/workbench/application/workbench_closed_tabs_plan.dart';
 import 'package:alera/src/features/workbench/application/workbench_explicit_resource_cleaner.dart';

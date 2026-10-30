@@ -30,6 +30,19 @@ extension WorkbenchTabLayoutOwnerTabs on WorkbenchTabLayoutOwner {
           tab.payload['lastTerminalTabTransfer'] is! Map) {
         continue;
       }
+      // D11 counted *mounted surfaces*. The detached-window service also
+      // owns tabs whose native windows are hidden or temporarily unmounted.
+      // Never present a shared PTY token as last-view authority while the
+      // detached window still owns this Tab, or a handoff is in flight.
+      // The user must merge it back into the primary window before Close.
+      if (detachedTabWindows.isDetached(tab.id) ||
+          detachedTabWindows.isLaunching(tab.id)) {
+        throw StateError(
+          'Return the transferred Terminal from its detached window to the '
+          'main window before closing. Its native view is still owned by '
+          'another window or is being moved.',
+        );
+      }
       final id = _host.attachedTerminalViewLeaseIdForTab(tab.id);
       if (id != null && id.isNotEmpty) {
         observedViewLeaseIds[tab.id] = id;
