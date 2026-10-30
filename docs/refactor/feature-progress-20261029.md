@@ -1,6 +1,20 @@
 # Alera 功能優先續做：第八批四線隔離（2026-10-29）
 
-## 下一次對話／其他 Agent 最新交接入口：T2-D16（2026-10-30）
+## 下一次對話／其他 Agent 最新交接入口：T2-D17（2026-10-30）
+
+**唯一整合基準**：`refactor/tdd-integrate-20261029`，`.worktrees/refactor-tdd-integrate-20261029`。從 D16 clean `46845b80ed8fa5eb0ada82bf869d4dd2c4473781` 起，用既有三個 clean source Worktree 分別切 `feat/t2-d17-store-upsert-20261030`、`feat/t2-d17-journal-correlation-20261030`、`feat/t2-d17-mobile-current-host-20261030`，三筆 source commit 順序 cherry-pick。**D17 程式碼整合後、文件提交前 HEAD `52dbe008a`**；交接文件 Commit 後需重新查 `git status`／`git log -1`。原始 dirty `main` HEAD `3d232acff9822154c68049ee63c57ed5966b84e0` 的 preexisting history、`third_party/xterm`、未追蹤 E2E 檔保持不動。
+
+| D17 工作線 | 已完成的安全防護／限制 | Source → Integration |
+| --- | --- | --- |
+| D17-S Store SQLite 普通 Upsert 權限下沉 | `RuntimeStore.upsert_workspace_tab` 由無條件單 SQL upsert 改為**單一 SQLite 交易內先讀權威既存 Row 再寫**。若原 Tab 有任何 `lastTerminalTabTransfer`／`lastTerminalTabExit` Key（即使 JSON null/損毀），拒絕一般 Store Caller 修改原 `Workspace/kind`、原 Receipt、退出證據、`terminalSessionId` 或原 `terminalExecutionWorkspaceId`／`terminalExecutionWorkingDirectory`；無原證據的 Row 與全新 Row 也禁止憑普通 Upsert 偽造 Transfer/Exit Marker。Title/正常未轉移 Tab Upsert 仍依原流程。正式移轉及 Exit 證據仍只能走各自受保護的 Store 交易。**這不是跨程序持久 Last-view 或已退休刪除的授權**；其他不經此 Upsert 的直接 SQLite／刪除路徑仍需專門守衛 | `c373fbe75` → **`2cd2b67f3`** |
+| D17-J Journal Local Audit 交叉稽核 | `TerminalTransferJournalManualRecoveryDossier.readablePendingArchiveCrossReferences` 從**可讀** Pending + 檔名 SHA256 與本地內容吻合的 Archive，列出同 Tab/同 mutation 的本地封存、同 Tab/不同 mutation 的歷史封存；`archivesWithoutReadableMatchingPending` 列出沒有可讀同 mutation Pending 的本地檔。任何損毀 Pending／Archive 仍保留在原始 Inventory，不會臆測其 Tab ID。不同 mutation 的舊 Archive **可能完全正常**，無法證明異常或 Host Success；`requiresHostVerification=true`、`permitsAutomaticUnlock=false` 沒變；未新增任何刪檔／解鎖 API | `85ca84604` → **`1a0543ead`** |
+| D17-M Mobile 新 Host Client 切換保護 | `TerminalSessionController.attachedViewLeaseId` 除已綁定原 View ID、`AsyncData`、Controller 未 Dispose／Recover 外，還同步讀取 `terminalClientProvider(hostId)`，只有目前 Provider 為 `AsyncData<MobileTerminalClient>` 且 Client instance **和原 Controller 綁定的 `_client` 完全同一個**才提供 Close Lease。若新 Socket Provider 已換、但 Controller Listener 還沒完成 D14 Handoff／D16 Revision 更新，舊 ready 狀態也不再授權 moved Tab Close。這只處理同 App Socket 切換時序，不是多 Phone、OS Window／Host Restart durable Lease | `4c45ddb0c` → **`52dbe008a`** |
+
+**D18 待解**：① 仍沒有跨 OS 原生視窗、多 App、多 Phone/Host Restart 的 durable last-view authority，Host 只有記憶體 View Lease，D17 只多一層本 App Socket 狀態守衛。② SQLite Commit → PTY Session reparent Crash 的 definite outcome/補償仍不存在，Original PTY process generation 無法憑名字重建。③ D16 退出證據與雙 Layout 只讀預檢 **不是**合法 retirement：缺 user intent、Host 原 View/Instance 驗證及同筆 SQLite CAS 同步 Tab+兩 Layout+Durable Audit，絕不可自動清理。④ Store 普通 `remove_workspace_tab`／特殊 Direct SQL 寫入還沒有等價保護，須設計與原 Host/View 最終授權整合，不能單純封鎖而破壞合法 existing Tab Remove。⑤ Journal stale Lock 真正 OS process incarnation/liveness、Host-signed outcome、人工解鎖 UX/稽核、實機多裝置 E2E 都尚未完成。
+
+**全部原限制保留**：`rust/alera-cli/src/terminal_host/server/requests.rs` 的 `tab.transfer.capabilities.supported=false`，功能繼續 OFF；僅 Rust `rustfmt --edition 2021`、Dart `dart format`、Git `diff --check`／`diff --cached --check`；**沒有新增或執行 Cargo/Flutter Tests、Cargo check、Flutter Analyzer、Build、Win/macOS/Phone E2E、Push、Release**，沒有 reset/clean/merge/push 或更改原始 dirty main。下一輪由本節接續 T2-D18。
+
+## 歷史：T2-D16 交接入口（2026-10-30）
 
 **最新接手整合基準**：`refactor/tdd-integrate-20261029`，Worktree `.worktrees/refactor-tdd-integrate-20261029`。從乾淨 D15 HEAD **`c4047798ad5ecbe6f9953c5c418351cc563ea5dd`** 起，三個 clean source worktrees 建立 `feat/t2-d16-store-retirement-preview-20261030`、`feat/t2-d16-journal-manual-dossier-20261030`、`feat/t2-d16-mobile-view-close-20261030`，分離提交再依序 cherry-pick。**D16 原始碼整合後，文件提交前 HEAD `e3f771ed1`**；下一輪必須以 `git log -1`、`git status` 查新 HEAD，不能直接假定 docs commit 未更新。原始 dirty `main` HEAD `3d232acff9822154c68049ee63c57ed5966b84e0` 以及其 preexisting history/xterm/e2e dirty files 未動。
 

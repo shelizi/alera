@@ -1,10 +1,24 @@
 # T2 — 跨專案／跨 Workspace Terminal Tab 移動：功能規劃與並行重構邊界
 
-**Priority：P2；Status：D16 三線／四筆安全與唯讀退休預檢已整合（Store fail-closed Replay/Exit、Host 同一 SQLite 快照查 Exit 與雙 Layout、Journal 合併人工診斷、Mobile View 附著版本防重連競態）；feature-gated OFF（2026-10-30）。** D1–D15 保留。**跨專案拖放仍未開放；Flutter/Cargo 測試、靜態分析、編譯及實機回歸仍未執行。**
+**Priority：P2；Status：D17 三線／三筆下層安全修正已整合（Store 單交易保護原 Transfer/Exit 證據、Journal Pending 與歷史本地 Archive 的唯讀交叉比對、Mobile 連線 Provider 與原附著 Client 的身分一致性）；feature-gated OFF（2026-10-30）。** D1–D16 保留。**跨專案拖放仍未開放；Flutter/Cargo 測試、靜態分析、編譯及實機回歸仍未執行。**
 
 本文件原是 `feat/cross-project-terminal-tabs-20261029` 分支上的設計稿（commit `ec150a493`），現**只收編此規劃檔**至 `refactor/tdd-integrate-20261029`；未合併該舊分支的產品程式。原設計所記載的並行分工為 2026-10-29 第三批的歷史狀態；最新整合已包含第八批功能修正及 macOS Claude Code 貼上 hotfix。
 
-## 最新：T2-D16 三線／四筆安全補強已整合（2026-10-30；Capability 仍 OFF）
+## 最新：T2-D17 三線／三筆安全補強已整合（2026-10-30；Capability 仍 OFF）
+
+**Git**：D16 clean `46845b80ed8fa5eb0ada82bf869d4dd2c4473781` 起。三條來源分支：`feat/t2-d17-store-upsert-20261030`、`feat/t2-d17-journal-correlation-20261030`、`feat/t2-d17-mobile-current-host-20261030`；Source→Integration：`c373fbe75`→**`2cd2b67f3`**、`85ca84604`→**`1a0543ead`**、`4c45ddb0c`→**`52dbe008a`**。更新本文件前 Head `52dbe008a`；Docs commit 後應重新查 `git log -1`／`git status`。
+
+| 工作線 | D17 實際防護／仍不具備的保證 |
+| --- | --- |
+| Store 單筆 SQLite Upsert 交易 | `RuntimeStore.upsert_workspace_tab` 已不再直接用 `INSERT ... ON CONFLICT UPDATE` 覆寫已移轉 Tab。先在同一筆 SQLite transaction 讀原 Row；只要有 Transfer 或原 Host Exit marker（**包含顯式 null/損毀**），拒絕一般 upsert 更改 Workspace owner、Tab kind、原 Receipt／Exit、`terminalSessionId`、原執行 Workspace／Working Directory。對新 Tab／從未轉移 Tab 不接受 client 直接偽造 Transfer/Exit marker。此功能涵蓋**透過普通 Store Upsert API** 的 callers；特別保護 Host RPC 以外的內部寫入路徑，**不是**對所有 direct SQLite/Remove 的完全覆蓋。 |
+| Journal 本地證據交叉比對 | `inspectManualRecoveryDossier` 新增 `readablePendingArchiveCrossReferences` 與 `archivesWithoutReadableMatchingPending`，列出同 Tab Pending Mutation 對應的同 mutation / 不同 mutation Local Archive；歷史 Archive 可能是前次正常完成，不可視為惡意/失敗。受損／無法讀取檔案仍在原始盤點，絕不猜測對應 Host/Tab。比對無原子性、沒 Host 簽證，`requiresHostVerification=true` 和 `permitsAutomaticUnlock=false` 不變。 |
+| Mobile 視圖身分與最新 Host Client 一致 | Controller 原來只判斷原 View Lease ID、Ready Attached Session 和 D16 Attachment Revision；現在 `attachedViewLeaseId` 每次同步再讀 `terminalClientProvider(hostId)`，必須仍是原綁定 Host Client instance，才能授權準備 moved Tab Close。即使新 Socket 更新 Provider 但 Controller Listener 尚未切入 Recovery，舊 Ready 的 View ID 亦不可被沿用。並不保證跨程序、多個 Phone／OS Window、Host restart 全域 Last-view。 |
+
+**D18 尚待**：持久跨 Window/Process/Phone/Host-restart 的 View/PTY Owner；Crash 於 SQLite commit 與 Session reparent 的 definite 交易結論；使用者意圖/原 Host Live Lease/退出證據及雙 Layout CAS 綁定的**合法 exited Tab＋Audit 原子退休**；Store 原始 `remove_workspace_tab`／直接 SQL 寫入需協調合法最終授權後加守衛；Journal OS-level stale Lock owner incarnation、Host-auth outcome 與人工安全解鎖 UX；實際 Windows/macOS/Phone E2E 與 Cargo/Flutter tests/Analyze/Check/Build。**`tab.transfer.capabilities.supported=false` 保留；本輪只進行 Rust/Dart format、Git whitespace checks、隔離 Git commit/cherry-pick，未執行或新增測試／編譯／Analyzer／E2E／Push／Release，也不改 dirty main。**
+
+**接手入口**：`docs/refactor/feature-progress-20261029.md` 最上方 D17、`docs/refactor/tdd-roadmap-20261029.md` 最上方 D17，D18 必須在合法授權與未驗證風險解決前保持功能 OFF。
+
+## 歷史：T2-D16 三線／四筆安全補強已整合（2026-10-30；Capability 仍 OFF）
 
 **Git**：從 D15 乾淨整合 `c4047798ad5ecbe6f9953c5c418351cc563ea5dd` 起，source 分支 `feat/t2-d16-store-retirement-preview-20261030`、`feat/t2-d16-journal-manual-dossier-20261030`、`feat/t2-d16-mobile-view-close-20261030`。四筆 Source→Integration：`cbe304c8b`→**`88f09d941`**、`fa5130e5a`→**`5837f89b8`**、`6f29de5e3`→**`dd6eeb3e3`**、`429557d4e`→**`e3f771ed1`**。文件提交前 HEAD `e3f771ed1`，Docs commit 後接手先查 Git HEAD/status。
 
