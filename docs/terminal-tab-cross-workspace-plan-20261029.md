@@ -1,10 +1,25 @@
 # T2 — 跨專案／跨 Workspace Terminal Tab 移動：功能規劃與並行重構邊界
 
-**Priority：P2；Status：D12 三線已整合（Host 原 PTY 真正 Exit 的 SQLite CAS 證據、Journal 全筆唯讀中斷清單、Mobile 具名 View Attach/Detach/Restart 與受保護 Close）；feature-gated OFF（2026-10-30）。** D1–D11 的安全修正全部保留。**跨專案拖放仍未開放；Flutter/Cargo 測試、靜態分析、編譯及實機回歸仍未執行。**
+**Priority：P2；Status：D13 四項安全補強已整合（雙側 Layout/Registry Status 權威核對、Journal 目錄項目 fail-closed、Mobile 具名 Lease 協定明確協商、Detached Window Close Guard）；feature-gated OFF（2026-10-30）。** D1–D12 的安全修正全部保留。**跨專案拖放仍未開放；Flutter/Cargo 測試、靜態分析、編譯及實機回歸仍未執行。**
 
 本文件原是 `feat/cross-project-terminal-tabs-20261029` 分支上的設計稿（commit `ec150a493`），現**只收編此規劃檔**至 `refactor/tdd-integrate-20261029`；未合併該舊分支的產品程式。原設計所記載的並行分工為 2026-10-29 第三批的歷史狀態；最新整合已包含第八批功能修正及 macOS Claude Code 貼上 hotfix。
 
-## 最新：T2-D12 三線程式碼已整合（2026-10-30；Capability 仍 OFF）
+## 最新：T2-D13 四部分安全補強已整合（2026-10-30；Capability 仍 OFF）
+
+**Git**：從 D12 clean `13842cc37` 出發，隔離分支 `feat/t2-d13-layout-attestation-20261030`、`feat/t2-d13-journal-failclosed-20261030`、`feat/t2-d13-mobile-capability-20261030` 並行分檔；後者另有 Workbench Detached Window 獨立 commit。五筆 source commits 各自 cherry-pick 且不衝突，更新 docs 前最後整合 **`f601c1a86`**。後續 Docs Commit 會推進 HEAD，接手須重新查 status/log，不可直接沿用。
+
+| 工作線 | D13 已做／限制 | Source → Integration |
+| --- | --- | --- |
+| H：Host 讀回雙 Layout + 原 PTY | `RuntimeStore.verify_terminal_transfer_layout_and_receipt` 在一個 SQLite read transaction 比對 **Tab 目前 owner、Session、最新 receipt ID/from/to/PTY Instance、兩側 Layout split tree/pane/Tab ID 的合法唯一性，且雙側所有 Tab 成員完全等於各自 Persisted WorkspaceTab 名冊**。Host `tab.transfer.status` 在既有原 live PTY token 證實後才呼叫；失敗回 `applied:false,recoveryRequired:true,reason:persisted_layout_inconsistent`，不清 Pending。這仍不是 Host Crash 補償／合法已死 PTY 退休 | `1f9bbf429` → **`ad91df026`** |
+| J：Journal 不忽略未知檔 | `loadPending()` 遇任何 `.lock`、損毀或非 File `.json`、非 SHA256 名稱與不認識的目錄項目均 fail closed，沒有把 broken symlink/資料夾 lock 當正常空 Journal；唯讀 `inspectRecoveryInventory()` 加入各種未知副檔名、隱藏檔，使操作員能看見被拒來源。可能被非 Journal 垃圾檔阻擋，但不可擅自刪除；仍不證明 PID 的 Owner liveness 或 Host 結論 | `987090545` → **`c6a6117d9`**；`122bfb48d` → **`f601c1a86`** |
+| M：Mobile 具名 View 協定版本宣告 | Host `mobile.hello` 加 `terminalNamedViewLeaseV1`，手機在具名 Attach/Detach/Restart 和 moved Tab Close 前必須從 Host authenticated capability 讀到此值，不能只靠新 Client 方法或舊 Host 對額外 JSON 欄位的寬鬆忽略而宣告具備 View proof。Legacy 未移動 PTY 保留舊 attach；**宣告支援協定 ≠ `tab.transfer` 已開放** | `59cb60152` → **`682a460ac`** |
+| W：Shared/Child Detached Window Close Guard | 桌面同步 Close 點擊捕獲 Receipt/Lease 時，若 `detachedTabWindows.isDetached` 或 `isLaunching`，已轉移 Terminal 必須先合回主視窗，不把已暫時 unmounted 的獨立原生視窗誤算為只有一個正在掛載的 PTY View；同時保留 D11 `mounted surface == 1` 保守條件。只覆蓋已由 **本機當前 App** 記錄的 detached windows，不提供跨原生程序/Device/Host Restart Durable Last-view | `ad7a714ff` → **`524cb4c49`** |
+
+**D14 未完成**：跨 Native Window、Mobile Device、不同 App Process 和 Host restart 真正持久 per-View/Last-view Lease；SQLite commit/live PTY reparent 的 Crash 補償與可驗證 definite outcome；Host 觀察到 Exit 後合法 retired Tab+雙 Layout 原子清理；Journal Stale Lock 安全 owner-liveness 檢查、Host 可稽核解除、人工 UX；Mobile 舊 Socket 仍維持 attached View 時的安全重連流程；完整 Cargo/Flutter Tests、Analyze、Check、Build、Windows/macOS/Phone 多視窗/E2E。**嚴格 `tab.transfer.capabilities.supported=false`，只有 Rust/Dart format + Git whitespace checks；未新增/執行測試／編譯／分析／實機驗證／Push／Release，原 dirty main 不動。**
+
+**接手入口**：`docs/refactor/feature-progress-20261029.md` 最上方 D13，及本文件最上方 D13；先核實最新整合 HEAD，再分離工作樹續 D14。
+
+## 歷史：T2-D12 三線程式碼已整合（2026-10-30；Capability 仍 OFF）
 
 **Git**：D11 乾淨整合起點 `fff99a3c6`。三個之前已乾淨的 Worktree 分別切 `feat/t2-d12-exit-evidence-20261030`／`feat/t2-d12-journal-inventory-20261030`／`feat/t2-d12-mobile-view-20261030`，各一筆提交再不重疊 cherry-pick，D12 程式整合最後 **`62ce1d3b3`**。文件提交會讓 HEAD 再變，接手先重新查 `git log -1`、`git status`。
 

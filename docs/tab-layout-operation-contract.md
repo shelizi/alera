@@ -4,7 +4,17 @@ This table answers the eight transaction/replay questions from the architecture 
 
 Authority is `ServerActor` on the terminal-host mailbox, persisting through `RuntimeStore`. Tabs are special in two ways: their `payload` carries host-owned fields (`agentTitle*` state) that client writes must not clobber, and `kind = "terminal"` tabs with `payload.spawnOnCreate` own a live PTY that is spawned as part of the upsert.
 
-## T2-D12: Mobile close transaction and exact observed exit diagnostic (2026-10-30)
+## T2-D13: all-Tab dual-layout authority and detached-view close veto (2026-10-30)
+
+`tab.transfer.status` returns `applied:true` only if live original PTY, latest persisted receipt **and both persisted Workspace Layouts and WorkspaceTab registries** all agree. The Host adds a single SQLite read transaction that verifies exact original transfer identity, source missing the moved Tab, target containing it exactly once, syntactically valid pane/split tree and the entire Tab set on each side. Inconsistency results in `applied:false,recoveryRequired:true,reason:persisted_layout_inconsistent`. Callers retain the pending transfer and **must not** silently discard a disputed layout. The snapshot is read-only and does not provide Host Crash repair, a safe reverse transfer or a dead PTY cleanup contract.
+
+The Workbench's view-bound Close now consults its already existing native/child Detached Window registry in the same synchronous click-time pass as the Tab and lease snapshot: any known detached or launching moved Terminal is rejected until it returns to the primary window, even if its second native Surface is currently unmounted and D11's visibility count would have been one. This guard covers only windows registered to the local App; multi-process/Host restart durable view ownership is still unimplemented.
+
+Mobile's new `terminalNamedViewLeaseV1` capability is explicit in authenticated `mobile.hello` and mandatory before the phone sends per-view attach/detach/restart or `MobileObservedViewLeaseTabRemoval` for moved Tabs. An old Host ignoring JSON View ID fields cannot be treated as a verified lease authority. Mobile still preserves never-moved legacy calls.
+
+Journal's fail-closed loader rejects all unexpected directory entries; the read-only inventory now lists every blocker, not only `.json` or `.lock` entries. This detects malicious/malformed symlinks and benign extraneous files alike without deleting them. No Host-signed resolution, cross-process liveness proof or safe stale Lock repair yet. T2 `supported:false`; no Cargo/Flutter tests, analyzer, compile, Win/Mac/Phone E2E, Push or Release in D13.
+
+## Historical T2-D12: Mobile close transaction and exact observed exit diagnostic (2026-10-30)
 
 Transferred `tab.remove` now also has a narrow Mobile caller: the phone `TabsController` requires an already live `TerminalSessionController` and the same random `viewLeaseId` it passed to `terminal.attach`. It snapshots this before the first `await`, retains the pre-dialog `WorkspaceTabSummary` receipt/owner, and calls `MobileObservedViewLeaseTabRemoval.removeObservedTabWithViewLease`, producing the **same three expected fields** as Desktop: `expectedWorkspaceId`, `expectedTransferMutationId`, `expectedViewLeaseId`. Crucially, the old two-step `terminal.terminate` → `tab.remove` is forbidden for moved Tabs; the serialized Actor owns authoritative last-view, persisted receipt and original instance checks before deleting anything. Old Mobile clients without the named view Port fail closed. Never-moved Tabs keep their old close order.
 

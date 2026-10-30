@@ -1,6 +1,23 @@
 # Alera 功能優先續做：第八批四線隔離（2026-10-29）
 
-## 下一次對話／其他 Agent 最新交接入口：T2-D12（2026-10-30）
+## 下一次對話／其他 Agent 最新交接入口：T2-D13（2026-10-30）
+
+**唯一整合基準**：`refactor/tdd-integrate-20261029`，Worktree `.worktrees/refactor-tdd-integrate-20261029`。從 D12 乾淨 HEAD **`13842cc37f1f9027a9a0442dcc50d90909c22af3`** 開始，重用三個 clean 工作樹分線切 `feat/t2-d13-layout-attestation-20261030`／`feat/t2-d13-journal-failclosed-20261030`／`feat/t2-d13-mobile-capability-20261030`，按不同檔案分工。D13 五筆來源碼整合後、文件提交前 HEAD **`f601c1a86`**；接手必須重新查 `git log -1`／`git status`，不能假設 docs HEAD 未改。原始 dirty `main` HEAD **`3d232acff9822154c68049ee63c57ed5966b84e0`** 既有修改/未追蹤檔保持原狀，**不** reset、clean、merge、push 或 release。
+
+**T2-D13 四部分安全補強已各自 source commit，再無衝突 cherry-pick 到整合**：
+
+| 工作線 | 確實完成／保守邊界 | Source → Integration |
+| --- | --- | --- |
+| D13-H Host/Store 雙 Layout 權威核對 | 新增 Store 唯讀 `verify_terminal_transfer_layout_and_receipt`，單一 SQLite transaction 同時檢查 **當下** Tab owner、Session ID、最新 Transfer ID/from/to/原 PTY token、來源與目的地兩份 persisted Layout 有效結構/去重、及兩側 **全部** Tab ID 與 Workspace 名冊吻合。Host 在驗證原 live PTY 後，**只有**這項 SQLite 快照也成功才讓 `tab.transfer.status` 回 `applied:true`；若 Layout/Registry 不一致則 `applied:false,recoveryRequired:true,reason:persisted_layout_inconsistent`，保留 Journal，不把只存活的 PTY/Receipt 誤判成全交易已成功。**仍不能修復 Host Crash、推論缺失 Session 已失敗或聲稱跨不同時刻原子性** | `1f9bbf429` → **`ad91df026`** |
+| D13-J Journal 載入與稽核一致 fail-closed | `loadPending()` 先看每筆檔名與檔案類型，任何 `.lock`（包含 symlink/dir）、`.json` 非 File、SHA256 檔名不合法，或**任何不認得的目錄項目** 都阻擋「沒有 Pending」的假象，不再靜默略過。原 Pending JSON/Tab Hash/重複驗證仍保留。追補 `inspectRecoveryInventory()` 也列出**每個**未知副檔名/隱藏檔等 blocker，使唯讀診斷能找到阻擋來源；沒有自動修復、刪檔、釋放 `.lock`，不把 PID 當存活證明。嚴格策略可能讓被 `.DS_Store` 等非 Journal 檔污染的資料夾也停用轉移，需由人員確認原因 | `987090545` → **`c6a6117d9`**；`122bfb48d` → **`f601c1a86`** |
+| D13-M Mobile Host 能力協商 | Rust Host `mobile.hello` 明確宣告 **`terminalNamedViewLeaseV1`**：只表示 Host 會驗證具名手機 Attach/Detach/Restart 與 moved Tab Close，**不表示 T2 開放**。手機的新窄介面讀取已驗證 Host `runtimeCapabilities`，只有宣告時才允許具名 RPC 與 receipt/View-bound `tab.remove`；較舊 Host 即使忽略額外 JSON 欄位，也**不得被新 Client 當成有安全 Last-view 證明**。未移轉舊 Terminal 延續 legacy attach/detach/restart | `59cb60152` → **`682a460ac`** |
+| D13-W Workbench 原生視窗生命週期近似防護 | 新增在**點擊關閉原同步快照**檢查 `detachedTabWindows.isDetached(tab.id)`／`isLaunching(tab.id)`。若 moved Terminal 屬於已建立/暫時 unmounted/隱藏的 Shared Engine 或 Child Process Window、或正在拖出，要求先移回主視窗，**不授權**利用另一個 mounted Surface 的共享 PTY token 關閉。現有 D11 的 mounted Surface count==1 檢查仍適用。此檢查依賴當前 App DetachedTabWindowService，**不是跨程序、未登記 Windows、手機/Host restart 的 durable Lease** | `ad7a714ff` → **`524cb4c49`** |
+
+**D14 尚待**：① 同一 Terminal 可能由多個 OS Window/Device 使用，仍缺包含 detached/hidden/多程序/Host restart 的**真正持久 per-View/Last-view lease**，D13 只看本地現有 registry 與 Host 記憶體。② Host Crash 落在 SQLite Commit 與 Actor Session owner reparent 中間，仍不能恢復原 PTY 或有權威可驗證的 definite failure/compensation；D12 的 `lastTerminalTabExit` 只是實際觀察 Exit 的證據，**還沒有**合法已退出 transferred Tab 封存／退休與 Layout 同交易。③ Journal stale lock 的跨程序活性、已驗證 Host 結論、手動安全解除、歸檔保留和 UX 沒做；Inventory 仍是非原子唯讀。④ Mobile 同裝置重連時舊 Socket 未 detach 的 Token 占用、跨多手機、Watcher 與真正 OS 的多視窗測試；必須先明確批准 Cargo/Flutter tests/analyzer/check/build、Windows/macOS/Phone E2E。
+
+**原限制全部保留**：`rust/alera-cli/src/terminal_host/server/requests.rs` 的 **`tab.transfer.capabilities.supported=false`**，跨專案 Terminal 拖放仍不可用；本批**只有** `rustfmt --edition 2021`、`dart format`、Git `diff --check`／`diff --cached --check`。**沒有新增／執行 Cargo/Flutter Tests、Cargo check、Flutter Analyzer、Build、Win/Mac/Phone E2E、Push、Release**，沒有更動既有 dirty `main`。
+
+## 歷史：T2-D12 交接入口（2026-10-30）
 
 **唯一接續整合分支**：`refactor/tdd-integrate-20261029`（`.worktrees/refactor-tdd-integrate-20261029`）。從 D11 乾淨 HEAD **`fff99a3c66446b26eedf61bdc746821d846c30d3`** 起，重用三條 clean 隔離 Worktree 新切 `feat/t2-d12-exit-evidence-20261030`／`feat/t2-d12-journal-inventory-20261030`／`feat/t2-d12-mobile-view-20261030`。程式碼整合最後一筆 **`62ce1d3b3`**，文件 Commit 後會再往前，接手必須重新 `git status`、`git log -1`。原始 dirty `main` HEAD `3d232acff9822154c68049ee63c57ed5966b84e0` 保持不變，沒有 merge、reset、clean、push 或 release。
 
