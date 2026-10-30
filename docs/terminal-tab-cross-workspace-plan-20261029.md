@@ -1,10 +1,29 @@
 # T2 — 跨專案／跨 Workspace Terminal Tab 移動：功能規劃與並行重構邊界
 
-**Priority：P2；Status：D6 四線已整合（跨程序 Journal 排他建立、來源 Pane 精確剪枝、Desktop 移轉收據關閉）；feature-gated OFF（2026-10-30）。** 先前 D1–D5+ 的功能安全修正全部保留。**跨專案拖放仍未開放；Flutter/Cargo 測試、靜態分析、編譯及實機回歸仍未執行。**
+**Priority：P2；Status：D7 三線已整合（Host Tab removal fence、SQLite 收據與 live PTY 不一致提示、Desktop 持續保留未決 Journal）；feature-gated OFF（2026-10-30）。** 先前 D1–D6 的功能安全修正全部保留。**跨專案拖放仍未開放；Flutter/Cargo 測試、靜態分析、編譯及實機回歸仍未執行。**
 
 本文件原是 `feat/cross-project-terminal-tabs-20261029` 分支上的設計稿（commit `ec150a493`），現**只收編此規劃檔**至 `refactor/tdd-integrate-20261029`；未合併該舊分支的產品程式。原設計所記載的並行分工為 2026-10-29 第三批的歷史狀態；最新整合已包含第八批功能修正及 macOS Claude Code 貼上 hotfix。
 
-## 最新：T2-D6 四條平行安全工作線已整合（2026-10-30；Capability 仍 OFF）
+## 最新：T2-D7 三線隔離已整合（2026-10-30；Capability 仍 OFF）
+
+從**乾淨最新整合基準 `f9b36ac29`**，重用三個原本乾淨的 D6 工作樹，切 `feat/t2-d7-host-20261030`／`feat/t2-d7-client-20261030`／`feat/t2-d7-contract-20261030`，無新建大型 checkout，且按檔案擁有者分離 Rust Host、Dart Client/UI、兩份契約文件。各線均獨立提交，cherry-pick 至 `refactor/tdd-integrate-20261029` 無衝突：
+
+| 線路 | 已實作且有範圍限制的行為 | 獨立提交 → 整合提交 |
+| --- | --- | --- |
+| D7-H Rust Host | `RuntimeMutationQueue` 記錄正在執行的 Tab Remove、辨認尚在排隊的同 Tab Remove。 `verify_terminal_attachment_owner`／`verify_terminal_termination_owner` 於讀 SQLite 前拒絕在移除空窗中新的 Attach／Terminate；收據已成功寫入 Store 但活 PTY 缺失／owner 不符時 `tab.transfer.status` 回 `recoveryRequired:true` 與明確 `pty_missing`／`pty_owner_mismatch`，不冒充 `applied:true` | `a6f810b04` → **`291a1c4c2`** |
+| D7-C Dart Client／Workbench UX | Desktop Runtime Port 對 `recoveryRequired` 丟出具有 `hostRecoveryRequired` 標記的 Unknown Outcome；Coordinator 不吞掉此明確狀態，也不清除同 Tab 原 Mutation／App Support Journal；側邊欄顯示 Host 已存收據但無法核實執行中 PTY 的訊息 | `2cfe61566` → **`c32d3662f`** |
+| D7-O Terminal／Tab 契約 | 明訂 `tab.remove` 排隊至 Session 關閉的 Actor fence 與轉移回覆三態：確定有原收據＋活 PTY／無對應收據／原收據存在但缺活 PTY；完整說明此保護不等於跨程序持久租約 | `6a7306e9a` → **`375c89568`** |
+
+**尚未完成的 D8 安全需求，不可誤宣稱 D7 已解決**：
+
+1. **跨程序 Last-view Lease**：Actor 的 `Session.clients` 和本輪 `RemoveTab` fence 是單一 Host 執行期狀態，不是獨立程序／Host restart 後的可信 Lease；`RemoveWorkspace`／`RemoveProject`／`tab.removeForWorkspace` 也需獨立檢視並設拒絕策略，保證其他視圖的 PTY 不被關閉。
+2. **Crash partial commit 正式復原**：目前 `recoveryRequired:true` 只是顯示「持久收據與活 PTY 不一致」；沒有重掛真正原 PTY、沒有證明確定失敗、沒有補償／原子回滾，也不能因此自動重新建立 Shell 或解除未知狀態。
+3. **Journal／UX 完成態**：正確處理 Host 明確拒絕、Store/PTY 不一致、Host 重新上線仍無 PTY、保留或人工安全解除 Journal 的權威證據。保護 A→B→A 收據、同 Tab 跨程序排他與 Mobile 舊版拒絕，不能靜默放行第二次轉移。
+4. **恢復正式驗證後才談啟用**：Flutter/Cargo targeted tests、Analyzer、Build、Windows/macOS 雙視窗／雙程序 Close/Detach/Attach/Output、Lost-reply、Restart、Watcher、Undo、Mobile 相容 E2E；本輪沒有執行。
+
+本 D7 僅執行 Rust/Dart 格式化與 Git whitespace check，**沒有新增測試、Cargo check、Flutter analyze/test、Build、實機、Push 或 Release**。原始 `main` HEAD `3d232acff` 仍 dirty 且完全未修改；Host `tab.transfer.capabilities.supported=false` 保持不變。接手以 `docs/refactor/feature-progress-20261029.md` 最上方 D7 入口為準，勿從舊 D1／B2「待辦」重做。
+
+## 歷史：T2-D6 四條平行安全工作線已整合（2026-10-30；Capability 仍 OFF）
 
 從**乾淨整合基準 `6bdb0cbb837de2a0c2e6d9c54435d54ed7e9e12d`**，重用四個確認乾淨的既有 Worktree 分別建立獨立 D6 分支（避免 Windows/Dropbox 大型重新檢出），各線獨立格式化、Git staged whitespace check、提交，然後依序 cherry-pick 回 `refactor/tdd-integrate-20261029`，沒有 Git 衝突。
 

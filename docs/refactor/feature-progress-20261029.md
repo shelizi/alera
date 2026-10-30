@@ -1,6 +1,22 @@
 # Alera 功能優先續做：第八批四線隔離（2026-10-29）
 
-## 下一次對話／其他 Agent 交接入口（2026-10-30，已核對）
+## 下一次對話／其他 Agent 最新交接入口：T2-D7（2026-10-30）
+
+**最新功能整合分支**：`refactor/tdd-integrate-20261029`，工作樹 `.worktrees/refactor-tdd-integrate-20261029`。本批 D7 程式與契約整合後，更新本交接文件前已確認 **HEAD `375c89568` 且工作樹乾淨**；本文件 Commit 後 HEAD 將再前進，接手務必重新查 `git status`、`git log -1`，**不要硬套舊 SHA**。原始 `main` 確認為 `3d232acff`，已有未提交文件、xterm 子模組和未追蹤資料，整批未動。
+
+**已完成的 T2-D7 小範圍三線（均已獨立提交並整合）**：
+
+| 線路 | 真正已修改的安全行為 | 獨立 Commit → 整合 Commit |
+| --- | --- | --- |
+| D7-H Rust Host／Mailbox | `tab.remove` 排隊或背景執行期間保留 Tab-specific Actor fence，`Attach`／顯式 `Terminate` 在 SQLite Tab row 已消失但 Session 未結束的空檔仍拒絕。對完全匹配的原轉移收據，如 Host PTY 缺失／不吻合，`tab.transfer.status` 回報 `applied:false,recoveryRequired:true`（`pty_missing`／`pty_owner_mismatch`），不謊稱成功 | `a6f810b04` → **`291a1c4c2`** |
+| D7-C Dart Client／Workbench | Host 確認 SQLite 收據但無法確認活 PTY 時，保留原 Mutation、App Support Journal 及阻擋狀態，投射明確需復原錯誤與側邊欄提示；不自動關閉、重送、回滾或放行第二次轉移 | `2cfe61566` → **`c32d3662f`** |
+| D7-O 操作契約 | 更新 `docs/terminal-operation-contract.md` 與 `docs/tab-layout-operation-contract.md`，明列 Actor-side Close/Attach fence、三態收據確認和仍待處理的持久 Lease 邊界 | `6a7306e9a` → **`375c89568`** |
+
+**真實狀態與限制**：上述只降低單 Host Actor 的 `tab.remove`／新 Attach 競態，**不是**跨程序持久 Last-view Lease；`recoveryRequired` 只是辨識 SQLite 已轉移但 PTY 不在，**不是**自動找回原程序、確定失敗或安全清 Journal。未完成下一輪 D8：① Host 全域跨程序視圖 Lease／Close/Detach 與 Workspace/Project cascade 規則；② SQLite Commit 至活 PTY owner 之間 Host Crash 的明確復原或阻擋協議；③ `recoveryRequired` 和 Host 明確拒絕時 Journal 確定失敗／可審計解除，Mobile 舊版相容；④ 恢復後的 Flutter/Cargo 編譯、測試、Analyzer、Windows/macOS 多程序實測。
+
+**限制不變**：`tab.transfer.capabilities.supported=false`，真正跨專案拖曳尚不能用。依使用者既有決定，本輪只做 `rustfmt`、`dart format` 與各線 `git diff --cached --check`；**沒有** Flutter/Cargo tests、Cargo check、Analyzer、Build、Win/Mac 實機、Push、Release，也**沒有**修改或合併 dirty `main`。不可將格式化成功寫成測試 green。新的 D7 詳細計畫見 `docs/terminal-tab-cross-workspace-plan-20261029.md` 最新段落，完整優先序見 `docs/refactor/tdd-roadmap-20261029.md`；D1–D6 已整合，勿重做。
+
+## 歷史：T2-D6 交接入口（2026-10-30）
 
 **可以直接依本檔交接，不需重做前面已提交的 D1–D6。** 本檔按最新批次在上方，較舊段落是歷史狀態；功能設計、每線細節和剩餘安全邊界以 `docs/terminal-tab-cross-workspace-plan-20261029.md` 最新 **D6** 為準；整體優先順序以 `docs/refactor/tdd-roadmap-20261029.md` 為準。
 
