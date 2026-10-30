@@ -12,10 +12,104 @@ use sqlx::Row;
 use super::{format_timestamp, tab_from_row, RuntimeStore, WorkspaceTabRecord};
 
 const TRANSFER_RECEIPT_KEY: &str = "lastTerminalTabTransfer";
+const TRANSFER_EXIT_EVIDENCE_KEY: &str = "lastTerminalTabExit";
 const EXECUTION_WORKSPACE_KEY: &str = "terminalExecutionWorkspaceId";
 const EXECUTION_LAUNCH_DIRECTORY_KEY: &str = "terminalExecutionWorkingDirectory";
 
 impl RuntimeStore {
+    /// Persist one Host-observed exit of the *same original PTY generation*
+    /// after a transferred Terminal ends normally. Never infer an exit from a
+    /// missing Session or a missing Host process after a crash. This is
+    /// diagnostic evidence, NOT permission to delete the Tab or to treat a
+    /// lost transfer response as a confirmed successful live-PTY move.
+    pub async fn record_transferred_terminal_exit(
+        &self,
+        tab_id: &str,
+        session_id: &str,
+        workspace_id: &str,
+        pty_instance_token: &str,
+        exit_code: i32,
+    ) -> Result<bool> {
+        ensure!(
+            !tab_id.trim().is_empty()
+                && !session_id.trim().is_empty()
+                && !workspace_id.trim().is_empty()
+                && !pty_instance_token.trim().is_empty(),
+            "Transferred Terminal exit evidence requires exact original identity."
+        );
+        let mut tx = self.pool.begin().await?;
+        let Some(row) = sqlx::query(
+            "SELECT id, workspaceId, kind, title, createdAt, updatedAt, payloadJson \
+             FROM workspaceTabs WHERE id = ?",
+        )
+        .bind(tab_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        else {
+            return Ok(false);
+        };
+        let original_payload: String = row.try_get("payloadJson")?;
+        let mut tab = tab_from_row(row)?;
+        let receipt = &tab.payload[TRANSFER_RECEIPT_KEY];
+        let original_session_id = tab.payload["terminalSessionId"]
+            .as_str()
+            .filter(|value| !value.is_empty())
+            .unwrap_or(tab_id);
+        if tab.kind != "terminal"
+            || tab.workspace_id != workspace_id
+            || original_session_id != session_id
+            || receipt["to"].as_str() != Some(workspace_id)
+            || receipt["ptyInstanceToken"].as_str() != Some(pty_instance_token)
+        {
+            return Ok(false);
+        }
+        let Some(transfer_id) = receipt["id"]
+            .as_str()
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+        else {
+            return Ok(false);
+        };
+        if tab.payload[TRANSFER_EXIT_EVIDENCE_KEY].is_object() {
+            let prior = &tab.payload[TRANSFER_EXIT_EVIDENCE_KEY];
+            return Ok(
+                prior["transferMutationId"].as_str() == Some(transfer_id.as_str())
+                    && prior["ptyInstanceToken"].as_str() == Some(pty_instance_token)
+                    && prior["sessionId"].as_str() == Some(session_id)
+                    && prior["workspaceId"].as_str() == Some(workspace_id)
+                    && prior["exitCode"].as_i64() == Some(i64::from(exit_code)),
+            );
+        }
+        // The Actor observed this specific original PTY exit while the
+        // persisted Tab and latest transfer receipt still matched.
+        tab.payload[TRANSFER_EXIT_EVIDENCE_KEY] = json!({
+            "transferMutationId": transfer_id,
+            "sessionId": session_id,
+            "workspaceId": workspace_id,
+            "ptyInstanceToken": pty_instance_token,
+            "exitCode": exit_code,
+            "observedAtUtc": Utc::now().to_rfc3339(),
+        });
+        tab.updated_at = Utc::now();
+        let update = sqlx::query(
+            "UPDATE workspaceTabs SET payloadJson = ?, updatedAt = ? \
+             WHERE id = ? AND workspaceId = ? AND payloadJson = ?",
+        )
+        .bind(serde_json::to_string(&tab.payload)?)
+        .bind(format_timestamp(tab.updated_at))
+        .bind(tab_id)
+        .bind(workspace_id)
+        .bind(original_payload)
+        .execute(&mut *tx)
+        .await?;
+        ensure!(
+            update.rows_affected() == 1,
+            "Transferred Terminal Tab changed while its original PTY exit was observed."
+        );
+        tx.commit().await?;
+        Ok(true)
+    }
+
     /// Compare-and-swap both serialized layouts and tab ownership inside one
     /// SQLite transaction. The caller supplies *both* layout snapshots and
     /// replacements: stale clients fail rather than overwrite another pane

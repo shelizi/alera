@@ -23,6 +23,31 @@ impl ServerActor {
         });
         if let Some((frame, clients)) = broadcast {
             self.broadcast(&clients, frame);
+            // Only a real event from the original in-memory PTY may write
+            // durable exit evidence. A missing Session after Host crash
+            // must never be interpreted as an observed normal exit.
+            if let Some(session) = self.sessions.get(&session_id) {
+                let tab_id = session.tab_id.clone();
+                let workspace_id = session.workspace_id.clone();
+                let token = super::terminal_tab_transfer::pty_instance_token(session.instance_id());
+                if let Err(error) = self
+                    .runtime_store
+                    .record_transferred_terminal_exit(
+                        &tab_id,
+                        &session_id,
+                        &workspace_id,
+                        &token,
+                        exit_code,
+                    )
+                    .await
+                {
+                    tracing::error!(
+                        session_id,
+                        tab_id,
+                        "failed to persist original transferred PTY exit evidence: {error}"
+                    );
+                }
+            }
             if keep_terminal {
                 self.immediate_checkpoint(&session_id).await;
             } else {

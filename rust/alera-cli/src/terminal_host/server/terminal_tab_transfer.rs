@@ -19,11 +19,34 @@ use super::ServerActor;
 // and the Session's per-PTY instance number for a conservative proof.
 static TRANSFER_HOST_EPOCH: OnceLock<Uuid> = OnceLock::new();
 
-fn pty_instance_token(instance_id: u64) -> String {
+pub(super) fn pty_instance_token(instance_id: u64) -> String {
     format!(
         "{}:{instance_id}",
         TRANSFER_HOST_EPOCH.get_or_init(Uuid::new_v4)
     )
+}
+
+/// Durable evidence of an *observed original generation's normal exit*.
+/// A Host crash, missing Session, stale token or newer transfer receipt must
+/// never be promoted into a confirmed exit. This evidence does not authorize
+/// deleting the transferred Tab or claiming an acknowledged live move.
+fn observed_transferred_pty_exit(
+    tab: &WorkspaceTabRecord,
+    session_id: &str,
+    target_workspace_id: &str,
+    mutation_id: &str,
+) -> Option<i64> {
+    let receipt = &tab.payload["lastTerminalTabTransfer"];
+    let evidence = &tab.payload["lastTerminalTabExit"];
+    if evidence["transferMutationId"].as_str() != Some(mutation_id)
+        || evidence["sessionId"].as_str() != Some(session_id)
+        || evidence["workspaceId"].as_str() != Some(target_workspace_id)
+        || evidence["ptyInstanceToken"].as_str() != receipt["ptyInstanceToken"].as_str()
+        || receipt["ptyInstanceToken"].as_str().is_none()
+    {
+        return None;
+    }
+    evidence["exitCode"].as_i64()
 }
 
 fn string_field<'a>(payload: &'a Value, name: &str) -> HostResult<&'a str> {
@@ -246,6 +269,16 @@ impl ServerActor {
             return Ok(json!({"applied": false}));
         }
         let Some(live) = self.sessions.get(session_id) else {
+            if let Some(exit_code) =
+                observed_transferred_pty_exit(&tab, session_id, target, mutation_id)
+            {
+                return Ok(json!({
+                    "applied": false,
+                    "recoveryRequired": true,
+                    "reason": "pty_exit_observed",
+                    "exitCode": exit_code
+                }));
+            }
             // The exact SQLite receipt exists but the Host no longer owns a
             // live process. After a crash (or exit) this is not a confirmed
             // success or a safe rollback. The client must keep its journal.
@@ -255,6 +288,18 @@ impl ServerActor {
                 "reason": "pty_missing"
             }));
         };
+        if !live.running() {
+            if let Some(exit_code) =
+                observed_transferred_pty_exit(&tab, session_id, target, mutation_id)
+            {
+                return Ok(json!({
+                    "applied": false,
+                    "recoveryRequired": true,
+                    "reason": "pty_exit_observed",
+                    "exitCode": exit_code
+                }));
+            }
+        }
         if !live.running() || live.tab_id != tab_id || live.workspace_id != target {
             return Ok(json!({
                 "applied": false,
