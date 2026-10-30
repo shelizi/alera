@@ -86,6 +86,25 @@ final class WorkbenchTerminalTabTransferCoordinator {
   /// cannot silently mint a new mutation ID for this same live PTY.
   bool hasUnknownOutcome(String tabId) => _unknownTransfers.containsKey(tabId);
 
+  /// The exact original attempt, never a synthesized replacement mutation.
+  /// Its source/destination are needed to re-hydrate both authoritative
+  /// layouts once the Host proves that the PTY and its receipt agree.
+  WorkbenchTerminalTabTransferPlan? unknownPlan(String tabId) =>
+      _unknownTransfers[tabId];
+
+  /// A confirmed Host receipt must not be cleared until the Workbench has
+  /// reloaded *both* layouts. Otherwise the same stale client could issue a
+  /// second move after an incomplete/failed reconcile.
+  void acknowledgeRecovered({
+    required String tabId,
+    required String clientMutationId,
+  }) {
+    final pending = _unknownTransfers[tabId];
+    if (pending != null && pending.clientMutationId == clientMutationId) {
+      _unknownTransfers.remove(tabId);
+    }
+  }
+
   Future<WorkspaceTabRecord?> confirmUnknownOutcome(String tabId) async {
     final original = _unknownTransfers[tabId];
     if (original == null) return null;
@@ -99,7 +118,8 @@ final class WorkbenchTerminalTabTransferCoordinator {
           committed.terminalSessionId != original.sessionId) {
         return null;
       }
-      _unknownTransfers.remove(tabId);
+      // Leave the unresolved guard in place until both source and
+      // destination layouts are authoritatively reconciled by the caller.
       return committed;
     } on Object {
       // Reconnect may still be in flight. Retain the exact unresolved
@@ -209,9 +229,12 @@ final class WorkbenchTerminalTabTransferCoordinator {
           updated.workspaceId != destination.id ||
           updated.terminalSessionId != tab.terminalSessionId) {
         // Do not roll back with a second mutation: after a lost reply the
-        // result may already be committed. The UI should reload both sides.
-        throw StateError(
-          'The runtime returned a mismatched terminal transfer result.',
+        // result may already be committed. Block a fresh mutation until the
+        // original receipt and two Host layouts have been reconciled.
+        _unknownTransfers[tabId] = plan;
+        throw TerminalTransferOutcomeUnknownException(
+          tabId: tabId,
+          clientMutationId: plan.clientMutationId,
         );
       }
       return updated;

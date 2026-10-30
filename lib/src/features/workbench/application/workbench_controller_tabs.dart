@@ -2,6 +2,78 @@ part of 'workbench_controller.dart';
 
 mixin _WorkbenchControllerTabs
     on _$WorkbenchController, _WorkbenchControllerInternals {
+  /// Reconcile a transfer whose original reply was lost. Do not retry the
+  /// mutation or mint another id: the Host must confirm its *same* receipt
+  /// and still-running Session, then both Layouts must be read back before
+  /// we release the coordinator's unknown-outcome guard.
+  Future<bool> confirmUnknownTerminalTransfer(String tabId) async {
+    final coordinator = ref.read(workbenchTerminalTransferCoordinatorProvider);
+    final original = coordinator.unknownPlan(tabId);
+    if (original == null) return false;
+    if (coordinator.isTransferring(tabId)) {
+      throw StateError('Terminal transfer is still in progress.');
+    }
+    _tabLayoutOwner.beginTerminalTransfer(
+      original.sourceWorkspaceId,
+      original.targetWorkspaceId,
+    );
+    try {
+      final committed = await coordinator.confirmUnknownOutcome(tabId);
+      if (committed == null) {
+        throw TerminalTransferOutcomeUnknownException(
+          tabId: tabId,
+          clientMutationId: original.clientMutationId,
+        );
+      }
+      if (_disposed) {
+        throw StateError(
+          'Workbench closed; reopen it to confirm Terminal move.',
+        );
+      }
+      final port = ref.read(workbenchTerminalTransferPortProvider);
+      await WorkbenchTerminalTransferReconciliation(
+        port: port,
+        applyTabs: _tabLayoutOwner.applyWorkspaceTabs,
+        applyLayoutWithoutPersistence: (layout) =>
+            _tabLayoutOwner.applyWorkspaceLayout(layout, persist: false),
+      ).reconcile(
+        tabId: tabId,
+        sourceWorkspaceId: original.sourceWorkspaceId,
+        targetWorkspaceId: original.targetWorkspaceId,
+      );
+      // Only the exact Host-verified mutation may release this guard.
+      coordinator.acknowledgeRecovered(
+        tabId: tabId,
+        clientMutationId: original.clientMutationId,
+      );
+      final target = _workspaceById(original.targetWorkspaceId);
+      if (target != null && !_disposed) {
+        final projectIndex = state.projects.indexWhere(
+          (entry) => entry.id == target.projectId,
+        );
+        if (projectIndex >= 0) {
+          await _selectionOwner.selectWorkspace(
+            project: state.projects[projectIndex],
+            workspace: target,
+            ensureInitialTerminal: false,
+          );
+          if (!_disposed) {
+            _tabLayoutOwner.activateWorkspaceTab(
+              workspaceId: target.id,
+              tabId: tabId,
+            );
+          }
+        }
+      }
+      return true;
+    } finally {
+      _tabLayoutOwner.finishTerminalTransfer(
+        original.sourceWorkspaceId,
+        original.targetWorkspaceId,
+      );
+    }
+  }
+
   /// Commits the *existing* PTY to the new workspace. The current sidecar
   /// advertises this as disabled until full transfer/restart reconciliation
   /// is ready, so old builds never simulate a transfer with separate writes.

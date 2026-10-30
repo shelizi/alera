@@ -32,6 +32,7 @@ import 'package:alera/src/features/workbench/application/workbench_replaceable_t
 import 'package:alera/src/features/workbench/application/workbench_selection_owner.dart';
 import 'package:alera/src/features/workbench/application/workbench_tab_layout_owner.dart';
 import 'package:alera/src/features/workbench/application/workbench_terminal_transfer_reconciliation.dart';
+import 'package:alera/src/features/workbench/application/workbench_terminal_tab_transfer_coordinator.dart';
 import 'package:alera/src/features/workbench/application/workbench_tab_subscription_registry.dart';
 import 'package:alera/src/features/workbench/application/workbench_workspace_subscription_registry.dart';
 import 'package:alera/src/features/workbench/application/workbench_workspace_tab_closing_scope.dart';
