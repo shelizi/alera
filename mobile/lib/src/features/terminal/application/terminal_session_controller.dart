@@ -260,6 +260,76 @@ class TerminalSessionController extends _$TerminalSessionController {
     );
   }
 
+  /// A per-view Host lease is attached to exactly one *socket* client. A new
+  /// socket cannot attach using the old UUID while the old socket is alive.
+  /// Release only this UI's original named view and await Host acknowledgement
+  /// before retrying the new attach; do not steal a UUID across connections.
+  ///
+  /// If the old socket cannot prove detach (including a lost reply), fail
+  /// closed and leave the old Host attachment to disconnect naturally. A
+  /// crash without a verified detach is not permission to reclaim its view.
+  Future<void> _releaseNamedViewBeforeClientSwitch(
+    MobileTerminalClient nextClient,
+  ) async {
+    final previousClient = _client;
+    final previousSessionId = _sessionId;
+    if (previousClient == null ||
+        previousSessionId == null ||
+        identical(previousClient, nextClient) ||
+        previousClient is! MobileScopedTerminalViewLeaseClient ||
+        !previousClient.supportsNamedTerminalViewLease ||
+        nextClient is! MobileScopedTerminalViewLeaseClient ||
+        !nextClient.supportsNamedTerminalViewLease) {
+      return;
+    }
+    // This is deliberately strict, unlike cleanup's best-effort detach.
+    await previousClient.detachTerminalWithViewLease(
+      previousSessionId,
+      viewLeaseId: _viewLeaseId,
+    );
+    if (!identical(_client, previousClient) ||
+        _sessionId != previousSessionId) {
+      throw StateError(
+        'Terminal view changed while its prior Host lease was released.',
+      );
+    }
+    await _driverSub?.cancel();
+    _driverSub = null;
+    _client = null;
+    _sessionId = null;
+  }
+
+  /// Try the new socket first: if the old socket already disconnected, its
+  /// Host attachment has been released and normal reconnect must not regress
+  /// by asking a dead client to detach. Only an explicit Host view-owner
+  /// collision permits the guarded old-view release and *one* retry.
+  Future<MobileTerminalSession> _attachAfterVerifiedHandoff(
+    MobileTerminalClient nextClient,
+  ) async {
+    try {
+      return await _attachWithOriginalView(nextClient);
+    } on Object catch (error) {
+      final previousClient = _client;
+      final message = error.toString();
+      if (previousClient == null ||
+          identical(previousClient, nextClient) ||
+          previousClient is! MobileScopedTerminalViewLeaseClient ||
+          !previousClient.supportsNamedTerminalViewLease ||
+          nextClient is! MobileScopedTerminalViewLeaseClient ||
+          !nextClient.supportsNamedTerminalViewLease ||
+          !message.contains(
+            'Terminal view lease is already registered on another Host client',
+          )) {
+        rethrow;
+      }
+      await _releaseNamedViewBeforeClientSwitch(nextClient);
+      if (_disposed) {
+        throw StateError('Terminal controller disposed during view handoff.');
+      }
+      return _attachWithOriginalView(nextClient);
+    }
+  }
+
   Future<void> _recoverWithClient(
     MobileTerminalClient client, {
     bool showStartingState = false,
@@ -284,7 +354,7 @@ class TerminalSessionController extends _$TerminalSessionController {
             : const AsyncLoading<TerminalTabSession>(progress: 0.25);
         showStartingState = false;
         try {
-          final session = await _attachWithOriginalView(nextClient);
+          final session = await _attachAfterVerifiedHandoff(nextClient);
           if (_disposed) {
             _logger.warning(
               'discarding terminal recovery session after controller disposal',
