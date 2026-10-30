@@ -9,6 +9,12 @@ const Map<String, String> _allowedSpawnSites = <String, String>{
   // ECHILD with a detached child alive, against 4 of 10 with a normal one.
   'lib/src/features/workbench/infra/terminal_host/terminal_host_process_launcher.dart':
       'ProcessStartMode.detached',
+  // The two Win32 shell/window launchers explicitly use detached mode too:
+  // neither produces a child for Dart's process reaper to waitpid.
+  'lib/src/features/workbench/application/detached_tab_window_service.dart':
+      'ProcessStartMode.detached',
+  'lib/src/features/workbench/application/workspace_folder_opener.dart':
+      'ProcessStartMode.detached',
 };
 
 final RegExp _spawnPattern = RegExp(r'\bProcess\.(run|runSync|start)\s*\(');

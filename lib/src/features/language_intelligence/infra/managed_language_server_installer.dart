@@ -8,6 +8,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import '../../../shared/infra/process/command_path_probe.dart';
+import '../../../shared/infra/process/rust_process_runner.dart';
 import '../application/language_intelligence_activity.dart';
 import '../application/managed_language_server_installer.dart';
 import '../domain/language_provider_descriptor.dart';
@@ -43,14 +44,22 @@ final class DefaultManagedLanguageServerProcessRunner
   const DefaultManagedLanguageServerProcessRunner();
 
   @override
-  Future<ProcessResult> run(ManagedLanguageServerProcessRequest request) =>
-      Process.run(
-        request.executable,
-        request.arguments,
-        workingDirectory: request.workingDirectory,
-        environment: request.environment,
-        runInShell: request.runInShell,
-      );
+  Future<ProcessResult> run(ManagedLanguageServerProcessRequest request) async {
+    // All subprocesses must share the Rust owner. dart:io's process reaper
+    // can consume waitpid events from live PTYs (ECHILD on Unix) and its
+    // Windows GUI child spawns may flash console windows. RustProcessRunner
+    // uses the platform shell for .cmd/.bat and POSIX shims and preserves
+    // explicit environment/working-directory overrides.
+    final result = await const RustProcessRunner().run(
+      request.executable,
+      request.arguments,
+      workingDirectory: request.workingDirectory,
+      environment: request.environment,
+    );
+    // Existing installer fakes and call sites use the ProcessResult contract,
+    // but no consumer uses its PID for short-lived install/probe commands.
+    return ProcessResult(0, result.exitCode, result.stdout, result.stderr);
+  }
 }
 
 final class ManagedLanguageServerInstallException implements Exception {
