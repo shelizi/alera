@@ -33,14 +33,14 @@ impl RuntimeStore {
         target_workspace_id: &str,
         mutation_id: &str,
         pty_instance_token: &str,
-    ) -> Result<bool> {
+    ) -> Result<Option<WorkspaceTabRecord>> {
         if tab_id.is_empty()
             || session_id.is_empty()
             || mutation_id.is_empty()
             || pty_instance_token.is_empty()
             || source_workspace_id == target_workspace_id
         {
-            return Ok(false);
+            return Ok(None);
         }
         let mut tx = self.pool.begin().await?;
         let row = sqlx::query(
@@ -51,7 +51,7 @@ impl RuntimeStore {
         .fetch_optional(&mut *tx)
         .await?;
         let Some(row) = row else {
-            return Ok(false);
+            return Ok(None);
         };
         let tab = tab_from_row(row)?;
         let receipt = &tab.payload[TRANSFER_RECEIPT_KEY];
@@ -67,26 +67,26 @@ impl RuntimeStore {
             || receipt["to"].as_str() != Some(target_workspace_id)
             || receipt["ptyInstanceToken"].as_str() != Some(pty_instance_token)
         {
-            return Ok(false);
+            return Ok(None);
         }
         let (Some(source_layout), Some(target_layout)) = (
             persisted_layout(&mut tx, source_workspace_id).await?,
             persisted_layout(&mut tx, target_workspace_id).await?,
         ) else {
-            return Ok(false);
+            return Ok(None);
         };
         let (Ok(source_ids), Ok(target_ids)) = (
             tab_ids_in_layout(&source_layout, source_workspace_id),
             tab_ids_in_layout(&target_layout, target_workspace_id),
         ) else {
-            return Ok(false);
+            return Ok(None);
         };
         if source_ids.contains(tab_id) || !target_ids.contains(tab_id) {
-            return Ok(false);
+            return Ok(None);
         }
         let stored_source_ids = workspace_tab_ids(&mut tx, source_workspace_id).await?;
         let stored_target_ids = workspace_tab_ids(&mut tx, target_workspace_id).await?;
-        Ok(source_ids == stored_source_ids && target_ids == stored_target_ids)
+        Ok((source_ids == stored_source_ids && target_ids == stored_target_ids).then_some(tab))
     }
 
     /// Persist one Host-observed exit of the *same original PTY generation*
