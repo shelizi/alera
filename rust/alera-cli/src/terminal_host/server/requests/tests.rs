@@ -129,14 +129,28 @@ async fn stale_tab_removal_does_not_depend_on_remote_cleanup() {
             .to_string(),
         )
         .await;
-    let completion = inbox_receiver.recv().await.unwrap();
-    actor.handle(completion).await;
-    let response = loop {
-        let response = receiver.recv().await.unwrap().as_json().unwrap();
-        if response["id"] == 1 {
-            break response;
+    // tab.remove now performs an explicit actor-owned, live-PTY/view
+    // preflight before the background Store transaction. The FIRST inbox
+    // event is PrepareRuntimeMutation, not necessarily MutationFinished.
+    // Drive every actor command until its reply; avoid hanging forever if
+    // a preflight fails or drops a completion.
+    let response = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            tokio::select! {
+                command = inbox_receiver.recv() => {
+                    actor.handle(command.expect("runtime mutation queue is open")).await;
+                }
+                reply = receiver.recv() => {
+                    let frame = reply.expect("client connection remains open").as_json().unwrap();
+                    if frame["id"] == 1 {
+                        break frame;
+                    }
+                }
+            }
         }
-    };
+    })
+    .await
+    .expect("stale tab removal must complete without remote cleanup");
 
     assert_eq!(response["ok"], true);
     assert!(actor
