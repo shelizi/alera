@@ -30,6 +30,9 @@ impl ServerActor {
     ) -> HostResult<()> {
         let expected_workspace = payload.get("expectedWorkspaceId").and_then(Value::as_str);
         let expected_tab = payload.get("expectedTabId").and_then(Value::as_str);
+        let expected_transfer_receipt = payload
+            .get("expectedTransferMutationId")
+            .and_then(Value::as_str);
         let Some(session) = self.sessions.get(session_id) else {
             return Ok(());
         };
@@ -46,6 +49,16 @@ impl ServerActor {
             .await
             .map_err(|error| HostError::state(error.to_string()))?
         {
+            // A -> B -> A gives the original view matching workspace/tab ids
+            // again (ABA). Only the *latest* observed transfer receipt permits
+            // terminating the live process. Legacy never-moved tabs have no
+            // receipt on either side and continue to work.
+            let last_receipt = stored.payload["lastTerminalTabTransfer"]["id"].as_str();
+            if expected_transfer_receipt != last_receipt {
+                return Err(HostError::state(
+                    "Terminal transfer revision changed. Refresh this tab before closing its PTY.",
+                ));
+            }
             if stored.payload["lastTerminalTabTransfer"].is_object()
                 && (expected_workspace != Some(session.workspace_id.as_str())
                     || expected_tab != Some(session.tab_id.as_str())
