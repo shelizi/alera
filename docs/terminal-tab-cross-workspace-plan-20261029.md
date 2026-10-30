@@ -1,10 +1,25 @@
 # T2 — 跨專案／跨 Workspace Terminal Tab 移動：功能規劃與並行重構邊界
 
-**Priority：P2；Status：D13 四項安全補強已整合（雙側 Layout/Registry Status 權威核對、Journal 目錄項目 fail-closed、Mobile 具名 Lease 協定明確協商、Detached Window Close Guard）；feature-gated OFF（2026-10-30）。** D1–D12 的安全修正全部保留。**跨專案拖放仍未開放；Flutter/Cargo 測試、靜態分析、編譯及實機回歸仍未執行。**
+**Priority：P2；Status：D14 三線/四筆原始碼補強已整合（Host 可辨識其他程序世代而不宣稱 PTY 已死亡、同一 SQLite 驗證快照回傳權威 Tab、Journal symlink/目錄證據拒絕與鎖身份補強、Mobile 新舊 Socket具名 Lease 安全重連）；feature-gated OFF（2026-10-30）。** D1–D13 的安全修正全部保留。**跨專案拖放仍未開放；Flutter/Cargo 測試、靜態分析、編譯及實機回歸仍未執行。**
 
 本文件原是 `feat/cross-project-terminal-tabs-20261029` 分支上的設計稿（commit `ec150a493`），現**只收編此規劃檔**至 `refactor/tdd-integrate-20261029`；未合併該舊分支的產品程式。原設計所記載的並行分工為 2026-10-29 第三批的歷史狀態；最新整合已包含第八批功能修正及 macOS Claude Code 貼上 hotfix。
 
-## 最新：T2-D13 四部分安全補強已整合（2026-10-30；Capability 仍 OFF）
+## 最新：T2-D14 三線/四筆補強已整合（2026-10-30；Capability 仍 OFF）
+
+**Git**：D13 baseline `cefc1d80c3a75ebae59217fbc59844c3153135ab`，三條乾淨來源工作樹切 `feat/t2-d14-host-epoch-20261030`、`feat/t2-d14-journal-root-20261030`、`feat/t2-d14-mobile-handoff-20261030`。四筆程式提交依序 cherry-pick 到 `refactor/tdd-integrate-20261029`，**文件提交前整合最後 HEAD `1d9c4b220`**。Docs commit 後 HEAD 會變，接續需重查 Git 狀態，不碰 dirty `main`。
+
+| 工作線 | 已完成程式碼／精確的安全意義 | Source → Integration |
+| --- | --- | --- |
+| H：Host 原程序世代辨識 | 不發明新 process ID；重用既有每 Host process 隨機 UUID + PTY instance counter 的 `ptyInstanceToken`。當 persisted transfer receipt 來自不同 Host generation，`tab.transfer.status` 明確回 `applied:false,recoveryRequired:true,reason:host_generation_mismatch`；若同一原 Receipt 有真正 Host 觀察到的 `lastTerminalTabExit`，則回 `pty_exit_observed,exitCode,hostGenerationMismatch:true`。**不能因此斷言原 Host 已死亡**（可能另一程序仍存活）、SQLite 交易失敗、允許自動刪 Tab／Journal 或重新啟動替代 PTY | `b170bc619` → **`edfe3abdc`** |
+| H2：同一 SQLite 快照權威 Tab | D13 `verify_terminal_transfer_layout_and_receipt` 從 bool 改為 `Option<WorkspaceTabRecord>`，在那筆單一 SQLite transaction 已驗證兩側 Layout、完整 WorkspaceTab registry、原 Session/Receipt/PTY Token，且**只回傳那筆交易讀到的同一 Tab**；Host status 給 Client 的 `tab` 不再是驗證前另一次讀取、可能已變動的舊副本。這仍不是 OS Host process/PTY/多 App 并行的真正跨層原子性 | `c7bc2e67c` → **`1d9c4b220`** |
+| J：Journal 根目錄與審計檔證據 | Pending/Resolved Archive 根目錄必須是真 Directory、不能是 symlink；鎖檔、Pending JSON、封存證據在 Read/Write/Delete 前拒絕 symlink/非一般 File；Inspector 用 `FileSystemEntity.type(followLinks:false)` 不跟隨偽裝的檔案。正常擁有自己的 Lock 在清理前還需 original Tab Hash、Nonce、PID、Version 全對。**不保證敵對外部寫入者下的零 TOCTOU**、不清 stale Lock、也不把本地 Archive 當 Host 授權 | `a2e840af7` → **`d212d87c6`** |
+| M：Mobile Named View Socket Handoff | `_attachAfterVerifiedHandoff` 先以同一原 UUID 正常嘗試新的 Host Client Attach（舊 Client 已斷開則成功）。只有 Host 明確回 `view lease is already registered on another Host client` 才向**目前原舊 Socket** 送具名 `detach` 並等待確認，清原本 _client/_sessionId，重試一次。舊 Socket 不可達、detach 答覆不確定或仍被別的 Client 持有時拒絕搶 Lease，不合成新 View ID；Legacy 未轉移路徑沿用舊法 | `058216b57` → **`28336851d`** |
+
+**D15 仍未完成**：真正 per-native Window/Device/App/Host restart durable Live/Last-view registry、跨多程序 Host owner 確認；Host Crash 於 SQLite commit/live Session reparent 間的持久復原/決定性結果；受權威證據與 User Intent 綁定的 exited moved Terminal Tab + 兩側 Layout 原子合法退休；Journal stale Lock OS Process incarnation/live proof、Host-authorized manual unlock/UX/保留歸檔；Mobile 多 Phone、舊 socket 連線切換、native Windows/macOS/Phone E2E，以及 Cargo/Flutter tests/analyzer/check/build。**D14 是防護與診斷，不代表功能已可開放**；`tab.transfer.capabilities.supported=false` 不變，格式化／Git whitespace checks 外所有測試、編譯、推送、發布仍禁止。
+
+**接續入口**：`docs/refactor/feature-progress-20261029.md` 最上方 D14，`docs/refactor/tdd-roadmap-20261029.md` 最上方 D14；下輪從目前真實 HEAD 續 D15。
+
+## 歷史：T2-D13 四部分安全補強已整合（2026-10-30；Capability 仍 OFF）
 
 **Git**：從 D12 clean `13842cc37` 出發，隔離分支 `feat/t2-d13-layout-attestation-20261030`、`feat/t2-d13-journal-failclosed-20261030`、`feat/t2-d13-mobile-capability-20261030` 並行分檔；後者另有 Workbench Detached Window 獨立 commit。五筆 source commits 各自 cherry-pick 且不衝突，更新 docs 前最後整合 **`f601c1a86`**。後續 Docs Commit 會推進 HEAD，接手須重新查 status/log，不可直接沿用。
 

@@ -1,6 +1,22 @@
 # Alera 功能優先續做：第八批四線隔離（2026-10-29）
 
-## 下一次對話／其他 Agent 最新交接入口：T2-D13（2026-10-30）
+## 下一次對話／其他 Agent 最新交接入口：T2-D14（2026-10-30）
+
+**唯一接續整合分支**：`refactor/tdd-integrate-20261029`，位於 `.worktrees/refactor-tdd-integrate-20261029`。本批從 D13 乾淨 HEAD **`cefc1d80c3a75ebae59217fbc59844c3153135ab`** 起，重用三條 clean source Worktree 分別切 `feat/t2-d14-host-epoch-20261030`、`feat/t2-d14-journal-root-20261030`、`feat/t2-d14-mobile-handoff-20261030`，各自分檔修改、格式化／Git whitespace check、source commit 再 cherry-pick。**D14 原始碼整合最後一筆 `1d9c4b220`**，文件提交後 HEAD 仍會前進；下次務必以 `git log -1`／`git status` 重查。原始 dirty `main` HEAD **`3d232acff9822154c68049ee63c57ed5966b84e0`** 的既有修改、history、xterm 與 untracked 檔案一律不碰。
+
+**T2-D14 三條隔離工作線、四筆來源碼 commits 已整合**：
+
+| 工作線 | 已實作／嚴格邊界 | Source → Integration |
+| --- | --- | --- |
+| D14-H Host process epoch + SQLite 同筆快照 | 原 `ptyInstanceToken` 本來就包含 **Host 程序級 v4 UUID + 單一 PTY instance counter**，**不重鑄 PTY 或新增另一個不可靠 epoch**。Host `tab.transfer.status` 在 persisted Receipt 與原 owner 完全吻合後，若 Receipt 的可解析 epoch 和目前 Host 不同，回 `applied:false,recoveryRequired:true,reason:host_generation_mismatch`，保留 Journal，**只代表本 Host 無法證明持有原 PTY**，不推論其他 Host 死亡、Transfer 失敗或可回復。如果有真正 persisted `lastTerminalTabExit`，仍優先回 `pty_exit_observed,exitCode,hostGenerationMismatch:true`。追補 D13 `verify_terminal_transfer_layout_and_receipt` 改回傳 `Option<WorkspaceTabRecord>`，**通過兩側 Layout、Receipt、Tab 名冊檢查的 Tab 本身來自相同 SQLite 讀取交易**，Host 不再回傳驗證前讀到的舊 Tab。沒有 Host Crash 後 Live PTY 恢復、Definitive failure 或刪除權限 | `b170bc619` → **`edfe3abdc`**；`c7bc2e67c` → **`1d9c4b220`** |
+| D14-J Journal 目錄與證據安全 | 新增 `_requireRealDirectoryOrAbsent` 和 `_requireOrdinaryFileOrAbsent`，在 Pending、Resolved Archive 目錄及讀寫鎖／Pending／Archive 檔案前拒絕不可信 symlink/非普通檔；讀取 Inspector 用 `FileSystemEntity.type(...,followLinks:false)`，非 File Pending 仍標示存在但不可解析，Archive Link 不當作本地成功證據。正常自己的 `.lock` 釋放又驗證原 **Tab SHA256 Hash + Nonce + PID + version**，無法對上就保留。這是**保守檢查而非無競態 OS 鎖**，完全未做自動/手動 stale Lock 清除與 Host 結論代簽 | `a2e840af7` → **`d212d87c6`** |
+| D14-M Mobile Socket View Lease 安全重連 | `TerminalSessionController._attachAfterVerifiedHandoff` **先照舊嘗試新連線具名 Attach**；若 Host 已釋放舊 Client，直接成功、不阻礙一般重連。**只有** Host 明確回「同一 `viewLeaseId` 已屬另一 Client」且新舊 Client 都明確支援 D13 的 `terminalNamedViewLeaseV1` 時，才向**原舊 Client** 做 `detachTerminalWithViewLease`、等待確認、解除舊本地綁定，再用**同一原 View ID** 重試新 Client 一次。若舊端不回或無法證明成功，**不搶占、不改 UUID、保留不確定狀態**。未移轉舊 Host 的 legacy path 不變；這不是跨手機/Host restart durable Lease | `058216b57` → **`28336851d`** |
+
+**D15 仍未完成**：① 真正 OS Window/Device/App/Host 跨程序可證明的持久 Last-view Lease，包括 unmounted Views 與連線切換；目前只有 Host 記憶體與本機已登記視窗，D14 的 Socket Handoff 沒有權威跨程序永久 Registry。② Host crash 發生在 SQLite commit 和 Actor session reparent 之間仍不能復活**原 PTY**、確定原 transfer 失敗或自動修復雙側 Layout；**Host epoch mismatch ≠ 死亡證明**。③ 正常 Host 觀察到 transferred PTY Exit 後，仍需具備使用者意圖與身份驗證的**合法 exited Tab + Layout 原子退休**、可靠審計與 explicit recovery API。④ Journal stale Lock 需跨程序 Process liveness/owner incarnation、Host 決定性授權/人工作業／稽核 UX，D14 只會安全拒絕錯誤 Filesystem Type 而不解除鎖。⑤ Mobile 新舊 Socket、多個 Phone、Tab Watcher／native windows 的實機回歸仍未做。
+
+**原限制全部保持**：`rust/alera-cli/src/terminal_host/server/requests.rs` **`tab.transfer.capabilities.supported=false`**，功能不可用。D14 只用 Rust `rustfmt --edition 2021`、Dart `dart format`、Git `diff --check`／`--cached --check`；**沒有新增或執行 Cargo/Flutter Tests、Cargo check、Flutter Analyze、Build、Windows/macOS/Phone E2E、Push 或 Release**，原 dirty `main` 沒有 merge、reset、clean 或修改。接手依本文件和 `docs/terminal-tab-cross-workspace-plan-20261029.md` 最上方 D14 續做 D15。
+
+## 歷史：T2-D13 交接入口（2026-10-30）
 
 **唯一整合基準**：`refactor/tdd-integrate-20261029`，Worktree `.worktrees/refactor-tdd-integrate-20261029`。從 D12 乾淨 HEAD **`13842cc37f1f9027a9a0442dcc50d90909c22af3`** 開始，重用三個 clean 工作樹分線切 `feat/t2-d13-layout-attestation-20261030`／`feat/t2-d13-journal-failclosed-20261030`／`feat/t2-d13-mobile-capability-20261030`，按不同檔案分工。D13 五筆來源碼整合後、文件提交前 HEAD **`f601c1a86`**；接手必須重新查 `git log -1`／`git status`，不能假設 docs HEAD 未改。原始 dirty `main` HEAD **`3d232acff9822154c68049ee63c57ed5966b84e0`** 既有修改/未追蹤檔保持原狀，**不** reset、clean、merge、push 或 release。
 

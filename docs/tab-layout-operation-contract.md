@@ -4,7 +4,17 @@ This table answers the eight transaction/replay questions from the architecture 
 
 Authority is `ServerActor` on the terminal-host mailbox, persisting through `RuntimeStore`. Tabs are special in two ways: their `payload` carries host-owned fields (`agentTitle*` state) that client writes must not clobber, and `kind = "terminal"` tabs with `payload.spawnOnCreate` own a live PTY that is spawned as part of the upsert.
 
-## T2-D13: all-Tab dual-layout authority and detached-view close veto (2026-10-30)
+## T2-D14: same-transaction returned Tab and no implicit Host-generation takeover (2026-10-30)
+
+For a lost `tab.transfer` reply, `tab.transfer.status` can report `applied:true` only from the original *live* PTY/Session together with an exact current persisted transfer receipt and both persisted Workbench Layout/WorkspaceTab registries. D14 further changes the Store's `verify_terminal_transfer_layout_and_receipt` to return the **very Tab it validated inside the one SQLite read transaction** instead of a mere bool, preventing a stale pre-verification Tab from being returned under `applied:true`. The live PTY proof and SQLite transaction are still separate layers; no cross-Host write lock or recovery is implied.
+
+The preexisting random process component of `ptyInstanceToken` now yields `applied:false,recoveryRequired:true,reason:host_generation_mismatch` when the persisted exact receipt has a different Host epoch. Another Host instance may still be alive, and no Client may treat this as failed transfer, permission to delete the Tab, clear Journal or start a replacement terminal. When Host actually persisted a matching original normal Exit event, it remains `pty_exit_observed` with `hostGenerationMismatch:true`, not an authorized cleanup. The legal atomic exited-Tab + Layout retirement transaction remains D15.
+
+Mobile original View ID cannot silently migrate to a new socket while another Host Client owns it: normal named attach first, and only if Host explicitly rejects a duplicate ID may the phone request acknowledged old-client `detachTerminalWithViewLease` for the original Session, followed by one retry. This does not grant last-view ownership across a Host crash or two devices.
+
+Journal pending/resolved evidence directory and per-file link type validation plus Tab-hash+Nonce+PID Lock release are fail-closed; read-only inspectors do not follow symlinks. No automated lock repair, Host determination or PID identity guarantee. Capability `supported:false`; no Cargo/Flutter Tests, Analyzer, Check, Build, Win/Mac/Phone E2E, Push/Release performed in D14.
+
+## Historical T2-D13: all-Tab dual-layout authority and detached-view close veto (2026-10-30)
 
 `tab.transfer.status` returns `applied:true` only if live original PTY, latest persisted receipt **and both persisted Workspace Layouts and WorkspaceTab registries** all agree. The Host adds a single SQLite read transaction that verifies exact original transfer identity, source missing the moved Tab, target containing it exactly once, syntactically valid pane/split tree and the entire Tab set on each side. Inconsistency results in `applied:false,recoveryRequired:true,reason:persisted_layout_inconsistent`. Callers retain the pending transfer and **must not** silently discard a disputed layout. The snapshot is read-only and does not provide Host Crash repair, a safe reverse transfer or a dead PTY cleanup contract.
 
