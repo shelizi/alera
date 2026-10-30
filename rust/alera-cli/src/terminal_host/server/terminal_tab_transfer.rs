@@ -19,6 +19,10 @@ use super::ServerActor;
 // and the Session's per-PTY instance number for a conservative proof.
 static TRANSFER_HOST_EPOCH: OnceLock<Uuid> = OnceLock::new();
 
+#[cfg(test)]
+#[path = "terminal_tab_transfer_contract_tests.rs"]
+mod transfer_contract_tests;
+
 pub(super) fn pty_instance_token(instance_id: u64) -> String {
     format!(
         "{}:{instance_id}",

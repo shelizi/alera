@@ -101,7 +101,7 @@ async fn request(
 }
 
 #[tokio::test]
-async fn create_or_attach_to_a_live_session_attaches_without_revalidating_metadata() {
+async fn create_or_attach_rejects_stale_owner_then_reuses_original_live_pty() {
     let dir = tempfile::tempdir().unwrap();
     let (handle_one, mut receiver_one) = ClientHandle::test_channels();
     let (handle_two, mut receiver_two) = ClientHandle::test_channels();
@@ -116,8 +116,9 @@ async fn create_or_attach_to_a_live_session_attaches_without_revalidating_metada
     let (inbox, mut inbox_receiver) = tokio::sync::mpsc::unbounded_channel();
     actor.inbox = inbox;
 
-    // The request's workspace/tab metadata does not match the live session;
-    // the live PTY wins and the caller attaches anyway.
+    // The Host must reject stale Workspace/Tab identity after a move.
+    // The old behavior of attaching by Session alone could reconnect from
+    // the now-incorrect source project and bypass the transfer receipt.
     let response = request(
         &mut actor,
         1,
@@ -134,6 +135,26 @@ async fn create_or_attach_to_a_live_session_attaches_without_revalidating_metada
     )
     .await;
 
+    assert_eq!(response["ok"], false);
+    assert!(actor.sessions["s1"].clients.is_empty());
+
+    // The actual current owner may still attach without starting a new
+    // process or discarding the original output buffer.
+    let response = request(
+        &mut actor,
+        1,
+        3,
+        "createOrAttach",
+        json!({
+            "sessionId": "s1",
+            "workspaceId": "workspace",
+            "tabId": "tab-s1",
+            "workingDirectory": ".",
+        }),
+        &mut receiver_one,
+        &mut inbox_receiver,
+    )
+    .await;
     assert_eq!(response["ok"], true);
     let payload = &response["payload"];
     assert_eq!(payload["sessionId"], "s1");

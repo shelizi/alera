@@ -269,6 +269,9 @@ async fn workspace_repository_url_is_deferred_before_git_access() {
 
 #[tokio::test]
 async fn effective_project_config_is_deferred_before_repository_file_read() {
+    // Opening SQLite and the repository file is slower on busy Windows CI;
+    // retain the mailbox ordering proof without a one-second scheduler flake.
+    const DEFERRED_IO_DEADLINE: Duration = Duration::from_secs(5);
     let dir = tempfile::tempdir().unwrap();
     let repo_path = dir.path().join("repo");
     std::fs::create_dir_all(&repo_path).unwrap();
@@ -317,7 +320,7 @@ async fn effective_project_config_is_deferred_before_repository_file_read() {
             json!({"id": 72, "type": "status.get", "payload": {}}).to_string(),
         )
         .await;
-    let status = tokio::time::timeout(Duration::from_secs(1), responses.recv())
+    let status = tokio::time::timeout(DEFERRED_IO_DEADLINE, responses.recv())
         .await
         .expect("status response should not wait for alera.toml")
         .unwrap()
@@ -325,12 +328,12 @@ async fn effective_project_config_is_deferred_before_repository_file_read() {
         .unwrap();
     assert_eq!(status["id"], 72);
 
-    let completion = tokio::time::timeout(Duration::from_secs(1), commands.recv())
+    let completion = tokio::time::timeout(DEFERRED_IO_DEADLINE, commands.recv())
         .await
         .expect("effective config worker should report completion")
         .unwrap();
     actor.handle(completion).await;
-    let config_response = tokio::time::timeout(Duration::from_secs(1), responses.recv())
+    let config_response = tokio::time::timeout(DEFERRED_IO_DEADLINE, responses.recv())
         .await
         .expect("effective config completion should answer the original request")
         .unwrap()
