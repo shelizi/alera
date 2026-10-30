@@ -1,6 +1,22 @@
 # Alera 功能優先續做：第八批四線隔離（2026-10-29）
 
-## 下一次對話／其他 Agent 最新交接入口：T2-D9（2026-10-30）
+## 下一次對話／其他 Agent 最新交接入口：T2-D10（2026-10-30）
+
+**最新可接續整合分支／安全起點**：`refactor/tdd-integrate-20261029`，工作樹 `.worktrees/refactor-tdd-integrate-20261029`。先檢查 D9 乾淨 HEAD `dfc9c2fe7c55ecc055e8534eba82ff2c98a09d11`，重用三條 clean D9 隔離工作樹切 `feat/t2-d10-view-registry-20261030`、`feat/t2-d10-view-close-20261030`、`feat/t2-d10-client-leases-20261030`，按檔案所有權分開修改。D10 來源碼整合後、更新本文件前 HEAD **`6c5571280` 已確認乾淨**；文件提交後 HEAD 會改變，接手一定要重新 `git status`／`git log -1`，不能硬套此 SHA。原始 `main` 的 `3d232acff` 仍是原有 dirty，沒有 reset、merge、clean 或覆蓋。
+
+**T2-D10 已平行完成並整合三條來源碼安全工作線**：
+
+| 隔離工作線 | 精確實作與安全邊界 | 原始 → 整合 Commit |
+| --- | --- | --- |
+| D10-V Host Session View Registry | 在每個 in-memory `Session` 以 `viewLeaseId` 記錄 **Host Client → 多個具名 UI 視圖**；`createOrAttach` 綁定 Lease，單一 `detach` 只釋放指定視圖、同 Client 其他視窗保持 attached；Token 不可同時轉給另一 Host Client。`unscoped_clients` 分別記錄舊版無 Lease 視圖，防新版同 Client 額外註冊後掩蓋它。Mobile `terminal.attach` 轉傳可選 Lease，舊版未轉移 Terminal 保留行為；**已轉移**視圖缺原 Lease 則拒絕。這仍是 **Host 執行期記憶體**，不是 SQLite 持久跨重啟 Lease | `6ea692df8` → **`dae1db212`** |
+| D10-G Host Close/Transfer + Receipt Status | 已轉移 Terminal 的顯式 `terminate` 現要求**要求者 Host Client 所附著的唯一 UI View Token**；`tab.remove` 的序列化 RPC 接受 `expectedViewLeaseId` 並在 Actor 檢查整個 Session 只有該 Token 一個活視圖。因 Runtime RPC 和 PTY I/O 可能不同 Host Client，`tab.remove` 以不可猜測 Token 作憑證，不硬比不同 socket 的 ID。移轉原 PTY 前確保所有已附著 Client 均有合法具名視圖，舊版不支持則拒絕。失聯回覆查證分辨 `receipt_conflict`／`persisted_owner_inconsistent`，仍回 `recoveryRequired:true`、**不認定確定失敗**，絕不清 Journal | `e6262d93a` → **`c22cf91f3`** |
+| D10-C Desktop Lease Port + Journal Inspector | Production `SocketTerminalHostClient` 透過窄介面 `TerminalHostViewLeaseClient` 支援 attach／detach／terminate 帶 Lease；每個 `TerminalHostPtySession` 以隨機 UUID 建立固定 view ID，Transport 重連仍沿用，處理 Shared Host connection 下的一個 View dispose 不會連帶 detach 其他視圖；Fake/legacy 仍維持既有介面。補齊 `TerminalHostClient.terminate` 原本缺漏的 observed transfer receipt 介面宣告與兩個 Fake。App Support Journal 提供 **唯讀** `inspectRecovery(tabId)`，可辨識 `.lock`、Pending 可讀性、精確 matching 本機成功 archive，但**不自動解除鎖或移除不明 Journal** | `6aa4a890f` → **`6c5571280`** |
+
+**D11 尚未完成／不可宣稱功能已可用**：① Workbench `tab.remove` 呼叫端尚未有可靠的目前視窗 `expectedViewLeaseId` 綁定／傳播，因此已轉移 Tab Close 目前仍會保守拒絕；Mobile View ID 及 cross-process Window 生命週期需完整對齊。② View Lease 是 **per Host Session memory**，尚非可跨 Host Restart 的 Durable Lease；原 PTY crash 中段仍不能復活或權威認定確定失敗，亦沒有可稽核 PTY Generation Renewal、正常退出或孤兒 transferred Tab 的合法清理策略。③ Journal 的 stale `.lock` 只有可讀診斷，沒有安全的跨程序人工驗證／解除 UI、正式 Host refusal 判定／Audit；需照顧 Mobile 舊版與 watcher。④ 必須依原政策恢復完整 Flutter/Cargo Build／Analyze／Tests／Windows/macOS 多程序 E2E 後才能考慮啟用；本輪 **沒跑**。
+
+**沿用既有限制**：Host `tab.transfer.capabilities.supported=false` 不變，跨專案 Terminal 拖放未開放；本批只跑 `rustfmt`、`dart format`、`git diff --check`／staged check，**沒有執行 Flutter/Cargo test、Analyzer、Cargo check、Build、實機 E2E、Push、Release**。Rust/Dart 既有 Fake／Test 檔案僅按新欄位更新定義，**未執行測試**。原始 dirty `main` 未碰，三線各自提交後 cherry-pick 至整合，沒有衝突。下一輪按 `docs/terminal-tab-cross-workspace-plan-20261029.md` 最上方 D10 入口進行 D11。
+
+## 歷史：T2-D9 交接入口（2026-10-30）
 
 **當前唯一整合基準**：`refactor/tdd-integrate-20261029`（`.worktrees/refactor-tdd-integrate-20261029`），從 D8 乾淨 HEAD `632f1429b` 起做，最後一筆 D9 原始碼整合提交 **`75161c9bf`**，在開始更新此文件前已確認整合工作樹乾淨。**文件 Commit 後 HEAD 將前進，接手必須重新查 `git log -1`、`git status`**。原始 `main` 仍為既存 dirty `3d232acff`，沒有修改／reset／merge／清理原本的歷史 Session、xterm 或其他未追蹤資料。
 

@@ -1,10 +1,24 @@
 # T2 — 跨專案／跨 Workspace Terminal Tab 移動：功能規劃與並行重構邊界
 
-**Priority：P2；Status：D9 三線已整合（Host requester-bound Close + Crash 收據保留、阻擋原 PTY 自動 Remint、Desktop 跨 App Journal Lock + 本機成功稽核）；feature-gated OFF（2026-10-30）。** 先前 D1–D8 的安全修正全部保留。**跨專案拖放仍未開放；Flutter/Cargo 測試、靜態分析、編譯及實機回歸仍未執行。**
+**Priority：P2；Status：D10 三線已整合（Host per-View Lease 登記／來源 close 確證、Desktop 狹義 View Lease Port + Journal 中斷唯讀診斷）；feature-gated OFF（2026-10-30）。** D1–D9 的安全修正全部保留。**跨專案拖放仍未開放；Flutter/Cargo 測試、靜態分析、編譯及實機回歸仍未執行。**
 
 本文件原是 `feat/cross-project-terminal-tabs-20261029` 分支上的設計稿（commit `ec150a493`），現**只收編此規劃檔**至 `refactor/tdd-integrate-20261029`；未合併該舊分支的產品程式。原設計所記載的並行分工為 2026-10-29 第三批的歷史狀態；最新整合已包含第八批功能修正及 macOS Claude Code 貼上 hotfix。
 
-## 最新：T2-D9 三條隔離安全工作線已整合（2026-10-30；Capability 仍 OFF）
+## 最新：T2-D10 三條隔離安全工作線已整合（2026-10-30；Capability 仍 OFF）
+
+從 D9 整合乾淨 HEAD `dfc9c2fe7` 重新切三個 D10 隔離分支：`feat/t2-d10-view-registry-20261030`、`feat/t2-d10-view-close-20261030`、`feat/t2-d10-client-leases-20261030`。按 Host Session／Host Transfer Close／Dart Terminal Client 及 Journal 分檔工作；三條獨立提交並無衝突 cherry-pick，D10 程式整合最後 HEAD `6c5571280`，其後仍會因 Docs Commit 前進。
+
+| D10 工作線 | 具體改動、保證與侷限 | Source → Integration |
+| --- | --- | --- |
+| V：per-View Session Registry | `Session.view_leases` 實際追蹤 `client_id -> Set<viewLeaseId>`，同一 Socket 下多個 Desktop/Phone 視圖各有 Token；`createOrAttach` 可收 `viewLeaseId`、會拒絕跨 Host Client 重用同 Token，`detach` 若帶 Token 只放掉那個視圖，仍有其他視圖就保留 Client 附著與輸出。另以 `unscoped_clients` 記錄同 Socket 的舊版無 Token View，防止與新版混用時被誤當成只有一個視圖；`terminal.attach` mobile 原樣轉傳可選 View ID。Moved Terminal Attach/Detach 缺 Lease 直接拒絕；未搬移的 legacy Terminal 維持兼容。**不是持久化 Lease** | `6ea692df8` → **`dae1db212`** |
+| G：Host 全視圖身份檢查＋Recovery 權威分類 | `tab.remove` 追加可選 `expectedViewLeaseId`（**搬移的 Tab 必須提供且 Host 判定唯一 live View**），即使 Runtime Store RPC 另一 Socket，也用原 Token 代替單一 Host Client 當 Last-view 憑證；顯式 `terminate` 同樣要求 requester Host Client 附著的唯一 View Token。若仍有舊版 unscoped View，`tab.transfer` 拒絕搬移，避免隱形視窗被殺。 `tab.transfer.status` 在有另一筆收據或持久 owner/Session 不一致時分別回 `recoveryRequired:true,reason:receipt_conflict`／`persisted_owner_inconsistent`；**這是需要人工核對的未決，不是確定失敗** | `e6262d93a` → **`c22cf91f3`** |
+| C：Dart View Lease 傳遞＋本機 Journal 中斷診斷 | `TerminalHostViewLeaseClient` 是狹義可選 Host Capability，不強迫所有 Fake 實作；Production `SocketTerminalHostClient` 支援 attach/detach/terminate 帶 Lease，`TerminalHostPtySession` 每 Instance 隨機 UUID，重連沿用原 ID。Dispose 單一 UI view 不再 detach 共用 Host Client 的其他 Views。補齊 `TerminalHostClient.terminate` observed transfer receipt 介面與兩個 Fake（只格式化，不執行測試）。`FileWorkbenchTerminalTransferJournal.inspectRecovery(tabId)` 可唯讀回應 Lock 是否存在、Pending 是否可讀、是否有匹配 caller-confirmed Local Archive；**不能據此直接刪 Lock 或清 Journal** | `6aa4a890f` → **`6c5571280`** |
+
+**D11 阻擋與相容**：Workbench 真正進入 transferred `tab.remove` 時，尚未將視圖 Session 的 Lease Token 綁定給其 `expectedViewLeaseId`，因此 **搬移 Tab Close 目前仍會拒絕**；必須把同一 Token 交由目前 Tab 的真正 UI owner，避免舊窗口代拿最新 Host token 造成 ABA。Mobile 客戶端舊版沒有 view ID，搬移後 Attach/Terminate/Close 安全拒絕，待新版本完整接線；Host Session 記憶體 Lease 遇 Host Restart 消失，原 PTY 不能自動重鑄，仍需持久跨程序身份、可稽核 PTY generation renewal／definitive failure 或補償、正常退出後已轉移 Tab 的合法清理。Journal 的 `.lock` 只允許**唯讀檢查**，manual stale-lock repair 必須先有跨程序沒有持鎖者的證據及 Host receipt/雙 Layout 驗證，否則不能解鎖；稽核保留政策與 UI 尚未做。仍欠 Flutter/Cargo、Analyzer、Build、Windows/macOS 多程序實測。
+
+**嚴格不變**：Host `tab.transfer.capabilities.supported=false`，不啟用真正拖放；只執行 Rust/Dart 格式化與 Git whitespace check，不新增／執行 Flutter/Cargo Tests、Analyzer、Build 或實機 E2E，不 push、release、merge/reset/clean dirty `main`。下一輪讀 `docs/refactor/feature-progress-20261029.md` 最上方 D10 與本文件 D10，重新查 HEAD，再從 D11 未完成項目繼續。
+
+## 歷史：T2-D9 三條隔離安全工作線已整合（2026-10-30；Capability 仍 OFF）
 
 **Git**：從整合乾淨基準 `632f1429b`，重用三個 D8 工作樹新切 `feat/t2-d9-owner-close-20261030`／`feat/t2-d9-pty-remint-20261030`／`feat/t2-d9-audited-journal-20261030`。各線 owner 原封不動，只寫 Host Close／Host Spawn + Transfer／Dart Journal 的分離檔案；獨立提交後無衝突 cherry-pick，追加 Host Receipt Cascade 修正，原始碼整合最後 HEAD `75161c9bf`（此文件提交後還會更動，務必重新核對）。
 
