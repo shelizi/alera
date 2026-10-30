@@ -6,6 +6,14 @@ import 'package:alera/src/features/workbench/domain/workbench_layout.dart';
 import 'package:alera/src/shared/infra/storage/alera_support_directory.dart';
 import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
+import 'package:uuid/uuid.dart';
+
+final class _TerminalTransferJournalLock {
+  const _TerminalTransferJournalLock(this.file, this.nonce);
+
+  final File file;
+  final String nonce;
+}
 
 /// A diagnostic snapshot, never a release permission. A surviving .lock may
 /// still belong to an active App and local archives are not Host-signed.
@@ -16,6 +24,9 @@ final class TerminalTransferJournalRecoveryInspection {
     required this.pendingReadable,
     required this.localConfirmedArchive,
     this.pendingMutationId,
+    this.lockOwnerProcessId,
+    this.lockCreatedAtUtc,
+    this.lockMetadataValid = false,
   });
 
   final bool lockPresent;
@@ -23,6 +34,11 @@ final class TerminalTransferJournalRecoveryInspection {
   final bool pendingReadable;
   final bool localConfirmedArchive;
   final String? pendingMutationId;
+
+  /// PID and timestamp are diagnostic hints, not proof of a live process.
+  final int? lockOwnerProcessId;
+  final DateTime? lockCreatedAtUtc;
+  final bool lockMetadataValid;
 
   bool get requiresManualRecovery =>
       lockPresent || (pendingPresent && !pendingReadable);
@@ -38,6 +54,7 @@ final class FileWorkbenchTerminalTransferJournal
   }) : _supportDirectory = supportDirectory ?? aleraApplicationSupportDirectory;
 
   static const int _version = 1;
+  static const int _lockVersion = 1;
   final Future<Directory> Function() _supportDirectory;
 
   Future<Directory> _folder() async {
@@ -68,7 +85,7 @@ final class FileWorkbenchTerminalTransferJournal
   /// The .lock sentinel serializes both remember and forget across apps
   /// sharing the same Support Directory. A process crash leaves it blocking:
   /// only a verified recovery flow may repair an abandoned journal lock.
-  Future<File> _acquireTabLock(String tabId) async {
+  Future<_TerminalTransferJournalLock> _acquireTabLock(String tabId) async {
     final lock = await _lockFor(tabId);
     await lock.parent.create(recursive: true);
     try {
@@ -83,7 +100,70 @@ final class FileWorkbenchTerminalTransferJournal
       }
       rethrow;
     }
-    return lock;
+    final nonce = const Uuid().v4();
+    // If this flush fails, leave the existing exclusive sentinel in place.
+    // An empty/partial lock is unknown, not evidence that it is abandoned.
+    await lock.writeAsString(
+      jsonEncode(<String, Object?>{
+        'version': _lockVersion,
+        'tabIdHash': sha256.convert(utf8.encode(tabId)).toString(),
+        'nonce': nonce,
+        'processId': pid,
+        'createdAtUtc': DateTime.now().toUtc().toIso8601String(),
+      }),
+      flush: true,
+    );
+    return _TerminalTransferJournalLock(lock, nonce);
+  }
+
+  /// Refuse to delete a lock whose identity changed under this process.
+  /// Not a durable lease: a privileged external writer could still race the
+  /// check, so an interrupted lock remains a manual-recovery condition.
+  Future<void> _releaseTabLock(_TerminalTransferJournalLock owned) async {
+    final Object? decoded;
+    try {
+      decoded = jsonDecode(await owned.file.readAsString());
+    } on Object {
+      throw StateError(
+        'Terminal transfer journal lock changed or is unreadable. '
+        'Preserving it for manual recovery.',
+      );
+    }
+    if (decoded is! Map ||
+        decoded['version'] != _lockVersion ||
+        decoded['nonce'] != owned.nonce ||
+        decoded['processId'] != pid) {
+      throw StateError(
+        'Terminal transfer journal lock owner changed; refusing deletion.',
+      );
+    }
+    await owned.file.delete();
+  }
+
+  Future<({bool valid, int? ownerPid, DateTime? created})> _inspectLock(
+    File lock,
+    String tabId,
+  ) async {
+    try {
+      final data = jsonDecode(await lock.readAsString());
+      if (data is! Map ||
+          data['version'] != _lockVersion ||
+          data['tabIdHash'] != sha256.convert(utf8.encode(tabId)).toString() ||
+          data['nonce'] is! String ||
+          (data['nonce'] as String).isEmpty ||
+          data['processId'] is! int ||
+          data['createdAtUtc'] is! String) {
+        return (valid: false, ownerPid: null, created: null);
+      }
+      final when = DateTime.tryParse(data['createdAtUtc'] as String);
+      if (when == null) {
+        return (valid: false, ownerPid: null, created: null);
+      }
+      return (valid: true, ownerPid: data['processId'] as int, created: when);
+    } on Object {
+      // A crash may leave a partial sentinel; never infer owner liveness.
+      return (valid: false, ownerPid: null, created: null);
+    }
   }
 
   bool _samePlan(
@@ -121,12 +201,18 @@ final class FileWorkbenchTerminalTransferJournal
     final lock = await _lockFor(tabId);
     final pending = await _fileFor(tabId);
     final lockPresent = await lock.exists();
+    final lockEvidence = lockPresent
+        ? await _inspectLock(lock, tabId)
+        : (valid: false, ownerPid: null, created: null);
     if (!await pending.exists()) {
       return TerminalTransferJournalRecoveryInspection(
         lockPresent: lockPresent,
         pendingPresent: false,
         pendingReadable: false,
         localConfirmedArchive: false,
+        lockOwnerProcessId: lockEvidence.ownerPid,
+        lockCreatedAtUtc: lockEvidence.created,
+        lockMetadataValid: lockEvidence.valid,
       );
     }
     final WorkbenchTerminalTabTransferPlan plan;
@@ -141,6 +227,9 @@ final class FileWorkbenchTerminalTransferJournal
         pendingPresent: true,
         pendingReadable: false,
         localConfirmedArchive: false,
+        lockOwnerProcessId: lockEvidence.ownerPid,
+        lockCreatedAtUtc: lockEvidence.created,
+        lockMetadataValid: lockEvidence.valid,
       );
     }
     var localConfirmedArchive = false;
@@ -158,6 +247,9 @@ final class FileWorkbenchTerminalTransferJournal
       pendingReadable: true,
       localConfirmedArchive: localConfirmedArchive,
       pendingMutationId: plan.clientMutationId,
+      lockOwnerProcessId: lockEvidence.ownerPid,
+      lockCreatedAtUtc: lockEvidence.created,
+      lockMetadataValid: lockEvidence.valid,
     );
   }
 
@@ -222,7 +314,7 @@ final class FileWorkbenchTerminalTransferJournal
         flush: true,
       );
     } finally {
-      await lock.delete();
+      await _releaseTabLock(lock);
     }
   }
 
@@ -273,7 +365,7 @@ final class FileWorkbenchTerminalTransferJournal
         }
       }
     } finally {
-      await lock.delete();
+      await _releaseTabLock(lock);
     }
   }
 
