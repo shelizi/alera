@@ -968,6 +968,58 @@ impl RuntimeStore {
         if tab.payload.is_null() {
             tab.payload = serde_json::json!({});
         }
+        // The Host RPC protects transferred Tab provenance, but other Store
+        // callers (automation, title updates, old clients) may bypass it.
+        // Re-check the authoritative row IN THIS SQLITE TRANSACTION before
+        // any ordinary upsert. The only legitimate mutations of original
+        // transfer and PTY-exit evidence use dedicated transactional methods.
+        let mut tx = self.pool.begin().await?;
+        let current = sqlx::query(
+            "SELECT id, workspaceId, kind, title, createdAt, updatedAt, payloadJson \
+             FROM workspaceTabs WHERE id = ?",
+        )
+        .bind(&tab.id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if let Some(row) = current {
+            let stored = tab_from_row(row)?;
+            let protected_evidence = ["lastTerminalTabTransfer", "lastTerminalTabExit"];
+            let has_evidence = protected_evidence
+                .iter()
+                .any(|key| stored.payload.get(*key).is_some());
+            if has_evidence {
+                anyhow::ensure!(
+                    tab.kind == stored.kind && tab.workspace_id == stored.workspace_id,
+                    "Transferred Terminal kind and Workspace owner are Host-owned."
+                );
+                for key in [
+                    "lastTerminalTabTransfer",
+                    "lastTerminalTabExit",
+                    "terminalSessionId",
+                    "terminalExecutionWorkspaceId",
+                    "terminalExecutionWorkingDirectory",
+                ] {
+                    anyhow::ensure!(
+                        tab.payload.get(key) == stored.payload.get(key),
+                        "Transferred Terminal Host-owned evidence changed during upsert: {key}."
+                    );
+                }
+            } else {
+                anyhow::ensure!(
+                    protected_evidence
+                        .iter()
+                        .all(|key| tab.payload.get(*key).is_none()),
+                    "An ordinary Tab upsert cannot forge a Terminal transfer or PTY exit receipt."
+                );
+            }
+        } else {
+            anyhow::ensure!(
+                ["lastTerminalTabTransfer", "lastTerminalTabExit"]
+                    .iter()
+                    .all(|key| tab.payload.get(*key).is_none()),
+                "A new Tab cannot create Host-owned Terminal transfer or PTY exit evidence."
+            );
+        }
         sqlx::query(
             "INSERT INTO workspaceTabs (id, workspaceId, kind, title, createdAt, updatedAt, payloadJson) \
              VALUES (?, ?, ?, ?, ?, ?, ?) \
@@ -982,8 +1034,9 @@ impl RuntimeStore {
         .bind(format_timestamp(tab.created_at))
         .bind(format_timestamp(tab.updated_at))
         .bind(serde_json::to_string(&tab.payload)?)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
+        tx.commit().await?;
         Ok(tab)
     }
 
