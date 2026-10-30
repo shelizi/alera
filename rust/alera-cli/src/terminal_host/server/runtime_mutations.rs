@@ -35,6 +35,8 @@ pub(crate) enum RuntimeMutationRequest {
         tab_id: String,
         expected_workspace_id: Option<String>,
         expected_transfer_mutation_id: Option<String>,
+        /// A per-view capability, not the runtime-mutation connection id.
+        expected_view_lease_id: Option<String>,
     },
     RemoveWorkspaceTabs {
         workspace_id: String,
@@ -203,6 +205,7 @@ pub(super) async fn run_runtime_mutation(
                 tab_id,
                 expected_workspace_id,
                 expected_transfer_mutation_id,
+                expected_view_lease_id: _,
             } => {
                 let existing = runtime_store
                     .find_workspace_tab(&tab_id)

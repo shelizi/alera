@@ -65,7 +65,12 @@ impl ServerActor {
         if let RuntimeMutationRequest::RemoveManagedWorkspace { request } = request {
             return self.prepare_managed_workspace_removal(request).await;
         }
-        if let RuntimeMutationRequest::RemoveTab { tab_id, .. } = request {
+        if let RuntimeMutationRequest::RemoveTab {
+            tab_id,
+            expected_view_lease_id,
+            ..
+        } = request
+        {
             if let Some(tab) = self
                 .runtime_store
                 .find_workspace_tab(tab_id)
@@ -103,18 +108,13 @@ impl ServerActor {
                             "Transferred Terminal PTY instance is not verified. Resolve its original transfer before deleting the Tab.",
                         ));
                     }
-                    if !session.clients.contains(&client_id) {
+                    let expected_view = expected_view_lease_id.as_deref().unwrap_or_default();
+                    if !session.is_only_live_view_token(expected_view) {
+                        // Runtime-store RPCs may have another authenticated
+                        // socket than PTY I/O. The unguessable per-view token
+                        // is the sole remaining-view proof.
                         return Err(HostError::state(
-                            "The requesting client is not attached to this transferred Terminal. Reattach from its current workspace before closing it.",
-                        ));
-                    }
-                    if session
-                        .clients
-                        .iter()
-                        .any(|attached| *attached != client_id)
-                    {
-                        return Err(HostError::state(
-                            "Transferred Terminal has another attached viewer. All other desktop/mobile views must detach before removing the Tab.",
+                            "Transferred Terminal removal requires the only attached view's exact expectedViewLeaseId. Other views must detach first.",
                         ));
                     }
                 }

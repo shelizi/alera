@@ -88,6 +88,7 @@ async fn removing_tab_releases_its_hosted_review_refs() {
             tab_id: "diff-tab".into(),
             expected_workspace_id: None,
             expected_transfer_mutation_id: None,
+            expected_view_lease_id: None,
         },
     )
     .await;

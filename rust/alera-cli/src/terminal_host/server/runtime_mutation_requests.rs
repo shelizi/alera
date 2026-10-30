@@ -70,6 +70,11 @@ impl ServerActor {
                         .and_then(Value::as_str)
                         .filter(|value| !value.is_empty())
                         .map(str::to_owned),
+                    expected_view_lease_id: payload
+                        .get("expectedViewLeaseId")
+                        .and_then(Value::as_str)
+                        .filter(|value| !value.is_empty() && value.len() <= 128)
+                        .map(str::to_owned),
                 }
             }
             SerializedRuntimeMutation::RemoveWorkspaceTabs => {

@@ -47,6 +47,7 @@ async fn tab_remove_is_idempotent_for_retries() {
                 tab_id: "tab-1".to_string(),
                 expected_workspace_id: None,
                 expected_transfer_mutation_id: None,
+                expected_view_lease_id: None,
             },
         )
         .await;

@@ -49,6 +49,7 @@ impl ServerActor {
         let expected_transfer_receipt = payload
             .get("expectedTransferMutationId")
             .and_then(Value::as_str);
+        let expected_view_lease_id = payload.get("expectedViewLeaseId").and_then(Value::as_str);
         let Some(session) = self.sessions.get(session_id) else {
             return Ok(());
         };
@@ -106,9 +107,11 @@ impl ServerActor {
                 ));
             }
             if stored.payload["lastTerminalTabTransfer"].is_object() {
-                if !session.clients.contains(&client_id) {
+                if !expected_view_lease_id
+                    .is_some_and(|view| session.is_only_attached_view(client_id, view))
+                {
                     return Err(HostError::state(
-                        "Only the currently attached Terminal view may terminate a transferred PTY.",
+                        "Transferred Terminal termination requires its requester's only live expectedViewLeaseId.",
                     ));
                 }
                 let actual_token = pty_instance_token(session.instance_id());
@@ -212,13 +215,34 @@ impl ServerActor {
             return Ok(json!({"applied": false}));
         };
         let receipt = &tab.payload["lastTerminalTabTransfer"];
-        if tab.kind != "terminal"
-            || tab.workspace_id != target
-            || terminal_session_id(&tab) != session_id
-            || receipt["id"].as_str() != Some(mutation_id)
-            || receipt["from"].as_str() != Some(source)
-            || receipt["to"].as_str() != Some(target)
+        if tab.kind != "terminal" {
+            return Ok(json!({"applied": false}));
+        }
+        if receipt.is_object()
+            && (receipt["id"].as_str() != Some(mutation_id)
+                || receipt["from"].as_str() != Some(source)
+                || receipt["to"].as_str() != Some(target))
         {
+            // A newer transfer could have committed after the lost reply.
+            // This is a conflict, not proof the original operation failed.
+            return Ok(json!({
+                "applied": false,
+                "recoveryRequired": true,
+                "reason": "receipt_conflict"
+            }));
+        }
+        if receipt.is_object()
+            && (tab.workspace_id != target || terminal_session_id(&tab) != session_id)
+        {
+            return Ok(json!({
+                "applied": false,
+                "recoveryRequired": true,
+                "reason": "persisted_owner_inconsistent"
+            }));
+        }
+        if !receipt.is_object() {
+            // Missing receipt is still unknown after Host crashes; do not
+            // claim definitive rejection from this read-only query.
             return Ok(json!({"applied": false}));
         }
         let Some(live) = self.sessions.get(session_id) else {
@@ -310,6 +334,14 @@ impl ServerActor {
             ));
         }
         let current_pty_instance = pty_instance_token(live.instance_id());
+        if !live.every_attached_client_has_view_lease() {
+            // An old Host client could multiplex several unknown windows.
+            // Never move its PTY until every attached connection supplies
+            // explicit per-view identity.
+            return Err(HostError::state(
+                "All attached Terminal views must support viewLeaseId before this PTY may move.",
+            ));
+        }
         let launch_directory = live.working_directory.clone();
         if self.sessions.values().any(|session| {
             session.tab_id == tab_id && session.id != session_id && session.running()
