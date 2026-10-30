@@ -106,6 +106,13 @@ class XtermTerminalRuntime._(
   String? attachedViewLeaseIdForTab(String tabId) {
     final session = _sessionOwner.peekSession(tabId);
     if (session is _XtermTerminalSessionHandle && !session.isDisposed) {
+      // Several native/shared-engine windows can render the same handle
+      // while the Host sees only one PTY lease. Never authorize a moved Tab
+      // close with that shared token when multiple surfaces are mounted.
+      // Unmounted/stale windows remain an unsolved D12 ownership case.
+      if (session._visibility.leases.length != 1) {
+        return null;
+      }
       final pty = session.ptySession;
       if (pty is TerminalPtyAttachedViewLease) {
         return pty.attachedViewLeaseId;
