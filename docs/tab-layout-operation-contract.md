@@ -4,7 +4,11 @@ This table answers the eight transaction/replay questions from the architecture 
 
 Authority is `ServerActor` on the terminal-host mailbox, persisting through `RuntimeStore`. Tabs are special in two ways: their `payload` carries host-owned fields (`agentTitle*` state) that client writes must not clobber, and `kind = "terminal"` tabs with `payload.spawnOnCreate` own a live PTY that is spawned as part of the upsert.
 
-## T2-D17: generic Store Upsert must preserve immutable transferred Tab owner/exit (2026-10-30)
+## T2 集中收尾：Transferred Tab 最後原 View Close 更新 Layout 必須同一交易（2026-10-30）
+
+普通 Store/Workspace/Project 刪除路徑不可擦除 Transfer/Exit key，空的 Source Workspace 也可能由 Target Tab 的最新 Receipt 指向而必須保留。被 Host Actor 已核實的**原活 PTY 唯一 View**主動關閉，走專用 `RuntimeStore.remove_transferred_terminal_after_verified_live_view`：同一 SQLite Snapshot 比對原 Session/PTY Token/最新 Mutation/Source+Target 完整 Split Layout/Tab Registry；只允許從 Target 原本唯一所在 Pane 移除該 Tab、必要時修剪空 Pane，CAS 更新版面、刪 Tab 並插入不保存 View Secret 的永久退休 Audit；任一身份／Layout 不符整筆 Rollback。不藉 Exit 或 Host Crash 推論可刪除原 Tab，也不把本地 Journal Archive 視為 Host 簽署。關鍵 Release Gate（跨程序 Last-view、Host Crash/Exit 人工復原、實際編譯/測試/E2E）未完成，`supported=false`。詳 `docs/terminal-tab-transfer-closure-20261030.md`，不再新增編號階段。
+
+## 歷史：T2-D17: generic Store Upsert must preserve immutable transferred Tab owner/exit (2026-10-30)
 
 `RuntimeStore.upsert_workspace_tab` can be called by older clients or internal Host workflows that never pass through the `tab.upsert` RPC's special guards. For an already transferred Terminal, the D17 Store now reads the current persisted Tab **inside the same SQLite transaction** as the generic Upsert and refuses a change to Workspace owner, Tab kind, original Transfer/Exit marker, original `terminalSessionId`, execution Workspace or launch Working Directory. It checks **marker key presence**, including null, so broken recovery evidence cannot be erased or replaced by an older UI payload; neither a new Tab nor a never-moved Tab may be given fake Host marker keys through this ordinary API. A normal rename is still allowed if it retains the Host fields. Only the dedicated Transfer/Exit code may mutate those identity markers. This does **not** protect raw independent SQL or `remove_workspace_tab` from a destructive caller; those must be evaluated against the existing safe View-bound deletion path before D18 expands the API.
 

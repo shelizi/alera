@@ -1,6 +1,10 @@
 # Alera 功能優先續做：第八批四線隔離（2026-10-29）
 
-## 下一次對話／其他 Agent 最新交接入口：T2-D17（2026-10-30）
+## 最新交接入口：T2 收尾盤點與有限 Release Gate（2026-10-30）
+
+**不再自動擴充 D18/D19/D20**：完整一次收尾成果、實作對應 Commit、未達驗收門檻、禁止開啟的功能旗標詳見 **`docs/terminal-tab-transfer-closure-20261030.md`**。本輪從 D17 乾淨整合 `7cac43d53a81198fdc10d601f188b02da45cb7de` 開始，Store 原始碼 `d479429e7` → 整合 **`09c8aba3a`**、靜態補正 `99cbe4a4c` → **`46794ddfe`**、Host 原 Scope 停止程序前預檢 `7c7689675` → **`185510980`**、Journal 原始碼 `be6d1922a` → 整合 **`d12ca2e69`**。Store 普通 Tab/Workspace/Project 級聯刪除均以同筆 SQLite 交易保留 Transfer/Exit Marker，Host 清理前再驗來源 Scope；已驗證原生**活 PTY 唯一 View**的 `tab.remove` 走原 Receipt／雙 Layout 名冊 CAS、Tab+Target Layout+永久 SHA256 View Audit 原子退休；Journal Lock v2 有 App Process Epoch、拒絕 PID 重用的誤認。這**不表示** Host Crash 後可還原原 PTY、已完成跨程序 durable View Registry 或安全 stale Unlock；詳 A/B/C 三項驗收門檻。Gate **`supported=false`**，無 Cargo/Flutter compile/check/test/analyzer、E2E、Push/Release，不改動 dirty `main`。
+
+## 歷史：T2-D17 交接入口（2026-10-30）
 
 **唯一整合基準**：`refactor/tdd-integrate-20261029`，`.worktrees/refactor-tdd-integrate-20261029`。從 D16 clean `46845b80ed8fa5eb0ada82bf869d4dd2c4473781` 起，用既有三個 clean source Worktree 分別切 `feat/t2-d17-store-upsert-20261030`、`feat/t2-d17-journal-correlation-20261030`、`feat/t2-d17-mobile-current-host-20261030`，三筆 source commit 順序 cherry-pick。**D17 程式碼整合後、文件提交前 HEAD `52dbe008a`**；交接文件 Commit 後需重新查 `git status`／`git log -1`。原始 dirty `main` HEAD `3d232acff9822154c68049ee63c57ed5966b84e0` 的 preexisting history、`third_party/xterm`、未追蹤 E2E 檔保持不動。
 

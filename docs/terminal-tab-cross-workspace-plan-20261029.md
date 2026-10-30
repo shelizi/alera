@@ -1,10 +1,14 @@
 # T2 — 跨專案／跨 Workspace Terminal Tab 移動：功能規劃與並行重構邊界
 
-**Priority：P2；Status：D17 三線／三筆下層安全修正已整合（Store 單交易保護原 Transfer/Exit 證據、Journal Pending 與歷史本地 Archive 的唯讀交叉比對、Mobile 連線 Provider 與原附著 Client 的身分一致性）；feature-gated OFF（2026-10-30）。** D1–D16 保留。**跨專案拖放仍未開放；Flutter/Cargo 測試、靜態分析、編譯及實機回歸仍未執行。**
+**Priority：P2；Status：T2 一次集中收尾的 Store/Journal 安全修改已整合；仍有 A/B/C 三項不可假定通過的有限 Release Gate；feature-gated OFF（2026-10-30）。** 詳 `docs/terminal-tab-transfer-closure-20261030.md`。**跨專案拖放仍未開放；Flutter/Cargo 測試、靜態分析、編譯及實機回歸仍未執行。**
 
 本文件原是 `feat/cross-project-terminal-tabs-20261029` 分支上的設計稿（commit `ec150a493`），現**只收編此規劃檔**至 `refactor/tdd-integrate-20261029`；未合併該舊分支的產品程式。原設計所記載的並行分工為 2026-10-29 第三批的歷史狀態；最新整合已包含第八批功能修正及 macOS Claude Code 貼上 hotfix。
 
-## 最新：T2-D17 三線／三筆安全補強已整合（2026-10-30；Capability 仍 OFF）
+## 最新：T2 集中收尾與最終驗收清單（2026-10-30；Capability 仍 OFF）
+
+以 `docs/terminal-tab-transfer-closure-20261030.md` 為**唯一最新收尾與驗收入口**。D17 乾淨起點 `7cac43d53`，Host/Store Source `d479429e7` → integration **`09c8aba3a`**，Journal Source `be6d1922a` → integration **`d12ca2e69`**。普通 Store Tab Delete/Workspace Sleep/Cascade/Project Delete 已對已移轉 Receipt/Host Exit Marker 加同筆 SQLite transaction 下的 failclosed Guard；原 Host Actor 已驗證活 PTY 世代與唯一 View、最新收據後，特別移動 Tab Close 才會以同筆 CAS 更新 Tab＋Target Layout＋持久稽核；Journal Lock v2 增加 App Process Epoch、正常釋放仍需同 PID/Hash/Nonce/Process Epoch。**沒有**實作 Host Crash 後冒用原 PTY、自動 stale Lock 解鎖、跨 OS Process durable Last-view，未跑 Test/Build/E2E，Gate OFF。**不再新增新編號階段**，僅依 A/B/C Release Gate 收斂。
+
+## 歷史：T2-D17 三線／三筆安全補強已整合（2026-10-30；Capability 仍 OFF）
 
 **Git**：D16 clean `46845b80ed8fa5eb0ada82bf869d4dd2c4473781` 起。三條來源分支：`feat/t2-d17-store-upsert-20261030`、`feat/t2-d17-journal-correlation-20261030`、`feat/t2-d17-mobile-current-host-20261030`；Source→Integration：`c373fbe75`→**`2cd2b67f3`**、`85ca84604`→**`1a0543ead`**、`4c45ddb0c`→**`52dbe008a`**。更新本文件前 Head `52dbe008a`；Docs commit 後應重新查 `git log -1`／`git status`。
 
