@@ -291,6 +291,46 @@ impl ServerActor {
     /// is insufficient: the process may have exited or the host may have
     /// crashed between SQLite commit and the in-memory Session reparenting.
     /// Callers may only treat the transfer as acknowledged when both agree.
+    async fn observed_transfer_exit_diagnostic(
+        &self,
+        tab: &WorkspaceTabRecord,
+        session_id: &str,
+        source_workspace_id: &str,
+        target_workspace_id: &str,
+        mutation_id: &str,
+        exit_code: i64,
+        different_host_generation: bool,
+    ) -> HostResult<Value> {
+        let token = tab.payload["lastTerminalTabTransfer"]["ptyInstanceToken"]
+            .as_str()
+            .unwrap_or_default();
+        // Validating one SQLite snapshot never proves current exclusive
+        // OS/window ownership, authorizes deletion or repairs a crashed Host.
+        let consistent = self
+            .runtime_store
+            .inspect_transferred_terminal_retirement_evidence(
+                &tab.id,
+                session_id,
+                source_workspace_id,
+                target_workspace_id,
+                mutation_id,
+                token,
+            )
+            .await
+            .map_err(|err| HostError::state(err.to_string()))?
+            .is_some_and(|verified| {
+                verified.payload["lastTerminalTabExit"]["exitCode"].as_i64() == Some(exit_code)
+            });
+        Ok(json!({
+            "applied": false,
+            "recoveryRequired": true,
+            "reason": "pty_exit_observed",
+            "exitCode": exit_code,
+            "originalExitAndLayoutsConsistent": consistent,
+            "hostGenerationMismatch": different_host_generation
+        }))
+    }
+
     pub(super) async fn terminal_tab_transfer_status(
         &self,
         client_id: u64,
@@ -354,13 +394,17 @@ impl ServerActor {
                 // A genuine original Exit marker is stronger evidence than
                 // merely observing that the Host has restarted since then.
                 // Neither outcome authorizes clearing the pending transfer.
-                return Ok(json!({
-                    "applied": false,
-                    "recoveryRequired": true,
-                    "reason": "pty_exit_observed",
-                    "exitCode": exit_code,
-                    "hostGenerationMismatch": true
-                }));
+                return self
+                    .observed_transfer_exit_diagnostic(
+                        &tab,
+                        session_id,
+                        source,
+                        target,
+                        mutation_id,
+                        exit_code,
+                        true,
+                    )
+                    .await;
             }
             // This Host cannot prove that it owns the original PTY from a
             // different process generation. The previous Host *may* still
@@ -376,12 +420,17 @@ impl ServerActor {
             if let Some(exit_code) =
                 observed_transferred_pty_exit(&tab, session_id, target, mutation_id)
             {
-                return Ok(json!({
-                    "applied": false,
-                    "recoveryRequired": true,
-                    "reason": "pty_exit_observed",
-                    "exitCode": exit_code
-                }));
+                return self
+                    .observed_transfer_exit_diagnostic(
+                        &tab,
+                        session_id,
+                        source,
+                        target,
+                        mutation_id,
+                        exit_code,
+                        false,
+                    )
+                    .await;
             }
             // The exact SQLite receipt exists but the Host no longer owns a
             // live process. After a crash (or exit) this is not a confirmed
@@ -396,12 +445,17 @@ impl ServerActor {
             if let Some(exit_code) =
                 observed_transferred_pty_exit(&tab, session_id, target, mutation_id)
             {
-                return Ok(json!({
-                    "applied": false,
-                    "recoveryRequired": true,
-                    "reason": "pty_exit_observed",
-                    "exitCode": exit_code
-                }));
+                return self
+                    .observed_transfer_exit_diagnostic(
+                        &tab,
+                        session_id,
+                        source,
+                        target,
+                        mutation_id,
+                        exit_code,
+                        false,
+                    )
+                    .await;
             }
         }
         if !live.running() || live.tab_id != tab_id || live.workspace_id != target {
