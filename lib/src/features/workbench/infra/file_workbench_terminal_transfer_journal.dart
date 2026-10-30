@@ -44,6 +44,40 @@ final class TerminalTransferJournalRecoveryInspection {
       lockPresent || (pendingPresent && !pendingReadable);
 }
 
+/// One read-only inventory row, including journals whose Tab ID cannot be
+/// decoded from a damaged pending file. A file hash/PID is not a Host proof or
+/// a permission to remove any lock.
+final class TerminalTransferJournalInventoryItem {
+  const TerminalTransferJournalInventoryItem({
+    required this.fileKey,
+    required this.lockPresent,
+    required this.pendingPresent,
+    required this.pendingReadable,
+    required this.localConfirmedArchive,
+    required this.lockMetadataValid,
+    required this.unknownFileName,
+    this.tabId,
+    this.pendingMutationId,
+    this.lockOwnerProcessId,
+    this.lockCreatedAtUtc,
+  });
+
+  final String fileKey;
+  final String? tabId;
+  final bool lockPresent;
+  final bool pendingPresent;
+  final bool pendingReadable;
+  final bool localConfirmedArchive;
+  final bool lockMetadataValid;
+  final bool unknownFileName;
+  final String? pendingMutationId;
+  final int? lockOwnerProcessId;
+  final DateTime? lockCreatedAtUtc;
+
+  bool get requiresManualRecovery =>
+      unknownFileName || lockPresent || (pendingPresent && !pendingReadable);
+}
+
 /// Durable, fail-closed record of a Terminal transfer *before* Host commit.
 /// Files are per Tab so unrelated workspaces do not overwrite one another.
 /// Malformed records are surfaced instead of silently authorizing a new move.
@@ -143,12 +177,18 @@ final class FileWorkbenchTerminalTransferJournal
   Future<({bool valid, int? ownerPid, DateTime? created})> _inspectLock(
     File lock,
     String tabId,
+  ) =>
+      _inspectLockWithHash(lock, sha256.convert(utf8.encode(tabId)).toString());
+
+  Future<({bool valid, int? ownerPid, DateTime? created})> _inspectLockWithHash(
+    File lock,
+    String expectedHash,
   ) async {
     try {
       final data = jsonDecode(await lock.readAsString());
       if (data is! Map ||
           data['version'] != _lockVersion ||
-          data['tabIdHash'] != sha256.convert(utf8.encode(tabId)).toString() ||
+          data['tabIdHash'] != expectedHash ||
           data['nonce'] is! String ||
           (data['nonce'] as String).isEmpty ||
           data['processId'] is! int ||
@@ -164,6 +204,104 @@ final class FileWorkbenchTerminalTransferJournal
       // A crash may leave a partial sentinel; never infer owner liveness.
       return (valid: false, ownerPid: null, created: null);
     }
+  }
+
+  /// Enumerate pending / interrupted transactions without invoking the
+  /// fail-closed loadPending() that intentionally stops at the first lock.
+  /// Each item is a *non-atomic diagnostic observation*; concurrent Apps can
+  /// change files immediately after a read. This method NEVER unlocks,
+  /// deletes, replays or declares an original Host mutation resolved.
+  Future<List<TerminalTransferJournalInventoryItem>>
+  inspectRecoveryInventory() async {
+    final folder = await _folder();
+    if (!await folder.exists()) {
+      return const <TerminalTransferJournalInventoryItem>[];
+    }
+    final fileTypes = <String, Set<String>>{};
+    final unexpected = <String, Set<String>>{};
+    final validDigest = RegExp(r'^[a-f0-9]{64}$');
+    await for (final entity in folder.list(followLinks: false)) {
+      if (entity is! File) continue;
+      final name = p.basename(entity.path);
+      final suffix = p.extension(name);
+      if (suffix != '.json' && suffix != '.lock') continue;
+      final key = p.basenameWithoutExtension(name);
+      (validDigest.hasMatch(key) ? fileTypes : unexpected)
+          .putIfAbsent(key, () => <String>{})
+          .add(suffix);
+    }
+    final result = <TerminalTransferJournalInventoryItem>[];
+    final hashes = fileTypes.keys.toList()..sort();
+    for (final hash in hashes) {
+      final types = fileTypes[hash]!;
+      final pendingPresent = types.contains('.json');
+      final lockPresent = types.contains('.lock');
+      final pendingFile = File(p.join(folder.path, '$hash.json'));
+      final lockFile = File(p.join(folder.path, '$hash.lock'));
+      final lockEvidence = lockPresent
+          ? await _inspectLockWithHash(lockFile, hash)
+          : (valid: false, ownerPid: null, created: null);
+      WorkbenchTerminalTabTransferPlan? plan;
+      if (pendingPresent) {
+        try {
+          final decoded = _decode(
+            await pendingFile.readAsString(),
+            pendingFile.path,
+          );
+          if (sha256.convert(utf8.encode(decoded.tabId)).toString() == hash) {
+            plan = decoded;
+          }
+        } on Object {
+          // Corrupt payload remains visible by hash; never skip or repair it.
+        }
+      }
+      var localConfirmedArchive = false;
+      if (plan != null) {
+        final archive = await _resolutionFor(plan);
+        if (await archive.exists()) {
+          try {
+            localConfirmedArchive = _samePlan(
+              await _readResolution(archive),
+              plan,
+            );
+          } on Object {
+            // A corrupt archive is not proof of successful reconciliation.
+          }
+        }
+      }
+      result.add(
+        TerminalTransferJournalInventoryItem(
+          fileKey: hash,
+          tabId: plan?.tabId,
+          pendingMutationId: plan?.clientMutationId,
+          pendingPresent: pendingPresent,
+          pendingReadable: plan != null,
+          lockPresent: lockPresent,
+          localConfirmedArchive: localConfirmedArchive,
+          lockMetadataValid: lockEvidence.valid,
+          lockOwnerProcessId: lockEvidence.ownerPid,
+          lockCreatedAtUtc: lockEvidence.created,
+          unknownFileName: false,
+        ),
+      );
+    }
+    final unknownKeys = unexpected.keys.toList()..sort();
+    for (final key in unknownKeys) {
+      final types = unexpected[key]!;
+      result.add(
+        TerminalTransferJournalInventoryItem(
+          fileKey: key,
+          tabId: null,
+          pendingPresent: types.contains('.json'),
+          pendingReadable: false,
+          lockPresent: types.contains('.lock'),
+          localConfirmedArchive: false,
+          lockMetadataValid: false,
+          unknownFileName: true,
+        ),
+      );
+    }
+    return result;
   }
 
   bool _samePlan(
