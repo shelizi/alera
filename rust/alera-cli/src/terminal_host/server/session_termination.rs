@@ -18,6 +18,28 @@ impl ServerActor {
         if let RuntimeMutationRequest::RemoveManagedWorkspace { request } = request {
             return self.prepare_managed_workspace_removal(request).await;
         }
+        if let RuntimeMutationRequest::RemoveTab { tab_id, .. } = request {
+            if let Some(tab) = self
+                .runtime_store
+                .find_workspace_tab(tab_id)
+                .await
+                .map_err(|error| HostError::state(error.to_string()))?
+            {
+                if tab.payload["lastTerminalTabTransfer"].is_object()
+                    && self.sessions.values().any(|session| {
+                        session.tab_id == *tab_id && session.running() && session.clients.len() > 1
+                    })
+                {
+                    // Preflight on the actor before the background SQLite
+                    // removal: never retire a transferred terminal record
+                    // when several local/mobile views remain attached.
+                    return Err(HostError::state(
+                        "Moved Terminal has multiple attached views. Detach other views before removing this tab.",
+                    ));
+                }
+            }
+            return Ok(WorkspaceShutdown::default());
+        }
         // Check when the queued operation starts, not when it was enqueued:
         // an earlier removal may have just failed and retained a shutdown.
         for workspace_id in self.mutation_queue.pending_workspace_shutdowns.keys() {

@@ -25,6 +25,7 @@ impl ServerActor {
     /// sessions without a persisted cross-workspace transfer receipt.
     pub(super) async fn verify_terminal_termination_owner(
         &self,
+        client_id: u64,
         session_id: &str,
         payload: &Value,
     ) -> HostResult<()> {
@@ -66,6 +67,19 @@ impl ServerActor {
             {
                 return Err(HostError::state(
                     "Moved Terminal requires current Workspace and Tab identity before termination.",
+                ));
+            }
+            if stored.payload["lastTerminalTabTransfer"].is_object()
+                && session
+                    .clients
+                    .iter()
+                    .any(|attached| *attached != client_id)
+            {
+                // A moved PTY may be displayed in another process or device.
+                // Reject explicit termination rather than killing a terminal
+                // that still has another attached viewer.
+                return Err(HostError::state(
+                    "Moved Terminal is attached in another window or device. Detach other views before terminating its PTY.",
                 ));
             }
         }

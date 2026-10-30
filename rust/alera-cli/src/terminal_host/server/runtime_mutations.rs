@@ -34,6 +34,7 @@ pub(crate) enum RuntimeMutationRequest {
     RemoveTab {
         tab_id: String,
         expected_workspace_id: Option<String>,
+        expected_transfer_mutation_id: Option<String>,
     },
     RemoveWorkspaceTabs {
         workspace_id: String,
@@ -201,12 +202,23 @@ pub(super) async fn run_runtime_mutation(
             RuntimeMutationRequest::RemoveTab {
                 tab_id,
                 expected_workspace_id,
+                expected_transfer_mutation_id,
             } => {
                 let existing = runtime_store
                     .find_workspace_tab(&tab_id)
                     .await
                     .map_err(runtime_store_error)?;
                 if let Some(tab) = &existing {
+                    if expected_transfer_mutation_id.as_deref().is_some_and(|expected| {
+                        tab.payload["lastTerminalTabTransfer"]["id"].as_str() != Some(expected)
+                    }) {
+                        // A -> B -> A returns to the same Workspace ID.
+                        // A caller that supplied its observed receipt cannot
+                        // remove the tab after a newer transfer took place.
+                        return Err(HostError::state(
+                            "Terminal transfer revision changed. Refresh the tab before removing it.",
+                        ));
+                    }
                     if expected_workspace_id
                         .as_deref()
                         .is_some_and(|expected| expected != tab.workspace_id.as_str())

@@ -123,7 +123,8 @@ impl ServerActor {
                     RuntimeMutationRequest::RemoveManagedWorkspace { .. }
                     | RuntimeMutationRequest::RemoveWorkspace { .. }
                     | RuntimeMutationRequest::RemoveProject { .. }
-                    | RuntimeMutationRequest::RemoveProjectWorkspaces { .. } => {
+                    | RuntimeMutationRequest::RemoveProjectWorkspaces { .. }
+                    | RuntimeMutationRequest::RemoveTab { .. } => {
                         let (completion, receiver) = tokio::sync::oneshot::channel();
                         let _ = inbox.send(ServerCommand::PrepareRuntimeMutation {
                             request: request.mutation.clone(),

@@ -65,6 +65,11 @@ impl ServerActor {
                         .and_then(Value::as_str)
                         .filter(|value| !value.is_empty())
                         .map(str::to_owned),
+                    expected_transfer_mutation_id: payload
+                        .get("expectedTransferMutationId")
+                        .and_then(Value::as_str)
+                        .filter(|value| !value.is_empty())
+                        .map(str::to_owned),
                 }
             }
             SerializedRuntimeMutation::RemoveWorkspaceTabs => {

@@ -456,7 +456,7 @@ impl ServerActor {
             "terminate" => {
                 self.require_auth(client_id)?;
                 let session_id = self.require_session_id(payload)?;
-                self.verify_terminal_termination_owner(&session_id, payload)
+                self.verify_terminal_termination_owner(client_id, &session_id, payload)
                     .await?;
                 let client_mutation_id = optional_client_mutation_id(payload)?;
                 let receipt_context = if let Some(client_mutation_id) = client_mutation_id {

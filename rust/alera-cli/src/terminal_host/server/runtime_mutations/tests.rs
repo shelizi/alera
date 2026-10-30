@@ -87,6 +87,7 @@ async fn removing_tab_releases_its_hosted_review_refs() {
         RuntimeMutationRequest::RemoveTab {
             tab_id: "diff-tab".into(),
             expected_workspace_id: None,
+            expected_transfer_mutation_id: None,
         },
     )
     .await;
