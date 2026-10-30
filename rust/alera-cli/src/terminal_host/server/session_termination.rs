@@ -9,6 +9,35 @@ use super::runtime_mutations::{
 use super::ServerActor;
 
 impl ServerActor {
+    /// A workspace/project cascade must not silently terminate an attached,
+    /// previously transferred PTY: it has no per-view receipt like tab.remove.
+    /// Serialized runtime mutations block new terminal attachments until the
+    /// background SQLite operation completes, after this actor preflight.
+    async fn ensure_moved_terminal_views_detached(
+        &self,
+        workspace_id: &str,
+    ) -> crate::terminal_host::host_error::HostResult<()> {
+        use crate::terminal_host::host_error::HostError;
+
+        for session in self.sessions.values().filter(|session| {
+            session.running() && session.workspace_id == workspace_id && !session.clients.is_empty()
+        }) {
+            let stored = self
+                .runtime_store
+                .find_workspace_tab(&session.tab_id)
+                .await
+                .map_err(|error| HostError::state(error.to_string()))?;
+            if stored.is_some_and(|tab| {
+                tab.kind == "terminal" && tab.payload["lastTerminalTabTransfer"].is_object()
+            }) {
+                return Err(HostError::state(
+                    "Workspace cleanup cannot close a transferred Terminal with attached views. Detach every desktop/mobile view before retrying.",
+                ));
+            }
+        }
+        Ok(())
+    }
+
     pub(super) async fn prepare_runtime_mutation(
         &mut self,
         request: &RuntimeMutationRequest,
@@ -39,6 +68,29 @@ impl ServerActor {
                 }
             }
             return Ok(WorkspaceShutdown::default());
+        }
+        // Other serialized removals can delete the same terminal implicitly.
+        // Require the owning view(s) to detach before any cascade is written.
+        let affected_workspace_ids = match request {
+            RuntimeMutationRequest::RemoveWorkspace { workspace_id, .. }
+            | RuntimeMutationRequest::RemoveWorkspaceTabs { workspace_id }
+            | RuntimeMutationRequest::SleepWorkspace { workspace_id } => {
+                vec![workspace_id.clone()]
+            }
+            RuntimeMutationRequest::RemoveProject { project_id }
+            | RuntimeMutationRequest::RemoveProjectWorkspaces { project_id } => self
+                .runtime_store
+                .list_workspaces(project_id)
+                .await
+                .map_err(|error| HostError::state(error.to_string()))?
+                .into_iter()
+                .map(|workspace| workspace.id)
+                .collect(),
+            _ => Vec::new(),
+        };
+        for workspace_id in &affected_workspace_ids {
+            self.ensure_moved_terminal_views_detached(workspace_id)
+                .await?;
         }
         // Check when the queued operation starts, not when it was enqueued:
         // an earlier removal may have just failed and retained a shutdown.
@@ -77,6 +129,10 @@ impl ServerActor {
         {
             return Err(HostError::state("Workspace is active in the workbench"));
         }
+        // close_sessions=true terminates before Git or SQLite cleanup, so
+        // the actor must reject attached moved sessions before capture.
+        self.ensure_moved_terminal_views_detached(&request.id)
+            .await?;
         if request.close_sessions {
             let mut shutdown = WorkspaceShutdown::capture(
                 self.sessions
