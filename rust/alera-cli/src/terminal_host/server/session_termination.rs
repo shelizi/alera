@@ -20,6 +20,22 @@ impl ServerActor {
     ) -> crate::terminal_host::host_error::HostResult<()> {
         use crate::terminal_host::host_error::HostError;
 
+        // Do not erase a persisted transfer receipt merely because its
+        // original process is already missing (or the Host restarted).
+        // Until there is a verified crash-resolution action, even a fully
+        // detached/dead moved Tab must survive an implicit cascade.
+        if self
+            .runtime_store
+            .list_workspace_tabs(workspace_id)
+            .await
+            .map_err(|error| HostError::state(error.to_string()))?
+            .iter()
+            .any(|tab| tab.kind == "terminal" && tab.payload["lastTerminalTabTransfer"].is_object())
+        {
+            return Err(HostError::state(
+                "Workspace cleanup would erase a transferred Terminal receipt. Explicitly resolve and close the Terminal Tab before deleting its Workspace or Project.",
+            ));
+        }
         for session in self.sessions.values().filter(|session| session.running()) {
             let stored = self
                 .runtime_store
