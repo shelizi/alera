@@ -37,12 +37,14 @@ impl RuntimeStore {
         source_layout: &Value,
         target_layout: &Value,
         execution_launch_directory: &str,
+        pty_instance_token: &str,
     ) -> Result<WorkspaceTabRecord> {
         ensure!(
             !tab_id.trim().is_empty()
                 && !client_mutation_id.trim().is_empty()
                 && !source_workspace_id.trim().is_empty()
-                && !target_workspace_id.trim().is_empty(),
+                && !target_workspace_id.trim().is_empty()
+                && !pty_instance_token.trim().is_empty(),
             "Terminal transfer identifiers must not be empty."
         );
         ensure!(
@@ -143,7 +145,10 @@ impl RuntimeStore {
             "id": client_mutation_id,
             "from": source_workspace_id,
             "to": target_workspace_id,
-            "sourceGroupId": previous_source_group_id
+            "sourceGroupId": previous_source_group_id,
+            // Session handles can be reminted to newly spawned PTYs. Tie
+            // the receipt to the exact live instance at SQLite commit.
+            "ptyInstanceToken": pty_instance_token
         });
         tab.workspace_id = target_workspace_id.to_owned();
         tab.updated_at = Utc::now();

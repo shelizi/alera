@@ -2,14 +2,29 @@
 //! tab.upsert followed by layout.upsert: all three records must commit
 //! together and only then may the actor mutate its in-memory Session owner.
 
+use std::sync::OnceLock;
+
 use alera_core::runtime::WorkspaceTabRecord;
 use serde_json::{json, Value};
+use uuid::Uuid;
 
 use crate::terminal_host::host_error::{HostError, HostResult};
 use crate::terminal_host::protocol::event;
 
 use super::terminal_startup_commands::terminal_session_id;
 use super::ServerActor;
+
+// A Session ID may be reminted after a crash; the numeric instance counter
+// also resets after a process restart. Combine the per-process random epoch
+// and the Session's per-PTY instance number for a conservative proof.
+static TRANSFER_HOST_EPOCH: OnceLock<Uuid> = OnceLock::new();
+
+fn pty_instance_token(instance_id: u64) -> String {
+    format!(
+        "{}:{instance_id}",
+        TRANSFER_HOST_EPOCH.get_or_init(Uuid::new_v4)
+    )
+}
 
 fn string_field<'a>(payload: &'a Value, name: &str) -> HostResult<&'a str> {
     payload
@@ -186,6 +201,14 @@ impl ServerActor {
                 "reason": "pty_owner_mismatch"
             }));
         }
+        let current_pty_instance = pty_instance_token(live.instance_id());
+        if receipt["ptyInstanceToken"].as_str() != Some(current_pty_instance.as_str()) {
+            return Ok(json!({
+                "applied": false,
+                "recoveryRequired": true,
+                "reason": "pty_instance_unverified"
+            }));
+        }
         Ok(json!({
             "applied": true,
             "tab": self.workspace_tab_for_client(client_id, tab)
@@ -249,6 +272,7 @@ impl ServerActor {
                 "Terminal PTY identity or current workspace does not match.",
             ));
         }
+        let current_pty_instance = pty_instance_token(live.instance_id());
         let launch_directory = live.working_directory.clone();
         if self.sessions.values().any(|session| {
             session.tab_id == tab_id && session.id != session_id && session.running()
@@ -280,6 +304,17 @@ impl ServerActor {
         if stored.kind != "terminal" || terminal_session_id(&stored) != session_id {
             return Err(HostError::state(
                 "Terminal tab and live Session do not match.",
+            ));
+        }
+        let previous_receipt = &stored.payload["lastTerminalTabTransfer"];
+        if stored.workspace_id == target
+            && previous_receipt["id"].as_str() == Some(mutation_id)
+            && previous_receipt["from"].as_str() == Some(source)
+            && previous_receipt["to"].as_str() == Some(target)
+            && previous_receipt["ptyInstanceToken"].as_str() != Some(current_pty_instance.as_str())
+        {
+            return Err(HostError::state(
+                "Terminal transfer was persisted, but the original PTY instance cannot be verified after recovery.",
             ));
         }
         if stored
@@ -324,6 +359,7 @@ impl ServerActor {
                 source_layout,
                 target_layout,
                 &launch_directory,
+                &current_pty_instance,
             )
             .await
             .map_err(|err| HostError::state(err.to_string()))?;
