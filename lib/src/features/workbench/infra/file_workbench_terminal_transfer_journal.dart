@@ -705,8 +705,9 @@ final class FileWorkbenchTerminalTransferJournal
   @override
   Future<Map<String, WorkbenchTerminalTabTransferPlan>> loadPending() async {
     final folder = await _folder();
-    if (!await folder.exists())
+    if (!await folder.exists()) {
       return <String, WorkbenchTerminalTabTransferPlan>{};
+    }
     final pending = <String, WorkbenchTerminalTabTransferPlan>{};
     final validDigest = RegExp(r'^[a-f0-9]{64}$');
     await for (final entity in folder.list(followLinks: false)) {

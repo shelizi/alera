@@ -172,8 +172,11 @@ final class WorkbenchTerminalTabTransferCoordinator {
     if (original == null) return null;
     final port = _port;
     if (port is! WorkbenchTerminalTabTransferRecoveryPort) return null;
+    // The commit port and optional recovery port are independent interfaces:
+    // Dart cannot promote across them without a narrowed typed reference.
+    final recovery = port as WorkbenchTerminalTabTransferRecoveryPort;
     try {
-      final committed = await port.confirmCommitted(original);
+      final committed = await recovery.confirmCommitted(original);
       if (committed == null ||
           committed.id != original.tabId ||
           committed.workspaceId != original.targetWorkspaceId ||
