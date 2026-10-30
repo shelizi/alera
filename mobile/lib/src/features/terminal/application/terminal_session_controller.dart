@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:math';
 
 import 'package:alera_mobile/src/app/lifecycle/app_lifecycle_controller.dart';
 import 'package:alera_mobile/src/core/json_payload_fields.dart';
@@ -17,6 +19,12 @@ part 'terminal_session_input.dart';
 
 const Duration _foregroundProbeTimeout = Duration(seconds: 8);
 
+String _newMobileTerminalViewLeaseId() {
+  final random = Random.secure();
+  return base64UrlEncode(List<int>.generate(24, (_) => random.nextInt(256)))
+      .replaceAll('=', '');
+}
+
 @riverpod
 class TerminalSessionController extends _$TerminalSessionController {
   final Logger _logger = Logger('TerminalSessionController');
@@ -28,6 +36,9 @@ class TerminalSessionController extends _$TerminalSessionController {
   bool _recovering = false;
   bool _desktopReclaimed = false;
   int _lifecycleEpoch = 0;
+  // A phone tab owns its own Host view, not one shared socket. Retain across
+  // transport reconnect; a stale alternate client must not claim its token.
+  final String _viewLeaseId = _newMobileTerminalViewLeaseId();
   Completer<void>? _recoveryCompletion;
   MobileTerminalClient? _pendingRecoveryClient;
   // Null until the terminal has been laid out. Claiming a viewport resizes the
@@ -36,6 +47,38 @@ class TerminalSessionController extends _$TerminalSessionController {
   int? _rows;
 
   bool get supportsRestart => _client?.supportsTerminalRestart ?? false;
+
+  /// Only an already bound, ready UI attachment may authorize moved Tab
+  /// deletion. This never triggers provider creation or a new Host attach.
+  String? get attachedViewLeaseId {
+    if (_disposed ||
+        _recovering ||
+        _desktopReclaimed ||
+        _client is! MobileScopedTerminalViewLeaseClient) {
+      return null;
+    }
+    return switch (state) {
+      AsyncData(value: final session) when session.sessionId == _sessionId =>
+        _viewLeaseId,
+      _ => null,
+    };
+  }
+
+  Future<MobileTerminalSession> _attachWithOriginalView(
+    MobileTerminalClient client,
+  ) {
+    if (client is MobileScopedTerminalViewLeaseClient) {
+      return client.attachTerminalWithViewLease(
+        tabId,
+        viewLeaseId: _viewLeaseId,
+        cols: _cols,
+        rows: _rows,
+      );
+    }
+    // Older runtimes continue to attach only never-transferred tabs; a moved
+    // Host deliberately rejects an unnamed view.
+    return client.attachTerminal(tabId, cols: _cols, rows: _rows);
+  }
 
   @override
   Future<TerminalTabSession> build(String hostId, String tabId) async {
@@ -65,11 +108,7 @@ class TerminalSessionController extends _$TerminalSessionController {
     final client = await ref.read(terminalClientProvider(hostId).future);
     // The runtime restarts exited sessions under the same handle during
     // attach, so a single attach always yields a usable session.
-    final session = await client.attachTerminal(
-      tabId,
-      cols: _cols,
-      rows: _rows,
-    );
+    final session = await _attachWithOriginalView(client);
     return _bindSession(client, session);
   }
 
@@ -242,11 +281,7 @@ class TerminalSessionController extends _$TerminalSessionController {
             : const AsyncLoading<TerminalTabSession>(progress: 0.25);
         showStartingState = false;
         try {
-          final session = await nextClient.attachTerminal(
-            tabId,
-            cols: _cols,
-            rows: _rows,
-          );
+          final session = await _attachWithOriginalView(nextClient);
           if (_disposed) {
             _logger.warning(
               'discarding terminal recovery session after controller disposal',
@@ -345,12 +380,20 @@ class TerminalSessionController extends _$TerminalSessionController {
     try {
       // A restart mints a new PTY, so unlike attach it always needs a size;
       // an unmeasured terminal has nothing better than the default to give.
-      final session = await client.restartTerminal(
-        tabId,
-        sessionId: _sessionId,
-        cols: _cols ?? defaultTerminalCols,
-        rows: _rows ?? defaultTerminalRows,
-      );
+      final session = client is MobileScopedTerminalViewLeaseClient
+          ? await client.restartTerminalWithViewLease(
+              tabId,
+              sessionId: _sessionId,
+              viewLeaseId: _viewLeaseId,
+              cols: _cols ?? defaultTerminalCols,
+              rows: _rows ?? defaultTerminalRows,
+            )
+          : await client.restartTerminal(
+              tabId,
+              sessionId: _sessionId,
+              cols: _cols ?? defaultTerminalCols,
+              rows: _rows ?? defaultTerminalRows,
+            );
       if (_disposed) {
         _logger.warning(
           'discarding terminal restart session after controller disposal',
@@ -441,7 +484,14 @@ class TerminalSessionController extends _$TerminalSessionController {
     String sessionId,
   ) async {
     try {
-      await client.detachTerminal(sessionId);
+      if (client is MobileScopedTerminalViewLeaseClient) {
+        await client.detachTerminalWithViewLease(
+          sessionId,
+          viewLeaseId: _viewLeaseId,
+        );
+      } else {
+        await client.detachTerminal(sessionId);
+      }
     } on Object catch (error, stackTrace) {
       _logger.warning(
         'could not detach terminal session $sessionId',

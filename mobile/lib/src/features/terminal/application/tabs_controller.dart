@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:alera_mobile/src/features/runtime/domain/runtime_client_surfaces.dart';
 import 'package:alera_mobile/src/features/runtime/domain/workspace_tab_summary.dart';
+import 'package:alera_mobile/src/features/terminal/application/terminal_session_controller.dart';
 import 'package:alera_mobile/src/features/terminal/application/terminal_providers.dart';
 import 'package:alera_mobile/src/features/workbench/application/workbench_providers.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
@@ -89,6 +90,43 @@ class TabsController extends _$TabsController {
   }
 
   Future<bool> closeTab(WorkspaceTabSummary tab) async {
+    if (tab.isTerminal && tab.payload['lastTerminalTabTransfer'] is Map) {
+      // Capture the *original, already rendered* phone view before any await
+      // or Host lookup. A background tab must first be opened and attached;
+      // never manufacture an attachment solely to authorize its deletion.
+      final provider = terminalSessionControllerProvider(hostId, tab.id);
+      if (!ref.exists(provider)) {
+        throw StateError(
+          'Open the moved Terminal on this phone before closing it.',
+        );
+      }
+      final observedViewLeaseId = ref
+          .read(provider.notifier)
+          .attachedViewLeaseId;
+      if (observedViewLeaseId == null) {
+        throw StateError(
+          'The moved Terminal is not attached to a verified phone view.',
+        );
+      }
+      final workspaceClient = await ref.read(
+        workspaceClientProvider(hostId).future,
+      );
+      if (!ref.mounted) return false;
+      if (workspaceClient is! MobileObservedViewLeaseTabRemoval) {
+        throw StateError(
+          'This mobile runtime cannot safely close a moved Terminal.',
+        );
+      }
+      // Unlike a never-moved tab, DO NOT call terminal.terminate first:
+      // Host tab.remove performs the receipt/PTY/last-view check and closes
+      // the process in one guarded serialized operation.
+      await workspaceClient.removeObservedTabWithViewLease(
+        tab,
+        observedViewLeaseId,
+      );
+      if (ref.mounted) ref.invalidateSelf();
+      return true;
+    }
     final client = await ref.read(terminalClientProvider(hostId).future);
     if (!ref.mounted) {
       return false;

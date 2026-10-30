@@ -296,6 +296,21 @@ impl ServerActor {
         let workspace_id = require_string(payload, "workspaceId")?;
         let tab_id = require_string(payload, "tabId")?;
         let working_directory = require_string(payload, "workingDirectory")?;
+        let view_lease_id = payload.get("viewLeaseId").and_then(Value::as_str);
+        if payload.get("viewLeaseId").is_some()
+            && !view_lease_id.is_some_and(|id| !id.trim().is_empty() && id.len() <= 128)
+        {
+            return Err(HostError::format(
+                "Terminal restart viewLeaseId must be non-empty and at most 128 bytes.",
+            ));
+        }
+        if let (Some(view), Some(existing)) = (view_lease_id, self.sessions.get(&session_id)) {
+            if !existing.can_register_view_lease(client_id, view) {
+                return Err(HostError::state(
+                    "Terminal restart viewLeaseId belongs to a different attached Host client.",
+                ));
+            }
+        }
         self.verify_terminal_attachment_owner(&session_id, &workspace_id, &tab_id)
             .await?;
         // Validate before any terminal exit/agent cleanup, so a missing
@@ -369,6 +384,11 @@ impl ServerActor {
             .collect::<Vec<_>>();
         let session = self.sessions.get_mut(&session_id).expect("just inserted");
         session.attach(client_id);
+        if let Some(view) = view_lease_id {
+            session.register_view_lease(client_id, view);
+        } else {
+            session.mark_unscoped_attachment(client_id);
+        }
         for attached_client_id in &resync_clients {
             session.attach_for_resync(*attached_client_id);
         }

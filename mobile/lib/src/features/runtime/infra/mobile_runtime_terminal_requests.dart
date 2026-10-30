@@ -3,7 +3,9 @@ part of 'mobile_runtime_client.dart';
 /// The terminal verbs of the gateway protocol: listing a workspace's tabs,
 /// minting and attaching sessions, and the input/viewport RPCs.
 mixin MobileRuntimeTerminalRequests
-    implements MobileObservedTerminalTermination {
+    implements
+        MobileObservedTerminalTermination,
+        MobileScopedTerminalViewLeaseClient {
   Future<void>? _probeAttempt;
   final Map<String, String> _pendingTerminateMutationIds = <String, String>{};
   Future<Object?> request(
@@ -85,6 +87,25 @@ mixin MobileRuntimeTerminalRequests
     return MobileTerminalSession.fromJson(payload);
   }
 
+  @override
+  Future<MobileTerminalSession> attachTerminalWithViewLease(
+    String tabId, {
+    required String viewLeaseId,
+    int? cols,
+    int? rows,
+  }) async {
+    if (viewLeaseId.trim().isEmpty) {
+      throw StateError('A mobile Terminal view lease cannot be empty.');
+    }
+    final payload = await requestMap('terminal.attach', <String, Object?>{
+      'tabId': tabId,
+      'viewLeaseId': viewLeaseId,
+      'cols': ?cols,
+      'rows': ?rows,
+    });
+    return MobileTerminalSession.fromJson(payload);
+  }
+
   Future<MobileTerminalSession> restartTerminal(
     String tabId, {
     String? sessionId,
@@ -94,6 +115,27 @@ mixin MobileRuntimeTerminalRequests
     final payload = await requestMap('terminal.restart', <String, Object?>{
       'tabId': tabId,
       'sessionId': ?sessionId,
+      'cols': cols,
+      'rows': rows,
+    });
+    return MobileTerminalSession.fromJson(payload);
+  }
+
+  @override
+  Future<MobileTerminalSession> restartTerminalWithViewLease(
+    String tabId, {
+    required String viewLeaseId,
+    String? sessionId,
+    int cols = defaultTerminalCols,
+    int rows = defaultTerminalRows,
+  }) async {
+    if (viewLeaseId.trim().isEmpty) {
+      throw StateError('Restart requires the same named phone Terminal view.');
+    }
+    final payload = await requestMap('terminal.restart', <String, Object?>{
+      'tabId': tabId,
+      'sessionId': ?sessionId,
+      'viewLeaseId': viewLeaseId,
       'cols': cols,
       'rows': rows,
     });
@@ -130,6 +172,20 @@ mixin MobileRuntimeTerminalRequests
 
   Future<void> detachTerminal(String sessionId) async {
     await request('detach', <String, Object?>{'sessionId': sessionId});
+  }
+
+  @override
+  Future<void> detachTerminalWithViewLease(
+    String sessionId, {
+    required String viewLeaseId,
+  }) async {
+    if (viewLeaseId.trim().isEmpty) {
+      throw StateError('Mobile detach requires its original view lease.');
+    }
+    await request('detach', <String, Object?>{
+      'sessionId': sessionId,
+      'viewLeaseId': viewLeaseId,
+    });
   }
 
   Future<void> terminateSession(String sessionId) async {

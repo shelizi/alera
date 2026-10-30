@@ -33,6 +33,38 @@ abstract interface class MobileObservedTabRemoval {
   Future<void> removeObservedTab(WorkspaceTabSummary tab);
 }
 
+/// A moved PTY may be closed only with the original tab/receipt and the
+/// already-attached phone View token. Legacy clients must reject that close.
+abstract interface class MobileObservedViewLeaseTabRemoval {
+  Future<void> removeObservedTabWithViewLease(
+    WorkspaceTabSummary tab,
+    String expectedViewLeaseId,
+  );
+}
+
+/// Optional named-view capability separate from the legacy mobile protocol.
+abstract interface class MobileScopedTerminalViewLeaseClient {
+  Future<MobileTerminalSession> attachTerminalWithViewLease(
+    String tabId, {
+    required String viewLeaseId,
+    int? cols,
+    int? rows,
+  });
+
+  Future<void> detachTerminalWithViewLease(
+    String sessionId, {
+    required String viewLeaseId,
+  });
+
+  Future<MobileTerminalSession> restartTerminalWithViewLease(
+    String tabId, {
+    required String viewLeaseId,
+    String? sessionId,
+    required int cols,
+    required int rows,
+  });
+}
+
 /// The runtime can send terminal output as a binary WebSocket message instead
 /// of base64 inside JSON. Feature-detected, never version-gated: the runtime
 /// requires an exact `aleraMobileProtocolVersion` match, so bumping it would

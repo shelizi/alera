@@ -19,7 +19,8 @@ import 'package:logging/logging.dart';
 const Duration _managedWorkspaceCreateTimeout = Duration(minutes: 30);
 const Duration _managedWorkspaceRemoveTimeout = Duration(minutes: 10);
 
-mixin MobileRuntimeWorkspaceClient implements MobileObservedTabRemoval {
+mixin MobileRuntimeWorkspaceClient
+    implements MobileObservedTabRemoval, MobileObservedViewLeaseTabRemoval {
   Set<String> get runtimeCapabilities;
 
   Future<Object?> request(
@@ -158,6 +159,30 @@ mixin MobileRuntimeWorkspaceClient implements MobileObservedTabRemoval {
       'id': tab.id,
       'expectedWorkspaceId': tab.workspaceId,
       if (receiptId != null) 'expectedTransferMutationId': receiptId,
+    });
+  }
+
+  @override
+  Future<void> removeObservedTabWithViewLease(
+    WorkspaceTabSummary tab,
+    String expectedViewLeaseId,
+  ) async {
+    if (!tab.isTerminal ||
+        tab.payload['lastTerminalTabTransfer'] is! Map ||
+        expectedViewLeaseId.trim().isEmpty) {
+      throw StateError('Moved Terminal requires an observed live mobile view.');
+    }
+    final originalMutationId = tab.observedTransferMutationId;
+    if (originalMutationId == null) {
+      throw StateError('Moved Terminal has an invalid original receipt.');
+    }
+    // Host tab.remove owns both deletion and live PTY teardown. Never
+    // terminate first: that would erase proof of the original PTY instance.
+    await request('tab.remove', <String, Object?>{
+      'id': tab.id,
+      'expectedWorkspaceId': tab.workspaceId,
+      'expectedTransferMutationId': originalMutationId,
+      'expectedViewLeaseId': expectedViewLeaseId,
     });
   }
 
