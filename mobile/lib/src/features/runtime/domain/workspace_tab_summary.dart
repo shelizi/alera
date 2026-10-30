@@ -28,6 +28,15 @@ class const WorkspaceTabSummary({
   String get terminalSessionId =>
       payload.optionalString('terminalSessionId') ?? id;
 
+  /// Last transfer *observed by this view*, not a refreshed Host value.
+  /// A stale Mobile close must not silently acquire a newer receipt.
+  String? get observedTransferMutationId {
+    final transfer = payload['lastTerminalTabTransfer'];
+    if (transfer is! Map) return null;
+    final id = transfer['id'];
+    return id is String && id.isNotEmpty ? id : null;
+  }
+
   factory fromJson(Map<String, Object?> json) {
     return WorkspaceTabSummary(
       id: json.requiredString('id'),

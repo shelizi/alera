@@ -21,6 +21,18 @@ const String mobileWorkspaceSidebarParityCapability =
 const String mobileProjectManagementCapability = 'mobileProjectManagementV1';
 const String mobileTabRenameCapability = 'mobileTabRenameV1';
 
+/// Optional V2 close operations use the tab observed by the caller rather
+/// than looking up the newest owner just before deleting a moved PTY.
+/// Kept separate from the existing interfaces so fake/older clients remain
+/// source-compatible and can safely reject unsupported moved-tab closes.
+abstract interface class MobileObservedTerminalTermination {
+  Future<void> terminateObservedTerminal(WorkspaceTabSummary tab);
+}
+
+abstract interface class MobileObservedTabRemoval {
+  Future<void> removeObservedTab(WorkspaceTabSummary tab);
+}
+
 /// The runtime can send terminal output as a binary WebSocket message instead
 /// of base64 inside JSON. Feature-detected, never version-gated: the runtime
 /// requires an exact `aleraMobileProtocolVersion` match, so bumping it would

@@ -2,7 +2,8 @@ part of 'mobile_runtime_client.dart';
 
 /// The terminal verbs of the gateway protocol: listing a workspace's tabs,
 /// minting and attaching sessions, and the input/viewport RPCs.
-mixin MobileRuntimeTerminalRequests {
+mixin MobileRuntimeTerminalRequests
+    implements MobileObservedTerminalTermination {
   Future<void>? _probeAttempt;
   final Map<String, String> _pendingTerminateMutationIds = <String, String>{};
   Future<Object?> request(
@@ -139,6 +140,36 @@ mixin MobileRuntimeTerminalRequests {
     await request('terminate', <String, Object?>{
       'sessionId': sessionId,
       'clientMutationId': clientMutationId,
+    });
+    _pendingTerminateMutationIds.remove(sessionId);
+  }
+
+  @override
+  Future<void> terminateObservedTerminal(WorkspaceTabSummary tab) async {
+    if (!tab.isTerminal) {
+      throw StateError('Only terminal tabs have a PTY to terminate.');
+    }
+    final transfer = tab.payload['lastTerminalTabTransfer'];
+    final receiptId = tab.observedTransferMutationId;
+    if (transfer is Map && receiptId == null) {
+      throw StateError(
+        'Terminal transfer receipt is invalid; refresh this tab before closing.',
+      );
+    }
+    final sessionId = tab.terminalSessionId;
+    final mutationId = _pendingTerminateMutationIds.putIfAbsent(
+      sessionId,
+      _newClientMutationId,
+    );
+    // The tab/workspace/receipt all come from the original visible snapshot.
+    // Never replace them with the newest Host owner on retry: an A->B->A
+    // transfer may have made that old window stale despite matching ids.
+    await request('terminate', <String, Object?>{
+      'sessionId': sessionId,
+      'expectedWorkspaceId': tab.workspaceId,
+      'expectedTabId': tab.id,
+      if (receiptId != null) 'expectedTransferMutationId': receiptId,
+      'clientMutationId': mutationId,
     });
     _pendingTerminateMutationIds.remove(sessionId);
   }

@@ -95,9 +95,21 @@ class TabsController extends _$TabsController {
     }
     if (tab.isTerminal) {
       try {
-        await client.terminateSession(tab.terminalSessionId);
+        if (client is MobileObservedTerminalTermination) {
+          await (client as MobileObservedTerminalTermination)
+              .terminateObservedTerminal(tab);
+        } else if (tab.payload['lastTerminalTabTransfer'] != null) {
+          throw StateError(
+            'This Terminal moved to another workspace. Update the mobile client before closing it.',
+          );
+        } else {
+          await client.terminateSession(tab.terminalSessionId);
+        }
       } on Object {
-        // A tab whose session already exited still gets removed below.
+        // Legacy never-moved tabs may already have an exited PTY; deleting
+        // their durable tab still makes sense. A moved Terminal is different:
+        // rejection can mean this window owns an obsolete transfer receipt.
+        if (tab.payload['lastTerminalTabTransfer'] != null) rethrow;
       }
     }
     if (!ref.mounted) {
@@ -106,7 +118,17 @@ class TabsController extends _$TabsController {
     final workspaceClient = await ref.read(
       workspaceClientProvider(hostId).future,
     );
-    await workspaceClient.removeTab(tab.id);
+    if (workspaceClient is MobileObservedTabRemoval) {
+      await (workspaceClient as MobileObservedTabRemoval).removeObservedTab(
+        tab,
+      );
+    } else if (tab.payload['lastTerminalTabTransfer'] != null) {
+      throw StateError(
+        'This Terminal changed workspaces. Refresh before deleting it.',
+      );
+    } else {
+      await workspaceClient.removeTab(tab.id);
+    }
     if (ref.mounted) {
       ref.invalidateSelf();
     }

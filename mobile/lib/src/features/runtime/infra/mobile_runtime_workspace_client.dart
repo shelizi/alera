@@ -19,7 +19,7 @@ import 'package:logging/logging.dart';
 const Duration _managedWorkspaceCreateTimeout = Duration(minutes: 30);
 const Duration _managedWorkspaceRemoveTimeout = Duration(minutes: 10);
 
-mixin MobileRuntimeWorkspaceClient {
+mixin MobileRuntimeWorkspaceClient implements MobileObservedTabRemoval {
   Set<String> get runtimeCapabilities;
 
   Future<Object?> request(
@@ -143,6 +143,22 @@ mixin MobileRuntimeWorkspaceClient {
 
   Future<void> removeTab(String tabId) async {
     await request('tab.remove', <String, Object?>{'id': tabId});
+  }
+
+  @override
+  Future<void> removeObservedTab(WorkspaceTabSummary tab) async {
+    final transfer = tab.payload['lastTerminalTabTransfer'];
+    final receiptId = tab.observedTransferMutationId;
+    if (transfer is Map && receiptId == null) {
+      throw StateError(
+        'Terminal transfer receipt is invalid; refresh this tab before closing.',
+      );
+    }
+    await request('tab.remove', <String, Object?>{
+      'id': tab.id,
+      'expectedWorkspaceId': tab.workspaceId,
+      if (receiptId != null) 'expectedTransferMutationId': receiptId,
+    });
   }
 
   Future<List<ProjectSummary>> listProjects() async {
