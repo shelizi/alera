@@ -35,10 +35,12 @@ class WorkspaceTabService._(
 
   static DateTime _defaultNow() => DateTime.now().toUtc();
 
+  @override
   Future<List<WorkspaceTabRecord>> listTabs(String workspaceId) {
     return _repository.listWorkspaceTabs(workspaceId);
   }
 
+  @override
   Future<WorkspaceTabRecord> ensureInitialTerminalTab(
     String workspaceId,
   ) async {
@@ -127,6 +129,7 @@ class WorkspaceTabService._(
     return tab;
   }
 
+  @override
   Future<void> closeTab(String tabId) {
     return _repository.removeWorkspaceTab(tabId);
   }
