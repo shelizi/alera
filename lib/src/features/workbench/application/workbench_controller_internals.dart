@@ -234,6 +234,17 @@ mixin _WorkbenchControllerInternals on _$WorkbenchController
 
   WorkbenchRepository get _repository => ref.read(workbenchRepositoryProvider);
 
+  /// T2 provider composition stays at the dedicated controller boundary.
+  /// Read on demand so a Host reconnect cannot leave stale port instances.
+  WorkbenchTerminalTabTransferCoordinator get _terminalTransferCoordinator =>
+      ref.read(workbenchTerminalTransferCoordinatorProvider);
+
+  WorkbenchTerminalTabTransferPort get _terminalTransferPort =>
+      ref.read(workbenchTerminalTransferPortProvider);
+
+  Future<bool> get _terminalTransferAvailable =>
+      ref.read(workbenchTerminalTransferAvailabilityProvider.future);
+
   WorkspaceGraphRepository get _workspaceGraphRepository =>
       ref.read(workspaceGraphRepositoryProvider);
 

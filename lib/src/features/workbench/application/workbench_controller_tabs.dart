@@ -7,7 +7,7 @@ mixin _WorkbenchControllerTabs
   /// and still-running Session, then both Layouts must be read back before
   /// we release the coordinator's unknown-outcome guard.
   Future<bool> confirmUnknownTerminalTransfer(String tabId) async {
-    final coordinator = ref.read(workbenchTerminalTransferCoordinatorProvider);
+    final coordinator = _terminalTransferCoordinator;
     await coordinator.restoreUnknownTransfers();
     final original = coordinator.unknownPlan(tabId);
     if (original == null) return false;
@@ -37,7 +37,7 @@ mixin _WorkbenchControllerTabs
           'Workbench closed; reopen it to confirm Terminal move.',
         );
       }
-      final port = ref.read(workbenchTerminalTransferPortProvider);
+      final port = _terminalTransferPort;
       await WorkbenchTerminalTransferReconciliation(
         port: port,
         applyTabs: _tabLayoutOwner.applyWorkspaceTabs,
@@ -96,16 +96,14 @@ mixin _WorkbenchControllerTabs
     required String tabId,
     String? targetGroupId,
   }) async {
-    final available = await ref.read(
-      workbenchTerminalTransferAvailabilityProvider.future,
-    );
+    final available = await _terminalTransferAvailable;
     if (!available) {
       throw StateError(
         'Cross-project Terminal transfer is not supported by this Runtime.',
       );
     }
-    final port = ref.read(workbenchTerminalTransferPortProvider);
-    final coordinator = ref.read(workbenchTerminalTransferCoordinatorProvider);
+    final port = _terminalTransferPort;
+    final coordinator = _terminalTransferCoordinator;
     _tabLayoutOwner.beginTerminalTransfer(source.id, destination.id);
     try {
       final moved = await coordinator.transfer(
@@ -174,9 +172,7 @@ mixin _WorkbenchControllerTabs
     required String tabId,
     required String expectedMutationId,
   }) async {
-    final tab = await ref
-        .read(workbenchRepositoryProvider)
-        .findWorkspaceTabById(tabId);
+    final tab = await _repository.findWorkspaceTabById(tabId);
     final receipt = tab?.payload['lastTerminalTabTransfer'];
     if (tab == null ||
         tab.kind != WorkspaceTabKind.terminal ||
@@ -202,9 +198,7 @@ mixin _WorkbenchControllerTabs
       );
     }
     final previousGroup = receipt['sourceGroupId'];
-    final restoredLayout = await ref
-        .read(workbenchRepositoryProvider)
-        .findWorkbenchLayout(original.id);
+    final restoredLayout = await _repository.findWorkbenchLayout(original.id);
     final groupId =
         previousGroup is String &&
             restoredLayout?.groups.containsKey(previousGroup) == true

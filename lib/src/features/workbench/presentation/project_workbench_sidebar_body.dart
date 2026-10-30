@@ -41,7 +41,8 @@ class const _SidebarBody({
   required final _TerminalTabCallback onSelectTerminal,
   required final _TerminalTabCallback onCloseTerminal,
 
-  /// Unset until an atomic host transfer API is available to the controller.
+  /// Null when the Host has not advertised safe live-PTY transfer. The
+  /// sidebar only receives a narrow command, never the Workbench owner.
   final Future<void> Function(WorkbenchTabDragData data, Workspace destination)?
   onTransferTerminalTab,
 }) extends ConsumerWidget {
