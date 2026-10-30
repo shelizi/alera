@@ -4,6 +4,12 @@ This table answers the eight transaction/replay questions from the architecture 
 
 Authority is `ServerActor` on the terminal-host mailbox, persisting through `RuntimeStore`. Tabs are special in two ways: their `payload` carries host-owned fields (`agentTitle*` state) that client writes must not clobber, and `kind = "terminal"` tabs with `payload.spawnOnCreate` own a live PTY that is spawned as part of the upsert.
 
+## T2-D4: lost transfer reply and dual-layout authority (2026-10-30)
+
+The `tab.transfer` request is a **single atomic owner/Layout mutation** scoped to one existing, live Terminal Session. A lost response is not proof of failure. The client holds its exact `clientMutationId` and both source/target identities, queries `tab.transfer.status`, and accepts success **only** when the Host confirms the original persisted receipt **and** current live PTY ownership. Client-side `WorkbenchTerminalTabTransferCoordinator` must retain this unknown-outcome guard until `WorkbenchTerminalTransferReconciliation` has read and applied **both** authoritative Tab lists and Layouts without further persistence. Mismatched replies also remain unknown. This protection is currently **in-memory only** (not preserved across application restarts).
+
+Host `layout.upsert` has a D3 narrow ownership membership fence for Tabs with `lastTerminalTabTransfer`; it is **not** universal optimistic CAS for every Workbench Layout edit. Transferred Tabs remain feature-gated off with `tab.transfer.capabilities.supported=false`. Source/target listeners must not use old provisional sanitized layouts to overwrite the Host's atomic results. These are unverified implementation contracts, **not** evidence of passing tests or release readiness.
+
 ## Tabs
 
 | Operation | Instance check | Replay | Same id + different payload | Commit vs publish | Lost reply retry | Restart recovery | Stale owner / wrong actor |

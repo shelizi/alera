@@ -1,8 +1,20 @@
 # T2 — 跨專案／跨 Workspace Terminal Tab 移動：功能規劃與並行重構邊界
 
-**Priority：P2；Status：D3 Host Layout authority / Client receipt recovery / safe PTY remint integrated, feature-gated OFF（2026-10-30）。** 已整合 D1 關閉競態／失聯確認／Undo、D2 stale-view close/attach／跨視窗權威同步，及 D3 原子 Layout 轉移歸屬守衛／未知結果阻止新操作／原執行路徑失效時的安全恢復。**仍未開放跨專案拖放，也未執行本批的 Flutter/Cargo 測試、靜態分析或編譯。**
+**Priority：P2；Status：D4 transfer-receipt ABA guard / unknown-result two-layout recovery / explicit status UX integrated, feature-gated OFF（2026-10-30）。** D1–D3 的 Host、Store、Watcher、Undo 和原執行目錄保護仍在；D4 進一步補上「A→B→A 舊視窗誤終止」及不明轉移回覆的手動核實。**仍未開放跨專案拖放，也未執行本批的 Flutter/Cargo 測試、靜態分析或編譯。**
 
 本文件原是 `feat/cross-project-terminal-tabs-20261029` 分支上的設計稿（commit `ec150a493`），現**只收編此規劃檔**至 `refactor/tdd-integrate-20261029`；未合併該舊分支的產品程式。原設計所記載的並行分工為 2026-10-29 第三批的歷史狀態；最新整合已包含第八批功能修正及 macOS Claude Code 貼上 hotfix。
+
+## 最新：T2-D4 三線安全修正（2026-10-30；仍未啟用）
+
+確認基準為乾淨整合 `1464828459c66b66c281a1a0664232af6aafcb21`，沿用 D3 乾淨獨立工作樹切換到 D4 新分支，沒有重新 checkout 全專案。啟用旗標 `tab.transfer.capabilities.supported` **仍為 false**。
+
+| 工作線 | 實際程式碼交付 | 獨立提交 → 整合提交 |
+| --- | --- | --- |
+| D4-H Rust Host 終止 ABA 防護 | `verify_terminal_termination_owner` 在已轉移過的 Terminal 上額外核對視圖送出的 `expectedTransferMutationId` 與 Host 持久化 `lastTerminalTabTransfer.id`。A→B→A 即使 Workspace/Tab ID 再次相同，仍拒絕舊收據終止；從未轉移的舊 Tab 無收據，維持 legacy 行為 | `2179039f1` → **`e74cda072`** |
+| D4-C Dart 未知結果二次確認 | Coordinator 保存精確原操作 `WorkbenchTerminalTabTransferPlan`，收到 Host 權威收據＋活 PTY 確認後，**仍維持 unknown guard，直到來源及目的 Tabs/Layout 以 `persist:false` 回讀完成**才解除。Controller 新增 `confirmUnknownTerminalTransfer`，失敗或斷線保持原 mutation 未解決；錯誤內容不符的轉移回覆也視為未知、不能宣稱確定失敗 | `4c827a88f` → **`ad35694ac`** |
+| D4-U Dart 終端視圖與提示 | Terminal Host client 終止請求帶入**本視圖觀察到的**最後轉移收據，不會關閉前偷查最新 ID；Terminal `sync` 與新建 PTY handle 分別更新本地觀察值。Sidebar 對失聯或逾時回覆顯示「結果未知」及「Check status」操作，查證成功才重讀兩側 Layout，不會自動重試或顯示假成功 | `e5dcf1f87` → **`469b64c54`** |
+
+**仍待啟用前處理**：Host Crash/Restart 時「Tab 已提交但活 PTY 已失效」要有可解決的 recovery 狀態；跨**不同程序**共享 Session 的最後一個視圖、Detach/Close 與輸出游標順序尚未有真正端到端的 ownership lease；斷線後持續跨 App 重啟的 unknown mutation journal 尚未實作。Transferred Terminal 的 Mobile 舊版 terminate 未帶最後收據會**安全拒絕**，需另設 Mobile 相容 UX。關鍵路徑的 Flutter/Cargo 編譯、實際多視窗 Win/Mac 測試與操作契約驗證**仍未執行**。本批只有格式化與 Git staged whitespace check；不推送、不發布，不修改原始 dirty `main`。
 
 ## 最新：T2-D3 三線平行修正（2026-10-30；尚未啟用）
 

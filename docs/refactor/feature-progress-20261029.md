@@ -1,5 +1,11 @@
 # Alera 功能優先續做：第八批四線隔離（2026-10-29）
 
+## 最新：T2-D4 平行三線安全防護已整合（2026-10-30）
+
+從整合 `146482845` 重用三個乾淨 D3 工作樹切 D4 分支，不碰 `main`。Rust Host 驗證最後轉移收據避免 A→B→A 的 ABA 舊視窗誤終止 **`e74cda072`**；Dart Coordinator 保留 Host 失聯後的原 mutation guard，直到收到原收據且重新套用來源／目的權威 Layout 才清除 **`ad35694ac`**；Terminal PTY client 送本視圖所見收據、側邊欄未知結果有「Check status」手動查證入口 **`469b64c54`**。均由獨立分支提交後 cherry-pick，沒有整合衝突。
+
+**功能仍停用**：`tab.transfer.capabilities.supported=false` 未變；跨程序真正 Last-view lease、Crash/Restart 的部分提交恢復、跨 App 重啟保存未知操作、Mobile 舊版 terminate 相容性與實機驗證仍待做。這輪僅 `rustfmt`／`dart format` 和 staged whitespace check；**沒有 Cargo/Flutter test、Analyze、Check、Build、Win/Mac E2E、Push 或 Release**。參見 `docs/terminal-tab-cross-workspace-plan-20261029.md`。
+
 ## 最新：T2-D3 三線安全補強已合入（2026-10-30，仍關閉跨專案拖曳）
 
 確認 D1／D2 已在乾淨整合 HEAD `ca42a1be76e967580921f3ece25299765c5eba35`，重用三個既有乾淨 worktree，從最新整合點分別切出獨立 D3 分支，不新建大量檢出工作樹：
