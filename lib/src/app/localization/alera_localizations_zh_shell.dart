@@ -162,7 +162,7 @@ const Map<String, String> _traditionalChineseShell = <String, String>{
   'Add Tag': '新增 Tag',
   'Tag Name': 'Tag 名稱',
   'Tag name': 'Tag 名稱',
-  'Tag name is required': '請輸入 Tag 名稱',
+  'Tag name is required': 'Tag 名稱為必填',
   'Remote': '遠端',
   'condensed diff': '精簡差異',
   'Message (Optional)': '訊息（選填）',
