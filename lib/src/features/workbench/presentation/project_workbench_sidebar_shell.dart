@@ -208,7 +208,7 @@ class _ProjectWorkbenchSidebarState
                                               ),
                                               content: Text(
                                                 error.hostRecoveryRequired
-                                                    ? 'Host saved the Terminal move, but its live PTY is missing or inconsistent. Keep the pending transfer and do not close or restart this tab until recovery.'
+                                                    ? 'Host found incomplete or conflicting Terminal transfer evidence (receipt, workspace owner, or live PTY). Keep the pending record; do not close, restart, or move this tab until recovery.'
                                                     : 'Terminal move status is unknown. Do not move or close the tab until the Host confirms its current workspace.',
                                               ),
                                               action: SnackBarAction(
