@@ -1,10 +1,23 @@
 # T2 — 跨專案／跨 Workspace Terminal Tab 移動：功能規劃與並行重構邊界
 
-**Priority：P2；Status：D15 三線六筆安全補強已整合（Host 收據／PTY 退出證據即使損毀都必須保留、Client 不得冒用 `tab.upsert` 改寫已移轉 owner/原退出紀錄、Mobile 未驗證 Transfer 不使用舊式 Close、Journal 孤兒封存清單）；feature-gated OFF（2026-10-30）。** D1–D14 保留。**跨專案拖放仍未開放；Flutter/Cargo 測試、靜態分析、編譯及實機回歸仍未執行。**
+**Priority：P2；Status：D16 三線／四筆安全與唯讀退休預檢已整合（Store fail-closed Replay/Exit、Host 同一 SQLite 快照查 Exit 與雙 Layout、Journal 合併人工診斷、Mobile View 附著版本防重連競態）；feature-gated OFF（2026-10-30）。** D1–D15 保留。**跨專案拖放仍未開放；Flutter/Cargo 測試、靜態分析、編譯及實機回歸仍未執行。**
 
 本文件原是 `feat/cross-project-terminal-tabs-20261029` 分支上的設計稿（commit `ec150a493`），現**只收編此規劃檔**至 `refactor/tdd-integrate-20261029`；未合併該舊分支的產品程式。原設計所記載的並行分工為 2026-10-29 第三批的歷史狀態；最新整合已包含第八批功能修正及 macOS Claude Code 貼上 hotfix。
 
-## 最新：T2-D15 三線／六筆安全補強已整合（2026-10-30；Capability 仍 OFF）
+## 最新：T2-D16 三線／四筆安全補強已整合（2026-10-30；Capability 仍 OFF）
+
+**Git**：從 D15 乾淨整合 `c4047798ad5ecbe6f9953c5c418351cc563ea5dd` 起，source 分支 `feat/t2-d16-store-retirement-preview-20261030`、`feat/t2-d16-journal-manual-dossier-20261030`、`feat/t2-d16-mobile-view-close-20261030`。四筆 Source→Integration：`cbe304c8b`→**`88f09d941`**、`fa5130e5a`→**`5837f89b8`**、`6f29de5e3`→**`dd6eeb3e3`**、`429557d4e`→**`e3f771ed1`**。文件提交前 HEAD `e3f771ed1`，Docs commit 後接手先查 Git HEAD/status。
+
+| 工作線 | D16 實作與不能推論之事 |
+| --- | --- |
+| Store Receipt／原 PTY Exit | `record_transferred_terminal_exit` 對原 Exit **key presence** 判斷，連 `null` 也當作需保留的原 Host 證據，不能覆寫；`transfer_terminal_tab_storage` 把先前 Exit Marker、格式錯/身份錯誤的 Transfer Receipt 和不同原 PTY Instance 一律擋下。相同 mutation replay 也需用**同一 SQLite transaction** 驗證來源/目標持久 Layout 和兩側全部 Tab registry，不能僅有收據就宣稱 success。 |
+| Host 退出 PTY 一筆快照預檢 | Store `inspect_transferred_terminal_retirement_evidence` 共享 D13/D14 的兩 Layout＋Tab registry 單筆交易檢查，另核對原 Host Observed Exit 的 mutation/Session/Workspace/PTY Token/Code/合法時間；Host `tab.transfer.status` 在 `pty_exit_observed` 時附上 **`originalExitAndLayoutsConsistent`**，對原 Host generation mismatch 仍如實標示。回傳保持 **`applied:false,recoveryRequired:true`**；即使 true，也**不是**可刪 Tab、可清 Journal、已無其他 live viewer 或能復活原 PTY 的權威批准。 |
+| Journal 人工復原 Dossier | Desktop `inspectManualRecoveryDossier()` 結合 Pending／所有 Lock 與 Resolved／孤兒檔的唯讀盤點，帶 UTC 觀察時間與本地 evidence flags。任一根目錄不安全就 fail closed；兩份不同時間讀取不構成 atomic snapshot。`requiresHostVerification=true`、`permitsAutomaticUnlock=false` 固定不變；不得以 PID、日期、Archive 格式判定已安全解除鎖。 |
+| Mobile Close 的附著版本 | `TerminalSessionController._attachmentRevision` 每次重新附著 increment，`observedAttachedView` 是同步只讀 View ID＋當次 revision。轉移 Tab Close 捕捉 click-time 原 Controller＋revision，`await workspaceClientProvider` 完成後確認 Provider 仍同 instance 且 View Revision 未改；新 Socket 使用**同 UUID**也不能自動繼承舊點擊的 Close 意圖。普通 fallback 再次使用 `hasTransferEvidence` 防 Exit-only 遺失。 |
+
+**D17 未完成**：跨原生視窗／跨 App／多 Phone／Host restart 的真正 durable last-view owner lease；Host Crash SQLite Commit／Session reparent 的 definite outcome/補償；需使用者授權＋原 Host Process Generation + 真實 original Exit＋雙 Layout CAS 的**同交易安全退休與持久 Audit**；Journal stale Lock 適當的 process incarnation/liveness 與 Host-signed manual recovery/UX；完整 Win/Mac/Phone E2E 和 Cargo/Flutter test/analyze/check/build。D16 **不提供**可破壞性清理/解鎖的 RPC，Gate `tab.transfer.capabilities.supported=false` 保留；只做 Rust/Dart format、Git whitespace checks、Git 隔離 commit/cherry-pick，**沒有測試、編譯、分析、Push、Release，也不碰 dirty main**。接手讀 `docs/refactor/feature-progress-20261029.md` 最上方 D16。
+
+## 歷史：T2-D15 三線／六筆安全補強已整合（2026-10-30；Capability 仍 OFF）
 
 **Git**：從 D14 乾淨整合 `ac5d4383c51b8cda5da946e6f1da954622e66256` 起，三條來源分支 `feat/t2-d15-corrupt-receipt-20261030`、`feat/t2-d15-resolution-inventory-20261030`、`feat/t2-d15-mobile-receipt-20261030`。程式碼最後一筆整合 **`6b255be72`**；文件提交後 HEAD 會再向前，接手先看 `git log -1`／`git status`。
 

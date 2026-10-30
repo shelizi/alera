@@ -1,6 +1,21 @@
 # Alera 功能優先續做：第八批四線隔離（2026-10-29）
 
-## 下一次對話／其他 Agent 最新交接入口：T2-D15（2026-10-30）
+## 下一次對話／其他 Agent 最新交接入口：T2-D16（2026-10-30）
+
+**最新接手整合基準**：`refactor/tdd-integrate-20261029`，Worktree `.worktrees/refactor-tdd-integrate-20261029`。從乾淨 D15 HEAD **`c4047798ad5ecbe6f9953c5c418351cc563ea5dd`** 起，三個 clean source worktrees 建立 `feat/t2-d16-store-retirement-preview-20261030`、`feat/t2-d16-journal-manual-dossier-20261030`、`feat/t2-d16-mobile-view-close-20261030`，分離提交再依序 cherry-pick。**D16 原始碼整合後，文件提交前 HEAD `e3f771ed1`**；下一輪必須以 `git log -1`、`git status` 查新 HEAD，不能直接假定 docs commit 未更新。原始 dirty `main` HEAD `3d232acff9822154c68049ee63c57ed5966b84e0` 以及其 preexisting history/xterm/e2e dirty files 未動。
+
+| D16 工作線 | 已完成的程式碼與證據限制 | Source → Integration |
+| --- | --- | --- |
+| D16-S Store 原收據／Exited PTY 保護 | `record_transferred_terminal_exit` 改用 **Key presence** 而非 `Value::is_null()` 判定已存 `lastTerminalTabExit`：不會覆寫 JSON null／損毀的 Host 退出證據。Store `transfer_terminal_tab_storage` 在任何新 Transfer/Replay 前拒絕已有 Exit Marker／不完整 Prior Receipt，要求先前原 PTY Token 必須與現行 token 相同、Receipt `to` 為目前 Workspace；同 mutation replay **重新驗證兩側已存 Layout 必須等於送入結果及兩側全部 Tab registry**，絕不單看相同 ID 就宣稱成功。此為 SQLite 寫入層 fail closed，不等於跨 Host OS PTY 交易或故障補償 | `cbe304c8b` → **`88f09d941`** |
+| D16-H 已退出 PTY 的原子唯讀預檢 | `RuntimeStore.inspect_transferred_terminal_retirement_evidence` 與現有 transfer status 共用**單筆 SQLite 讀取交易**，同時核對 Tab 當前 owner/Session/最新 Receipt ID/from/to/原 PTY Token、Host 記錄的 Exit Mutation/Session/Workspace/Token/Code/合法 UTC 時間字串、雙側 Layout split tree 和兩側完整 Tab 名冊。Host `tab.transfer.status` 對 `pty_exit_observed` 新增 **`originalExitAndLayoutsConsistent`**，仍只回 `applied:false,recoveryRequired:true`，Host 世代不一致繼續標 `hostGenerationMismatch`。**這不是 Last-view 證明、也不允許退休 Tab／清 Journal／認定舊 Host 已死** | `fa5130e5a` → **`5837f89b8`** |
+| D16-J Journal 人工診斷資料合併 | `inspectManualRecoveryDossier()` 唯讀合併所有 Pending/Lock 檔案的 `inspectRecoveryInventory` 與所有 resolved/Orphan Audit 的 `inspectResolutionArchiveInventory`，回傳觀察時間／未解 Pending 或 Lock／不安全本地證據。兩個根目錄任一出錯就直接拒絕，不能用部分清單誤認為空。快照**非原子**；`requiresHostVerification` 永遠 true、`permitsAutomaticUnlock` 永遠 false，不檢查 PID liveness、不刪除任何檔案 | `6f29de5e3` → **`dd6eeb3e3`** |
+| D16-M Mobile 點擊時附著身分 | `TerminalSessionController` 每次真正 `_bindSession` 更新 `_attachmentRevision`，`observedAttachedView` 只在已附著 ready UI 提供 `(原 View Lease ID, attachment revision)`。手機按下 moved Tab Close 後，在 `await workspaceClientProvider` 結束時重新核對**原 Provider/原 Controller/原附著版本仍存在**，否則要求從目前視圖重新按 Close，不可借用另一個 Socket 上相同 UUID 的新附著；即使 legacy fallback 也拒絕只有 Exit Marker 的移轉資料。此仍非跨程序 durable View registry | `429557d4e` → **`e3f771ed1`** |
+
+**D17 待辦與安全界線**：① 沒有真正跨 OS Native Window／多 App Process／多 Phone／Host 重啟的**持久 Last-view Lease/原實體 View owner**，D16 只以當下 Host 記憶體與本地手機 revision 避免部分 race。② Host SQLite Commit 至 Live PTY reparent 的 Crash 區間仍無 definite outcome／可復活原 PTY，D16 不宣稱原 Host 死亡。③ `originalExitAndLayoutsConsistent` **只讀證據**，不是使用者意圖／身分授權；**尚未**實作原 PTY 退出後透過最新 Receipt + Process Generation + 雙 Layout CAS + Durable Audit 同交易的合法退休。④ Journal stale Lock 缺跨程序 Process incarnation/liveness、Host 權威 outcome/人工簽核/安全解除與 UX；Dossier 不包含解除鎖操作。⑤ Cargo/Flutter Tests、Check、Analyze、Build、Win/macOS/Phone 多視窗與多裝置 E2E 仍未獲准執行。
+
+**原限制完全保留**：`rust/alera-cli/src/terminal_host/server/requests.rs` **`tab.transfer.capabilities.supported=false`**，跨專案 Terminal Tab 拖放仍**不可用**。D16 僅執行 `rustfmt --edition 2021`、`dart format`、Git `diff --check`／`diff --cached --check` 與 Git Source Commit/Cherry-pick；**不新增或執行 Cargo/Flutter tests、Cargo check、Flutter analyzer、Build、Windows/macOS/Phone E2E、Push 或 Release**；不 reset/clean/merge 原始 dirty main。下次先讀本節，再看 `docs/terminal-tab-cross-workspace-plan-20261029.md` 最新 D16。
+
+## 歷史：T2-D15 交接入口（2026-10-30）
 
 **唯一整合分支**：`refactor/tdd-integrate-20261029`（`.worktrees/refactor-tdd-integrate-20261029`）。本輪起點為 D14 乾淨 HEAD **`ac5d4383c51b8cda5da946e6f1da954622e66256`**；三條乾淨 Worktree 分別新建 `feat/t2-d15-corrupt-receipt-20261030`／`feat/t2-d15-resolution-inventory-20261030`／`feat/t2-d15-mobile-receipt-20261030`，各自 source commit 後依序 cherry-pick。**D15 程式碼最後整合 `6b255be72`**；文件 Commit 會再推進，接手務必重新查 HEAD/status。原始 dirty `main` HEAD `3d232acff9822154c68049ee63c57ed5966b84e0` 及其歷史記錄、`third_party/xterm`、未追蹤檔案保持不變，**不能** reset/clean/merge/push。
 
