@@ -223,7 +223,15 @@ final class FileWorkbenchTerminalTransferJournal
     await for (final entity in folder.list(followLinks: false)) {
       final name = p.basename(entity.path);
       final suffix = p.extension(name);
-      if (suffix != '.json' && suffix != '.lock') continue;
+      if (suffix != '.json' && suffix != '.lock') {
+        // loadPending() now blocks every unexpected directory entry. The
+        // read-only inventory must also *show* that blocker (including a
+        // no-extension file) so the operator can investigate the exact name.
+        unexpected
+            .putIfAbsent('unexpected:$name', () => <String>{})
+            .add(suffix);
+        continue;
+      }
       if (entity is! File) {
         // Symlinks/directories with journal-shaped names are not legitimate
         // pending records. Flag them without following their targets.
