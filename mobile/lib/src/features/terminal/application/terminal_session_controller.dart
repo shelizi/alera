@@ -62,6 +62,16 @@ class TerminalSessionController extends _$TerminalSessionController {
             .supportsNamedTerminalViewLease) {
       return null;
     }
+    // The old ready Terminal state can briefly survive a Host socket change
+    // before the recovery listener has bound the replacement Client. It must
+    // not grant a Close to the new Host using an attachment from the old one.
+    // This only checks the current in-app connection, not durable cross-app
+    // or cross-device physical View ownership.
+    final currentClient = ref.read(terminalClientProvider(hostId));
+    if (currentClient is! AsyncData<MobileTerminalClient> ||
+        !identical(currentClient.value, _client)) {
+      return null;
+    }
     return switch (state) {
       AsyncData(value: final session) when session.sessionId == _sessionId =>
         _viewLeaseId,
