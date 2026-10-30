@@ -5,9 +5,16 @@ import 'package:alera/src/features/updater/application/update_service.dart';
 import 'package:alera/src/features/updater/domain/package_install_method.dart';
 import 'package:alera/src/features/updater/infra/desktop_update_service.dart';
 import 'package:alera/src/shared/infra/process/process_providers.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 part 'update_providers.g.dart';
+
+/// Privacy portable builds never discover releases over the network.
+/// Kept as an explicit injected capability so offline production policy and
+/// the controller's result-handling behavior can be tested independently.
+/// The production composition root intentionally never overrides this.
+final updateDiscoveryAllowedProvider = Provider<bool>((ref) => false);
 
 @Riverpod(keepAlive: true)
 AleraUpdateService aleraUpdateService(Ref ref) {

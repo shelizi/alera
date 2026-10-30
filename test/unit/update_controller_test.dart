@@ -8,12 +8,41 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   group('AleraUpdateController', () {
+    test(
+      'privacy portable blocks release discovery even with a fake service',
+      () async {
+        final service = _FakeUpdateService(
+          result: AleraUpdateCheckResult(latest: _update),
+        );
+        final container = ProviderContainer(
+          overrides: [aleraUpdateServiceProvider.overrideWithValue(service)],
+        );
+        addTearDown(container.dispose);
+
+        await container
+            .read(aleraUpdateControllerProvider.notifier)
+            .checkForUpdates();
+
+        final state = container.read(aleraUpdateControllerProvider);
+        expect(state.status, AleraUpdateStatus.notAvailable);
+        expect(state.latest, isNull);
+        expect(
+          state.message,
+          contains('disabled in this privacy portable build'),
+        );
+        expect(service.checkCalls, 0);
+      },
+    );
+
     test('marks state as not available when no update exists', () async {
       final service = _FakeUpdateService(
         result: const AleraUpdateCheckResult(message: 'No update.'),
       );
       final container = ProviderContainer(
-        overrides: [aleraUpdateServiceProvider.overrideWithValue(service)],
+        overrides: [
+          aleraUpdateServiceProvider.overrideWithValue(service),
+          updateDiscoveryAllowedProvider.overrideWithValue(true),
+        ],
       );
       addTearDown(container.dispose);
       final controller = container.read(aleraUpdateControllerProvider.notifier);
@@ -42,7 +71,10 @@ void main() {
         result: AleraUpdateCheckResult(latest: _update),
       );
       final container = ProviderContainer(
-        overrides: [aleraUpdateServiceProvider.overrideWithValue(service)],
+        overrides: [
+          aleraUpdateServiceProvider.overrideWithValue(service),
+          updateDiscoveryAllowedProvider.overrideWithValue(true),
+        ],
       );
       addTearDown(container.dispose);
       final controller = container.read(aleraUpdateControllerProvider.notifier);
@@ -73,7 +105,10 @@ void main() {
         ),
       );
       final container = ProviderContainer(
-        overrides: [aleraUpdateServiceProvider.overrideWithValue(service)],
+        overrides: [
+          aleraUpdateServiceProvider.overrideWithValue(service),
+          updateDiscoveryAllowedProvider.overrideWithValue(true),
+        ],
       );
       addTearDown(container.dispose);
       final controller = container.read(aleraUpdateControllerProvider.notifier);
@@ -99,7 +134,10 @@ void main() {
         checkError: StateError('network down'),
       );
       final container = ProviderContainer(
-        overrides: [aleraUpdateServiceProvider.overrideWithValue(service)],
+        overrides: [
+          aleraUpdateServiceProvider.overrideWithValue(service),
+          updateDiscoveryAllowedProvider.overrideWithValue(true),
+        ],
       );
       addTearDown(container.dispose);
       final controller = container.read(aleraUpdateControllerProvider.notifier);
@@ -121,7 +159,10 @@ void main() {
         result: AleraUpdateCheckResult(latest: _update),
       );
       final container = ProviderContainer(
-        overrides: [aleraUpdateServiceProvider.overrideWithValue(service)],
+        overrides: [
+          aleraUpdateServiceProvider.overrideWithValue(service),
+          updateDiscoveryAllowedProvider.overrideWithValue(true),
+        ],
       );
       addTearDown(container.dispose);
       final controller = container.read(aleraUpdateControllerProvider.notifier);
@@ -139,7 +180,10 @@ void main() {
           result: AleraUpdateCheckResult(latest: _update),
         );
         final container = ProviderContainer(
-          overrides: [aleraUpdateServiceProvider.overrideWithValue(service)],
+          overrides: [
+            aleraUpdateServiceProvider.overrideWithValue(service),
+            updateDiscoveryAllowedProvider.overrideWithValue(true),
+          ],
         );
         addTearDown(container.dispose);
         final controller = container.read(
@@ -171,7 +215,10 @@ void main() {
           ),
         );
         final container = ProviderContainer(
-          overrides: [aleraUpdateServiceProvider.overrideWithValue(service)],
+          overrides: [
+            aleraUpdateServiceProvider.overrideWithValue(service),
+            updateDiscoveryAllowedProvider.overrideWithValue(true),
+          ],
         );
         addTearDown(container.dispose);
         final controller = container.read(
@@ -207,7 +254,10 @@ void main() {
         installError: StateError('disk full'),
       );
       final container = ProviderContainer(
-        overrides: [aleraUpdateServiceProvider.overrideWithValue(service)],
+        overrides: [
+          aleraUpdateServiceProvider.overrideWithValue(service),
+          updateDiscoveryAllowedProvider.overrideWithValue(true),
+        ],
       );
       addTearDown(container.dispose);
       final controller = container.read(aleraUpdateControllerProvider.notifier);
@@ -241,7 +291,10 @@ void main() {
         restartError: StateError('helper unavailable'),
       );
       final container = ProviderContainer(
-        overrides: [aleraUpdateServiceProvider.overrideWithValue(service)],
+        overrides: [
+          aleraUpdateServiceProvider.overrideWithValue(service),
+          updateDiscoveryAllowedProvider.overrideWithValue(true),
+        ],
       );
       addTearDown(container.dispose);
       final controller = container.read(aleraUpdateControllerProvider.notifier);
@@ -276,7 +329,10 @@ void main() {
           ),
         );
         final container = ProviderContainer(
-          overrides: [aleraUpdateServiceProvider.overrideWithValue(service)],
+          overrides: [
+            aleraUpdateServiceProvider.overrideWithValue(service),
+            updateDiscoveryAllowedProvider.overrideWithValue(true),
+          ],
         );
         addTearDown(container.dispose);
         final controller = container.read(
@@ -305,7 +361,10 @@ void main() {
         packageUpgradeError: StateError('scoop missing'),
       );
       final container = ProviderContainer(
-        overrides: [aleraUpdateServiceProvider.overrideWithValue(service)],
+        overrides: [
+          aleraUpdateServiceProvider.overrideWithValue(service),
+          updateDiscoveryAllowedProvider.overrideWithValue(true),
+        ],
       );
       addTearDown(container.dispose);
       final controller = container.read(aleraUpdateControllerProvider.notifier);
@@ -326,7 +385,10 @@ void main() {
         packageInstall: const PackageManagerInstall(method: .chocolatey),
       );
       final container = ProviderContainer(
-        overrides: [aleraUpdateServiceProvider.overrideWithValue(service)],
+        overrides: [
+          aleraUpdateServiceProvider.overrideWithValue(service),
+          updateDiscoveryAllowedProvider.overrideWithValue(true),
+        ],
       );
       addTearDown(container.dispose);
       final controller = container.read(aleraUpdateControllerProvider.notifier);
@@ -341,7 +403,10 @@ void main() {
     test('restartApp delegates to the update service', () async {
       final service = _FakeUpdateService();
       final container = ProviderContainer(
-        overrides: [aleraUpdateServiceProvider.overrideWithValue(service)],
+        overrides: [
+          aleraUpdateServiceProvider.overrideWithValue(service),
+          updateDiscoveryAllowedProvider.overrideWithValue(true),
+        ],
       );
       addTearDown(container.dispose);
       final controller = container.read(aleraUpdateControllerProvider.notifier);
@@ -356,7 +421,10 @@ void main() {
         result: AleraUpdateCheckResult(latest: _update),
       );
       final container = ProviderContainer(
-        overrides: [aleraUpdateServiceProvider.overrideWithValue(service)],
+        overrides: [
+          aleraUpdateServiceProvider.overrideWithValue(service),
+          updateDiscoveryAllowedProvider.overrideWithValue(true),
+        ],
       );
       addTearDown(container.dispose);
       final controller = container.read(aleraUpdateControllerProvider.notifier);
@@ -375,7 +443,10 @@ void main() {
         restartError: StateError('relaunch unavailable'),
       );
       final container = ProviderContainer(
-        overrides: [aleraUpdateServiceProvider.overrideWithValue(service)],
+        overrides: [
+          aleraUpdateServiceProvider.overrideWithValue(service),
+          updateDiscoveryAllowedProvider.overrideWithValue(true),
+        ],
       );
       addTearDown(container.dispose);
       final controller = container.read(aleraUpdateControllerProvider.notifier);
@@ -417,11 +488,13 @@ class _FakeUpdateService({
 
   AleraUpdateInfo? openedUpdate;
   AleraUpdateInfo? installedUpdate;
+  int checkCalls = 0;
   int restartCalls = 0;
   int packageUpgradeCalls = 0;
 
   @override
   Future<AleraUpdateCheckResult> checkForUpdates() async {
+    checkCalls++;
     if (checkError case final Object error) {
       throw error;
     }
