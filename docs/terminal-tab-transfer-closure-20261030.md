@@ -1,5 +1,25 @@
 # Alera T2 跨 Workspace Terminal Tab：一次收尾成果與最後驗收門檻（2026-10-30）
 
+## 本輪新驗收：Host 完整測試全通過，三個啟用門檻仍未全部完成（2026-10-30）
+
+**最新整合基準**：`refactor/tdd-integrate-20261029`、`.worktrees/refactor-tdd-integrate-20261029`。本輪從 clean `d73ed7fad` 延續，隔離來源 Worktree 三線修正、按序 cherry-pick；程式碼提交後 HEAD **`742e0d556`**（本節文件 Commit 後需用 Git 重新確認）。原始 dirty `main` HEAD `3d232acff9822154c68049ee63c57ed5966b84e0`、原有未追蹤測試/歷史/xterm 保留，**未合併／Push／Release／改 Gate**。`rust/alera-cli/src/terminal_host/server/requests.rs` 的 `tab.transfer.capabilities.supported=false` 仍 OFF。
+
+**本輪真正取得的新通過證據（以完成的命令為準）**：
+- Windows Rust **完整 Host** `cargo test --locked -p alera-cli --bin alera -- --test-threads=2`：**1,158 pass／0 fail／6 ignored**；前一輪兩項失敗（舊 `terminal.restart` 文字、Mobile Hello Fixture 缺 `terminalNamedViewLeaseV1`）已在新版本真實通過。該次 Host 全套檢查在新增下一筆 Crash 回歸測試前完成。
+- 桌面 T2 相關 `flutter test --no-pub --concurrency=2` 定向 9 個測試檔：**53 pass／0 fail**，包括 Tab 拖曳、Layout、Tab Close、Workbench Controller Provider Boundary、Sidebar Boundary、Language Intelligence Architecture、Settings Ownership/Search Catalog 與 Host Wire Fixture Socket Cleanup。
+- 本輪新增的 Rust Host **原 PTY 遺失後 fail-closed** Actor Case `existing_pty_moves_atomically_but_unknown_second_view_rejects_it` 已在最新程式碼提交 `742e0d556` 上重新編譯、實際執行：**1 pass／0 fail**；檢查安全移動後移除 original Session 仍保留 Transfer Receipt，Status 回 `pty_missing`／`recoveryRequired`，不許重新 Attach/Remint。**不代表舊 Host OS Process 已證實停止，也不授權手動解除 Journal。**
+- `dart analyze` Desktop App 組裝後 `language_intelligence_providers.dart`／Controller Internals／Tabs：**No issues found**。
+- 上一輪已確認：原 Host Actor 單 PTY 轉移 **1 pass**、Rust Store 原收據與安全退休 **3 pass**、Mobile Flutter **473 pass／4 skipped／0 fail**，必要 Rust `cargo check` 通過。
+
+**本輪新增六筆安全／回歸整合提交**：`f076157f5` 補齊第一批 29 個簡中/日文 Language Intelligence Key、`7f3c7d50c` 透過 Internals Narrow Getter 組裝 T2 Provider、`faad1ec0e` 將 Language Intelligence Riverpod 與生成碼搬到 App Root、`461549354` 校正 Host fail-closed Restart 及 Mobile Hello 能力 Fixture、`97307cf88` 將 Git Auto-fetch 欄位列為 Local Only 並修 Host Wire Fixture Socket Dispose 併發變更、`742e0d556` 新增模擬已提交跨 Workspace Transfer 後**原 PTY Session 消失**的 Actor 回歸：不能因持久 Receipt/Layouts 就宣稱成功或啟動替代 PTY，應保留原資料與 Recovery Required。新測試已在該 HEAD **1 pass／0 fail**；完整 Host 1,158 pass 是同一輪修改在增補此新測試**之前**的結果，不宣稱最後 Commit 也已重跑整套。
+
+**仍不可開啟 `supported:true` 或直接合併**：
+1. **A：持久 Host/PTY/View Ownership 與 Crash**：跨 Win/macOS 原生視窗、多 App Process／手機及 Host process Generation 的耐久 Last-view 權威、原 PTY 無法尋回後的確定性處置仍未實作；本輪有更多「保留資料、拒絕重建」測試，**不是**完整自動復原能力。
+2. **B：人工復原**：Host 原 PTY 已 Exit／失蹤、Journal stale Lock 的 OS+Host attestation／使用者意圖／永久 Audit 及安全解鎖 UX 仍不足；現行安全策略維持未解而不刪資料。
+3. **C：完整跨平台／應用回歸**：本輪早期 Desktop 全套 `flutter test --no-pub --concurrency=2` 在 Windows 600 秒上限附近約 **3,608 pass／31 skipped／26 fail**，非完整通過。定向回歸已修復上述 T2/架構/設定問題，但 CN/JA 靜態語系總表仍分別缺 **217／220** 個相較繁中鍵（前次修 29 個後仍有差額）；另有 Golden 微像素差、max-lines 52 檔、舊 Updater Privacy Build 測試期待等**非 T2** 回歸未處置。不能用拋棄測試／虛假填英文翻譯／硬更新 Golden 或 Ratchet 取得假全綠。缺 macOS/實體雙手機/Windows 多 OS Process Crash-injection E2E。
+
+**決策**：不再新增 D 編號階段，僅追 A/B/C Release Gate。Rust Host 與 T2 定向測試已有關鍵突破；但直到 Host 崩潰/多程序恢復和合法手動退出流程可證明安全，以及必要原生 E2E 達標前，繼續拒絕啟用。原 dirty `main` 不動。
+
 ## 最新實際驗收與整合交接（2026-10-30；Gate 仍 OFF）
 
 **本次應使用此節作為最新入口，而不是下方早期的「未允許執行測試」限制摘要。使用者現已要求完成合併與啟用，明確授權必要編譯／測試；但未授權遺失 dirty `main` 既有修改或跳過安全驗收。** 依新要求已在隔離整合工作樹實際跑測試；Git HEAD 需以 `git log -1` 重新核對。

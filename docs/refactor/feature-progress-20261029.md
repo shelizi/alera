@@ -1,5 +1,7 @@
 # Alera 功能優先續做：第八批四線隔離（2026-10-29）
 
+> **T2 本輪最新 HEAD／測試交接（2026-10-30）**：先讀 `docs/terminal-tab-transfer-closure-20261030.md` 最頂部「本輪新驗收」。從 `d73ed7fad` 起增補 App/Controller 依賴修正、Host 失敗 Fixture、Local-only Settings 與新 PTY Crash Regression，程式碼整合 HEAD `742e0d556`（文件 Commit 後再以 Git 查）；**Windows Rust Host 完整 1,158 pass／0 fail／6 ignored**、Desktop T2/架構/Settings/Host Wire 53 pass／0 fail、Desktop App 組裝相關 Dart Analyzer 0 issue；新原 PTY 遺失後 fail-closed Actor Case 已**1 pass／0 fail**。完整 Desktop／雙手機／Mac OS/Host Crash E2E 與 A/B 的 durable Last-view、Exited PTY + stale Lock 安全人工恢復尚未達成。**`supported=false` 不變、不合併／Push／Release dirty main**；後續固定 A/B/C Gate，不再延長編號。
+
 > **T2 最新真實測試／啟用驗收入口：`docs/terminal-tab-transfer-closure-20261030.md` 最上方「最新實際驗收與整合交接」**（2026-10-30）。本輪 user 已授權必要 Cargo/Flutter tests，但**Gate 仍 OFF、不合併 dirty main**。已通過 Host 原 PTY 真正轉移 1、Rust Store 3、桌面 T2 Drop/Layout/Close 29、Desktop PTY/清理 162、Rust ProcessRunner/Detach 41、Mobile Flutter 473 pass+4 skip，初次 Host Cargo check 成功；完整桌面 34 fail、Host 全套 test compiled binary 卡住／修後 MSVC recompile 未確認通過、Host Crash/跨 Process durable View 和人工 stale Lock 還未解決。最新整合 SHA 以 Git HEAD 為準；固定 A/B/C Release Gate，不再增列無限階段。
 
 ## 最新交接入口：T2 收尾盤點與有限 Release Gate（2026-10-30）
