@@ -272,6 +272,29 @@ const Map<String, String> _simplifiedChineseSettingsExtra = <String, String>{
       '只检查各设置变量是否存在，不读取其 Secret 值。',
   'No quota providers enabled': '尚未启用任何配额 Provider',
   'No CCS profiles configured': '尚未设置 CCS Profile',
+  'No additional Claude accounts configured': '尚未设置其他 Claude 账号',
+  'Claude Accounts': 'Claude 账号',
+  'Codex Accounts': 'Codex 账号',
+  'Edit Claude Account': '编辑 Claude 账号',
+  'Remove Claude Account': '移除 Claude 账号',
+  'Edit Account': '编辑账号',
+  'Remove Account': '移除账号',
+  'work or an absolute directory': '工作目录或绝对路径',
+  'Configure the default Claude account, CCS profiles, and independent account directories.':
+      '设置默认 Claude 账号、CCS 配置文件及独立账号目录。',
+  'Add a CCS instance name or an absolute CLAUDE_CONFIG_DIR. Switch accounts from the quota card.':
+      '添加 CCS 实例名或 CLAUDE_CONFIG_DIR 绝对路径，并通过配额卡片切换账号。',
+  'Add signed-in CODEX_HOME directories. Choose the active account from its quota card.':
+      '添加已登录的 CODEX_HOME 目录，并通过配额卡片选择当前账号。',
+  'Each directory keeps its own CLI login, configuration, and history. The default account is retained.':
+      '每个目录分别保存 CLI 登录、配置和历史记录，默认账号将继续保留。',
+  'Background maintenance for local workspaces.': '本地工作区后台维护。',
+  'Automatically Fetch Git Remotes': '自动 Fetch Git 远端',
+  'Periodically fetch remote branch information for Git projects. Does not pull, merge, or modify local files.':
+      '定期 Fetch Git 项目的远端分支信息，不会 Pull、Merge 或修改本地文件。',
+  'Auto Git Fetch Interval': '自动 Git Fetch 间隔',
+  'Minutes between automatic Git fetches. Default: 5 minutes. Changes apply without restarting Alera.':
+      '自动 Git Fetch 的间隔分钟数，默认 5 分钟；修改后无需重启 Alera。',
   'Shown in status bar': '显示于状态栏',
   'Hidden from status bar - available in the quota panel': '不显示于状态栏，但仍可在配额面板查看',
   'Not shown in Usage': '不显示于 Usage',

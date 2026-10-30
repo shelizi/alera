@@ -272,6 +272,29 @@ const Map<String, String> _japaneseSettingsExtra = <String, String>{
       '設定した各変数が存在するかどうかだけを確認し、秘密の値は読み取りません。',
   'No quota providers enabled': '使用枠のプロバイダーが有効になっていません',
   'No CCS profiles configured': 'CCS プロファイルが設定されていません',
+  'No additional Claude accounts configured': '追加の Claude アカウントが設定されていません',
+  'Claude Accounts': 'Claude アカウント',
+  'Codex Accounts': 'Codex アカウント',
+  'Edit Claude Account': 'Claude アカウントを編集',
+  'Remove Claude Account': 'Claude アカウントを削除',
+  'Edit Account': 'アカウントを編集',
+  'Remove Account': 'アカウントを削除',
+  'work or an absolute directory': '作業ディレクトリまたは絶対パス',
+  'Configure the default Claude account, CCS profiles, and independent account directories.':
+      '既定の Claude アカウント、CCS プロファイル、独立したアカウントディレクトリを設定します。',
+  'Add a CCS instance name or an absolute CLAUDE_CONFIG_DIR. Switch accounts from the quota card.':
+      'CCS インスタンス名または CLAUDE_CONFIG_DIR の絶対パスを追加します。使用量カードからアカウントを切り替えます。',
+  'Add signed-in CODEX_HOME directories. Choose the active account from its quota card.':
+      'ログイン済みの CODEX_HOME ディレクトリを追加し、使用量カードから使用するアカウントを選びます。',
+  'Each directory keeps its own CLI login, configuration, and history. The default account is retained.':
+      '各ディレクトリの CLI ログイン、設定、履歴は独立して保持され、既定のアカウントも保持されます。',
+  'Background maintenance for local workspaces.': 'ローカルワークスペースのバックグラウンド保守。',
+  'Automatically Fetch Git Remotes': 'Git リモートを自動 Fetch',
+  'Periodically fetch remote branch information for Git projects. Does not pull, merge, or modify local files.':
+      'Git プロジェクトのリモートブランチ情報を定期的に Fetch します。Pull、Merge、ローカルファイルの変更は行いません。',
+  'Auto Git Fetch Interval': 'Git 自動 Fetch の間隔',
+  'Minutes between automatic Git fetches. Default: 5 minutes. Changes apply without restarting Alera.':
+      'Git 自動 Fetch の間隔（分）。既定は 5 分で、Alera の再起動なしに変更が反映されます。',
   'Shown in status bar': 'ステータスバーに表示',
   'Hidden from status bar - available in the quota panel':
       'ステータスバーには非表示。使用枠パネルでは確認できます',

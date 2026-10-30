@@ -497,7 +497,10 @@ void registerAppLocalizationTailTests() {
     ).readAsStringSync();
 
     expect(quotaSource, contains("context.tr('No quota providers enabled')"));
-    expect(quotaSource, contains("context.tr('No CCS profiles configured')"));
+    expect(
+      quotaSource,
+      contains("context.tr('No additional Claude accounts configured')"),
+    );
     expect(quotaSource, contains('context.tr(error)'));
     expect(deviceSource, contains('context.tr(detail)'));
     expect(deviceSource, contains("label: context.tr('Revoked')"));

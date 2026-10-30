@@ -22,7 +22,7 @@ import '../unit/fake_git_backend.dart';
 import '../unit/fake_source_control_watcher.dart';
 
 part 'workspace_git_history_panel_scope_cases.dart';
-part 'workspace_git_history_panel_ref_menu_test.dart';
+part 'workspace_git_history_panel_ref_menu_cases.dart';
 
 void main() {
   _registerHistoryScopeTests();
@@ -106,9 +106,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(
-      find.byKey(
-        const ValueKey<String>('git-history-head-row-abc123456789'),
-      ),
+      find.byKey(const ValueKey<String>('git-history-head-row-abc123456789')),
       findsOneWidget,
     );
     expect(
