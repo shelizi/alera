@@ -134,10 +134,8 @@ class TabsController extends _$TabsController {
       // Unlike a never-moved tab, DO NOT call terminal.terminate first:
       // Host tab.remove performs the receipt/PTY/last-view check and closes
       // the process in one guarded serialized operation.
-      await workspaceClient.removeObservedTabWithViewLease(
-        tab,
-        observedAttachment.viewLeaseId,
-      );
+      await (workspaceClient as MobileObservedViewLeaseTabRemoval)
+          .removeObservedTabWithViewLease(tab, observedAttachment.viewLeaseId);
       if (ref.mounted) ref.invalidateSelf();
       return true;
     }

@@ -90,9 +90,11 @@ class TerminalSessionController extends _$TerminalSessionController {
   Future<MobileTerminalSession> _attachWithOriginalView(
     MobileTerminalClient client,
   ) {
-    if (client is MobileScopedTerminalViewLeaseClient &&
-        client.supportsNamedTerminalViewLease) {
-      return client.attachTerminalWithViewLease(
+    final scoped = client is MobileScopedTerminalViewLeaseClient
+        ? client as MobileScopedTerminalViewLeaseClient
+        : null;
+    if (scoped != null && scoped.supportsNamedTerminalViewLease) {
+      return scoped.attachTerminalWithViewLease(
         tabId,
         viewLeaseId: _viewLeaseId,
         cols: _cols,
@@ -295,17 +297,23 @@ class TerminalSessionController extends _$TerminalSessionController {
   ) async {
     final previousClient = _client;
     final previousSessionId = _sessionId;
+    final previousScoped = previousClient is MobileScopedTerminalViewLeaseClient
+        ? previousClient as MobileScopedTerminalViewLeaseClient
+        : null;
+    final nextScoped = nextClient is MobileScopedTerminalViewLeaseClient
+        ? nextClient as MobileScopedTerminalViewLeaseClient
+        : null;
     if (previousClient == null ||
         previousSessionId == null ||
         identical(previousClient, nextClient) ||
-        previousClient is! MobileScopedTerminalViewLeaseClient ||
-        !previousClient.supportsNamedTerminalViewLease ||
-        nextClient is! MobileScopedTerminalViewLeaseClient ||
-        !nextClient.supportsNamedTerminalViewLease) {
+        previousScoped == null ||
+        !previousScoped.supportsNamedTerminalViewLease ||
+        nextScoped == null ||
+        !nextScoped.supportsNamedTerminalViewLease) {
       return;
     }
     // This is deliberately strict, unlike cleanup's best-effort detach.
-    await previousClient.detachTerminalWithViewLease(
+    await previousScoped.detachTerminalWithViewLease(
       previousSessionId,
       viewLeaseId: _viewLeaseId,
     );
@@ -333,12 +341,19 @@ class TerminalSessionController extends _$TerminalSessionController {
     } on Object catch (error) {
       final previousClient = _client;
       final message = error.toString();
+      final previousScoped =
+          previousClient is MobileScopedTerminalViewLeaseClient
+          ? previousClient as MobileScopedTerminalViewLeaseClient
+          : null;
+      final nextScoped = nextClient is MobileScopedTerminalViewLeaseClient
+          ? nextClient as MobileScopedTerminalViewLeaseClient
+          : null;
       if (previousClient == null ||
           identical(previousClient, nextClient) ||
-          previousClient is! MobileScopedTerminalViewLeaseClient ||
-          !previousClient.supportsNamedTerminalViewLease ||
-          nextClient is! MobileScopedTerminalViewLeaseClient ||
-          !nextClient.supportsNamedTerminalViewLease ||
+          previousScoped == null ||
+          !previousScoped.supportsNamedTerminalViewLease ||
+          nextScoped == null ||
+          !nextScoped.supportsNamedTerminalViewLease ||
           !message.contains(
             'Terminal view lease is already registered on another Host client',
           )) {
@@ -475,10 +490,11 @@ class TerminalSessionController extends _$TerminalSessionController {
     try {
       // A restart mints a new PTY, so unlike attach it always needs a size;
       // an unmeasured terminal has nothing better than the default to give.
-      final session =
-          client is MobileScopedTerminalViewLeaseClient &&
-              client.supportsNamedTerminalViewLease
-          ? await client.restartTerminalWithViewLease(
+      final scoped = client is MobileScopedTerminalViewLeaseClient
+          ? client as MobileScopedTerminalViewLeaseClient
+          : null;
+      final session = scoped != null && scoped.supportsNamedTerminalViewLease
+          ? await scoped.restartTerminalWithViewLease(
               tabId,
               sessionId: _sessionId,
               viewLeaseId: _viewLeaseId,
@@ -581,9 +597,11 @@ class TerminalSessionController extends _$TerminalSessionController {
     String sessionId,
   ) async {
     try {
-      if (client is MobileScopedTerminalViewLeaseClient &&
-          client.supportsNamedTerminalViewLease) {
-        await client.detachTerminalWithViewLease(
+      final scoped = client is MobileScopedTerminalViewLeaseClient
+          ? client as MobileScopedTerminalViewLeaseClient
+          : null;
+      if (scoped != null && scoped.supportsNamedTerminalViewLease) {
+        await scoped.detachTerminalWithViewLease(
           sessionId,
           viewLeaseId: _viewLeaseId,
         );
