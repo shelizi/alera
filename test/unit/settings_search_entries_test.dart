@@ -30,7 +30,9 @@ void main() {
 
     expect(
       _catalogFingerprint(catalogs),
-      '99196c9a46768ee57d121f286ee2f2a7d42b963ad8c49de984e6c81ead518f57',
+      // Current audited Settings search metadata/order after adding new
+      // sidebar, keyboard and workspace entries on the integration branch.
+      '29faf1023bec2bd4d507cc3ef8dfcc804d253b09603deea3c85c566dba14b237',
     );
   });
 

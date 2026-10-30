@@ -103,7 +103,10 @@ final class _WireFixtureServer {
 
   Future<void> dispose() async {
     await _subscription?.cancel();
-    for (final socket in _clients) {
+    // A socket's onDone handler removes it from _clients synchronously while
+    // destroy notifications are being dispatched. Iterate a stable snapshot
+    // instead of invalidating the live List iterator during teardown.
+    for (final socket in List<Socket>.of(_clients)) {
       socket.destroy();
     }
     await _listener.close();

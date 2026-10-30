@@ -31,6 +31,8 @@ A field can sit in more than one tier: the `runtimeSettings.update` payload and 
 | `showTrayBadge` | portable |
 | `showPullRequestStatusInSidebar` | local-only |
 | `pullRequestFailureNotificationsEnabled` | local-only |
+| `autoGitFetchEnabled` | local-only (periodic fetch is scheduled on this device only) |
+| `autoGitFetchIntervalMinutes` | local-only (per-device fetch frequency, 1–60 minutes) |
 | `autoArchiveWorkspacesAfterDays` | runtime + portable |
 
 ### `agents`

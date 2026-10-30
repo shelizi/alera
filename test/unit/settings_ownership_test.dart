@@ -169,6 +169,8 @@ const _classifiedFieldPaths = <String>{
   'general.showTrayBadge',
   'general.showPullRequestStatusInSidebar',
   'general.pullRequestFailureNotificationsEnabled',
+  'general.autoGitFetchEnabled',
+  'general.autoGitFetchIntervalMinutes',
   'general.autoArchiveWorkspacesAfterDays',
   'agents.agentStatusHooks',
   'agents.agentStatusNotificationsEnabled',
