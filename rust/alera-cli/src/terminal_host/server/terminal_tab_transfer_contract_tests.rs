@@ -137,4 +137,41 @@ async fn existing_pty_moves_atomically_but_unknown_second_view_rejects_it() {
         .await
         .unwrap();
     assert_eq!(status["applied"], true);
+
+    // Simulate the narrow commit/PTY-loss window: the persisted receipt and
+    // both layouts survived, but this actor no longer owns the original
+    // process. A matching mutation must NOT be acknowledged from SQLite
+    // alone, and CreateOrAttach must not remint a new shell under the old PTY
+    // identity. Preserve the durable owner for manual recovery.
+    actor.sessions.remove("session-moving");
+    let unresolved = actor
+        .terminal_tab_transfer_status(
+            1,
+            &json!({
+                "tabId": "tab-moving",
+                "sessionId": "session-moving",
+                "sourceWorkspaceId": source,
+                "targetWorkspaceId": target,
+                "clientMutationId": "move-one"
+            }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unresolved["applied"], false);
+    assert_eq!(unresolved["recoveryRequired"], true);
+    assert_eq!(unresolved["reason"], "pty_missing");
+    assert!(actor
+        .verify_terminal_attachment_owner("session-moving", &target, "tab-moving")
+        .await
+        .is_err());
+    assert_eq!(
+        actor
+            .runtime_store
+            .find_workspace_tab("tab-moving")
+            .await
+            .unwrap()
+            .unwrap()
+            .payload["lastTerminalTabTransfer"]["id"],
+        "move-one"
+    );
 }
