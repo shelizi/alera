@@ -1,10 +1,24 @@
 # T2 — 跨專案／跨 Workspace Terminal Tab 移動：功能規劃與並行重構邊界
 
-**Priority：P2；Status：D10 三線已整合（Host per-View Lease 登記／來源 close 確證、Desktop 狹義 View Lease Port + Journal 中斷唯讀診斷）；feature-gated OFF（2026-10-30）。** D1–D9 的安全修正全部保留。**跨專案拖放仍未開放；Flutter/Cargo 測試、靜態分析、編譯及實機回歸仍未執行。**
+**Priority：P2；Status：D11 三線已整合（Workbench click-time 原 UI View Lease Close、Host PTY Exit 保留轉移收據、Journal .lock Owner 身分稽核）；feature-gated OFF（2026-10-30）。** D1–D10 的安全修正全部保留。**跨專案拖放仍未開放；Flutter/Cargo 測試、靜態分析、編譯及實機回歸仍未執行。**
 
 本文件原是 `feat/cross-project-terminal-tabs-20261029` 分支上的設計稿（commit `ec150a493`），現**只收編此規劃檔**至 `refactor/tdd-integrate-20261029`；未合併該舊分支的產品程式。原設計所記載的並行分工為 2026-10-29 第三批的歷史狀態；最新整合已包含第八批功能修正及 macOS Claude Code 貼上 hotfix。
 
-## 最新：T2-D10 三條隔離安全工作線已整合（2026-10-30；Capability 仍 OFF）
+## 最新：T2-D11 三線程式碼已整合（2026-10-30；Capability 仍 OFF）
+
+**Git**：從 D10 乾淨整合 `42b0deee2`，三個已乾淨 D10 工作樹各自切 `feat/t2-d11-host-lease-20261030`、`feat/t2-d11-journal-20261030`、`feat/t2-d11-workbench-close-20261030`。Host Exit、Dart Journal、Dart WorkbenchClose/Repo 分檔修改、各自提交再 cherry-pick 無衝突；程式碼整合 HEAD **`2ea227339`**（文件 Commit 後務必重新確認）。
+
+| 工作線 | D11 源碼實作／保守範圍 | Source → Integration |
+| --- | --- | --- |
+| H：Host PTY 出口證據保留 | 通用 `remove_terminal_session_tab` 被自然 Exit 或顯式 `terminate` 呼叫時，若 Store Tab 的 `lastTerminalTabTransfer` 存在，直接返回 `Ok(false)`，**不刪 Tab／Transfer Receipt**；既有流程 checkpoint exited Session／顯式終止 PTY，非轉移 Tab 行為不變。這保住過去會被自然退出抹掉的復原證據，但**已退出 moved Tab 仍無合法最終處置**；下一批要有明確的持久化 process-generation/retirement transaction，不可逕行全域清理 | `831bdb1e0` → **`673566e07`** |
+| J：可辨識但不可自動移除的 Journal Lock | per-Tab `.lock` 建立成功後持久寫入 `tabIdHash`、UUID `nonce`、PID、建立 UTC；`remember/forget` 只刪自身 nonce/PID 匹配的 Lock。Crash 留空 Lock、毀損內容或跨程序身份變更都 fail closed。原有 `inspectRecovery` 補 `lockMetadataValid`、`lockOwnerProcessId`、`lockCreatedAtUtc`，**不能**把 PID／UTC 當成程序已結束證明，也**沒有**新增 Unlock 按鈕、Host 簽章或失敗定論 | `62fd828ef` → **`95ab5e5b6`** |
+| C：真實 Workbench Tab Close 帶原視圖 Lease | UI 透過新可選 `TerminalRuntimeAttachedViewLeaseSource`，只讀已存在 `XtermTerminalRuntime.peekSession` 的活 PTY `viewLeaseId`。 `closeWorkspaceTabs` 進入任何 `await` 前，同步擷取原 Tab／Workspace／Transfer Receipt／view ID；搬移過的 Terminal 必須走 `WorkbenchViewBoundObservedTabCloseStore` 與新可選 Repository Port，`tab.remove` RPC 綁 `expectedViewLeaseId`，Timeout/Disconnect 重播**保持原值**，禁止 fallback unscoped。另加 **mounted Surface count == 1** 條件：0／多個共享 Handle 視圖不授權 Close；無法識別被卸載的其他視窗，這不是完整跨 Window Last-view 協議 | `a4eef3eba` → **`3adc4f465`**；`abc61e686` → **`2ea227339`** |
+
+**下一批 D12 未完成**：物理 OS Window/Device 的 View 生命週期辨識，不是只看 Xterm Handle 的已掛載 Surface；跨 App/Host restart 的 durable Lease、Client token 延續驗證、Mobile 具名 Attach/Detach/Close／legacy fallback、Host SQLite Receipt 與 live PTY owner crash window 的真正可恢復 process-generation 與確定失敗證據。Terminated/Exited moved PTY 目前**保留 Metadata**，因未證實合法退休方法，這不是正常長期清除策略。Journal 鎖的 PID 不可當 liveness；需要另一個獨立的確認所有持有者退出、Host Receipt + 兩 Layout 再讀回與安全解鎖/稽核 UI。還要補足 Terminal watcher 退場清理政策，完成 Flutter/Cargo Tests、Analyzer、Build、Win/Mac 多 App/E2E。
+
+**開放條件仍未達成**：`tab.transfer.capabilities.supported=false`。本輪只使用 `rustfmt`、`dart format` 與 Git whitespace checks；未新增或執行 Cargo/Flutter Tests、Analyzer、Build、Windows/macOS E2E，未 Push/Release，不碰 dirty `main`。接手先讀 `docs/refactor/feature-progress-20261029.md` 最上方 D11，核對最新 Git HEAD 後分線續做 D12。
+
+## 歷史：T2-D10 三條隔離安全工作線已整合（2026-10-30；Capability 仍 OFF）
 
 從 D9 整合乾淨 HEAD `dfc9c2fe7` 重新切三個 D10 隔離分支：`feat/t2-d10-view-registry-20261030`、`feat/t2-d10-view-close-20261030`、`feat/t2-d10-client-leases-20261030`。按 Host Session／Host Transfer Close／Dart Terminal Client 及 Journal 分檔工作；三條獨立提交並無衝突 cherry-pick，D10 程式整合最後 HEAD `6c5571280`，其後仍會因 Docs Commit 前進。
 

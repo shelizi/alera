@@ -1,6 +1,23 @@
 # Alera 功能優先續做：第八批四線隔離（2026-10-29）
 
-## 下一次對話／其他 Agent 最新交接入口：T2-D10（2026-10-30）
+## 下一次對話／其他 Agent 最新交接入口：T2-D11（2026-10-30）
+
+**唯一整合基準**：`refactor/tdd-integrate-20261029`，`.worktrees/refactor-tdd-integrate-20261029`。從 D10 乾淨 HEAD **`42b0deee2`** 出發，重用三個先前乾淨的隔離工作樹，分別新開 `feat/t2-d11-host-lease-20261030`／`feat/t2-d11-journal-20261030`／`feat/t2-d11-workbench-close-20261030`。D11 源碼最後整合 **`2ea227339`**，在開始編輯此文件前確定整合工作樹乾淨。**此文件提交後 HEAD 將改變，接手先查 `git log -1`、`git status`，不可使用舊 SHA 猜狀態**。原始 `main` HEAD `3d232acff` 的既有 dirty 檔案、history、xterm 和未追蹤測試資料不曾更改／reset／clean／merge。
+
+**T2-D11 三線獨立提交並全部無衝突 cherry-pick 到整合**：
+
+| 工作線 | 本輪確實完成的行為與侷限 | 來源 → 整合 |
+| --- | --- | --- |
+| D11-H Host 退出紀錄保留 | `pty_events_session_lifecycle.rs::remove_terminal_session_tab` 現先查 Store Tab；若是含 `lastTerminalTabTransfer` 的 Terminal，**一般 PTY 自然 Exit 與顯式 Terminate 的通用 Session 清理皆不能直接刪除持久化 Tab/收據**，回 `false` 以保留 crash/exit 證據，交由目前既有 exited checkpoint 路徑。非轉移 Terminal 照舊清理。**這不是**合法的 dead transferred Tab 結束／回收流程；已轉移 Terminal 顯式 Terminate 後 Tab 仍留待安全處置 | `831bdb1e0` → **`673566e07`** |
+| D11-J Journal 跨 App Lock 身分稽核 | 原本 per-Tab `.lock` 用 exclusive create 後，現在 flush 持久化 JSON `version/tabIdHash/nonce/processId/createdAtUtc`；`remember`／`forget` 的 finally 需確認**相同隨機 nonce + processId**，才清除自己持有的 Lock。唯讀 `inspectRecovery(tabId)` 額外回報 lock metadata 是否有效、檔案標示 PID／UTC。空檔／毀損／Crash 殘留仍 **fail closed**，**PID 不是仍在執行的證據**，不允許自動 unlock 或清不明 Journal；操作終止/跨程序安全人工解除仍待設計 | `62fd828ef` → **`95ab5e5b6`** |
+| D11-C Workbench 真實 UI Lease 傳遞 | 從 Production `TerminalHostPtySession` 只讀取**已 attach／尚未 dispose** 的自身固定 UUID；`XtermTerminalRuntime.peekSession` 不新建 PTY，經窄介面 `TerminalRuntimeAttachedViewLeaseSource` 讓 Workbench 在**點擊關閉的同步快照時**一併抓 `tab + workspace + lastTransferReceipt + viewLeaseId`。只針對已轉移 Terminal 要求 `WorkbenchViewBoundObservedTabCloseStore`、`WorkbenchViewBoundTabRemovalRepository`，不允許退化為 legacy close；`RuntimeWorkbenchRepository` `tab.remove` 帶 `expectedViewLeaseId`，Timeout／Connection Closed 的一次重播仍沿用**原快照**與原 Token，不從 Host 重新抓新 View，避免 ABA。普通 Tab 仍走原有路徑。對同一 Xterm Handle **有 0 或超過 1 個 mounted visibility lease** 的情況保守不提供該 Token，避免多原生視窗共用同一 PTY Token 造成最後視圖誤判；但**未掛載視窗仍不可觀測**，不是完整 per-OS-window Lease | `a4eef3eba` → **`3adc4f465`**；追加 `abc61e686` → **`2ea227339`** |
+
+**D12 阻擋項**：① 真正跨原生 Window、Mobile、App process、Host restart 的 View ID／durable Last-view Lease；一個共享 Xterm Handle 可能代表多個未掛載視窗，D11 只拒絕 0／多個 mounted Surface。② Host SQLite 成功但 Session 未重設 owner 時 Crash 仍不能還原舊 PTY 或權威宣告確定失敗；需 Durable process generation/可靠補償、合法的 transferred PTY 退出後 Tab 清除與終止交易（目前刻意保留收據）。③ Journal 手動判斷 stale lock 仍沒有跨程序活性證明／安全解鎖／Host 簽署決定性稽核，仍沒有 UX；Mobile 版本與 Terminal watcher、不同 runtime clients 的終止流程要審。④ 需依原限制另行批准完整 `cargo check`、Cargo/Flutter tests、Flutter analyzer/build、Windows/macOS 多 Window/Client/Crash E2E 才可考慮開 Gate。
+
+**限制原封不動**：`tab.transfer.capabilities.supported=false`（不可用、不發布）。本批**僅** `rustfmt`、`dart format`、`git diff --check`、`git diff --cached --check`；**沒有新增或執行測試、分析、編譯、Win/Mac 實機、Push、Release**，不得以格式化通過宣稱功能已可用。接手請再讀 `docs/terminal-tab-cross-workspace-plan-20261029.md` 最上方 D11 與 `docs/refactor/tdd-roadmap-20261029.md`。
+
+## 歷史：T2-D10 交接入口（2026-10-30）
+
 
 **最新可接續整合分支／安全起點**：`refactor/tdd-integrate-20261029`，工作樹 `.worktrees/refactor-tdd-integrate-20261029`。先檢查 D9 乾淨 HEAD `dfc9c2fe7c55ecc055e8534eba82ff2c98a09d11`，重用三條 clean D9 隔離工作樹切 `feat/t2-d10-view-registry-20261030`、`feat/t2-d10-view-close-20261030`、`feat/t2-d10-client-leases-20261030`，按檔案所有權分開修改。D10 來源碼整合後、更新本文件前 HEAD **`6c5571280` 已確認乾淨**；文件提交後 HEAD 會改變，接手一定要重新 `git status`／`git log -1`，不能硬套此 SHA。原始 `main` 的 `3d232acff` 仍是原有 dirty，沒有 reset、merge、clean 或覆蓋。
 
