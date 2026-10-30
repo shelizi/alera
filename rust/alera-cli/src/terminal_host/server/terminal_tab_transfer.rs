@@ -30,6 +30,12 @@ pub(super) fn pty_instance_token(instance_id: u64) -> String {
     )
 }
 
+/// Never use a malformed or reminted PTY identity as an original Host proof.
+fn parse_pty_instance_token(token: &str) -> Option<(Uuid, u64)> {
+    let (epoch, instance) = token.split_once(':')?;
+    Some((Uuid::parse_str(epoch).ok()?, instance.parse::<u64>().ok()?))
+}
+
 /// A receipt stamped by a different Host process can never prove that its
 /// original PTY is owned by *this* process. Another Host could still be live
 /// elsewhere; this is NOT evidence of death, failed transfer or safe rollback.
@@ -37,16 +43,10 @@ pub(super) fn pty_instance_token(instance_id: u64) -> String {
 /// Older/unrecognized receipt formats stay unknown rather than being
 /// interpreted as a valid instance of the current Host.
 fn receipt_from_other_host_generation(receipt: &Value) -> bool {
-    let Some(token) = receipt["ptyInstanceToken"].as_str() else {
-        return false;
-    };
-    let Some((epoch, instance)) = token.split_once(':') else {
-        return false;
-    };
-    if instance.parse::<u64>().is_err() {
-        return false;
-    }
-    let Ok(recorded_epoch) = Uuid::parse_str(epoch) else {
+    let Some((recorded_epoch, _)) = receipt["ptyInstanceToken"]
+        .as_str()
+        .and_then(parse_pty_instance_token)
+    else {
         return false;
     };
     recorded_epoch != *TRANSFER_HOST_EPOCH.get_or_init(Uuid::new_v4)
@@ -99,6 +99,16 @@ pub(super) fn invalid_transfer_receipt_marker(tab: &WorkspaceTabRecord) -> bool 
     {
         return true;
     }
+    // Validate the actual owner and the original process-generation format;
+    // missing PTYs or stale receipts never authorize destructive cleanup.
+    if receipt["from"] == receipt["to"]
+        || receipt["to"].as_str() != Some(tab.workspace_id.as_str())
+        || !receipt["ptyInstanceToken"]
+            .as_str()
+            .is_some_and(|token| parse_pty_instance_token(token).is_some())
+    {
+        return true;
+    }
     // A stale/malformed exit marker must not be taken as permission to
     // terminate or remove the current original PTY generation.
     if let Some(exit) = tab.payload.get("lastTerminalTabExit") {
@@ -110,7 +120,10 @@ pub(super) fn invalid_transfer_receipt_marker(tab: &WorkspaceTabRecord) -> bool 
             || exit["ptyInstanceToken"].as_str() != receipt["ptyInstanceToken"].as_str()
             || exit["workspaceId"].as_str() != receipt["to"].as_str()
             || exit["sessionId"].as_str() != Some(session_id)
-            || exit["exitCode"].as_i64().is_none();
+            || exit["exitCode"].as_i64().is_none()
+            || !exit["observedAtUtc"]
+                .as_str()
+                .is_some_and(|timestamp| chrono::DateTime::parse_from_rfc3339(timestamp).is_ok());
     }
     false
 }

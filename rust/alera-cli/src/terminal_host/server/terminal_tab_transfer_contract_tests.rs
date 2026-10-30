@@ -9,6 +9,7 @@ use crate::terminal_host::client::ClientHandle;
 use crate::terminal_host::session::Session;
 
 use super::super::actor_test_harness::{local_client, test_actor};
+use super::invalid_transfer_receipt_marker;
 
 fn layout(workspace: &str, tab_ids: &[&str]) -> Value {
     let group = format!("{workspace}/main");
@@ -24,6 +25,79 @@ fn layout(workspace: &str, tab_ids: &[&str]) -> Value {
         "activeTabId": tab_ids.last().copied()
     });
     data
+}
+
+#[test]
+fn transferred_terminal_rejects_malformed_owner_generation_and_exit_evidence() {
+    let timestamp = Utc::now();
+    let token = format!("{}:23", uuid::Uuid::new_v4());
+    let make = |owner: &str, from: &str, to: &str, token: &str, exit: Option<Value>| {
+        let mut payload = json!({
+            "terminalSessionId": "session-moving",
+            "lastTerminalTabTransfer": {
+                "id": "move-1",
+                "from": from,
+                "to": to,
+                "ptyInstanceToken": token,
+            }
+        });
+        if let Some(exit) = exit {
+            payload["lastTerminalTabExit"] = exit;
+        }
+        WorkspaceTabRecord {
+            id: "tab-moving".to_string(),
+            workspace_id: owner.to_string(),
+            kind: "terminal".to_string(),
+            title: "Terminal".to_string(),
+            created_at: timestamp,
+            updated_at: timestamp,
+            payload,
+        }
+    };
+    let valid_exit = json!({
+        "transferMutationId": "move-1",
+        "sessionId": "session-moving",
+        "workspaceId": "target",
+        "ptyInstanceToken": token,
+        "exitCode": 0,
+        "observedAtUtc": timestamp.to_rfc3339()
+    });
+    assert!(!invalid_transfer_receipt_marker(&make(
+        "target", "source", "target", &token, None
+    )));
+    assert!(!invalid_transfer_receipt_marker(&make(
+        "target",
+        "source",
+        "target",
+        &token,
+        Some(valid_exit.clone())
+    )));
+    assert!(invalid_transfer_receipt_marker(&make(
+        "wrong-owner",
+        "source",
+        "target",
+        &token,
+        None
+    )));
+    assert!(invalid_transfer_receipt_marker(&make(
+        "target", "target", "target", &token, None
+    )));
+    assert!(invalid_transfer_receipt_marker(&make(
+        "target",
+        "source",
+        "target",
+        "invalid-generation:23",
+        None
+    )));
+    let mut bad_exit = valid_exit;
+    bad_exit["observedAtUtc"] = json!("not-a-timestamp");
+    assert!(invalid_transfer_receipt_marker(&make(
+        "target",
+        "source",
+        "target",
+        &token,
+        Some(bad_exit)
+    )));
 }
 
 #[tokio::test]
