@@ -303,6 +303,12 @@ abstract interface class TerminalPtySession {
   void terminate();
 }
 
+/// A real attached PTY view may disclose its *own* close capability. It is
+/// deliberately not supplied by a repository or a newly queried Host token.
+abstract interface class TerminalPtyAttachedViewLease {
+  String? get attachedViewLeaseId;
+}
+
 abstract interface class RecoverableTerminalPtySession
     implements TerminalPtySession {
   bool get supportsRestart;

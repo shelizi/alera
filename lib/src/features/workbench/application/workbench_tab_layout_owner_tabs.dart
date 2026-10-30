@@ -21,6 +21,20 @@ extension WorkbenchTabLayoutOwnerTabs on WorkbenchTabLayoutOwner {
       currentTabs: _host.readState().tabsFor(workspace.id),
       currentLayout: _host.readState().layoutFor(workspace.id),
     );
+    // Capture the view token in the same synchronous click-time snapshot
+    // as the original tab owner and transfer receipt. Do not re-query a
+    // newer Host token after the serialized close waits/retries.
+    final observedViewLeaseIds = <String, String>{};
+    for (final tab in snapshot.closingTabs.values) {
+      if (tab.kind != WorkspaceTabKind.terminal ||
+          tab.payload['lastTerminalTabTransfer'] is! Map) {
+        continue;
+      }
+      final id = _host.attachedTerminalViewLeaseIdForTab(tab.id);
+      if (id != null && id.isNotEmpty) {
+        observedViewLeaseIds[tab.id] = id;
+      }
+    }
     final ids = snapshot.closedTabIds;
     if (ids.isEmpty) {
       return;
@@ -31,7 +45,11 @@ extension WorkbenchTabLayoutOwnerTabs on WorkbenchTabLayoutOwner {
           tabStore: _host.workspaceTabService,
           hostedReviewRetention: _host.hostedReviewRetention,
           resourceCleaner: _host.explicitResourceCleaner,
-        ).close(workspace: workspace, snapshot: snapshot);
+        ).close(
+          workspace: workspace,
+          snapshot: snapshot,
+          observedViewLeaseIds: observedViewLeaseIds,
+        );
         await WorkbenchClosedTabsCompletionCoordinator(
           readCurrentTabs: () => _host.readState().tabsFor(workspace.id),
           readCurrentLayout: () => _host.readState().layoutFor(workspace.id),

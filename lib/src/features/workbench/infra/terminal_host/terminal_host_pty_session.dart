@@ -45,6 +45,7 @@ final class TerminalHostPtySession._(
     implements
         RecoverableTerminalPtySession,
         WorkspaceAwareTerminalPtySession,
+        TerminalPtyAttachedViewLease,
         DeferredEnterTerminalPtySession,
         TerminalPulsePtySession {
   factory({
@@ -70,6 +71,12 @@ final class TerminalHostPtySession._(
   /// The same PTY view uses one random lease across transport reconnects.
   /// Other windows sharing the socket mint different lease IDs.
   final String _viewLeaseId = const Uuid().v4();
+
+  @override
+  String? get attachedViewLeaseId =>
+      !_disposed && _started && _client is TerminalHostViewLeaseClient
+      ? _viewLeaseId
+      : null;
 
   @override
   void updateDisplayWorkspaceId(String workspaceId) {

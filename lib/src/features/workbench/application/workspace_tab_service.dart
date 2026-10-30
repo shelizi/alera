@@ -19,6 +19,7 @@ class WorkspaceTabService._(
     WorkbenchTabCloseStore,
     WorkbenchScopedTabCloseStore,
     WorkbenchObservedTabCloseStore,
+    WorkbenchViewBoundObservedTabCloseStore,
     WorkbenchWorkspaceSelectionTabStore {
   factory({
     required WorkbenchRepository repository,
@@ -162,6 +163,33 @@ class WorkspaceTabService._(
       );
     }
     return closeTabInWorkspace(observedTab.id, expectedWorkspaceId);
+  }
+
+  @override
+  Future<void> closeObservedTabWithViewLease(
+    WorkspaceTabRecord observedTab,
+    String expectedWorkspaceId,
+    String expectedViewLeaseId,
+  ) {
+    if (observedTab.workspaceId != expectedWorkspaceId ||
+        observedTab.kind != WorkspaceTabKind.terminal ||
+        observedTab.payload['lastTerminalTabTransfer'] is! Map ||
+        expectedViewLeaseId.trim().isEmpty) {
+      throw StateError(
+        'Transferred Terminal close requires the observed Tab, workspace, receipt and current attached view lease.',
+      );
+    }
+    final repository = _repository;
+    if (repository is! WorkbenchViewBoundTabRemovalRepository) {
+      throw StateError(
+        'This repository cannot prove the last attached view of a transferred Terminal.',
+      );
+    }
+    return repository.removeObservedWorkspaceTabWithViewLease(
+      observedTab,
+      expectedWorkspaceId,
+      expectedViewLeaseId,
+    );
   }
 
   Future<WorkspaceTabRecord> renameTab({

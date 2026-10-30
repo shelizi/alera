@@ -22,7 +22,8 @@ class RuntimeWorkbenchRepository(
     implements
         WorkbenchRepository,
         WorkbenchScopedTabRemovalRepository,
-        WorkbenchObservedTabRemovalRepository {
+        WorkbenchObservedTabRemovalRepository,
+        WorkbenchViewBoundTabRemovalRepository {
   this : _coalescer = coalescer ?? RuntimeChangeCoalescer();
 
   @override
@@ -210,10 +211,39 @@ class RuntimeWorkbenchRepository(
     );
   }
 
+  @override
+  Future<void> removeObservedWorkspaceTabWithViewLease(
+    WorkspaceTabRecord observedTab,
+    String expectedWorkspaceId,
+    String expectedViewLeaseId,
+  ) async {
+    if (observedTab.workspaceId != expectedWorkspaceId ||
+        observedTab.kind != WorkspaceTabKind.terminal ||
+        expectedViewLeaseId.trim().isEmpty) {
+      throw StateError('Moved Terminal close has invalid observed view scope.');
+    }
+    final receipt = observedTab.payload['lastTerminalTabTransfer'];
+    final receiptId = receipt is Map ? receipt['id'] : null;
+    if (receiptId is! String || receiptId.trim().isEmpty) {
+      throw StateError(
+        'Moved Terminal close has no observed transfer receipt.',
+      );
+    }
+    // No Host lookup: use the click-time owner/receipt/view capability even
+    // when the first attempt times out or the Runtime socket reconnects.
+    await _removeWorkspaceTabWithRetry(
+      observedTab.id,
+      expectedWorkspaceId: expectedWorkspaceId,
+      expectedTransferMutationId: receiptId,
+      expectedViewLeaseId: expectedViewLeaseId,
+    );
+  }
+
   Future<void> _removeWorkspaceTabWithRetry(
     String tabId, {
     String? expectedWorkspaceId,
     String? expectedTransferMutationId,
+    String? expectedViewLeaseId,
   }) async {
     await _ensureReady();
     try {
@@ -221,6 +251,7 @@ class RuntimeWorkbenchRepository(
         tabId,
         expectedWorkspaceId: expectedWorkspaceId,
         expectedTransferMutationId: expectedTransferMutationId,
+        expectedViewLeaseId: expectedViewLeaseId,
       );
     } on TerminalHostRequestTimeoutException catch (error) {
       if (error.requestType != 'tab.remove') {
@@ -233,6 +264,7 @@ class RuntimeWorkbenchRepository(
         tabId,
         expectedWorkspaceId: expectedWorkspaceId,
         expectedTransferMutationId: expectedTransferMutationId,
+        expectedViewLeaseId: expectedViewLeaseId,
       );
     } on TerminalHostConnectionClosedException {
       // The request may have reached the host before the disconnect. The
@@ -241,6 +273,7 @@ class RuntimeWorkbenchRepository(
         tabId,
         expectedWorkspaceId: expectedWorkspaceId,
         expectedTransferMutationId: expectedTransferMutationId,
+        expectedViewLeaseId: expectedViewLeaseId,
       );
     }
   }
@@ -249,6 +282,7 @@ class RuntimeWorkbenchRepository(
     String tabId, {
     String? expectedWorkspaceId,
     String? expectedTransferMutationId,
+    String? expectedViewLeaseId,
   }) async {
     await _client.runtimeRequest('tab.remove', <String, Object?>{
       'id': tabId,
@@ -256,6 +290,8 @@ class RuntimeWorkbenchRepository(
         'expectedWorkspaceId': expectedWorkspaceId,
       if (expectedTransferMutationId != null)
         'expectedTransferMutationId': expectedTransferMutationId,
+      if (expectedViewLeaseId != null)
+        'expectedViewLeaseId': expectedViewLeaseId,
     });
   }
 

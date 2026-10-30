@@ -26,6 +26,16 @@ abstract interface class WorkbenchObservedTabRemovalRepository {
   );
 }
 
+/// Optional Runtime Host capability: only a currently attached UI view may
+/// request a destructive close of a previously transferred PTY.
+abstract interface class WorkbenchViewBoundTabRemovalRepository {
+  Future<void> removeObservedWorkspaceTabWithViewLease(
+    WorkspaceTabRecord observedTab,
+    String expectedWorkspaceId,
+    String expectedViewLeaseId,
+  );
+}
+
 abstract interface class WorkbenchRepository
     implements
         WorkbenchLayoutRepository,

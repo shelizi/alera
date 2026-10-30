@@ -70,6 +70,10 @@ abstract interface class WorkbenchTabLayoutOwnerHost {
   /// Cleans client-local resources for explicit tab closes.
   WorkbenchExplicitResourceCleaner get explicitResourceCleaner;
 
+  /// Captures the existing rendered UI view's lease at close-click time.
+  /// Never create or reattach a view merely to authorize Tab removal.
+  String? attachedTerminalViewLeaseIdForTab(String tabId);
+
   /// Releases resources for tabs retired by watcher-driven removals.
   WorkbenchRetiredTabsCleanupCoordinator get retiredTabsCleanup;
 

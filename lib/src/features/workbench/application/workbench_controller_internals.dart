@@ -104,6 +104,14 @@ mixin _WorkbenchControllerInternals on _$WorkbenchController
       _lifecycleOwner.explicitResourceCleaner;
 
   @override
+  String? attachedTerminalViewLeaseIdForTab(String tabId) {
+    final lifecycle = ref.read(terminalRuntimeLifecycleProvider);
+    return lifecycle is TerminalRuntimeAttachedViewLeaseSource
+        ? lifecycle.attachedViewLeaseIdForTab(tabId)
+        : null;
+  }
+
+  @override
   WorkbenchRetiredTabsCleanupCoordinator get retiredTabsCleanup =>
       _lifecycleOwner.retiredTabsCleanup;
 

@@ -27,3 +27,11 @@ abstract interface class TerminalRuntimeLifecycle {
   /// Frees local terminal resources for [workspaceId] without terminating PTYs.
   void releaseWorkspace(String workspaceId);
 }
+
+/// Read-only lease evidence from an already attached Terminal view. The
+/// Workbench must never create a new PTY view or fetch a different Host
+/// connection's newest token while authorizing a previously observed close.
+abstract interface class TerminalRuntimeAttachedViewLeaseSource {
+  /// The same view that rendered [tabId], or null if not attached locally.
+  String? attachedViewLeaseIdForTab(String tabId);
+}

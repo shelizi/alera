@@ -11,6 +11,7 @@ class XtermTerminalRuntime._(
 ) implements
     TerminalRuntime,
     TerminalRuntimeSessionOwnerHost,
+    TerminalRuntimeAttachedViewLeaseSource,
     TerminalRuntimeUserInputSource {
   factory({
     TerminalPtySessionFactory? ptySessionFactory,
@@ -100,6 +101,18 @@ class XtermTerminalRuntime._(
   @override
   TerminalSessionHandle? peekSession(String tabId) =>
       _sessionOwner.peekSession(tabId);
+
+  @override
+  String? attachedViewLeaseIdForTab(String tabId) {
+    final session = _sessionOwner.peekSession(tabId);
+    if (session is _XtermTerminalSessionHandle && !session.isDisposed) {
+      final pty = session.ptySession;
+      if (pty is TerminalPtyAttachedViewLease) {
+        return pty.attachedViewLeaseId;
+      }
+    }
+    return null;
+  }
 
   @override
   void requestFocus({

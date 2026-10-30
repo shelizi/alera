@@ -18,3 +18,13 @@ abstract interface class WorkbenchObservedTabCloseStore {
     String expectedWorkspaceId,
   );
 }
+
+/// A moved PTY must be closed with its original observed Tab/receipt and
+/// the same already attached UI view's lease, not a newly queried Host token.
+abstract interface class WorkbenchViewBoundObservedTabCloseStore {
+  Future<void> closeObservedTabWithViewLease(
+    WorkspaceTabRecord observedTab,
+    String expectedWorkspaceId,
+    String expectedViewLeaseId,
+  );
+}
