@@ -25,6 +25,9 @@ export 'package:alera/src/features/workbench/infra/terminal_host/terminal_host_p
 
 part 'terminal_host_client_types.dart';
 part 'terminal_host_client_requests.dart';
+part 'terminal_host_client_request_routing.dart';
+part 'terminal_host_client_connection_state.dart';
+part 'terminal_host_client_message_dispatch.dart';
 part 'terminal_host_client_capabilities.dart';
 part 'terminal_host_client_connections.dart';
 part 'terminal_host_client_guarded_requests.dart';
@@ -374,30 +377,6 @@ final class SocketTerminalHostClient._(
     expectedTransferMutationId: expectedTransferMutationId,
   );
 
-  Future<void> _terminateWithView(
-    String sessionId, {
-    String? viewLeaseId,
-    String? expectedWorkspaceId,
-    String? expectedTabId,
-    String? expectedTransferMutationId,
-  }) async {
-    final clientMutationId = _pendingTerminateMutationIds.putIfAbsent(
-      sessionId,
-      () => const Uuid().v4(),
-    );
-    await _terminalRequest('terminate', <String, Object?>{
-      'sessionId': sessionId,
-      'clientMutationId': clientMutationId,
-      if (expectedWorkspaceId != null)
-        'expectedWorkspaceId': expectedWorkspaceId,
-      if (expectedTabId != null) 'expectedTabId': expectedTabId,
-      if (expectedTransferMutationId != null)
-        'expectedTransferMutationId': expectedTransferMutationId,
-      if (viewLeaseId != null) 'expectedViewLeaseId': viewLeaseId,
-    });
-    _pendingTerminateMutationIds.remove(sessionId);
-  }
-
   @override
   Future<Map<String, Object?>> _terminalRequestMap(
     String type,
@@ -410,123 +389,6 @@ final class SocketTerminalHostClient._(
     );
   }
 
-  Future<Object?> _terminalRequest(
-    String type,
-    Map<String, Object?> payload, {
-    Duration? timeout,
-  }) async {
-    if (_disposed) {
-      throw StateError('Terminal host client is disposed.');
-    }
-    _throwIfAppQuitInProgress();
-    final connection = await _connectTerminal();
-    _throwIfAppQuitInProgress();
-    return _requestOnConnection(connection, type, payload, timeout: timeout);
-  }
-
-  Future<Object?> _runtimeRequest(
-    String type,
-    Map<String, Object?> payload,
-    Duration? timeout,
-  ) async {
-    if (_disposed) {
-      throw StateError('Terminal host client is disposed.');
-    }
-    _throwIfAppQuitInProgress();
-    final connection = await _connectRuntime(
-      requireOrchestration: type.startsWith('orchestration.'),
-    );
-    _throwIfAppQuitInProgress();
-    final requestPayload =
-        type == 'runtimeSettings.update' &&
-            _runtimeSettingsRevision != null &&
-            !payload.containsKey('expectedRevision')
-        ? <String, Object?>{
-            ...payload,
-            'expectedRevision': _runtimeSettingsRevision,
-          }
-        : payload;
-    try {
-      final response = await _requestOnConnection(
-        connection,
-        type,
-        requestPayload,
-        timeout: timeout,
-      );
-      if (type == 'runtimeSettings.get' || type == 'runtimeSettings.update') {
-        _rememberRuntimeSettingsRevision(response);
-      }
-      return response;
-    } on TerminalHostConflictException catch (error, stackTrace) {
-      if (type == 'runtimeSettings.update' &&
-          error.code == _runtimeSettingsRevisionConflictCode) {
-        await _refreshRuntimeSettingsRevision(
-          connection,
-          timeout: timeout,
-          conflict: error,
-          conflictStackTrace: stackTrace,
-        );
-      }
-      rethrow;
-    }
-  }
-
-  void _rememberRuntimeSettingsRevision(Object? response) {
-    final revision = response is Map ? response['revision'] : null;
-    _runtimeSettingsRevision = revision is num ? revision.toInt() : null;
-  }
-
-  Future<void> _refreshRuntimeSettingsRevision(
-    _TerminalHostConnection connection, {
-    required Duration? timeout,
-    required TerminalHostConflictException conflict,
-    required StackTrace conflictStackTrace,
-  }) async {
-    try {
-      final response = await _requestOnConnection(
-        connection,
-        'runtimeSettings.get',
-        const <String, Object?>{},
-        timeout: timeout,
-      );
-      _rememberRuntimeSettingsRevision(response);
-    } on Object catch (error, stackTrace) {
-      Logger('SocketTerminalHostClient').warning(
-        'could not refresh runtime settings after a revision conflict',
-        error,
-        stackTrace,
-      );
-      Logger('SocketTerminalHostClient').fine(
-        'the original runtime settings conflict remains authoritative',
-        conflict,
-        conflictStackTrace,
-      );
-    }
-  }
-
-  Future<Object?> _requestOnConnection(
-    _TerminalHostConnection connection,
-    String type,
-    Map<String, Object?> payload, {
-    Duration? timeout,
-    bool allowDuringAppQuit = false,
-  }) {
-    if (_disposed) {
-      throw StateError('Terminal host client is disposed.');
-    }
-    if (_appQuitInProgress && !allowDuringAppQuit) {
-      throw const TerminalHostConnectionClosedException();
-    }
-    return _sendTerminalHostRequestWithMutationRetry(
-      this,
-      connection,
-      type,
-      payload,
-      timeout: timeout,
-      allowDuringAppQuit: allowDuringAppQuit,
-    );
-  }
-
   @override
   Future<Object?> runtimeRequest(
     String type, [
@@ -536,192 +398,14 @@ final class SocketTerminalHostClient._(
     return _runtimeRequest(type, payload, timeout);
   }
 
-  void _throwIfConnectRetryCoolingDown() {
-    final notBefore = _connectRetryNotBefore;
-    if (notBefore != null && DateTime.now().isBefore(notBefore)) {
-      throw const TerminalHostConnectionClosedException();
-    }
-  }
-
-  Future<_TerminalHostConnection> _trackConnectOutcome(
-    Future<_TerminalHostConnection> future,
-  ) async {
-    try {
-      final connection = await future;
-      _connectFailureStreak = 0;
-      _connectRetryNotBefore = null;
-      return connection;
-    } catch (error) {
-      // Semantic rejections such as a missing orchestration capability are
-      // not transport failures and must not pace later connects.
-      if (error is! StateError) {
-        _connectFailureStreak += 1;
-        if (_connectFailureStreak >= 2) {
-          final factor = (_connectFailureStreak - 1).clamp(1, 4);
-          _connectRetryNotBefore = DateTime.now().add(
-            _connectRetryCooldown * factor,
-          );
-        }
-      }
-      rethrow;
-    }
-  }
-
-  Future<_TerminalHostConnection> _connectTerminal() {
-    if (_disposed) {
-      throw const TerminalHostConnectionClosedException();
-    }
-    if (_terminalConnection case final connection?) {
-      return Future<_TerminalHostConnection>.value(connection);
-    }
-    if (_runtimeConnection case final connection?
-        when connection.supportsRuntime) {
-      _terminalConnection = connection;
-      return Future<_TerminalHostConnection>.value(connection);
-    }
-    final future = _terminalConnectionFuture;
-    if (future != null) {
-      return future;
-    }
-    _throwIfConnectRetryCoolingDown();
-    late final Future<_TerminalHostConnection> next;
-    next = _trackConnectOutcome(_openTerminalConnection()).whenComplete(() {
-      if (identical(_terminalConnectionFuture, next)) {
-        _terminalConnectionFuture = null;
-      }
-    });
-    _terminalConnectionFuture = next;
-    _guardHostFuture(next);
-    return next;
-  }
-
   @override
   Future<_TerminalHostConnection> _connectRuntime({
     bool requireOrchestration = false,
     bool launchIfMissing = true,
-  }) async {
-    if (_disposed) {
-      throw const TerminalHostConnectionClosedException();
-    }
-    if (_runtimeConnection case final connection?
-        when _supportsRuntime(connection, requireOrchestration)) {
-      return Future<_TerminalHostConnection>.value(connection);
-    }
-    if (_terminalConnection case final connection?) {
-      if (_supportsRuntime(connection, requireOrchestration)) {
-        _runtimeConnection = connection;
-        return Future<_TerminalHostConnection>.value(connection);
-      }
-      _throwIfOrchestrationWouldSplitPtyHost(connection, requireOrchestration);
-    }
-    final future = _runtimeConnectionFuture;
-    if (future != null) {
-      final connection = await _waitForRuntimeConnectionFuture(
-        future,
-        requireOrchestration: requireOrchestration,
-      );
-      if (connection != null &&
-          _supportsRuntime(connection, requireOrchestration)) {
-        return connection;
-      }
-    }
-    final terminalFuture = _terminalConnectionFuture;
-    if (terminalFuture != null) {
-      final connection = await terminalFuture;
-      if (_supportsRuntime(connection, requireOrchestration)) {
-        _runtimeConnection = connection;
-        return connection;
-      }
-      _throwIfOrchestrationWouldSplitPtyHost(connection, requireOrchestration);
-    }
-    if (_runtimeConnection case final connection?
-        when _supportsRuntime(connection, requireOrchestration)) {
-      return connection;
-    }
-    final nextFuture = _runtimeConnectionFuture;
-    if (nextFuture != null) {
-      final connection = await _waitForRuntimeConnectionFuture(
-        nextFuture,
-        requireOrchestration: requireOrchestration,
-      );
-      if (connection != null &&
-          _supportsRuntime(connection, requireOrchestration)) {
-        return connection;
-      }
-    }
-    _throwIfConnectRetryCoolingDown();
-    late final Future<_TerminalHostConnection> next;
-    next =
-        _trackConnectOutcome(
-          _openRuntimeConnection(
-            requireOrchestration: requireOrchestration,
-            launchIfMissing: launchIfMissing,
-          ),
-        ).whenComplete(() {
-          if (identical(_runtimeConnectionFuture, next)) {
-            _runtimeConnectionFuture = null;
-          }
-        });
-    _runtimeConnectionFuture = next;
-    _guardHostFuture(next);
-    return next;
-  }
-
-  Future<_TerminalHostConnection?> _waitForRuntimeConnectionFuture(
-    Future<_TerminalHostConnection> future, {
-    required bool requireOrchestration,
-  }) async {
-    try {
-      return await future;
-    } catch (_) {
-      if (_disposed) {
-        throw const TerminalHostConnectionClosedException();
-      }
-      if (requireOrchestration) {
-        rethrow;
-      }
-      // A strict orchestration probe can reject a live pre-orchestration host;
-      // normal runtime callers should retry without inheriting that error.
-      return null;
-    }
-  }
-
-  void _handleLine(_TerminalHostConnection connection, Object? line) {
-    // The reader isolate parses; the fallback path hands over the raw line.
-    final decoded = line is String ? jsonDecode(line) : line;
-    final message = asTerminalHostMap(decoded, 'Terminal host message');
-    if (message['event'] case final String event) {
-      _handleEvent(event, asTerminalHostMap(message['payload'], 'event'));
-      return;
-    }
-    final id = message['id'];
-    if (id is! int) {
-      return;
-    }
-    if (id == 0) {
-      if (message['ok'] != true) {
-        final error = StateError(
-          (message['error'] as String?) ??
-              'Terminal host authentication was rejected.',
-        );
-        connection.completeAuthenticationError(error);
-        _handleConnectionClosed(connection, error, 'authentication_rejected');
-      } else {
-        connection.completeAuthentication();
-      }
-      return;
-    }
-    final pending = _pending.remove(id);
-    final completer = pending?.completer;
-    if (completer == null || completer.isCompleted) {
-      return;
-    }
-    if (message['ok'] == true) {
-      completer.complete(message['payload']);
-    } else {
-      completer.completeError(_terminalHostRequestError(message));
-    }
-  }
+  }) => _connectRuntimeImpl(
+    requireOrchestration: requireOrchestration,
+    launchIfMissing: launchIfMissing,
+  );
 
   @override
   Future<void> _sendHeartbeatRequest(_TerminalHostConnection connection) async {
@@ -739,83 +423,7 @@ final class SocketTerminalHostClient._(
     _TerminalHostConnection connection, [
     Object? error,
     String origin = 'unspecified',
-  ]) {
-    if (connection.isClosed) {
-      return;
-    }
-    final wasTerminalConnection = identical(_terminalConnection, connection);
-    final wasRuntimeConnection = identical(_runtimeConnection, connection);
-    if ((wasTerminalConnection || wasRuntimeConnection) &&
-        !_disposed &&
-        !_appQuitInProgress) {
-      // Never log a host frame, socket exception message, or RPC payload: the
-      // runtime may contain user terminal output and authentication secrets.
-      final detail = switch (error) {
-        _TerminalHostSocketReaderFailure(:final stage) =>
-          ' reader_stage=$stage',
-        null => '',
-        _ => ' error_type=${error.runtimeType}',
-      };
-      Logger(
-        'SocketTerminalHostClient',
-      ).warning('terminal host transport disconnected origin=$origin$detail');
-    }
-    final closedError = TerminalHostConnectionClosedException(error);
-    _stopHeartbeatFor(connection);
-    connection.completeAuthenticationError(closedError);
-    if (wasTerminalConnection) {
-      _terminalConnection = null;
-      _terminalConnectionFuture = null;
-      unawaited(_terminalLineSub?.cancel());
-      _terminalLineSub = null;
-    }
-    if (wasTerminalConnection && !_disposed && !_appQuitInProgress) {
-      _emitConnectionError(closedError);
-    }
-    if (wasRuntimeConnection) {
-      CrashReporting.clearRuntimeContext();
-      _runtimeConnection = null;
-      _runtimeConnectionFuture = null;
-      _runtimeSettingsRevision = null;
-      unawaited(_runtimeLineSub?.cancel());
-      _runtimeLineSub = null;
-    }
-    connection.dispose();
-    final pendingIds = <int>[
-      for (final entry in _pending.entries)
-        if (identical(entry.value.connection, connection)) entry.key,
-    ];
-    for (final id in pendingIds) {
-      final completer = _pending.remove(id)?.completer;
-      if (completer != null && !completer.isCompleted) {
-        final pendingError = _disposed || _appQuitInProgress
-            ? const TerminalHostConnectionClosedException()
-            : closedError;
-        // Preserve the close site for reporters that receive this error
-        // without an await; public callers observe the async wrapper stack.
-        completer.completeError(pendingError, .current);
-      }
-    }
-  }
-
-  Future<_TerminalHostPaths> _runtimePaths() async {
-    final support = await _applicationSupportDirectory();
-    final runtimeDir = Directory(p.join(support.path, 'terminal_host'));
-    if (!await runtimeDir.exists()) {
-      await runtimeDir.create(recursive: true);
-    }
-    return _TerminalHostPaths(
-      runtimeDir: runtimeDir,
-      controlFile: File(p.join(runtimeDir.path, 'host.json')),
-      runtimeControlFile: File(p.join(runtimeDir.path, 'runtime-host.json')),
-    );
-  }
-
-  String _newToken() {
-    final random = Random.secure();
-    final bytes = List<int>.generate(32, (_) => random.nextInt(256));
-    return base64UrlEncode(bytes);
-  }
+  ]) => _handleConnectionClosedImpl(connection, error, origin);
 
   @override
   void dispose() {
@@ -842,45 +450,10 @@ final class SocketTerminalHostClient._(
     unawaited(_runtimeEvents.close());
   }
 
-  void _failPendingRequests(Object error) {
-    final pending = _pending.values.toList(growable: false);
-    _pending.clear();
-    for (final request in pending) {
-      if (!request.completer.isCompleted) {
-        request.completer.completeError(error, .current);
-      }
-    }
-  }
-
   @override
   void _throwIfAppQuitInProgress() {
     if (_appQuitInProgress) {
       throw const TerminalHostConnectionClosedException();
-    }
-  }
-
-  bool _supportsRuntime(
-    _TerminalHostConnection connection,
-    bool requireOrchestration,
-  ) {
-    return connection.supportsRuntime &&
-        (!requireOrchestration || connection.supportsOrchestration);
-  }
-
-  bool _controlSupportsRuntime(
-    _TerminalHostControl? control,
-    bool requireOrchestration,
-  ) {
-    return control?.supportsRuntime == true &&
-        (!requireOrchestration || control!.supportsOrchestration);
-  }
-
-  void _throwIfOrchestrationWouldSplitPtyHost(
-    _TerminalHostConnection connection,
-    bool requireOrchestration,
-  ) {
-    if (requireOrchestration && !_supportsRuntime(connection, true)) {
-      throw StateError(_orchestrationHostRestartRequiredMessage);
     }
   }
 }
