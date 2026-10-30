@@ -31,6 +31,8 @@ impl Session {
             tab_id,
             working_directory: checkpoint.working_directory,
             clients: HashSet::new(),
+            view_leases: HashMap::new(),
+            unscoped_clients: HashSet::new(),
             driver: SessionDriver::Idle,
             desktop_dims: None,
             current_dims: (80, 24),

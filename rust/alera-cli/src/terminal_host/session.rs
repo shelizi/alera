@@ -133,6 +133,12 @@ pub struct Session {
     pub tab_id: String,
     pub working_directory: String,
     pub clients: HashSet<u64>,
+    /// Multiple UI windows can share one Host client connection. Keep their
+    /// lease identities separately from the connection-level output cursor.
+    pub(super) view_leases: HashMap<u64, HashSet<String>>,
+    /// Legacy unscoped views must remain visible even when a token-bearing
+    /// window subsequently attaches through the same Host connection.
+    pub(super) unscoped_clients: HashSet<u64>,
     pub driver: SessionDriver,
     /// Last dims a desktop client applied or requested; restored on reclaim
     /// and when the mobile driver releases the session.
@@ -248,6 +254,8 @@ impl Session {
             tab_id,
             working_directory,
             clients: HashSet::new(),
+            view_leases: HashMap::new(),
+            unscoped_clients: HashSet::new(),
             driver: SessionDriver::Idle,
             desktop_dims: None,
             current_dims: (cols, rows),
@@ -328,6 +336,88 @@ impl Session {
             .insert(client_id, self.output_stream_bytes);
     }
 
+    /// One lease cannot silently move between Host connections. Reattaching
+    /// the same view after transport recovery is idempotent for its client.
+    pub fn can_register_view_lease(&self, client_id: u64, view_id: &str) -> bool {
+        !view_id.trim().is_empty()
+            && self
+                .view_leases
+                .iter()
+                .all(|(owner, ids)| *owner == client_id || !ids.contains(view_id))
+    }
+
+    pub fn register_view_lease(&mut self, client_id: u64, view_id: &str) -> bool {
+        if !self.can_register_view_lease(client_id, view_id) {
+            return false;
+        }
+        self.view_leases
+            .entry(client_id)
+            .or_default()
+            .insert(view_id.to_owned());
+        true
+    }
+
+    pub fn mark_unscoped_attachment(&mut self, client_id: u64) {
+        self.unscoped_clients.insert(client_id);
+    }
+
+    pub fn has_view_lease(&self, client_id: u64, view_id: &str) -> bool {
+        self.clients.contains(&client_id)
+            && self
+                .view_leases
+                .get(&client_id)
+                .is_some_and(|views| views.contains(view_id))
+    }
+
+    pub fn every_attached_client_has_view_lease(&self) -> bool {
+        self.unscoped_clients.is_empty()
+            && self.clients.iter().all(|client_id| {
+                self.view_leases
+                    .get(client_id)
+                    .is_some_and(|views| !views.is_empty())
+            })
+    }
+
+    pub fn is_only_attached_view(&self, client_id: u64, view_id: &str) -> bool {
+        self.unscoped_clients.is_empty()
+            && self.clients.len() == 1
+            && self.has_view_lease(client_id, view_id)
+            && self
+                .view_leases
+                .get(&client_id)
+                .is_some_and(|views| views.len() == 1)
+    }
+
+    /// Runtime-store mutations may use a different authenticated Host
+    /// connection than terminal I/O. The unpredictable view lease is the
+    /// capability proof, not the mutation socket's transient client_id.
+    pub fn is_only_live_view_token(&self, view_id: &str) -> bool {
+        self.every_attached_client_has_view_lease()
+            && self
+                .view_leases
+                .values()
+                .flat_map(|views| views.iter())
+                .fold((0usize, false), |(count, found), id| {
+                    (count + 1, found || id.as_str() == view_id)
+                })
+                == (1, true)
+    }
+
+    /// Detaching one window must not drop another window sharing the Host
+    /// connection. Only the final view releases connection-level output.
+    pub fn release_view_lease(&mut self, client_id: u64, view_id: &str) -> bool {
+        let Some(views) = self.view_leases.get_mut(&client_id) else {
+            return false;
+        };
+        if !views.remove(view_id) {
+            return false;
+        }
+        if views.is_empty() && !self.unscoped_clients.contains(&client_id) {
+            self.detach(client_id);
+        }
+        true
+    }
+
     /// Reattaches a client at an absolute output cursor retained by the app.
     ///
     /// The cursor is accepted only while the entire gap is still present in
@@ -348,6 +438,7 @@ impl Session {
 
     pub fn attach_for_resync(&mut self, client_id: u64) {
         self.clients.insert(client_id);
+        self.unscoped_clients.insert(client_id);
         self.delivered_output_cursors.remove(&client_id);
         self.output_paused_clients.insert(client_id);
         self.output_resync_pending_clients.insert(client_id);
@@ -355,6 +446,8 @@ impl Session {
 
     pub fn detach(&mut self, client_id: u64) {
         self.clients.remove(&client_id);
+        self.view_leases.remove(&client_id);
+        self.unscoped_clients.remove(&client_id);
         self.output_paused_clients.remove(&client_id);
         self.output_resync_pending_clients.remove(&client_id);
         self.delivered_output_cursors.remove(&client_id);

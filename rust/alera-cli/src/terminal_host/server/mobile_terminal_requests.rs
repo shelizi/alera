@@ -244,7 +244,7 @@ async fn mobile_terminal_attachment_payload(
     payload: &Value,
     login_shell: bool,
 ) -> Value {
-    json!({
+    let mut attachment = json!({
         "sessionId": session_id,
         "workspaceId": workspace.id.clone(),
         "tabId": tab_id,
@@ -255,5 +255,11 @@ async fn mobile_terminal_attachment_payload(
             .to_json(),
         "cols": int_or(payload, "cols", 80),
         "rows": int_or(payload, "rows", 24),
-    })
+    });
+    if let Some(view_id) = payload.get("viewLeaseId").and_then(Value::as_str) {
+        // Legacy clients omit the field, not a JSON null. Only moved PTYs
+        // demand an explicit, unique mobile view identity.
+        attachment["viewLeaseId"] = Value::String(view_id.to_owned());
+    }
+    attachment
 }

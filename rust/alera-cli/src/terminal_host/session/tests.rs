@@ -68,6 +68,8 @@ fn test_session() -> Session {
         tab_id: "tab-1".to_string(),
         working_directory: "/repo".to_string(),
         clients: HashSet::new(),
+        view_leases: HashMap::new(),
+        unscoped_clients: HashSet::new(),
         driver: SessionDriver::Idle,
         desktop_dims: None,
         current_dims: (80, 24),

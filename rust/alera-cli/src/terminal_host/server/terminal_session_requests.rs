@@ -99,8 +99,35 @@ impl ServerActor {
         let tab_id = require_string(payload, "tabId")?;
         let working_directory = require_string(payload, "workingDirectory")?;
         let resume_cursor = payload.get("resumeCursor").and_then(Value::as_u64);
+        let view_lease_id = payload.get("viewLeaseId").and_then(Value::as_str);
+        if payload.get("viewLeaseId").is_some()
+            && !view_lease_id.is_some_and(|id| !id.trim().is_empty() && id.len() <= 128)
+        {
+            return Err(HostError::format(
+                "Terminal viewLeaseId must be a non-empty string of at most 128 bytes.",
+            ));
+        }
         self.verify_terminal_attachment_owner(&session_id, &workspace_id, &tab_id)
             .await?;
+        if let Some(tab) = self
+            .runtime_store
+            .find_workspace_tab(&tab_id)
+            .await
+            .map_err(|error| HostError::state(error.to_string()))?
+        {
+            if tab.payload["lastTerminalTabTransfer"].is_object() && view_lease_id.is_none() {
+                return Err(HostError::state(
+                    "Transferred Terminal requires a per-window viewLeaseId; this older client cannot safely attach.",
+                ));
+            }
+        }
+        if let (Some(view), Some(session)) = (view_lease_id, self.sessions.get(&session_id)) {
+            if !session.can_register_view_lease(client_id, view) {
+                return Err(HostError::state(
+                    "Terminal view lease is already registered on another Host client.",
+                ));
+            }
+        }
 
         // Attaching a user client to a tab created for an automation is the
         // durable takeover signal. It prevents a later successful completion
@@ -172,6 +199,17 @@ impl ServerActor {
                         .expect("just checked")
                         .attach_at_output_cursor(client_id, cursor);
                     if retained {
+                        if let Some(view) = view_lease_id {
+                            self.sessions
+                                .get_mut(&session_id)
+                                .expect("just checked")
+                                .register_view_lease(client_id, view);
+                        } else {
+                            self.sessions
+                                .get_mut(&session_id)
+                                .expect("just checked")
+                                .mark_unscoped_attachment(client_id);
+                        }
                         let data = {
                             let session = self.sessions.get(&session_id).expect("just checked");
                             let (base_cursor, _) = session.output_stream_range();
@@ -197,11 +235,21 @@ impl ServerActor {
                         // scrollback through the control reply instead.
                         let session = self.sessions.get_mut(&session_id).expect("just checked");
                         session.attach(client_id);
+                        if let Some(view) = view_lease_id {
+                            session.register_view_lease(client_id, view);
+                        } else {
+                            session.mark_unscoped_attachment(client_id);
+                        }
                         return Ok(session.attachment_payload(false, restore_bytes));
                     }
                 }
                 let session = self.sessions.get_mut(&session_id).expect("just checked");
                 session.attach(client_id);
+                if let Some(view) = view_lease_id {
+                    session.register_view_lease(client_id, view);
+                } else {
+                    session.mark_unscoped_attachment(client_id);
+                }
                 return Ok(session.attachment_payload(false, restore_bytes));
             }
         }
@@ -231,6 +279,11 @@ impl ServerActor {
         .await?;
         let session = self.sessions.get_mut(&session_id).expect("just inserted");
         session.attach(client_id);
+        if let Some(view) = view_lease_id {
+            session.register_view_lease(client_id, view);
+        } else {
+            session.mark_unscoped_attachment(client_id);
+        }
         Ok(session.attachment_payload(true, restore_bytes))
     }
 

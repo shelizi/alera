@@ -445,11 +445,46 @@ impl ServerActor {
             "detach" => {
                 self.require_auth(client_id)?;
                 let session_id = self.require_session(payload)?;
+                let view_lease_id = payload.get("viewLeaseId").and_then(Value::as_str);
+                let moved = if let Some(session) = self.sessions.get(&session_id) {
+                    self.runtime_store
+                        .find_workspace_tab(&session.tab_id)
+                        .await
+                        .map_err(|error| HostError::state(error.to_string()))?
+                        .is_some_and(|tab| tab.payload["lastTerminalTabTransfer"].is_object())
+                } else {
+                    false
+                };
+                if moved
+                    && !view_lease_id.is_some_and(|view| {
+                        self.sessions
+                            .get(&session_id)
+                            .is_some_and(|session| session.has_view_lease(client_id, view))
+                    })
+                {
+                    return Err(HostError::state(
+                        "Transferred Terminal detach requires the attached viewLeaseId.",
+                    ));
+                }
                 self.flush_all_output(&session_id);
                 if let Some(session) = self.sessions.get_mut(&session_id) {
-                    session.detach(client_id);
+                    if let Some(view) = view_lease_id {
+                        if !session.release_view_lease(client_id, view) {
+                            return Err(HostError::state(
+                                "Terminal viewLeaseId is not attached to this Host client.",
+                            ));
+                        }
+                    } else {
+                        session.detach(client_id);
+                    }
                 }
-                self.release_mobile_driver_for_session(client_id, &session_id);
+                if !self
+                    .sessions
+                    .get(&session_id)
+                    .is_some_and(|session| session.clients.contains(&client_id))
+                {
+                    self.release_mobile_driver_for_session(client_id, &session_id);
+                }
                 self.immediate_checkpoint(&session_id).await;
                 Ok(json!({}))
             }
