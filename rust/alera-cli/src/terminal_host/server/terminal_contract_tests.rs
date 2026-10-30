@@ -387,7 +387,10 @@ async fn terminal_restart_fails_closed_when_metadata_disagrees_with_the_live_ses
     assert_eq!(response["ok"], false);
     assert_eq!(
         response["error"].as_str().unwrap(),
-        "Terminal restart metadata does not match the live session."
+        // A stale Workspace claim is now rejected at the earlier identity
+        // boundary, before an attempted restart could destroy the original
+        // PTY. The more specific error is the intended safety behavior.
+        "Terminal moved to a different workspace. Refresh before attaching."
     );
     // The failed restart must not have touched the live session.
     let session = &actor.sessions["s1"];
