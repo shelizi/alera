@@ -70,7 +70,12 @@ impl RuntimeStore {
         else {
             return Ok(false);
         };
-        if tab.payload[TRANSFER_EXIT_EVIDENCE_KEY].is_object() {
+        // Do not silently replace malformed or conflicting previously
+        // persisted exit evidence. A recovery operator must inspect it first.
+        if !tab.payload[TRANSFER_EXIT_EVIDENCE_KEY].is_null() {
+            if !tab.payload[TRANSFER_EXIT_EVIDENCE_KEY].is_object() {
+                return Ok(false);
+            }
             let prior = &tab.payload[TRANSFER_EXIT_EVIDENCE_KEY];
             return Ok(
                 prior["transferMutationId"].as_str() == Some(transfer_id.as_str())
