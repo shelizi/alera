@@ -185,11 +185,15 @@ class WorkspaceTabService._(
         'This repository cannot prove the last attached view of a transferred Terminal.',
       );
     }
-    return repository.removeObservedWorkspaceTabWithViewLease(
-      observedTab,
-      expectedWorkspaceId,
-      expectedViewLeaseId,
-    );
+    // WorkbenchRepository and the optional view-bound removal contract are
+    // independent interface types. Narrow explicitly after checking rather
+    // than invoking the extension on the base repository interface.
+    return (repository as WorkbenchViewBoundTabRemovalRepository)
+        .removeObservedWorkspaceTabWithViewLease(
+          observedTab,
+          expectedWorkspaceId,
+          expectedViewLeaseId,
+        );
   }
 
   Future<WorkspaceTabRecord> renameTab({
