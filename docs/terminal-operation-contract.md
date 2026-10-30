@@ -12,6 +12,14 @@ Keyed `terminal.terminate` requests use the `terminalHostIdempotencyReceipts` ta
 
 View and attachment state is per client and ephemeral: `output_paused_clients`, `output_resync_pending_clients`, and `delivered_output_cursors` live on the session, and `dispose_client` detaches a disconnected client from every session without touching the PTY.
 
+## T2-D7: queued Tab removal fence and missing-PTY recovery state (2026-10-30)
+
+The Host now fences **new Attach and explicit Terminate** for a Tab while a serialized `tab.remove` is queued or active. The Host Actor records the active removal before dispatching its background SQLite mutation, and checks the fence **before** looking up the Tab record. This covers the interval where the row has already been deleted but the live Session has not yet been retired; a second desktop/mobile view cannot attach in that interval. `detach` remains a view-only release, never a PTY termination. This is a narrow per-Actor removal fence, **not** a durable cross-process lease, a global last-view protocol, or protection for every form of Workspace/Project cascade deletion.
+
+For `tab.transfer.status`, a matching persisted `lastTerminalTabTransfer` receipt plus absent live Session now returns `{applied:false,recoveryRequired:true,reason:"pty_missing"}`; a dead or mismatched live owner returns `reason:"pty_owner_mismatch"`. A missing or nonmatching receipt still yields `{applied:false}`, while `applied:true` still requires both the exact persisted receipt and a running PTY belonging to the target Workspace/Tab. **Neither `recoveryRequired` outcome permits automatic rollback, new mutation IDs, PTY remint, journal deletion, or a declaration of success.** The desktop keeps the original unresolved operation and displays a recovery-required warning. A real owner-recovery/definitive-failure protocol remains pending.
+
+This D7 source and contract change was only formatted and Git whitespace-checked. It has **not** passed Cargo/Flutter tests, analyzer, build, or Windows/macOS multi-process E2E. `tab.transfer.capabilities.supported=false` remains unchanged; no push/release.
+
 ## T2-D6: transferred Desktop Tab close is receipt-bound (2026-10-30)
 
 An explicit Workbench Tab close uses the **Tab record captured by the closing view**, including the original observed `lastTerminalTabTransfer.id`, and sends both `expectedWorkspaceId` and `expectedTransferMutationId` to Host `tab.remove`. The same snapshot and receipt are reused for a request timeout/disconnect retry. A serialized `tab.remove` for *any previously transferred Terminal* **rejects a missing receipt**, not only a mismatched supplied receipt. This blocks stale Desktop A→B→A removal while preserving old behavior for never-transferred Tabs. Legacy repositories that cannot carry an observed receipt fail closed on moved terminals. The earlier D5+ optional-receipt wording is superseded.
