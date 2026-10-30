@@ -218,7 +218,12 @@ final class FakeTerminalHostClient({
   }
 
   @override
-  Future<void> terminate(String sessionId) async {
+  Future<void> terminate(
+    String sessionId, {
+    String? expectedWorkspaceId,
+    String? expectedTabId,
+    String? expectedTransferMutationId,
+  }) async {
     terminated.add(sessionId);
   }
 

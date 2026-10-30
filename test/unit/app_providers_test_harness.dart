@@ -153,7 +153,12 @@ final class _FakeTerminalHostClient({TerminalHostAttachment? attachment})
   }
 
   @override
-  Future<void> terminate(String sessionId) async {}
+  Future<void> terminate(
+    String sessionId, {
+    String? expectedWorkspaceId,
+    String? expectedTabId,
+    String? expectedTransferMutationId,
+  }) async {}
 
   @override
   Future<bool> reclaimTerminal(String sessionId) async => false;

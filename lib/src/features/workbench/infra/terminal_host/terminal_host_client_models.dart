@@ -73,6 +73,7 @@ abstract interface class TerminalHostClient {
     String sessionId, {
     String? expectedWorkspaceId,
     String? expectedTabId,
+    String? expectedTransferMutationId,
   });
 
   /// Takes the viewport back from a mobile driver, restoring the last desktop
@@ -86,6 +87,32 @@ abstract interface class TerminalHostClient {
   Future<List<String>> getTerminalRunningProcesses(String sessionId);
 
   void dispose();
+}
+
+/// Narrow opt-in view identity port for production hosts. Legacy fake and
+/// older clients keep their original TerminalHostClient methods unchanged.
+abstract interface class TerminalHostViewLeaseClient {
+  Future<TerminalHostAttachment> createOrAttachView({
+    required String sessionId,
+    required String workspaceId,
+    required String tabId,
+    required String workingDirectory,
+    required GhosttyTerminalShellLaunch launch,
+    required int cols,
+    required int rows,
+    required String viewLeaseId,
+    int? resumeCursor,
+  });
+
+  Future<void> detachView(String sessionId, {required String viewLeaseId});
+
+  Future<void> terminateView(
+    String sessionId, {
+    required String viewLeaseId,
+    String? expectedWorkspaceId,
+    String? expectedTabId,
+    String? expectedTransferMutationId,
+  });
 }
 
 abstract interface class TerminalPulseHostClient {

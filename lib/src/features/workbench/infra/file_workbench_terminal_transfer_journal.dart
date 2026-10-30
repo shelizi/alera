@@ -7,6 +7,27 @@ import 'package:alera/src/shared/infra/storage/alera_support_directory.dart';
 import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
 
+/// A diagnostic snapshot, never a release permission. A surviving .lock may
+/// still belong to an active App and local archives are not Host-signed.
+final class TerminalTransferJournalRecoveryInspection {
+  const TerminalTransferJournalRecoveryInspection({
+    required this.lockPresent,
+    required this.pendingPresent,
+    required this.pendingReadable,
+    required this.localConfirmedArchive,
+    this.pendingMutationId,
+  });
+
+  final bool lockPresent;
+  final bool pendingPresent;
+  final bool pendingReadable;
+  final bool localConfirmedArchive;
+  final String? pendingMutationId;
+
+  bool get requiresManualRecovery =>
+      lockPresent || (pendingPresent && !pendingReadable);
+}
+
 /// Durable, fail-closed record of a Terminal transfer *before* Host commit.
 /// Files are per Tab so unrelated workspaces do not overwrite one another.
 /// Malformed records are surfaced instead of silently authorizing a new move.
@@ -89,6 +110,55 @@ final class FileWorkbenchTerminalTransferJournal
       );
     }
     return _decode(raw, file.path);
+  }
+
+  /// Read-only inspection of an interrupted lock and matching local audit.
+  /// Never remove a lock, retry a mutation or silently discard the pending
+  /// Journal just because its payload or archive happens to look complete.
+  Future<TerminalTransferJournalRecoveryInspection> inspectRecovery(
+    String tabId,
+  ) async {
+    final lock = await _lockFor(tabId);
+    final pending = await _fileFor(tabId);
+    final lockPresent = await lock.exists();
+    if (!await pending.exists()) {
+      return TerminalTransferJournalRecoveryInspection(
+        lockPresent: lockPresent,
+        pendingPresent: false,
+        pendingReadable: false,
+        localConfirmedArchive: false,
+      );
+    }
+    final WorkbenchTerminalTabTransferPlan plan;
+    try {
+      plan = _decode(await pending.readAsString(), pending.path);
+      if (plan.tabId != tabId) {
+        throw StateError('Pending Terminal journal Tab identity disagrees.');
+      }
+    } on Object {
+      return TerminalTransferJournalRecoveryInspection(
+        lockPresent: lockPresent,
+        pendingPresent: true,
+        pendingReadable: false,
+        localConfirmedArchive: false,
+      );
+    }
+    var localConfirmedArchive = false;
+    final archive = await _resolutionFor(plan);
+    if (await archive.exists()) {
+      try {
+        localConfirmedArchive = _samePlan(await _readResolution(archive), plan);
+      } on Object {
+        // Corrupt archives provide no evidence that the lock may be removed.
+      }
+    }
+    return TerminalTransferJournalRecoveryInspection(
+      lockPresent: lockPresent,
+      pendingPresent: true,
+      pendingReadable: true,
+      localConfirmedArchive: localConfirmedArchive,
+      pendingMutationId: plan.clientMutationId,
+    );
   }
 
   @override

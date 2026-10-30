@@ -5,6 +5,7 @@ import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 import 'package:alera/src/features/workbench/infra/terminal_host/terminal_host_client.dart';
 import 'package:alera/src/features/workbench/presentation/terminal_runtime.dart';
 import 'package:ghostty_vte_flutter/ghostty_vte_flutter.dart';
+import 'package:uuid/uuid.dart';
 
 part 'terminal_host_pty_session_pulse.dart';
 part 'terminal_host_pty_session_lease.dart';
@@ -65,6 +66,10 @@ final class TerminalHostPtySession._(
   final TerminalHostClient _client;
   @override
   final String _sessionId;
+
+  /// The same PTY view uses one random lease across transport reconnects.
+  /// Other windows sharing the socket mint different lease IDs.
+  final String _viewLeaseId = const Uuid().v4();
 
   @override
   void updateDisplayWorkspaceId(String workspaceId) {
@@ -170,6 +175,19 @@ final class TerminalHostPtySession._(
         cols == null ||
         rows == null) {
       throw StateError('PTY session has not been started.');
+    }
+    if (_client case final TerminalHostViewLeaseClient viewClient) {
+      return viewClient.createOrAttachView(
+        sessionId: _sessionId,
+        workspaceId: _workspaceId,
+        tabId: _tabId,
+        workingDirectory: workingDirectory,
+        launch: launch,
+        cols: cols,
+        rows: rows,
+        viewLeaseId: _viewLeaseId,
+        resumeCursor: _retainedOutputCursor,
+      );
     }
     return _client.createOrAttach(
       sessionId: _sessionId,
@@ -467,9 +485,18 @@ final class TerminalHostPtySession._(
     _started = false;
     unawaited(_hostSub?.cancel());
     _hostSub = null;
-    if (_lease?.release() ?? true) {
-      _client.releaseSession(_sessionId);
+    final wasLastLocalLease = _lease?.release() ?? true;
+    if (_client case final TerminalHostViewLeaseClient viewClient) {
+      unawaited(
+        viewClient
+            .detachView(_sessionId, viewLeaseId: _viewLeaseId)
+            .catchError((_) {}),
+      );
+    } else if (wasLastLocalLease) {
       unawaited(_client.detach(_sessionId).catchError((_) {}));
+    }
+    if (wasLastLocalLease) {
+      _client.releaseSession(_sessionId);
     }
     unawaited(_events.close());
   }
@@ -488,16 +515,30 @@ final class TerminalHostPtySession._(
     // The view may outlive its original workspace while another window moves
     // the same live PTY. Let the Host compare the expected owner before any
     // termination, rather than killing a moved Claude/Codex session.
-    unawaited(
-      _client
-          .terminate(
-            _sessionId,
-            expectedWorkspaceId: _workspaceId,
-            expectedTabId: _tabId,
-            expectedTransferMutationId: _observedTransferMutationId,
-          )
-          .catchError((_) {}),
-    );
+    if (_client case final TerminalHostViewLeaseClient viewClient) {
+      unawaited(
+        viewClient
+            .terminateView(
+              _sessionId,
+              viewLeaseId: _viewLeaseId,
+              expectedWorkspaceId: _workspaceId,
+              expectedTabId: _tabId,
+              expectedTransferMutationId: _observedTransferMutationId,
+            )
+            .catchError((_) {}),
+      );
+    } else {
+      unawaited(
+        _client
+            .terminate(
+              _sessionId,
+              expectedWorkspaceId: _workspaceId,
+              expectedTabId: _tabId,
+              expectedTransferMutationId: _observedTransferMutationId,
+            )
+            .catchError((_) {}),
+      );
+    }
     unawaited(_events.close());
   }
 

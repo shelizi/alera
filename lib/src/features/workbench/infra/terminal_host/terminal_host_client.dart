@@ -55,6 +55,7 @@ final class SocketTerminalHostClient._(
         _GuardedRuntimeHostClientSupport
     implements
         TerminalHostClient,
+        TerminalHostViewLeaseClient,
         TerminalPulseHostClient,
         RuntimeHostClient,
         RuntimeHostCapabilityClient {
@@ -203,6 +204,30 @@ final class SocketTerminalHostClient._(
   );
 
   @override
+  Future<TerminalHostAttachment> createOrAttachView({
+    required String sessionId,
+    required String workspaceId,
+    required String tabId,
+    required String workingDirectory,
+    required GhosttyTerminalShellLaunch launch,
+    required int cols,
+    required int rows,
+    required String viewLeaseId,
+    int? resumeCursor,
+  }) => _createOrAttachTerminal(
+    this,
+    sessionId: sessionId,
+    workspaceId: workspaceId,
+    tabId: tabId,
+    workingDirectory: workingDirectory,
+    launch: launch,
+    cols: cols,
+    rows: rows,
+    resumeCursor: resumeCursor,
+    viewLeaseId: viewLeaseId,
+  );
+
+  @override
   Future<TerminalHostAttachment> restart({
     required String sessionId,
     required String workspaceId,
@@ -311,8 +336,47 @@ final class SocketTerminalHostClient._(
   }
 
   @override
+  Future<void> detachView(
+    String sessionId, {
+    required String viewLeaseId,
+  }) async {
+    await _terminalRequest('detach', <String, Object?>{
+      'sessionId': sessionId,
+      'viewLeaseId': viewLeaseId,
+    });
+  }
+
+  @override
   Future<void> terminate(
     String sessionId, {
+    String? expectedWorkspaceId,
+    String? expectedTabId,
+    String? expectedTransferMutationId,
+  }) => _terminateWithView(
+    sessionId,
+    expectedWorkspaceId: expectedWorkspaceId,
+    expectedTabId: expectedTabId,
+    expectedTransferMutationId: expectedTransferMutationId,
+  );
+
+  @override
+  Future<void> terminateView(
+    String sessionId, {
+    required String viewLeaseId,
+    String? expectedWorkspaceId,
+    String? expectedTabId,
+    String? expectedTransferMutationId,
+  }) => _terminateWithView(
+    sessionId,
+    viewLeaseId: viewLeaseId,
+    expectedWorkspaceId: expectedWorkspaceId,
+    expectedTabId: expectedTabId,
+    expectedTransferMutationId: expectedTransferMutationId,
+  );
+
+  Future<void> _terminateWithView(
+    String sessionId, {
+    String? viewLeaseId,
     String? expectedWorkspaceId,
     String? expectedTabId,
     String? expectedTransferMutationId,
@@ -329,6 +393,7 @@ final class SocketTerminalHostClient._(
       if (expectedTabId != null) 'expectedTabId': expectedTabId,
       if (expectedTransferMutationId != null)
         'expectedTransferMutationId': expectedTransferMutationId,
+      if (viewLeaseId != null) 'expectedViewLeaseId': viewLeaseId,
     });
     _pendingTerminateMutationIds.remove(sessionId);
   }

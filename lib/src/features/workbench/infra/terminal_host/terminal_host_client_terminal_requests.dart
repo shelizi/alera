@@ -10,6 +10,7 @@ Future<TerminalHostAttachment> _createOrAttachTerminal(
   required int cols,
   required int rows,
   int? resumeCursor,
+  String? viewLeaseId,
 }) async {
   final payload = await client._terminalRequestMap(
     'createOrAttach',
@@ -22,6 +23,7 @@ Future<TerminalHostAttachment> _createOrAttachTerminal(
       cols: cols,
       rows: rows,
       resumeCursor: resumeCursor,
+      viewLeaseId: viewLeaseId,
     ),
   );
   return TerminalHostAttachment.fromJson(payload);
@@ -66,6 +68,7 @@ Map<String, Object?> _terminalAttachmentRequest({
   required int cols,
   required int rows,
   int? resumeCursor,
+  String? viewLeaseId,
 }) {
   return <String, Object?>{
     'sessionId': sessionId,
@@ -81,5 +84,6 @@ Map<String, Object?> _terminalAttachmentRequest({
     'cols': cols,
     'rows': rows,
     if (resumeCursor != null) 'resumeCursor': resumeCursor,
+    if (viewLeaseId != null) 'viewLeaseId': viewLeaseId,
   };
 }
