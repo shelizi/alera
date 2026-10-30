@@ -135,7 +135,8 @@ class WorkspaceTabService._(
   Future<void> closeTabInWorkspace(String tabId, String workspaceId) {
     final repository = _repository;
     if (repository is WorkbenchScopedTabRemovalRepository) {
-      return repository.removeWorkspaceTabForWorkspace(tabId, workspaceId);
+      return (repository as WorkbenchScopedTabRemovalRepository)
+          .removeWorkspaceTabForWorkspace(tabId, workspaceId);
     }
     return repository.removeWorkspaceTab(tabId);
   }
@@ -150,10 +151,11 @@ class WorkspaceTabService._(
     }
     final repository = _repository;
     if (repository is WorkbenchObservedTabRemovalRepository) {
-      return repository.removeObservedWorkspaceTabForWorkspace(
-        observedTab,
-        expectedWorkspaceId,
-      );
+      return (repository as WorkbenchObservedTabRemovalRepository)
+          .removeObservedWorkspaceTabForWorkspace(
+            observedTab,
+            expectedWorkspaceId,
+          );
     }
     if (observedTab.kind == WorkspaceTabKind.terminal &&
         observedTab.payload['lastTerminalTabTransfer'] is Map) {

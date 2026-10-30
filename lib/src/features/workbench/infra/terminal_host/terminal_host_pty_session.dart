@@ -38,7 +38,7 @@ final class TerminalHostPtySessionFactory._(final TerminalHostClient _client)
 final class TerminalHostPtySession._(
   this._client,
   this._sessionId,
-  String _workspaceId,
+  this._workspaceId,
   final String _tabId,
   final _TerminalHostPtySessionLease? _lease,
 ) with _TerminalPulsePtySessionSupport
@@ -67,6 +67,10 @@ final class TerminalHostPtySession._(
   final TerminalHostClient _client;
   @override
   final String _sessionId;
+  // The displayed owner follows a transfer, but the original PTY and its
+  // execution directory never change. This must be an actual mutable field,
+  // not a discarded primary-constructor parameter.
+  String _workspaceId;
 
   /// The same PTY view uses one random lease across transport reconnects.
   /// Other windows sharing the socket mint different lease IDs.
