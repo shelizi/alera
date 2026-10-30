@@ -102,6 +102,13 @@ impl RuntimeStore {
         );
         let previous_source_group_id =
             expected_source_layout.and_then(|layout| layout_group_for_tab(layout, tab_id));
+        ensure_transfer_preserves_other_panes(
+            expected_source_layout,
+            expected_target_layout,
+            source_layout,
+            target_layout,
+            tab_id,
+        )?;
 
         // Compare against the *actual* authoritative tab registry, not just
         // the client-supplied layout. No unrelated tab may be lost/duplicated.
@@ -184,6 +191,122 @@ fn layout_group_for_tab<'a>(layout: &'a Value, tab_id: &str) -> Option<&'a str> 
                 .any(|tab| tab.as_str() == Some(tab_id))
                 .then_some(id.as_str())
         })
+}
+
+/// The two-layout CAS verifies only tab membership. Restrict the submitted
+/// replacement to removing the Terminal from one source pane and appending it
+/// to one destination pane; a stale/modified client must not silently reorder
+/// unrelated tabs or replace the destination split tree.
+fn ensure_transfer_preserves_other_panes(
+    old_source: Option<&Value>,
+    old_target: Option<&Value>,
+    new_source: &Value,
+    new_target: &Value,
+    tab_id: &str,
+) -> Result<()> {
+    if let Some(before) = old_source {
+        let prior = before["groups"]
+            .as_object()
+            .ok_or_else(|| anyhow::anyhow!("Source layout has no pane groups."))?;
+        let next = new_source["groups"]
+            .as_object()
+            .ok_or_else(|| anyhow::anyhow!("Transferred source has no pane groups."))?;
+        ensure!(
+            layout_group_for_tab(before, tab_id).is_some(),
+            "Source layout no longer contains the transferred Terminal."
+        );
+        for (id, group) in prior {
+            let remaining = group["tabIds"]
+                .as_array()
+                .ok_or_else(|| anyhow::anyhow!("Source pane has no tab list."))?
+                .iter()
+                .filter(|entry| entry.as_str() != Some(tab_id))
+                .cloned()
+                .collect::<Vec<_>>();
+            if let Some(actual) = next.get(id) {
+                let mut expected = group.clone();
+                let old_active = group["activeTabId"].as_str();
+                let retained_active = old_active
+                    .filter(|active| remaining.iter().any(|item| item.as_str() == Some(*active)));
+                expected["activeTabId"] = retained_active
+                    .map(|active| json!(active))
+                    .or_else(|| remaining.first().cloned())
+                    .unwrap_or(Value::Null);
+                expected["tabIds"] = Value::Array(remaining);
+                ensure!(
+                    *actual == expected,
+                    "Terminal move unexpectedly changed a source pane."
+                );
+            } else {
+                ensure!(
+                    remaining.is_empty(),
+                    "Terminal move cannot drop a source pane containing other tabs."
+                );
+            }
+        }
+        // removeTab() prunes empty groups; when the last tab leaves, it
+        // constructs one empty default group. No new nonempty pane is legal.
+        let source_empty = next
+            .values()
+            .all(|group| group["tabIds"].as_array().is_some_and(|ids| ids.is_empty()));
+        let default_group = new_source["workspaceId"]
+            .as_str()
+            .map(|workspace_id| format!("{workspace_id}/main"));
+        ensure!(
+            next.keys().all(|id| {
+                prior.contains_key(id)
+                    || (source_empty
+                        && next.len() == 1
+                        && default_group.as_deref() == Some(id.as_str()))
+            }),
+            "Terminal move introduced an unrelated source pane."
+        );
+        if prior.len() == next.len() && prior.keys().all(|id| next.contains_key(id)) {
+            ensure!(
+                before["root"] == new_source["root"]
+                    && before["activeGroupId"] == new_source["activeGroupId"],
+                "Terminal transfer replaced the source split layout."
+            );
+        }
+    }
+    if let Some(before) = old_target {
+        let prior = before["groups"]
+            .as_object()
+            .ok_or_else(|| anyhow::anyhow!("Target layout has no pane groups."))?;
+        let next = new_target["groups"]
+            .as_object()
+            .ok_or_else(|| anyhow::anyhow!("Transferred target has no pane groups."))?;
+        let target_group = layout_group_for_tab(new_target, tab_id)
+            .ok_or_else(|| anyhow::anyhow!("Transferred Terminal has no target pane."))?;
+        ensure!(
+            prior.len() == next.len()
+                && prior.keys().all(|id| next.contains_key(id))
+                && before["root"] == new_target["root"]
+                && new_target["activeGroupId"].as_str() == Some(target_group),
+            "Terminal transfer cannot replace destination panes."
+        );
+        for (id, group) in prior {
+            let mut expected = group.clone();
+            if id == target_group {
+                let mut ids = group["tabIds"]
+                    .as_array()
+                    .ok_or_else(|| anyhow::anyhow!("Destination pane has no tab list."))?
+                    .clone();
+                ensure!(
+                    !ids.iter().any(|entry| entry.as_str() == Some(tab_id)),
+                    "Destination already contains the transferred Terminal."
+                );
+                ids.push(json!(tab_id));
+                expected["tabIds"] = Value::Array(ids);
+                expected["activeTabId"] = json!(tab_id);
+            }
+            ensure!(
+                next.get(id) == Some(&expected),
+                "Terminal transfer cannot reorder unrelated destination tabs."
+            );
+        }
+    }
+    Ok(())
 }
 
 fn tab_ids_in_layout(layout: &Value, workspace_id: &str) -> Result<BTreeSet<String>> {
