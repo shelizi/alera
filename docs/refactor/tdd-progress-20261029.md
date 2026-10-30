@@ -4,6 +4,12 @@
 > 讀取 `docs/refactor/tdd-roadmap-20261029.md` 了解契約/驗收，然後從下列 pending/in_progress 工作續做。
 > 變更只在隔離整合 worktree；最新 macOS hotfix 來源分支目前與 `main` HEAD 指向同一提交，已依使用者要求將此 hotfix 分支合入整合分支，但沒有在原 `main` worktree 做修改、push 或 release。
 
+## 最新：T2-D5+ 多視窗／Journal／Mobile 三線安全補強（2026-10-30，仍停用）
+
+以乾淨整合 `7b7b3b877` 起，重用三個隔離工作樹建 D5 分支，分工不重疊。工作中其他並行線先合入 `0b95fbf7b`（Store pane／Workbench double-read／Agent watcher），本組在其後依序整合 Rust Host 多 attached client `terminate` 拒絕、`tab.remove` actor preflight 與可選轉移收據 ABA guard **`32f365b79`**、App Support Directory 持久原 Transfer Plan／失聯重啟 fail-closed Journal **`db7eca96b`**、Mobile 基於所見 Tab 的 Workspace／最後收據限定關閉與拒絕後停止刪除 **`ea881429b`**。
+
+**重要：這是來源碼修改而非可啟用功能。** Host `tab.transfer.capabilities.supported=false` 仍未改；沒有跨程序全域租約或 Host Crash 局部提交時的復原保證；Journal 的不明結果需要人員確認才能安全清理。依使用者既定優先順序，本輪只有格式化、Git diff/staged whitespace check，**未執行 tests、Analyzer、Cargo check、Build、Win/Mac 實機、push 或 release**；原 `main` dirty 資料未動。後續接手詳 `docs/terminal-tab-cross-workspace-plan-20261029.md` 最上方 D5+。
+
 ## 最新：T2-D5 平行三條安全修補已整合（2026-10-30，Capability OFF）
 
 在 D4 `7b7b3b877` 完成後，整合 Rust Store 不准 Terminal 轉移改動其他 Pane 的幾何配置／排序 **`5b4d15db5`**、Workbench 對來源與目的進行完整 Layout/Tab membership 核對及雙側二次權威讀回 **`a7a673591`**、Watcher 刪除舊來源 Tab 不再假定 PTY 已退出而清除 Codex transcript watcher **`9d420bf8d`**。來源隔離提交 `416dca6bf`、`6c5e3505a`、`c0f1fa5c0`，三線重用乾淨 B2 worktree，不碰 D4 進行中的文件／程式碼。詳 `docs/terminal-tab-cross-workspace-plan-20261029.md`。

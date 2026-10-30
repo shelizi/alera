@@ -1,8 +1,20 @@
 # T2 — 跨專案／跨 Workspace Terminal Tab 移動：功能規劃與並行重構邊界
 
-**Priority：P2；Status：D5 Store pane integrity / two-sided readback / live agent watcher retention integrated, feature-gated OFF（2026-10-30）。** D1–D4 的 Host、Store、Watcher、Undo、ABA 及原執行路徑保護持續保留；最新 D5 收斂兩端布局一致性與來源 Tab 退役後的活 Agent 追蹤。**仍未開放跨專案拖放，也未執行本批的 Flutter/Cargo 測試、靜態分析或編譯。**
+**Priority：P2；Status：D5/D5+ pane integrity, scoped multi-view close, durable unknown-intent journal and Mobile observed close integrated; feature-gated OFF（2026-10-30）。** 已合入 D1–D4 及兩組互補 D5 功能安全修正。**跨專案拖放仍未開放；Flutter/Cargo 測試、靜態分析、編譯及實機回歸仍未執行。**
 
 本文件原是 `feat/cross-project-terminal-tabs-20261029` 分支上的設計稿（commit `ec150a493`），現**只收編此規劃檔**至 `refactor/tdd-integrate-20261029`；未合併該舊分支的產品程式。原設計所記載的並行分工為 2026-10-29 第三批的歷史狀態；最新整合已包含第八批功能修正及 macOS Claude Code 貼上 hotfix。
+
+## 最新：T2-D5+ 追加三條平行安全工作線（2026-10-30；Capability 仍 OFF）
+
+從最新乾淨整合 `7b7b3b877` 重用三個乾淨隔離 worktree，各切新 D5 branch。實作期間另一組 D5 Store／Workbench／Agent watcher 修正已合入 `0b95fbf7b`；確認**變更檔案互不重疊**後，將本組三個提交 cherry-pick 到該最新整合分支，無衝突。
+
+| 工作線 | 本輪確實修改 | 原始提交 → 整合提交 |
+| --- | --- | --- |
+| D5+-H：Rust Host 多視圖阻擋與 Tab Remove 收據 | **已轉移的 Terminal** 在 `terminate` 發現其他已附著 Host client 時，拒絕殺死 PTY；序列化的 `tab.remove` 新增 Host Actor 執行前的多視圖 preflight，防止背景 SQLite 移除後才發現其他使用者。若 `tab.remove` 帶 `expectedTransferMutationId`，會核對目前持久化最後收據，阻擋 A→B→A 的舊手機畫面。未移轉 Terminal 保留舊契約 | `bcd7f7cb0` → **`32f365b79`** |
+| D5+-J：Desktop 不明轉移持久 Journal | `FileWorkbenchTerminalTransferJournal` 使用 App Support Directory，以 Tab ID 雜湊獨立存放操作計畫；**RPC 送出前**持久化原 `clientMutationId` 與雙側布局，App 重啟先載入。收據符合並且雙側 Layout 已權威回讀後才清除；損壞／無法讀取則 fail closed，不自動重送或假設成功 | `1e85f25a1` → **`db7eca96b`** |
+| D5+-M：Mobile 觀察歸屬的安全關閉 | Mobile 新增相容現有介面的 observed-terminal close，從使用者畫面當時的 `WorkspaceTabSummary` 傳 `expectedWorkspaceId`、`expectedTabId`、`expectedTransferMutationId`；Agent Tab 關閉前重新取得指定 Workspace 的對應 Tab，確認仍相同；**轉移後的終止拒絕不再被吞掉並繼續刪除**。舊 fake/client 不支援時對移轉 Tab fail closed | `bef757b7d` → **`ea881429b`** |
+
+**界線／下一步**：Host 的 attached-client preflight **不是跨程序持久租約**，兩個 Client Close/Attach 與 queued mutation 仍須有更完整的 owner/lease protocol 與驗證；本機 Journal 是**原操作記錄**，不是跨程序分散式鎖，Host Crash 若只持久化 Tab/Layout 但 live PTY 不見，不能僅據 DB 宣稱轉移成功；Host 明確拒絕操作後留下的未決 Journal 需要可核實的安全清理 UX。Transferred Terminal 的 Desktop legacy `tab.remove` 若未帶收據，仍只用 Workspace scope，尚有 A→B→A ABA 的狹義缺口。Mobile 最新客戶端已帶收據，舊 Mobile 對已移轉 Tab 仍被拒絕。**必須在恢復目標測試、Cargo/Flutter 編譯、Windows/macOS 多程序實機驗證後，才能考慮把 `tab.transfer.capabilities.supported` 改為 true**。本批只格式化和 Git staged whitespace check；原始 dirty `main` 未改，未 push／release。
 
 ## 最新：T2-D5 三線平行安全補強（2026-10-30；仍未啟用）
 

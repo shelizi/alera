@@ -12,6 +12,14 @@ Keyed `terminal.terminate` requests use the `terminalHostIdempotencyReceipts` ta
 
 View and attachment state is per client and ephemeral: `output_paused_clients`, `output_resync_pending_clients`, and `delivered_output_cursors` live on the session, and `dispose_client` detaches a disconnected client from every session without touching the PTY.
 
+## T2-D5+: moved PTY multi-client termination and Mobile observed owner (2026-10-30)
+
+For a Terminal with a persisted `lastTerminalTabTransfer` receipt, `terminate` still requires current `expectedWorkspaceId`, `expectedTabId`, and latest **observed** `expectedTransferMutationId`. D5+ also rejects an explicit termination if any other Host client remains in `Session.clients`; the old window must first detach the other view. `tab.remove` is additionally preflighted **on the Actor before its queued background deletion**, rejecting a transferred live Session with multiple attached clients. The source record is not removed on this refusal.
+
+The updated Mobile client uses `MobileObservedTerminalTermination` and `MobileObservedTabRemoval` only when supported, sending the Workspace/Tab/last receipt from its **original observed** `WorkspaceTabSummary`. A stale transferred Terminal close error is not swallowed and followed by `tab.remove`; the Agent Terminal action likewise confirms the Tab still appears in the selected Workspace. Old mobile clients lacking the new scoped methods are safely unable to close moved Terminals.
+
+These are **fail-closed checks on the current Host Actor's attached-client set**, not a durable cross-process Session lease or authoritative last-window reference count. Pending/queued attach/close, Host crash, or a PTY already missing after commit still need recovery rules and Windows/macOS multi-process validation. `tab.transfer.capabilities.supported=false` remains unchanged. This batch was only formatted and Git-diff checked; no tests, analyzer, build or release were run.
+
 ## T2-D5: remote Tab retirement is not Session exit (2026-10-30)
 
 Workbench's watcher-driven cleanup only releases old local view/editor resources. A moved Terminal disappears from its **source** Workspace's Tab list without terminating its PTY or its Claude/Codex process. `WorkbenchRetiredResourceCleaner` must therefore **not** clear its Codex transcript watcher merely because an observer lost the source Tab: callers may opt into `confirmedSessionExit:true` only with independent evidence that the Session really exited. Explicit local Terminal Close retains its separate lifecycle cleaner. Final remote-exit watcher reclamation still needs owner-aware confirmation; this change is not a global cross-process last-view lease.
