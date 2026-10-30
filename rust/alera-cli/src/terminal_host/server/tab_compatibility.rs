@@ -5,7 +5,7 @@ use alera_core::runtime::WorkspaceTabRecord;
 use super::terminal_pulse::TERMINAL_PULSE_PAYLOAD_KEY;
 use super::{ClientKind, ServerActor};
 
-const HOST_OWNED_TAB_PAYLOAD_KEYS: [&str; 11] = [
+const HOST_OWNED_TAB_PAYLOAD_KEYS: [&str; 13] = [
     "agentProfileLaunchV1",
     "initialPrompt",
     "pendingAgentPrompt",
@@ -17,6 +17,11 @@ const HOST_OWNED_TAB_PAYLOAD_KEYS: [&str; 11] = [
     // Immutable transfer receipt and execution provenance: old client tab
     // snapshots must not erase a successful move on the next title update.
     "lastTerminalTabTransfer",
+    // D12 exit evidence is a durable original process-generation receipt;
+    // a stale UI rename must never replace it with an older payload.
+    "lastTerminalTabExit",
+    // A moved Tab's original PTY handle is not editable by old clients.
+    "terminalSessionId",
     "terminalExecutionWorkspaceId",
     "terminalExecutionWorkingDirectory",
 ];

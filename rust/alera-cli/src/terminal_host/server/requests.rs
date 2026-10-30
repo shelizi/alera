@@ -451,7 +451,9 @@ impl ServerActor {
                         .find_workspace_tab(&session.tab_id)
                         .await
                         .map_err(|error| HostError::state(error.to_string()))?
-                        .is_some_and(|tab| tab.payload["lastTerminalTabTransfer"].is_object())
+                        .is_some_and(|tab| {
+                            super::terminal_tab_transfer::has_transfer_receipt_marker(&tab)
+                        })
                 } else {
                     false
                 };
@@ -772,11 +774,34 @@ impl ServerActor {
                     .find(&tab.id)
                     .await?
                 {
+                    if super::terminal_tab_transfer::has_transfer_receipt_marker(&stored) {
+                        if super::terminal_tab_transfer::invalid_transfer_receipt_marker(&stored)
+                            || tab.kind != stored.kind
+                            || tab.workspace_id != stored.workspace_id
+                        {
+                            return Err(HostError::state(
+                                "Transferred Terminal original receipt/kind/Workspace owner is protected. Refresh the current Tab; use tab.transfer for an authorized move.",
+                            ));
+                        }
+                    } else if tab.payload.get("lastTerminalTabTransfer").is_some()
+                        || tab.payload.get("lastTerminalTabExit").is_some()
+                    {
+                        return Err(HostError::state(
+                            "A client cannot forge a transferred Terminal receipt or original PTY exit evidence.",
+                        ));
+                    }
                     super::tab_compatibility::preserve_host_owned_tab_payload(&stored, &mut tab);
                     if tab.payload["agentTitleRevision"] != stored.payload["agentTitleRevision"] {
                         self.cancel_agent_title_job(&tab.id);
                     }
                 } else if let Some(payload) = tab.payload.as_object_mut() {
+                    if payload.contains_key("lastTerminalTabTransfer")
+                        || payload.contains_key("lastTerminalTabExit")
+                    {
+                        return Err(HostError::state(
+                            "Only the Host may create a Terminal transfer receipt or exit evidence.",
+                        ));
+                    }
                     for key in [
                         "agentTitleStateV1",
                         "agentTitleConversationId",
