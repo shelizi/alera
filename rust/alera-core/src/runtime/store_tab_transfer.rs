@@ -151,7 +151,7 @@ impl RuntimeStore {
             .execute(&mut *tx)
             .await?;
         // Never store the secret bearer View token itself in the audit.
-        let view_digest = format!("{:x}", Sha256::digest(expected_view_lease_id.as_bytes()));
+        let view_digest = hex::encode(Sha256::digest(expected_view_lease_id.as_bytes()));
         sqlx::query(
             "INSERT INTO terminalTabRetirementAudits \
              (id, tabId, sessionId, sourceWorkspaceId, targetWorkspaceId, \
