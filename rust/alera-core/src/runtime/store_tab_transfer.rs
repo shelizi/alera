@@ -34,6 +34,56 @@ impl RuntimeStore {
         mutation_id: &str,
         pty_instance_token: &str,
     ) -> Result<Option<WorkspaceTabRecord>> {
+        self.transferred_terminal_snapshot(
+            tab_id,
+            session_id,
+            source_workspace_id,
+            target_workspace_id,
+            mutation_id,
+            pty_instance_token,
+            false,
+        )
+        .await
+    }
+
+    /// Read-only, SAME-TRANSACTION preflight for an eventual explicit
+    /// retirement workflow. Requiring a recorded normal Exit here never
+    /// authorizes termination, deletion, clearing Journals, or recovering a
+    /// vanished PTY: a live Host/session/view authorization and a fresh
+    /// write-time compare-and-swap still have to be designed.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn inspect_transferred_terminal_retirement_evidence(
+        &self,
+        tab_id: &str,
+        session_id: &str,
+        source_workspace_id: &str,
+        target_workspace_id: &str,
+        mutation_id: &str,
+        pty_instance_token: &str,
+    ) -> Result<Option<WorkspaceTabRecord>> {
+        self.transferred_terminal_snapshot(
+            tab_id,
+            session_id,
+            source_workspace_id,
+            target_workspace_id,
+            mutation_id,
+            pty_instance_token,
+            true,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn transferred_terminal_snapshot(
+        &self,
+        tab_id: &str,
+        session_id: &str,
+        source_workspace_id: &str,
+        target_workspace_id: &str,
+        mutation_id: &str,
+        pty_instance_token: &str,
+        require_observed_exit: bool,
+    ) -> Result<Option<WorkspaceTabRecord>> {
         if tab_id.is_empty()
             || session_id.is_empty()
             || mutation_id.is_empty()
@@ -68,6 +118,21 @@ impl RuntimeStore {
             || receipt["ptyInstanceToken"].as_str() != Some(pty_instance_token)
         {
             return Ok(None);
+        }
+        if require_observed_exit {
+            let evidence = &tab.payload[TRANSFER_EXIT_EVIDENCE_KEY];
+            let timestamp_valid = evidence["observedAtUtc"]
+                .as_str()
+                .is_some_and(|date| chrono::DateTime::parse_from_rfc3339(date).is_ok());
+            if evidence["transferMutationId"].as_str() != Some(mutation_id)
+                || evidence["workspaceId"].as_str() != Some(target_workspace_id)
+                || evidence["sessionId"].as_str() != Some(session_id)
+                || evidence["ptyInstanceToken"].as_str() != Some(pty_instance_token)
+                || evidence["exitCode"].as_i64().is_none()
+                || !timestamp_valid
+            {
+                return Ok(None);
+            }
         }
         let (Some(source_layout), Some(target_layout)) = (
             persisted_layout(&mut tx, source_workspace_id).await?,
@@ -142,9 +207,15 @@ impl RuntimeStore {
         else {
             return Ok(false);
         };
-        // Do not silently replace malformed or conflicting previously
-        // persisted exit evidence. A recovery operator must inspect it first.
-        if !tab.payload[TRANSFER_EXIT_EVIDENCE_KEY].is_null() {
+        // D15 treats the *presence* of a Host-owned exit key (even null) as
+        // evidence of an interrupted generation. JSON indexing treats an
+        // absent key and an explicit null identically; check key existence
+        // instead, or this writer could erase a corrupted retained marker.
+        if tab
+            .payload
+            .as_object()
+            .is_some_and(|fields| fields.contains_key(TRANSFER_EXIT_EVIDENCE_KEY))
+        {
             if !tab.payload[TRANSFER_EXIT_EVIDENCE_KEY].is_object() {
                 return Ok(false);
             }
@@ -243,15 +314,59 @@ impl RuntimeStore {
         let mut tab = tab_from_row(row)?;
         ensure!(tab.kind == "terminal", "Only terminal tabs can transfer.");
 
+        // Never overwrite interrupted original process evidence via direct
+        // Store callers, even when the Host RPC has its own preflight.
+        // A legitimate exited process requires a separate authenticated
+        // retirement workflow; it cannot perform another live PTY move.
+        ensure!(
+            !tab.payload
+                .as_object()
+                .is_some_and(|fields| fields.contains_key(TRANSFER_EXIT_EVIDENCE_KEY)),
+            "Terminal original PTY exit evidence needs audited recovery before another transfer."
+        );
+        let prior_receipt_present = tab
+            .payload
+            .as_object()
+            .is_some_and(|fields| fields.contains_key(TRANSFER_RECEIPT_KEY));
+        let receipt = &tab.payload[TRANSFER_RECEIPT_KEY];
+        if prior_receipt_present {
+            ensure!(
+                ["id", "from", "to", "ptyInstanceToken"]
+                    .iter()
+                    .all(|field| receipt[*field]
+                        .as_str()
+                        .is_some_and(|value| !value.trim().is_empty()))
+                    && receipt["ptyInstanceToken"].as_str() == Some(pty_instance_token)
+                    && receipt["to"].as_str() == Some(tab.workspace_id.as_str()),
+                "Stored Terminal receipt is malformed or belongs to another PTY generation."
+            );
+        }
+
         // The preceding request may have committed before its reply was lost.
         // Replay remains safe only for the *exact same* source, destination,
-        // and mutation identity; never turn an unrelated move into success.
-        let receipt = &tab.payload[TRANSFER_RECEIPT_KEY];
+        // mutation and original PTY instance, never another reminted process.
         if tab.workspace_id == target_workspace_id
             && receipt["id"].as_str() == Some(client_mutation_id)
             && receipt["from"].as_str() == Some(source_workspace_id)
             && receipt["to"].as_str() == Some(target_workspace_id)
+            && receipt["ptyInstanceToken"].as_str() == Some(pty_instance_token)
         {
+            // An idempotent replay after a lost reply must not acknowledge
+            // a partial/crashed layout commit or accept a different display
+            // snapshot. Re-check BOTH sides and the full Tab registry in
+            // the same SQLite read transaction before returning the receipt.
+            let current_source = persisted_layout(&mut tx, source_workspace_id).await?;
+            let current_target = persisted_layout(&mut tx, target_workspace_id).await?;
+            ensure!(
+                current_source.as_ref() == Some(source_layout)
+                    && current_target.as_ref() == Some(target_layout),
+                "Original Terminal transfer receipt exists, but one persisted layout changed."
+            );
+            ensure!(
+                source_ids == workspace_tab_ids(&mut tx, source_workspace_id).await?
+                    && target_ids == workspace_tab_ids(&mut tx, target_workspace_id).await?,
+                "Original Terminal transfer receipt exists, but a persisted pane or Tab registry is inconsistent."
+            );
             return Ok(tab);
         }
         ensure!(
