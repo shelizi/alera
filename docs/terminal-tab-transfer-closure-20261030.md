@@ -1,5 +1,17 @@
 # Alera T2 跨 Workspace Terminal Tab：一次收尾成果與最後驗收門檻（2026-10-30）
 
+## 2026-10-31 固定 Gate 逐項驗收：Updater 完成、Golden 根因量測、PTY Receipt 安全補強
+
+**本節從乾淨整合 `7bb5a13d2` 接續；程式碼來源提交依序為 Updater `fcbce650f`、Host Receipt `ba866b6fb`、Journal Lock `74e33f6a4`；本文件提交後以 Git HEAD 為準。仍只採 A/B/C 三 Gate，不新增階段。`supported=false`、不合併/Push/Release dirty `main`。**
+
+- **C／Updater：已修復並提交 `fcbce650f`。** 正式 Privacy Portable Build 透過預設 `updateDiscoveryAllowedProvider=false` 先拒絕網路查詢；既有 UpdateController Fake 測試明確覆寫為 true 測試狀態流程，新 Privacy Test 斷言未呼叫 Service。`flutter test --no-pub --concurrency=2 --reporter=expanded test/unit/update_controller_test.dart test/widget/update_settings_section_test.dart` 實得 **20 pass／0 fail**，`dart format` 與 Git whitespace 檢查通過。
+- **C／Golden：2 例仍未通過。** 對既有參考與測試影像逐像素比對：Core Controls **82/635700** pixels、PR Stack Dialog **75/756000** pixels 有差異，集中於 1px 文字遮罩/控制項邊界，尚不能據此推定無回歸。嘗試在 Golden Harness 明確載入 bundled Inter 後仍為完全相同 82／75 差異，已撤回該實驗；**未更新 Golden 基準、未放寬比較器**。
+- **C／max-lines：`dart tool/quality/check_max_lines.dart` 實際 exit 1、137 個超出 500 行或基準容量的檔案；未更新 baseline。** 這是全專案現有品質債，不能當作 T2 通過證據。
+- **B／Journal Lock 診斷 `74e33f6a4`：** 新增唯讀的錯誤 PID、非 UTC 時間與有效 UTC 鎖三種測試。前兩項在原程式重現 **0 pass／2 fail**，嚴格檢查正 PID 與具 UTC 時區的時間戳後 **3 pass／0 fail**；正常身分也**不**允許無 Host attestation 自動解鎖，檔案保持原樣，`loadPending` 維持阻擋。這僅提高人工證據可靠度，尚非合法的 Host/OS 簽核、安全人工解除或復原 UI。
+- **A／原 PTY 收據防護 `ba866b6fb`：** 新增原 Host 世代 UUID、收據持久 Workspace owner、相異 from/to、Host 觀察退出時間有效性回歸，原始程式 **1 fail（錯誤 owner）** → 補強後同一 Test **1 pass**。修正後 Windows **完整 Host** `cargo test --locked -p alera-cli --bin alera -- --test-threads=2` **1,159 pass／0 fail／6 ignored**，包括原有 Live PTY 轉移 Case **pass**。本防護只是 fail-closed Receipt 正規性，不是 durable 跨程序 Last-view、原 Host Crash 後可回復的 PTY 或安全 stale Journal Lock 解鎖。
+
+**A/B/C Release Gate 仍 OFF**：待權威跨程序／雙手機／Host Crash、使用者授權的安全復原及全部原生 E2E/回歸完成後再討論啟用。未通過前保留原收據、原 PTY 證據與 Journal，禁止推論失蹤 Host 已死並自動清理。
+
 ## 2026-10-31 接續：Gate C 繁簡日靜態鍵補齊、Updater 隱私衝突重現（Gate 保持 OFF）
 
 **最新整合程式碼 HEAD `21e000998`**（本文件提交後以 Git HEAD 為準），仍限定原本 **A／B／C 三項固定門檻**，不新增 D 編號。原 dirty `main`（`3d232acff`）既有修改與未追蹤項目保持不動；無 merge／push／release，`tab.transfer.capabilities.supported=false` 不變。
