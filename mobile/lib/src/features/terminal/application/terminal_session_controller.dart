@@ -39,6 +39,9 @@ class TerminalSessionController extends _$TerminalSessionController {
   // A phone tab owns its own Host view, not one shared socket. Retain across
   // transport reconnect; a stale alternate client must not claim its token.
   final String _viewLeaseId = _newMobileTerminalViewLeaseId();
+  // One logical View UUID spans socket reconnects; a physical attachment
+  // revision does not. A stale close click cannot borrow a later attachment.
+  int _attachmentRevision = 0;
   Completer<void>? _recoveryCompletion;
   MobileTerminalClient? _pendingRecoveryClient;
   // Null until the terminal has been laid out. Claiming a viewport resizes the
@@ -64,6 +67,14 @@ class TerminalSessionController extends _$TerminalSessionController {
         _viewLeaseId,
       _ => null,
     };
+  }
+
+  /// Synchronous proof of the same ready UI attachment at click time.
+  ({String viewLeaseId, int revision})? get observedAttachedView {
+    final lease = attachedViewLeaseId;
+    return lease == null
+        ? null
+        : (viewLeaseId: lease, revision: _attachmentRevision);
   }
 
   Future<MobileTerminalSession> _attachWithOriginalView(
@@ -212,6 +223,7 @@ class TerminalSessionController extends _$TerminalSessionController {
     }
     _client = client;
     _sessionId = sessionId;
+    _attachmentRevision += 1;
     _driverSub = client.events.listen(
       (event) {
         if (_disposed ||

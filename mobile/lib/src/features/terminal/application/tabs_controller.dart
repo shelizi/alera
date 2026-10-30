@@ -105,10 +105,9 @@ class TabsController extends _$TabsController {
           'Open the moved Terminal on this phone before closing it.',
         );
       }
-      final observedViewLeaseId = ref
-          .read(provider.notifier)
-          .attachedViewLeaseId;
-      if (observedViewLeaseId == null) {
+      final originalView = ref.read(provider.notifier);
+      final observedAttachment = originalView.observedAttachedView;
+      if (observedAttachment == null) {
         throw StateError(
           'The moved Terminal is not attached to a verified phone view.',
         );
@@ -117,6 +116,16 @@ class TabsController extends _$TabsController {
         workspaceClientProvider(hostId).future,
       );
       if (!ref.mounted) return false;
+      if (!ref.exists(provider) ||
+          !identical(ref.read(provider.notifier), originalView) ||
+          originalView.observedAttachedView != observedAttachment) {
+        // The same logical View ID may have moved to a different Socket
+        // while resolving the Workspace client. That new attachment is
+        // not the one that initiated this Tab Close.
+        throw StateError(
+          'Terminal view reattached while preparing Close. Retry from the current visible view.',
+        );
+      }
       if (workspaceClient is! MobileObservedViewLeaseTabRemoval) {
         throw StateError(
           'This mobile runtime cannot safely close a moved Terminal.',
@@ -127,7 +136,7 @@ class TabsController extends _$TabsController {
       // the process in one guarded serialized operation.
       await workspaceClient.removeObservedTabWithViewLease(
         tab,
-        observedViewLeaseId,
+        observedAttachment.viewLeaseId,
       );
       if (ref.mounted) ref.invalidateSelf();
       return true;
@@ -165,7 +174,7 @@ class TabsController extends _$TabsController {
       await (workspaceClient as MobileObservedTabRemoval).removeObservedTab(
         tab,
       );
-    } else if (tab.payload['lastTerminalTabTransfer'] != null) {
+    } else if (tab.hasTransferEvidence) {
       throw StateError(
         'This Terminal changed workspaces. Refresh before deleting it.',
       );
