@@ -221,10 +221,15 @@ final class FileWorkbenchTerminalTransferJournal
     final unexpected = <String, Set<String>>{};
     final validDigest = RegExp(r'^[a-f0-9]{64}$');
     await for (final entity in folder.list(followLinks: false)) {
-      if (entity is! File) continue;
       final name = p.basename(entity.path);
       final suffix = p.extension(name);
       if (suffix != '.json' && suffix != '.lock') continue;
+      if (entity is! File) {
+        // Symlinks/directories with journal-shaped names are not legitimate
+        // pending records. Flag them without following their targets.
+        unexpected.putIfAbsent('non-file:$name', () => <String>{}).add(suffix);
+        continue;
+      }
       final key = p.basenameWithoutExtension(name);
       (validDigest.hasMatch(key) ? fileTypes : unexpected)
           .putIfAbsent(key, () => <String>{})
