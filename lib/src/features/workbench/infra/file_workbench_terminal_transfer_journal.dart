@@ -402,14 +402,29 @@ final class FileWorkbenchTerminalTransferJournal
     if (!await folder.exists())
       return <String, WorkbenchTerminalTabTransferPlan>{};
     final pending = <String, WorkbenchTerminalTabTransferPlan>{};
+    final validDigest = RegExp(r'^[a-f0-9]{64}$');
     await for (final entity in folder.list(followLinks: false)) {
-      if (entity is File && entity.path.endsWith('.lock')) {
+      final name = p.basename(entity.path);
+      final extension = p.extension(name);
+      if (extension == '.lock') {
+        // A stale lock can be a broken symlink or a directory, not only a
+        // Dart File. Ignoring it would falsely advertise an empty journal.
         throw StateError(
           'Terminal transfer journal has an active or interrupted '
           'cross-process lock: ${entity.path}. Verify it before moving.',
         );
       }
-      if (entity is! File || !entity.path.endsWith('.json')) continue;
+      if (extension != '.json' ||
+          entity is! File ||
+          !validDigest.hasMatch(p.basenameWithoutExtension(name))) {
+        // The directory is exclusively for pending transfers. Unexpected
+        // entries (including symlinks and corrupted names) are unresolved
+        // evidence; they may not be silently ignored during recovery.
+        throw StateError(
+          'Terminal transfer journal contains an unexpected pending '
+          'entry: ${entity.path}. Inspect it without deleting it.',
+        );
+      }
       final plan = _decode(await entity.readAsString(), entity.path);
       final expected = await _fileFor(plan.tabId);
       if (p.normalize(entity.path) != p.normalize(expected.path)) {
