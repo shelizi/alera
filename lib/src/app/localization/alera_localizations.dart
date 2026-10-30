@@ -7,11 +7,15 @@ part 'alera_localizations_dynamic_ja.dart';
 part 'alera_localizations_dynamic_zh_cn.dart';
 part 'alera_localizations_git_history.dart';
 part 'alera_localizations_ja_agents.dart';
+part 'alera_localizations_ja_parity_1.dart';
+part 'alera_localizations_ja_parity_2.dart';
 part 'alera_localizations_ja_settings.dart';
 part 'alera_localizations_ja_settings_extra.dart';
 part 'alera_localizations_ja_shell.dart';
 part 'alera_localizations_zh_agents.dart';
 part 'alera_localizations_zh_cn_agents.dart';
+part 'alera_localizations_zh_cn_parity_1.dart';
+part 'alera_localizations_zh_cn_parity_2.dart';
 part 'alera_localizations_zh_cn_settings.dart';
 part 'alera_localizations_zh_cn_settings_extra.dart';
 part 'alera_localizations_zh_cn_shell.dart';
@@ -240,6 +244,8 @@ class AleraLocalizations {
     ..._simplifiedChineseAgents,
     ..._simplifiedChineseSettings,
     ..._simplifiedChineseGitHistory,
+    ..._simplifiedChineseParity1,
+    ..._simplifiedChineseParity2,
   };
 
   static const Map<String, String> _japanese = <String, String>{
@@ -278,6 +284,8 @@ class AleraLocalizations {
     ..._japaneseAgents,
     ..._japaneseSettings,
     ..._japaneseGitHistory,
+    ..._japaneseParity1,
+    ..._japaneseParity2,
   };
 
   /// Source keys covered by every static table, used by parity tests.
