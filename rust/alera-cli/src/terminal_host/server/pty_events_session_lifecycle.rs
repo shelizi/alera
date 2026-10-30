@@ -110,7 +110,7 @@ impl ServerActor {
         // even after the PTY exits or the Host loses its live generation.
         // The caller must use the guarded tab.remove / future verified
         // process-generation retirement contract instead.
-        if tab.kind == "terminal" && tab.payload["lastTerminalTabTransfer"].is_object() {
+        if super::terminal_tab_transfer::has_transfer_receipt_marker(&tab) {
             tracing::info!(
                 session_id,
                 tab_id,

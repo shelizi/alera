@@ -7,6 +7,7 @@ use super::runtime_mutations::{
     RuntimeMutationEffect, RuntimeMutationFinished, RuntimeMutationOutcome, RuntimeMutationRequest,
 };
 use super::terminal_startup_commands::terminal_session_id;
+use super::terminal_tab_transfer::{has_transfer_receipt_marker, invalid_transfer_receipt_marker};
 use super::ServerActor;
 
 impl ServerActor {
@@ -30,7 +31,7 @@ impl ServerActor {
             .await
             .map_err(|error| HostError::state(error.to_string()))?
             .iter()
-            .any(|tab| tab.kind == "terminal" && tab.payload["lastTerminalTabTransfer"].is_object())
+            .any(has_transfer_receipt_marker)
         {
             return Err(HostError::state(
                 "Workspace cleanup would erase a transferred Terminal receipt. Explicitly resolve and close the Terminal Tab before deleting its Workspace or Project.",
@@ -43,8 +44,7 @@ impl ServerActor {
                 .await
                 .map_err(|error| HostError::state(error.to_string()))?;
             if stored.is_some_and(|tab| {
-                tab.kind == "terminal"
-                    && tab.payload["lastTerminalTabTransfer"].is_object()
+                has_transfer_receipt_marker(&tab)
                     && (tab.workspace_id == workspace_id || session.workspace_id == workspace_id)
             }) {
                 return Err(HostError::state(
@@ -77,6 +77,11 @@ impl ServerActor {
                 .await
                 .map_err(|error| HostError::state(error.to_string()))?
             {
+                if invalid_transfer_receipt_marker(&tab) {
+                    return Err(HostError::state(
+                        "Transferred Terminal has malformed original receipt evidence. Refusing Tab removal until audited recovery.",
+                    ));
+                }
                 if tab.kind == "terminal" && tab.payload["lastTerminalTabTransfer"].is_object() {
                     let session_id = terminal_session_id(&tab);
                     let Some(session) = self.sessions.get(&session_id).filter(|session| {

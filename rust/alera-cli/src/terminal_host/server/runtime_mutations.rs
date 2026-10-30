@@ -8,6 +8,8 @@ use crate::managed_workspace::{
 };
 use crate::terminal_host::host_error::{HostError, HostResult};
 
+use super::terminal_tab_transfer::invalid_transfer_receipt_marker;
+
 #[path = "runtime_mutation_hosted_review_retention.rs"]
 mod hosted_review_retentions;
 #[cfg(test)]
@@ -212,6 +214,11 @@ pub(super) async fn run_runtime_mutation(
                     .await
                     .map_err(runtime_store_error)?;
                 if let Some(tab) = &existing {
+                    if invalid_transfer_receipt_marker(tab) {
+                        return Err(HostError::state(
+                            "Transferred Terminal Tab has malformed receipt evidence. Preserve its persisted record until audited recovery.",
+                        ));
+                    }
                     // A -> B -> A can restore the original Workspace and Tab
                     // identifiers without restoring the closing window's
                     // original transfer revision. Every RemoveTab operation

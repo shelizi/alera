@@ -71,6 +71,26 @@ fn observed_transferred_pty_exit(
     evidence["exitCode"].as_i64()
 }
 
+/// The presence of a corrupted transfer marker is still durable evidence.
+/// It must never silently fall back to never-transferred cleanup semantics.
+pub(super) fn has_transfer_receipt_marker(tab: &WorkspaceTabRecord) -> bool {
+    tab.payload.get("lastTerminalTabTransfer").is_some()
+}
+
+pub(super) fn invalid_transfer_receipt_marker(tab: &WorkspaceTabRecord) -> bool {
+    let Some(receipt) = tab.payload.get("lastTerminalTabTransfer") else {
+        return false;
+    };
+    tab.kind != "terminal"
+        || ["id", "from", "to", "ptyInstanceToken"]
+            .iter()
+            .any(|field| {
+                !receipt[*field]
+                    .as_str()
+                    .is_some_and(|value| !value.trim().is_empty())
+            })
+}
+
 fn string_field<'a>(payload: &'a Value, name: &str) -> HostResult<&'a str> {
     payload
         .get(name)
@@ -119,6 +139,11 @@ impl ServerActor {
             .await
             .map_err(|error| HostError::state(error.to_string()))?
         {
+            if invalid_transfer_receipt_marker(&stored) {
+                return Err(HostError::state(
+                    "Terminal transfer receipt is malformed. Preserve the original PTY and inspect its persisted owner before termination.",
+                ));
+            }
             // A -> B -> A gives the original view matching workspace/tab ids
             // again (ABA). Only the *latest* observed transfer receipt permits
             // terminating the live process. Legacy never-moved tabs have no
@@ -205,6 +230,11 @@ impl ServerActor {
             .await
             .map_err(|error| HostError::state(error.to_string()))?
         {
+            if invalid_transfer_receipt_marker(&stored) {
+                return Err(HostError::state(
+                    "Terminal transfer receipt is malformed. Never attach or remint a process from an unverified owner.",
+                ));
+            }
             if stored.payload["lastTerminalTabTransfer"].is_object()
                 && (stored.workspace_id != workspace_id
                     || terminal_session_id(&stored) != session_id)
@@ -260,6 +290,13 @@ impl ServerActor {
             return Ok(json!({"applied": false}));
         };
         let receipt = &tab.payload["lastTerminalTabTransfer"];
+        if invalid_transfer_receipt_marker(&tab) {
+            return Ok(json!({
+                "applied": false,
+                "recoveryRequired": true,
+                "reason": "malformed_transfer_receipt"
+            }));
+        }
         if tab.kind != "terminal" {
             return Ok(json!({"applied": false}));
         }
@@ -487,6 +524,11 @@ impl ServerActor {
         if stored.kind != "terminal" || terminal_session_id(&stored) != session_id {
             return Err(HostError::state(
                 "Terminal tab and live Session do not match.",
+            ));
+        }
+        if invalid_transfer_receipt_marker(&stored) {
+            return Err(HostError::state(
+                "Terminal transfer receipt is malformed. Resolve the original persisted owner before a further move.",
             ));
         }
         let previous_receipt = &stored.payload["lastTerminalTabTransfer"];
