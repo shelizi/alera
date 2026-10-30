@@ -56,29 +56,33 @@ final class FileWorkbenchTerminalTransferJournal
   Future<void> remember(WorkbenchTerminalTabTransferPlan plan) async {
     final file = await _fileFor(plan.tabId);
     await file.parent.create(recursive: true);
-    if (await file.exists()) {
-      throw StateError(
-        'A previous Terminal move is pending. Check its Host status before moving again.',
-      );
-    }
-    final temp = File(
-      '${file.path}.${DateTime.now().microsecondsSinceEpoch}.tmp',
-    );
+    // A contains()/rename() check is not an inter-process mutex: two
+    // desktop windows may both observe "no file", then rename their own
+    // mutation journals onto the same Tab, losing one original receipt.
+    // Exclusive creation is the filesystem's atomic compare-and-create.
+    // A crash after creation but before the flushed payload is written
+    // intentionally leaves a corrupt sentinel: loadPending() fails closed
+    // rather than silently authorizing a second transfer.
     try {
-      await temp.writeAsString(
-        jsonEncode(<String, Object?>{
-          'version': _version,
-          ...plan.toRuntimePayload(),
-        }),
-        flush: true,
-      );
+      await file.create(exclusive: true);
+    } on FileSystemException {
       if (await file.exists()) {
-        throw StateError('Another Terminal transfer recorded this tab.');
+        throw StateError(
+          'A Terminal transfer is already recorded for this tab. '
+          'Verify the original Host receipt before moving it again.',
+        );
       }
-      await temp.rename(file.path);
-    } finally {
-      if (await temp.exists()) await temp.delete();
+      rethrow;
     }
+    // Never delete or overwrite the sentinel on an I/O failure: a second
+    // process may otherwise infer that the first mutation never happened.
+    await file.writeAsString(
+      jsonEncode(<String, Object?>{
+        'version': _version,
+        ...plan.toRuntimePayload(),
+      }),
+      flush: true,
+    );
   }
 
   @override
