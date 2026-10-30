@@ -8,6 +8,7 @@ mixin _WorkbenchControllerTabs
   /// we release the coordinator's unknown-outcome guard.
   Future<bool> confirmUnknownTerminalTransfer(String tabId) async {
     final coordinator = ref.read(workbenchTerminalTransferCoordinatorProvider);
+    await coordinator.restoreUnknownTransfers();
     final original = coordinator.unknownPlan(tabId);
     if (original == null) return false;
     if (coordinator.isTransferring(tabId)) {
@@ -42,7 +43,7 @@ mixin _WorkbenchControllerTabs
         targetWorkspaceId: original.targetWorkspaceId,
       );
       // Only the exact Host-verified mutation may release this guard.
-      coordinator.acknowledgeRecovered(
+      await coordinator.acknowledgeRecovered(
         tabId: tabId,
         clientMutationId: original.clientMutationId,
       );
@@ -141,6 +142,13 @@ mixin _WorkbenchControllerTabs
           'Terminal transfer was committed but the Undo receipt is unavailable.',
         );
       }
+      // Host acknowledged and both layouts have been reloaded. Only now
+      // erase the original pre-RPC journal. A crash before this point must
+      // still require an explicit same-ID Host status check after restart.
+      await coordinator.acknowledgeRecovered(
+        tabId: tabId,
+        clientMutationId: id,
+      );
       return id;
     } finally {
       _tabLayoutOwner.finishTerminalTransfer(source.id, destination.id);

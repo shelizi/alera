@@ -39,6 +39,15 @@ abstract interface class WorkbenchTerminalTabTransferRecoveryPort {
   );
 }
 
+/// A crash-safe record of the exact Host operation and its two workspace
+/// snapshots. Must be durable before sending tab.transfer; clear only after
+/// confirming the Host receipt and reconciling both layouts.
+abstract interface class WorkbenchTerminalTransferJournal {
+  Future<Map<String, WorkbenchTerminalTabTransferPlan>> loadPending();
+  Future<void> remember(WorkbenchTerminalTabTransferPlan plan);
+  Future<void> forget(WorkbenchTerminalTabTransferPlan plan);
+}
+
 /// Source and destination layouts are prepared from the same snapshot and
 /// sent to the Runtime as an optimistic, atomic compare-and-swap request.
 /// The host is responsible for validating/committing both layouts and the
@@ -71,14 +80,34 @@ class const WorkbenchTerminalTabTransferPlan({
 /// Failing a transfer preserves the original tab, session, and layouts; an
 /// ambiguous timeout is *not* retried with a new mutation id.
 final class WorkbenchTerminalTabTransferCoordinator {
-  WorkbenchTerminalTabTransferCoordinator(this._port, {Uuid? uuid})
-    : _uuid = uuid ?? const Uuid();
+  WorkbenchTerminalTabTransferCoordinator(
+    this._port, {
+    Uuid? uuid,
+    WorkbenchTerminalTransferJournal? journal,
+  }) : _uuid = uuid ?? const Uuid(),
+       _journal = journal;
 
   final WorkbenchTerminalTabTransferPort _port;
   final Uuid _uuid;
+  final WorkbenchTerminalTransferJournal? _journal;
+  Future<void>? _restoringJournal;
   final Set<String> _transferringTabIds = <String>{};
   final Map<String, WorkbenchTerminalTabTransferPlan> _unknownTransfers =
       <String, WorkbenchTerminalTabTransferPlan>{};
+
+  /// Crash recovery is fail-closed: corrupt or unreadable journal data must
+  /// block another move instead of being silently treated as an empty set.
+  Future<void> restoreUnknownTransfers() =>
+      _restoringJournal ??= _loadJournal();
+
+  Future<void> _loadJournal() async {
+    final journal = _journal;
+    if (journal == null) return;
+    final saved = await journal.loadPending();
+    for (final entry in saved.entries) {
+      _unknownTransfers.putIfAbsent(entry.key, () => entry.value);
+    }
+  }
 
   bool isTransferring(String tabId) => _transferringTabIds.contains(tabId);
 
@@ -95,12 +124,13 @@ final class WorkbenchTerminalTabTransferCoordinator {
   /// A confirmed Host receipt must not be cleared until the Workbench has
   /// reloaded *both* layouts. Otherwise the same stale client could issue a
   /// second move after an incomplete/failed reconcile.
-  void acknowledgeRecovered({
+  Future<void> acknowledgeRecovered({
     required String tabId,
     required String clientMutationId,
-  }) {
+  }) async {
     final pending = _unknownTransfers[tabId];
     if (pending != null && pending.clientMutationId == clientMutationId) {
+      await _journal?.forget(pending);
       _unknownTransfers.remove(tabId);
     }
   }
@@ -139,6 +169,7 @@ final class WorkbenchTerminalTabTransferCoordinator {
       throw StateError('This terminal tab is already being transferred.');
     }
     try {
+      await restoreUnknownTransfers();
       final unresolved = _unknownTransfers[tabId];
       if (unresolved != null) {
         final committed = await confirmUnknownOutcome(tabId);
@@ -218,6 +249,11 @@ final class WorkbenchTerminalTabTransferCoordinator {
         sourceLayout: nextSource,
         targetLayout: nextTarget,
       );
+      // Never send a mutating RPC without its durable recovery receipt.
+      // Keep the guard even after a normal Host reply until both workspaces
+      // have been authoritatively read back by the controller.
+      await _journal?.remember(plan);
+      _unknownTransfers[tabId] = plan;
       final WorkspaceTabRecord updated;
       try {
         updated = await _port.commit(plan);

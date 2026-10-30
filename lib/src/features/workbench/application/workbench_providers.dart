@@ -35,6 +35,7 @@ import 'package:alera/src/features/workbench/infra/runtime_managed_workspace_cli
 import 'package:alera/src/features/workbench/infra/runtime_workspace_graph_repository.dart';
 import 'package:alera/src/features/workbench/infra/runtime_workbench_repository.dart';
 import 'package:alera/src/features/workbench/infra/runtime_terminal_tab_transfer_port.dart';
+import 'package:alera/src/features/workbench/infra/file_workbench_terminal_transfer_journal.dart';
 import 'package:alera/src/features/workbench/infra/runtime_terminal_transfer_capability.dart';
 import 'package:alera/src/features/workbench/infra/terminal_host/terminal_host_client.dart';
 import 'package:alera/src/features/workbench/infra/terminal_shell_startup_preparer.dart';
@@ -67,10 +68,16 @@ final workbenchTerminalTransferPortProvider =
       );
     });
 
+final workbenchTerminalTransferJournalProvider =
+    Provider<WorkbenchTerminalTransferJournal>(
+      (ref) => const FileWorkbenchTerminalTransferJournal(),
+    );
+
 final workbenchTerminalTransferCoordinatorProvider =
     Provider<WorkbenchTerminalTabTransferCoordinator>((ref) {
       return WorkbenchTerminalTabTransferCoordinator(
         ref.watch(workbenchTerminalTransferPortProvider),
+        journal: ref.watch(workbenchTerminalTransferJournalProvider),
       );
     });
 
