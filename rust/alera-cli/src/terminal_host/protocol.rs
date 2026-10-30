@@ -30,6 +30,10 @@ pub const RUNTIME_HOST_MOBILE_SIDEBAR_PARITY_CAPABILITY: &str = "mobileWorkspace
 pub const RUNTIME_HOST_MOBILE_PROJECT_MANAGEMENT_CAPABILITY: &str = "mobileProjectManagementV1";
 pub const RUNTIME_HOST_MOBILE_TAB_RENAME_CAPABILITY: &str = "mobileTabRenameV1";
 pub const RUNTIME_HOST_MOBILE_TERMINAL_TITLES_CAPABILITY: &str = "mobileTerminalTitlesV1";
+/// This advertises the *wire contract*, not that cross-Workspace moves are
+/// enabled: the Host accepts named mobile attach/detach/restart and enforces
+/// original receipt + sole View token for transferred tab.remove.
+pub const RUNTIME_HOST_TERMINAL_NAMED_VIEW_LEASE_CAPABILITY: &str = "terminalNamedViewLeaseV1";
 pub const RUNTIME_HOST_MOBILE_PORTABLE_SETTINGS_CAPABILITY: &str = "mobilePortableSettingsV1";
 pub const RUNTIME_HOST_MOBILE_AGENT_QUOTA_CAPABILITY: &str = "mobileAgentQuotaV1";
 /// The existing agentQuota.snapshot RPC accepts provider/accountId filters,

@@ -54,7 +54,9 @@ class TerminalSessionController extends _$TerminalSessionController {
     if (_disposed ||
         _recovering ||
         _desktopReclaimed ||
-        _client is! MobileScopedTerminalViewLeaseClient) {
+        _client is! MobileScopedTerminalViewLeaseClient ||
+        !(_client! as MobileScopedTerminalViewLeaseClient)
+            .supportsNamedTerminalViewLease) {
       return null;
     }
     return switch (state) {
@@ -67,7 +69,8 @@ class TerminalSessionController extends _$TerminalSessionController {
   Future<MobileTerminalSession> _attachWithOriginalView(
     MobileTerminalClient client,
   ) {
-    if (client is MobileScopedTerminalViewLeaseClient) {
+    if (client is MobileScopedTerminalViewLeaseClient &&
+        client.supportsNamedTerminalViewLease) {
       return client.attachTerminalWithViewLease(
         tabId,
         viewLeaseId: _viewLeaseId,
@@ -380,7 +383,9 @@ class TerminalSessionController extends _$TerminalSessionController {
     try {
       // A restart mints a new PTY, so unlike attach it always needs a size;
       // an unmeasured terminal has nothing better than the default to give.
-      final session = client is MobileScopedTerminalViewLeaseClient
+      final session =
+          client is MobileScopedTerminalViewLeaseClient &&
+              client.supportsNamedTerminalViewLease
           ? await client.restartTerminalWithViewLease(
               tabId,
               sessionId: _sessionId,
@@ -484,7 +489,8 @@ class TerminalSessionController extends _$TerminalSessionController {
     String sessionId,
   ) async {
     try {
-      if (client is MobileScopedTerminalViewLeaseClient) {
+      if (client is MobileScopedTerminalViewLeaseClient &&
+          client.supportsNamedTerminalViewLease) {
         await client.detachTerminalWithViewLease(
           sessionId,
           viewLeaseId: _viewLeaseId,

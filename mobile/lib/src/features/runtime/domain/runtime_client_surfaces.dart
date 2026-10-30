@@ -44,6 +44,10 @@ abstract interface class MobileObservedViewLeaseTabRemoval {
 
 /// Optional named-view capability separate from the legacy mobile protocol.
 abstract interface class MobileScopedTerminalViewLeaseClient {
+  /// Old Hosts may ignore an unknown viewLeaseId field. Only the Host's
+  /// authenticated capability advertisement proves it enforces the contract.
+  bool get supportsNamedTerminalViewLease;
+
   Future<MobileTerminalSession> attachTerminalWithViewLease(
     String tabId, {
     required String viewLeaseId,
@@ -78,6 +82,10 @@ const String mobileBinaryFramesCapability = 'binaryFrames';
 /// capability is not mobile-scoped, same as [mobileBinaryFramesCapability].
 const String terminalDeferredInputCapability = 'terminalDeferredInputV1';
 const String terminalRestartCapability = 'terminalRestartV1';
+
+/// A Host explicitly verifies mobile per-view attach/detach and guarded
+/// transferred-Tab deletion. Presence does NOT enable cross-Workspace moves.
+const String terminalNamedViewLeaseCapability = 'terminalNamedViewLeaseV1';
 const String runtimeHostRestartCapability = 'runtimeHostRestartV1';
 const String mobileTerminalTitlesCapability = 'mobileTerminalTitlesV1';
 const String mobilePortableSettingsCapability = 'mobilePortableSettingsV1';

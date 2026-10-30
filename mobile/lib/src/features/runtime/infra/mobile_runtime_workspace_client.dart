@@ -167,6 +167,13 @@ mixin MobileRuntimeWorkspaceClient
     WorkspaceTabSummary tab,
     String expectedViewLeaseId,
   ) async {
+    if (!runtimeCapabilities.contains(terminalNamedViewLeaseCapability)) {
+      // Unknown JSON keys can be ignored by an older Host. A newer app may
+      // only close transferred PTYs on a Host that advertises enforcement.
+      throw StateError(
+        'This Host does not verify view-bound transferred Terminal removal.',
+      );
+    }
     if (!tab.isTerminal ||
         tab.payload['lastTerminalTabTransfer'] is! Map ||
         expectedViewLeaseId.trim().isEmpty) {

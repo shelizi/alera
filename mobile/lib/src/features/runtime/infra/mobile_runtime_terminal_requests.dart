@@ -6,6 +6,12 @@ mixin MobileRuntimeTerminalRequests
     implements
         MobileObservedTerminalTermination,
         MobileScopedTerminalViewLeaseClient {
+  Set<String> get runtimeCapabilities;
+
+  @override
+  bool get supportsNamedTerminalViewLease =>
+      runtimeCapabilities.contains(terminalNamedViewLeaseCapability);
+
   Future<void>? _probeAttempt;
   final Map<String, String> _pendingTerminateMutationIds = <String, String>{};
   Future<Object?> request(
@@ -94,6 +100,11 @@ mixin MobileRuntimeTerminalRequests
     int? cols,
     int? rows,
   }) async {
+    if (!supportsNamedTerminalViewLease) {
+      throw StateError(
+        'This Host does not verify named mobile Terminal views.',
+      );
+    }
     if (viewLeaseId.trim().isEmpty) {
       throw StateError('A mobile Terminal view lease cannot be empty.');
     }
@@ -129,6 +140,11 @@ mixin MobileRuntimeTerminalRequests
     int cols = defaultTerminalCols,
     int rows = defaultTerminalRows,
   }) async {
+    if (!supportsNamedTerminalViewLease) {
+      throw StateError(
+        'This Host does not verify named mobile Terminal views.',
+      );
+    }
     if (viewLeaseId.trim().isEmpty) {
       throw StateError('Restart requires the same named phone Terminal view.');
     }
@@ -179,6 +195,11 @@ mixin MobileRuntimeTerminalRequests
     String sessionId, {
     required String viewLeaseId,
   }) async {
+    if (!supportsNamedTerminalViewLease) {
+      throw StateError(
+        'This Host does not verify named mobile Terminal views.',
+      );
+    }
     if (viewLeaseId.trim().isEmpty) {
       throw StateError('Mobile detach requires its original view lease.');
     }
