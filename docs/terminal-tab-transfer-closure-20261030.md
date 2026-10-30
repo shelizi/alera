@@ -1,5 +1,15 @@
 # Alera T2 跨 Workspace Terminal Tab：一次收尾成果與最後驗收門檻（2026-10-30）
 
+## 2026-10-31 接續：Gate C 繁簡日靜態鍵補齊、Updater 隱私衝突重現（Gate 保持 OFF）
+
+**最新整合程式碼 HEAD `21e000998`**（本文件提交後以 Git HEAD 為準），仍限定原本 **A／B／C 三項固定門檻**，不新增 D 編號。原 dirty `main`（`3d232acff`）既有修改與未追蹤項目保持不動；無 merge／push／release，`tab.transfer.capabilities.supported=false` 不變。
+
+- **C／語系修復已實作並提交**：`21e000998` 在四個獨立 Dart part 補上簡中 **215** 與日文 **218** 個缺漏的實際翻譯，仍由 `alera_localizations.dart` 組合；未塞入英文占位、未放寬鍵集合測試。初次重現 `app_localizations_zh_cn_ja_test.dart` **28 pass／2 fail**（簡中／日文靜態鍵 parity）；修復後聯合 `app_localizations_test.dart` **72 pass／0 fail**。新增檔案與總表 `dart format` exit 0；`git diff --check`、`git diff --cached --check` exit 0。
+- **C／Updater 舊版測試仍紅**：`flutter test --no-pub --concurrency=2 test/unit/update_controller_test.dart test/widget/update_settings_section_test.dart`，Controller **13 fail**（期待在線更新查詢，現行 Privacy Portable Build 的 `checkForUpdates` 明確禁止線上查詢），兩者聯合 **6 pass**。此衝突**不是 T2 PTY 損毀**，也不能透過啟用隱私版線上更新「修測試」；待獨立修復產品策略／測試契約。其他原記錄 Golden／max-lines／原生 E2E 未本輪重跑，不宣稱已綠。
+- **A/B 未變**：持久跨原生視窗／多 App／雙手機的 Last-view 權威、SQLite Commit 後原 PTY Actor 失聯 Crash 定論、原 Host OS process generation 驗證、Exited PTY／stale Journal Lock 的使用者授權與人工安全復原／Audit 都仍缺正式 E2E／簽核。**任何不確定狀態保持 Fail-closed、保留 Receipt/Journal，不自動解鎖、殺 PTY 或退休 Tab。**
+
+**決策**：Gate **A、B、C 均未通過**，`supported=false`，不合併 dirty `main`；下一步只針對既有 A/B/C 驗收證據及其明確失敗項目收斂。
+
 ## 本輪新驗收：Host 完整測試全通過，三個啟用門檻仍未全部完成（2026-10-30）
 
 **最新整合基準**：`refactor/tdd-integrate-20261029`、`.worktrees/refactor-tdd-integrate-20261029`。本輪從 clean `d73ed7fad` 延續，隔離來源 Worktree 三線修正、按序 cherry-pick；程式碼提交後 HEAD **`742e0d556`**（本節文件 Commit 後需用 Git 重新確認）。原始 dirty `main` HEAD `3d232acff9822154c68049ee63c57ed5966b84e0`、原有未追蹤測試/歷史/xterm 保留，**未合併／Push／Release／改 Gate**。`rust/alera-cli/src/terminal_host/server/requests.rs` 的 `tab.transfer.capabilities.supported=false` 仍 OFF。
