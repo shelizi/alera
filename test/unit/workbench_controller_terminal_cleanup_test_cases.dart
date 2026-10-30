@@ -126,7 +126,7 @@ void _registerWorkbenchControllerTerminalCleanupTests() {
     expect(_harness.terminalRuntime.sessions, isEmpty);
     expect(
       _harness.hookReceiver.clearedSessionIds,
-      contains(tab.terminalSessionId),
+      isNot(contains(tab.terminalSessionId)),
     );
     // Released, not closed: the record disappeared from persisted state, so
     // the PTY may still belong to whichever client removed it.
@@ -161,7 +161,7 @@ void _registerWorkbenchControllerTerminalCleanupTests() {
       expect(_harness.terminalRuntime.sessions, isEmpty);
       expect(
         _harness.hookReceiver.clearedSessionIds,
-        contains(terminal.terminalSessionId),
+        isNot(contains(terminal.terminalSessionId)),
       );
     },
   );

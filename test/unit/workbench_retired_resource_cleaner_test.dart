@@ -21,7 +21,8 @@ void main() {
 
     expect(lifecycle.releasedTabIds, <String>['terminal', 'editor']);
     expect(forgotten, <String>['terminal', 'editor']);
-    expect(clearedTerminalSessions, <String>['session-1']);
+    // A Tab disappearing from a source workspace doesn't prove PTY exit.
+    expect(clearedTerminalSessions, isEmpty);
   });
 
   test(
@@ -44,9 +45,22 @@ void main() {
       expect(lifecycle.releasedWorkspaceIds, <String>['workspace']);
       expect(lifecycle.releasedTabIds, isEmpty);
       expect(forgotten, <String>['terminal', 'editor']);
-      expect(clearedTerminalSessions, <String>['session-1']);
+      expect(clearedTerminalSessions, isEmpty);
     },
   );
+
+  test('confirmed original PTY exit alone clears transcript observer', () {
+    final cleared = <String>[];
+    final cleaner = WorkbenchRetiredResourceCleaner(
+      runtimeLifecycle: _FakeTerminalRuntimeLifecycle(),
+      forgetEditorSession: (_) {},
+      clearTerminalSession: cleared.add,
+    );
+    cleaner.releaseTabs(<WorkspaceTabRecord>[
+      _tab('terminal', sessionId: 'session-1'),
+    ], confirmedSessionExit: true);
+    expect(cleared, <String>['session-1']);
+  });
 }
 
 WorkspaceTabRecord _tab(

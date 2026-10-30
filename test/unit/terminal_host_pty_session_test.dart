@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:alera/src/features/workbench/infra/terminal_host/terminal_host_client.dart';
@@ -166,6 +167,16 @@ void main() {
   test(
     'reconnect attaches without restarting and restart is explicit',
     () async {
+      // Restart deliberately refuses a vanished original launch directory.
+      // The old /repo fixture is absent on Windows; use a real directory.
+      final originalDirectory = await Directory.systemTemp.createTemp(
+        'alera-original-pty-restart-',
+      );
+      addTearDown(() async {
+        if (await originalDirectory.exists()) {
+          await originalDirectory.delete(recursive: true);
+        }
+      });
       final client = FakeTerminalHostClient(
         attachment: TerminalHostAttachment(
           sessionId: 'session-1',
@@ -184,7 +195,7 @@ void main() {
 
       await session.start(
         launch: _launch(),
-        workingDirectory: '/repo',
+        workingDirectory: originalDirectory.path,
         cols: 80,
         rows: 24,
       );
