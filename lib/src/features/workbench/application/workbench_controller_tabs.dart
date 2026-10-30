@@ -14,11 +14,17 @@ mixin _WorkbenchControllerTabs
     if (coordinator.isTransferring(tabId)) {
       throw StateError('Terminal transfer is still in progress.');
     }
-    _tabLayoutOwner.beginTerminalTransfer(
-      original.sourceWorkspaceId,
-      original.targetWorkspaceId,
+    coordinator.beginUnknownConfirmation(
+      tabId: tabId,
+      clientMutationId: original.clientMutationId,
     );
+    var layoutFenceAcquired = false;
     try {
+      _tabLayoutOwner.beginTerminalTransfer(
+        original.sourceWorkspaceId,
+        original.targetWorkspaceId,
+      );
+      layoutFenceAcquired = true;
       final committed = await coordinator.confirmUnknownOutcome(tabId);
       if (committed == null) {
         throw TerminalTransferOutcomeUnknownException(
@@ -68,10 +74,16 @@ mixin _WorkbenchControllerTabs
       }
       return true;
     } finally {
-      _tabLayoutOwner.finishTerminalTransfer(
-        original.sourceWorkspaceId,
-        original.targetWorkspaceId,
-      );
+      try {
+        if (layoutFenceAcquired) {
+          _tabLayoutOwner.finishTerminalTransfer(
+            original.sourceWorkspaceId,
+            original.targetWorkspaceId,
+          );
+        }
+      } finally {
+        coordinator.finishUnknownConfirmation(tabId);
+      }
     }
   }
 

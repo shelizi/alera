@@ -120,6 +120,29 @@ final class WorkbenchTerminalTabTransferCoordinator {
 
   bool isTransferring(String tabId) => _transferringTabIds.contains(tabId);
 
+  /// Serialize a manual status check with transfers and other checks of the
+  /// same Tab until both Layouts are read back and the Journal is cleared.
+  void beginUnknownConfirmation({
+    required String tabId,
+    required String clientMutationId,
+  }) {
+    final original = _unknownTransfers[tabId];
+    if (original == null || original.clientMutationId != clientMutationId) {
+      throw StateError(
+        'The original Terminal transfer journal changed. Reload its status.',
+      );
+    }
+    if (!_transferringTabIds.add(tabId)) {
+      throw StateError(
+        'Terminal transfer or recovery confirmation is already in progress.',
+      );
+    }
+  }
+
+  void finishUnknownConfirmation(String tabId) {
+    _transferringTabIds.remove(tabId);
+  }
+
   /// Keep the original receipt for an inconclusive timeout. A second drag
   /// cannot silently mint a new mutation ID for this same live PTY.
   bool hasUnknownOutcome(String tabId) => _unknownTransfers.containsKey(tabId);
