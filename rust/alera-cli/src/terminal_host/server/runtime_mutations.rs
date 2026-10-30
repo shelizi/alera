@@ -209,6 +209,27 @@ pub(super) async fn run_runtime_mutation(
                     .await
                     .map_err(runtime_store_error)?;
                 if let Some(tab) = &existing {
+                    // A -> B -> A can restore the original Workspace and Tab
+                    // identifiers without restoring the closing window's
+                    // original transfer revision. Every RemoveTab operation
+                    // (including legacy Desktop callers) must carry the
+                    // *observed* latest receipt for a transferred terminal.
+                    // Do not fetch the newest receipt on behalf of a stale
+                    // view: that would silently authorize its deletion.
+                    if tab.kind == "terminal"
+                        && tab.payload["lastTerminalTabTransfer"].is_object()
+                    {
+                        let latest_receipt = tab.payload["lastTerminalTabTransfer"]["id"]
+                            .as_str()
+                            .filter(|value| !value.is_empty());
+                        if latest_receipt.is_none()
+                            || expected_transfer_mutation_id.as_deref() != latest_receipt
+                        {
+                            return Err(HostError::state(
+                                "Transferred Terminal requires its last observed transfer receipt before removal. Refresh the tab and retry from its current workspace.",
+                            ));
+                        }
+                    }
                     if expected_transfer_mutation_id.as_deref().is_some_and(|expected| {
                         tab.payload["lastTerminalTabTransfer"]["id"].as_str() != Some(expected)
                     }) {
