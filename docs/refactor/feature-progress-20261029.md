@@ -1,6 +1,25 @@
 # Alera 功能優先續做：第八批四線隔離（2026-10-29）
 
-## 下一次對話／其他 Agent 最新交接入口：T2-D14（2026-10-30）
+## 下一次對話／其他 Agent 最新交接入口：T2-D15（2026-10-30）
+
+**唯一整合分支**：`refactor/tdd-integrate-20261029`（`.worktrees/refactor-tdd-integrate-20261029`）。本輪起點為 D14 乾淨 HEAD **`ac5d4383c51b8cda5da946e6f1da954622e66256`**；三條乾淨 Worktree 分別新建 `feat/t2-d15-corrupt-receipt-20261030`／`feat/t2-d15-resolution-inventory-20261030`／`feat/t2-d15-mobile-receipt-20261030`，各自 source commit 後依序 cherry-pick。**D15 程式碼最後整合 `6b255be72`**；文件 Commit 會再推進，接手務必重新查 HEAD/status。原始 dirty `main` HEAD `3d232acff9822154c68049ee63c57ed5966b84e0` 及其歷史記錄、`third_party/xterm`、未追蹤檔案保持不變，**不能** reset/clean/merge/push。
+
+**T2-D15 三線／六筆程式碼安全補強，全部已 source commit 且整合**：
+
+| 工作線 | 真正實作、證據限制 | Source → Integration |
+| --- | --- | --- |
+| D15-H Host 壞收據生命週期防護 | 新增 `has_transfer_recovery_evidence`／`invalid_transfer_receipt_marker`：**只要**有 `lastTerminalTabTransfer` 或 `lastTerminalTabExit` Key，即使是 JSON `null`、錯型別、缺失 mutation/from/to/original PTY Token，或 Exit marker 與轉移 ID／Workspace／Session／原 Token／Exit Code 不符，都是**未解決的持久化證據**，不得當作 never-moved Tab。Host `terminate`、`createOrAttach`／Restart、`tab.transfer`、read-only `tab.transfer.status`、`tab.remove` preflight + 背景 worker、PTY 自然 Exit cleanup、Workspace/Project cascade 都採保守拒絕。Status 對 malformed receipt 明確回 `applied:false,recoveryRequired:true,reason:malformed_transfer_receipt`；**絕不因資料毀損直接殺 PTY、刪 Tab 或清 Journal** | `2e1aa4995` → **`12ff53b74`**；`8fc786f22` → **`c28d49b45`** |
+| D15-H2 Host 保護舊 Client Upsert | Host `tab.upsert` 對已轉移 Tab 的舊 UI 欄位**拒絕**變更 Workspace owner／Kind，對既有損壞收據拒絕覆寫；沒轉移過或新建 Tab 不得由 Client 偽造 `lastTerminalTabTransfer`／`lastTerminalTabExit`。新增 `lastTerminalTabExit` 與原 `terminalSessionId` 為 `tab_compatibility` Host-owned Payload Key，正常舊式 rename/upsert 不得用過期內容覆蓋原 PTY 世代退出證據。**不宣稱跨 Host Process Store CAS 已完成**，另一程序寫入仍需進一步持久交易守衛 | `812de0e13` → **`0499ec5d2`** |
+| D15-M Mobile 不允許 unscoped transferred Close | `WorkspaceTabSummary.hasTransferEvidence` 檢查 Transfer 或 Exit Key 是否存在，`hasMalformedTransferEvidence` 驗證 Tab Kind、ID/from/to/原 PTY Token，與 Exit／Receipt 的鏈接。Mobile `TabsController.closeTab` 在任何 `await` 前拒絕壞收據，完好 moved Tab 只用原 Attached View Lease／Receipt 直接 Host guarded `tab.remove`；`removeObservedTab`／`terminateObservedTerminal` 明確拒絕任何 transferred Tab，不再先 `terminate` 後刪除；缺少 Receipt 但存在 Exit Marker 也拒絕，不回退到普通 Tab 操作 | `09cfaf15b` → **`2a3d33934`**；`c1e183f0e` → **`6b255be72`** |
+| D15-J Journal Resolved Archive 唯讀盤點 | `FileWorkbenchTerminalTransferJournal.inspectResolutionArchiveInventory()` 獨立列出 `terminal_transfer_resolved_v1` 中的每筆封存，檢查普通 File、合法 `SHA256.json` 名稱、已寫入的 `callerConfirmedHostAndBothLayouts` 格式／Plan、`SHA256([tabId,clientMutationId])` 與檔名相符；不跟隨 symlink、把孤兒／毀損／假名 Archive 納入供人工查核。模型的 `requiresHostVerification` **永遠 true**：本地 archive **不是** Host 簽章、也不允許自動清 Pending/Lock／認定原 PTY 已回復。此輪沒有接到破壞性修復 UI | `3c9c11615` → **`24bfe5751`** |
+
+**整合備註**：最後 Mobile cherry-pick 一度遇到 Git ref 更新錯誤，經核對 `CHERRY_PICK_HEAD`、staged 四檔與 HEAD 後，使用 `git cherry-pick --continue` 完成 **`2a3d33934`**；沒有 reset/清理 dirty `main`。D15 額外兩筆 exit-only 安全追補亦已獨立整合。
+
+**D16 未完成**：① 真正跨 OS Native Window/App Process/Mobile Device/Host restart 的持久 Last-view Lease（包括未掛載／隱藏的視圖），仍依賴 Host 記憶體與本地 App 已登記 Detached Window。② Host Crash 於 SQLite 轉移提交與 live Session 改 owner 之間的決定性回復；原 PTY 已失聯不可憑 ID 偽造。③ **使用者授權且與原 Receipt／Process Generation／合法持久退出證據及兩側 Layout 同筆交易**的 transferred Tab retirement 尚未實作；D15 **沒有**增加刪除 API。④ Journal stale Lock 的跨程序 owner incarnation/liveness、Host 簽證決議、人工審查/安全解鎖和 UX 未做，新增封存盤點仍唯讀。⑤ 多手機/原生多視窗、Host restart、跨平台 E2E 與 Cargo/Flutter 編譯/Analyzer/測試均待獲准驗證。
+
+**所有既有限制繼續**：`rust/alera-cli/src/terminal_host/server/requests.rs` 的 **`tab.transfer.capabilities.supported=false`**，跨專案 Terminal Drag 不開放。D15 僅跑 Rust `rustfmt --edition 2021`、Dart `dart format`、Git `diff --check`／`diff --cached --check`；**未新增／執行 Cargo/Flutter Tests、Cargo check、Flutter analyzer、Build、Windows/macOS/Phone E2E、Push 或 Release**。下一輪由本文件和 `docs/terminal-tab-cross-workspace-plan-20261029.md` D15 起續 D16。
+
+## 歷史：T2-D14 交接入口（2026-10-30）
 
 **唯一接續整合分支**：`refactor/tdd-integrate-20261029`，位於 `.worktrees/refactor-tdd-integrate-20261029`。本批從 D13 乾淨 HEAD **`cefc1d80c3a75ebae59217fbc59844c3153135ab`** 起，重用三條 clean source Worktree 分別切 `feat/t2-d14-host-epoch-20261030`、`feat/t2-d14-journal-root-20261030`、`feat/t2-d14-mobile-handoff-20261030`，各自分檔修改、格式化／Git whitespace check、source commit 再 cherry-pick。**D14 原始碼整合最後一筆 `1d9c4b220`**，文件提交後 HEAD 仍會前進；下次務必以 `git log -1`／`git status` 重查。原始 dirty `main` HEAD **`3d232acff9822154c68049ee63c57ed5966b84e0`** 的既有修改、history、xterm 與 untracked 檔案一律不碰。
 

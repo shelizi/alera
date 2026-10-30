@@ -1,10 +1,25 @@
 # T2 — 跨專案／跨 Workspace Terminal Tab 移動：功能規劃與並行重構邊界
 
-**Priority：P2；Status：D14 三線/四筆原始碼補強已整合（Host 可辨識其他程序世代而不宣稱 PTY 已死亡、同一 SQLite 驗證快照回傳權威 Tab、Journal symlink/目錄證據拒絕與鎖身份補強、Mobile 新舊 Socket具名 Lease 安全重連）；feature-gated OFF（2026-10-30）。** D1–D13 的安全修正全部保留。**跨專案拖放仍未開放；Flutter/Cargo 測試、靜態分析、編譯及實機回歸仍未執行。**
+**Priority：P2；Status：D15 三線六筆安全補強已整合（Host 收據／PTY 退出證據即使損毀都必須保留、Client 不得冒用 `tab.upsert` 改寫已移轉 owner/原退出紀錄、Mobile 未驗證 Transfer 不使用舊式 Close、Journal 孤兒封存清單）；feature-gated OFF（2026-10-30）。** D1–D14 保留。**跨專案拖放仍未開放；Flutter/Cargo 測試、靜態分析、編譯及實機回歸仍未執行。**
 
 本文件原是 `feat/cross-project-terminal-tabs-20261029` 分支上的設計稿（commit `ec150a493`），現**只收編此規劃檔**至 `refactor/tdd-integrate-20261029`；未合併該舊分支的產品程式。原設計所記載的並行分工為 2026-10-29 第三批的歷史狀態；最新整合已包含第八批功能修正及 macOS Claude Code 貼上 hotfix。
 
-## 最新：T2-D14 三線/四筆補強已整合（2026-10-30；Capability 仍 OFF）
+## 最新：T2-D15 三線／六筆安全補強已整合（2026-10-30；Capability 仍 OFF）
+
+**Git**：從 D14 乾淨整合 `ac5d4383c51b8cda5da946e6f1da954622e66256` 起，三條來源分支 `feat/t2-d15-corrupt-receipt-20261030`、`feat/t2-d15-resolution-inventory-20261030`、`feat/t2-d15-mobile-receipt-20261030`。程式碼最後一筆整合 **`6b255be72`**；文件提交後 HEAD 會再向前，接手先看 `git log -1`／`git status`。
+
+| 工作線 | D15 具體內容／不得越界聲稱 | Source → Integration |
+| --- | --- | --- |
+| H：不可信 Transferred Receipt／Exit | 引入 Host `has_transfer_recovery_evidence`／`invalid_transfer_receipt_marker`。只要有 `lastTerminalTabTransfer` **或** `lastTerminalTabExit` Key，即使 null、畸形、缺 ID/from/to/PTY Token、Exit 不符原 Mutation／Session／Workspace／PTY Token／Code，均視為未解決證據；`terminate`、Attach/Restart、新 Transfer、`tab.remove` Actor preflight 與 background worker、自然 Exit、Workspace/Project 隱式清理均拒絕 fallback legacy 處理。Host status 對損毀收據回 `applied:false,recoveryRequired:true,reason:malformed_transfer_receipt`，不能因 JSON 壞掉而刪已移轉 Terminal；**未新增真正的退休／回復交易** | `2e1aa4995` → **`12ff53b74`**；`8fc786f22` → **`c28d49b45`** |
+| H2：`tab.upsert` Host-owned Evidence | 新增 Host Upsert guard，已轉移 Row 不能經 stale Client 修改 Workspace/Kind；沒有 transfer 的 row/client 新建不能偽造 Transfer 或 Exit Marker。既有 `preserve_host_owned_tab_payload` 納入 `lastTerminalTabExit`、`terminalSessionId`，舊視窗 Rename/Title 更新不會丟失退出證據或原 Session ID。這只涵蓋 Host RPC 封裝的 Upsert，未提供跨不同 Host Process 寫入 SQLite 的 durable CAS | `812de0e13` → **`0499ec5d2`** |
+| M：Mobile 不回退到 unscoped Close | Mobile `WorkspaceTabSummary.hasTransferEvidence` 同時識別 Transfer/Exit Marker Key；`hasMalformedTransferEvidence` 檢查原 Receipt 欄位及 Exit 關聯，不把損毀 JSON、只剩 Exit 的 Tab 當從未移轉。手機轉移 Tab Close 仍需同步取得已附著原 View Lease + 最後看到的 Receipt，直接 Host `tab.remove`；普通 `removeObservedTab`／`terminateObservedTerminal` 明確拒絕 transferred Evidence，避免先殺原 PTY 或默默刪掉不可恢復的收據 | `09cfaf15b` → **`2a3d33934`**；`c1e183f0e` → **`6b255be72`** |
+| J：Resolved Audit 目錄完整盤點 | 新 `inspectResolutionArchiveInventory()` 唯讀列出所有 resolved_v1 封存，找出孤兒檔、損壞、未知副檔名/型別、SHA256 名稱與 `[tabId,clientMutationId]` 不符；`requiresHostVerification` 永遠 true，因本地 `callerConfirmedHostAndBothLayouts` 記錄不是 Host 簽證。**不會因封存存在就清 Pending／刪 Lock**，不提供自動解鎖 | `3c9c11615` → **`24bfe5751`** |
+
+**整合中的 Git ref 問題**：Mobile cherry-pick 曾已完成 index 但 ref 更新失敗；核對 HEAD、staged diff、`CHERRY_PICK_HEAD` 後，`git cherry-pick --continue` 產生 **`2a3d33934`**，並非重複 cherry-pick。最後二筆 orphan Exit safety follow-up 亦已整合。
+
+**D16 遺留**：真正跨 Windows/macOS Native Window/多 App/多 Phone/Host Restart 的 durable Live/Last-view lease；Host crash 在 SQLite commit 和 in-memory PTY owner reparent 之間的決定性補償；受 Original Receipt/PTY Generation/Exit 與使用者意圖綁定的 exited transferred Tab+雙側 Layout 同交易安全退休；Journal stale Lock 的安全 Manual Repair、跨程序 owner incarnation/liveness 和 Host 權威判定 UX；Mobile 多裝置與 Win/Mac/Phone E2E。**Gate `tab.transfer.capabilities.supported=false` 保留**，本輪只做 Rust/Dart format 與 Git whitespace checks；沒有新增/執行 Cargo/Flutter Tests、Analyzer、Build、Check、E2E、Push 或 Release，原始 dirty `main` 不動。接續 D16 優先讀 `docs/refactor/feature-progress-20261029.md` 的 D15。
+
+## 歷史：T2-D14 三線/四筆補強已整合（2026-10-30；Capability 仍 OFF）
 
 **Git**：D13 baseline `cefc1d80c3a75ebae59217fbc59844c3153135ab`，三條乾淨來源工作樹切 `feat/t2-d14-host-epoch-20261030`、`feat/t2-d14-journal-root-20261030`、`feat/t2-d14-mobile-handoff-20261030`。四筆程式提交依序 cherry-pick 到 `refactor/tdd-integrate-20261029`，**文件提交前整合最後 HEAD `1d9c4b220`**。Docs commit 後 HEAD 會變，接續需重查 Git 狀態，不碰 dirty `main`。
 

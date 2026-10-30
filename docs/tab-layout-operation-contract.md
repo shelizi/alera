@@ -4,7 +4,17 @@ This table answers the eight transaction/replay questions from the architecture 
 
 Authority is `ServerActor` on the terminal-host mailbox, persisting through `RuntimeStore`. Tabs are special in two ways: their `payload` carries host-owned fields (`agentTitle*` state) that client writes must not clobber, and `kind = "terminal"` tabs with `payload.spawnOnCreate` own a live PTY that is spawned as part of the upsert.
 
-## T2-D14: same-transaction returned Tab and no implicit Host-generation takeover (2026-10-30)
+## T2-D15: never discard an invalid transfer/exit marker through older Tab operations (2026-10-30)
+
+The latest transfer revision must continue to fence a close after an A→B→A Workspace switch. D15 additionally classifies an explicit (even null/malformed) `lastTerminalTabTransfer` **or** `lastTerminalTabExit` key as unresolved transfer evidence. Absent/blank ID/from/to/PTY token, mismatched Exit mutation/Workspace/Session/instance/Code, or an orphan Exit marker requires recovery; Host read-only `tab.transfer.status` returns `applied:false,recoveryRequired:true,reason:malformed_transfer_receipt`. Generic `terminate`/Attach/Restart, `tab.remove` preflight and serialized worker, natural Exit cleanup, Workspace/Project cascade must never treat these records as untransferred Tabs. A valid moved Tab still needs the only live exact UI View Token and original PTY Receipt for its guarded `tab.remove`.
+
+Older `tab.upsert` may change a title, but may not change the `kind` or `workspaceId` of a transferred Tab, insert fake transfer/exit evidence for an unmoved Tab, overwrite the Host-owned original `terminalSessionId` or discard `lastTerminalTabExit` during stale UI edits. Mobile enforces the same shape before async close and disallows regular `removeObservedTab`/terminate-first paths for every Tab with transfer or original Exit evidence; even an Exit-only record fails closed.
+
+The Journal resolved-archive folder now has its own **read-only inventory** of all local resolution files, including orphaned files whose Pending plan is gone, corrupt/non-file/symlink artifacts and SHA256 key mismatch. `localArchiveWellFormed` is not a Host proof, so `requiresHostVerification` remains true. No automatic stale-lock unlock, exited PTY legal retirement, durable cross-process Last-view Lease or crash compensating transaction was introduced in D15.
+
+Capability remains `supported:false`. Only formatting and Git whitespace verification; no tests/analyzer/compile/Win-Mac-Phone E2E/Push/Release.
+
+## Historical T2-D14: same-transaction returned Tab and no implicit Host-generation takeover (2026-10-30)
 
 For a lost `tab.transfer` reply, `tab.transfer.status` can report `applied:true` only from the original *live* PTY/Session together with an exact current persisted transfer receipt and both persisted Workbench Layout/WorkspaceTab registries. D14 further changes the Store's `verify_terminal_transfer_layout_and_receipt` to return the **very Tab it validated inside the one SQLite read transaction** instead of a mere bool, preventing a stale pre-verification Tab from being returned under `applied:true`. The live PTY proof and SQLite transaction are still separate layers; no cross-Host write lock or recovery is implied.
 
