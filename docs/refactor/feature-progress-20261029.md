@@ -1,6 +1,22 @@
 # Alera 功能優先續做：第八批四線隔離（2026-10-29）
 
-## 下一次對話／其他 Agent 最新交接入口：T2-D8（2026-10-30）
+## 下一次對話／其他 Agent 最新交接入口：T2-D9（2026-10-30）
+
+**當前唯一整合基準**：`refactor/tdd-integrate-20261029`（`.worktrees/refactor-tdd-integrate-20261029`），從 D8 乾淨 HEAD `632f1429b` 起做，最後一筆 D9 原始碼整合提交 **`75161c9bf`**，在開始更新此文件前已確認整合工作樹乾淨。**文件 Commit 後 HEAD 將前進，接手必須重新查 `git log -1`、`git status`**。原始 `main` 仍為既存 dirty `3d232acff`，沒有修改／reset／merge／清理原本的歷史 Session、xterm 或其他未追蹤資料。
+
+**T2-D9 已完成三條來源碼隔離工作線及一筆保守補強，全部無衝突整合**：
+
+| 隔離工作線 | 真的完成的防護與明確侷限 | 來源提交 → 整合提交 |
+| --- | --- | --- |
+| D9-H：Host requester-bound Close + Cascade | 序列化 `tab.remove` 把真正的 `client_id` 傳到 Actor preflight；對**已轉移 Terminal** 先核實 Store 最新收據、原 live PTY 的 instance Token、Workspace／Tab 歸屬，並要求「要求移除的 Client 本身仍 attached，而且其他 Client 都已 detach」。原 PTY 消失／新程序冒充時直接拒絕。Workspace/Project/Managed/Tab For Workspace/Sleep 的清理也保守拒絕**任何尚有持久轉移收據的 Tab**，即使 PTY 已死或無人附著；另外檢查 Store/Session owner 因 Crash 分歧的 live PTY。因為 Host attached set 以 Client 連線為單位、尚無每視窗 Lease，**不是**跨程序持久 Last-view 協議 | `c9468fd77` → **`3f1cf30d7`**；追加來源 `3753d60d7` → **`75161c9bf`** |
+| D9-R：Host 原 PTY 不可偷偷重鑄 | `verify_terminal_attachment_owner` 對有轉移收據的 Tab 強制核對 live PTY + `ptyInstanceToken`，不再用相同 `sessionId` 在 Host 重啟時 `createOrAttach` 新 Shell；`spawnOnCreate` 不重生已轉移 PTY，`tab.upsert` 的既有一般錯誤 cleanup 不會刪掉其 Tab／殺掉原程序；對 moved Tab 的直接 `terminal.restart` 也先保守拒絕，直到有**獨立、可稽核的 process-generation 變更協議**。因此目前不提供已轉移 Tab 的一般 Restart 功能 | `7775ff028` → **`f10fb0f52`** |
+| D9-J：跨 App Journal Lock + 本機稽核 | 原本 App Support per-Tab 排他 Pending Journal 外，再用相同 Tab 雜湊 `.lock` 以 `File.create(exclusive:true)` 協調不同 App 程序的 remember／forget；有中斷 Lock 則讀取與新移轉 fail closed，**不自動清掉**。在 Controller 完成 Host 原收據與雙 Layout 核實後，`forget` 先寫入 `terminal_transfer_resolved_v1` 的完整原計畫、caller-confirmed marker 與 UTC 時間、flush，核對一致才刪 Pending；重試時缺 Pending 但有精確 Archived Resolution 才可視為本機已清。這是**本機 caller 稽核**，非 Host 簽章或跨裝置 Lease | `2d9244d25` → **`f536c68b6`** |
+
+**下一批 D10 的真實阻擋項**：① Host Client connection 不等於每個 App 視窗／Mobile view ID，仍缺真正跨程序、跨重啟 Last-view Lease、已轉移 PTY 關閉／正常退出後的合法 Tab cleanup；② Crash 落在 SQLite 交易與 live PTY reparent 中間仍**不能找回原 PTY**，需要權威 terminal generation transition、補償或可審計確定失敗方案，且不得清掉待決收據；③ Host 明確拒絕與 partial-commit 的決定性結果／安全解除 Journal、跨程序中斷 `.lock` 的人工修復流程及 Mobile 舊版相容；④ 需另獲恢復完整驗證之許可，再執行 Flutter/Cargo 測試、Analyzer、Build、Windows/macOS 多視窗、多程序 E2E。禁止把 D9 單 Host／本機檔案鎖誤稱持久全域 Lease。
+
+**限制維持**：`tab.transfer.capabilities.supported=false`，跨專案 Terminal 拖放仍不能用。本批只有 `rustfmt`、`dart format`、`git diff --check` 與 `git diff --cached --check`，**沒有新增／執行測試、Flutter/Cargo check、Analyzer、Build、Win/Mac 實機、Push、Release**。只是修改既有 `managed_workspace_cleanup_tests.rs` 以配合 Actor 訊息參數，**沒有執行測試**。原始 dirty `main` 保留。
+
+## 歷史：T2-D8 交接入口（2026-10-30）
 
 **起點與 Git 安全**：從乾淨 `refactor/tdd-integrate-20261029` HEAD `379ec62ca` 延續；三條獨立工作樹切新 D8 分支，各線隔離改檔並提交，無衝突 cherry-pick 回整合，**更新本交接前已確認 D8 整合 HEAD `0ffb9b3a3` 乾淨**。本文件提交後 HEAD 還會前進；接手先重新 `git status`／`git log -1`，不得以舊 SHA 推斷現況。原始 dirty `main` 仍是 `3d232acff`，沒有清理、合併或修改其既有文件、xterm 子模組／測試資料。
 

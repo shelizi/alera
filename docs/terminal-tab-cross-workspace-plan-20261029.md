@@ -1,10 +1,24 @@
 # T2 — 跨專案／跨 Workspace Terminal Tab 移動：功能規劃與並行重構邊界
 
-**Priority：P2；Status：D8 三線已整合（批次清理的移轉 PTY 觀看者防護、原 PTY instance 身分憑證、Desktop 同 Tab 未決狀態確認排他）；feature-gated OFF（2026-10-30）。** 先前 D1–D7 的安全修正全部保留。**跨專案拖放仍未開放；Flutter/Cargo 測試、靜態分析、編譯及實機回歸仍未執行。**
+**Priority：P2；Status：D9 三線已整合（Host requester-bound Close + Crash 收據保留、阻擋原 PTY 自動 Remint、Desktop 跨 App Journal Lock + 本機成功稽核）；feature-gated OFF（2026-10-30）。** 先前 D1–D8 的安全修正全部保留。**跨專案拖放仍未開放；Flutter/Cargo 測試、靜態分析、編譯及實機回歸仍未執行。**
 
 本文件原是 `feat/cross-project-terminal-tabs-20261029` 分支上的設計稿（commit `ec150a493`），現**只收編此規劃檔**至 `refactor/tdd-integrate-20261029`；未合併該舊分支的產品程式。原設計所記載的並行分工為 2026-10-29 第三批的歷史狀態；最新整合已包含第八批功能修正及 macOS Claude Code 貼上 hotfix。
 
-## 最新：T2-D8 三條隔離安全工作線已整合（2026-10-30；Capability 仍 OFF）
+## 最新：T2-D9 三條隔離安全工作線已整合（2026-10-30；Capability 仍 OFF）
+
+**Git**：從整合乾淨基準 `632f1429b`，重用三個 D8 工作樹新切 `feat/t2-d9-owner-close-20261030`／`feat/t2-d9-pty-remint-20261030`／`feat/t2-d9-audited-journal-20261030`。各線 owner 原封不動，只寫 Host Close／Host Spawn + Transfer／Dart Journal 的分離檔案；獨立提交後無衝突 cherry-pick，追加 Host Receipt Cascade 修正，原始碼整合最後 HEAD `75161c9bf`（此文件提交後還會更動，務必重新核對）。
+
+| 工作線 | 本輪精確實作 | 來源 → 整合 |
+| --- | --- | --- |
+| D9-H Host Close／Cascade | Queued `PrepareRuntimeMutation` 帶真正 Client ID；對 transferred `tab.remove` 先用原收據向 Host `tab.transfer.status` 查證原 instance、目前 Session/Tab owner，再限定要求者已 attached、沒有其他 attached Client；失敗時保留原 Tab。Workspace／Project／Managed／Sleep／Workspace Tabs Delete 若會移除**任何持久化 transferred Tab**，即使原 PTY 已不在也拒絕；若在 SQLite owner 已更新但 Session 仍停在舊 Workspace 的 partial commit，舊 Workspace Cleanup 也拒絕。這不等於多 Window 共用單 Client 的獨立 View Lease | `c9468fd77` → **`3f1cf30d7`**；`3753d60d7` → **`75161c9bf`** |
+| D9-R 防止 original PTY Remint | 已移轉的 Tab 在 Attach／CreateOrAttach 必須有仍在執行且 `ptyInstanceToken` 匹配的原 PTY。重啟後缺失/新生同 Session ID 不許自動生成 Shell；`spawnOnCreate` 和 `tab.upsert` spawn-error 不再刪 moved Tab／殺原程序；直接 `terminal.restart` 也保守拒絕，直到新增獨立的可稽核 PTY generation 更換協議 | `7775ff028` → **`f10fb0f52`** |
+| D9-J 同 App Support 路徑跨程序鎖與清除稽核 | `FileWorkbenchTerminalTransferJournal` 的 `remember`／`forget` 取得 `<tab-hash>.lock`，由 OS exclusive File.create 跨程序協調；Interrupted Lock 被 `loadPending` 當作需要人工調查而非自動清。僅在 Controller 已確認 Host 原始收據與雙 Layout 權威 readback 後，`forget` 先寫入完整 Plan + `callerConfirmedHostAndBothLayouts` + UTC 時間的 `terminal_transfer_resolved_v1` archive，核對後才刪 pending。若無 pending 又無符合的 archive 不能假裝已清。此 audit **不是 Host 授權簽章**，也沒有同跨裝置 lock | `2d9244d25` → **`f536c68b6`** |
+
+**D10 尚未解決的功能核心**：目前採用**保守拒絕而非自動復原**。真正的 View ID／Last-view Lease 要同時覆蓋多 App、多 Window 共用同個 Host client、Mobile 及 Host restart；需要合法、安全的 transferred PTY 正常退出／顯式終止後 Tab 關閉協議，否則已轉移而 dead 的 Tab 將持續不可批次刪除。SQLite Commit 與 Live PTY owner 之間 Host Crash 不會因 Instance Token 而自動補償或復活 PTY；應定義已持久化但 PTY 消失的 definitive success/failure／人工介入證據、PTY generation renewal，而非隨意解除 Journal。跨 App `.lock` 後的 crash-stale 手工修復、稽核檔保留／清理政策、Host 明確拒絕、Mobile 舊客戶端相容與 Windows/macOS E2E 必須另外設計、驗證。
+
+**開放條件仍未達成**：`tab.transfer.capabilities.supported=false`。只做 Rust/Dart Format 和 Git scoped whitespace checks；**沒有新增／執行 Flutter/Cargo 測試、Analyzer、Cargo check、Build、Win/Mac 多程序實機、Push、Release**，沒有修改 dirty `main`。實際啟用前必須依使用者既有政策另行恢復驗證，不能從這些尚未編譯的修改推論功能已可用。接手以 `docs/refactor/feature-progress-20261029.md` 最上方 D9 入口為準，再往 D10。
+
+## 歷史：T2-D8 三條隔離安全工作線已整合（2026-10-30；Capability 仍 OFF）
 
 從乾淨整合 `379ec62cadf04686255dbb094101a1b2e9c345d7` 重用既有 Host／Rust transfer／Desktop Client 工作樹，分別切 `feat/t2-d8-cascade-20261030`、`feat/t2-d8-pty-identity-20261030`、`feat/t2-d8-journal-concurrency-20261030`。Host Cascade 專責 `session_termination.rs`、`runtime_mutation_queue.rs`；PTY Identity 專責 `terminal_tab_transfer.rs`、`store_tab_transfer.rs`；Desktop 專責 `workbench_controller_tabs.dart`、`workbench_terminal_tab_transfer_coordinator.dart`。各線完整範圍無同檔寫入／衝突：
 
