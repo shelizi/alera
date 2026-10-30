@@ -79,6 +79,33 @@ final class TerminalTransferJournalInventoryItem {
       unknownFileName || lockPresent || (pendingPresent && !pendingReadable);
 }
 
+/// One *local* resolved-archive artifact. A well-formed file is evidence
+/// only that this caller previously wrote a record, not that the Host
+/// confirmed a live original PTY or that the pending lock may be unlocked.
+final class TerminalTransferJournalResolutionInventoryItem {
+  const TerminalTransferJournalResolutionInventoryItem({
+    required this.fileName,
+    required this.ordinaryFile,
+    required this.localArchiveWellFormed,
+    required this.fileNameMatchesMutation,
+    this.tabId,
+    this.clientMutationId,
+  });
+
+  final String fileName;
+  final bool ordinaryFile;
+  final bool localArchiveWellFormed;
+  final bool fileNameMatchesMutation;
+  final String? tabId;
+  final String? clientMutationId;
+
+  bool get needsLocalEvidenceReview =>
+      !ordinaryFile || !localArchiveWellFormed || !fileNameMatchesMutation;
+
+  /// Deliberately always true: a local audit is never a Host-signed receipt.
+  bool get requiresHostVerification => true;
+}
+
 /// Durable, fail-closed record of a Terminal transfer *before* Host commit.
 /// Files are per Tab so unrelated workspaces do not overwrite one another.
 /// Malformed records are surfaced instead of silently authorizing a new move.
@@ -359,6 +386,59 @@ final class FileWorkbenchTerminalTransferJournal
       );
     }
     return result;
+  }
+
+  /// Surface orphan/corrupt resolution archives even when the pending folder
+  /// is empty. A crash after archive creation may leave no corresponding
+  /// pending JSON, but neither this method nor a matching local archive can
+  /// confirm Host completion. Read-only; never follows links or clears files.
+  Future<List<TerminalTransferJournalResolutionInventoryItem>>
+  inspectResolutionArchiveInventory() async {
+    final support = await _supportDirectory();
+    final folder = Directory(
+      p.join(support.path, 'terminal_transfer_resolved_v1'),
+    );
+    await _requireRealDirectoryOrAbsent(folder);
+    if (!await folder.exists()) {
+      return const <TerminalTransferJournalResolutionInventoryItem>[];
+    }
+    final entries = <TerminalTransferJournalResolutionInventoryItem>[];
+    final validName = RegExp(r'^[a-f0-9]{64}\.json$');
+    await for (final entity in folder.list(followLinks: false)) {
+      final fileName = p.basename(entity.path);
+      final isFile =
+          entity is File &&
+          await FileSystemEntity.type(entity.path, followLinks: false) ==
+              FileSystemEntityType.file;
+      WorkbenchTerminalTabTransferPlan? plan;
+      var matchesFileName = false;
+      if (isFile && validName.hasMatch(fileName)) {
+        try {
+          final resolved = await _readResolution(File(entity.path));
+          final digest = sha256.convert(
+            utf8.encode(
+              jsonEncode(<String>[resolved.tabId, resolved.clientMutationId]),
+            ),
+          );
+          matchesFileName = fileName == '$digest.json';
+          plan = resolved;
+        } on Object {
+          // A truncated, malformed or unexpected local audit is not proof.
+        }
+      }
+      entries.add(
+        TerminalTransferJournalResolutionInventoryItem(
+          fileName: fileName,
+          ordinaryFile: isFile,
+          localArchiveWellFormed: plan != null,
+          fileNameMatchesMutation: matchesFileName,
+          tabId: plan?.tabId,
+          clientMutationId: plan?.clientMutationId,
+        ),
+      );
+    }
+    entries.sort((first, second) => first.fileName.compareTo(second.fileName));
+    return entries;
   }
 
   bool _samePlan(
