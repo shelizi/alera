@@ -247,6 +247,20 @@ impl ServerActor {
             .await?;
         // Validate before any terminal exit/agent cleanup, so a missing
         // original project cannot destroy the still-running PTY.
+        // A transferred PTY cannot be replaced by an unaudited new process
+        // generation while its original transfer receipt is still authoritative.
+        if let Some(stored) = self
+            .runtime_store
+            .find_workspace_tab(&tab_id)
+            .await
+            .map_err(|error| HostError::state(error.to_string()))?
+        {
+            if stored.payload["lastTerminalTabTransfer"].is_object() {
+                return Err(HostError::state(
+                    "Transferred Terminal cannot restart until its original PTY generation is authoritatively resolved. The existing process was preserved.",
+                ));
+            }
+        }
         self.verify_moved_terminal_launch_directory(&tab_id, &working_directory)
             .await?;
         let launch = TerminalHostLaunch::from_json(&Value::Object(

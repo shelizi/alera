@@ -188,6 +188,18 @@ impl ServerActor {
                     "Terminal belongs to another workspace. Use tab.transfer to move its existing PTY.",
                 ));
             }
+            if stored.kind == "terminal"
+                && stored.payload["lastTerminalTabTransfer"].is_object()
+                && spawns_on_create(&tab)
+                && !self
+                    .sessions
+                    .get(&terminal_session_id(&stored))
+                    .is_some_and(Session::running)
+            {
+                return Err(HostError::state(
+                    "Cannot upsert/restart a transferred Terminal with no original live PTY. Resolve the transfer before changing its launch state.",
+                ));
+            }
         }
         self.initialize_agent_title_if_new(&mut tab).await?;
         let saved = TerminalSpawnPersistence::new(&self.runtime_store)
@@ -196,10 +208,12 @@ impl ServerActor {
         let saved = match self.ensure_spawn_on_create_terminal(&saved).await {
             Ok(rewritten) => rewritten.unwrap_or(saved),
             Err(error) => {
-                let _ = TerminalSpawnPersistence::new(&self.runtime_store)
-                    .remove_tab(&saved.id)
-                    .await;
-                self.terminate_sessions_for_tab(&saved.id).await;
+                if !saved.payload["lastTerminalTabTransfer"].is_object() {
+                    let _ = TerminalSpawnPersistence::new(&self.runtime_store)
+                        .remove_tab(&saved.id)
+                        .await;
+                    self.terminate_sessions_for_tab(&saved.id).await;
+                }
                 return Err(error);
             }
         };
@@ -219,6 +233,11 @@ impl ServerActor {
         let session_id = terminal_session_id(tab);
         if self.sessions.get(&session_id).is_some_and(Session::running) {
             return Ok(None);
+        }
+        if tab.payload["lastTerminalTabTransfer"].is_object() {
+            return Err(HostError::state(
+                "Transferred Terminal has no original live PTY. Automatic spawn-on-create recovery is disabled.",
+            ));
         }
         let rearmed = self.rearm_terminal_after_ready_prompt(tab).await?;
         let tab = rearmed.as_ref().unwrap_or(tab);

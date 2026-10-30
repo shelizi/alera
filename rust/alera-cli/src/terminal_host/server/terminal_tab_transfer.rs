@@ -105,6 +105,23 @@ impl ServerActor {
                     "Moved Terminal is attached in another window or device. Detach other views before terminating its PTY.",
                 ));
             }
+            if stored.payload["lastTerminalTabTransfer"].is_object() {
+                if !session.clients.contains(&client_id) {
+                    return Err(HostError::state(
+                        "Only the currently attached Terminal view may terminate a transferred PTY.",
+                    ));
+                }
+                let actual_token = pty_instance_token(session.instance_id());
+                if stored.payload["lastTerminalTabTransfer"]["ptyInstanceToken"].as_str()
+                    != Some(actual_token.as_str())
+                    || !session.running()
+                    || stored.workspace_id != session.workspace_id
+                {
+                    return Err(HostError::state(
+                        "Transferred Terminal PTY instance could not be verified. Resolve the original transfer before terminating.",
+                    ));
+                }
+            }
         }
         Ok(())
     }
@@ -147,6 +164,26 @@ impl ServerActor {
                 return Err(HostError::state(
                     "Transferred Terminal metadata is stale. Refresh workspace before restarting.",
                 ));
+            }
+            if stored.payload["lastTerminalTabTransfer"].is_object() {
+                let original = self.sessions.get(session_id).filter(|session| {
+                    session.running()
+                        && session.tab_id == tab_id
+                        && session.workspace_id == workspace_id
+                });
+                let Some(original) = original else {
+                    return Err(HostError::state(
+                        "Transferred Terminal original PTY is unavailable. Automatic restart is blocked; keep the Tab and resolve its transfer before starting a new process.",
+                    ));
+                };
+                let actual_token = pty_instance_token(original.instance_id());
+                if stored.payload["lastTerminalTabTransfer"]["ptyInstanceToken"].as_str()
+                    != Some(actual_token.as_str())
+                {
+                    return Err(HostError::state(
+                        "Transferred Terminal live PTY instance does not match its persisted receipt. Refusing to attach a reminted process.",
+                    ));
+                }
             }
         }
         Ok(())
