@@ -1,5 +1,7 @@
 # Alera TDD 重構執行進度（持續更新）
 
+> **交接入口（2026-10-30）**：請先讀 `docs/refactor/feature-progress-20261029.md` 最上方「下一次對話／其他 Agent 交接入口」，再讀 `docs/terminal-tab-cross-workspace-plan-20261029.md` D6。本檔下方早期重構基準為**歷史資訊**。已核對當時整合乾淨 HEAD `b5836e8f5ead907db7d507a3958ca851aeb702e9`，實際開始前重新查 Git；T2 capability 仍 **OFF**、無編譯／實機驗證，不要改 dirty `main`，不宣稱已發布。
+
 > 起點：2026-10-29；Worktree `.worktrees/refactor-tdd-boundaries-20261029`；Branch `refactor/tdd-boundaries-20261029`；main 基準 `3501b0555`。
 > 讀取 `docs/refactor/tdd-roadmap-20261029.md` 了解契約/驗收，然後從下列 pending/in_progress 工作續做。
 > 變更只在隔離整合 worktree；最新 macOS hotfix 來源分支目前與 `main` HEAD 指向同一提交，已依使用者要求將此 hotfix 分支合入整合分支，但沒有在原 `main` worktree 做修改、push 或 release。

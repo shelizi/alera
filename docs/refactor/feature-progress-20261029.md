@@ -1,5 +1,18 @@
 # Alera 功能優先續做：第八批四線隔離（2026-10-29）
 
+## 下一次對話／其他 Agent 交接入口（2026-10-30，已核對）
+
+**可以直接依本檔交接，不需重做前面已提交的 D1–D6。** 本檔按最新批次在上方，較舊段落是歷史狀態；功能設計、每線細節和剩餘安全邊界以 `docs/terminal-tab-cross-workspace-plan-20261029.md` 最新 **D6** 為準；整體優先順序以 `docs/refactor/tdd-roadmap-20261029.md` 為準。
+
+- **已確認的 D6 功能基準**：`refactor/tdd-integrate-20261029`，Worktree `.worktrees/refactor-tdd-integrate-20261029`，本次更新交接文件前已核對乾淨 HEAD **`b5836e8f5ead907db7d507a3958ca851aeb702e9`**（`docs(terminal): hand off T2 D6 four parallel safety fixes`）。**本交接檔若有新的文件 Commit，整合 HEAD 會再前進**；動手前必須重新 `git status`／`git rev-parse HEAD`，以當前乾淨整合 HEAD 為新起點，不硬套此 SHA。
+- **已整合的最後批次**：D6 Rust Host 移動收據強制驗證 `8a9e78d83`、Rust Store 精確 Pane Tree 剪枝 `74f8062a9`、Desktop 未決 Journal 同 Tab 原子排他建立 `dd71d3401`、Desktop 關閉使用視圖當時所見收據 `c23dd4189`；此前 D1–D5+ 亦已合入，無需重做。
+- **真實狀態**：跨專案 Terminal Tab 拖放 **尚未對使用者開放**，`tab.transfer.capabilities.supported=false`。尚未得到 Flutter/Cargo 編譯、Analyzer、測試或 Windows/macOS 多視窗實機通過的證據；不得宣稱可用或安全發布，也不得自行打開旗標。
+- **下一批可平行範圍**：① Rust Host／PTY 唯一 owner 處理跨程序最後視圖 Lease、Attach/Detach/Close；② Rust Store／Host 協調 Crash 發生在 SQLite 提交和 live PTY owner 更新之間的可驗證復原；③ Desktop Journal／Workbench 提供「確定成功／確定失敗／結果未知」的權威確認與安全清理 UX。三線必須先按**檔案擁有者**隔離、避免 Store／Host 同檔同時寫，並在串接前核對操作契約。
+- **工作樹慣例**：優先**重用乾淨的既有** `feat-t2-*` Worktree 各切新分支；Windows／Dropbox 下避免同時大量 `git worktree add`，之前曾因 checkout 逾時留下暫時的初始化鎖及 Index 差異。當前驗證 D6 的 Host `.worktrees/feat-t2-host-d1-20261029`、Journal `.worktrees/feat-t2-recovery-d1-20261029`、Client `.worktrees/feat-t2-undo-d1-20261029` 各已乾淨且在 D6 隔離提交上，**不是**最新整合基準，重用前先確認工作樹 HEAD 與目標 branch。
+- **不要動原始 `main`**：原 `main` HEAD `3d232acff`，具有既存未提交文件、xterm 子模組與未追蹤資料；不可 `reset --hard`／清理／覆蓋。先前使用者指示功能優先，暫停完整測試／靜態分析／編譯；若準備啟用或發布 T2，必須另外確認恢復核心驗證，不可憑格式化與 Git whitespace check 宣稱 green。既有批次未 Push／Release。
+
+**新對話接手指令**：請先讀本檔最上方交接入口、`docs/terminal-tab-cross-workspace-plan-20261029.md` D6、`docs/refactor/tdd-roadmap-20261029.md`，查 `git status`／`git log`，再從仍未完成的 T2-D7 安全邊界安排平行工作；做完每條線獨立提交、整合並把進度寫回這些文件。不要把以前 B2／D1 段落的「待做」誤認為當前剩餘項目。
+
 ## 最新：T2-D6 四條安全工作線已平行提交、整合（2026-10-30）
 
 從乾淨 `6bdb0cbb8` 重用四個既有 Worktree，各切隔離分支：**Host** 已轉移 Tab 的 `tab.remove` 強制持有原視圖最新收據 `8a9e78d83`；**Rust Store** 來源 Pane 刪除時限定精確 Split Tree 剪枝與 active Group `74f8062a9`；**Desktop Journal** `File.create(exclusive:true)` 原子佔有同一 Tab 的持久未決操作檔 `dd71d3401`；**Workbench Desktop Close** 從關閉時捕捉的原始 Tab Snapshot 傳同一 Workspace/Receipt 給 Host，timeout 重送不偷更新收據 `c23dd4189`。各線源提交 `19a9c3dd0`／`7ea2bf150`／`b16c0b58`／`b63c637d1`，四線 cherry-pick 全部成功且無衝突。
