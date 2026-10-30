@@ -53,6 +53,22 @@ pub(super) const RUNTIME_SCHEMA: &[&str] = &[
         payloadJson TEXT NOT NULL DEFAULT '{}'
     );",
     "CREATE INDEX IF NOT EXISTS workspaceTabsWorkspaceIdx ON workspaceTabs(workspaceId, createdAt);",
+    // Permanent evidence of *explicitly authorized* transferred Tab closure.
+    // A crashed Host must never synthesize one of these records from an old
+    // Transfer Receipt or an unattached / missing PTY.
+    "CREATE TABLE IF NOT EXISTS terminalTabRetirementAudits (
+        id TEXT PRIMARY KEY,
+        tabId TEXT NOT NULL,
+        sessionId TEXT NOT NULL,
+        sourceWorkspaceId TEXT NOT NULL,
+        targetWorkspaceId TEXT NOT NULL,
+        transferMutationId TEXT NOT NULL,
+        originalPtyInstanceToken TEXT NOT NULL,
+        viewLeaseSha256 TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        recordedAtUtc TEXT NOT NULL
+    );",
+    "CREATE INDEX IF NOT EXISTS terminalTabRetirementTabIdx ON terminalTabRetirementAudits(tabId, recordedAtUtc);",
     "CREATE TABLE IF NOT EXISTS linkedReviews (
         workspaceId TEXT PRIMARY KEY,
         dismissed INTEGER NOT NULL DEFAULT 0,

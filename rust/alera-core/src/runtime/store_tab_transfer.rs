@@ -7,6 +7,7 @@ use std::collections::BTreeSet;
 use anyhow::{bail, ensure, Result};
 use chrono::Utc;
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use sqlx::Row;
 
 use super::{format_timestamp, tab_from_row, RuntimeStore, WorkspaceTabRecord};
@@ -17,6 +18,162 @@ const EXECUTION_WORKSPACE_KEY: &str = "terminalExecutionWorkspaceId";
 const EXECUTION_LAUNCH_DIRECTORY_KEY: &str = "terminalExecutionWorkingDirectory";
 
 impl RuntimeStore {
+    /// The only storage path for a moved Tab explicitly closed by its current
+    /// Host's verified original live PTY and single attached UI view.
+    ///
+    /// The Host actor MUST verify the actual live Session generation, latest
+    /// transfer revision, and only attached View before dispatching this
+    /// request. This Store layer repeats all durable identity checks, both
+    /// complete pane registries and the original View token's presence; it
+    /// cannot independently prove OS process liveness.
+    ///
+    /// Atomically delete the Tab, remove it from the destination pane, and
+    /// append a permanent audit. A missing PTY / observed Exit is NOT an
+    /// acceptable substitute for live-view authorization.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn remove_transferred_terminal_after_verified_live_view(
+        &self,
+        tab_id: &str,
+        session_id: &str,
+        expected_workspace_id: &str,
+        expected_transfer_mutation_id: &str,
+        expected_original_pty_token: &str,
+        expected_view_lease_id: &str,
+    ) -> Result<()> {
+        ensure!(
+            [
+                tab_id,
+                session_id,
+                expected_workspace_id,
+                expected_transfer_mutation_id,
+                expected_original_pty_token,
+                expected_view_lease_id,
+            ]
+            .iter()
+            .all(|id| !id.trim().is_empty()),
+            "Explicit transferred Terminal retirement requires original Session, PTY, View and receipt."
+        );
+        let (host_epoch, number) = expected_original_pty_token
+            .split_once(':')
+            .ok_or_else(|| anyhow::anyhow!("Original PTY instance has no Host generation."))?;
+        uuid::Uuid::parse_str(host_epoch)?;
+        ensure!(
+            number.parse::<u64>().is_ok(),
+            "Original PTY instance identifier is malformed."
+        );
+        let mut tx = self.pool.begin().await?;
+        let row = sqlx::query(
+            "SELECT id, workspaceId, kind, title, createdAt, updatedAt, payloadJson \
+             FROM workspaceTabs WHERE id = ?",
+        )
+        .bind(tab_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("Transferred Terminal no longer exists."))?;
+        let original_payload: String = row.try_get("payloadJson")?;
+        let tab = tab_from_row(row)?;
+        let receipt = &tab.payload[TRANSFER_RECEIPT_KEY];
+        let persisted_session_id = tab.payload["terminalSessionId"]
+            .as_str()
+            .filter(|value| !value.is_empty())
+            .unwrap_or(tab_id);
+        let source = receipt["from"].as_str().unwrap_or_default();
+        let target = receipt["to"].as_str().unwrap_or_default();
+        ensure!(
+            tab.kind == "terminal"
+                && tab.workspace_id == expected_workspace_id
+                && target == expected_workspace_id
+                && !source.is_empty()
+                && source != target
+                && persisted_session_id == session_id
+                && receipt["id"].as_str() == Some(expected_transfer_mutation_id)
+                && receipt["ptyInstanceToken"].as_str() == Some(expected_original_pty_token)
+                && tab.payload.get(TRANSFER_EXIT_EVIDENCE_KEY).is_none(),
+            "Moved Tab original PTY/owner/receipt differs or exit evidence requires manual recovery."
+        );
+        let original_source = persisted_layout(&mut tx, source)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Transferred source layout is missing."))?;
+        let target_layout_raw: String =
+            sqlx::query_scalar("SELECT dataJson FROM workbenchLayouts WHERE workspaceId = ?")
+                .bind(target)
+                .fetch_optional(&mut *tx)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("Transferred target layout is missing."))?;
+        let original_target: Value = serde_json::from_str(&target_layout_raw)?;
+        let source_ids = tab_ids_in_layout(&original_source, source)?;
+        let target_ids = tab_ids_in_layout(&original_target, target)?;
+        ensure!(
+            !source_ids.contains(tab_id)
+                && target_ids.contains(tab_id)
+                && source_ids == workspace_tab_ids(&mut tx, source).await?
+                && target_ids == workspace_tab_ids(&mut tx, target).await?,
+            "Both complete transferred Terminal layouts and authoritative Tab registries must match."
+        );
+        let next_target = layout_after_retiring_tab(&original_target, target, tab_id)?;
+        let mut remaining_target_ids = target_ids;
+        ensure!(
+            remaining_target_ids.remove(tab_id),
+            "Retired Tab was not in its target layout."
+        );
+        ensure!(
+            tab_ids_in_layout(&next_target, target)? == remaining_target_ids,
+            "Retiring Terminal would orphan or duplicate other pane tabs."
+        );
+
+        let removed = sqlx::query(
+            "DELETE FROM workspaceTabs WHERE id = ? AND workspaceId = ? AND payloadJson = ?",
+        )
+        .bind(tab_id)
+        .bind(target)
+        .bind(original_payload)
+        .execute(&mut *tx)
+        .await?;
+        ensure!(
+            removed.rows_affected() == 1,
+            "Transferred Terminal changed during retirement."
+        );
+        let updated = sqlx::query(
+            "UPDATE workbenchLayouts SET dataJson = ? \
+             WHERE workspaceId = ? AND dataJson = ?",
+        )
+        .bind(serde_json::to_string(&next_target)?)
+        .bind(target)
+        .bind(target_layout_raw)
+        .execute(&mut *tx)
+        .await?;
+        ensure!(
+            updated.rows_affected() == 1,
+            "Destination pane changed during original-PTY retirement."
+        );
+        sqlx::query("DELETE FROM agentProfileLaunchReceipts WHERE tabId = ?")
+            .bind(tab_id)
+            .execute(&mut *tx)
+            .await?;
+        // Never store the secret bearer View token itself in the audit.
+        let view_digest = format!("{:x}", Sha256::digest(expected_view_lease_id.as_bytes()));
+        sqlx::query(
+            "INSERT INTO terminalTabRetirementAudits \
+             (id, tabId, sessionId, sourceWorkspaceId, targetWorkspaceId, \
+              transferMutationId, originalPtyInstanceToken, viewLeaseSha256, \
+              reason, recordedAtUtc) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(uuid::Uuid::new_v4().to_string())
+        .bind(tab_id)
+        .bind(session_id)
+        .bind(source)
+        .bind(target)
+        .bind(expected_transfer_mutation_id)
+        .bind(expected_original_pty_token)
+        .bind(view_digest)
+        .bind("explicit_verified_original_live_pty_only_view")
+        .bind(Utc::now().to_rfc3339())
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
     /// A lost-reply transfer is not acknowledged merely because the Tab row
     /// and its PTY instance match. Read *both* persisted layouts and the
     /// authoritative Tab registries in one SQLite snapshot: neither pane
@@ -467,6 +624,68 @@ impl RuntimeStore {
         tx.commit().await?;
         Ok(tab)
     }
+}
+
+/// Equivalent to removing one Tab from WorkbenchLayout and pruning an empty
+/// pane. The only permitted differences are this Tab, its active selection
+/// and the strictly required split-tree pruning.
+fn layout_after_retiring_tab(layout: &Value, workspace_id: &str, tab_id: &str) -> Result<Value> {
+    let group_id = layout_group_for_tab(layout, tab_id)
+        .ok_or_else(|| anyhow::anyhow!("Transferred Terminal has no destination pane."))?
+        .to_owned();
+    let mut next = layout.clone();
+    let groups = next["groups"]
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("Destination layout has no pane groups."))?;
+    let old_group = groups
+        .get(&group_id)
+        .ok_or_else(|| anyhow::anyhow!("Destination pane was removed."))?;
+    let kept = old_group["tabIds"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("Destination pane has no Tab list."))?
+        .iter()
+        .filter(|value| value.as_str() != Some(tab_id))
+        .cloned()
+        .collect::<Vec<_>>();
+    if kept.is_empty() {
+        groups.remove(&group_id);
+    } else {
+        let old_active = old_group["activeTabId"].as_str();
+        let active = old_active
+            .filter(|id| kept.iter().any(|entry| entry.as_str() == Some(*id)))
+            .map(|id| json!(id))
+            .unwrap_or_else(|| kept[0].clone());
+        let group = groups
+            .get_mut(&group_id)
+            .ok_or_else(|| anyhow::anyhow!("Destination pane changed during retirement."))?;
+        group["tabIds"] = Value::Array(kept);
+        group["activeTabId"] = active;
+    }
+    let remaining_groups = next["groups"]
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("Destination pane groups vanished."))?;
+    if remaining_groups.is_empty() {
+        let default_id = format!("{workspace_id}/main");
+        next["groups"] = json!({});
+        next["groups"][&default_id] = json!({"id": default_id, "tabIds": [], "activeTabId": null});
+        next["root"] = json!({"type": "leaf", "groupId": default_id});
+        next["activeGroupId"] = json!(default_id);
+    } else if !remaining_groups.contains_key(&group_id) {
+        let retained = remaining_groups.keys().cloned().collect::<BTreeSet<_>>();
+        let root = prune_transfer_source_tree(&layout["root"], &retained)?
+            .ok_or_else(|| anyhow::anyhow!("Retired Terminal would remove every target split."))?;
+        let first = first_transfer_tree_leaf(&root)
+            .ok_or_else(|| anyhow::anyhow!("Pruned target split has no pane."))?
+            .to_owned();
+        let active = layout["activeGroupId"]
+            .as_str()
+            .filter(|id| retained.contains(*id))
+            .unwrap_or(&first)
+            .to_owned();
+        next["root"] = root;
+        next["activeGroupId"] = json!(active);
+    }
+    Ok(next)
 }
 
 fn layout_group_for_tab<'a>(layout: &'a Value, tab_id: &str) -> Option<&'a str> {

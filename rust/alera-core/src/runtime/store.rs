@@ -1,10 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::Path;
 
-use anyhow::Result;
+use anyhow::{ensure, Result};
 use chrono::{DateTime, SecondsFormat, TimeZone, Utc};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
-use sqlx::{Row, SqlitePool};
+use sqlx::{Row, Sqlite, SqlitePool, Transaction};
 use uuid::Uuid;
 
 use super::runtime_schema::RUNTIME_SCHEMA;
@@ -38,6 +38,79 @@ pub struct SshTargetBootstrapStateUpdate<'a> {
 }
 
 impl RuntimeStore {
+    /// Never let a generic Store deletion erase a transferred Terminal or its
+    /// original Host-observed exit, including malformed/null JSON markers.
+    /// Call inside the SAME SQLite write transaction that deletes the row.
+    /// Authorized original-PTY retirement must use an exact guarded API.
+    pub(crate) async fn ensure_ordinary_tab_can_be_deleted(
+        tx: &mut Transaction<'_, Sqlite>,
+        tab_id: &str,
+    ) -> Result<()> {
+        let raw: Option<String> =
+            sqlx::query_scalar("SELECT payloadJson FROM workspaceTabs WHERE id = ?")
+                .bind(tab_id)
+                .fetch_optional(&mut **tx)
+                .await?;
+        if let Some(raw) = raw {
+            let payload: serde_json::Value = serde_json::from_str(&raw)?;
+            ensure!(
+                payload.get("lastTerminalTabTransfer").is_none()
+                    && payload.get("lastTerminalTabExit").is_none(),
+                "Transferred Terminal evidence cannot be erased by ordinary Tab deletion."
+            );
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn ensure_workspace_tabs_can_be_deleted(
+        tx: &mut Transaction<'_, Sqlite>,
+        workspace_id: &str,
+    ) -> Result<()> {
+        let rows = sqlx::query("SELECT id FROM workspaceTabs WHERE workspaceId = ?")
+            .bind(workspace_id)
+            .fetch_all(&mut **tx)
+            .await?;
+        for row in rows {
+            let tab_id: String = row.try_get("id")?;
+            Self::ensure_ordinary_tab_can_be_deleted(tx, &tab_id).await?;
+        }
+        // A moved Tab may already live in another Workspace while still
+        // referring to this Workspace as its original source / execution
+        // scope. Deleting the *empty source* would erase recovery provenance
+        // just as surely as deleting the current target. Scan every migrated
+        // receipt and fail closed if a damaged receipt cannot identify owner.
+        let rows = sqlx::query(
+            "SELECT payloadJson FROM workspaceTabs \
+             WHERE payloadJson LIKE '%lastTerminalTabTransfer%' \
+                OR payloadJson LIKE '%lastTerminalTabExit%'",
+        )
+        .fetch_all(&mut **tx)
+        .await?;
+        for row in rows {
+            let raw: String = row.try_get("payloadJson")?;
+            let payload: serde_json::Value = serde_json::from_str(&raw)?;
+            if let Some(receipt) = payload.get("lastTerminalTabTransfer") {
+                ensure!(
+                    receipt["from"].as_str().is_some()
+                        && receipt["to"].as_str().is_some(),
+                    "Workspace deletion cannot resolve malformed original Terminal transfer provenance."
+                );
+                ensure!(
+                    receipt["from"].as_str() != Some(workspace_id)
+                        && receipt["to"].as_str() != Some(workspace_id)
+                        && payload["terminalExecutionWorkspaceId"].as_str() != Some(workspace_id),
+                    "Workspace is still an original or destination scope for a transferred Terminal."
+                );
+            } else if payload.get("lastTerminalTabExit").is_some() {
+                ensure!(
+                    false,
+                    "Workspace deletion cannot resolve an orphan original PTY exit marker."
+                );
+            }
+        }
+        Ok(())
+    }
+
     pub async fn open(runtime_dir: &Path) -> Result<Self> {
         prepare_private_runtime_directory(runtime_dir)?;
         let path = runtime_dir.join(RUNTIME_DATABASE_FILE_NAME);
@@ -691,15 +764,21 @@ impl RuntimeStore {
     }
 
     pub async fn remove_project(&self, project_id: &str) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
         let workspace_ids: Vec<String> =
             sqlx::query("SELECT id FROM workspaces WHERE projectId = ?")
                 .bind(project_id)
-                .fetch_all(&self.pool)
+                .fetch_all(&mut *tx)
                 .await?
                 .into_iter()
                 .map(|row| row.try_get("id"))
                 .collect::<Result<Vec<String>, _>>()?;
-        let mut tx = self.pool.begin().await?;
+        // Verify every Workspace before deleting the first one. A late
+        // transferred Tab must abort the entire Project removal, not leave
+        // its source project partially destroyed.
+        for workspace_id in &workspace_ids {
+            Self::ensure_workspace_tabs_can_be_deleted(&mut tx, workspace_id).await?;
+        }
         for workspace_id in workspace_ids {
             sqlx::query("DELETE FROM workspaceTabs WHERE workspaceId = ?")
                 .bind(&workspace_id)
@@ -881,6 +960,9 @@ impl RuntimeStore {
 
     pub async fn remove_workspace(&self, workspace_id: &str, cascade_tabs: bool) -> Result<()> {
         let mut tx = self.pool.begin().await?;
+        // Even cascadeTabs=false deletes the Layout and Workspace that a
+        // transferred Terminal's persisted original receipt still names.
+        Self::ensure_workspace_tabs_can_be_deleted(&mut tx, workspace_id).await?;
         if cascade_tabs {
             sqlx::query("DELETE FROM workspaceTabs WHERE workspaceId = ?")
                 .bind(workspace_id)
@@ -1111,15 +1193,19 @@ impl RuntimeStore {
     }
 
     pub async fn remove_workspace_tabs_for_workspace(&self, workspace_id: &str) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        Self::ensure_workspace_tabs_can_be_deleted(&mut tx, workspace_id).await?;
         sqlx::query("DELETE FROM workspaceTabs WHERE workspaceId = ?")
             .bind(workspace_id)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await?;
+        tx.commit().await?;
         Ok(())
     }
 
     pub async fn sleep_workspace(&self, workspace_id: &str) -> Result<()> {
         let mut tx = self.pool.begin().await?;
+        Self::ensure_workspace_tabs_can_be_deleted(&mut tx, workspace_id).await?;
         sqlx::query("DELETE FROM workspaceTabs WHERE workspaceId = ?")
             .bind(workspace_id)
             .execute(&mut *tx)

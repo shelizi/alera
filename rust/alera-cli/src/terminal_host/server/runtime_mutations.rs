@@ -207,7 +207,7 @@ pub(super) async fn run_runtime_mutation(
                 tab_id,
                 expected_workspace_id,
                 expected_transfer_mutation_id,
-                expected_view_lease_id: _,
+                expected_view_lease_id,
             } => {
                 let existing = runtime_store
                     .find_workspace_tab(&tab_id)
@@ -261,11 +261,59 @@ pub(super) async fn run_runtime_mutation(
                         ));
                     }
                 }
-                let workspace_id = existing.map(|tab| tab.workspace_id);
-                runtime_store
-                    .remove_workspace_tab(&tab_id)
-                    .await
-                    .map_err(runtime_store_error)?;
+                let workspace_id = existing.as_ref().map(|tab| tab.workspace_id.clone());
+                if let Some(tab) = existing
+                    .as_ref()
+                    .filter(|tab| super::terminal_tab_transfer::has_transfer_recovery_evidence(tab))
+                {
+                    // The serialized Host Actor has already checked original
+                    // running PTY generation, both Layouts, latest receipt,
+                    // and the sole attached View token. Ordinary Store remove
+                    // is intentionally forbidden for transferred evidence.
+                    let expected_view = expected_view_lease_id.as_deref().ok_or_else(|| {
+                        HostError::state(
+                            "Transferred Terminal retirement needs its original attached View.",
+                        )
+                    })?;
+                    let mutation = expected_transfer_mutation_id.as_deref().ok_or_else(|| {
+                        HostError::state(
+                            "Transferred Terminal retirement needs the last observed mutation.",
+                        )
+                    })?;
+                    let owner = expected_workspace_id.as_deref().ok_or_else(|| {
+                        HostError::state(
+                            "Transferred Terminal retirement needs its current Workspace owner.",
+                        )
+                    })?;
+                    let original_pty_token = tab.payload["lastTerminalTabTransfer"]
+                        ["ptyInstanceToken"]
+                        .as_str()
+                        .ok_or_else(|| {
+                            HostError::state(
+                                "Transferred Terminal original PTY token is missing.",
+                            )
+                        })?;
+                    let session = tab.payload["terminalSessionId"]
+                        .as_str()
+                        .filter(|id| !id.is_empty())
+                        .unwrap_or(&tab_id);
+                    runtime_store
+                        .remove_transferred_terminal_after_verified_live_view(
+                            &tab_id,
+                            session,
+                            owner,
+                            mutation,
+                            original_pty_token,
+                            expected_view,
+                        )
+                        .await
+                        .map_err(runtime_store_error)?;
+                } else {
+                    runtime_store
+                        .remove_workspace_tab(&tab_id)
+                        .await
+                        .map_err(runtime_store_error)?;
+                }
                 Ok(RuntimeMutationCompletion {
                     response: json!({}),
                     effect: RuntimeMutationEffect::TabRemoved {

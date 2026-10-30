@@ -19,6 +19,7 @@ pub enum AgentProfileLaunchReceiptOutcome {
 impl RuntimeStore {
     pub async fn remove_workspace_tab(&self, tab_id: &str) -> Result<()> {
         let mut tx = self.pool().begin().await?;
+        Self::ensure_ordinary_tab_can_be_deleted(&mut tx, tab_id).await?;
         sqlx::query("DELETE FROM workspaceTabs WHERE id = ?")
             .bind(tab_id)
             .execute(&mut *tx)
