@@ -4,6 +4,12 @@
 > 讀取 `docs/refactor/tdd-roadmap-20261029.md` 了解契約/驗收，然後從下列 pending/in_progress 工作續做。
 > 變更只在隔離整合 worktree；最新 macOS hotfix 來源分支目前與 `main` HEAD 指向同一提交，已依使用者要求將此 hotfix 分支合入整合分支，但沒有在原 `main` worktree 做修改、push 或 release。
 
+## 最新：T2-D5 平行三條安全修補已整合（2026-10-30，Capability OFF）
+
+在 D4 `7b7b3b877` 完成後，整合 Rust Store 不准 Terminal 轉移改動其他 Pane 的幾何配置／排序 **`5b4d15db5`**、Workbench 對來源與目的進行完整 Layout/Tab membership 核對及雙側二次權威讀回 **`a7a673591`**、Watcher 刪除舊來源 Tab 不再假定 PTY 已退出而清除 Codex transcript watcher **`9d420bf8d`**。來源隔離提交 `416dca6bf`、`6c5e3505a`、`c0f1fa5c0`，三線重用乾淨 B2 worktree，不碰 D4 進行中的文件／程式碼。詳 `docs/terminal-tab-cross-workspace-plan-20261029.md`。
+
+**產品仍不可用**：Host `tab.transfer.capabilities.supported=false`；跨程序 Session lease、Host crash partial commit、重啟後失聯操作 journal、Mobile 相容、退出後 watcher cleanup 與 E2E 未完成。依使用者既定偏好僅格式化＋Git staged whitespace check，**未跑測試／分析／編譯／實機；未 push／release、未動 dirty `main`**。
+
 ## 最新：T2-D4 收據 ABA／未知轉移 Recovery／UI 三線已整合（2026-10-30，Capability OFF）
 
 從最新乾淨整合 `146482845` 沿用三個隔離 worktree 切新分支，平行完成：Rust Host `expectedTransferMutationId` 守衛 A→B→A 終止 ABA **`e74cda072`**；Dart Coordinator 取得 Host 原收據後，完成雙 Workspace 權威 Tab/Layout readback 才解除 unknown guard，並提供 Controller `confirmUnknownTerminalTransfer` **`ad35694ac`**；Terminal Host PTY adapter 傳送最後觀察收據、Sidebar 不明轉移回覆顯示「Check status」而非假失敗 **`469b64c54`**。三線各自提交、cherry-pick 無衝突；進度契約詳 `docs/terminal-tab-cross-workspace-plan-20261029.md`。

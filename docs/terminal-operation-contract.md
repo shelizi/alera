@@ -12,6 +12,12 @@ Keyed `terminal.terminate` requests use the `terminalHostIdempotencyReceipts` ta
 
 View and attachment state is per client and ephemeral: `output_paused_clients`, `output_resync_pending_clients`, and `delivered_output_cursors` live on the session, and `dispose_client` detaches a disconnected client from every session without touching the PTY.
 
+## T2-D5: remote Tab retirement is not Session exit (2026-10-30)
+
+Workbench's watcher-driven cleanup only releases old local view/editor resources. A moved Terminal disappears from its **source** Workspace's Tab list without terminating its PTY or its Claude/Codex process. `WorkbenchRetiredResourceCleaner` must therefore **not** clear its Codex transcript watcher merely because an observer lost the source Tab: callers may opt into `confirmedSessionExit:true` only with independent evidence that the Session really exited. Explicit local Terminal Close retains its separate lifecycle cleaner. Final remote-exit watcher reclamation still needs owner-aware confirmation; this change is not a global cross-process last-view lease.
+
+The Host continues reporting `tab.transfer.capabilities.supported=false`; D5 has only formatting and Git diff checks, not Flutter/Cargo compilation, platform E2E or release verification.
+
 ## T2-D4: explicit termination requires the last observed transfer revision (2026-10-30)
 
 For a Terminal Tab carrying `payload.lastTerminalTabTransfer.id`, Host `verify_terminal_termination_owner` compares the request's `expectedWorkspaceId`, `expectedTabId` **and** `expectedTransferMutationId` against the currently owned Session and the **last** persisted transfer receipt. This closes the A→B→A ABA hole: an old window that originally observed Workspace A cannot terminate the moved-back PTY just because its Workspace/Tab identity happens to match again. The current Desktop terminal view captures the receipt from the actual `WorkspaceTabRecord` observed on creation or sync, and passes that value with `terminate`; it must never query the Host's newest receipt just before closing. Old clients without this field **fail closed** for moved Tabs, including current Mobile terminate callers; unmoved legacy Tabs continue to work without a receipt.

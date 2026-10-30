@@ -4,6 +4,12 @@ This table answers the eight transaction/replay questions from the architecture 
 
 Authority is `ServerActor` on the terminal-host mailbox, persisting through `RuntimeStore`. Tabs are special in two ways: their `payload` carries host-owned fields (`agentTitle*` state) that client writes must not clobber, and `kind = "terminal"` tabs with `payload.spawnOnCreate` own a live PTY that is spawned as part of the upsert.
 
+## T2-D5: transfer-only pane delta and authoritative readback (2026-10-30)
+
+`RuntimeStore::transfer_terminal_tab_storage` now checks that the client's **replacement** source/target Layouts do more than preserve the same overall Tab set: existing source groups may lose only the transferred Tab (plus empty-pane pruning), and existing destination groups may gain only that Tab, appended to its chosen Pane with that Tab active. Other panes' ordered Tab IDs and active selections must not change. The destination Split Tree must match the stored snapshot. The source Split Tree is checked for equality when no Pane is pruned; **exact tree-prune equivalence when source Panes disappear remains a narrower unverified edge**, not a general Layout revision CAS.
+
+`WorkbenchTerminalTransferReconciliation` verifies every Tab maps to one group, correct owning Workspace, an existing active Pane and a consistent Split Tree before updating UI. It performs a second **non-transactional** source/target Tabs+Layouts readback and refuses stale/changing snapshots without persisting them. Two read passes improve safety but do **not** constitute a multi-Workspace atomic snapshot. Capability remains `tab.transfer.capabilities.supported=false`; none of these changes have been compiled or regression-tested in D5.
+
 ## T2-D4: lost transfer reply and dual-layout authority (2026-10-30)
 
 The `tab.transfer` request is a **single atomic owner/Layout mutation** scoped to one existing, live Terminal Session. A lost response is not proof of failure. The client holds its exact `clientMutationId` and both source/target identities, queries `tab.transfer.status`, and accepts success **only** when the Host confirms the original persisted receipt **and** current live PTY ownership. Client-side `WorkbenchTerminalTabTransferCoordinator` must retain this unknown-outcome guard until `WorkbenchTerminalTransferReconciliation` has read and applied **both** authoritative Tab lists and Layouts without further persistence. Mismatched replies also remain unknown. This protection is currently **in-memory only** (not preserved across application restarts).

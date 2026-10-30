@@ -1,5 +1,11 @@
 # Alera 功能優先續做：第八批四線隔離（2026-10-29）
 
+## 最新：T2-D5 三線安全修補已合入（2026-10-30）
+
+整合已包含 D4 `7b7b3b877`；本輪另從乾淨 D3 基準平行做三個**互不修改同檔**的安全修補，再 cherry-pick 到最新版整合：Rust Store 原子轉移不得順手重排其他 Pane，並保護目的分割結構與未修剪來源幾何 **`5b4d15db5`**；Dart Workbench 二次權威讀回兩側完整 Tab/Layout，拒絕不一致／讀回中變更的快照 **`a7a673591`**；Watcher-driven Tab 退役保留仍在執行的 Codex transcript watcher，只有確證 Session Exit 才清理 **`9d420bf8d`**。隔離來源分別是 `416dca6bf`、`6c5e3505a`、`c0f1fa5c0`，全線提交並合入，無同檔衝突。
+
+**仍未開啟 T2：`tab.transfer.capabilities.supported=false`**。剩餘跨程序 PTY lease/last-view owner、Host Crash 中間結果恢復、重啟後 unknown mutation journal、Mobile 舊版相容與確實退出的 watcher cleanup，以及端到端驗證。只跑 `rustfmt`、`dart format`、Git whitespace check；沒有 Cargo/Flutter Tests、Analyzer、Build、Win/Mac E2E、Push 或 Release。未操作 dirty `main`。詳細見 `docs/terminal-tab-cross-workspace-plan-20261029.md`。
+
 ## 最新：T2-D4 平行三線安全防護已整合（2026-10-30）
 
 從整合 `146482845` 重用三個乾淨 D3 工作樹切 D4 分支，不碰 `main`。Rust Host 驗證最後轉移收據避免 A→B→A 的 ABA 舊視窗誤終止 **`e74cda072`**；Dart Coordinator 保留 Host 失聯後的原 mutation guard，直到收到原收據且重新套用來源／目的權威 Layout 才清除 **`ad35694ac`**；Terminal PTY client 送本視圖所見收據、側邊欄未知結果有「Check status」手動查證入口 **`469b64c54`**。均由獨立分支提交後 cherry-pick，沒有整合衝突。

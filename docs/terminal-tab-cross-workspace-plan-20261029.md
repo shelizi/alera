@@ -1,8 +1,20 @@
 # T2 — 跨專案／跨 Workspace Terminal Tab 移動：功能規劃與並行重構邊界
 
-**Priority：P2；Status：D4 transfer-receipt ABA guard / unknown-result two-layout recovery / explicit status UX integrated, feature-gated OFF（2026-10-30）。** D1–D3 的 Host、Store、Watcher、Undo 和原執行目錄保護仍在；D4 進一步補上「A→B→A 舊視窗誤終止」及不明轉移回覆的手動核實。**仍未開放跨專案拖放，也未執行本批的 Flutter/Cargo 測試、靜態分析或編譯。**
+**Priority：P2；Status：D5 Store pane integrity / two-sided readback / live agent watcher retention integrated, feature-gated OFF（2026-10-30）。** D1–D4 的 Host、Store、Watcher、Undo、ABA 及原執行路徑保護持續保留；最新 D5 收斂兩端布局一致性與來源 Tab 退役後的活 Agent 追蹤。**仍未開放跨專案拖放，也未執行本批的 Flutter/Cargo 測試、靜態分析或編譯。**
 
 本文件原是 `feat/cross-project-terminal-tabs-20261029` 分支上的設計稿（commit `ec150a493`），現**只收編此規劃檔**至 `refactor/tdd-integrate-20261029`；未合併該舊分支的產品程式。原設計所記載的並行分工為 2026-10-29 第三批的歷史狀態；最新整合已包含第八批功能修正及 macOS Claude Code 貼上 hotfix。
+
+## 最新：T2-D5 三線平行安全補強（2026-10-30；仍未啟用）
+
+D5 從乾淨 D3 基準 `1464828459c66b66c281a1a0664232af6aafcb21` 出發，**重用三個確認乾淨的 B2 工作樹**並切新分支；D4 同時在其他工作樹推進並合入整合分支 `7b7b3b877`，三條 D5 只修改互不重疊的單一檔案，接著依序 cherry-pick 至**已含 D4** 的整合分支。
+
+| 工作線 | 實際修正 | 獨立提交 → 整合提交 |
+| --- | --- | --- |
+| D5-S Rust Store | `transfer_terminal_tab_storage` 在原子雙 Layout CAS／Tab membership 檢查之外，限制**來源僅移除被轉移的 Terminal**、目的僅把該 Tab 加入單一 Pane；其餘 Pane 的 Tab 順序與 Active Tab 不得偷偷改寫，目的 Split Tree 及來源未修剪 Pane 時的幾何結構不得改動。來源刪除空 Pane 時的**精確 root prune 比對仍待補** | `416dca6bf` → **`5b4d15db5`** |
+| D5-C Workbench readback | `WorkbenchTerminalTransferReconciliation` 驗證來源／目的各自完整 Tab 清單、Workspace 身分、唯一 Pane membership、Active Tab 與 Split Tree，再**二次讀回**兩側 Tabs＋Layouts 核對是否發生併發變動；未通過時**不套用舊 UI 狀態，也不反寫 DB** | `6c5e3505a` → **`a7a673591`** |
+| D5-L Agent Session lifecycle | `WorkbenchRetiredResourceCleaner` 在 watcher 驅動的 Tab/Workspace 退役時只釋放本地畫面／編輯器，**不因來源 Tab 消失便停止仍存活的 Codex transcript watcher**。只有外部明確確認 PTY 已結束時，才可指定 `confirmedSessionExit:true` 清除追蹤；explicit close 仍由原本獨立清理流程處理 | `c0f1fa5c0` → **`9d420bf8d`** |
+
+**限制與後續**：二次讀回不是跨 Workspace 原子 Snapshot，也尚未有跨程序／跨視窗 PTY 最後擁有者 Lease；Host Crash 後 Store 已更新但 Session 不在記憶體、跨 App 重啟保留未知 Mutation Journal、Mobile 端相容、Agent watcher 確認退出後的最終清理與 Win/Mac 實機驗證仍需處理。Host `tab.transfer.capabilities.supported=false` **不變**。本輪只有 `rustfmt`、`dart format` 和 staged Git whitespace check；**沒有測試、Analyze、Build、push、release，沒有動原始 dirty `main`**。
 
 ## 最新：T2-D4 三線安全修正（2026-10-30；仍未啟用）
 

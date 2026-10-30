@@ -1,5 +1,7 @@
 # Alera TDD 架構重構總計畫（2026-10-29）
 
+> **最新：T2-D5 三線平行已整合（2026-10-30）**：Rust Store 限定轉移不能修改其他 Pane 的 Tab 順序和 Active Tab，來源未修剪 Pane 時亦禁止改動分割幾何 **`5b4d15db5`**；Dart Workbench 核對雙 Workspace 完整 Tab/Layout 並二次讀回避免舊快照反寫 **`a7a673591`**；來源 Tab watcher 退役不得當作 PTY Session Exit，保留 Codex 追蹤 **`9d420bf8d`**。**Host `tab.transfer.capabilities.supported=false` 不變，跨專案拖曳仍停用**；跨程序 Last-view Lease、Crash 中途轉移恢復、App 重啟 mutation journal、來源 Split Tree prune 比對、Mobile 相容、實際 Flutter/Cargo 編譯與 Win/Mac E2E 仍待做。來源獨立分支及限制見 `docs/terminal-tab-cross-workspace-plan-20261029.md`。本輪僅格式化＋Git whitespace check，未做測試、分析、編譯或發布。
+
 > 狀態：執行中。工作分支 `refactor/tdd-boundaries-20261029`，基準 `3501b05550f6ca476528ca63c3bb7673c444b985`。
 > 每次接手先讀此檔、`docs/refactor/tdd-progress-20261029.md` 與 `skills/alera-di-architecture/SKILL.md`，以進度文件中的下一個未完成驗收項目繼續。
 > 2026-10-29 第二批已將 Q0/G1/R1 各自獨立工作樹的 verified commits cherry-pick 至 `refactor/tdd-integrate-20261029`。第一批表格僅作歷史狀態，**現況請先讀進度檔最上方〈第二批三線平行〉**。
