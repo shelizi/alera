@@ -10,6 +10,22 @@ class const WorkspaceTabSummary({
 }) {
   bool get isTerminal => kind == 'terminal';
 
+  /// A present but null/wrongly typed transfer record is unresolved evidence,
+  /// not a never-transferred Tab. Do not fall back to legacy PTY termination.
+  bool get hasTransferEvidence =>
+      payload.containsKey('lastTerminalTabTransfer');
+
+  bool get hasMalformedTransferEvidence {
+    if (!hasTransferEvidence) return false;
+    final transfer = payload['lastTerminalTabTransfer'];
+    if (!isTerminal || transfer is! Map) return true;
+    for (final key in <String>['id', 'from', 'to', 'ptyInstanceToken']) {
+      final value = transfer[key];
+      if (value is! String || value.trim().isEmpty) return true;
+    }
+    return false;
+  }
+
   bool get hasManualTitle => payload['manualTitle'] == true;
 
   String get displayTitle {

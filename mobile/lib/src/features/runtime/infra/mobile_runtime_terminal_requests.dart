@@ -226,11 +226,11 @@ mixin MobileRuntimeTerminalRequests
     if (!tab.isTerminal) {
       throw StateError('Only terminal tabs have a PTY to terminate.');
     }
-    final transfer = tab.payload['lastTerminalTabTransfer'];
-    final receiptId = tab.observedTransferMutationId;
-    if (transfer is Map && receiptId == null) {
+    if (tab.hasTransferEvidence) {
+      // Terminating the process before a guarded tab.remove destroys the
+      // original PTY instance evidence; corrupt transfer metadata is worse.
       throw StateError(
-        'Terminal transfer receipt is invalid; refresh this tab before closing.',
+        'Transferred Terminal must close through the view-bound tab.remove transaction.',
       );
     }
     final sessionId = tab.terminalSessionId;
@@ -245,7 +245,6 @@ mixin MobileRuntimeTerminalRequests
       'sessionId': sessionId,
       'expectedWorkspaceId': tab.workspaceId,
       'expectedTabId': tab.id,
-      if (receiptId != null) 'expectedTransferMutationId': receiptId,
       'clientMutationId': mutationId,
     });
     _pendingTerminateMutationIds.remove(sessionId);

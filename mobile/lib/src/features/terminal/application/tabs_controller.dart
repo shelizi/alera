@@ -90,7 +90,12 @@ class TabsController extends _$TabsController {
   }
 
   Future<bool> closeTab(WorkspaceTabSummary tab) async {
-    if (tab.isTerminal && tab.payload['lastTerminalTabTransfer'] is Map) {
+    if (tab.hasMalformedTransferEvidence) {
+      throw StateError(
+        'The Terminal transfer receipt is malformed. Preserve this Tab and inspect its original Host record before closing.',
+      );
+    }
+    if (tab.isTerminal && tab.hasTransferEvidence) {
       // Capture the *original, already rendered* phone view before any await
       // or Host lookup. A background tab must first be opened and attached;
       // never manufacture an attachment solely to authorize its deletion.
@@ -136,7 +141,7 @@ class TabsController extends _$TabsController {
         if (client is MobileObservedTerminalTermination) {
           await (client as MobileObservedTerminalTermination)
               .terminateObservedTerminal(tab);
-        } else if (tab.payload['lastTerminalTabTransfer'] != null) {
+        } else if (tab.hasTransferEvidence) {
           throw StateError(
             'This Terminal moved to another workspace. Update the mobile client before closing it.',
           );
@@ -147,7 +152,7 @@ class TabsController extends _$TabsController {
         // Legacy never-moved tabs may already have an exited PTY; deleting
         // their durable tab still makes sense. A moved Terminal is different:
         // rejection can mean this window owns an obsolete transfer receipt.
-        if (tab.payload['lastTerminalTabTransfer'] != null) rethrow;
+        if (tab.hasTransferEvidence) rethrow;
       }
     }
     if (!ref.mounted) {

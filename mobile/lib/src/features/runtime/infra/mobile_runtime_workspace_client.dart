@@ -148,17 +148,16 @@ mixin MobileRuntimeWorkspaceClient
 
   @override
   Future<void> removeObservedTab(WorkspaceTabSummary tab) async {
-    final transfer = tab.payload['lastTerminalTabTransfer'];
-    final receiptId = tab.observedTransferMutationId;
-    if (transfer is Map && receiptId == null) {
+    if (tab.hasTransferEvidence) {
+      // The ordinary (unscoped) RPC has no attached per-view authorization.
+      // A malformed/null record must never be reinterpreted as legacy.
       throw StateError(
-        'Terminal transfer receipt is invalid; refresh this tab before closing.',
+        'Transferred Tab removal requires its original authenticated View lease and a valid receipt.',
       );
     }
     await request('tab.remove', <String, Object?>{
       'id': tab.id,
       'expectedWorkspaceId': tab.workspaceId,
-      if (receiptId != null) 'expectedTransferMutationId': receiptId,
     });
   }
 
@@ -175,7 +174,8 @@ mixin MobileRuntimeWorkspaceClient
       );
     }
     if (!tab.isTerminal ||
-        tab.payload['lastTerminalTabTransfer'] is! Map ||
+        !tab.hasTransferEvidence ||
+        tab.hasMalformedTransferEvidence ||
         expectedViewLeaseId.trim().isEmpty) {
       throw StateError('Moved Terminal requires an observed live mobile view.');
     }
