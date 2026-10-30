@@ -1,10 +1,26 @@
 # T2 — 跨專案／跨 Workspace Terminal Tab 移動：功能規劃與並行重構邊界
 
-**Priority：P2；Status：D11 三線已整合（Workbench click-time 原 UI View Lease Close、Host PTY Exit 保留轉移收據、Journal .lock Owner 身分稽核）；feature-gated OFF（2026-10-30）。** D1–D10 的安全修正全部保留。**跨專案拖放仍未開放；Flutter/Cargo 測試、靜態分析、編譯及實機回歸仍未執行。**
+**Priority：P2；Status：D12 三線已整合（Host 原 PTY 真正 Exit 的 SQLite CAS 證據、Journal 全筆唯讀中斷清單、Mobile 具名 View Attach/Detach/Restart 與受保護 Close）；feature-gated OFF（2026-10-30）。** D1–D11 的安全修正全部保留。**跨專案拖放仍未開放；Flutter/Cargo 測試、靜態分析、編譯及實機回歸仍未執行。**
 
 本文件原是 `feat/cross-project-terminal-tabs-20261029` 分支上的設計稿（commit `ec150a493`），現**只收編此規劃檔**至 `refactor/tdd-integrate-20261029`；未合併該舊分支的產品程式。原設計所記載的並行分工為 2026-10-29 第三批的歷史狀態；最新整合已包含第八批功能修正及 macOS Claude Code 貼上 hotfix。
 
-## 最新：T2-D11 三線程式碼已整合（2026-10-30；Capability 仍 OFF）
+## 最新：T2-D12 三線程式碼已整合（2026-10-30；Capability 仍 OFF）
+
+**Git**：D11 乾淨整合起點 `fff99a3c6`。三個之前已乾淨的 Worktree 分別切 `feat/t2-d12-exit-evidence-20261030`／`feat/t2-d12-journal-inventory-20261030`／`feat/t2-d12-mobile-view-20261030`，各一筆提交再不重疊 cherry-pick，D12 程式整合最後 **`62ce1d3b3`**。文件提交會讓 HEAD 再變，接手先重新查 `git log -1`、`git status`。
+
+| 工作線 | 實作／精確安全範圍 | Source → Integration |
+| --- | --- | --- |
+| H：真實原 PTY Exit Durable Evidence | 在 `rust/alera-core/src/runtime/store_tab_transfer.rs` 新增 `record_transferred_terminal_exit`，只接受 Host Actor **真正收到** 原 PTY Exit 的 `Session`、Workspace、Tab、receipt ID、`ptyInstanceToken` 全對上的值，SQLite 用原始 `payloadJson` CAS 寫 `lastTerminalTabExit`，含 Exit Code／UTC。Host status 在缺失或不再執行原 Session 時可回 `applied:false,recoveryRequired:true,reason:pty_exit_observed,exitCode`，以**已觀測正常退出**區分未知 Crash／missing PTY。這不是權威 Host Crash 成敗決定，也不允許重鑄／刪除 moved Tab | `60b1eb3d8` → **`f259d98df`** |
+| J：Journal Inventory 唯讀 | `FileWorkbenchTerminalTransferJournal.inspectRecoveryInventory()` 列出整個 pending 目錄，依 SHA256 檔名整合 `.json`／`.lock`，顯示有效 Tab／Client Mutation、錯誤 Hash／無法解析的 JSON、匹配本地 Archive、Lock metadata／PID／UTC，亦列出不合法檔名。檢查不持原子鎖，所有資訊僅是**當下可疑證據**，不會解鎖、復原、重試或宣告結果。原 `loadPending` 碰到 Lock 必須失敗的防護不變 | `0f50c913f` → **`535db1096`** |
+| M：手機有名 View 及 moved Close | 新版手機每個 `TerminalSessionController` 生成 24-byte crypto-random `viewLeaseId`，原 ID 沿用 Attach／Detach／Reconnect／Restart；Mobile Runtime Client 新窄介面不強迫 Legacy Fake 編譯升級，Host `restart_terminal` 會驗證 View 不屬另一 Client，重建 Session 後具名註冊。對搬移 Tab，`TabsController` 不再先 `terminate` 後 `tab.remove`；在任何 await 前向**已存在、成功附著**的手機 Controller 取得原 Token，經 `MobileObservedViewLeaseTabRemoval` 用原 Tab/Workspace/receipt/token 直接執行受 Host Actor 序列化的 `tab.remove`。缺憑證／未開啟 UI／不支援新 Port 仍拒絕，從不臨時新建視圖授權；未移轉 Tab 舊路徑維持 | `29a74ed32` → **`62ce1d3b3`** |
+
+**D13 仍未做**：不同 Native Window（包含未掛載 Surface）、不同 App/Device、多 Host Restart 的真正 durable Last-view Lease；Host crash 在 SQLite commit 和 in-memory Session owner 切換間的可靠補償與 definitive failure；已正常退出 moved PTY 的合法 Tab retire（目前保持收據）；跨程序可獨立驗證 liveness 的 Journal stale Lock 修復及 UX；真正手機多裝置和重連舊 socket 同時存活、Host watcher／Window 語意；完整 Cargo/Flutter Compile、Analyze、Tests、Win/Mac/Phone E2E。**正常退出 Marker ≠ 可刪 Tab 的憑證；PID ≠ 已確認持鎖者仍活著／已停止。**
+
+**嚴格開關與工作限制**：`tab.transfer.capabilities.supported=false` 保留。D12 僅執行 Rust/Dart 格式化和 Git whitespace check，沒有新增／執行 Tests、Analyzer、Cargo check、Build、實機 E2E、Push、Release，也沒有修改／reset／clean 原本 dirty `main`。下一輪由 `docs/refactor/feature-progress-20261029.md` 最上方 D12 接手 D13。
+
+**D12 最後安全追補**：Store 不覆寫 non-null malformed `lastTerminalTabExit`，保留原始有問題的持久資料以供確認，`3773a5512` → **`04aff070f`**；Journal Inventory 不跟隨 .json/.lock 符號連結、會標示具備這種檔名的非 File 異常物件，`e11d3d570` → **`37bbe6b03`**。兩者均不讓 Client 自動清退未知 Receipt 或 Lock。
+
+## 歷史：T2-D11 三線程式碼已整合（2026-10-30；Capability 仍 OFF）
 
 **Git**：從 D10 乾淨整合 `42b0deee2`，三個已乾淨 D10 工作樹各自切 `feat/t2-d11-host-lease-20261030`、`feat/t2-d11-journal-20261030`、`feat/t2-d11-workbench-close-20261030`。Host Exit、Dart Journal、Dart WorkbenchClose/Repo 分檔修改、各自提交再 cherry-pick 無衝突；程式碼整合 HEAD **`2ea227339`**（文件 Commit 後務必重新確認）。
 

@@ -1,6 +1,24 @@
 # Alera 功能優先續做：第八批四線隔離（2026-10-29）
 
-## 下一次對話／其他 Agent 最新交接入口：T2-D11（2026-10-30）
+## 下一次對話／其他 Agent 最新交接入口：T2-D12（2026-10-30）
+
+**唯一接續整合分支**：`refactor/tdd-integrate-20261029`（`.worktrees/refactor-tdd-integrate-20261029`）。從 D11 乾淨 HEAD **`fff99a3c66446b26eedf61bdc746821d846c30d3`** 起，重用三條 clean 隔離 Worktree 新切 `feat/t2-d12-exit-evidence-20261030`／`feat/t2-d12-journal-inventory-20261030`／`feat/t2-d12-mobile-view-20261030`。程式碼整合最後一筆 **`62ce1d3b3`**，文件 Commit 後會再往前，接手必須重新 `git status`、`git log -1`。原始 dirty `main` HEAD `3d232acff9822154c68049ee63c57ed5966b84e0` 保持不變，沒有 merge、reset、clean、push 或 release。
+
+**T2-D12 三條隔離來源碼工作線，分別獨立提交且已無衝突整合**：
+
+| 工作線 | 真正實作／不可越界聲稱的事項 | 來源 → 整合 |
+| --- | --- | --- |
+| D12-H Host/Store 原 PTY 退出持久證據 | `RuntimeStore.record_transferred_terminal_exit` 在 SQLite 交易裡驗證**當下 persisted Tab 的 Session ID、Workspace owner、最新轉移收據與原 `ptyInstanceToken`**，以原 `payloadJson` CAS 寫入 `payload.lastTerminalTabExit`（receipt ID、Session、Workspace、PTY token、Exit Code、UTC）。只在 Host `handle_session_exit` **真正收到原 Session 正常 Exit event** 才觸發，不能由缺失的 Host PTY 推論退出。 `tab.transfer.status` 對此精確證據回 `applied:false,recoveryRequired:true,reason:pty_exit_observed,exitCode`，與未觀測的 Host Crash／PTY Missing 分開；**絕不因此宣告移轉已確認、允許清 Journal 或刪 Tab**。原本 D11 退出保留持久 Receipt 不變 | `60b1eb3d8` → **`f259d98df`** |
+| D12-J Desktop Journal 唯讀復原清單 | `FileWorkbenchTerminalTransferJournal.inspectRecoveryInventory()` 逐一列出原本 `loadPending()` 遇第一筆 `.lock` 就會停住而看不到的其他 pending／Lock；可辨識合法 SHA256 檔名、無效檔名、JSON／Tab Hash 不符或損壞、原 Mutation ID、相符 local archive、Lock nonce metadata 有效性／標示 PID/UTC。**快照並非原子、只供稽核**；既有 `loadPending()` fail closed 不變，沒實作自動解除鎖、重播、清 Pending、Host 授權或失敗定論 | `0f50c913f` → **`535db1096`** |
+| D12-M Mobile 全鏈路 View Lease 與安全 Close | Mobile 真正來源在 `mobile/lib/`。新增可選 `MobileScopedTerminalViewLeaseClient` 及 `MobileObservedViewLeaseTabRemoval`，不變更既有 Legacy Fake 介面。每個手機 `TerminalSessionController` 使用 `Random.secure()` 產生 **24-byte 隨機 view ID**，Attach、重連、Detach、Restart 沿用；Host `restart_terminal` 驗證 ID 不屬別的 Client 並在新 Session 註冊具名 ID，舊 Client Restart 則繼續 unscoped。對已轉移 Tab，Mobile `TabsController.closeTab` 必須**當次點擊時已存在、已 attach 的 controller Lease**，直接送原 Tab/Workspace/Transfer Receipt/View ID 至 Host `tab.remove`；**不可先 `terminal.terminate`** 再移除，避免先殺原 PTY 破壞收據驗證。未 attach／舊版／不支援 narrow Port 一律安全拒絕，不補建 UI 來取得 Token。一般未移轉 Tab 沿用舊版流程 | `29a74ed32` → **`62ce1d3b3`** |
+
+**D13 尚未完成**：① Host crash 後 SQLite commit 與 live owner 失配時，現有觀測 Exit Marker **不能復活 PTY**，也不能對沒觀測到 Exit 的狀況當成確定失敗。需要權威 Host process-generation、補償／合法退休 exited transferred Tab。② 真正逐 OS Window 的 **mounted/unmounted/同 Engine/多程序** View 所有權，以及持久跨 Host restart/多裝置 Last-view Lease，目前仍只有單 Host Session 記憶體與 UI mounted 近似值。③ Journal 殘留 Lock 的 OS Process liveness 與安全的手動稽核／解鎖、Host 正式決定性解除和 UX 尚未做；D12 Inventory **不改寫**任何 pending。④ Mobile 舊版裝置、重連時舊 Socket 尚活、Multiple Phone、Terminal Watcher、正常／異常退出和跨 OS 真機須實驗；需要明確恢復 Flutter/Cargo 編譯、analyzer、測試與 Windows/macOS/Phone E2E 之後才可評估開 Gate。
+
+**限制嚴格沿用**：`rust/alera-cli/src/terminal_host/server/requests.rs` **`tab.transfer.capabilities.supported=false`** 不變、跨專案 Terminal 拖放仍不可用。這輪**只跑** `rustfmt`、`dart format`、`git diff --check`／`--cached --check`；**沒新增／執行 Cargo／Flutter tests、Cargo check、Flutter analyze、Build、Win/Mac/Phone E2E、Push 或 Release**。原始 dirty `main` 不動。下一輪依本文件與 `docs/terminal-tab-cross-workspace-plan-20261029.md` 的 D12 再開 D13 隔離工作線。
+
+**D12 安全審查追補**：若 `lastTerminalTabExit` 已存在非 Null 的損壞／異常證據，Store 現在也**拒絕覆寫**，避免毀損稽核資訊，來源 `3773a5512` → 整合 **`04aff070f`**。Journal 復原 Inventory 另外標示檔名像 `.json`／`.lock`、實際卻是**符號連結或資料夾等非一般 File** 的可疑項目，不跟隨或自動刪除，來源 `e11d3d570` → 整合 **`37bbe6b03`**。D12 文件整理前最新程式碼 HEAD **`37bbe6b03`**；文件 Commit 後必須重新查 HEAD。
+
+## 歷史：T2-D11 交接入口（2026-10-30）
 
 **唯一整合基準**：`refactor/tdd-integrate-20261029`，`.worktrees/refactor-tdd-integrate-20261029`。從 D10 乾淨 HEAD **`42b0deee2`** 出發，重用三個先前乾淨的隔離工作樹，分別新開 `feat/t2-d11-host-lease-20261030`／`feat/t2-d11-journal-20261030`／`feat/t2-d11-workbench-close-20261030`。D11 源碼最後整合 **`2ea227339`**，在開始編輯此文件前確定整合工作樹乾淨。**此文件提交後 HEAD 將改變，接手先查 `git log -1`、`git status`，不可使用舊 SHA 猜狀態**。原始 `main` HEAD `3d232acff` 的既有 dirty 檔案、history、xterm 和未追蹤測試資料不曾更改／reset／clean／merge。
 
