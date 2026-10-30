@@ -17,6 +17,12 @@ extension _XtermTerminalSessionSync on _XtermTerminalSessionHandle {
     final livePty = _ptySession;
     if (livePty is WorkspaceAwareTerminalPtySession) {
       livePty.updateDisplayWorkspaceId(workspace.id);
+      final receipt = tab.payload['lastTerminalTabTransfer'];
+      livePty.updateDisplayTransferMutationId(
+        receipt is Map && receipt['id'] is String
+            ? receipt['id'] as String
+            : null,
+      );
     }
     _syncTerminalPulseConfiguration(tab);
     _titleNotifier.value = displayTitle;

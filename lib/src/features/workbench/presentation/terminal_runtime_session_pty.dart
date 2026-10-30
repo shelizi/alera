@@ -37,6 +37,14 @@ extension _XtermTerminalSessionPty on _XtermTerminalSessionHandle {
         workspaceId: _workspace.id,
         tabId: _tab.id,
       );
+      if (session is WorkspaceAwareTerminalPtySession) {
+        final receipt = _tab.payload['lastTerminalTabTransfer'];
+        session.updateDisplayTransferMutationId(
+          receipt is Map && receipt['id'] is String
+              ? receipt['id'] as String
+              : null,
+        );
+      }
       final generation = ++_ptyGeneration;
       final sub = session.events.listen(
         (event) => _handlePtySessionEvent(event, generation),

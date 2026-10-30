@@ -315,6 +315,7 @@ final class SocketTerminalHostClient._(
     String sessionId, {
     String? expectedWorkspaceId,
     String? expectedTabId,
+    String? expectedTransferMutationId,
   }) async {
     final clientMutationId = _pendingTerminateMutationIds.putIfAbsent(
       sessionId,
@@ -326,6 +327,8 @@ final class SocketTerminalHostClient._(
       if (expectedWorkspaceId != null)
         'expectedWorkspaceId': expectedWorkspaceId,
       if (expectedTabId != null) 'expectedTabId': expectedTabId,
+      if (expectedTransferMutationId != null)
+        'expectedTransferMutationId': expectedTransferMutationId,
     });
     _pendingTerminateMutationIds.remove(sessionId);
   }

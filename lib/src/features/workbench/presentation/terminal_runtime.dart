@@ -317,6 +317,9 @@ abstract interface class RecoverableTerminalPtySession
 abstract interface class WorkspaceAwareTerminalPtySession
     implements TerminalPtySession {
   void updateDisplayWorkspaceId(String workspaceId);
+
+  /// Last Host transfer revision seen by this view; not queried at close.
+  void updateDisplayTransferMutationId(String? clientMutationId);
 }
 
 /// A backend that can queue the submit CR as its own delayed write, kept

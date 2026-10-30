@@ -74,6 +74,15 @@ final class TerminalHostPtySession._(
     }
   }
 
+  String? _observedTransferMutationId;
+
+  @override
+  void updateDisplayTransferMutationId(String? clientMutationId) {
+    if (!_disposed) {
+      _observedTransferMutationId = clientMutationId;
+    }
+  }
+
   final StreamController<TerminalPtySessionEvent> _events =
       StreamController<TerminalPtySessionEvent>.broadcast();
 
@@ -485,6 +494,7 @@ final class TerminalHostPtySession._(
             _sessionId,
             expectedWorkspaceId: _workspaceId,
             expectedTabId: _tabId,
+            expectedTransferMutationId: _observedTransferMutationId,
           )
           .catchError((_) {}),
     );

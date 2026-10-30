@@ -184,12 +184,63 @@ class _ProjectWorkbenchSidebarState
                                             'Source Terminal workspace no longer exists.',
                                           );
                                         }
-                                        final receiptId = await controller
-                                            .transferTerminalTab(
-                                              source: source,
-                                              destination: destination,
-                                              tabId: data.tabId,
-                                            );
+                                        final String receiptId;
+                                        try {
+                                          receiptId = await controller
+                                              .transferTerminalTab(
+                                                source: source,
+                                                destination: destination,
+                                                tabId: data.tabId,
+                                              );
+                                        } on TerminalTransferOutcomeUnknownException {
+                                          if (!mounted) return;
+                                          // Timeout/disconnect is *not*
+                                          // failure. The original mutation
+                                          // may already have committed.
+                                          ScaffoldMessenger.maybeOf(
+                                            context,
+                                          )?.showSnackBar(
+                                            SnackBar(
+                                              duration: const Duration(
+                                                seconds: 20,
+                                              ),
+                                              content: const Text(
+                                                'Terminal move status is unknown. '
+                                                'Do not move or close the tab until the Host confirms its current workspace.',
+                                              ),
+                                              action: SnackBarAction(
+                                                label: 'Check status',
+                                                onPressed: () {
+                                                  unawaited(
+                                                    controller
+                                                        .confirmUnknownTerminalTransfer(
+                                                          data.tabId,
+                                                        )
+                                                        .then<void>((
+                                                          confirmed,
+                                                        ) {
+                                                          if (!mounted) return;
+                                                          AleraToast.publish(
+                                                            message: confirmed
+                                                                ? 'Host confirmed the Terminal move and both layouts were refreshed.'
+                                                                : 'No pending Terminal move was found.',
+                                                          );
+                                                        })
+                                                        .catchError((
+                                                          Object error,
+                                                        ) {
+                                                          AleraToast.publish(
+                                                            message:
+                                                                'Terminal status is still unknown: $error',
+                                                          );
+                                                        }),
+                                                  );
+                                                },
+                                              ),
+                                            ),
+                                          );
+                                          return;
+                                        }
                                         if (!mounted) return;
                                         ScaffoldMessenger.maybeOf(
                                           context,
