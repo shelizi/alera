@@ -1,10 +1,23 @@
 # T2 — 跨專案／跨 Workspace Terminal Tab 移動：功能規劃與並行重構邊界
 
-**Priority：P2；Status：D5/D5+ pane integrity, scoped multi-view close, durable unknown-intent journal and Mobile observed close integrated; feature-gated OFF（2026-10-30）。** 已合入 D1–D4 及兩組互補 D5 功能安全修正。**跨專案拖放仍未開放；Flutter/Cargo 測試、靜態分析、編譯及實機回歸仍未執行。**
+**Priority：P2；Status：D6 四線已整合（跨程序 Journal 排他建立、來源 Pane 精確剪枝、Desktop 移轉收據關閉）；feature-gated OFF（2026-10-30）。** 先前 D1–D5+ 的功能安全修正全部保留。**跨專案拖放仍未開放；Flutter/Cargo 測試、靜態分析、編譯及實機回歸仍未執行。**
 
 本文件原是 `feat/cross-project-terminal-tabs-20261029` 分支上的設計稿（commit `ec150a493`），現**只收編此規劃檔**至 `refactor/tdd-integrate-20261029`；未合併該舊分支的產品程式。原設計所記載的並行分工為 2026-10-29 第三批的歷史狀態；最新整合已包含第八批功能修正及 macOS Claude Code 貼上 hotfix。
 
-## 最新：T2-D5+ 追加三條平行安全工作線（2026-10-30；Capability 仍 OFF）
+## 最新：T2-D6 四條平行安全工作線已整合（2026-10-30；Capability 仍 OFF）
+
+從**乾淨整合基準 `6bdb0cbb837de2a0c2e6d9c54435d54ed7e9e12d`**，重用四個確認乾淨的既有 Worktree 分別建立獨立 D6 分支（避免 Windows/Dropbox 大型重新檢出），各線獨立格式化、Git staged whitespace check、提交，然後依序 cherry-pick 回 `refactor/tdd-integrate-20261029`，沒有 Git 衝突。
+
+| 線路 | 已修改、實際保證 | 獨立提交 → 整合提交 |
+| --- | --- | --- |
+| D6-H：Host `tab.remove` 強制轉移收據 | **所有**已轉移 Terminal 的序列化移除請求都要攜帶與持久化 `lastTerminalTabTransfer.id` 相符的 `expectedTransferMutationId`，不再只因 Workspace ID 相同便允許舊 Desktop 視窗刪除（防 A→B→A）。未移轉的 legacy Tab 保持原契約 | `19a9c3dd0` → **`8a9e78d83`** |
+| D6-S：Rust Store 精確 Pane 剪枝 | 來源 Pane 消失時，重算 `WorkbenchLayoutNode.pruneGroups`：只允許移除空群組並提升原本的存活子樹；保留其他 Split 的 axis/ratio、剩餘 Pane 與 activeGroupId，不准暗中改變布局；最後一個來源 Pane 則必須變成空的預設 Pane | `7ea2bf150` → **`74f8062a9`** |
+| D6-J：Desktop 未決 Journal 原子建立 | `FileWorkbenchTerminalTransferJournal.remember` 由 `exists + temp.rename` 改為檔案系統 `File.create(exclusive:true)`，競爭的另一個 App 程序不得覆寫相同 Tab 的原 Mutation ID。中斷時保留損壞或空 Journal 供安全拒絕，不當成未送出操作 | `b16c0b58` → **`dd71d3401`** |
+| D6-C：Desktop Close 使用「視圖所見」收據 | `WorkbenchTabCloseCoordinator` 從使用者原始 Tab Snapshot 傳收據；`WorkspaceTabService`／Runtime repository 使用可選 observed close port 將相同 Workspace／Receipt 傳給 Host `tab.remove`，含 timeout/disconnect 的同一操作重送。Fake/舊 repository 不支援搬移後 Close 時安全拒絕，不會在 Close 前偷讀最新收據 | `b63c637d1` → **`c23dd4189`** |
+
+**仍未完成且不可啟用**：這次的 Journal 排他建立只防**同機同路徑**的原操作覆寫，**不是跨程序／跨機器 PTY lease**；Host Crash 後 SQLite 已提交、live Session 已消失的復原／拒絕結果的 Journal 安全清理 UX、Attach/Detach/Close 跨程序最後視圖協調，以及完整的 Windows/macOS 多程序實測尚未解決。Rust Store/Client 仍**沒有** Flutter/Cargo 編譯、測試／靜態分析或實機通過證據，不能將 `tab.transfer.capabilities.supported` 設為 true。原始 dirty `main` 未更動、未 push、未 release。以下 D5+ 文件為歷史實作範圍，遇到衝突以 D6 本節為準。
+
+## 歷史：T2-D5+ 追加三條平行安全工作線（2026-10-30；Capability 仍 OFF）
 
 從最新乾淨整合 `7b7b3b877` 重用三個乾淨隔離 worktree，各切新 D5 branch。實作期間另一組 D5 Store／Workbench／Agent watcher 修正已合入 `0b95fbf7b`；確認**變更檔案互不重疊**後，將本組三個提交 cherry-pick 到該最新整合分支，無衝突。
 

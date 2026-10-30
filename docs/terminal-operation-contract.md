@@ -12,6 +12,12 @@ Keyed `terminal.terminate` requests use the `terminalHostIdempotencyReceipts` ta
 
 View and attachment state is per client and ephemeral: `output_paused_clients`, `output_resync_pending_clients`, and `delivered_output_cursors` live on the session, and `dispose_client` detaches a disconnected client from every session without touching the PTY.
 
+## T2-D6: transferred Desktop Tab close is receipt-bound (2026-10-30)
+
+An explicit Workbench Tab close uses the **Tab record captured by the closing view**, including the original observed `lastTerminalTabTransfer.id`, and sends both `expectedWorkspaceId` and `expectedTransferMutationId` to Host `tab.remove`. The same snapshot and receipt are reused for a request timeout/disconnect retry. A serialized `tab.remove` for *any previously transferred Terminal* **rejects a missing receipt**, not only a mismatched supplied receipt. This blocks stale Desktop A→B→A removal while preserving old behavior for never-transferred Tabs. Legacy repositories that cannot carry an observed receipt fail closed on moved terminals. The earlier D5+ optional-receipt wording is superseded.
+
+The new Store exact-pane-prune guard and local Journal exclusive file claim do **not** make active PTY ownership a cross-process lease: Host restart, pending attach/detach/close and crash between SQLite commit and Session reparenting still need defined conservative recovery. The Host advertises `tab.transfer.capabilities.supported=false` throughout D6; no Flutter/Cargo compilation, regression tests, platform E2E, push or release were performed.
+
 ## T2-D5+: moved PTY multi-client termination and Mobile observed owner (2026-10-30)
 
 For a Terminal with a persisted `lastTerminalTabTransfer` receipt, `terminate` still requires current `expectedWorkspaceId`, `expectedTabId`, and latest **observed** `expectedTransferMutationId`. D5+ also rejects an explicit termination if any other Host client remains in `Session.clients`; the old window must first detach the other view. `tab.remove` is additionally preflighted **on the Actor before its queued background deletion**, rejecting a transferred live Session with multiple attached clients. The source record is not removed on this refusal.

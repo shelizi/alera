@@ -1,5 +1,11 @@
 # Alera 功能優先續做：第八批四線隔離（2026-10-29）
 
+## 最新：T2-D6 四條安全工作線已平行提交、整合（2026-10-30）
+
+從乾淨 `6bdb0cbb8` 重用四個既有 Worktree，各切隔離分支：**Host** 已轉移 Tab 的 `tab.remove` 強制持有原視圖最新收據 `8a9e78d83`；**Rust Store** 來源 Pane 刪除時限定精確 Split Tree 剪枝與 active Group `74f8062a9`；**Desktop Journal** `File.create(exclusive:true)` 原子佔有同一 Tab 的持久未決操作檔 `dd71d3401`；**Workbench Desktop Close** 從關閉時捕捉的原始 Tab Snapshot 傳同一 Workspace/Receipt 給 Host，timeout 重送不偷更新收據 `c23dd4189`。各線源提交 `19a9c3dd0`／`7ea2bf150`／`b16c0b58`／`b63c637d1`，四線 cherry-pick 全部成功且無衝突。
+
+**仍不可用：`tab.transfer.capabilities.supported=false` 保持不變。** 排他 Journal 不等於跨程序 Host lease；Host crash 中途提交、跨程序 PTY 最後一個視圖與不明結果紀錄的安全解除仍是阻擋。依先前指示僅執行 `rustfmt`、`dart format`、Git staged whitespace check，**沒有** Flutter/Cargo 測試、Analyzer、Build、實機驗證、Push 或 Release。原始 dirty `main` 未動。完整交接見 `docs/terminal-tab-cross-workspace-plan-20261029.md` 最新 D6。
+
 ## 最新：T2-D5+ 三線平行已合入（2026-10-30）
 
 另一組 D5 已將 Rust Store／Workbench readback／Agent watcher 完成並合入 `0b95fbf7b`。本輪在 D4 基準 `7b7b3b877` 上隔離並行處理不同檔案，再合入最新整合：Rust Host **移轉後多視圖終止／Tab Remove 防護＋可選收據 ABA 比對** `32f365b79`、Desktop **重啟仍保存原 transfer mutation 的 App Support Journal** `db7eca96b`、Mobile **觀察時的 Workspace/Tab/收據 scoped close 與失敗安全停止** `ea881429b`。獨立來源為 `bcd7f7cb0`、`1e85f25a1`、`bef757b7d`；三線提交／cherry-pick 無衝突。

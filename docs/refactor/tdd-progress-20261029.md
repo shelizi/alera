@@ -4,6 +4,12 @@
 > 讀取 `docs/refactor/tdd-roadmap-20261029.md` 了解契約/驗收，然後從下列 pending/in_progress 工作續做。
 > 變更只在隔離整合 worktree；最新 macOS hotfix 來源分支目前與 `main` HEAD 指向同一提交，已依使用者要求將此 hotfix 分支合入整合分支，但沒有在原 `main` worktree 做修改、push 或 release。
 
+## 最新：T2-D6 四線安全防護已整合（2026-10-30，Capability OFF）
+
+以乾淨整合 `6bdb0cbb837de2a0c2e6d9c54435d54ed7e9e12d` 分四個乾淨舊工作樹、不同檔案平行做：Host 已轉移 Tab `tab.remove` **強制** `expectedTransferMutationId` `8a9e78d83`；Rust Store Source Split Tree 精確剪枝不擾動剩餘 Pane `74f8062a9`；File Journal 同一 Tab 跨 App 程序排他建立 `dd71d3401`；Desktop 關閉依 UI 捕捉的 Tab Snapshot 帶收據、不重查最新、失聯重送相同收據 `c23dd4189`。四線皆獨立提交與 cherry-pick 無衝突；來源是 `19a9c3dd0`、`7ea2bf150`、`b16c0b58`、`b63c637d1`。
+
+**T2 仍停用：Host `tab.transfer.capabilities.supported=false`**；跨程序 Last-view Lease、Host Crash 後 SQLite/live PTY 不一致恢復、未決 Journal 安全清理／機制與跨平台驗證仍待做。僅格式化、Git staged whitespace check，**未執行測試、Analyzer、Cargo check、Build、實機、push 或 release**；原始 dirty `main` 未操作。具體範圍及歷史交接見 `docs/terminal-tab-cross-workspace-plan-20261029.md` D6。
+
 ## 最新：T2-D5+ 多視窗／Journal／Mobile 三線安全補強（2026-10-30，仍停用）
 
 以乾淨整合 `7b7b3b877` 起，重用三個隔離工作樹建 D5 分支，分工不重疊。工作中其他並行線先合入 `0b95fbf7b`（Store pane／Workbench double-read／Agent watcher），本組在其後依序整合 Rust Host 多 attached client `terminate` 拒絕、`tab.remove` actor preflight 與可選轉移收據 ABA guard **`32f365b79`**、App Support Directory 持久原 Transfer Plan／失聯重啟 fail-closed Journal **`db7eca96b`**、Mobile 基於所見 Tab 的 Workspace／最後收據限定關閉與拒絕後停止刪除 **`ea881429b`**。
