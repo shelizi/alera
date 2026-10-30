@@ -13,7 +13,8 @@ class const WorkspaceTabSummary({
   /// A present but null/wrongly typed transfer record is unresolved evidence,
   /// not a never-transferred Tab. Do not fall back to legacy PTY termination.
   bool get hasTransferEvidence =>
-      payload.containsKey('lastTerminalTabTransfer');
+      payload.containsKey('lastTerminalTabTransfer') ||
+      payload.containsKey('lastTerminalTabExit');
 
   bool get hasMalformedTransferEvidence {
     if (!hasTransferEvidence) return false;
@@ -22,6 +23,18 @@ class const WorkspaceTabSummary({
     for (final key in <String>['id', 'from', 'to', 'ptyInstanceToken']) {
       final value = transfer[key];
       if (value is! String || value.trim().isEmpty) return true;
+    }
+    if (payload.containsKey('lastTerminalTabExit')) {
+      final exit = payload['lastTerminalTabExit'];
+      final sessionId = terminalSessionId;
+      if (exit is! Map ||
+          exit['transferMutationId'] != transfer['id'] ||
+          exit['ptyInstanceToken'] != transfer['ptyInstanceToken'] ||
+          exit['workspaceId'] != transfer['to'] ||
+          exit['sessionId'] != sessionId ||
+          exit['exitCode'] is! int) {
+        return true;
+      }
     }
     return false;
   }
