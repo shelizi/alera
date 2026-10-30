@@ -22,7 +22,11 @@ final class WorkbenchTabCloseCoordinator {
     required WorkbenchTabCloseSnapshot snapshot,
   }) async {
     for (final tabId in snapshot.closedTabIds) {
-      if (_tabStore is WorkbenchScopedTabCloseStore) {
+      final closedTab = snapshot.closingTabs[tabId];
+      if (closedTab != null && _tabStore is WorkbenchObservedTabCloseStore) {
+        await (_tabStore as WorkbenchObservedTabCloseStore)
+            .closeObservedTabInWorkspace(closedTab, workspace.id);
+      } else if (_tabStore is WorkbenchScopedTabCloseStore) {
         await (_tabStore as WorkbenchScopedTabCloseStore).closeTabInWorkspace(
           tabId,
           workspace.id,
@@ -30,7 +34,6 @@ final class WorkbenchTabCloseCoordinator {
       } else {
         await _tabStore.closeTab(tabId);
       }
-      final closedTab = snapshot.closingTabs[tabId];
       if (closedTab != null) {
         await _hostedReviewRetention.releaseTab(workspace, closedTab);
       }

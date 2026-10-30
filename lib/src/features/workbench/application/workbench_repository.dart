@@ -16,6 +16,16 @@ abstract interface class WorkbenchScopedTabRemovalRepository {
   );
 }
 
+/// An optional repository capability for scope- and receipt-bound closes.
+/// Legacy repositories may close unchanged tabs but must fail closed when
+/// they do not know how to authorize a previously transferred Terminal.
+abstract interface class WorkbenchObservedTabRemovalRepository {
+  Future<void> removeObservedWorkspaceTabForWorkspace(
+    WorkspaceTabRecord observedTab,
+    String expectedWorkspaceId,
+  );
+}
+
 abstract interface class WorkbenchRepository
     implements
         WorkbenchLayoutRepository,

@@ -18,6 +18,7 @@ class WorkspaceTabService._(
 ) implements
     WorkbenchTabCloseStore,
     WorkbenchScopedTabCloseStore,
+    WorkbenchObservedTabCloseStore,
     WorkbenchWorkspaceSelectionTabStore {
   factory({
     required WorkbenchRepository repository,
@@ -136,6 +137,31 @@ class WorkspaceTabService._(
       return repository.removeWorkspaceTabForWorkspace(tabId, workspaceId);
     }
     return repository.removeWorkspaceTab(tabId);
+  }
+
+  @override
+  Future<void> closeObservedTabInWorkspace(
+    WorkspaceTabRecord observedTab,
+    String expectedWorkspaceId,
+  ) {
+    if (observedTab.workspaceId != expectedWorkspaceId) {
+      throw StateError('Tab close snapshot belongs to a different workspace.');
+    }
+    final repository = _repository;
+    if (repository is WorkbenchObservedTabRemovalRepository) {
+      return repository.removeObservedWorkspaceTabForWorkspace(
+        observedTab,
+        expectedWorkspaceId,
+      );
+    }
+    if (observedTab.kind == WorkspaceTabKind.terminal &&
+        observedTab.payload['lastTerminalTabTransfer'] is Map) {
+      throw StateError(
+        'This repository cannot safely close a moved Terminal. '
+        'Refresh it with a transfer-aware Host client.',
+      );
+    }
+    return closeTabInWorkspace(observedTab.id, expectedWorkspaceId);
   }
 
   Future<WorkspaceTabRecord> renameTab({
