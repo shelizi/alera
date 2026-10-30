@@ -197,6 +197,14 @@ void _registerTerminalHostClientRuntimeMutationTests() {
       ),
     );
 
-    expect(server.requestTypes.where((type) => type == 'tab.upsert').length, 2);
+    // The 70ms deadline leaves only 20ms after the 50ms retry pause. On a
+    // contended CI runner, the second request may miss the deadline entirely:
+    // the contract is an upper bound, not an exact number of socket writes.
+    // The preceding test separately proves a busy response is retried when
+    // sufficient time is available.
+    expect(
+      server.requestTypes.where((type) => type == 'tab.upsert').length,
+      inInclusiveRange(1, 2),
+    );
   });
 }
