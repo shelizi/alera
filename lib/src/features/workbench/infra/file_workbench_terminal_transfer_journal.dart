@@ -9,10 +9,11 @@ import 'package:path/path.dart' as p;
 import 'package:uuid/uuid.dart';
 
 final class _TerminalTransferJournalLock {
-  const _TerminalTransferJournalLock(this.file, this.nonce);
+  const _TerminalTransferJournalLock(this.file, this.nonce, this.tabIdHash);
 
   final File file;
   final String nonce;
+  final String tabIdHash;
 }
 
 /// A diagnostic snapshot, never a release permission. A surviving .lock may
@@ -91,9 +92,38 @@ final class FileWorkbenchTerminalTransferJournal
   static const int _lockVersion = 1;
   final Future<Directory> Function() _supportDirectory;
 
+  /// The pending and audit roots must be actual directories, not links to
+  /// locations outside the app Support Directory. This is a conservative
+  /// type check, not a filesystem race-free proof against hostile writers.
+  Future<void> _requireRealDirectoryOrAbsent(Directory folder) async {
+    final type = await FileSystemEntity.type(folder.path, followLinks: false);
+    if (type != FileSystemEntityType.directory &&
+        type != FileSystemEntityType.notFound) {
+      throw StateError(
+        'Terminal transfer evidence directory is not a real directory: '
+        '${folder.path}. Preserve it and investigate manually.',
+      );
+    }
+  }
+
+  Future<void> _requireOrdinaryFileOrAbsent(File file) async {
+    final type = await FileSystemEntity.type(file.path, followLinks: false);
+    if (type != FileSystemEntityType.file &&
+        type != FileSystemEntityType.notFound) {
+      throw StateError(
+        'Terminal transfer evidence is not an ordinary file: '
+        '${file.path}. Refusing to follow a link or remove it.',
+      );
+    }
+  }
+
   Future<Directory> _folder() async {
     final support = await _supportDirectory();
-    return Directory(p.join(support.path, 'terminal_transfer_pending_v1'));
+    final folder = Directory(
+      p.join(support.path, 'terminal_transfer_pending_v1'),
+    );
+    await _requireRealDirectoryOrAbsent(folder);
+    return folder;
   }
 
   Future<File> _fileFor(String tabId) async {
@@ -111,9 +141,11 @@ final class FileWorkbenchTerminalTransferJournal
       utf8.encode(jsonEncode(<String>[plan.tabId, plan.clientMutationId])),
     );
     final support = await _supportDirectory();
-    return File(
-      p.join(support.path, 'terminal_transfer_resolved_v1', '$key.json'),
+    final folder = Directory(
+      p.join(support.path, 'terminal_transfer_resolved_v1'),
     );
+    await _requireRealDirectoryOrAbsent(folder);
+    return File(p.join(folder.path, '$key.json'));
   }
 
   /// The .lock sentinel serializes both remember and forget across apps
@@ -122,6 +154,8 @@ final class FileWorkbenchTerminalTransferJournal
   Future<_TerminalTransferJournalLock> _acquireTabLock(String tabId) async {
     final lock = await _lockFor(tabId);
     await lock.parent.create(recursive: true);
+    await _requireRealDirectoryOrAbsent(lock.parent);
+    await _requireOrdinaryFileOrAbsent(lock);
     try {
       await lock.create(exclusive: true);
     } on FileSystemException {
@@ -135,25 +169,27 @@ final class FileWorkbenchTerminalTransferJournal
       rethrow;
     }
     final nonce = const Uuid().v4();
+    final tabIdHash = sha256.convert(utf8.encode(tabId)).toString();
     // If this flush fails, leave the existing exclusive sentinel in place.
     // An empty/partial lock is unknown, not evidence that it is abandoned.
     await lock.writeAsString(
       jsonEncode(<String, Object?>{
         'version': _lockVersion,
-        'tabIdHash': sha256.convert(utf8.encode(tabId)).toString(),
+        'tabIdHash': tabIdHash,
         'nonce': nonce,
         'processId': pid,
         'createdAtUtc': DateTime.now().toUtc().toIso8601String(),
       }),
       flush: true,
     );
-    return _TerminalTransferJournalLock(lock, nonce);
+    return _TerminalTransferJournalLock(lock, nonce, tabIdHash);
   }
 
   /// Refuse to delete a lock whose identity changed under this process.
   /// Not a durable lease: a privileged external writer could still race the
   /// check, so an interrupted lock remains a manual-recovery condition.
   Future<void> _releaseTabLock(_TerminalTransferJournalLock owned) async {
+    await _requireOrdinaryFileOrAbsent(owned.file);
     final Object? decoded;
     try {
       decoded = jsonDecode(await owned.file.readAsString());
@@ -166,6 +202,7 @@ final class FileWorkbenchTerminalTransferJournal
     if (decoded is! Map ||
         decoded['version'] != _lockVersion ||
         decoded['nonce'] != owned.nonce ||
+        decoded['tabIdHash'] != owned.tabIdHash ||
         decoded['processId'] != pid) {
       throw StateError(
         'Terminal transfer journal lock owner changed; refusing deletion.',
@@ -185,6 +222,12 @@ final class FileWorkbenchTerminalTransferJournal
     String expectedHash,
   ) async {
     try {
+      if (await FileSystemEntity.type(lock.path, followLinks: false) !=
+          FileSystemEntityType.file) {
+        // An operator-visible symlink must not be followed to parse a
+        // potentially unrelated user's process ID.
+        return (valid: false, ownerPid: null, created: null);
+      }
       final data = jsonDecode(await lock.readAsString());
       if (data is! Map ||
           data['version'] != _lockVersion ||
@@ -270,16 +313,17 @@ final class FileWorkbenchTerminalTransferJournal
       }
       var localConfirmedArchive = false;
       if (plan != null) {
-        final archive = await _resolutionFor(plan);
-        if (await archive.exists()) {
-          try {
+        try {
+          final archive = await _resolutionFor(plan);
+          if (await FileSystemEntity.type(archive.path, followLinks: false) ==
+              FileSystemEntityType.file) {
             localConfirmedArchive = _samePlan(
               await _readResolution(archive),
               plan,
             );
-          } on Object {
-            // A corrupt archive is not proof of successful reconciliation.
           }
+        } on Object {
+          // An unsafe root, symlink, or corrupt archive cannot prove success.
         }
       }
       result.add(
@@ -351,14 +395,19 @@ final class FileWorkbenchTerminalTransferJournal
   ) async {
     final lock = await _lockFor(tabId);
     final pending = await _fileFor(tabId);
-    final lockPresent = await lock.exists();
-    final lockEvidence = lockPresent
+    final lockType = await FileSystemEntity.type(lock.path, followLinks: false);
+    final lockPresent = lockType != FileSystemEntityType.notFound;
+    final lockEvidence = lockType == FileSystemEntityType.file
         ? await _inspectLock(lock, tabId)
         : (valid: false, ownerPid: null, created: null);
-    if (!await pending.exists()) {
+    final pendingType = await FileSystemEntity.type(
+      pending.path,
+      followLinks: false,
+    );
+    if (pendingType != FileSystemEntityType.file) {
       return TerminalTransferJournalRecoveryInspection(
         lockPresent: lockPresent,
-        pendingPresent: false,
+        pendingPresent: pendingType != FileSystemEntityType.notFound,
         pendingReadable: false,
         localConfirmedArchive: false,
         lockOwnerProcessId: lockEvidence.ownerPid,
@@ -384,13 +433,14 @@ final class FileWorkbenchTerminalTransferJournal
       );
     }
     var localConfirmedArchive = false;
-    final archive = await _resolutionFor(plan);
-    if (await archive.exists()) {
-      try {
+    try {
+      final archive = await _resolutionFor(plan);
+      if (await FileSystemEntity.type(archive.path, followLinks: false) ==
+          FileSystemEntityType.file) {
         localConfirmedArchive = _samePlan(await _readResolution(archive), plan);
-      } on Object {
-        // Corrupt archives provide no evidence that the lock may be removed.
       }
+    } on Object {
+      // Invalid archive path/data is not a verified Host decision.
     }
     return TerminalTransferJournalRecoveryInspection(
       lockPresent: lockPresent,
@@ -454,6 +504,8 @@ final class FileWorkbenchTerminalTransferJournal
     try {
       final file = await _fileFor(plan.tabId);
       await file.parent.create(recursive: true);
+      await _requireRealDirectoryOrAbsent(file.parent);
+      await _requireOrdinaryFileOrAbsent(file);
       // A contains()/rename() check is not an inter-process mutex: two
       // desktop windows may both observe "no file", then rename their own
       // mutation journals onto the same Tab, losing one original receipt.
@@ -490,6 +542,8 @@ final class FileWorkbenchTerminalTransferJournal
     try {
       final file = await _fileFor(plan.tabId);
       final resolution = await _resolutionFor(plan);
+      await _requireOrdinaryFileOrAbsent(file);
+      await _requireOrdinaryFileOrAbsent(resolution);
       if (await file.exists()) {
         final saved = _decode(await file.readAsString(), file.path);
         if (!_samePlan(saved, plan)) {
@@ -501,6 +555,8 @@ final class FileWorkbenchTerminalTransferJournal
         // This local archive is NOT a signed Host receipt. Archive before
         // deleting pending data: an interruption leaves inspectable evidence.
         await resolution.parent.create(recursive: true);
+        await _requireRealDirectoryOrAbsent(resolution.parent);
+        await _requireOrdinaryFileOrAbsent(resolution);
         if (!await resolution.exists()) {
           await resolution.create(exclusive: true);
           await resolution.writeAsString(
