@@ -18,6 +18,8 @@
 
 **嚴格不變**：Host `tab.transfer.capabilities.supported=false`，不啟用真正拖放；只執行 Rust/Dart 格式化與 Git whitespace check，不新增／執行 Flutter/Cargo Tests、Analyzer、Build 或實機 E2E，不 push、release、merge/reset/clean dirty `main`。下一輪讀 `docs/refactor/feature-progress-20261029.md` 最上方 D10 與本文件 D10，重新查 HEAD，再從 D11 未完成項目繼續。
 
+**D10 UI 補正**：原始收據衝突與持久 owner 不一致同屬 `recoveryRequired`，不能誤寫「Host 一定已保存原移轉收據」。RuntimePort 註解與 Sidebar 未決警示已修改，獨立來源 `e38e0c9c7` → 整合 **`c7def499b`**。仍保留原 Mutation、Journal 與操作阻擋；沒有宣告確定成功／失敗。
+
 ## 歷史：T2-D9 三條隔離安全工作線已整合（2026-10-30；Capability 仍 OFF）
 
 **Git**：從整合乾淨基準 `632f1429b`，重用三個 D8 工作樹新切 `feat/t2-d9-owner-close-20261030`／`feat/t2-d9-pty-remint-20261030`／`feat/t2-d9-audited-journal-20261030`。各線 owner 原封不動，只寫 Host Close／Host Spawn + Transfer／Dart Journal 的分離檔案；獨立提交後無衝突 cherry-pick，追加 Host Receipt Cascade 修正，原始碼整合最後 HEAD `75161c9bf`（此文件提交後還會更動，務必重新核對）。

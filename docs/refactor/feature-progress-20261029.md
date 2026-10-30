@@ -16,6 +16,8 @@
 
 **沿用既有限制**：Host `tab.transfer.capabilities.supported=false` 不變，跨專案 Terminal 拖放未開放；本批只跑 `rustfmt`、`dart format`、`git diff --check`／staged check，**沒有執行 Flutter/Cargo test、Analyzer、Cargo check、Build、實機 E2E、Push、Release**。Rust/Dart 既有 Fake／Test 檔案僅按新欄位更新定義，**未執行測試**。原始 dirty `main` 未碰，三線各自提交後 cherry-pick 至整合，沒有衝突。下一輪按 `docs/terminal-tab-cross-workspace-plan-20261029.md` 最上方 D10 入口進行 D11。
 
+**D10-C 後續 UI 補正已整合**：`tab.transfer.status` 的 `recoveryRequired:true` 可能是 `receipt_conflict`、`persisted_owner_inconsistent` 或原 PTY 消失，不可一律提示原交易「已儲存收據」。Desktop Sidebar 改為保守提示原始收據／Workspace owner／PTY 可能有衝突，RuntimePort 註解同步；來源 `e38e0c9c7` → 整合 **`c7def499b`**。這筆在 D10 主程式與首份交接文件 Commit 之後合入，最新 HEAD 應重新 `git log` 確認。
+
 ## 歷史：T2-D9 交接入口（2026-10-30）
 
 **當前唯一整合基準**：`refactor/tdd-integrate-20261029`（`.worktrees/refactor-tdd-integrate-20261029`），從 D8 乾淨 HEAD `632f1429b` 起做，最後一筆 D9 原始碼整合提交 **`75161c9bf`**，在開始更新此文件前已確認整合工作樹乾淨。**文件 Commit 後 HEAD 將前進，接手必須重新查 `git log -1`、`git status`**。原始 `main` 仍為既存 dirty `3d232acff`，沒有修改／reset／merge／清理原本的歷史 Session、xterm 或其他未追蹤資料。
