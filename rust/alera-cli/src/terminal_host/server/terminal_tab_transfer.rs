@@ -26,6 +26,28 @@ pub(super) fn pty_instance_token(instance_id: u64) -> String {
     )
 }
 
+/// A receipt stamped by a different Host process can never prove that its
+/// original PTY is owned by *this* process. Another Host could still be live
+/// elsewhere; this is NOT evidence of death, failed transfer or safe rollback.
+///
+/// Older/unrecognized receipt formats stay unknown rather than being
+/// interpreted as a valid instance of the current Host.
+fn receipt_from_other_host_generation(receipt: &Value) -> bool {
+    let Some(token) = receipt["ptyInstanceToken"].as_str() else {
+        return false;
+    };
+    let Some((epoch, instance)) = token.split_once(':') else {
+        return false;
+    };
+    if instance.parse::<u64>().is_err() {
+        return false;
+    }
+    let Ok(recorded_epoch) = Uuid::parse_str(epoch) else {
+        return false;
+    };
+    recorded_epoch != *TRANSFER_HOST_EPOCH.get_or_init(Uuid::new_v4)
+}
+
 /// Durable evidence of an *observed original generation's normal exit*.
 /// A Host crash, missing Session, stale token or newer transfer receipt must
 /// never be promoted into a confirmed exit. This evidence does not authorize
@@ -267,6 +289,31 @@ impl ServerActor {
             // Missing receipt is still unknown after Host crashes; do not
             // claim definitive rejection from this read-only query.
             return Ok(json!({"applied": false}));
+        }
+        if receipt_from_other_host_generation(receipt) {
+            if let Some(exit_code) =
+                observed_transferred_pty_exit(&tab, session_id, target, mutation_id)
+            {
+                // A genuine original Exit marker is stronger evidence than
+                // merely observing that the Host has restarted since then.
+                // Neither outcome authorizes clearing the pending transfer.
+                return Ok(json!({
+                    "applied": false,
+                    "recoveryRequired": true,
+                    "reason": "pty_exit_observed",
+                    "exitCode": exit_code,
+                    "hostGenerationMismatch": true
+                }));
+            }
+            // This Host cannot prove that it owns the original PTY from a
+            // different process generation. The previous Host *may* still
+            // exist; no reminted Session or missing local PTY is proof that
+            // the transfer failed. Preserve the original Journal.
+            return Ok(json!({
+                "applied": false,
+                "recoveryRequired": true,
+                "reason": "host_generation_mismatch"
+            }));
         }
         let Some(live) = self.sessions.get(session_id) else {
             if let Some(exit_code) =
