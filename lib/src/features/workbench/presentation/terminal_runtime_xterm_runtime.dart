@@ -115,7 +115,7 @@ class XtermTerminalRuntime._(
       }
       final pty = session.ptySession;
       if (pty is TerminalPtyAttachedViewLease) {
-        return pty.attachedViewLeaseId;
+        return (pty as TerminalPtyAttachedViewLease).attachedViewLeaseId;
       }
     }
     return null;

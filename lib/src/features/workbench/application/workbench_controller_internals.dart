@@ -107,7 +107,8 @@ mixin _WorkbenchControllerInternals on _$WorkbenchController
   String? attachedTerminalViewLeaseIdForTab(String tabId) {
     final lifecycle = ref.read(terminalRuntimeLifecycleProvider);
     return lifecycle is TerminalRuntimeAttachedViewLeaseSource
-        ? lifecycle.attachedViewLeaseIdForTab(tabId)
+        ? (lifecycle as TerminalRuntimeAttachedViewLeaseSource)
+              .attachedViewLeaseIdForTab(tabId)
         : null;
   }
 
