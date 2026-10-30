@@ -9,11 +9,17 @@ import 'package:path/path.dart' as p;
 import 'package:uuid/uuid.dart';
 
 final class _TerminalTransferJournalLock {
-  const _TerminalTransferJournalLock(this.file, this.nonce, this.tabIdHash);
+  const _TerminalTransferJournalLock(
+    this.file,
+    this.nonce,
+    this.tabIdHash,
+    this.processEpoch,
+  );
 
   final File file;
   final String nonce;
   final String tabIdHash;
+  final String processEpoch;
 }
 
 /// A diagnostic snapshot, never a release permission. A surviving .lock may
@@ -251,7 +257,10 @@ final class FileWorkbenchTerminalTransferJournal
   }) : _supportDirectory = supportDirectory ?? aleraApplicationSupportDirectory;
 
   static const int _version = 1;
-  static const int _lockVersion = 1;
+  static const int _lockVersion = 2;
+  // Distinguish a fresh App process from a reused OS PID. It is *not* proof
+  // that a different process exited, nor an unlock capability.
+  static final String _processEpoch = const Uuid().v4();
   final Future<Directory> Function() _supportDirectory;
 
   /// The pending and audit roots must be actual directories, not links to
@@ -340,11 +349,12 @@ final class FileWorkbenchTerminalTransferJournal
         'tabIdHash': tabIdHash,
         'nonce': nonce,
         'processId': pid,
+        'processEpoch': _processEpoch,
         'createdAtUtc': DateTime.now().toUtc().toIso8601String(),
       }),
       flush: true,
     );
-    return _TerminalTransferJournalLock(lock, nonce, tabIdHash);
+    return _TerminalTransferJournalLock(lock, nonce, tabIdHash, _processEpoch);
   }
 
   /// Refuse to delete a lock whose identity changed under this process.
@@ -365,7 +375,9 @@ final class FileWorkbenchTerminalTransferJournal
         decoded['version'] != _lockVersion ||
         decoded['nonce'] != owned.nonce ||
         decoded['tabIdHash'] != owned.tabIdHash ||
-        decoded['processId'] != pid) {
+        decoded['processId'] != pid ||
+        decoded['processEpoch'] != owned.processEpoch ||
+        decoded['processEpoch'] != _processEpoch) {
       throw StateError(
         'Terminal transfer journal lock owner changed; refusing deletion.',
       );
@@ -397,6 +409,10 @@ final class FileWorkbenchTerminalTransferJournal
           data['nonce'] is! String ||
           (data['nonce'] as String).isEmpty ||
           data['processId'] is! int ||
+          data['processEpoch'] is! String ||
+          !RegExp(
+            r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
+          ).hasMatch(data['processEpoch'] as String) ||
           data['createdAtUtc'] is! String) {
         return (valid: false, ownerPid: null, created: null);
       }
