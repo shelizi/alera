@@ -1,5 +1,21 @@
 # Alera T2 跨 Workspace Terminal Tab：一次收尾成果與最後驗收門檻（2026-10-30）
 
+## 最新實際驗收與整合交接（2026-10-30；Gate 仍 OFF）
+
+**本次應使用此節作為最新入口，而不是下方早期的「未允許執行測試」限制摘要。使用者現已要求完成合併與啟用，明確授權必要編譯／測試；但未授權遺失 dirty `main` 既有修改或跳過安全驗收。** 依新要求已在隔離整合工作樹實際跑測試；Git HEAD 需以 `git log -1` 重新核對。
+
+**已驗證通過：** Windows Rust `cargo check --locked -p alera-cli`；Rust Store 原收據、退出證據和單交易退休的新增 3 項測試；`alera-cli` Actor 真正跨 Workspace 單 Session 原 PTY 測試 **1 pass**（未知第二 View 阻擋、解除後同一 PTY 遷移、雙 Layout/Receipt）；手機完整 Flutter **473 pass／4 skip／0 fail**，手機 T2 Dart Analyzer 0 issue；桌面拖曳／Layout／Tab Close **29 pass**；桌面 Terminal 重連／Controller／清理 **162 pass**；RustProcessRunner/Detached Process Conformance **41 pass**；桌面 T2 定向 Dart Analyzer exit0（少量 style info）。
+
+**最新隔離整合修正：** Windows Git Hosted Review `file:///C:/` Test URL、更強的 Store 退休測試、Mobile 具名 View Lease 介面型別、Desktop Optional Recovery/Scoped Tab/PTY View Lease 型別與顯示 Workspace ID、Host Actor 測試 stale-owner 與唯一 PTY 回歸、Managed LSP 執行改用 Rust ProcessRunner 避免 Dart 的 PTY `ECHILD`、舊 Tab 消失不可清除原 Codex Session 的安全測試、Host 異步 `tab.remove` 測試處理完整 Actor preflight／completion 兩階段；設定頁三語系翻譯與 Git History 輔助測試檔命名。請以最近 Git log 確認實際 commit（本節撰寫時最近 `f296cd58e`）。
+
+**仍不可啟用／合併的確切阻塞：**
+- 桌面完整 Flutter `flutter test --no-pub --concurrency=2` 在本輪已實測約 **4564 pass、34 skipped、34 failed**；含 Golden 兩張小像素差、設定／語系及更新器／架構／Settings 欄位檢查等多項非 T2 回歸。T2 相關 Terminal 清理四項已後續定向修正且 162 pass，LSP process 41 pass；全套**尚未**重跑通過。三語系定向補強後 `app_localizations_zh_cn_ja_test` 還有此前累積的 Language Intelligence Static Key parity 失敗，不可把後續碼版宣稱全綠。
+- Host `cargo test --locked -p alera-cli --bin alera` 執行到 `stale_tab_removal_does_not_depend_on_remote_cleanup` 時舊測試卡住，已修正舊測試假定只需處理一個 Actor 訊息的失誤（現在兩階段 preflight + background completion）。**修正版**重跑 Windows MSVC Debug Test binary 編譯時間極長／曾逾時，目前沒有該例與整套 Host tests 最新成功證據；此前原始 PTY 跨 Workspace 精準 Actor 測試 **1 pass** 屬另一獨立案例。
+- 原有 Gate A/B 尚未完成：Host 重新啟動／原 PTY 消失的權威 outcome、跨 Native Window／App Process／Phone durable Last-view 身分、已退出 PTY 的合法人工退休及 Journal stale Lock 的 OS/Host 認證稽核。不得僅因單窗/單 Host 模擬測試成功就開啟所有裝置拖放。
+- Mac/實體雙手機 E2E 不可在目前 Windows 工作環境證實；真實 Windows 跨原生進程與 Host Crash injection 亦無完成驗收。原 dirty main 尚未合併；`rust/alera-cli/src/terminal_host/server/requests.rs` **`supported=false` 保持**。無 Push/Release。
+
+**具體下一行動，不再新增 D 編號**：① 排除 Host MSVC Test binary build blocker、取得所有 Host 測試 pass；② 修完整桌面 34 項殘留回歸，重新執行全套；③ Host/Journal/Live View 確定性 Crash/manual recovery 和跨實際 Win/Mac/Phone E2E；④ 只有 A/B/C 所有證據通過時才由乾淨整合安全合併 dirty main（保留其未提交內容）並啟用 capability，否則維持 OFF。
+
 > **狀態：收斂開發，尚未可啟用。** 不再依照 D18、D19、D20 無限分批。現在的任務是完成確定的可安全修改項目，然後按本文件的**有限驗收清單**決定能否開 Gate。沒有編譯與真實 OS/Phone E2E 就不宣稱完成，不為了趕完成而刪原 PTY 或解鎖 Journal。
 
 ## 整合分支與原限制

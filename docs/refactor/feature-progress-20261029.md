@@ -1,5 +1,7 @@
 # Alera 功能優先續做：第八批四線隔離（2026-10-29）
 
+> **T2 最新真實測試／啟用驗收入口：`docs/terminal-tab-transfer-closure-20261030.md` 最上方「最新實際驗收與整合交接」**（2026-10-30）。本輪 user 已授權必要 Cargo/Flutter tests，但**Gate 仍 OFF、不合併 dirty main**。已通過 Host 原 PTY 真正轉移 1、Rust Store 3、桌面 T2 Drop/Layout/Close 29、Desktop PTY/清理 162、Rust ProcessRunner/Detach 41、Mobile Flutter 473 pass+4 skip，初次 Host Cargo check 成功；完整桌面 34 fail、Host 全套 test compiled binary 卡住／修後 MSVC recompile 未確認通過、Host Crash/跨 Process durable View 和人工 stale Lock 還未解決。最新整合 SHA 以 Git HEAD 為準；固定 A/B/C Release Gate，不再增列無限階段。
+
 ## 最新交接入口：T2 收尾盤點與有限 Release Gate（2026-10-30）
 
 **不再自動擴充 D18/D19/D20**：完整一次收尾成果、實作對應 Commit、未達驗收門檻、禁止開啟的功能旗標詳見 **`docs/terminal-tab-transfer-closure-20261030.md`**。本輪從 D17 乾淨整合 `7cac43d53a81198fdc10d601f188b02da45cb7de` 開始，Store 原始碼 `d479429e7` → 整合 **`09c8aba3a`**、靜態補正 `99cbe4a4c` → **`46794ddfe`**、Host 原 Scope 停止程序前預檢 `7c7689675` → **`185510980`**、Journal 原始碼 `be6d1922a` → 整合 **`d12ca2e69`**。Store 普通 Tab/Workspace/Project 級聯刪除均以同筆 SQLite 交易保留 Transfer/Exit Marker，Host 清理前再驗來源 Scope；已驗證原生**活 PTY 唯一 View**的 `tab.remove` 走原 Receipt／雙 Layout 名冊 CAS、Tab+Target Layout+永久 SHA256 View Audit 原子退休；Journal Lock v2 有 App Process Epoch、拒絕 PID 重用的誤認。這**不表示** Host Crash 後可還原原 PTY、已完成跨程序 durable View Registry 或安全 stale Unlock；詳 A/B/C 三項驗收門檻。Gate **`supported=false`**，無 Cargo/Flutter compile/check/test/analyzer、E2E、Push/Release，不改動 dirty `main`。
