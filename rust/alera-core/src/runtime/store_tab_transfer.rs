@@ -261,11 +261,40 @@ fn ensure_transfer_preserves_other_panes(
             }),
             "Terminal move introduced an unrelated source pane."
         );
-        if prior.len() == next.len() && prior.keys().all(|id| next.contains_key(id)) {
+        // Mirror removeTab() exactly: prune empty source groups, promote the
+        // surviving sibling and preserve every untouched split's ratio.
+        let workspace_id = new_source["workspaceId"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Source layout has no workspace identity."))?;
+        if source_empty {
+            let default_id = format!("{workspace_id}/main");
             ensure!(
-                before["root"] == new_source["root"]
-                    && before["activeGroupId"] == new_source["activeGroupId"],
-                "Terminal transfer replaced the source split layout."
+                next.len() == 1
+                    && next.contains_key(&default_id)
+                    && new_source["root"] == json!({"type": "leaf", "groupId": default_id})
+                    && new_source["activeGroupId"].as_str() == Some(default_id.as_str()),
+                "Last source pane must become the empty default Workbench pane."
+            );
+        } else {
+            ensure!(
+                next.values().all(|group| group["tabIds"]
+                    .as_array()
+                    .is_some_and(|ids| !ids.is_empty())),
+                "Terminal move left an unrelated empty source pane."
+            );
+            let retained = next.keys().cloned().collect::<BTreeSet<_>>();
+            let pruned = prune_transfer_source_tree(&before["root"], &retained)?
+                .ok_or_else(|| anyhow::anyhow!("Transfer removed every source split pane."))?;
+            let first = first_transfer_tree_leaf(&pruned)
+                .ok_or_else(|| anyhow::anyhow!("Pruned source layout has no pane."))?;
+            let expected_active = before["activeGroupId"]
+                .as_str()
+                .filter(|id| retained.contains(*id))
+                .unwrap_or(first);
+            ensure!(
+                new_source["root"] == pruned
+                    && new_source["activeGroupId"].as_str() == Some(expected_active),
+                "Terminal transfer changed unrelated split geometry or active pane."
             );
         }
     }
@@ -307,6 +336,44 @@ fn ensure_transfer_preserves_other_panes(
         }
     }
     Ok(())
+}
+
+/// Mirror WorkbenchLayoutNode.pruneGroups. When one child disappears, keep
+/// its sibling verbatim; both children surviving must retain the original
+/// parent split axis, ratio and any other metadata.
+fn prune_transfer_source_tree(node: &Value, retained: &BTreeSet<String>) -> Result<Option<Value>> {
+    match node["type"].as_str() {
+        Some("leaf") => {
+            let group = node["groupId"]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("Source leaf has no pane group."))?;
+            Ok(retained.contains(group).then(|| node.clone()))
+        }
+        Some("split") => {
+            let first = prune_transfer_source_tree(&node["first"], retained)?;
+            let second = prune_transfer_source_tree(&node["second"], retained)?;
+            Ok(match (first, second) {
+                (None, None) => None,
+                (Some(one), None) | (None, Some(one)) => Some(one),
+                (Some(first), Some(second)) => {
+                    let mut combined = node.clone();
+                    combined["first"] = first;
+                    combined["second"] = second;
+                    Some(combined)
+                }
+            })
+        }
+        _ => bail!("Invalid source split tree during Terminal transfer."),
+    }
+}
+
+fn first_transfer_tree_leaf(node: &Value) -> Option<&str> {
+    match node["type"].as_str()? {
+        "leaf" => node["groupId"].as_str(),
+        "split" => first_transfer_tree_leaf(&node["first"])
+            .or_else(|| first_transfer_tree_leaf(&node["second"])),
+        _ => None,
+    }
 }
 
 fn tab_ids_in_layout(layout: &Value, workspace_id: &str) -> Result<BTreeSet<String>> {
