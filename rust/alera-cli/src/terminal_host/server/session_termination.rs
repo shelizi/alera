@@ -23,6 +23,14 @@ impl ServerActor {
     ) -> crate::terminal_host::host_error::HostResult<()> {
         use crate::terminal_host::host_error::HostError;
 
+        // The moved Tab may live under the target Workspace while still
+        // depending on this original source/execution scope. Reject before
+        // shutting down source PTYs, not just after the Store cascade fails.
+        self.runtime_store
+            .ensure_workspace_cleanup_preserves_terminal_transfer_evidence(workspace_id)
+            .await
+            .map_err(|error| HostError::state(error.to_string()))?;
+
         // Do not erase a persisted transfer receipt merely because its
         // original process is already missing (or the Host restarted).
         // Until there is a verified crash-resolution action, even a fully

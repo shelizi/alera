@@ -111,6 +111,17 @@ impl RuntimeStore {
         Ok(())
     }
 
+    /// Read-only Host preflight before any irreversible process shutdown.
+    /// The destructive Store mutation repeats every guard in its own
+    /// transaction; a preflight snapshot is never deletion permission.
+    pub async fn ensure_workspace_cleanup_preserves_terminal_transfer_evidence(
+        &self,
+        workspace_id: &str,
+    ) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        Self::ensure_workspace_tabs_can_be_deleted(&mut tx, workspace_id).await
+    }
+
     pub async fn open(runtime_dir: &Path) -> Result<Self> {
         prepare_private_runtime_directory(runtime_dir)?;
         let path = runtime_dir.join(RUNTIME_DATABASE_FILE_NAME);
