@@ -192,7 +192,9 @@ class _ProjectWorkbenchSidebarState
                                                 destination: destination,
                                                 tabId: data.tabId,
                                               );
-                                        } on TerminalTransferOutcomeUnknownException {
+                                        } on TerminalTransferOutcomeUnknownException catch (
+                                          error
+                                        ) {
                                           if (!mounted) return;
                                           // Timeout/disconnect is *not*
                                           // failure. The original mutation
@@ -204,9 +206,10 @@ class _ProjectWorkbenchSidebarState
                                               duration: const Duration(
                                                 seconds: 20,
                                               ),
-                                              content: const Text(
-                                                'Terminal move status is unknown. '
-                                                'Do not move or close the tab until the Host confirms its current workspace.',
+                                              content: Text(
+                                                error.hostRecoveryRequired
+                                                    ? 'Host saved the Terminal move, but its live PTY is missing or inconsistent. Keep the pending transfer and do not close or restart this tab until recovery.'
+                                                    : 'Terminal move status is unknown. Do not move or close the tab until the Host confirms its current workspace.',
                                               ),
                                               action: SnackBarAction(
                                                 label: 'Check status',

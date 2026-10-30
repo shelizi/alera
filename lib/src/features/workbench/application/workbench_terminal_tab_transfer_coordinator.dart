@@ -10,16 +10,25 @@ final class TerminalTransferOutcomeUnknownException implements Exception {
   const TerminalTransferOutcomeUnknownException({
     required this.tabId,
     required this.clientMutationId,
+    this.hostRecoveryRequired = false,
   });
 
   final String tabId;
   final String clientMutationId;
 
+  /// The exact transfer receipt exists in SQLite, but no matching live PTY
+  /// could be proven. This is never permission to discard the pending journal.
+  final bool hostRecoveryRequired;
+
   @override
-  String toString() =>
-      'Terminal move status is unknown (tab $tabId, operation '
-      '$clientMutationId). Refresh both workspaces before trying again; '
-      'the running command may already be in the destination.';
+  String toString() => hostRecoveryRequired
+      ? 'Terminal move was persisted (tab $tabId, operation '
+            '$clientMutationId), but the Host cannot confirm its live PTY. '
+            'Keep the transfer journal and do not close or restart the tab '
+            'until the session owner is recovered.'
+      : 'Terminal move status is unknown (tab $tabId, operation '
+            '$clientMutationId). Refresh both workspaces before trying again; '
+            'the running command may already be in the destination.';
 }
 
 /// Narrow Runtime capability used exclusively for cross-workspace terminal
@@ -151,6 +160,11 @@ final class WorkbenchTerminalTabTransferCoordinator {
       // Leave the unresolved guard in place until both source and
       // destination layouts are authoritatively reconciled by the caller.
       return committed;
+    } on TerminalTransferOutcomeUnknownException {
+      // A durable matching receipt with no live PTY is a distinct Host
+      // recovery case. Do not erase the evidence by treating it as a normal
+      // lookup miss; the caller must retain the original pending journal.
+      rethrow;
     } on Object {
       // Reconnect may still be in flight. Retain the exact unresolved
       // operation rather than risking a second transfer of the same PTY.

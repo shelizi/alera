@@ -78,6 +78,16 @@ final class RuntimeTerminalTabTransferPort
           'clientMutationId': plan.clientMutationId,
         },
       );
+      if (status is Map && status['recoveryRequired'] == true) {
+        // The SQLite receipt matches the original operation, but the Host
+        // cannot prove that its PTY survived/reparented. The operation
+        // remains unresolved; never forget its original recovery journal.
+        throw TerminalTransferOutcomeUnknownException(
+          tabId: plan.tabId,
+          clientMutationId: plan.clientMutationId,
+          hostRecoveryRequired: true,
+        );
+      }
       if (status is! Map || status['applied'] != true) return null;
       final stored = status['tab'];
       if (stored is! Map) return null;
@@ -99,6 +109,8 @@ final class RuntimeTerminalTabTransferPort
         return null;
       }
       return tab;
+    } on TerminalTransferOutcomeUnknownException {
+      rethrow;
     } on Object {
       // Connection can remain unavailable after the first timeout. Preserve
       // an *unknown* outcome rather than falsely marking failure or success.
