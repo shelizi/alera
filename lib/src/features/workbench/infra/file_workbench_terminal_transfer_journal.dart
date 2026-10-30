@@ -409,6 +409,7 @@ final class FileWorkbenchTerminalTransferJournal
           data['nonce'] is! String ||
           (data['nonce'] as String).isEmpty ||
           data['processId'] is! int ||
+          (data['processId'] as int) <= 0 ||
           data['processEpoch'] is! String ||
           !RegExp(
             r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
@@ -416,8 +417,14 @@ final class FileWorkbenchTerminalTransferJournal
           data['createdAtUtc'] is! String) {
         return (valid: false, ownerPid: null, created: null);
       }
-      final when = DateTime.tryParse(data['createdAtUtc'] as String);
-      if (when == null) {
+      final timestamp = data['createdAtUtc'] as String;
+      final when = DateTime.tryParse(timestamp);
+      // The field promises UTC, but a local timestamp is silently accepted
+      // by DateTime.tryParse. An ambiguous time or impossible owner PID is
+      // not trustworthy process-identity metadata for manual recovery.
+      if (when == null ||
+          !when.isUtc ||
+          !RegExp(r'(?:Z|\+00:00)$').hasMatch(timestamp)) {
         return (valid: false, ownerPid: null, created: null);
       }
       return (valid: true, ownerPid: data['processId'] as int, created: when);
