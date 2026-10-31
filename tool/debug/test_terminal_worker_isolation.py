@@ -55,15 +55,19 @@ def open_shell_wait_handle(pid):
 
 
 class Worker:
-    def __init__(self, executable, runtime, label):
+    def __init__(self, executable, runtime, label, *, worker_env=None, max_backlog_bytes=1024 * 1024):
         self.label = label
         self.session_id = f"isolation-smoke-{label}"
         self.data = bytearray()
         self.lock = threading.Condition()
         self.runtime_dir = runtime
+        worker_environment = dict(os.environ)
+        if worker_env:
+            worker_environment.update(worker_env)
         self.process = subprocess.Popen(
             [str(executable), "__alera-terminal-pty-worker"],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            env=worker_environment,
         )
         try:
             request = {
@@ -75,12 +79,12 @@ class Worker:
                 "cols": 80,
                 "rows": 24,
                 "initialOutputStreamBytes": 0,
-                "maxBacklogBytes": 1024 * 1024,
+                "maxBacklogBytes": max_backlog_bytes,
                 "launch": {
                     "label": "cmd",
                     "shell": os.environ.get("ComSpec", "cmd.exe"),
                     "arguments": ["/Q", "/K"],
-                    "environment": {**dict(os.environ), "ALERA_TEST_PART": "WORKER"},
+                    "environment": {**worker_environment, "ALERA_TEST_PART": "WORKER"},
                 },
             }
             write_frame(self.process.stdin, b"I", json.dumps(request).encode())
@@ -125,6 +129,7 @@ class Worker:
         ack = receive_exact(sock, 13)
         assert ack[0:1] == b"R", f"{self.label}: bad reconnect marker {ack!r}"
         assert int.from_bytes(ack[1:5], "little") == self.shell_pid
+        self.replay_start_cursor = int.from_bytes(ack[5:13], "little")
         self.socket = sock
         with self.lock:
             self.data.clear()

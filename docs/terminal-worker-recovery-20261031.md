@@ -21,6 +21,10 @@
 - `cargo build --locked --manifest-path rust/Cargo.toml -p alera-cli --bin alera` on Windows.
 - `python tool/debug/test_terminal_worker_isolation.py D:\\c\\t\\debug\\alera.exe`: two Workers, one forcibly terminated and its Shell Job exited, the other Worker continued; incorrect reconnection tokens were rejected; the second Worker survived Host-socket loss and reauthenticated on a new connection with the original PID/Shell and offline output replay. Test creates an isolated runtime under its worktree and does not touch live user terminals.
 - `python tool/debug/test_runtime_host_worker_recovery.py D:\\c\\t\\debug\\alera.exe`: complete isolated Windows RuntimeHost started, project/workspace/tab created, Terminal attached, **Host process forcibly killed**, replacement RuntimeHost launched with the same private runtime, original Worker PID and Shell PID preserved, and Terminal accepted/echoed input after reconnection. This passed with the Worker setting enabled only for the test; its test Worker was confirmed gone at cleanup.
+- `python tool/debug/test_terminal_worker_memory_limit.py D:\\c\\t\\debug\\alera.exe`: in an isolated test Runtime, a 384 MiB Windows Job limit on one Shell rejected one child 512 MiB `VirtualAlloc(MEM_COMMIT|MEM_RESERVE)` request. The limited Shell, its Worker, and an independent uncapped sibling Terminal all stayed responsive. No machine-wide OOM and no physical page-touch stress was performed.
+- `python tool/debug/test_terminal_worker_output_pressure.py D:\\c\\t\\debug\\alera.exe`: the disconnected Terminal generated 256 KiB of output with a 64 KiB maximum replay tail; reattachment returned an advanced absolute replay cursor (233275 in the successful run), preserved the final output marker and kept both Workers responsive.
+- `python tool/debug/test_terminal_worker_offline_backlog.py D:\\c\\t\\debug\\alera.exe`: while Host was disconnected, one Worker emitted 6 MiB with a 64 KiB offline ring; new connection replayed only 65573 bytes (including protocol/control bytes), with an advanced cursor at 7091879, preserving the original Worker/Shell and accepting more input.
+- `cargo test --locked --manifest-path rust/Cargo.toml -p alera-cli --bin alera configured_session_memory_budget_is_enforced_in_windows_job_flags`: queried Windows Job Object and verified the 384 MiB per-session memory limit flag and value.
 - Windows Session regression tests: `cargo test --locked --manifest-path rust/Cargo.toml -p alera-cli --bin alera terminal_host::session::` — 38 passed after Windows token ACL hardening.
 - T2 transfer contract regression: `cargo test --locked --manifest-path rust/Cargo.toml -p alera-cli --bin alera terminal_tab_transfer` — 4 passed.
 - Rustfmt direct checks and `git diff --check`.
@@ -28,7 +32,7 @@
 ## Remaining release and acceptance checks
 
 - Complete **graphical Alera UI acceptance** for actual Host restart, multi-window tab leases and prompt interaction on Windows. The new isolated RuntimeHost test verifies the server/PTY code path, but does not validate Flutter screen state and focus.
-- Test offline backlog overflow and recovery cursor gaps, Host shutdown vs crash semantics, duplicate attach generation fencing, Worker/child OOM, memory/CPU overhead, and repeated rapid create/destroy cycles.
+- Remaining load/edge coverage: full machine-wide OOM (which no application can absolutely contain), repeated Worker-native process aborts, sustained long-running CPU/memory monitoring, many rapid create/destroy cycles, Host graceful-shutdown versus crash semantics, and simultaneous competing Host attach attempts. The bounded child allocation-failure and offline-tail-overflow scenarios above have now been tested.
 - Windows PTY worker reconnect registry and token files now receive a protected DACL granting only the current user, SYSTEM and Administrators access; ACL setup fails closed. The full Host crash/recovery smoke checks no inherited or generic Users/Everyone ACE. Additional security review and restricted-user deployment acceptance are still required before default enable.
 - Run macOS/Linux platform tests and ensure no unintended changes to their path. Explicit cross-project T2 Gate A/B/C and full UI acceptance remain independent release blockers.
 
@@ -47,3 +51,8 @@ If the Worker has already trimmed output from before the latest durable Host cur
 - `rust/alera-cli/src/terminal_host/server/terminal_session_requests.rs`
 - `tool/debug/test_terminal_worker_isolation.py`
 - `tool/debug/test_runtime_host_worker_recovery.py`
+- `tool/debug/pty_job_memory_probe.py`
+- `tool/debug/test_terminal_worker_memory_limit.py`
+- `tool/debug/test_terminal_worker_output_pressure.py`
+- `tool/debug/pty_output_flood_probe.py`
+- `tool/debug/test_terminal_worker_offline_backlog.py`
