@@ -162,6 +162,23 @@ def main():
             created = host.request("createOrAttach", terminal)
             assert created["running"] is True, "initial terminal not running"
             record = worker_record(runtime, session_id)
+            # Token registry and directory must not inherit access for Users,
+            # Everyone or Authenticated Users from the wider runtime profile.
+            registry_file = runtime / "pty-workers" / (
+                hashlib.sha256(session_id.encode()).hexdigest() + ".json"
+            )
+            for secured in (registry_file.parent, registry_file):
+                proc = subprocess.run(
+                    ["icacls", str(secured)], capture_output=True,
+                    text=True, encoding="utf-8", errors="replace", timeout=10,
+                )
+                assert proc.returncode == 0, f"cannot inspect registry ACL: {proc.stderr}"
+                acl = proc.stdout.upper()
+                assert "(I)" not in acl, f"registry ACL unexpectedly inherited: {proc.stdout}"
+                assert "EVERYONE:" not in acl and "BUILTIN\\USERS:" not in acl, (
+                    f"registry ACL permits generic users: {proc.stdout}"
+                )
+            assert record["schemaVersion"] == 2, "old unprotected token schema"
             original_worker_pid = record["workerPid"]
             original_shell_pid = record["shellPid"]
             assert original_worker_pid > 0 and original_shell_pid > 0

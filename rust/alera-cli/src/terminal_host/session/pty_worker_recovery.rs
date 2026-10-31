@@ -27,7 +27,10 @@ use super::{read_frame, write_frame, MAX_WRITE_BYTES};
 use crate::terminal_host::host_error::{HostError, HostResult};
 use crate::terminal_host::resources::seal_shell_process;
 
-const SCHEMA_VERSION: u32 = 1;
+#[path = "pty_worker_acl.rs"]
+mod acl;
+
+const SCHEMA_VERSION: u32 = 2;
 const RECOVERY_BACKLOG_MAX: usize = 4 * 1024 * 1024;
 const CONNECTION_TIMEOUT: Duration = Duration::from_secs(3);
 
@@ -60,6 +63,16 @@ fn manifest_path(runtime_dir: &Path, session_id: &str) -> PathBuf {
 }
 
 fn read_record(path: &Path) -> HostResult<Option<WorkerRecord>> {
+    if let Some(parent) = path.parent() {
+        if parent.exists() {
+            acl::protect_path(parent, true)
+                .map_err(|e| HostError::state(format!("PTY worker registry ACL: {e}")))?;
+        }
+    }
+    if path.exists() {
+        acl::protect_path(path, false)
+            .map_err(|e| HostError::state(format!("PTY worker token ACL: {e}")))?;
+    }
     let data = match std::fs::read(path) {
         Ok(data) => data,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
@@ -282,6 +295,7 @@ impl WorkerRecoveryServer {
             .parent()
             .expect("registry path includes workers directory");
         prepare_private_runtime_directory(parent)?;
+        acl::protect_path(parent, true)?;
         let record = WorkerRecord {
             schema_version: SCHEMA_VERSION,
             session_id: session_id.to_string(),
@@ -301,6 +315,7 @@ impl WorkerRecoveryServer {
             let mut file = create_private_runtime_file(&tmp)?;
             file.write_all(&body)?;
             file.sync_all()?;
+            acl::protect_path(&tmp, false)?;
             std::fs::rename(&tmp, &registry)
         })();
         if write_result.is_err() {

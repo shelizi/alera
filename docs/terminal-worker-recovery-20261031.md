@@ -21,7 +21,7 @@
 - `cargo build --locked --manifest-path rust/Cargo.toml -p alera-cli --bin alera` on Windows.
 - `python tool/debug/test_terminal_worker_isolation.py D:\\c\\t\\debug\\alera.exe`: two Workers, one forcibly terminated and its Shell Job exited, the other Worker continued; incorrect reconnection tokens were rejected; the second Worker survived Host-socket loss and reauthenticated on a new connection with the original PID/Shell and offline output replay. Test creates an isolated runtime under its worktree and does not touch live user terminals.
 - `python tool/debug/test_runtime_host_worker_recovery.py D:\\c\\t\\debug\\alera.exe`: complete isolated Windows RuntimeHost started, project/workspace/tab created, Terminal attached, **Host process forcibly killed**, replacement RuntimeHost launched with the same private runtime, original Worker PID and Shell PID preserved, and Terminal accepted/echoed input after reconnection. This passed with the Worker setting enabled only for the test; its test Worker was confirmed gone at cleanup.
-- Windows Session regression tests: `cargo test --locked --manifest-path rust/Cargo.toml -p alera-cli --bin alera terminal_host::session::` — 36 passed after cursor-gap hardening.
+- Windows Session regression tests: `cargo test --locked --manifest-path rust/Cargo.toml -p alera-cli --bin alera terminal_host::session::` — 38 passed after Windows token ACL hardening.
 - T2 transfer contract regression: `cargo test --locked --manifest-path rust/Cargo.toml -p alera-cli --bin alera terminal_tab_transfer` — 4 passed.
 - Rustfmt direct checks and `git diff --check`.
 
@@ -29,7 +29,7 @@
 
 - Complete **graphical Alera UI acceptance** for actual Host restart, multi-window tab leases and prompt interaction on Windows. The new isolated RuntimeHost test verifies the server/PTY code path, but does not validate Flutter screen state and focus.
 - Test offline backlog overflow and recovery cursor gaps, Host shutdown vs crash semantics, duplicate attach generation fencing, Worker/child OOM, memory/CPU overhead, and repeated rapid create/destroy cycles.
-- Verify Windows user-private ACL handling for the reconnect registry/token. The existing shared runtime-file helper currently applies POSIX permissions only; Windows deployment must prove the runtime directory is private before opt-in becomes default.
+- Windows PTY worker reconnect registry and token files now receive a protected DACL granting only the current user, SYSTEM and Administrators access; ACL setup fails closed. The full Host crash/recovery smoke checks no inherited or generic Users/Everyone ACE. Additional security review and restricted-user deployment acceptance are still required before default enable.
 - Run macOS/Linux platform tests and ensure no unintended changes to their path. Explicit cross-project T2 Gate A/B/C and full UI acceptance remain independent release blockers.
 
 ## Replay gap rule
@@ -40,6 +40,7 @@ If the Worker has already trimmed output from before the latest durable Host cur
 
 - `rust/alera-cli/src/terminal_host/session/pty_worker.rs`
 - `rust/alera-cli/src/terminal_host/session/pty_worker_recovery.rs`
+- `rust/alera-cli/src/terminal_host/session/pty_worker_acl.rs`
 - `rust/alera-cli/src/terminal_host/session/pty_spawn.rs`
 - `rust/alera-cli/src/terminal_host/session.rs`
 - `rust/alera-cli/src/terminal_host/server/terminal_spawn.rs`
