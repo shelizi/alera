@@ -20,7 +20,8 @@ fn blocked_writer_applies_local_backpressure_without_blocking_sender() {
         }),
         input_rx,
         on_event,
-    );
+    )
+    .unwrap();
     input_tx
         .try_send(PtyWrite {
             completion: PtyWriteCompletion::ClientRequest {
@@ -94,7 +95,8 @@ fn deferred_write_keeps_its_suffix_ahead_of_queued_input() {
         }),
         input_rx,
         on_event,
-    );
+    )
+    .unwrap();
     input_tx
         .try_send(PtyWrite {
             completion: PtyWriteCompletion::ClientRequest {
@@ -160,7 +162,7 @@ fn failed_writer_completes_every_queued_request_with_the_same_error() {
     let on_event: Arc<dyn Fn(PtyEvent) + Send + Sync> = Arc::new(move |event| {
         event_tx.send(event).unwrap();
     });
-    spawn_writer(Box::new(FailingWriter), input_rx, on_event);
+    spawn_writer(Box::new(FailingWriter), input_rx, on_event).unwrap();
     for request_id in 10..13 {
         assert!(matches!(
             event_rx

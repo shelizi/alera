@@ -1,10 +1,16 @@
 use std::io::{Read, Write};
 use std::sync::mpsc::Receiver;
+#[cfg(windows)]
+use std::sync::mpsc::{sync_channel, SyncSender};
 use std::sync::Arc;
 
 use super::{PtyEvent, PtyWrite};
 
 const READ_CHUNK_BYTES: usize = 64 * 1024;
+// Each Windows PTY must apply backpressure rather than retaining an unlimited
+// number of 64 KiB output chunks in the shared Host process.
+#[cfg(windows)]
+const WINDOWS_PTY_EVENT_QUEUE_CAPACITY: usize = 8;
 
 /// Read the PTY on a dedicated thread, forwarding output and the final exit code.
 #[cfg(not(windows))]
@@ -13,7 +19,7 @@ pub(super) fn spawn_reader(
     mut child: Box<dyn portable_pty::Child + Send + Sync>,
     on_event: Arc<dyn Fn(PtyEvent) + Send + Sync>,
     child_reaper: Arc<tokio::sync::Mutex<()>>,
-) {
+) -> std::io::Result<()> {
     std::thread::Builder::new()
         .name("alera-pty-reader".to_string())
         .spawn(move || {
@@ -43,7 +49,7 @@ pub(super) fn spawn_reader(
             };
             on_event(PtyEvent::Exit(code));
         })
-        .expect("failed to spawn pty reader thread");
+        .map(|_| ())
 }
 
 #[cfg(windows)]
@@ -54,42 +60,46 @@ enum WindowsReaderEvent {
     ChildExited(i32),
 }
 
+#[cfg(windows)]
+fn read_windows_pty(mut reader: Box<dyn Read + Send>, reader_tx: SyncSender<WindowsReaderEvent>) {
+    let mut buffer = vec![0u8; READ_CHUNK_BYTES];
+    loop {
+        match reader.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(read) => {
+                // A slow Host actor blocks this session's PTY reader only.
+                // No other terminal shares this queue or is starved by it.
+                if reader_tx
+                    .send(WindowsReaderEvent::Output(buffer[..read].to_vec()))
+                    .is_err()
+                {
+                    return;
+                }
+            }
+            Err(error) => {
+                let _ = reader_tx.send(WindowsReaderEvent::Error(error.to_string()));
+                break;
+            }
+        }
+    }
+    let _ = reader_tx.send(WindowsReaderEvent::ReaderClosed);
+}
+
 /// ConPTY keeps its output pipe open until the pseudoconsole and input writer
 /// are released. Wait for the child independently, ask the server actor to
 /// release those handles, then drain all remaining output before publishing
 /// the final exit event.
 #[cfg(windows)]
 pub(super) fn spawn_reader(
-    mut reader: Box<dyn Read + Send>,
+    reader: Box<dyn Read + Send>,
     mut child: Box<dyn portable_pty::Child + Send + Sync>,
     on_event: Arc<dyn Fn(PtyEvent) + Send + Sync>,
-) {
-    let (event_tx, event_rx) = std::sync::mpsc::channel();
+) -> std::io::Result<()> {
+    let (event_tx, event_rx) = sync_channel(WINDOWS_PTY_EVENT_QUEUE_CAPACITY);
     let reader_tx = event_tx.clone();
     std::thread::Builder::new()
         .name("alera-pty-reader".to_string())
-        .spawn(move || {
-            let mut buffer = vec![0u8; READ_CHUNK_BYTES];
-            loop {
-                match reader.read(&mut buffer) {
-                    Ok(0) => break,
-                    Ok(read) => {
-                        if reader_tx
-                            .send(WindowsReaderEvent::Output(buffer[..read].to_vec()))
-                            .is_err()
-                        {
-                            return;
-                        }
-                    }
-                    Err(error) => {
-                        let _ = reader_tx.send(WindowsReaderEvent::Error(error.to_string()));
-                        break;
-                    }
-                }
-            }
-            let _ = reader_tx.send(WindowsReaderEvent::ReaderClosed);
-        })
-        .expect("failed to spawn pty reader thread");
+        .spawn(move || read_windows_pty(reader, reader_tx))?;
 
     std::thread::Builder::new()
         .name("alera-pty-child-waiter".to_string())
@@ -99,8 +109,7 @@ pub(super) fn spawn_reader(
                 .map(|status| status.exit_code() as i32)
                 .unwrap_or(-1);
             let _ = event_tx.send(WindowsReaderEvent::ChildExited(code));
-        })
-        .expect("failed to spawn pty child waiter thread");
+        })?;
 
     std::thread::Builder::new()
         .name("alera-pty-event-coordinator".to_string())
@@ -125,14 +134,14 @@ pub(super) fn spawn_reader(
                 }
             }
         })
-        .expect("failed to spawn pty event coordinator thread");
+        .map(|_| ())
 }
 
 pub(super) fn spawn_writer(
     mut writer: Box<dyn Write + Send>,
     input_rx: Receiver<PtyWrite>,
     on_event: Arc<dyn Fn(PtyEvent) + Send + Sync>,
-) {
+) -> std::io::Result<()> {
     std::thread::Builder::new()
         .name("alera-pty-writer".to_string())
         .spawn(move || {
@@ -175,7 +184,7 @@ pub(super) fn spawn_writer(
                 });
             }
         })
-        .expect("failed to spawn PTY writer thread");
+        .map(|_| ())
 }
 
 #[cfg(test)]
@@ -202,6 +211,72 @@ mod tests {
         fn flush(&mut self) -> std::io::Result<()> {
             Ok(())
         }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn flooding_conpty_reader_backpressures_only_its_session() {
+        use std::sync::atomic::AtomicUsize;
+        use std::time::Instant;
+
+        struct EndlessOutput {
+            reads: Arc<AtomicUsize>,
+        }
+
+        impl Read for EndlessOutput {
+            fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+                self.reads.fetch_add(1, Ordering::SeqCst);
+                buffer.fill(b'x');
+                Ok(buffer.len())
+            }
+        }
+
+        let reads = Arc::new(AtomicUsize::new(0));
+        let (blocked_tx, blocked_rx) = sync_channel(WINDOWS_PTY_EVENT_QUEUE_CAPACITY);
+        let counter = Arc::clone(&reads);
+        let blocked_reader = std::thread::spawn(move || {
+            read_windows_pty(Box::new(EndlessOutput { reads: counter }), blocked_tx);
+        });
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while reads.load(Ordering::SeqCst) < WINDOWS_PTY_EVENT_QUEUE_CAPACITY + 1
+            && Instant::now() < deadline
+        {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        // The last read blocks on send: the queue cannot grow while the
+        // shared Host is occupied with another session.
+        assert_eq!(
+            reads.load(Ordering::SeqCst),
+            WINDOWS_PTY_EVENT_QUEUE_CAPACITY + 1
+        );
+        std::thread::sleep(Duration::from_millis(50));
+        assert_eq!(
+            reads.load(Ordering::SeqCst),
+            WINDOWS_PTY_EVENT_QUEUE_CAPACITY + 1
+        );
+
+        // A separate PTY reader must keep delivering while the first stalls.
+        let (healthy_tx, healthy_rx) = sync_channel(WINDOWS_PTY_EVENT_QUEUE_CAPACITY);
+        let healthy_reader = std::thread::spawn(move || {
+            read_windows_pty(
+                Box::new(std::io::Cursor::new(b"healthy".to_vec())),
+                healthy_tx,
+            );
+        });
+        assert!(matches!(
+            healthy_rx.recv_timeout(Duration::from_secs(2)),
+            Ok(WindowsReaderEvent::Output(data)) if data == b"healthy"
+        ));
+        assert!(matches!(
+            healthy_rx.recv_timeout(Duration::from_secs(2)),
+            Ok(WindowsReaderEvent::ReaderClosed)
+        ));
+        healthy_reader.join().unwrap();
+
+        // A closed Host receiver also releases the blocked producer.
+        drop(blocked_rx);
+        blocked_reader.join().unwrap();
     }
 
     #[test]
@@ -241,7 +316,8 @@ mod tests {
             }),
             input_rx,
             on_event,
-        );
+        )
+        .unwrap();
 
         for _ in 0..2 {
             assert!(matches!(

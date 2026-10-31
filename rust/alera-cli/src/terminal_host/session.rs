@@ -299,14 +299,26 @@ impl Session {
             title_tracker,
         };
         history.queue_checkpoint(session.checkpoint(None), max_bytes);
-        spawn_reader(
+        // A failure to allocate a PTY worker thread must fail just this
+        // session, not panic the shared Host and disconnect every terminal.
+        if let Err(error) = spawn_reader(
             reader,
             child,
             Arc::clone(&on_event),
             #[cfg(unix)]
             Arc::clone(&session.child_reaper),
-        );
-        spawn_writer(writer, input_rx, on_event);
+        ) {
+            session.terminate(true, history, max_bytes).await;
+            return Err(HostError::state(format!(
+                "failed to start PTY reader: {error}"
+            )));
+        }
+        if let Err(error) = spawn_writer(writer, input_rx, on_event) {
+            session.terminate(true, history, max_bytes).await;
+            return Err(HostError::state(format!(
+                "failed to start PTY writer: {error}"
+            )));
+        }
         Ok(session)
     }
 

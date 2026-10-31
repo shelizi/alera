@@ -159,3 +159,51 @@ impl ServerActor {
             .await;
     }
 }
+
+#[cfg(test)]
+mod fault_isolation_tests {
+    use super::*;
+    use crate::terminal_host::server::actor_test_harness::test_actor;
+    use crate::terminal_host::session::PtyEvent;
+
+    #[tokio::test]
+    async fn crashing_pty_does_not_stop_another_terminal_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut actor = test_actor(
+            &dir,
+            HashMap::new(),
+            HashMap::from([
+                (
+                    "broken".to_string(),
+                    Session::driver_test_stub("broken", 80, 24),
+                ),
+                (
+                    "healthy".to_string(),
+                    Session::driver_test_stub("healthy", 80, 24),
+                ),
+            ]),
+        )
+        .await;
+
+        // A broken reader and a failed shell are local to the original PTY.
+        actor
+            .handle_pty_event("broken".to_string(), PtyEvent::Error("pipe closed".into()))
+            .await;
+        actor
+            .handle_pty_event("broken".to_string(), PtyEvent::Exit(-1))
+            .await;
+        assert!(!actor.sessions["broken"].running());
+        assert!(actor.sessions["healthy"].running());
+
+        // The unaffected session can still receive output in the same Host.
+        actor
+            .handle_pty_event(
+                "healthy".to_string(),
+                PtyEvent::Output(b"still alive".to_vec()),
+            )
+            .await;
+        assert!(actor.sessions["healthy"].running());
+        assert_eq!(actor.sessions["healthy"].output_stream_range(), (0, 11));
+        assert!(!actor.disposed);
+    }
+}
