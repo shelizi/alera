@@ -9,7 +9,7 @@ use windows::core::PCWSTR;
 use windows::Win32::Foundation::{HANDLE, WAIT_FAILED, WAIT_OBJECT_0};
 use windows::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
-    SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+    SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_JOB_MEMORY,
     JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
 };
 use windows::Win32::System::Threading::{
@@ -28,6 +28,17 @@ pub(crate) struct WindowsProcessJob {
     handle: OwnedHandle,
     release_event: OwnedHandle,
     release_event_name: String,
+}
+
+const TERMINAL_JOB_MEMORY_LIMIT_ENV: &str = "ALERA_TERMINAL_JOB_MEMORY_LIMIT_MB";
+
+fn terminal_job_memory_limit(override_mb: Option<&str>) -> Option<usize> {
+    let mb = override_mb?.trim().parse::<u64>().ok()?;
+    if mb == 0 {
+        return None;
+    }
+    mb.checked_mul(1024 * 1024)
+        .and_then(|bytes| usize::try_from(bytes).ok())
 }
 
 impl WindowsProcessJob {
@@ -50,6 +61,16 @@ impl WindowsProcessJob {
         let handle = unsafe { OwnedHandle::from_raw_handle(raw.0) };
         let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
         limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        // Opt-in only: a low default would unexpectedly kill compilers and AI
+        // agents. The cap covers one shell's entire descendant tree, not Host.
+        if let Ok(raw_limit) = std::env::var(TERMINAL_JOB_MEMORY_LIMIT_ENV) {
+            if let Some(bytes) = terminal_job_memory_limit(Some(&raw_limit)) {
+                limits.BasicLimitInformation.LimitFlags |= JOB_OBJECT_LIMIT_JOB_MEMORY;
+                limits.JobMemoryLimit = bytes;
+            } else if raw_limit.trim() != "0" {
+                tracing::warn!("invalid {TERMINAL_JOB_MEMORY_LIMIT_ENV}; PTY cap not applied");
+            }
+        }
         // Safe: `limits` has the exact layout and size required by the selected
         // information class and remains alive for the duration of the call.
         unsafe {
@@ -156,6 +177,21 @@ mod tests {
 
     use windows::Win32::System::JobObjects::{QueryInformationJobObject, JOB_OBJECT_LIMIT};
     use windows::Win32::System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE};
+
+    #[test]
+    fn session_memory_limit_rejects_invalid_and_overflow_values() {
+        assert_eq!(terminal_job_memory_limit(None), None);
+        assert_eq!(terminal_job_memory_limit(Some("0")), None);
+        assert_eq!(terminal_job_memory_limit(Some("abc")), None);
+        assert_eq!(
+            terminal_job_memory_limit(Some("1024")),
+            Some(1024 * 1024 * 1024)
+        );
+        assert_eq!(
+            terminal_job_memory_limit(Some("18446744073709551615")),
+            None
+        );
+    }
 
     #[test]
     fn job_is_configured_to_kill_processes_when_closed() {
