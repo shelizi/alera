@@ -100,16 +100,17 @@ impl ServerActor {
                 if tab.kind == "terminal" && tab.payload["lastTerminalTabTransfer"].is_object() {
                     let session_id = terminal_session_id(&tab);
                     let Some(session) = self.sessions.get(&session_id).filter(|session| {
-                        session.running()
-                            && session.tab_id == *tab_id
+                        session.tab_id == *tab_id
                             && session.workspace_id == tab.workspace_id
+                            && (session.running() || session.observed_exit_code().is_some())
                     }) else {
-                        // Do not erase crash evidence by deleting metadata
-                        // while the original PTY's identity is unknown.
+                        // A disappeared Host, reminted PTY, or restored
+                        // checkpoint is NOT an original exit witness.
                         return Err(HostError::state(
-                            "Transferred Terminal's original live PTY owner cannot be confirmed. Resolve recovery before deleting its Tab.",
+                            "Transferred Terminal original PTY or its Host-observed exit cannot be confirmed. Preserve the Tab for audited recovery.",
                         ));
                     };
+                    let original_exit_code = session.observed_exit_code();
                     let receipt = &tab.payload["lastTerminalTabTransfer"];
                     let status = self
                         .terminal_tab_transfer_status(
@@ -123,13 +124,23 @@ impl ServerActor {
                             }),
                         )
                         .await?;
-                    if status["applied"] != true {
+                    let original_witness_matches = if let Some(exit_code) = original_exit_code {
+                        status["reason"] == "pty_exit_observed"
+                            && status["exitCode"].as_i64() == Some(i64::from(exit_code))
+                            && status["originalExitAndLayoutsConsistent"] == true
+                            && status["hostGenerationMismatch"] == false
+                    } else {
+                        status["applied"] == true
+                    };
+                    if !original_witness_matches {
                         return Err(HostError::state(
-                            "Transferred Terminal PTY instance is not verified. Resolve its original transfer before deleting the Tab.",
+                            "Transferred Terminal live PTY or original Host-observed exit is not verified. Preserve the Tab and recovery receipt.",
                         ));
                     }
                     let expected_view = expected_view_lease_id.as_deref().unwrap_or_default();
                     if !session.is_only_live_view_token(expected_view) {
+                        // Applies to an original exited Session too: any
+                        // second attached window blocks explicit removal.
                         // Runtime-store RPCs may have another authenticated
                         // socket than PTY I/O. The unguessable per-view token
                         // is the sole remaining-view proof.

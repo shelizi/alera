@@ -314,6 +314,17 @@ impl Session {
         self.running
     }
 
+    /// Only an exit event processed by this original Host actor records a
+    /// code. A missing Session, restored checkpoint, or reminted PTY is not
+    /// equivalent to observing its original shell exit.
+    pub fn observed_exit_code(&self) -> Option<i32> {
+        if self.running {
+            None
+        } else {
+            self.exit_code
+        }
+    }
+
     pub fn workspace_id(&self) -> &str {
         &self.workspace_id
     }

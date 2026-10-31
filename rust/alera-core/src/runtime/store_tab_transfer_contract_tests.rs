@@ -133,6 +133,83 @@ async fn only_matching_original_pty_receipt_can_retire_tab_with_audit() {
     assert_ne!(digest, "my-private-view");
 }
 
+#[tokio::test]
+async fn original_exited_pty_requires_exact_marker_and_audits_explicit_close() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = RuntimeStore::open(dir.path()).await.unwrap();
+    let token = format!("{}:42", uuid::Uuid::new_v4());
+    let payload = json!({
+        "terminalSessionId": "exited-session",
+        "lastTerminalTabTransfer": {
+            "id": "exit-move", "from": "source", "to": "target", "ptyInstanceToken": token
+        },
+        "lastTerminalTabExit": {
+            "transferMutationId": "exit-move", "sessionId": "exited-session",
+            "workspaceId": "target", "ptyInstanceToken": token,
+            "exitCode": 7, "observedAtUtc": Utc::now().to_rfc3339()
+        }
+    });
+    insert_tab(&store, "exited-tab", "target", payload).await;
+    save_layout(&store, "source", &single_pane("source", &[])).await;
+    save_layout(&store, "target", &single_pane("target", &["exited-tab"])).await;
+    assert!(store
+        .remove_transferred_terminal_after_verified_live_view(
+            "exited-tab",
+            "exited-session",
+            "target",
+            "exit-move",
+            &token,
+            "view"
+        )
+        .await
+        .is_err());
+    for (mutation, code) in [("stale-move", 7), ("exit-move", 0)] {
+        assert!(store
+            .remove_transferred_terminal_after_verified_original_exit(
+                "exited-tab",
+                "exited-session",
+                "target",
+                mutation,
+                &token,
+                "view",
+                code
+            )
+            .await
+            .is_err());
+    }
+    assert!(store
+        .find_workspace_tab("exited-tab")
+        .await
+        .unwrap()
+        .is_some());
+    store
+        .remove_transferred_terminal_after_verified_original_exit(
+            "exited-tab",
+            "exited-session",
+            "target",
+            "exit-move",
+            &token,
+            "view",
+            7,
+        )
+        .await
+        .unwrap();
+    assert!(store
+        .find_workspace_tab("exited-tab")
+        .await
+        .unwrap()
+        .is_none());
+    let audit: (String, String) = sqlx::query_as(
+        "SELECT reason, viewLeaseSha256 FROM terminalTabRetirementAudits WHERE tabId = ?",
+    )
+    .bind("exited-tab")
+    .fetch_one(&store.pool)
+    .await
+    .unwrap();
+    assert_eq!(audit.0, "explicit_verified_original_exited_pty_only_view");
+    assert_eq!(audit.1, hex::encode(Sha256::digest(b"view")));
+}
+
 #[test]
 fn retirement_keeps_other_destination_tab_and_activates_it() {
     let target = single_pane("target", &["moved", "editor"]);

@@ -44,6 +44,56 @@ impl RuntimeStore {
         expected_original_pty_token: &str,
         expected_view_lease_id: &str,
     ) -> Result<()> {
+        self.retire_transferred_terminal_with_original_witness(
+            tab_id,
+            session_id,
+            expected_workspace_id,
+            expected_transfer_mutation_id,
+            expected_original_pty_token,
+            expected_view_lease_id,
+            None,
+        )
+        .await
+    }
+
+    /// Explicit Tab close after this SAME Host actor observed its original
+    /// PTY exit and verified its only attached View. The actor must witness
+    /// the actual Session exit; a persisted marker by itself is insufficient.
+    /// Both layouts and receipt are checked again in the write transaction.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn remove_transferred_terminal_after_verified_original_exit(
+        &self,
+        tab_id: &str,
+        session_id: &str,
+        expected_workspace_id: &str,
+        expected_transfer_mutation_id: &str,
+        expected_original_pty_token: &str,
+        expected_view_lease_id: &str,
+        original_exit_code: i32,
+    ) -> Result<()> {
+        self.retire_transferred_terminal_with_original_witness(
+            tab_id,
+            session_id,
+            expected_workspace_id,
+            expected_transfer_mutation_id,
+            expected_original_pty_token,
+            expected_view_lease_id,
+            Some(original_exit_code),
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn retire_transferred_terminal_with_original_witness(
+        &self,
+        tab_id: &str,
+        session_id: &str,
+        expected_workspace_id: &str,
+        expected_transfer_mutation_id: &str,
+        expected_original_pty_token: &str,
+        expected_view_lease_id: &str,
+        expected_exit_code: Option<i32>,
+    ) -> Result<()> {
         ensure!(
             [
                 tab_id,
@@ -83,6 +133,20 @@ impl RuntimeStore {
             .unwrap_or(tab_id);
         let source = receipt["from"].as_str().unwrap_or_default();
         let target = receipt["to"].as_str().unwrap_or_default();
+        // The exited path is allowed only with the original observed code,
+        // exact receipt/PTY identity and a non-malformed Host exit marker.
+        // A crashed or different Host cannot supply this actor-owned witness.
+        let exit_witness_matches = expected_exit_code.is_some_and(|code| {
+            let marker = &tab.payload[TRANSFER_EXIT_EVIDENCE_KEY];
+            marker["transferMutationId"].as_str() == Some(expected_transfer_mutation_id)
+                && marker["sessionId"].as_str() == Some(session_id)
+                && marker["workspaceId"].as_str() == Some(expected_workspace_id)
+                && marker["ptyInstanceToken"].as_str() == Some(expected_original_pty_token)
+                && marker["exitCode"].as_i64() == Some(i64::from(code))
+                && marker["observedAtUtc"].as_str().is_some_and(|timestamp| {
+                    chrono::DateTime::parse_from_rfc3339(timestamp).is_ok()
+                })
+        });
         ensure!(
             tab.kind == "terminal"
                 && tab.workspace_id == expected_workspace_id
@@ -92,8 +156,12 @@ impl RuntimeStore {
                 && persisted_session_id == session_id
                 && receipt["id"].as_str() == Some(expected_transfer_mutation_id)
                 && receipt["ptyInstanceToken"].as_str() == Some(expected_original_pty_token)
-                && tab.payload.get(TRANSFER_EXIT_EVIDENCE_KEY).is_none(),
-            "Moved Tab original PTY/owner/receipt differs or exit evidence requires manual recovery."
+                && if expected_exit_code.is_some() {
+                    exit_witness_matches
+                } else {
+                    tab.payload.get(TRANSFER_EXIT_EVIDENCE_KEY).is_none()
+                },
+            "Moved Tab original PTY/owner/receipt or Host-observed exit witness differs."
         );
         let original_source = persisted_layout(&mut tx, source)
             .await?
@@ -170,7 +238,11 @@ impl RuntimeStore {
         .bind(expected_transfer_mutation_id)
         .bind(expected_original_pty_token)
         .bind(view_digest)
-        .bind("explicit_verified_original_live_pty_only_view")
+        .bind(if expected_exit_code.is_some() {
+            "explicit_verified_original_exited_pty_only_view"
+        } else {
+            "explicit_verified_original_live_pty_only_view"
+        })
         .bind(Utc::now().to_rfc3339())
         .execute(&mut *tx)
         .await?;

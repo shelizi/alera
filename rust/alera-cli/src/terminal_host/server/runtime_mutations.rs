@@ -297,17 +297,34 @@ pub(super) async fn run_runtime_mutation(
                         .as_str()
                         .filter(|id| !id.is_empty())
                         .unwrap_or(&tab_id);
-                    runtime_store
-                        .remove_transferred_terminal_after_verified_live_view(
-                            &tab_id,
-                            session,
-                            owner,
-                            mutation,
-                            original_pty_token,
-                            expected_view,
-                        )
-                        .await
-                        .map_err(runtime_store_error)?;
+                    if tab.payload.get("lastTerminalTabExit").is_some() {
+                        // The owning actor already required its *own* exit
+                        // event, current Host generation, matching status
+                        // and the only attached View before enqueuing this.
+                        // The Store re-checks that exact persisted marker,
+                        // receipt, Tab and both layouts in its write txn.
+                        let observed_code = tab.payload["lastTerminalTabExit"]["exitCode"]
+                            .as_i64()
+                            .and_then(|code| i32::try_from(code).ok())
+                            .ok_or_else(|| HostError::state(
+                                "Original transferred PTY exit marker is unavailable."
+                            ))?;
+                        runtime_store
+                            .remove_transferred_terminal_after_verified_original_exit(
+                                &tab_id, session, owner, mutation,
+                                original_pty_token, expected_view, observed_code,
+                            )
+                            .await
+                            .map_err(runtime_store_error)?;
+                    } else {
+                        runtime_store
+                            .remove_transferred_terminal_after_verified_live_view(
+                                &tab_id, session, owner, mutation,
+                                original_pty_token, expected_view,
+                            )
+                            .await
+                            .map_err(runtime_store_error)?;
+                    }
                 } else {
                     runtime_store
                         .remove_workspace_tab(&tab_id)
