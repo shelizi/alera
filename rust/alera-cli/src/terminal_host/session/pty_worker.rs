@@ -81,6 +81,13 @@ fn write_frame(writer: &mut impl Write, kind: u8, payload: &[u8]) -> io::Result<
 }
 
 fn read_frame(reader: &mut impl Read) -> io::Result<Option<(u8, Vec<u8>)>> {
+    read_frame_bounded(reader, MAX_FRAME_BYTES)
+}
+
+fn read_frame_bounded(
+    reader: &mut impl Read,
+    max_bytes: usize,
+) -> io::Result<Option<(u8, Vec<u8>)>> {
     let mut kind = [0];
     if reader.read(&mut kind)? == 0 {
         return Ok(None);
@@ -88,7 +95,7 @@ fn read_frame(reader: &mut impl Read) -> io::Result<Option<(u8, Vec<u8>)>> {
     let mut length = [0u8; 4];
     reader.read_exact(&mut length)?;
     let length = u32::from_le_bytes(length) as usize;
-    if length > MAX_FRAME_BYTES {
+    if length > MAX_FRAME_BYTES || length > max_bytes {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "PTY frame length exceeds limit",
@@ -612,6 +619,14 @@ mod tests {
         oversize.extend_from_slice(&((MAX_FRAME_BYTES + 1) as u32).to_le_bytes());
         assert_eq!(
             read_frame(&mut oversize.as_slice()).unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
+        let mut too_large_for_auth = vec![b'A'];
+        too_large_for_auth.extend_from_slice(&(4097_u32).to_le_bytes());
+        assert_eq!(
+            read_frame_bounded(&mut too_large_for_auth.as_slice(), 4096)
+                .unwrap_err()
+                .kind(),
             io::ErrorKind::InvalidData
         );
     }

@@ -10,7 +10,7 @@ use std::io::{self, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::os::windows::io::{FromRawHandle, OwnedHandle};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -23,7 +23,7 @@ use windows::Win32::System::Threading::{
     OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
 };
 
-use super::{read_frame, write_frame, MAX_WRITE_BYTES};
+use super::{read_frame_bounded, write_frame, MAX_WRITE_BYTES};
 use crate::terminal_host::host_error::{HostError, HostResult};
 use crate::terminal_host::resources::seal_shell_process;
 
@@ -33,6 +33,33 @@ mod acl;
 const SCHEMA_VERSION: u32 = 2;
 const RECOVERY_BACKLOG_MAX: usize = 4 * 1024 * 1024;
 const CONNECTION_TIMEOUT: Duration = Duration::from_secs(3);
+// Each unauthenticated connection previously spawned an unbounded OS thread
+// and could request a 4 MiB frame before presenting its token. Keep both
+// resource budgets small even if local software opens many idle connections.
+const MAX_CLIENT_CONNECTIONS: usize = 8;
+const MAX_AUTH_FRAME_BYTES: usize = 4096;
+
+#[derive(Default)]
+struct ClientSlots(AtomicUsize);
+
+struct ClientPermit(Arc<ClientSlots>);
+
+impl ClientSlots {
+    fn try_acquire(self: &Arc<Self>) -> Option<ClientPermit> {
+        self.0
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                (current < MAX_CLIENT_CONNECTIONS).then_some(current + 1)
+            })
+            .ok()?;
+        Some(ClientPermit(Arc::clone(self)))
+    }
+}
+
+impl Drop for ClientPermit {
+    fn drop(&mut self) {
+        self.0 .0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -334,12 +361,18 @@ impl WorkerRecoveryServer {
         let thread_tail = Arc::clone(&tail);
         let thread_stop = Arc::clone(&stop);
         let thread_record = record.clone();
+        let client_slots = Arc::new(ClientSlots::default());
         let thread_result = thread::Builder::new()
             .name("alera-pty-worker-reconnect".to_string())
             .spawn(move || {
                 while !thread_stop.load(Ordering::Acquire) {
                     match listener.accept() {
                         Ok((stream, addr)) if addr.ip().is_loopback() => {
+                            let Some(permit) = client_slots.try_acquire() else {
+                                // Drop the socket without spawning another OS
+                                // thread. The active Host is unaffected.
+                                continue;
+                            };
                             let stream_tail = Arc::clone(&thread_tail);
                             let stream_writer = Arc::clone(&writer);
                             let stream_master = Arc::clone(&master);
@@ -347,6 +380,9 @@ impl WorkerRecoveryServer {
                             let _ = thread::Builder::new()
                                 .name("alera-pty-worker-client".to_string())
                                 .spawn(move || {
+                                    // Dropped on any path out of serve_client,
+                                    // including failed auth or disconnected Host.
+                                    let _permit = permit;
                                     serve_client(
                                         stream,
                                         current_record,
@@ -409,7 +445,7 @@ fn serve_client(
     let _ = stream.set_nodelay(true);
     let _ = stream.set_read_timeout(Some(CONNECTION_TIMEOUT));
     let _ = stream.set_write_timeout(Some(CONNECTION_TIMEOUT));
-    let Ok(Some((b'A', payload))) = read_frame(&mut stream) else {
+    let Ok(Some((b'A', payload))) = read_frame_bounded(&mut stream, MAX_AUTH_FRAME_BYTES) else {
         return;
     };
     let Ok(auth) = serde_json::from_slice::<AuthRequest>(&payload) else {
@@ -447,7 +483,7 @@ fn serve_client(
     let generation = state.generation;
     drop(state);
     let _ = stream.set_read_timeout(None);
-    while let Ok(Some((kind, payload))) = read_frame(&mut stream) {
+    while let Ok(Some((kind, payload))) = read_frame_bounded(&mut stream, MAX_WRITE_BYTES) {
         if tail
             .lock()
             .map_or(true, |state| state.generation != generation)
@@ -488,6 +524,24 @@ fn serve_client(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reconnect_client_threads_are_bounded_and_slots_released() {
+        let slots = Arc::new(ClientSlots::default());
+        let permits: Vec<ClientPermit> = (0..MAX_CLIENT_CONNECTIONS)
+            .map(|_| slots.try_acquire().expect("available slot"))
+            .collect();
+        assert!(
+            slots.try_acquire().is_none(),
+            "extra client must not spawn a thread"
+        );
+        drop(permits);
+        assert_eq!(slots.0.load(Ordering::Acquire), 0);
+        assert!(
+            slots.try_acquire().is_some(),
+            "disconnected clients release slots"
+        );
+    }
 
     #[test]
     fn reconnect_output_tail_is_bounded_and_replays_at_absolute_cursor() {
