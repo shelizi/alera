@@ -1,5 +1,17 @@
 # Alera T2 跨 Workspace Terminal Tab：一次收尾成果與最後驗收門檻（2026-10-30）
 
+## 2026-10-31 逐項收斂最新交接：Infra 行數品質通過、原 PTY 遺失收據防護紅轉綠
+
+**本節為最新入口；歷史節保留當時的失敗數以便追蹤，不能用較早日期的紅燈覆蓋本節已完成的定向修正。** 整合分支 `refactor/tdd-integrate-20261029`，隔離 Worktree `.worktrees/refactor-tdd-integrate-20261029`；來源 HEAD 依序 `28f847e20` → `a43e7ea66` → `ea76fa062` → `2d00d0933` → `96e9a4761`。本文件提交後以實際 Git HEAD 為準。原始 dirty `main` 不動，`tab.transfer.capabilities.supported=false`，**無合併／Push／Release**。
+
+- **Gate C／Journal 模組化，已提交 `a43e7ea66`**：原本 900 行的持久化／唯讀證據表拆成 **482 + 240 + 187 行**三份 Dart part。原鎖檔 fail-closed、身分檢查、人工診斷 API 不變，Journal 3 項 Flutter 安全回歸 **3 pass／0 fail**。
+- **Gate C／PTY 附著與重連模組化，已提交 `ea76fa062`**：PTY Session 主檔 592→**496 行**，抽出 101 行的 attach/reattach helper，保留原 Session、View Lease、輸出游標、拒絕 Remint 行為；四組定向 Flutter **182 pass／0 fail／2 skipped**。
+- **Gate C／Host Client 連線與請求模組化，已提交 `2d00d0933`**：Host Client 主檔 886→**459 行**，新增 145/197/114 行的 Routing、Connection、Message Dispatch Dart part，保留原 Socket Hello、已認證資料流、Runtime 設定 Revision CAS、Terminate Mutation ID 與原有 Mixin 覆寫介面。五組定向 Flutter **238 pass／0 fail／2 skipped**。**`dart tool/quality/check_max_lines.dart --roots lib/src/features/workbench/infra`：exit 0、0 違規，沒有更新 baseline。** 全專案 Max-lines 本輪重跑 `dart tool/quality/check_max_lines.dart` **exit 1、134 個超限檔案**（先前 137、減少 3 個）；其他品質債仍待處置，不把局部通過宣稱成全域通過。
+- **Gate A／原 Host 程序內轉移 PTY 缺收據防護，已提交 `96e9a4761`**：在原 Session 加入僅當前 Host 生效的 `moved_workspace_fence`，成功 Commit Transfer 後保留來源與目的 Workspace ID。若原 PTY 仍活、但 SQLite Tab 整列遺失或遭替換為「未轉移」無收據內容，拒絕 `terminate`、`createOrAttach`、來源／目的 Workspace 隱含 `Sleep/cleanup`，不清 Lock、不殺原 PTY、不重建 Shell。**TDD 原版 1 fail（缺收據卻允許終止）→ 修正後 1 pass；實際註冊兩側 Workspace 並測缺列與擦除收據。** 修正後 Windows `cargo test --locked -p alera-cli --bin alera -- --test-threads=2` **1,160 pass／0 fail／6 ignored，exit 0**，包括既有 Live PTY 跨 Workspace 原生 Actor Case **pass**。
+- **Gate C／前一輪另外已完成**：兩張 Golden 以逐像素核對後定向重建（82／75 像素，未放寬像素比較）；Golden＋Host Client 指定測試 **60 pass／0 fail**；Windows Flutter Widget 全套 **1,071 pass／0 fail／3 skipped、exit 0**；Updater Privacy 模式 **20 pass／0 fail**。這些結果在本輪 Dart/Rust 模組化**之前**取得；目前沒有宣稱最新 HEAD 已完成整份 Desktop Flutter 全套。
+
+**固定門檻仍未全通過**：**A** 的跨原生視窗／多 App／雙手機的持久 Last-view 權威、不同 Host 世代與 OS Process Crash 的確定性安全處置仍未完成；本輪的 `moved_workspace_fence` 只是同一個活 Host 的保守證據，不能證明其他 Host 已死。**B** 的 Exited PTY／stale Journal Lock 仍缺雙方 Host+OS attestation、使用者明確授權、完整永久 Audit 及可驗收的人工安全復原 UI；不允許自動解鎖或用 PID 推論原 PTY 不在。**C** 仍缺最新整合版本的完整 Desktop／macOS／兩台實體手機 Native E2E 與全專案 max-lines 收斂。任何一項未通過均維持 `supported=false`，不合併 dirty `main` 或發布。
+
 ## 2026-10-31 固定 Gate 逐項驗收：Updater 完成、Golden 根因量測、PTY Receipt 安全補強
 
 **本節從乾淨整合 `7bb5a13d2` 接續；程式碼來源提交依序為 Updater `fcbce650f`、Host Receipt `ba866b6fb`、Journal Lock `74e33f6a4`；本文件提交後以 Git HEAD 為準。仍只採 A/B/C 三 Gate，不新增階段。`supported=false`、不合併/Push/Release dirty `main`。**
