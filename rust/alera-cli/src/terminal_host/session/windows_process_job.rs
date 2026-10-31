@@ -51,6 +51,22 @@ impl WindowsProcessJob {
     }
 
     pub(crate) fn create() -> HostResult<Self> {
+        // Keep the optional memory cap per Job; tests can specify an explicit
+        // budget without mutating global process environment across threads.
+        let limit = match std::env::var(TERMINAL_JOB_MEMORY_LIMIT_ENV) {
+            Ok(raw_limit) => {
+                let parsed = terminal_job_memory_limit(Some(&raw_limit));
+                if parsed.is_none() && raw_limit.trim() != "0" {
+                    tracing::warn!("invalid {TERMINAL_JOB_MEMORY_LIMIT_ENV}; PTY cap not applied");
+                }
+                parsed
+            }
+            Err(_) => None,
+        };
+        Self::create_with_memory_limit(limit)
+    }
+
+    fn create_with_memory_limit(memory_limit: Option<usize>) -> HostResult<Self> {
         // Safe: both arguments are null, so Windows creates an unnamed job with
         // default security attributes and returns an owned handle.
         let raw = unsafe { CreateJobObjectW(None, PCWSTR::null()) }.map_err(|error| {
@@ -63,13 +79,9 @@ impl WindowsProcessJob {
         limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
         // Opt-in only: a low default would unexpectedly kill compilers and AI
         // agents. The cap covers one shell's entire descendant tree, not Host.
-        if let Ok(raw_limit) = std::env::var(TERMINAL_JOB_MEMORY_LIMIT_ENV) {
-            if let Some(bytes) = terminal_job_memory_limit(Some(&raw_limit)) {
-                limits.BasicLimitInformation.LimitFlags |= JOB_OBJECT_LIMIT_JOB_MEMORY;
-                limits.JobMemoryLimit = bytes;
-            } else if raw_limit.trim() != "0" {
-                tracing::warn!("invalid {TERMINAL_JOB_MEMORY_LIMIT_ENV}; PTY cap not applied");
-            }
+        if let Some(bytes) = memory_limit {
+            limits.BasicLimitInformation.LimitFlags |= JOB_OBJECT_LIMIT_JOB_MEMORY;
+            limits.JobMemoryLimit = bytes;
         }
         // Safe: `limits` has the exact layout and size required by the selected
         // information class and remains alive for the duration of the call.
@@ -191,6 +203,30 @@ mod tests {
             terminal_job_memory_limit(Some("18446744073709551615")),
             None
         );
+    }
+
+    #[test]
+    fn configured_session_memory_budget_is_enforced_in_windows_job_flags() {
+        const CAP_BYTES: usize = 384 * 1024 * 1024;
+        let job = WindowsProcessJob::create_with_memory_limit(Some(CAP_BYTES))
+            .expect("create limited PTY Job");
+        let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+        unsafe {
+            QueryInformationJobObject(
+                Some(WindowsProcessJob::raw_handle(&job.handle)),
+                JobObjectExtendedLimitInformation,
+                (&mut limits as *mut JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast::<c_void>(),
+                size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                None,
+            )
+        }
+        .expect("query per-session job memory cap");
+        assert_ne!(
+            limits.BasicLimitInformation.LimitFlags & JOB_OBJECT_LIMIT_JOB_MEMORY,
+            JOB_OBJECT_LIMIT(0),
+            "Windows Job must enforce the per-terminal memory cap"
+        );
+        assert_eq!(limits.JobMemoryLimit, CAP_BYTES);
     }
 
     #[test]
