@@ -1850,7 +1850,14 @@ packages:
       path: "third_party/xterm"
       relative: true
     source: path
-    version: "5.3.0"
+    version: "5.4.0"
+  xterm2_core:
+    dependency: "direct overridden"
+    description:
+      path: "third_party/xterm/core"
+      relative: true
+    source: path
+    version: "1.0.0"
   yaml:
     dependency: "direct dev"
     description:

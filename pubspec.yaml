@@ -100,6 +100,10 @@ dependency_overrides:
   # Keeps local terminal fixes pinned while upstream PRs are reviewed.
   xterm2:
     path: third_party/xterm
+  # xterm2 5.4 splits the terminal model into a pure-Dart workspace package.
+  # Keep Alera's patched core paired with its patched Flutter renderer.
+  xterm2_core:
+    path: third_party/xterm/core
 
 flutter_launcher_icons:
   windows:
