@@ -1,5 +1,7 @@
 # Alera T2 跨 Workspace Terminal Tab：一次收尾成果與最後驗收門檻（2026-10-30）
 
+> **最新功能狀態（2026-10-31）**：T2 同一 Host 的桌面轉移功能已採用 `tab.transfer.capabilities` 協定協商；含完整 T2 實作的 Host 無 Windows／macOS／Linux 作業系統白名單，舊／不完整／離線 Host 仍被 Flutter 拒絕。以下 Gate A／B／C 與 `supported=false` 記錄屬**先前開發階段的歷史驗收資料**，不是當前程式的能力回覆。原 Host 身分不明、Crash、收據損毀或 View 不一致時，實際操作仍 fail-closed；macOS／Linux 原生 E2E 尚未據此宣稱通過。
+
 ## 2026-10-31 Gate A／B／C 接續實作與驗收（本文件最新入口）
 
 **整合起點已核對**：唯一整合分支 `refactor/tdd-integrate-20261029`，原始 HEAD `806f5d7af16112839eda1badb7ed99dec873e463`，工作樹初始 clean。原始 dirty `main` HEAD `3d232acff9822154c68049ee63c57ed5966b84e0`，原本修改與未追蹤內容不動。**固定只使用 Gate A／B／C，不新增其他階段；`tab.transfer.capabilities.supported=false`、`livePtyTransfer=false`，絕不 merge／push／release。**

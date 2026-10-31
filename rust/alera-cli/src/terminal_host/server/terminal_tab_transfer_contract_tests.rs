@@ -28,6 +28,38 @@ fn layout(workspace: &str, tab_ids: &[&str]) -> Value {
     data
 }
 
+#[tokio::test]
+async fn transfer_capability_is_negotiated_by_host_not_target_os() {
+    let dir = tempfile::tempdir().unwrap();
+    let (handle, mut replies) = ClientHandle::test_channels();
+    let mut clients = HashMap::new();
+    clients.insert(1, local_client(handle));
+    let mut actor = test_actor(&dir, clients, HashMap::new()).await;
+
+    actor
+        .handle_line(
+            1,
+            json!({
+                "id": 31,
+                "type": "tab.transfer.capabilities",
+                "payload": {}
+            })
+            .to_string(),
+        )
+        .await;
+    let response = tokio::time::timeout(std::time::Duration::from_secs(5), replies.recv())
+        .await
+        .expect("Host must answer capability negotiation")
+        .expect("client channel remains open")
+        .as_json()
+        .expect("Host reply is JSON");
+    assert_eq!(response["id"], 31);
+    assert_eq!(response["ok"], true);
+    assert_eq!(response["payload"]["supported"], true);
+    assert_eq!(response["payload"]["livePtyTransfer"], true);
+    assert_eq!(response["payload"]["atomicLayouts"], true);
+}
+
 #[test]
 fn transferred_terminal_rejects_malformed_owner_generation_and_exit_evidence() {
     let timestamp = Utc::now();

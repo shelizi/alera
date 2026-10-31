@@ -1,8 +1,8 @@
 # Tab and layout operation contract
 
-## T2 Windows Desktop 同一 Host 的跨 Workspace 轉移契約（2026-10-31）
+## T2 跨平台同一 Host 的跨 Workspace 轉移契約（2026-10-31）
 
-Windows Host 在 `tab.transfer.capabilities` 宣告 `supported=true`、`livePtyTransfer=true`、`atomicLayouts=true`；其他 Host 平台維持 false。Flutter 只在能力協商通過時開放 Terminal-only 的側欄跨專案／Workspace 拖放，禁止用 `tab.upsert`＋`layout.upsert` 偽造移動。
+具備完整 T2 實作的 Host 不論 Windows、macOS 或 Linux，皆透過 `tab.transfer.capabilities` 宣告 `supported=true`、`livePtyTransfer=true`、`atomicLayouts=true`；由 Flutter 依**實際連線 Host 的回覆**決定是否開放 Terminal-only 側欄跨專案／Workspace 拖放。舊版、不完整或無法連線的 Host 保持拒絕，不以 OS 名稱猜測支援，也不使用 `tab.upsert`＋`layout.upsert` 偽造移動。此宣告表示 Host 提供協定能力，不代表任一 Session 都可移動；每筆仍須通過 PTY、View 與 Layout 的原有安全檢查。
 
 `tab.transfer` 要求相同 Host 的有效來源與目的 Workspace、活原 PTY／Session 身分、原來源與目標 Layout CAS、固定 `clientMutationId`。單一 SQLite 交易提交 Tab owner 與雙側 Layout 後，原 Host Actor 更新既有 Session 顯示 Workspace、廣播雙側變更；Client 讀回並只在記憶體套用兩側 Layout。失聯時用原 ID 查 `tab.transfer.status`，無法確認則保留 Pending Journal，禁止生成新 Shell 或推定失敗。Undo 必須是一筆反向 `tab.transfer`，不能刪除重建。跨程序 Host Crash 後沒有原 PTY 的情況不宣稱可恢復原 Session。
 
