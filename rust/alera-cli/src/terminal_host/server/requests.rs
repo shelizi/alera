@@ -825,17 +825,17 @@ impl ServerActor {
             }
             "tab.transfer.capabilities" => {
                 self.require_auth(client_id)?;
-                // Scope the first release to the Windows desktop Host. The
-                // existing Flutter capability probe keeps older or other
-                // platforms disabled instead of faking a close+reopen move.
-                // All mutations still require the original live PTY/receipt
-                // and same-Host atomic two-layout transaction.
-                let supported = cfg!(target_os = "windows");
+                // Negotiate the Host implementation, not the operating system.
+                // This sidecar implements tab.transfer and its atomic Store
+                // transaction on every Host platform; older/partial sidecars
+                // fail the Flutter capability probe. Each actual move still
+                // verifies the live original PTY, its View leases, receipt,
+                // and both layouts before committing.
                 Ok(json!({
-                    "supported": supported,
-                    "livePtyTransfer": supported,
+                    "supported": true,
+                    "livePtyTransfer": true,
                     "atomicLayouts": true,
-                    "reason": if supported { "" } else { "Live Terminal transfer is not enabled on this Host platform." }
+                    "reason": ""
                 }))
             }
             "tab.rename" => {

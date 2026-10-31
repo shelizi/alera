@@ -1,5 +1,7 @@
 # T2 — 跨專案／跨 Workspace Terminal Tab 移動：功能規劃與並行重構邊界
 
+> **2026-10-31 更新**：下方 `feature-gated OFF`、Windows-only 和「未執行測試」為歷史設計與開發記錄。當前實作以連線 Host 的三項能力回覆判定 T2 可用，**不依 Host 作業系統限制**；原 PTY、收據、View/Layouts 驗證與未知結果時的 fail-closed 規則仍有效。跨平台原生驗收需分開記錄，不能僅因 Host 協定宣告就假稱實機已通過。
+
 **Priority：P2；Status：T2 一次集中收尾的 Store/Journal 安全修改已整合；仍有 A/B/C 三項不可假定通過的有限 Release Gate；feature-gated OFF（2026-10-30）。** 詳 `docs/terminal-tab-transfer-closure-20261030.md`。**跨專案拖放仍未開放；Flutter/Cargo 測試、靜態分析、編譯及實機回歸仍未執行。**
 
 本文件原是 `feat/cross-project-terminal-tabs-20261029` 分支上的設計稿（commit `ec150a493`），現**只收編此規劃檔**至 `refactor/tdd-integrate-20261029`；未合併該舊分支的產品程式。原設計所記載的並行分工為 2026-10-29 第三批的歷史狀態；最新整合已包含第八批功能修正及 macOS Claude Code 貼上 hotfix。
