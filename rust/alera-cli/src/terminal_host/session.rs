@@ -206,6 +206,8 @@ impl Session {
         workspace_id: String,
         tab_id: String,
         working_directory: String,
+        runtime_dir: &std::path::Path,
+        allow_reconnect: bool,
         launch: &TerminalHostLaunch,
         cols: u16,
         rows: u16,
@@ -224,14 +226,34 @@ impl Session {
             let launch = launch.clone();
             let terminal_handle = id.clone();
             let launch_working_directory = working_directory.clone();
+            let worker_runtime_dir = runtime_dir.to_path_buf();
+            let worker_workspace_id = workspace_id.clone();
+            let worker_tab_id = tab_id.clone();
             tokio::task::spawn_blocking(move || {
                 if pty_worker::enabled() {
+                    if allow_reconnect {
+                        if let Some(existing) = pty_worker::try_recover_worker(
+                            &worker_runtime_dir,
+                            &terminal_handle,
+                            &worker_tab_id,
+                            cols,
+                            rows,
+                            initial_output_stream_bytes,
+                        )? {
+                            return Ok(existing);
+                        }
+                    }
                     pty_worker::spawn_worker_pty(
                         launch,
                         terminal_handle,
+                        worker_workspace_id,
+                        worker_tab_id,
                         &launch_working_directory,
+                        &worker_runtime_dir,
                         cols,
                         rows,
+                        initial_output_stream_bytes,
+                        max_bytes,
                     )
                 } else {
                     spawn_pty(
@@ -247,7 +269,10 @@ impl Session {
             .map_err(|error| HostError::state(format!("PTY setup worker failed: {error}")))??
         };
         #[cfg(not(windows))]
-        let spawned = spawn_pty(launch.clone(), id.clone(), &working_directory, cols, rows)?;
+        let spawned = {
+            let _ = (runtime_dir, allow_reconnect);
+            spawn_pty(launch.clone(), id.clone(), &working_directory, cols, rows)?
+        };
         let SpawnedPty {
             child,
             master,
@@ -258,8 +283,28 @@ impl Session {
             process_job,
             #[cfg(windows)]
             worker_process,
+            #[cfg(windows)]
+            replay_start_cursor,
+            #[cfg(windows)]
+            recovered_working_directory,
             shell,
         } = spawned;
+        // If the Host was gone longer than the worker's bounded output tail,
+        // replay begins after the last durable checkpoint. Keep cursor offsets
+        // truthful: old scrollback is not contiguous with recovered live output.
+        #[cfg(windows)]
+        let initial_scrollback =
+            if replay_start_cursor.is_some_and(|start| start > initial_output_stream_bytes) {
+                tracing::warn!(
+                    session_id = %id,
+                    checkpoint_cursor = initial_output_stream_bytes,
+                    replay_start_cursor = replay_start_cursor.unwrap_or_default(),
+                    "PTY output gap after Host crash; discarding noncontiguous cached scrollback"
+                );
+                &[][..]
+            } else {
+                initial_scrollback
+            };
         let (input_tx, input_rx) = sync_channel(INPUT_QUEUE_CAPACITY);
         let on_event: Arc<dyn Fn(PtyEvent) + Send + Sync> = Arc::new(on_event);
 
@@ -273,6 +318,9 @@ impl Session {
             id,
             workspace_id,
             tab_id,
+            #[cfg(windows)]
+            working_directory: recovered_working_directory.unwrap_or(working_directory),
+            #[cfg(not(windows))]
             working_directory,
             clients: HashSet::new(),
             view_leases: HashMap::new(),
@@ -311,7 +359,16 @@ impl Session {
             durable_output_batch_armed: false,
             durable_output_batch_sequence,
             output_stream_bytes: resumed_output_stream_bytes(
-                initial_output_stream_bytes,
+                {
+                    #[cfg(windows)]
+                    {
+                        initial_output_stream_bytes.max(replay_start_cursor.unwrap_or(0))
+                    }
+                    #[cfg(not(windows))]
+                    {
+                        initial_output_stream_bytes
+                    }
+                },
                 initial_scrollback.len(),
             ),
             title_tracker,

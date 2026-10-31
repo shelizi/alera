@@ -293,6 +293,7 @@ impl ServerActor {
             initial_scrollback,
             initial_output_stream_bytes,
             pending_agent_type(tab),
+            true,
         )
         .await?;
         let managed_launch = initial_managed_agent_launch(tab)?;
@@ -440,6 +441,7 @@ impl ServerActor {
         initial_scrollback: Vec<u8>,
         initial_output_stream_bytes: u64,
         forced_agent_hook: Option<&str>,
+        allow_reconnect: bool,
     ) -> HostResult<()> {
         // This is the final owner-creation boundary for client, automation,
         // and orchestration launches. Runtime mutations perform filesystem
@@ -500,6 +502,8 @@ impl ServerActor {
             workspace_id,
             tab_id,
             working_directory,
+            &self.runtime_dir,
+            allow_reconnect,
             &launch,
             cols,
             rows,

@@ -253,8 +253,19 @@ impl ServerActor {
                 return Ok(session.attachment_payload(false, restore_bytes));
             }
         }
-        self.verify_moved_terminal_launch_directory(&tab_id, &working_directory)
-            .await?;
+        // Do not remint a shell if an authenticated worker outlived Host.
+        #[cfg(windows)]
+        let recoverable = crate::terminal_host::session::pty_worker::has_recoverable_worker(
+            &self.runtime_dir,
+            &session_id,
+            &tab_id,
+        );
+        #[cfg(not(windows))]
+        let recoverable = false;
+        if !recoverable {
+            self.verify_moved_terminal_launch_directory(&tab_id, &working_directory)
+                .await?;
+        }
         let (initial_scrollback, initial_output_stream_bytes) = self
             .take_terminal_restart_state(&session_id, &workspace_id, &tab_id, max_bytes)
             .await;
@@ -275,6 +286,7 @@ impl ServerActor {
             initial_scrollback,
             initial_output_stream_bytes,
             None,
+            true,
         )
         .await?;
         let session = self.sessions.get_mut(&session_id).expect("just inserted");
@@ -373,6 +385,7 @@ impl ServerActor {
             initial_scrollback,
             initial_output_stream_bytes,
             None,
+            false,
         )
         .await?;
 

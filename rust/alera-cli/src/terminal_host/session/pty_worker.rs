@@ -1,14 +1,15 @@
-//! A Windows-only PTY process boundary.
+//! Windows PTY process isolation with opt-in reconnectable worker transport.
 //!
-//! The Host remains the source of truth for tabs, scrollback, and client
-//! attachments. Each opted-in worker owns its own ConPTY and shell Job Object:
-//! an abort or OOM in one worker cannot abort the Host or another worker.
-//! This pipe transport does not yet survive a *Host* crash; recovery needs a
-//! reconnectable transport and durable worker discovery before default enable.
+//! The shared Host keeps tab metadata and history, while every worker owns its
+//! ConPTY, shell and Job Object. The worker listens only on localhost, protects
+//! its connection with a random token and buffers at most 4 MiB of output while
+//! the Host is unavailable. Older/default hosts use the in-process PTY path.
 
 use std::io::{self, Read, Write};
-use std::os::windows::io::{AsHandle, AsRawHandle, OwnedHandle};
-use std::process::{ChildStdin, ChildStdout, Stdio};
+use std::net::TcpStream;
+use std::os::windows::io::{AsRawHandle, OwnedHandle};
+use std::path::Path;
+use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{sync_channel, SyncSender};
 use std::sync::{Arc, Mutex};
@@ -16,14 +17,19 @@ use std::time::{Duration, Instant};
 
 use portable_pty::{Child, ChildKiller, ExitStatus, MasterPty, PtySize};
 use serde::{Deserialize, Serialize};
-use windows::Win32::Foundation::HANDLE;
+use windows::Win32::Foundation::{HANDLE, WAIT_OBJECT_0, WAIT_TIMEOUT};
 use windows::Win32::System::Pipes::PeekNamedPipe;
-use windows::Win32::System::Threading::TerminateProcess;
+use windows::Win32::System::Threading::{
+    GetExitCodeProcess, TerminateProcess, WaitForSingleObject,
+};
 
 use super::pty_spawn::{spawn_pty, SpawnedPty};
 use crate::terminal_host::host_error::{HostError, HostResult};
 use crate::terminal_host::protocol::TerminalHostLaunch;
 use crate::terminal_host::resources::seal_shell_process;
+
+#[path = "pty_worker_recovery.rs"]
+mod recovery;
 
 pub(crate) const WORKER_ARGUMENT: &str = "__alera-terminal-pty-worker";
 const WORKER_ENABLED_ENV: &str = "ALERA_TERMINAL_WORKER_PROCESS";
@@ -35,10 +41,15 @@ const WORKER_STARTUP_TIMEOUT: Duration = Duration::from_secs(15);
 #[serde(rename_all = "camelCase")]
 struct LaunchRequest {
     session_id: String,
+    workspace_id: String,
+    tab_id: String,
     working_directory: String,
+    runtime_dir: String,
     launch: serde_json::Value,
     cols: u16,
     rows: u16,
+    initial_output_stream_bytes: u64,
+    max_backlog_bytes: usize,
 }
 
 pub(super) fn enabled() -> bool {
@@ -46,6 +57,10 @@ pub(super) fn enabled() -> bool {
         std::env::var(WORKER_ENABLED_ENV).as_deref(),
         Ok("1" | "true" | "on")
     )
+}
+
+pub(crate) fn has_recoverable_worker(runtime_dir: &Path, session_id: &str, tab_id: &str) -> bool {
+    enabled() && recovery::has_recoverable_worker(runtime_dir, session_id, tab_id)
 }
 
 pub(crate) fn is_invocation() -> bool {
@@ -84,8 +99,12 @@ fn read_frame(reader: &mut impl Read) -> io::Result<Option<(u8, Vec<u8>)>> {
     Ok(Some((kind[0], payload)))
 }
 
-/// Poll without blocking ReadFile, so a hung worker cannot stall Host forever.
-fn wait_for_worker_bytes(reader: &ChildStdout, minimum: u32, deadline: Instant) -> HostResult<()> {
+/// Polls the startup pipe so a wedged child cannot hang the whole Host.
+fn wait_for_worker_bytes(
+    reader: &std::process::ChildStdout,
+    minimum: u32,
+    deadline: Instant,
+) -> HostResult<()> {
     loop {
         let mut available = 0u32;
         unsafe {
@@ -114,13 +133,13 @@ fn lock_error() -> io::Error {
 }
 
 struct WorkerConnection {
-    stdin: Arc<Mutex<ChildStdin>>,
+    socket: Arc<Mutex<TcpStream>>,
     resize_tx: SyncSender<PtySize>,
 }
 
 struct WorkerMaster {
     connection: WorkerConnection,
-    stdout: Mutex<Option<ChildStdout>>,
+    stdout: Mutex<Option<TcpStream>>,
     size: Mutex<PtySize>,
     writer_taken: AtomicBool,
 }
@@ -154,13 +173,13 @@ impl MasterPty for WorkerMaster {
             anyhow::bail!("PTY worker writer already taken");
         }
         Ok(Box::new(WorkerWriter {
-            stdin: Arc::clone(&self.connection.stdin),
+            socket: Arc::clone(&self.connection.socket),
         }))
     }
 }
 
 struct WorkerWriter {
-    stdin: Arc<Mutex<ChildStdin>>,
+    socket: Arc<Mutex<TcpStream>>,
 }
 
 impl Write for WorkerWriter {
@@ -170,7 +189,7 @@ impl Write for WorkerWriter {
         }
         let count = bytes.len().min(MAX_WRITE_BYTES);
         write_frame(
-            &mut *self.stdin.lock().map_err(|_| lock_error())?,
+            &mut *self.socket.lock().map_err(|_| lock_error())?,
             b'W',
             &bytes[..count],
         )?;
@@ -178,8 +197,60 @@ impl Write for WorkerWriter {
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        self.stdin.lock().map_err(|_| lock_error())?.flush()
+        self.socket.lock().map_err(|_| lock_error())?.flush()
     }
+}
+
+fn worker_streams(
+    stream: TcpStream,
+    cols: u16,
+    rows: u16,
+) -> HostResult<(
+    Box<dyn MasterPty + Send>,
+    Box<dyn Read + Send>,
+    Box<dyn Write + Send>,
+)> {
+    let reader = stream
+        .try_clone()
+        .map_err(|error| HostError::state(error.to_string()))?;
+    let input = Arc::new(Mutex::new(stream));
+    let (resize_tx, resize_rx) = sync_channel::<PtySize>(8);
+    let resize_input = Arc::clone(&input);
+    std::thread::Builder::new()
+        .name("alera-pty-worker-resize".to_string())
+        .spawn(move || {
+            while let Ok(size) = resize_rx.recv() {
+                let payload = [size.cols.to_le_bytes(), size.rows.to_le_bytes()].concat();
+                let Ok(mut socket) = resize_input.lock() else {
+                    break;
+                };
+                if write_frame(&mut *socket, b'R', &payload).is_err() {
+                    break;
+                }
+            }
+        })
+        .map_err(|error| HostError::state(format!("PTY resize thread: {error}")))?;
+    let master: Box<dyn MasterPty + Send> = Box::new(WorkerMaster {
+        connection: WorkerConnection {
+            socket: input,
+            resize_tx,
+        },
+        stdout: Mutex::new(Some(reader)),
+        size: Mutex::new(PtySize {
+            cols,
+            rows,
+            pixel_width: 0,
+            pixel_height: 0,
+        }),
+        writer_taken: AtomicBool::new(false),
+    });
+    let reader = master
+        .try_clone_reader()
+        .map_err(|error| HostError::state(error.to_string()))?;
+    let writer = master
+        .take_writer()
+        .map_err(|error| HostError::state(error.to_string()))?;
+    Ok((master, reader, writer))
 }
 
 #[derive(Debug, Clone)]
@@ -196,10 +267,23 @@ impl ChildKiller for WorkerKiller {
 }
 
 #[derive(Debug)]
+enum WorkerChildHandle {
+    Spawned(std::process::Child),
+    Attached(Arc<OwnedHandle>),
+}
+
+#[derive(Debug)]
 struct WorkerChild {
-    child: std::process::Child,
+    child: WorkerChildHandle,
     killer: WorkerKiller,
     shell_pid: Option<u32>,
+}
+
+fn process_status(handle: &OwnedHandle) -> io::Result<ExitStatus> {
+    let mut code = 0u32;
+    unsafe { GetExitCodeProcess(HANDLE(handle.as_raw_handle()), &mut code) }
+        .map_err(io::Error::other)?;
+    Ok(ExitStatus::with_exit_code(code))
 }
 
 impl ChildKiller for WorkerChild {
@@ -214,11 +298,28 @@ impl ChildKiller for WorkerChild {
 
 impl Child for WorkerChild {
     fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
-        self.child.try_wait().map(|status| status.map(Into::into))
+        match &mut self.child {
+            WorkerChildHandle::Spawned(child) => child.try_wait().map(|s| s.map(Into::into)),
+            WorkerChildHandle::Attached(handle) => {
+                match unsafe { WaitForSingleObject(HANDLE(handle.as_raw_handle()), 0) } {
+                    WAIT_OBJECT_0 => Ok(Some(process_status(handle)?)),
+                    WAIT_TIMEOUT => Ok(None),
+                    _ => Err(io::Error::last_os_error()),
+                }
+            }
+        }
     }
 
     fn wait(&mut self) -> io::Result<ExitStatus> {
-        self.child.wait().map(Into::into)
+        match &mut self.child {
+            WorkerChildHandle::Spawned(child) => child.wait().map(Into::into),
+            WorkerChildHandle::Attached(handle) => {
+                match unsafe { WaitForSingleObject(HANDLE(handle.as_raw_handle()), u32::MAX) } {
+                    WAIT_OBJECT_0 => process_status(handle),
+                    _ => Err(io::Error::last_os_error()),
+                }
+            }
+        }
     }
 
     fn process_id(&self) -> Option<u32> {
@@ -226,16 +327,73 @@ impl Child for WorkerChild {
     }
 
     fn as_raw_handle(&self) -> Option<std::os::windows::io::RawHandle> {
-        Some(AsRawHandle::as_raw_handle(&self.child))
+        Some(match &self.child {
+            WorkerChildHandle::Spawned(child) => AsRawHandle::as_raw_handle(child),
+            WorkerChildHandle::Attached(handle) => handle.as_raw_handle(),
+        })
     }
 }
 
+fn assemble_worker(
+    attachment: recovery::WorkerAttachment,
+    process: WorkerChildHandle,
+    cols: u16,
+    rows: u16,
+) -> HostResult<SpawnedPty> {
+    let recovered_cursor = attachment.replay_start_cursor;
+    let working_directory = attachment.working_directory;
+    let shell_pid = attachment.shell_pid;
+    let handle = Arc::clone(&attachment.process);
+    let (master, reader, writer) = worker_streams(attachment.stream, cols, rows)?;
+    let child = WorkerChild {
+        child: process,
+        killer: WorkerKiller(Arc::clone(&handle)),
+        shell_pid: Some(shell_pid),
+    };
+    let killer = child.clone_killer();
+    Ok(SpawnedPty {
+        child: Box::new(child),
+        master,
+        reader,
+        writer,
+        killer,
+        shell: seal_shell_process(shell_pid),
+        process_job: None,
+        worker_process: Some(handle),
+        replay_start_cursor: Some(recovered_cursor),
+        recovered_working_directory: Some(working_directory),
+    })
+}
+
+pub(super) fn try_recover_worker(
+    runtime_dir: &Path,
+    session_id: &str,
+    tab_id: &str,
+    cols: u16,
+    rows: u16,
+    resume_cursor: u64,
+) -> HostResult<Option<SpawnedPty>> {
+    let Some(attachment) =
+        recovery::attach_existing(runtime_dir, session_id, tab_id, resume_cursor)?
+    else {
+        return Ok(None);
+    };
+    let process = WorkerChildHandle::Attached(Arc::clone(&attachment.process));
+    assemble_worker(attachment, process, cols, rows).map(Some)
+}
+
+#[allow(clippy::too_many_arguments)]
 pub(super) fn spawn_worker_pty(
     launch: TerminalHostLaunch,
     session_id: String,
+    workspace_id: String,
+    tab_id: String,
     working_directory: &str,
+    runtime_dir: &Path,
     cols: u16,
     rows: u16,
+    initial_output_stream_bytes: u64,
+    max_backlog_bytes: usize,
 ) -> HostResult<SpawnedPty> {
     let exe = std::env::current_exe()
         .map_err(|error| HostError::state(format!("PTY worker executable missing: {error}")))?;
@@ -251,10 +409,8 @@ pub(super) fn spawn_worker_pty(
             .map_err(|error| HostError::state(format!("failed to start PTY worker: {error}")))?,
     );
 
-    // Child stays in this option until all fallible startup steps complete.
-    // Failed handshakes can then always terminate and reap their own worker.
     let result = (|| {
-        let child = child_slot.as_mut().expect("PTY worker child is owned");
+        let child = child_slot.as_mut().expect("worker child owned");
         let mut stdin = child
             .stdin
             .take()
@@ -265,24 +421,30 @@ pub(super) fn spawn_worker_pty(
             .ok_or_else(|| HostError::state("PTY worker output pipe missing"))?;
         let deadline = Instant::now() + WORKER_STARTUP_TIMEOUT;
         let request = LaunchRequest {
-            session_id,
+            session_id: session_id.clone(),
+            workspace_id,
+            tab_id: tab_id.clone(),
             working_directory: working_directory.to_string(),
+            runtime_dir: runtime_dir.to_string_lossy().into_owned(),
             launch: launch.to_json(),
             cols,
             rows,
+            initial_output_stream_bytes,
+            max_backlog_bytes,
         };
         let payload = serde_json::to_vec(&request)
             .map_err(|error| HostError::state(format!("invalid PTY launch: {error}")))?;
         write_frame(&mut stdin, b'I', &payload)
             .map_err(|error| HostError::state(format!("PTY worker handshake failed: {error}")))?;
-        let mut code = [0u8; 1];
+        drop(stdin);
         wait_for_worker_bytes(&stdout, 1, deadline)?;
+        let mut code = [0u8; 1];
         stdout
             .read_exact(&mut code)
             .map_err(|error| HostError::state(format!("PTY worker readiness failed: {error}")))?;
         if code[0] == b'E' {
-            let mut size = [0u8; 4];
             wait_for_worker_bytes(&stdout, 4, deadline)?;
+            let mut size = [0u8; 4];
             stdout
                 .read_exact(&mut size)
                 .map_err(|error| HostError::state(format!("PTY worker error frame: {error}")))?;
@@ -290,89 +452,47 @@ pub(super) fn spawn_worker_pty(
             if size > 4096 {
                 return Err(HostError::state("PTY worker rejected oversized error"));
             }
-            let mut detail = vec![0; size];
             wait_for_worker_bytes(&stdout, size as u32, deadline)?;
+            let mut detail = vec![0; size];
             stdout
                 .read_exact(&mut detail)
                 .map_err(|error| HostError::state(format!("PTY worker error body: {error}")))?;
             return Err(HostError::state(format!(
                 "PTY worker startup failed: {}",
-                String::from_utf8_lossy(&detail)
+                String::from_utf8_lossy(&detail),
             )));
         }
         if code[0] != b'R' {
             return Err(HostError::state("PTY worker returned invalid ready marker"));
         }
-        let mut pid_bytes = [0u8; 4];
         wait_for_worker_bytes(&stdout, 4, deadline)?;
+        let mut pid_bytes = [0u8; 4];
         stdout
             .read_exact(&mut pid_bytes)
             .map_err(|error| HostError::state(format!("PTY worker ready payload: {error}")))?;
         let pid = u32::from_le_bytes(pid_bytes);
-        let cloned = Arc::new(
-            child
-                .as_handle()
-                .try_clone_to_owned()
-                .map_err(|error| HostError::state(format!("PTY worker handle: {error}")))?,
-        );
-        let (resize_tx, resize_rx) = sync_channel::<PtySize>(8);
-        let input = Arc::new(Mutex::new(stdin));
-        let resize_input = Arc::clone(&input);
-        std::thread::Builder::new()
-            .name("alera-pty-worker-resize".to_string())
-            .spawn(move || {
-                while let Ok(size) = resize_rx.recv() {
-                    let payload = [size.cols.to_le_bytes(), size.rows.to_le_bytes()].concat();
-                    let Ok(mut pipe) = resize_input.lock() else {
-                        break;
-                    };
-                    if write_frame(&mut *pipe, b'R', &payload).is_err() {
-                        break;
-                    }
-                }
-            })
-            .map_err(|error| HostError::state(format!("PTY resize thread: {error}")))?;
-        let master: Box<dyn MasterPty + Send> = Box::new(WorkerMaster {
-            connection: WorkerConnection {
-                stdin: input,
-                resize_tx,
-            },
-            stdout: Mutex::new(Some(stdout)),
-            size: Mutex::new(PtySize {
-                cols,
-                rows,
-                pixel_width: 0,
-                pixel_height: 0,
-            }),
-            writer_taken: AtomicBool::new(false),
-        });
-        let reader = master
-            .try_clone_reader()
-            .map_err(|error| HostError::state(error.to_string()))?;
-        let writer = master
-            .take_writer()
-            .map_err(|error| HostError::state(error.to_string()))?;
-        let shell = (pid != 0).then(|| seal_shell_process(pid)).flatten();
-        let worker = WorkerChild {
-            child: child_slot.take().expect("PTY worker child still owned"),
-            killer: WorkerKiller(Arc::clone(&cloned)),
-            shell_pid: (pid != 0).then_some(pid),
-        };
-        let killer = worker.clone_killer();
-        Ok(SpawnedPty {
-            child: Box::new(worker),
-            master,
-            reader,
-            writer,
-            killer,
-            shell,
-            process_job: None,
-            worker_process: Some(cloned),
-        })
+        drop(stdout);
+        let attachment = recovery::attach_existing(
+            runtime_dir,
+            &session_id,
+            &tab_id,
+            initial_output_stream_bytes,
+        )?
+        .ok_or_else(|| {
+            HostError::state("new PTY worker did not publish a live reconnect endpoint")
+        })?;
+        if attachment.shell_pid != pid
+            || child_slot.as_ref().expect("worker exists").id() != attachment.worker_pid
+        {
+            return Err(HostError::state(
+                "PTY worker startup process identity mismatch",
+            ));
+        }
+        let process = WorkerChildHandle::Spawned(child_slot.take().expect("worker exists"));
+        assemble_worker(attachment, process, cols, rows)
     })();
     if result.is_err() {
         if let Some(mut child) = child_slot.take() {
-            // Worker owns its shell Job; killing it tears down its descendants.
             let _ = child.kill();
             let _ = child.wait();
         }
@@ -407,7 +527,7 @@ fn run_inner() -> anyhow::Result<i32> {
         .map_err(|error| anyhow::anyhow!("{error}"))?;
     let spawned = spawn_pty(
         launch,
-        request.session_id,
+        request.session_id.clone(),
         &request.working_directory,
         request.cols,
         request.rows,
@@ -421,72 +541,44 @@ fn run_inner() -> anyhow::Result<i32> {
         shell,
         process_job,
         worker_process: _,
+        replay_start_cursor: _,
+        recovered_working_directory: _,
     } = spawned;
     let master = Arc::new(Mutex::new(Some(master)));
     let writer = Arc::new(Mutex::new(Some(writer)));
     let shell_pid = shell.map(|process| process.pid).unwrap_or(0);
+    let recovery = recovery::WorkerRecoveryServer::start(
+        Path::new(&request.runtime_dir),
+        &request.session_id,
+        &request.workspace_id,
+        &request.tab_id,
+        &request.working_directory,
+        shell_pid,
+        request.initial_output_stream_bytes,
+        request.max_backlog_bytes,
+        Arc::clone(&writer),
+        Arc::clone(&master),
+    )?;
+    let relay = recovery.output();
     {
         let mut output = io::stdout().lock();
         output.write_all(b"R")?;
         output.write_all(&shell_pid.to_le_bytes())?;
         output.flush()?;
     }
-
     let output_thread = std::thread::Builder::new()
         .name("alera-pty-worker-output".to_string())
         .spawn(move || {
             let mut reader = reader;
-            let mut output = io::stdout().lock();
             let mut bytes = [0u8; MAX_WRITE_BYTES];
             loop {
                 let count = match reader.read(&mut bytes) {
                     Ok(0) | Err(_) => return,
                     Ok(count) => count,
                 };
-                if output.write_all(&bytes[..count]).is_err() {
-                    return;
-                }
-                if output.flush().is_err() {
-                    return;
-                }
+                relay.forward(&bytes[..count]);
             }
         })?;
-
-    let master_for_input = Arc::clone(&master);
-    let writer_for_input = Arc::clone(&writer);
-    std::thread::Builder::new()
-        .name("alera-pty-worker-input".to_string())
-        .spawn(move || {
-            while let Ok(Some((kind, payload))) = read_frame(&mut input) {
-                match kind {
-                    b'W' => {
-                        let Ok(mut guard) = writer_for_input.lock() else {
-                            break;
-                        };
-                        let Some(pty) = guard.as_mut() else { break };
-                        if pty.write_all(&payload).and_then(|_| pty.flush()).is_err() {
-                            break;
-                        }
-                    }
-                    b'R' if payload.len() == 4 => {
-                        let cols = u16::from_le_bytes([payload[0], payload[1]]);
-                        let rows = u16::from_le_bytes([payload[2], payload[3]]);
-                        let Ok(guard) = master_for_input.lock() else {
-                            break;
-                        };
-                        let Some(pty) = guard.as_ref() else { break };
-                        let _ = pty.resize(PtySize {
-                            cols,
-                            rows,
-                            pixel_width: 0,
-                            pixel_height: 0,
-                        });
-                    }
-                    _ => break,
-                }
-            }
-        })?;
-
     let code = child
         .wait()
         .map(|status| status.exit_code() as i32)
@@ -498,8 +590,8 @@ fn run_inner() -> anyhow::Result<i32> {
     if let Ok(mut guard) = master.lock() {
         guard.take();
     }
-    // ConPTY can hold the reader open until process exit; joining it here
-    // deadlocks a shell's normal shutdown while the input pipe remains open.
+    drop(recovery);
+    // ConPTY may keep the PTY reader waiting until this worker process exits.
     drop(output_thread);
     Ok(code)
 }
