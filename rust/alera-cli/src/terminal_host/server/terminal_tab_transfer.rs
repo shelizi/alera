@@ -170,12 +170,21 @@ impl ServerActor {
                 "Terminal removal is in progress. Wait for its result before terminating the PTY.",
             ));
         }
-        if let Some(stored) = self
+        let stored = self
             .runtime_store
             .find_workspace_tab(&session.tab_id)
             .await
-            .map_err(|error| HostError::state(error.to_string()))?
+            .map_err(|error| HostError::state(error.to_string()))?;
+        if !session.moved_workspace_fence.is_empty()
+            && !stored
+                .as_ref()
+                .is_some_and(|tab| tab.payload["lastTerminalTabTransfer"].is_object())
         {
+            return Err(HostError::state(
+                "Transferred Terminal lost its durable owner receipt. Preserve the original PTY and require audited recovery before termination.",
+            ));
+        }
+        if let Some(stored) = stored {
             if invalid_transfer_receipt_marker(&stored) {
                 return Err(HostError::state(
                     "Terminal transfer receipt is malformed. Preserve the original PTY and inspect its persisted owner before termination.",
@@ -261,12 +270,24 @@ impl ServerActor {
                 ));
             }
         }
-        if let Some(stored) = self
+        let stored = self
             .runtime_store
             .find_workspace_tab(tab_id)
             .await
-            .map_err(|error| HostError::state(error.to_string()))?
+            .map_err(|error| HostError::state(error.to_string()))?;
+        if self
+            .sessions
+            .get(session_id)
+            .is_some_and(|session| !session.moved_workspace_fence.is_empty())
+            && !stored
+                .as_ref()
+                .is_some_and(|tab| tab.payload["lastTerminalTabTransfer"].is_object())
         {
+            return Err(HostError::state(
+                "Transferred Terminal durable owner receipt is missing. Do not reattach or remint its original PTY.",
+            ));
+        }
+        if let Some(stored) = stored {
             if invalid_transfer_receipt_marker(&stored) {
                 return Err(HostError::state(
                     "Terminal transfer receipt is malformed. Never attach or remint a process from an unverified owner.",
@@ -683,6 +704,8 @@ impl ServerActor {
         // commit and this synchronous mutation. Process, PTY, output stream,
         // scrollback, input queue and original working directory stay intact.
         if let Some(session) = self.sessions.get_mut(session_id) {
+            session.moved_workspace_fence.insert(source.to_owned());
+            session.moved_workspace_fence.insert(target.to_owned());
             session.workspace_id = target.to_owned();
         }
         // Scoped watchers must see *both* sides; the layout event is global.

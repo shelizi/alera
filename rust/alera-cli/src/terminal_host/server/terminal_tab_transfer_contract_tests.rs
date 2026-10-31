@@ -9,6 +9,7 @@ use crate::terminal_host::client::ClientHandle;
 use crate::terminal_host::session::Session;
 
 use super::super::actor_test_harness::{local_client, test_actor};
+use super::super::runtime_mutations::RuntimeMutationRequest;
 use super::invalid_transfer_receipt_marker;
 
 fn layout(workspace: &str, tab_ids: &[&str]) -> Value {
@@ -248,4 +249,97 @@ async fn existing_pty_moves_atomically_but_unknown_second_view_rejects_it() {
             .payload["lastTerminalTabTransfer"]["id"],
         "move-one"
     );
+}
+
+#[tokio::test]
+async fn live_moved_pty_cannot_be_retired_when_durable_tab_row_disappears() {
+    let dir = tempfile::tempdir().unwrap();
+    let source_repo = tempfile::tempdir().unwrap();
+    let target_repo = tempfile::tempdir().unwrap();
+    let (handle, _replies) = ClientHandle::test_channels();
+    let mut clients = HashMap::new();
+    clients.insert(1, local_client(handle));
+    let mut actor = test_actor(&dir, clients, HashMap::new()).await;
+    let source = register_project(
+        &actor.runtime_store,
+        source_repo.path().to_str().unwrap(),
+        Some("Original"),
+    )
+    .await
+    .unwrap()
+    .main_workspace
+    .id;
+    let target = register_project(
+        &actor.runtime_store,
+        target_repo.path().to_str().unwrap(),
+        Some("Current"),
+    )
+    .await
+    .unwrap()
+    .main_workspace
+    .id;
+    let mut moved = Session::driver_test_stub("missing-row-session", 80, 24);
+    moved.workspace_id = target.clone();
+    moved.tab_id = "missing-row-tab".to_owned();
+    moved.attach(1);
+    assert!(moved.register_view_lease(1, "current-window"));
+    moved.moved_workspace_fence.insert(source.clone());
+    moved.moved_workspace_fence.insert(target.clone());
+    actor.sessions.insert(moved.id.clone(), moved);
+
+    // Simulate an out-of-band SQLite row loss while the original PTY remains
+    // live. A missing row cannot promote the PTY into a never-moved session.
+    let closing = json!({
+        "expectedWorkspaceId": target,
+        "expectedTabId": "missing-row-tab",
+        "expectedViewLeaseId": "current-window",
+        "expectedTransferMutationId": "previous-move"
+    });
+    assert!(actor
+        .verify_terminal_termination_owner(1, "missing-row-session", &closing)
+        .await
+        .is_err());
+    assert!(actor
+        .verify_terminal_attachment_owner("missing-row-session", &target, "missing-row-tab",)
+        .await
+        .is_err());
+    for workspace_id in [&source, &target] {
+        assert!(actor
+            .prepare_runtime_mutation(
+                1,
+                &RuntimeMutationRequest::SleepWorkspace {
+                    workspace_id: workspace_id.to_owned(),
+                },
+            )
+            .await
+            .is_err());
+    }
+    // Even replacing the row with a never-moved-looking Tab cannot erase
+    // the current Host's earlier successful move of this still-live PTY.
+    let now = Utc::now();
+    actor
+        .runtime_store
+        .upsert_workspace_tab(WorkspaceTabRecord {
+            id: "missing-row-tab".to_owned(),
+            workspace_id: target.clone(),
+            kind: "terminal".to_owned(),
+            title: "Original PTY".to_owned(),
+            created_at: now,
+            updated_at: now,
+            payload: json!({"terminalSessionId": "missing-row-session"}),
+        })
+        .await
+        .unwrap();
+    assert!(actor
+        .verify_terminal_termination_owner(1, "missing-row-session", &closing)
+        .await
+        .is_err());
+    assert!(actor
+        .verify_terminal_attachment_owner("missing-row-session", &target, "missing-row-tab")
+        .await
+        .is_err());
+    assert!(actor
+        .sessions
+        .get("missing-row-session")
+        .is_some_and(|session| session.running()));
 }

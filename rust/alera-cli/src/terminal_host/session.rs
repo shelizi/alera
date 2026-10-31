@@ -139,6 +139,11 @@ pub struct Session {
     /// Legacy unscoped views must remain visible even when a token-bearing
     /// window subsequently attaches through the same Host connection.
     pub(super) unscoped_clients: HashSet<u64>,
+    /// Workspace identities touched by this live PTY's committed moves.
+    /// An absent/corrupt SQLite row must never make the current Host forget
+    /// that this process needs explicit transfer recovery before cleanup.
+    /// This is local conservative evidence, NOT cross-Host crash attestation.
+    pub(super) moved_workspace_fence: HashSet<String>,
     pub driver: SessionDriver,
     /// Last dims a desktop client applied or requested; restored on reclaim
     /// and when the mobile driver releases the session.
@@ -256,6 +261,7 @@ impl Session {
             clients: HashSet::new(),
             view_leases: HashMap::new(),
             unscoped_clients: HashSet::new(),
+            moved_workspace_fence: HashSet::new(),
             driver: SessionDriver::Idle,
             desktop_dims: None,
             current_dims: (cols, rows),

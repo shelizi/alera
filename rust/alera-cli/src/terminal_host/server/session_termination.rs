@@ -48,6 +48,11 @@ impl ServerActor {
             ));
         }
         for session in self.sessions.values().filter(|session| session.running()) {
+            if session.moved_workspace_fence.contains(workspace_id) {
+                return Err(HostError::state(
+                    "Workspace cleanup cannot retire a transferred original PTY whose Host-local ownership fence remains active. Restore durable evidence and resolve it explicitly.",
+                ));
+            }
             let stored = self
                 .runtime_store
                 .find_workspace_tab(&session.tab_id)
