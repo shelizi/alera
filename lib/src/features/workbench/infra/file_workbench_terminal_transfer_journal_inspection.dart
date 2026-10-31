@@ -50,7 +50,7 @@ extension FileWorkbenchTerminalTransferJournalInspection
       final lockFile = File(p.join(folder.path, '$hash.lock'));
       final lockEvidence = lockPresent
           ? await _inspectLockWithHash(lockFile, hash)
-          : (valid: false, ownerPid: null, created: null);
+          : (valid: false, ownerPid: null, processEpoch: null, created: null);
       WorkbenchTerminalTabTransferPlan? plan;
       if (pendingPresent) {
         try {
@@ -91,6 +91,7 @@ extension FileWorkbenchTerminalTransferJournalInspection
           localConfirmedArchive: localConfirmedArchive,
           lockMetadataValid: lockEvidence.valid,
           lockOwnerProcessId: lockEvidence.ownerPid,
+          lockOwnerProcessEpoch: lockEvidence.processEpoch,
           lockCreatedAtUtc: lockEvidence.created,
           unknownFileName: false,
         ),

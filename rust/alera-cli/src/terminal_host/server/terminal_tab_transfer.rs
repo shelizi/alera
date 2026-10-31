@@ -385,7 +385,14 @@ impl ServerActor {
             .await
             .map_err(|err| HostError::state(err.to_string()))?
         else {
-            return Ok(json!({"applied": false}));
+            // A missing row is not proof that a previously moved PTY was
+            // removed or its Host died. Force manual recovery rather than a
+            // silent "not applied" result that looks like a safe retry.
+            return Ok(json!({
+                "applied": false,
+                "recoveryRequired": true,
+                "reason": "tab_missing"
+            }));
         };
         let receipt = &tab.payload["lastTerminalTabTransfer"];
         if invalid_transfer_receipt_marker(&tab) {
@@ -396,7 +403,13 @@ impl ServerActor {
             }));
         }
         if tab.kind != "terminal" {
-            return Ok(json!({"applied": false}));
+            // The original Tab ID is now owned by another kind of record:
+            // do not mistake a conflicting durable identity for rejection.
+            return Ok(json!({
+                "applied": false,
+                "recoveryRequired": true,
+                "reason": "tab_kind_conflict"
+            }));
         }
         if receipt.is_object()
             && (receipt["id"].as_str() != Some(mutation_id)
@@ -421,9 +434,14 @@ impl ServerActor {
             }));
         }
         if !receipt.is_object() {
-            // Missing receipt is still unknown after Host crashes; do not
-            // claim definitive rejection from this read-only query.
-            return Ok(json!({"applied": false}));
+            // A never-moved-looking Tab cannot erase a previously committed
+            // transfer. Neither this Host nor the caller may remint its PTY
+            // from absent durable evidence.
+            return Ok(json!({
+                "applied": false,
+                "recoveryRequired": true,
+                "reason": "transfer_receipt_missing"
+            }));
         }
         if receipt_from_other_host_generation(receipt) {
             if let Some(exit_code) =

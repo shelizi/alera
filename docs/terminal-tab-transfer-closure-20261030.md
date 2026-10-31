@@ -1,5 +1,16 @@
 # Alera T2 跨 Workspace Terminal Tab：一次收尾成果與最後驗收門檻（2026-10-30）
 
+## 2026-10-31 Gate A／B／C 接續實作與驗收（本文件最新入口）
+
+**整合起點已核對**：唯一整合分支 `refactor/tdd-integrate-20261029`，原始 HEAD `806f5d7af16112839eda1badb7ed99dec873e463`，工作樹初始 clean。原始 dirty `main` HEAD `3d232acff9822154c68049ee63c57ed5966b84e0`，原本修改與未追蹤內容不動。**固定只使用 Gate A／B／C，不新增其他階段；`tab.transfer.capabilities.supported=false`、`livePtyTransfer=false`，絕不 merge／push／release。**
+
+- **Gate A／Host 原 PTY 存在但持久收據遺失時的明確拒絕**：`terminal_tab_transfer_status` 對找不到 SQLite Tab、Tab 類型衝突或轉移 Receipt 被抹除均回傳 `applied=false`、`recoveryRequired=true` 和分類原因（`tab_missing`／`tab_kind_conflict`／`transfer_receipt_missing`）；不把「不存在」當安全重試或原 Host 死亡證明。新增同一原 Session 活 PTY 回歸、含缺列與擦除收據兩種狀態；TDD **原版 1 fail → 修改版 1 pass／0 fail（exit 0）**。Dart Client 不再誤稱缺收據一定是已持久化成功，保留未知 Outcome 與原 Journal。沒有解鎖、Remint、Terminate 原 PTY 的新權限。
+- **Gate B／Lock 世代唯讀診斷**：既有 Lock UUID `processEpoch` 現可從 `inspectRecovery` 和整份 `inspectRecoveryInventory` 讀出；無效 PID／非 UTC 欄位仍拒絕成為可信 metadata。這是人工比對不同 App 世代的**線索而不是 OS/Host Liveness 或 Unlock 認證**。原 `loadPending` 鎖定保持、無自動解鎖和刪檔。最新 3 項 Flutter Journal 回歸 **3 pass／0 fail**。
+- **Gate C／已完成的定向檢查**：最新三組 Host Client／PTY Session／Journal Flutter **86 pass／0 fail、exit 0**；`dart tool/quality/check_max_lines.dart --roots lib/src/features/workbench/infra` **exit 0、零超限**；全專案 `dart tool/quality/check_max_lines.dart` **exit 1、134 個超限檔案**，沒有更新 baseline；`git diff --check` **exit 0**，Dart 格式已核對。全域品質紅燈不能被局部通過覆蓋。
+- **本輪完整 Host／靜態分析**：Windows `cargo test --locked -p alera-cli --bin alera -- --test-threads=2` **exit 0，1,160 passed／0 failed／6 ignored（測試執行 262.61 秒）**；改動相關檔案的 `dart analyze` **exit 0、無 error／warning，有 3 筆既有 `prefer_initializing_formals` info**。本輪修改 Rust 檔案的 `rustfmt --check` exit 0；全域 `cargo fmt --all -- --check` exit 1 含非本輪修改的 `rust/src/api/git_status_tests.rs` 既有格式差異，不能算全域綠燈。macOS、雙實體手機、多原生視窗／多 App 與 Host OS Process Crash 注入 E2E 尚未取得完整通過證據。
+
+**固定 Gate 決策：A／B／C 仍 OFF。** A 尚缺跨程序 durable Last-view／原 Host 世代權威與 Crash 後確認；B 尚缺雙方 Host＋OS attestation、使用者明確授權、永久 Audit 與可驗證安全人工復原 UI；C 尚缺最新完整桌面＋macOS＋雙實體手機及原生跨程序 E2E 與全專案品質債收斂。任何未知狀態繼續 Fail-closed，保留原 PTY、Tab、轉移 Receipt 和 Journal；不將 PID、App Epoch、Local Archive 當刪除／解鎖授權。
+
 ## 2026-10-31 逐項收斂最新交接：Infra 行數品質通過、原 PTY 遺失收據防護紅轉綠
 
 **本節為最新入口；歷史節保留當時的失敗數以便追蹤，不能用較早日期的紅燈覆蓋本節已完成的定向修正。** 整合分支 `refactor/tdd-integrate-20261029`，隔離 Worktree `.worktrees/refactor-tdd-integrate-20261029`；來源 HEAD 依序 `28f847e20` → `a43e7ea66` → `ea76fa062` → `2d00d0933` → `96e9a4761`。本文件提交後以實際 Git HEAD 為準。原始 dirty `main` 不動，`tab.transfer.capabilities.supported=false`，**無合併／Push／Release**。

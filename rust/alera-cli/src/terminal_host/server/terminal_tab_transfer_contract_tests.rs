@@ -289,6 +289,20 @@ async fn live_moved_pty_cannot_be_retired_when_durable_tab_row_disappears() {
 
     // Simulate an out-of-band SQLite row loss while the original PTY remains
     // live. A missing row cannot promote the PTY into a never-moved session.
+    let status_query = json!({
+        "tabId": "missing-row-tab",
+        "sessionId": "missing-row-session",
+        "sourceWorkspaceId": source,
+        "targetWorkspaceId": target,
+        "clientMutationId": "previous-move"
+    });
+    let missing = actor
+        .terminal_tab_transfer_status(1, &status_query)
+        .await
+        .unwrap();
+    assert_eq!(missing["applied"], false);
+    assert_eq!(missing["recoveryRequired"], true);
+    assert_eq!(missing["reason"], "tab_missing");
     let closing = json!({
         "expectedWorkspaceId": target,
         "expectedTabId": "missing-row-tab",
@@ -330,6 +344,13 @@ async fn live_moved_pty_cannot_be_retired_when_durable_tab_row_disappears() {
         })
         .await
         .unwrap();
+    let erased_receipt = actor
+        .terminal_tab_transfer_status(1, &status_query)
+        .await
+        .unwrap();
+    assert_eq!(erased_receipt["applied"], false);
+    assert_eq!(erased_receipt["recoveryRequired"], true);
+    assert_eq!(erased_receipt["reason"], "transfer_receipt_missing");
     assert!(actor
         .verify_terminal_termination_owner(1, "missing-row-session", &closing)
         .await

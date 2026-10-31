@@ -22,6 +22,13 @@ final class FileWorkbenchTerminalTransferJournal
 
   static const int _version = 1;
   static const int _lockVersion = 2;
+  // Invalid/stale process metadata is one explicit unknown evidence state.
+  static const _unverifiedLockEvidence = (
+    valid: false,
+    ownerPid: null,
+    processEpoch: null,
+    created: null,
+  );
   // Distinguish a fresh App process from a reused OS PID. It is *not* proof
   // that a different process exited, nor an unlock capability.
   static final String _processEpoch = const Uuid().v4();
@@ -149,22 +156,18 @@ final class FileWorkbenchTerminalTransferJournal
     await owned.file.delete();
   }
 
-  Future<({bool valid, int? ownerPid, DateTime? created})> _inspectLock(
-    File lock,
-    String tabId,
-  ) =>
+  Future<({bool valid, int? ownerPid, String? processEpoch, DateTime? created})>
+  _inspectLock(File lock, String tabId) =>
       _inspectLockWithHash(lock, sha256.convert(utf8.encode(tabId)).toString());
 
-  Future<({bool valid, int? ownerPid, DateTime? created})> _inspectLockWithHash(
-    File lock,
-    String expectedHash,
-  ) async {
+  Future<({bool valid, int? ownerPid, String? processEpoch, DateTime? created})>
+  _inspectLockWithHash(File lock, String expectedHash) async {
     try {
       if (await FileSystemEntity.type(lock.path, followLinks: false) !=
           FileSystemEntityType.file) {
         // An operator-visible symlink must not be followed to parse a
         // potentially unrelated user's process ID.
-        return (valid: false, ownerPid: null, created: null);
+        return _unverifiedLockEvidence;
       }
       final data = jsonDecode(await lock.readAsString());
       if (data is! Map ||
@@ -179,7 +182,7 @@ final class FileWorkbenchTerminalTransferJournal
             r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
           ).hasMatch(data['processEpoch'] as String) ||
           data['createdAtUtc'] is! String) {
-        return (valid: false, ownerPid: null, created: null);
+        return _unverifiedLockEvidence;
       }
       final timestamp = data['createdAtUtc'] as String;
       final when = DateTime.tryParse(timestamp);
@@ -189,12 +192,17 @@ final class FileWorkbenchTerminalTransferJournal
       if (when == null ||
           !when.isUtc ||
           !RegExp(r'(?:Z|\+00:00)$').hasMatch(timestamp)) {
-        return (valid: false, ownerPid: null, created: null);
+        return _unverifiedLockEvidence;
       }
-      return (valid: true, ownerPid: data['processId'] as int, created: when);
+      return (
+        valid: true,
+        ownerPid: data['processId'] as int,
+        processEpoch: data['processEpoch'] as String,
+        created: when,
+      );
     } on Object {
       // A crash may leave a partial sentinel; never infer owner liveness.
-      return (valid: false, ownerPid: null, created: null);
+      return (valid: false, ownerPid: null, processEpoch: null, created: null);
     }
   }
 
@@ -236,7 +244,7 @@ final class FileWorkbenchTerminalTransferJournal
     final lockPresent = lockType != FileSystemEntityType.notFound;
     final lockEvidence = lockType == FileSystemEntityType.file
         ? await _inspectLock(lock, tabId)
-        : (valid: false, ownerPid: null, created: null);
+        : (valid: false, ownerPid: null, processEpoch: null, created: null);
     final pendingType = await FileSystemEntity.type(
       pending.path,
       followLinks: false,
@@ -248,6 +256,7 @@ final class FileWorkbenchTerminalTransferJournal
         pendingReadable: false,
         localConfirmedArchive: false,
         lockOwnerProcessId: lockEvidence.ownerPid,
+        lockOwnerProcessEpoch: lockEvidence.processEpoch,
         lockCreatedAtUtc: lockEvidence.created,
         lockMetadataValid: lockEvidence.valid,
       );
@@ -265,6 +274,7 @@ final class FileWorkbenchTerminalTransferJournal
         pendingReadable: false,
         localConfirmedArchive: false,
         lockOwnerProcessId: lockEvidence.ownerPid,
+        lockOwnerProcessEpoch: lockEvidence.processEpoch,
         lockCreatedAtUtc: lockEvidence.created,
         lockMetadataValid: lockEvidence.valid,
       );
@@ -286,6 +296,7 @@ final class FileWorkbenchTerminalTransferJournal
       localConfirmedArchive: localConfirmedArchive,
       pendingMutationId: plan.clientMutationId,
       lockOwnerProcessId: lockEvidence.ownerPid,
+      lockOwnerProcessEpoch: lockEvidence.processEpoch,
       lockCreatedAtUtc: lockEvidence.created,
       lockMetadataValid: lockEvidence.valid,
     );

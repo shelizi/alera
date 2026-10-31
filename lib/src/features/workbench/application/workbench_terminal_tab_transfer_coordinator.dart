@@ -16,16 +16,16 @@ final class TerminalTransferOutcomeUnknownException implements Exception {
   final String tabId;
   final String clientMutationId;
 
-  /// The exact transfer receipt exists in SQLite, but no matching live PTY
-  /// could be proven. This is never permission to discard the pending journal.
+  /// Host reported unresolved durable owner/receipt or original PTY identity.
+  /// This is never permission to discard the pending journal.
   final bool hostRecoveryRequired;
 
   @override
   String toString() => hostRecoveryRequired
-      ? 'Terminal move was persisted (tab $tabId, operation '
-            '$clientMutationId), but the Host cannot confirm its live PTY. '
-            'Keep the transfer journal and do not close or restart the tab '
-            'until the session owner is recovered.'
+      ? 'Terminal move is unresolved (tab $tabId, operation '
+            '$clientMutationId): the original Host, live PTY, or durable '
+            'receipt could not be verified. Keep the transfer journal; '
+            'do not close or restart the tab until audited recovery.'
       : 'Terminal move status is unknown (tab $tabId, operation '
             '$clientMutationId). Refresh both workspaces before trying again; '
             'the running command may already be in the destination.';

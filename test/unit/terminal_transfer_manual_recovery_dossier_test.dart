@@ -46,6 +46,15 @@ void main() {
       expect(lockEvidence.lockPresent, isTrue);
       expect(lockEvidence.pendingPresent, isFalse);
       expect(lockEvidence.lockMetadataValid, validMetadata);
+      expect(
+        lockEvidence.lockOwnerProcessEpoch,
+        validMetadata ? '00000000-0000-4000-8000-000000000001' : isNull,
+      );
+      final tabInspection = await journal.inspectRecovery(tabId);
+      expect(
+        tabInspection.lockOwnerProcessEpoch,
+        lockEvidence.lockOwnerProcessEpoch,
+      );
       expect(lockEvidence.requiresManualRecovery, isTrue);
       expect(dossier.requiresHostVerification, isTrue);
       expect(dossier.permitsAutomaticUnlock, isFalse);

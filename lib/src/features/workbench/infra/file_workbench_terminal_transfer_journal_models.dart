@@ -24,6 +24,7 @@ final class TerminalTransferJournalRecoveryInspection {
     required this.localConfirmedArchive,
     this.pendingMutationId,
     this.lockOwnerProcessId,
+    this.lockOwnerProcessEpoch,
     this.lockCreatedAtUtc,
     this.lockMetadataValid = false,
   });
@@ -36,6 +37,9 @@ final class TerminalTransferJournalRecoveryInspection {
 
   /// PID and timestamp are diagnostic hints, not proof of a live process.
   final int? lockOwnerProcessId;
+
+  /// App-created UUID is a diagnostic incarnation hint, never an OS liveness attestation.
+  final String? lockOwnerProcessEpoch;
   final DateTime? lockCreatedAtUtc;
   final bool lockMetadataValid;
 
@@ -58,6 +62,7 @@ final class TerminalTransferJournalInventoryItem {
     this.tabId,
     this.pendingMutationId,
     this.lockOwnerProcessId,
+    this.lockOwnerProcessEpoch,
     this.lockCreatedAtUtc,
   });
 
@@ -71,6 +76,9 @@ final class TerminalTransferJournalInventoryItem {
   final bool unknownFileName;
   final String? pendingMutationId;
   final int? lockOwnerProcessId;
+
+  /// App-created UUID is a diagnostic incarnation hint, never an OS liveness attestation.
+  final String? lockOwnerProcessEpoch;
   final DateTime? lockCreatedAtUtc;
 
   bool get requiresManualRecovery =>

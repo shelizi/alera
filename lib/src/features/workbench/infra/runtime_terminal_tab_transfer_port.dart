@@ -79,9 +79,9 @@ final class RuntimeTerminalTabTransferPort
         },
       );
       if (status is Map && status['recoveryRequired'] == true) {
-        // Either a matching SQLite receipt lacks original PTY proof OR the
-        // persisted receipt/owner conflicts with this original mutation.
-        // Neither state proves success, failure, or safe Journal removal.
+        // Host may have lost the row, received a conflicting/erased receipt,
+        // or failed to prove the original PTY. None of these proves success,
+        // failure, or permission to clear the original Journal.
         throw TerminalTransferOutcomeUnknownException(
           tabId: plan.tabId,
           clientMutationId: plan.clientMutationId,
