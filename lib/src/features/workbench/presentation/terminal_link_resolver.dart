@@ -2,7 +2,7 @@ import 'dart:math' show min;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
-import 'package:xterm2/xterm.dart' as xterm;
+import 'package:xterm2_core/xterm2_core.dart' as xterm;
 
 final class const TerminalLinkRange({
   required final Uri uri,

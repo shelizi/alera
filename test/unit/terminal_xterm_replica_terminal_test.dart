@@ -2,10 +2,18 @@ import 'package:alera/src/features/workbench/domain/terminal_osc52_clipboard.dar
 import 'package:alera/src/features/workbench/presentation/terminal_xterm_replica_terminal.dart';
 import 'package:alera/src/features/workbench/presentation/terminal_xterm_worker.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:xterm2/core.dart';
-import 'package:xterm2/xterm.dart';
+import 'package:xterm2_core/xterm2_core.dart';
+import 'package:xterm2/ui.dart' show TerminalView;
 
 void main() {
+  test('Flutter TerminalView accepts a pure xterm2_core replica', () {
+    final replica = TerminalXtermReplicaTerminal(cols: 16, rows: 5);
+    addTearDown(replica.dispose);
+
+    final view = TerminalView(replica);
+    expect(view.terminal, same(replica));
+  });
+
   test('replica reconstructs direct xterm buffer and renderer state', () async {
     final direct = _createDirect(cols: 16, rows: 5, maxLines: 64);
     final worker = await TerminalXtermWorker.start(

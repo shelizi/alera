@@ -1,4 +1,4 @@
-import 'package:xterm2/xterm.dart';
+import 'package:xterm2_core/xterm2_core.dart';
 
 import 'terminal_xterm_worker.dart';
 import 'terminal_xterm_worker_packed_cells.dart';

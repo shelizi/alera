@@ -27,7 +27,10 @@ dependencies:
   ghostty_vte_flutter: ^0.1.5
   ffi: ^2.2.0
   portable_pty: ^0.0.5
-  xterm2: ^5.3.0
+  # Core parser and buffer types are shared by the worker isolate and renderer.
+  # Both versions must stay paired with the local patched submodule.
+  xterm2: ^5.4.0
+  xterm2_core: ^1.0.0
   desktop_updater: ^2.7.0
   http: ^1.6.0
   record: ^7.1.1

@@ -1,7 +1,7 @@
 import 'dart:collection';
 import 'dart:typed_data';
 
-import 'package:xterm2/core.dart';
+import 'package:xterm2_core/xterm2_core.dart';
 
 import 'terminal_search_source.dart';
 import 'terminal_xterm_worker.dart';

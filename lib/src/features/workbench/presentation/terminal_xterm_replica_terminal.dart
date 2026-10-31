@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 
-import 'package:xterm2/xterm.dart';
+import 'package:xterm2_core/xterm2_core.dart';
 
 import '../domain/terminal_osc52_clipboard.dart';
 import 'terminal_xterm_buffer_model.dart';

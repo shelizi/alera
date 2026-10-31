@@ -1852,7 +1852,7 @@ packages:
     source: path
     version: "5.4.0"
   xterm2_core:
-    dependency: "direct overridden"
+    dependency: "direct main"
     description:
       path: "third_party/xterm/core"
       relative: true

@@ -1,8 +1,7 @@
 import 'package:alera/src/features/workbench/presentation/terminal_xterm_buffer_model.dart';
 import 'package:alera/src/features/workbench/presentation/terminal_xterm_worker.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:xterm2/core.dart';
-import 'package:xterm2/xterm.dart';
+import 'package:xterm2_core/xterm2_core.dart';
 
 void main() {
   test('retained bytes grow with mirrored scrollback', () async {

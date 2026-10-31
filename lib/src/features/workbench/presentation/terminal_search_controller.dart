@@ -2,7 +2,7 @@ import 'dart:math' show max;
 
 import 'package:alera/src/features/workbench/domain/terminal_search.dart';
 import 'package:flutter/foundation.dart';
-import 'package:xterm2/xterm.dart' as xterm;
+import 'package:xterm2_core/xterm2_core.dart' as xterm;
 
 import 'terminal_search_source.dart';
 

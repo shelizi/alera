@@ -3,7 +3,7 @@ import 'dart:isolate';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
-import 'package:xterm2/xterm.dart';
+import 'package:xterm2_core/xterm2_core.dart';
 
 import '../domain/terminal_mode_reset.dart';
 import '../domain/terminal_osc52_clipboard.dart';
@@ -744,27 +744,20 @@ final class TerminalXtermWorkerStateDelta {
 
 final class _TerminalXtermWorkerTerminal extends Terminal {
   _TerminalXtermWorkerTerminal({
-    required int maxLines,
-    required TerminalTargetPlatform platform,
-    Set<int>? wordSeparators,
-    void Function(String)? onTitleChange,
-    void Function()? onBell,
-    void Function(String)? onOutput,
-    void Function(String, String)? onClipboardStore,
+    required super.maxLines,
+    required super.platform,
+    super.wordSeparators,
+    super.onTitleChange,
+    super.onBell,
+    super.onOutput,
+    super.onClipboardStore,
   }) : super(
-         maxLines: maxLines,
          reflowWithHiddenCursor: false,
          preserveOrphanCombiningMarks: true,
          allowITerm2ClipboardCapture: false,
          allowKittyClipboard: false,
          onClipboardQuery: (_) => null,
          clipboardDecoder: decodeTerminalOsc52Payload,
-         platform: platform,
-         wordSeparators: wordSeparators,
-         onTitleChange: onTitleChange,
-         onBell: onBell,
-         onOutput: onOutput,
-         onClipboardStore: onClipboardStore,
        );
 
   bool keyboardActionMode = false;

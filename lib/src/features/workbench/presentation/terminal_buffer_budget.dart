@@ -1,4 +1,4 @@
-import 'package:xterm2/xterm.dart' as xterm;
+import 'package:xterm2_core/xterm2_core.dart' as xterm;
 
 /// Bytes an xterm buffer holds for a given size.
 ///
