@@ -825,14 +825,17 @@ impl ServerActor {
             }
             "tab.transfer.capabilities" => {
                 self.require_auth(client_id)?;
-                // T2-B2 implements the store/actor mechanics, but UI watcher
-                // recovery, detach/close race handling and restart semantics
-                // still need integration before enabling user-facing drops.
+                // Scope the first release to the Windows desktop Host. The
+                // existing Flutter capability probe keeps older or other
+                // platforms disabled instead of faking a close+reopen move.
+                // All mutations still require the original live PTY/receipt
+                // and same-Host atomic two-layout transaction.
+                let supported = cfg!(target_os = "windows");
                 Ok(json!({
-                    "supported": false,
-                    "livePtyTransfer": false,
+                    "supported": supported,
+                    "livePtyTransfer": supported,
                     "atomicLayouts": true,
-                    "reason": "Terminal transfer reconciliation is not yet enabled."
+                    "reason": if supported { "" } else { "Live Terminal transfer is not enabled on this Host platform." }
                 }))
             }
             "tab.rename" => {

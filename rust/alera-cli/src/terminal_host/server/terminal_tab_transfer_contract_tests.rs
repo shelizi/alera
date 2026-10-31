@@ -213,6 +213,105 @@ async fn existing_pty_moves_atomically_but_unknown_second_view_rejects_it() {
         .unwrap();
     assert_eq!(status["applied"], true);
 
+    // Another native window may share the same Host but holds its own
+    // original View lease. Neither explicit termination nor Tab removal
+    // can close the PTY while that window remains attached.
+    let live = actor.sessions.get_mut("session-moving").unwrap();
+    live.attach(2);
+    assert!(live.register_view_lease(2, "second-window"));
+    let close = json!({
+        "expectedWorkspaceId": target,
+        "expectedTabId": "tab-moving",
+        "expectedTransferMutationId": "move-one",
+        "expectedViewLeaseId": "original-window"
+    });
+    assert!(actor
+        .verify_terminal_termination_owner(1, "session-moving", &close)
+        .await
+        .is_err());
+    let remove = RuntimeMutationRequest::RemoveTab {
+        tab_id: "tab-moving".to_string(),
+        expected_workspace_id: Some(target.clone()),
+        expected_transfer_mutation_id: Some("move-one".to_string()),
+        expected_view_lease_id: Some("original-window".to_string()),
+    };
+    assert!(actor.prepare_runtime_mutation(1, &remove).await.is_err());
+    assert!(actor
+        .sessions
+        .get_mut("session-moving")
+        .unwrap()
+        .release_view_lease(2, "second-window"));
+    assert!(actor.prepare_runtime_mutation(1, &remove).await.is_ok());
+
+    // Undo is a real reverse transaction, never a close+remint. The same
+    // original process instance, view token and Session must survive both
+    // legs and the original mutation must become stale.
+    let reverse = json!({
+        "tabId": "tab-moving",
+        "sessionId": "session-moving",
+        "sourceWorkspaceId": target,
+        "targetWorkspaceId": source,
+        "clientMutationId": "move-back",
+        "expectedSourceLayout": layout(&target, &["tab-moving"]),
+        "expectedTargetLayout": layout(&source, &[]),
+        "sourceLayout": layout(&target, &[]),
+        "targetLayout": layout(&source, &["tab-moving"])
+    });
+    actor.transfer_terminal_tab(1, &reverse).await.unwrap();
+    let back = actor.sessions.get("session-moving").unwrap();
+    assert_eq!(back.instance_id(), original_instance);
+    assert_eq!(back.workspace_id, source);
+    assert!(back.has_view_lease(1, "original-window"));
+    assert!(back.running());
+    let reverse_status = actor
+        .terminal_tab_transfer_status(
+            1,
+            &json!({
+                "tabId": "tab-moving", "sessionId": "session-moving",
+                "sourceWorkspaceId": target, "targetWorkspaceId": source,
+                "clientMutationId": "move-back"
+            }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(reverse_status["applied"], true);
+    let stale = actor
+        .terminal_tab_transfer_status(
+            1,
+            &json!({
+                "tabId": "tab-moving", "sessionId": "session-moving",
+                "sourceWorkspaceId": source, "targetWorkspaceId": target,
+                "clientMutationId": "move-one"
+            }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(stale["applied"], false);
+    assert_eq!(stale["recoveryRequired"], true);
+    assert_eq!(stale["reason"], "receipt_conflict");
+
+    let return_to_target = json!({
+        "tabId": "tab-moving", "sessionId": "session-moving",
+        "sourceWorkspaceId": source, "targetWorkspaceId": target,
+        "clientMutationId": "move-two",
+        "expectedSourceLayout": layout(&source, &["tab-moving"]),
+        "expectedTargetLayout": layout(&target, &[]),
+        "sourceLayout": layout(&source, &[]),
+        "targetLayout": layout(&target, &["tab-moving"])
+    });
+    actor
+        .transfer_terminal_tab(1, &return_to_target)
+        .await
+        .unwrap();
+    assert_eq!(
+        actor.sessions.get("session-moving").unwrap().instance_id(),
+        original_instance
+    );
+    assert_eq!(
+        actor.sessions.get("session-moving").unwrap().workspace_id,
+        target
+    );
+
     // Simulate the narrow commit/PTY-loss window: the persisted receipt and
     // both layouts survived, but this actor no longer owns the original
     // process. A matching mutation must NOT be acknowledged from SQLite
@@ -227,7 +326,7 @@ async fn existing_pty_moves_atomically_but_unknown_second_view_rejects_it() {
                 "sessionId": "session-moving",
                 "sourceWorkspaceId": source,
                 "targetWorkspaceId": target,
-                "clientMutationId": "move-one"
+                "clientMutationId": "move-two"
             }),
         )
         .await
@@ -247,7 +346,7 @@ async fn existing_pty_moves_atomically_but_unknown_second_view_rejects_it() {
             .unwrap()
             .unwrap()
             .payload["lastTerminalTabTransfer"]["id"],
-        "move-one"
+        "move-two"
     );
 }
 

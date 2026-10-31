@@ -1,5 +1,11 @@
 # Terminal operation contract
 
+## T2 Windows Desktop 原 PTY 轉移、Close 與恢復契約（2026-10-31）
+
+在已協商支援的 Windows Host 上，跨 Workspace `tab.transfer` 只改顯示 Tab／Layout owner，保留原 Session ID、PTY instance、輸出與滾動歷史、原啟動 CWD／繼承環境。原始執行資料夾不因拖到不同 Git 專案而變更；Undo 再經同一 Host 的原子反向轉移。不同 Host、非 Terminal、並行 Workspace 刪除／Detach、Automation/Pulse 等不安全條件拒絕移動，不重開 Shell 作為 fallback。
+
+最後 View 的 `terminate`／`tab.remove` 需要最新 transfer receipt、正確 Workspace/Tab、原 PTY 世代和實際附著 View Lease；第二個 View 尚在時一律拒絕。原 Host 收到 Exit 事件且當時有匹配持久 Exit marker 時，使用者可從唯一 View 明確 Close，Host/Store 以同一交易確認收據、Exit、兩側 Layout、永久稽核。Host 已崩潰、原 PTY 消失、收據損毀或 Journal Lock 不明時不猜測程序已死亡，不刪 Tab、不自動 unlock、不 remint。下列舊節的 `supported=false` 屬歷史狀態。
+
 This table answers the eight transaction/replay questions from the architecture refactor handoff (section 13) for the terminal surface handled by `ServerActor`: `createOrAttach`, `write`, `resize`, `terminal.read`, `setOutputPaused`, `detach`, `terminate`, `terminal.create`, `terminal.attach`, `terminal.restart`, `terminal.reclaim`, `terminal.driver.list`, `terminal.runningProcesses`, and `terminal.pulse.*`. Companion to `orchestration-operation-contract.md`, `project-operation-contract.md`, `workspace-operation-contract.md`, and `tab-layout-operation-contract.md`; update the table and its pinning tests together.
 
 Authority splits three ways, and the split is the point of this document:
