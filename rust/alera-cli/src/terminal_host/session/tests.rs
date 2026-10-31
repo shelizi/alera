@@ -88,6 +88,8 @@ fn test_session() -> Session {
         #[cfg(windows)]
         process_job: None,
         #[cfg(windows)]
+        worker_process: None,
+        #[cfg(windows)]
         conpty_startup_cursor_query_tail: Vec::new(),
         #[cfg(windows)]
         conpty_startup_cursor_query_answered: false,

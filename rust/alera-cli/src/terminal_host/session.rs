@@ -27,6 +27,8 @@ mod io_threads;
 mod output_backpressure;
 mod output_batching;
 mod pty_spawn;
+#[cfg(windows)]
+pub(crate) mod pty_worker;
 #[cfg(unix)]
 mod shell_tree_termination;
 mod termination;
@@ -176,6 +178,8 @@ pub struct Session {
     #[cfg(windows)]
     process_job: Option<WindowsProcessJob>,
     #[cfg(windows)]
+    worker_process: Option<Arc<std::os::windows::io::OwnedHandle>>,
+    #[cfg(windows)]
     conpty_startup_cursor_query_tail: Vec<u8>,
     #[cfg(windows)]
     conpty_startup_cursor_query_answered: bool,
@@ -221,13 +225,23 @@ impl Session {
             let terminal_handle = id.clone();
             let launch_working_directory = working_directory.clone();
             tokio::task::spawn_blocking(move || {
-                spawn_pty(
-                    launch,
-                    terminal_handle,
-                    &launch_working_directory,
-                    cols,
-                    rows,
-                )
+                if pty_worker::enabled() {
+                    pty_worker::spawn_worker_pty(
+                        launch,
+                        terminal_handle,
+                        &launch_working_directory,
+                        cols,
+                        rows,
+                    )
+                } else {
+                    spawn_pty(
+                        launch,
+                        terminal_handle,
+                        &launch_working_directory,
+                        cols,
+                        rows,
+                    )
+                }
             })
             .await
             .map_err(|error| HostError::state(format!("PTY setup worker failed: {error}")))??
@@ -242,6 +256,8 @@ impl Session {
             killer,
             #[cfg(windows)]
             process_job,
+            #[cfg(windows)]
+            worker_process,
             shell,
         } = spawned;
         let (input_tx, input_rx) = sync_channel(INPUT_QUEUE_CAPACITY);
@@ -277,7 +293,9 @@ impl Session {
             input_tx: Some(input_tx),
             killer: Some(killer),
             #[cfg(windows)]
-            process_job: Some(process_job),
+            process_job,
+            #[cfg(windows)]
+            worker_process,
             #[cfg(windows)]
             conpty_startup_cursor_query_tail: Vec::new(),
             #[cfg(windows)]
@@ -559,6 +577,7 @@ impl Session {
         #[cfg(windows)]
         {
             self.process_job = None;
+            self.worker_process = None;
         }
         Some(json!({ "sessionId": self.id, "exitCode": exit_code }))
     }
@@ -568,6 +587,7 @@ impl Session {
         // Closing the job here catches descendants that outlived the shell;
         // waiting for the user to remove the exited tab would leak them.
         self.process_job = None;
+        self.worker_process = None;
         self.input_tx = None;
         self.master = None;
         self.killer = None;

@@ -8,6 +8,10 @@ use crate::terminal_host::resources::{seal_shell_process, ShellProcess};
 
 #[cfg(windows)]
 use super::windows_process_job::WindowsProcessJob;
+#[cfg(windows)]
+use std::os::windows::io::OwnedHandle;
+#[cfg(windows)]
+use std::sync::Arc;
 
 pub(super) struct SpawnedPty {
     pub(super) child: Box<dyn Child + Send + Sync>,
@@ -17,7 +21,9 @@ pub(super) struct SpawnedPty {
     pub(super) killer: Box<dyn ChildKiller + Send + Sync>,
     pub(super) shell: Option<ShellProcess>,
     #[cfg(windows)]
-    pub(super) process_job: WindowsProcessJob,
+    pub(super) process_job: Option<WindowsProcessJob>,
+    #[cfg(windows)]
+    pub(super) worker_process: Option<Arc<OwnedHandle>>,
 }
 
 pub(super) fn spawn_pty(
@@ -91,6 +97,8 @@ pub(super) fn spawn_pty(
         killer,
         shell,
         #[cfg(windows)]
-        process_job,
+        process_job: Some(process_job),
+        #[cfg(windows)]
+        worker_process: None,
     })
 }

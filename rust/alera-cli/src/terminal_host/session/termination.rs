@@ -48,6 +48,10 @@ impl Session {
         }
         self.input_tx = None;
         self.master = None;
+        #[cfg(windows)]
+        {
+            self.worker_process = None;
+        }
         self.checkpoint_armed = false;
         self.output_batch.clear();
         self.output_batch_armed = false;
