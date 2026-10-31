@@ -19,6 +19,7 @@ import 'package:alera/src/features/projects/domain/project.dart';
 import 'package:alera/src/features/settings/domain/alera_settings.dart';
 import 'package:alera/src/features/shell/presentation/alera_shell_page.dart';
 import 'package:alera/src/features/workbench/application/workbench_state.dart';
+import 'package:alera/src/features/workbench/application/workbench_providers.dart';
 import 'package:alera/src/features/workbench/application/workspace_file_service.dart';
 import 'package:alera/src/features/workbench/application/workspace_folder_opener.dart';
 import 'package:alera/src/features/workbench/application/workspace_graph_repository.dart';
@@ -38,6 +39,7 @@ import 'package:alera/src/features/workbench/presentation/widgets/agent_run_spin
 import 'package:alera/src/features/workbench/presentation/project_workbench_sidebar.dart';
 import 'package:alera/src/features/workbench/presentation/widgets/workspace_agent_compact_summary.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_workbench_view.dart';
+import 'package:alera/src/features/workbench/presentation/workbench_tab_drag_data.dart';
 import 'package:alera/src/shared/infra/git/git_providers.dart';
 import 'package:alera/src/shared/infra/process/process_runner.dart';
 import 'package:alera/src/shared/infra/storage/drift_database.dart';
@@ -79,6 +81,7 @@ Future<_ShellPumpHarness> _pumpShell(
   Map<String, AgentStatusEntry> agentStatuses =
       const <String, AgentStatusEntry>{},
   bool agentTitlesAvailable = false,
+  bool terminalTransferAvailable = false,
   List<AgentType> installedAgents = const <AgentType>[],
   ExternalTerminalLauncher? externalTerminalLauncher,
   VoidCallback? onAgentHookInstallerCoordinatorStarted,
@@ -106,6 +109,9 @@ Future<_ShellPumpHarness> _pumpShell(
       overrides: [
         aleraDatabaseProvider.overrideWith((ref) async => db),
         workbenchControllerProvider.overrideWith(() => shellController),
+        workbenchTerminalTransferAvailabilityProvider.overrideWith(
+          (ref) async => terminalTransferAvailable,
+        ),
         agentProfilesProvider.overrideWith(() => _ShellAgentProfiles()),
         agentStatusControllerProvider.overrideWith(() => agentStatusController),
         agentQuotaStateProvider.overrideWith(

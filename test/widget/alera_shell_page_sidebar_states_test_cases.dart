@@ -1,6 +1,96 @@
 part of 'alera_shell_page_test.dart';
 
+class _RecordingT2ShellController extends _ShellTestWorkbenchController {
+  _RecordingT2ShellController(WorkbenchState initialState)
+    : super(initialState);
+
+  final moves = <({String from, String to, String tabId})>[];
+
+  @override
+  Future<String> transferTerminalTab({
+    required Workspace source,
+    required Workspace destination,
+    required String tabId,
+    String? targetGroupId,
+  }) async {
+    moves.add((from: source.id, to: destination.id, tabId: tabId));
+    return 'widget-transfer-receipt';
+  }
+}
+
 void _registerAleraShellSidebarStateTests() {
+  testWidgets(
+    'T2 sidebar drop passes the existing Tab to its chosen workspace',
+    (tester) async {
+      final state = _linkedWorkbenchState(linkedExpanded: true);
+      final controller = _RecordingT2ShellController(state);
+      await _pumpShell(
+        tester,
+        state: state,
+        controller: controller,
+        terminalTransferAvailable: true,
+      );
+      const dragged = WorkbenchTabDragData(
+        workspaceId: 'workspace-1',
+        sourceGroupId: 'main',
+        tabId: 'tab-1',
+        kind: WorkspaceTabKind.terminal,
+        sourceHostId: 'local',
+      );
+      final destinationTarget = tester.widget<DragTarget<WorkbenchTabDragData>>(
+        find
+            .ancestor(
+              of: find.text('Feature login'),
+              matching: find.byType(DragTarget<WorkbenchTabDragData>),
+            )
+            .first,
+      );
+      final details = DragTargetDetails<WorkbenchTabDragData>(
+        data: dragged,
+        offset: Offset.zero,
+      );
+      expect(destinationTarget.onWillAcceptWithDetails!(details), isTrue);
+      destinationTarget.onAcceptWithDetails!(details);
+      await tester.pump();
+      expect(controller.moves, [
+        (from: 'workspace-1', to: 'workspace-2', tabId: 'tab-1'),
+      ]);
+    },
+  );
+
+  testWidgets(
+    'T2 sidebar drop is disabled when the Host does not advertise support',
+    (tester) async {
+      await _pumpShell(
+        tester,
+        state: _linkedWorkbenchState(linkedExpanded: true),
+      );
+      const dragged = WorkbenchTabDragData(
+        workspaceId: 'workspace-1',
+        sourceGroupId: 'main',
+        tabId: 'tab-1',
+        kind: WorkspaceTabKind.terminal,
+        sourceHostId: 'local',
+      );
+      final destinationTarget = tester.widget<DragTarget<WorkbenchTabDragData>>(
+        find
+            .ancestor(
+              of: find.text('Feature login'),
+              matching: find.byType(DragTarget<WorkbenchTabDragData>),
+            )
+            .first,
+      );
+      expect(
+        destinationTarget.onWillAcceptWithDetails!(
+          DragTargetDetails<WorkbenchTabDragData>(
+            data: dragged,
+            offset: Offset.zero,
+          ),
+        ),
+        isFalse,
+      );
+    },
+  );
   testWidgets('inactive workspaces with terminal tabs show active dots', (
     tester,
   ) async {
