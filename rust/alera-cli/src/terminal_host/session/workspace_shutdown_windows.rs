@@ -36,6 +36,13 @@ impl ShutdownGuard {
         for job in &jobs {
             processes.extend(capture_processes(job)?);
         }
+        // In worker mode the Job Object belongs to the isolated process.
+        // Retain its process handle until workspace shutdown completes.
+        for session in sessions {
+            if let Some(worker) = &session.worker_process {
+                processes.push(worker.try_clone().map_err(shutdown_error)?);
+            }
+        }
         Ok(Self { jobs, processes })
     }
 

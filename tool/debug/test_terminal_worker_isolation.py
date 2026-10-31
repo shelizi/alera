@@ -3,6 +3,7 @@
 Usage: python tool/debug/test_terminal_worker_isolation.py D:/c/t/debug/alera.exe
 Build the alera-cli executable first; never use a Cargo unit-test harness as a worker.
 """
+import ctypes
 import json
 import os
 from pathlib import Path
@@ -10,6 +11,20 @@ import subprocess
 import sys
 import threading
 import time
+
+
+def open_shell_wait_handle(pid):
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.OpenProcess.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32]
+    kernel.OpenProcess.restype = ctypes.c_void_p
+    kernel.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+    kernel.WaitForSingleObject.restype = ctypes.c_uint32
+    kernel.CloseHandle.argtypes = [ctypes.c_void_p]
+    kernel.CloseHandle.restype = ctypes.c_int
+    handle = kernel.OpenProcess(0x00100000, False, pid)
+    if not handle:
+        raise AssertionError(f"cannot open shell PID {pid}; Win32={ctypes.get_last_error()}")
+    return kernel, handle
 
 
 def write_frame(stream, kind, payload):
@@ -112,8 +127,15 @@ def main():
         assert first.process.pid != second.process.pid
         first.assert_echo("ALERA_%ALERA_TEST_PART%_FIRST", "ALERA_WORKER_FIRST")
         second.assert_echo("ALERA_%ALERA_TEST_PART%_SECOND", "ALERA_WORKER_SECOND")
-        first.process.kill()
-        first.process.wait(timeout=10)
+        kernel, shell_handle = open_shell_wait_handle(first.shell_pid)
+        try:
+            first.process.kill()
+            first.process.wait(timeout=10)
+            assert kernel.WaitForSingleObject(shell_handle, 10000) == 0, (
+                "worker died but its shell process remains alive"
+            )
+        finally:
+            kernel.CloseHandle(shell_handle)
         second.assert_echo("ALERA_%ALERA_TEST_PART%_SURVIVED_FIRST_CRASH", "ALERA_WORKER_SURVIVED_FIRST_CRASH")
         third = Worker(exe, "natural-exit", ["/Q", "/C", "echo WORKER_NORMAL_EXIT"])
         workers.append(third)
@@ -125,7 +147,7 @@ def main():
         third.reader.join(timeout=2)
         assert b"WORKER_NORMAL_EXIT" in third.data, "normal shell output lost"
         second.assert_echo("ALERA_%ALERA_TEST_PART%_AFTER_NORMAL_EXIT", "ALERA_WORKER_AFTER_NORMAL_EXIT")
-        print(f"PASS: worker crash isolated; natural exit output preserved")
+        print(f"PASS: worker crash isolated; child Job terminated; normal exit output preserved")
     finally:
         for worker in reversed(workers):
             worker.close()

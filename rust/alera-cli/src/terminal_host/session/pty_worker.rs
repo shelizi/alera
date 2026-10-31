@@ -12,10 +12,12 @@ use std::process::{ChildStdin, ChildStdout, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{sync_channel, SyncSender};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use portable_pty::{Child, ChildKiller, ExitStatus, MasterPty, PtySize};
 use serde::{Deserialize, Serialize};
 use windows::Win32::Foundation::HANDLE;
+use windows::Win32::System::Pipes::PeekNamedPipe;
 use windows::Win32::System::Threading::TerminateProcess;
 
 use super::pty_spawn::{spawn_pty, SpawnedPty};
@@ -27,6 +29,7 @@ pub(crate) const WORKER_ARGUMENT: &str = "__alera-terminal-pty-worker";
 const WORKER_ENABLED_ENV: &str = "ALERA_TERMINAL_WORKER_PROCESS";
 const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
 const MAX_WRITE_BYTES: usize = 64 * 1024;
+const WORKER_STARTUP_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -79,6 +82,31 @@ fn read_frame(reader: &mut impl Read) -> io::Result<Option<(u8, Vec<u8>)>> {
     let mut payload = vec![0; length];
     reader.read_exact(&mut payload)?;
     Ok(Some((kind[0], payload)))
+}
+
+/// Poll without blocking ReadFile, so a hung worker cannot stall Host forever.
+fn wait_for_worker_bytes(reader: &ChildStdout, minimum: u32, deadline: Instant) -> HostResult<()> {
+    loop {
+        let mut available = 0u32;
+        unsafe {
+            PeekNamedPipe(
+                HANDLE(reader.as_raw_handle()),
+                None,
+                0,
+                None,
+                Some(&mut available),
+                None,
+            )
+        }
+        .map_err(|error| HostError::state(format!("PTY worker handshake pipe closed: {error}")))?;
+        if available >= minimum {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(HostError::state("PTY worker startup exceeded 15 seconds"));
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
 
 fn lock_error() -> io::Error {
@@ -217,12 +245,16 @@ pub(super) fn spawn_worker_pty(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
-    let mut child = command
-        .spawn()
-        .map_err(|error| HostError::state(format!("failed to start PTY worker: {error}")))?;
+    let mut child_slot = Some(
+        command
+            .spawn()
+            .map_err(|error| HostError::state(format!("failed to start PTY worker: {error}")))?,
+    );
 
-    // On a failed handshake, never leave an unauthenticated worker running.
+    // Child stays in this option until all fallible startup steps complete.
+    // Failed handshakes can then always terminate and reap their own worker.
     let result = (|| {
+        let child = child_slot.as_mut().expect("PTY worker child is owned");
         let mut stdin = child
             .stdin
             .take()
@@ -231,6 +263,7 @@ pub(super) fn spawn_worker_pty(
             .stdout
             .take()
             .ok_or_else(|| HostError::state("PTY worker output pipe missing"))?;
+        let deadline = Instant::now() + WORKER_STARTUP_TIMEOUT;
         let request = LaunchRequest {
             session_id,
             working_directory: working_directory.to_string(),
@@ -243,11 +276,13 @@ pub(super) fn spawn_worker_pty(
         write_frame(&mut stdin, b'I', &payload)
             .map_err(|error| HostError::state(format!("PTY worker handshake failed: {error}")))?;
         let mut code = [0u8; 1];
+        wait_for_worker_bytes(&stdout, 1, deadline)?;
         stdout
             .read_exact(&mut code)
             .map_err(|error| HostError::state(format!("PTY worker readiness failed: {error}")))?;
         if code[0] == b'E' {
             let mut size = [0u8; 4];
+            wait_for_worker_bytes(&stdout, 4, deadline)?;
             stdout
                 .read_exact(&mut size)
                 .map_err(|error| HostError::state(format!("PTY worker error frame: {error}")))?;
@@ -256,6 +291,7 @@ pub(super) fn spawn_worker_pty(
                 return Err(HostError::state("PTY worker rejected oversized error"));
             }
             let mut detail = vec![0; size];
+            wait_for_worker_bytes(&stdout, size as u32, deadline)?;
             stdout
                 .read_exact(&mut detail)
                 .map_err(|error| HostError::state(format!("PTY worker error body: {error}")))?;
@@ -268,6 +304,7 @@ pub(super) fn spawn_worker_pty(
             return Err(HostError::state("PTY worker returned invalid ready marker"));
         }
         let mut pid_bytes = [0u8; 4];
+        wait_for_worker_bytes(&stdout, 4, deadline)?;
         stdout
             .read_exact(&mut pid_bytes)
             .map_err(|error| HostError::state(format!("PTY worker ready payload: {error}")))?;
@@ -317,7 +354,7 @@ pub(super) fn spawn_worker_pty(
             .map_err(|error| HostError::state(error.to_string()))?;
         let shell = (pid != 0).then(|| seal_shell_process(pid)).flatten();
         let worker = WorkerChild {
-            child,
+            child: child_slot.take().expect("PTY worker child still owned"),
             killer: WorkerKiller(Arc::clone(&cloned)),
             shell_pid: (pid != 0).then_some(pid),
         };
@@ -333,8 +370,13 @@ pub(super) fn spawn_worker_pty(
             worker_process: Some(cloned),
         })
     })();
-    // The worker child is moved into the successful result. On failure the
-    // child remains here and must be reaped, never orphaned.
+    if result.is_err() {
+        if let Some(mut child) = child_slot.take() {
+            // Worker owns its shell Job; killing it tears down its descendants.
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
     result
 }
 
