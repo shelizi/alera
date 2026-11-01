@@ -254,14 +254,12 @@ impl ServerActor {
             }
         }
         // Do not remint a shell if an authenticated worker outlived Host.
-        #[cfg(windows)]
+        #[cfg(any(windows, unix))]
         let recoverable = crate::terminal_host::session::pty_worker::has_recoverable_worker(
             &self.runtime_dir,
             &session_id,
             &tab_id,
         );
-        #[cfg(not(windows))]
-        let recoverable = false;
         if !recoverable {
             self.verify_moved_terminal_launch_directory(&tab_id, &working_directory)
                 .await?;

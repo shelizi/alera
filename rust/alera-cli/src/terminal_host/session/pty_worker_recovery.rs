@@ -1,13 +1,16 @@
-//! Reconnectable, loopback-only control plane for an isolated Windows PTY.
+//! Reconnectable, loopback-only control plane for isolated Rust PTY Workers.
 //!
-//! The worker owns the ConPTY and a capped output tail. A Host crash closes its
-//! TCP socket but not the worker or the shell's Job Object. A replacement Host
-//! may authenticate with the retained session token and request a tail replay.
+//! Every Worker owns its native PTY and shell; Windows additionally owns a
+//! Job Object. A Host crash closes its socket, but a replacement Host can
+//! authenticate to resume its bounded output tail and original shell.
 //! This is only used when ALERA_TERMINAL_WORKER_PROCESS is explicitly enabled.
 
 use std::collections::VecDeque;
 use std::io::{self, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream};
+#[cfg(unix)]
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
+#[cfg(windows)]
 use std::os::windows::io::{FromRawHandle, OwnedHandle};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -19,6 +22,7 @@ use alera_core::runtime::{create_private_runtime_file, prepare_private_runtime_d
 use portable_pty::{MasterPty, PtySize};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+#[cfg(windows)]
 use windows::Win32::System::Threading::{
     OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
 };
@@ -27,8 +31,29 @@ use super::{read_frame_bounded, write_frame, MAX_WRITE_BYTES};
 use crate::terminal_host::host_error::{HostError, HostResult};
 use crate::terminal_host::resources::seal_shell_process;
 
+#[cfg(windows)]
 #[path = "pty_worker_acl.rs"]
 mod acl;
+
+#[cfg(unix)]
+fn verify_unix_registry_path(path: &Path, directory: bool) -> io::Result<()> {
+    let metadata = std::fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink()
+        || if directory {
+            !metadata.is_dir()
+        } else {
+            !metadata.is_file()
+        }
+        || metadata.uid() != unsafe { libc::geteuid() }
+        || metadata.permissions().mode() & 0o077 != 0
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "Unix PTY Worker token path must be user-owned and private",
+        ));
+    }
+    Ok(())
+}
 
 const SCHEMA_VERSION: u32 = 2;
 const RECOVERY_BACKLOG_MAX: usize = 4 * 1024 * 1024;
@@ -92,13 +117,21 @@ fn manifest_path(runtime_dir: &Path, session_id: &str) -> PathBuf {
 fn read_record(path: &Path) -> HostResult<Option<WorkerRecord>> {
     if let Some(parent) = path.parent() {
         if parent.exists() {
+            #[cfg(windows)]
             acl::protect_path(parent, true)
                 .map_err(|e| HostError::state(format!("PTY worker registry ACL: {e}")))?;
+            #[cfg(unix)]
+            verify_unix_registry_path(parent, true)
+                .map_err(|e| HostError::state(format!("PTY worker registry permissions: {e}")))?;
         }
     }
     if path.exists() {
+        #[cfg(windows)]
         acl::protect_path(path, false)
             .map_err(|e| HostError::state(format!("PTY worker token ACL: {e}")))?;
+        #[cfg(unix)]
+        verify_unix_registry_path(path, false)
+            .map_err(|e| HostError::state(format!("PTY worker token permissions: {e}")))?;
     }
     let data = match std::fs::read(path) {
         Ok(data) => data,
@@ -145,7 +178,10 @@ pub(super) fn has_recoverable_worker(runtime_dir: &Path, session_id: &str, tab_i
 
 pub(super) struct WorkerAttachment {
     pub(super) worker_pid: u32,
+    #[cfg(unix)]
+    pub(super) worker_start_time: u64,
     pub(super) stream: TcpStream,
+    #[cfg(windows)]
     pub(super) process: Arc<OwnedHandle>,
     pub(super) shell_pid: u32,
     pub(super) replay_start_cursor: u64,
@@ -218,6 +254,7 @@ pub(super) fn attach_existing(
             "PTY worker changed identity during reconnect",
         ));
     }
+    #[cfg(windows)]
     let handle = unsafe {
         OpenProcess(
             PROCESS_SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE,
@@ -226,13 +263,17 @@ pub(super) fn attach_existing(
         )
     }
     .map_err(|error| HostError::state(format!("PTY worker handle unavailable: {error}")))?;
+    #[cfg(windows)]
     let handle = unsafe { OwnedHandle::from_raw_handle(handle.0) };
     stream
         .set_read_timeout(None)
         .map_err(|error| HostError::state(error.to_string()))?;
     Ok(Some(WorkerAttachment {
         worker_pid: record.worker_pid,
+        #[cfg(unix)]
+        worker_start_time: record.worker_start_time,
         stream,
+        #[cfg(windows)]
         process: Arc::new(handle),
         shell_pid,
         replay_start_cursor,
@@ -322,7 +363,10 @@ impl WorkerRecoveryServer {
             .parent()
             .expect("registry path includes workers directory");
         prepare_private_runtime_directory(parent)?;
+        #[cfg(windows)]
         acl::protect_path(parent, true)?;
+        #[cfg(unix)]
+        verify_unix_registry_path(parent, true)?;
         let record = WorkerRecord {
             schema_version: SCHEMA_VERSION,
             session_id: session_id.to_string(),
@@ -342,7 +386,10 @@ impl WorkerRecoveryServer {
             let mut file = create_private_runtime_file(&tmp)?;
             file.write_all(&body)?;
             file.sync_all()?;
+            #[cfg(windows)]
             acl::protect_path(&tmp, false)?;
+            #[cfg(unix)]
+            verify_unix_registry_path(&tmp, false)?;
             std::fs::rename(&tmp, &registry)
         })();
         if write_result.is_err() {
@@ -524,6 +571,37 @@ fn serve_client(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_reconnect_manifest_requires_private_owner_and_permissions() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+
+        let dir = tempfile::tempdir().unwrap();
+        let registry = dir.path().join("workers");
+        prepare_private_runtime_directory(&registry).unwrap();
+        verify_unix_registry_path(&registry, true).unwrap();
+
+        let manifest = registry.join("session.json");
+        create_private_runtime_file(&manifest).unwrap();
+        verify_unix_registry_path(&manifest, false).unwrap();
+
+        std::fs::set_permissions(&manifest, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(
+            verify_unix_registry_path(&manifest, false)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::PermissionDenied
+        );
+
+        std::fs::set_permissions(&manifest, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let link = registry.join("malicious.json");
+        symlink(&manifest, &link).unwrap();
+        assert_eq!(
+            verify_unix_registry_path(&link, false).unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+    }
 
     #[test]
     fn reconnect_client_threads_are_bounded_and_slots_released() {

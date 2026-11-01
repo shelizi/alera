@@ -105,7 +105,7 @@ fn main() {
     if pty_job_bootstrap::is_invocation() {
         std::process::exit(pty_job_bootstrap::run());
     }
-    #[cfg(windows)]
+    #[cfg(any(windows, unix))]
     if terminal_host::session::pty_worker::is_invocation() {
         std::process::exit(terminal_host::session::pty_worker::run());
     }

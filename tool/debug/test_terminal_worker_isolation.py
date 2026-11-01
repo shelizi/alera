@@ -210,7 +210,7 @@ def main():
     if not executable.is_file():
         raise SystemExit(f"executable not found: {executable}")
 
-    with tempfile.TemporaryDirectory(prefix="alera-worker-smoke-", dir=Path.cwd()) as runtime:
+    with tempfile.TemporaryDirectory(prefix="alera-worker-smoke-") as runtime:
         workers = []
         try:
             first = Worker(executable, runtime, "first")

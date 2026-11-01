@@ -24,9 +24,7 @@ pub(super) struct SpawnedPty {
     pub(super) process_job: Option<WindowsProcessJob>,
     #[cfg(windows)]
     pub(super) worker_process: Option<Arc<OwnedHandle>>,
-    #[cfg(windows)]
     pub(super) replay_start_cursor: Option<u64>,
-    #[cfg(windows)]
     pub(super) recovered_working_directory: Option<String>,
 }
 
@@ -56,11 +54,12 @@ pub(super) fn spawn_pty(
         &launch.environment,
     )?;
     #[cfg(not(windows))]
-    let _ = working_directory;
-    #[cfg(not(windows))]
     let mut command = {
         let mut command = CommandBuilder::new(&launch.shell);
         command.args(&launch.arguments);
+        // The Unix PTY shell must start in the owning workspace, including
+        // after its Worker is reattached by a replacement Host.
+        command.cwd(working_directory);
         command
     };
     // Session launch environments are explicit so terminals do not inherit
@@ -104,9 +103,7 @@ pub(super) fn spawn_pty(
         process_job: Some(process_job),
         #[cfg(windows)]
         worker_process: None,
-        #[cfg(windows)]
         replay_start_cursor: None,
-        #[cfg(windows)]
         recovered_working_directory: None,
     })
 }

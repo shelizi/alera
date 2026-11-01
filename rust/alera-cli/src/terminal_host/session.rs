@@ -27,7 +27,7 @@ mod io_threads;
 mod output_backpressure;
 mod output_batching;
 mod pty_spawn;
-#[cfg(windows)]
+#[cfg(any(windows, unix))]
 pub(crate) mod pty_worker;
 #[cfg(unix)]
 mod shell_tree_termination;
@@ -221,7 +221,7 @@ impl Session {
             .next_output_sequence(&id)
             .await
             .map_err(|error| HostError::state(error.to_string()))?;
-        #[cfg(windows)]
+        #[cfg(any(windows, unix))]
         let spawned = {
             let launch = launch.clone();
             let terminal_handle = id.clone();
@@ -268,11 +268,6 @@ impl Session {
             .await
             .map_err(|error| HostError::state(format!("PTY setup worker failed: {error}")))??
         };
-        #[cfg(not(windows))]
-        let spawned = {
-            let _ = (runtime_dir, allow_reconnect);
-            spawn_pty(launch.clone(), id.clone(), &working_directory, cols, rows)?
-        };
         let SpawnedPty {
             child,
             master,
@@ -283,16 +278,13 @@ impl Session {
             process_job,
             #[cfg(windows)]
             worker_process,
-            #[cfg(windows)]
             replay_start_cursor,
-            #[cfg(windows)]
             recovered_working_directory,
             shell,
         } = spawned;
         // If the Host was gone longer than the worker's bounded output tail,
         // replay begins after the last durable checkpoint. Keep cursor offsets
         // truthful: old scrollback is not contiguous with recovered live output.
-        #[cfg(windows)]
         let initial_scrollback =
             if replay_start_cursor.is_some_and(|start| start > initial_output_stream_bytes) {
                 tracing::warn!(
@@ -318,10 +310,7 @@ impl Session {
             id,
             workspace_id,
             tab_id,
-            #[cfg(windows)]
             working_directory: recovered_working_directory.unwrap_or(working_directory),
-            #[cfg(not(windows))]
-            working_directory,
             clients: HashSet::new(),
             view_leases: HashMap::new(),
             unscoped_clients: HashSet::new(),
@@ -359,16 +348,7 @@ impl Session {
             durable_output_batch_armed: false,
             durable_output_batch_sequence,
             output_stream_bytes: resumed_output_stream_bytes(
-                {
-                    #[cfg(windows)]
-                    {
-                        initial_output_stream_bytes.max(replay_start_cursor.unwrap_or(0))
-                    }
-                    #[cfg(not(windows))]
-                    {
-                        initial_output_stream_bytes
-                    }
-                },
+                initial_output_stream_bytes.max(replay_start_cursor.unwrap_or(0)),
                 initial_scrollback.len(),
             ),
             title_tracker,

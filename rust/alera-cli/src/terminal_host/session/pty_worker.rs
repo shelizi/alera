@@ -1,14 +1,20 @@
-//! Windows PTY process isolation with opt-in reconnectable worker transport.
+//! Cross-platform PTY process isolation with opt-in Rust Worker transport.
 //!
 //! The shared Host keeps tab metadata and history, while every worker owns its
-//! ConPTY, shell and Job Object. The worker listens only on localhost, protects
+//! native PTY and shell (plus a Windows Job Object when applicable).
+//! The worker listens only on localhost, protects
 //! its connection with a random token and buffers at most 4 MiB of output while
 //! the Host is unavailable. Older/default hosts use the in-process PTY path.
 
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
+#[cfg(unix)]
+use std::os::unix::io::AsRawFd;
+#[cfg(windows)]
 use std::os::windows::io::{AsRawHandle, OwnedHandle};
 use std::path::Path;
+#[cfg(unix)]
+use std::process::Command;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{sync_channel, SyncSender};
@@ -17,8 +23,11 @@ use std::time::{Duration, Instant};
 
 use portable_pty::{Child, ChildKiller, ExitStatus, MasterPty, PtySize};
 use serde::{Deserialize, Serialize};
+#[cfg(windows)]
 use windows::Win32::Foundation::{HANDLE, WAIT_OBJECT_0, WAIT_TIMEOUT};
+#[cfg(windows)]
 use windows::Win32::System::Pipes::PeekNamedPipe;
+#[cfg(windows)]
 use windows::Win32::System::Threading::{
     GetExitCodeProcess, TerminateProcess, WaitForSingleObject,
 };
@@ -27,6 +36,8 @@ use super::pty_spawn::{spawn_pty, SpawnedPty};
 use crate::terminal_host::host_error::{HostError, HostResult};
 use crate::terminal_host::protocol::TerminalHostLaunch;
 use crate::terminal_host::resources::seal_shell_process;
+#[cfg(unix)]
+use crate::terminal_host::resources::ShellProcess;
 
 #[path = "pty_worker_recovery.rs"]
 mod recovery;
@@ -107,6 +118,7 @@ fn read_frame_bounded(
 }
 
 /// Polls the startup pipe so a wedged child cannot hang the whole Host.
+#[cfg(windows)]
 fn wait_for_worker_bytes(
     reader: &std::process::ChildStdout,
     minimum: u32,
@@ -130,6 +142,33 @@ fn wait_for_worker_bytes(
         }
         if Instant::now() >= deadline {
             return Err(HostError::state("PTY worker startup exceeded 15 seconds"));
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[cfg(unix)]
+fn wait_for_worker_bytes(
+    reader: &std::process::ChildStdout,
+    minimum: u32,
+    deadline: Instant,
+) -> HostResult<()> {
+    // Linux and macOS support FIONREAD on pipes. Do not block waiting for
+    // a partial response from a Worker that has failed during startup.
+    loop {
+        let mut available: libc::c_int = 0;
+        let status = unsafe { libc::ioctl(reader.as_raw_fd(), libc::FIONREAD, &mut available) };
+        if status < 0 {
+            return Err(HostError::state(format!(
+                "PTY Worker startup pipe failed: {}",
+                io::Error::last_os_error()
+            )));
+        }
+        if available >= 0 && available as u32 >= minimum {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(HostError::state("PTY Worker startup exceeded 15 seconds"));
         }
         std::thread::sleep(Duration::from_millis(10));
     }
@@ -260,9 +299,15 @@ fn worker_streams(
     Ok((master, reader, writer))
 }
 
+#[cfg(windows)]
 #[derive(Debug, Clone)]
 struct WorkerKiller(Arc<OwnedHandle>);
 
+#[cfg(unix)]
+#[derive(Debug, Clone)]
+struct WorkerKiller(ShellProcess);
+
+#[cfg(windows)]
 impl ChildKiller for WorkerKiller {
     fn kill(&mut self) -> io::Result<()> {
         unsafe { TerminateProcess(HANDLE(self.0.as_raw_handle()), 1) }.map_err(io::Error::other)
@@ -273,10 +318,33 @@ impl ChildKiller for WorkerKiller {
     }
 }
 
+#[cfg(unix)]
+impl ChildKiller for WorkerKiller {
+    fn kill(&mut self) -> io::Result<()> {
+        // Refuse to signal a recycled Worker PID.
+        if seal_shell_process(self.0.pid).is_none_or(|p| p.start_time != self.0.start_time) {
+            return Ok(());
+        }
+        let status = unsafe { libc::kill(self.0.pid as libc::pid_t, libc::SIGTERM) };
+        if status == 0 {
+            Ok(())
+        } else {
+            Err(io::Error::last_os_error())
+        }
+    }
+
+    fn clone_killer(&self) -> Box<dyn ChildKiller + Send + Sync> {
+        Box::new(self.clone())
+    }
+}
+
 #[derive(Debug)]
 enum WorkerChildHandle {
     Spawned(std::process::Child),
+    #[cfg(windows)]
     Attached(Arc<OwnedHandle>),
+    #[cfg(unix)]
+    Attached(ShellProcess),
 }
 
 #[derive(Debug)]
@@ -286,6 +354,7 @@ struct WorkerChild {
     shell_pid: Option<u32>,
 }
 
+#[cfg(windows)]
 fn process_status(handle: &OwnedHandle) -> io::Result<ExitStatus> {
     let mut code = 0u32;
     unsafe { GetExitCodeProcess(HANDLE(handle.as_raw_handle()), &mut code) }
@@ -307,6 +376,7 @@ impl Child for WorkerChild {
     fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
         match &mut self.child {
             WorkerChildHandle::Spawned(child) => child.try_wait().map(|s| s.map(Into::into)),
+            #[cfg(windows)]
             WorkerChildHandle::Attached(handle) => {
                 match unsafe { WaitForSingleObject(HANDLE(handle.as_raw_handle()), 0) } {
                     WAIT_OBJECT_0 => Ok(Some(process_status(handle)?)),
@@ -314,18 +384,36 @@ impl Child for WorkerChild {
                     _ => Err(io::Error::last_os_error()),
                 }
             }
+            #[cfg(unix)]
+            WorkerChildHandle::Attached(worker) => Ok(
+                if seal_shell_process(worker.pid).is_some_and(|p| p.start_time == worker.start_time)
+                {
+                    None
+                } else {
+                    Some(ExitStatus::with_exit_code(1))
+                },
+            ),
         }
     }
 
     fn wait(&mut self) -> io::Result<ExitStatus> {
         match &mut self.child {
             WorkerChildHandle::Spawned(child) => child.wait().map(Into::into),
+            #[cfg(windows)]
             WorkerChildHandle::Attached(handle) => {
                 match unsafe { WaitForSingleObject(HANDLE(handle.as_raw_handle()), u32::MAX) } {
                     WAIT_OBJECT_0 => process_status(handle),
                     _ => Err(io::Error::last_os_error()),
                 }
             }
+            #[cfg(unix)]
+            WorkerChildHandle::Attached(worker) => loop {
+                if seal_shell_process(worker.pid).is_none_or(|p| p.start_time != worker.start_time)
+                {
+                    return Ok(ExitStatus::with_exit_code(1));
+                }
+                std::thread::sleep(Duration::from_millis(30));
+            },
         }
     }
 
@@ -333,6 +421,7 @@ impl Child for WorkerChild {
         self.shell_pid
     }
 
+    #[cfg(windows)]
     fn as_raw_handle(&self) -> Option<std::os::windows::io::RawHandle> {
         Some(match &self.child {
             WorkerChildHandle::Spawned(child) => AsRawHandle::as_raw_handle(child),
@@ -350,11 +439,19 @@ fn assemble_worker(
     let recovered_cursor = attachment.replay_start_cursor;
     let working_directory = attachment.working_directory;
     let shell_pid = attachment.shell_pid;
+    #[cfg(windows)]
     let handle = Arc::clone(&attachment.process);
+    #[cfg(unix)]
+    let worker = seal_shell_process(attachment.worker_pid)
+        .filter(|identity| identity.start_time == attachment.worker_start_time)
+        .ok_or_else(|| HostError::state("Unix Worker identity changed during PTY attachment"))?;
     let (master, reader, writer) = worker_streams(attachment.stream, cols, rows)?;
     let child = WorkerChild {
         child: process,
+        #[cfg(windows)]
         killer: WorkerKiller(Arc::clone(&handle)),
+        #[cfg(unix)]
+        killer: WorkerKiller(worker),
         shell_pid: Some(shell_pid),
     };
     let killer = child.clone_killer();
@@ -365,7 +462,9 @@ fn assemble_worker(
         writer,
         killer,
         shell: seal_shell_process(shell_pid),
+        #[cfg(windows)]
         process_job: None,
+        #[cfg(windows)]
         worker_process: Some(handle),
         replay_start_cursor: Some(recovered_cursor),
         recovered_working_directory: Some(working_directory),
@@ -385,7 +484,14 @@ pub(super) fn try_recover_worker(
     else {
         return Ok(None);
     };
+    #[cfg(windows)]
     let process = WorkerChildHandle::Attached(Arc::clone(&attachment.process));
+    #[cfg(unix)]
+    let process = WorkerChildHandle::Attached(
+        seal_shell_process(attachment.worker_pid)
+            .filter(|p| p.start_time == attachment.worker_start_time)
+            .ok_or_else(|| HostError::state("Unix Worker PID was reused"))?,
+    );
     assemble_worker(attachment, process, cols, rows).map(Some)
 }
 
@@ -404,7 +510,10 @@ pub(super) fn spawn_worker_pty(
 ) -> HostResult<SpawnedPty> {
     let exe = std::env::current_exe()
         .map_err(|error| HostError::state(format!("PTY worker executable missing: {error}")))?;
-    let mut command = alera_core::child_process::windowless_command(exe);
+    #[cfg(windows)]
+    let mut command = alera_core::child_process::windowless_command(exe.clone());
+    #[cfg(unix)]
+    let mut command = Command::new(exe);
     command
         .arg(WORKER_ARGUMENT)
         .stdin(Stdio::piped())
@@ -546,8 +655,10 @@ fn run_inner() -> anyhow::Result<i32> {
         writer,
         killer: _,
         shell,
+        #[cfg(windows)]
         process_job,
-        worker_process: _,
+        #[cfg(windows)]
+            worker_process: _,
         replay_start_cursor: _,
         recovered_working_directory: _,
     } = spawned;
@@ -590,6 +701,7 @@ fn run_inner() -> anyhow::Result<i32> {
         .wait()
         .map(|status| status.exit_code() as i32)
         .unwrap_or(-1);
+    #[cfg(windows)]
     drop(process_job);
     if let Ok(mut guard) = writer.lock() {
         guard.take();
