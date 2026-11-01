@@ -63,11 +63,21 @@ struct LaunchRequest {
     max_backlog_bytes: usize,
 }
 
+/// Desktop PTYs are isolated by default on Windows, macOS and Linux.
+/// Set ALERA_TERMINAL_WORKER_PROCESS=0 to revert to the legacy in-Host PTY.
+/// Unknown explicit values fail closed instead of silently changing the mode.
+fn worker_mode_enabled(value: Option<&str>) -> bool {
+    match value {
+        None => true,
+        Some(value) => matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "on" | "yes"
+        ),
+    }
+}
+
 pub(super) fn enabled() -> bool {
-    matches!(
-        std::env::var(WORKER_ENABLED_ENV).as_deref(),
-        Ok("1" | "true" | "on")
-    )
+    worker_mode_enabled(std::env::var(WORKER_ENABLED_ENV).ok().as_deref())
 }
 
 pub(crate) fn has_recoverable_worker(runtime_dir: &Path, session_id: &str, tab_id: &str) -> bool {
@@ -718,6 +728,18 @@ fn run_inner() -> anyhow::Result<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn worker_is_enabled_by_default_with_explicit_rollback() {
+        assert!(worker_mode_enabled(None));
+        assert!(worker_mode_enabled(Some("1")));
+        assert!(worker_mode_enabled(Some(" ON ")));
+        assert!(worker_mode_enabled(Some("true")));
+        assert!(!worker_mode_enabled(Some("0")));
+        assert!(!worker_mode_enabled(Some("off")));
+        assert!(!worker_mode_enabled(Some("false")));
+        assert!(!worker_mode_enabled(Some("invalid")));
+    }
 
     #[test]
     fn worker_frame_round_trips_binary_and_rejects_oversized_length() {

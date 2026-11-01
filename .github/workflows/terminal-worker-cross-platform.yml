@@ -1,0 +1,41 @@
+name: Terminal Worker Cross Platform
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'rust/alera-cli/src/terminal_host/session/**'
+      - 'rust/alera-cli/src/terminal_host/session.rs'
+      - 'tool/debug/test_terminal_worker_unix.py'
+      - '.github/workflows/terminal-worker-cross-platform.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  unix-worker:
+    name: native ${{ matrix.platform }} worker
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux
+            os: ubuntu-latest
+          - platform: macos
+            os: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Native build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdbus-1-dev pkg-config
+      - name: Build sidecar
+        run: cargo build --locked --manifest-path rust/Cargo.toml -p alera-cli --bin alera
+      - name: Run Unix PTY isolation and reconnect smoke
+        run: python3 tool/debug/test_terminal_worker_unix.py rust/target/debug/alera
+      - name: Run Rust PTY worker tests
+        run: cargo test --locked --manifest-path rust/Cargo.toml -p alera-cli --bin alera terminal_host::session::pty_worker
