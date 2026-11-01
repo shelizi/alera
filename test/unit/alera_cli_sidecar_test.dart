@@ -149,4 +149,45 @@ void main() {
       expect((await File(first.executable).stat()).mode & 0x40, isNot(0));
     }
   });
+
+  test(
+    'desktop repackaging does not change an identical CLI cache path',
+    () async {
+      final tempDir = await Directory.systemTemp.createTemp(
+        'alera-cli-sidecar-repacked-',
+      );
+      addTearDown(() async {
+        if (await tempDir.exists()) {
+          await tempDir.delete(recursive: true);
+        }
+      });
+      final bundleDir = Directory(p.join(tempDir.path, 'bundle'));
+      await bundleDir.create();
+      final archive = File(p.join(bundleDir.path, 'alera.gz'));
+      final originalBytes = utf8.encode('same CLI binary');
+      await archive.writeAsBytes(gzip.encode(originalBytes), flush: true);
+      DefaultAleraCliResolver makeResolver() => DefaultAleraCliResolver(
+        environment: <String, String>{'ALERA_CLI_BUNDLE_DIR': bundleDir.path},
+        operatingSystem: 'linux',
+        resolvedExecutable: p.join(tempDir.path, 'alera-app'),
+        currentDirectoryPath: tempDir.path,
+      );
+      final runtimeDir = p.join(tempDir.path, 'support', 'terminal_host');
+
+      final first = await makeResolver().resolve(runtimeDir: runtimeDir);
+      await archive.setLastModified(
+        DateTime.now().add(const Duration(days: 1)),
+      );
+      final repacked = await makeResolver().resolve(runtimeDir: runtimeDir);
+
+      expect(repacked.executable, first.executable);
+      expect(await File(repacked.executable).readAsBytes(), originalBytes);
+
+      final updatedBytes = utf8.encode('new CLI binary!');
+      await archive.writeAsBytes(gzip.encode(updatedBytes), flush: true);
+      final updated = await makeResolver().resolve(runtimeDir: runtimeDir);
+      expect(updated.executable, isNot(first.executable));
+      expect(await File(updated.executable).readAsBytes(), updatedBytes);
+    },
+  );
 }

@@ -27,6 +27,7 @@ const Map<String, String> _traditionalChineseSettings = <String, String>{
   'Runtime': '執行環境',
   'Diagnostics': '診斷',
   'Updates': '更新',
+  'Registered': '已註冊',
   'Support': '支援',
   'Identity': '身分',
   'Account unavailable': '無法取得帳號',

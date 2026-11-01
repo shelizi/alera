@@ -8,6 +8,56 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  testWidgets('up-to-date CLI registration offers no update action', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          aleraCliRegistrationServiceProvider.overrideWithValue(
+            _FakeAleraCliRegistrationService(statusResult: _registeredStatus),
+          ),
+        ],
+        child: MaterialApp(
+          theme: buildAleraDarkTheme(),
+          home: const Scaffold(body: AleraCliRegistrationControl()),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.text('Update'), findsNothing);
+    expect(find.text('Registered'), findsOneWidget);
+    final action = tester.widget<FilledButton>(
+      find.widgetWithText(FilledButton, 'Registered'),
+    );
+    expect(action.onPressed, isNull);
+  });
+
+  testWidgets('stale CLI registration offers an update action', (tester) async {
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          aleraCliRegistrationServiceProvider.overrideWithValue(
+            _FakeAleraCliRegistrationService(statusResult: _staleStatus),
+          ),
+        ],
+        child: MaterialApp(
+          theme: buildAleraDarkTheme(),
+          home: const Scaffold(body: AleraCliRegistrationControl()),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    final action = tester.widget<FilledButton>(
+      find.widgetWithText(FilledButton, 'Update'),
+    );
+    expect(action.onPressed, isNotNull);
+  });
+
   testWidgets('registration control surfaces refresh failures', (tester) async {
     await tester.pumpWidget(
       ProviderScope(
@@ -73,6 +123,7 @@ void main() {
 class _FakeAleraCliRegistrationService({
   final Object? statusError,
   final Object? installError,
+  final AleraCliRegistrationStatus? statusResult,
 }) extends AleraCliRegistrationService {
   this : super(processRunner: _NoopProcessRunner());
 
@@ -82,7 +133,7 @@ class _FakeAleraCliRegistrationService({
     if (error != null) {
       throw error;
     }
-    return _notRegisteredStatus;
+    return statusResult ?? _notRegisteredStatus;
   }
 
   @override
@@ -127,4 +178,26 @@ const _notRegisteredStatus = AleraCliRegistrationStatus(
   installMethod: .wrapper,
   state: .notInstalled,
   detail: 'Register the Alera command to use it from terminals and agents.',
+);
+
+const _registeredStatus = AleraCliRegistrationStatus(
+  commandName: 'alera',
+  commandPath: '/Users/test/.local/bin/alera',
+  pathDirectory: '/Users/test/.local/bin',
+  pathConfigured: true,
+  launcherPath: '/Applications/Alera.app/alera',
+  installMethod: .wrapper,
+  state: .installed,
+  detail: 'Registered at /Users/test/.local/bin/alera.',
+);
+
+const _staleStatus = AleraCliRegistrationStatus(
+  commandName: 'alera',
+  commandPath: '/Users/test/.local/bin/alera',
+  pathDirectory: '/Users/test/.local/bin',
+  pathConfigured: true,
+  launcherPath: '/Applications/Alera.app/alera',
+  installMethod: .wrapper,
+  state: .stale,
+  detail: 'Registered command points to an older Alera launcher.',
 );

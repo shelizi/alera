@@ -27,6 +27,7 @@ const Map<String, String> _japaneseSettings = <String, String>{
   'Runtime': 'Runtime',
   'Diagnostics': '診断',
   'Updates': '更新',
+  'Registered': '登録済み',
   'Support': 'サポート',
   'Identity': 'アイデンティティ',
   'Account unavailable': 'アカウントを取得できません',

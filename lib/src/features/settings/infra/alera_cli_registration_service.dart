@@ -198,7 +198,10 @@ class AleraCliRegistrationService({
       return status();
     }
     final current = await status();
-    if (current.state == AleraCliRegistrationState.conflict) {
+    // A registered wrapper already points to the bundled CLI. Rewriting it
+    // on every desktop release does not update the CLI itself.
+    if (current.state == AleraCliRegistrationState.conflict ||
+        current.state == AleraCliRegistrationState.installed) {
       return current;
     }
     final file = File(spec.commandPath);

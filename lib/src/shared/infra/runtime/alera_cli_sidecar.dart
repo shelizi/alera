@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:alera/src/platform/runtime_host/protocol/terminal_host_protocol.dart';
 import 'package:alera/src/shared/infra/files/posix_file_mode.dart';
+import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
 
 final class const AleraCliCommand({
@@ -29,6 +30,10 @@ final class DefaultAleraCliResolver({
       );
 
   final _DefaultAleraCliResolverOptions _options;
+
+  // Avoid repeatedly decompressing the same archive within an app session.
+  final Map<String, ({int size, DateTime modified, String executable})>
+  _archiveCache = {};
 
   Map<String, String>? get _environment => _options.environment;
 
@@ -149,28 +154,37 @@ final class DefaultAleraCliResolver({
   }) async {
     final archive = File(archivePath);
     final stat = await archive.stat();
+    final previous = _archiveCache[archive.path];
+    if (previous != null &&
+        previous.size == stat.size &&
+        previous.modified == stat.modified &&
+        await File(previous.executable).exists()) {
+      return previous.executable;
+    }
+    // Repackaging an unchanged CLI may change archive timestamps. The CLI's
+    // uncompressed content, rather than the desktop release, owns its cache.
+    final bytes = gzip.decode(await archive.readAsBytes());
     final cacheRoot = Directory(p.join(p.dirname(runtimeDir), 'cli'));
     final cacheKey = [
       p
           .basenameWithoutExtension(archive.path)
           .replaceAll(RegExp(r'[^A-Za-z0-9_.-]'), '_'),
-      stat.size,
-      stat.modified.millisecondsSinceEpoch,
+      sha256.convert(bytes),
     ].join('-');
     final cacheDir = Directory(p.join(cacheRoot.path, cacheKey));
     final target = File(p.join(cacheDir.path, _executableName));
-    if (await target.exists()) {
-      return target.path;
-    }
-
-    if (!await cacheDir.exists()) {
+    if (!await target.exists()) {
       await cacheDir.create(recursive: true);
+      await target.writeAsBytes(bytes, flush: true);
+      if (_operatingSystemName != 'windows' && !Platform.isWindows) {
+        setPosixFileMode(target.path, posixExecutableFileMode);
+      }
     }
-    final bytes = gzip.decode(await archive.readAsBytes());
-    await target.writeAsBytes(bytes, flush: true);
-    if (_operatingSystemName != 'windows' && !Platform.isWindows) {
-      setPosixFileMode(target.path, posixExecutableFileMode);
-    }
+    _archiveCache[archive.path] = (
+      size: stat.size,
+      modified: stat.modified,
+      executable: target.path,
+    );
     return target.path;
   }
 

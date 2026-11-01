@@ -123,6 +123,15 @@ class _AleraCliRegistrationControlState
         status?.state == AleraCliRegistrationState.conflict ||
         status?.state == AleraCliRegistrationState.unsupported;
     final ready = status?.ready ?? false;
+    final needsRegistration =
+        status?.state == AleraCliRegistrationState.notInstalled;
+    final needsUpdate = status?.state == AleraCliRegistrationState.stale;
+    final isRegistered = status?.state == AleraCliRegistrationState.installed;
+    final actionLabel = needsUpdate
+        ? 'Update'
+        : isRegistered
+        ? 'Registered'
+        : 'Register';
     final summary = error ?? status?.summary;
     final detail = error == null ? status?.detail : null;
     return Column(
@@ -154,9 +163,11 @@ class _AleraCliRegistrationControlState
             SizedBox(
               height: kSupportControlHeight,
               child: FilledButton.tonalIcon(
-                onPressed: _busy || hasConflict ? null : _install,
+                onPressed: _busy || (!needsRegistration && !needsUpdate)
+                    ? null
+                    : _install,
                 icon: const Icon(AleraIcons.terminal, size: 16),
-                label: Text(context.tr(ready ? 'Update' : 'Register')),
+                label: Text(context.tr(actionLabel)),
               ),
             ),
           ],

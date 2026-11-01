@@ -27,6 +27,7 @@ const Map<String, String> _simplifiedChineseSettings = <String, String>{
   'Runtime': '运行时',
   'Diagnostics': '诊断',
   'Updates': '更新',
+  'Registered': '已注册',
   'Support': '支持',
   'Identity': '身份',
   'Account unavailable': '无法取得账号',

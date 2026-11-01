@@ -58,6 +58,47 @@ void main() {
       expect(wrapper, contains("exec '/Applications/Alera.app/alera'"));
     });
 
+    test('already registered CLI does not rewrite the command', () async {
+      final tempDir = await Directory.systemTemp.createTemp(
+        'alera-cli-registration-idempotent-',
+      );
+      addTearDown(() async {
+        if (await tempDir.exists()) {
+          await tempDir.delete(recursive: true);
+        }
+      });
+      final home = Directory(p.join(tempDir.path, 'home'));
+      final userBin = p.join(home.path, '.local', 'bin');
+      final service = AleraCliRegistrationService(
+        cliResolver: const _FakeAleraCliResolver(
+          AleraCliCommand(executable: '/Applications/Alera.app/alera'),
+        ),
+        commandEnvironmentResolver: _FakeCommandEnvironmentResolver(
+          <String, String>{'PATH': userBin},
+        ),
+        processRunner: _FakeProcessRunner(),
+        executableChecker: _fakeIsExecutable,
+        pathListSeparator: _testPathListSeparator,
+        applicationSupportDirectory: () async =>
+            Directory(p.join(tempDir.path, 'support')),
+        operatingSystem: 'macos',
+        homePath: home.path,
+      );
+
+      final installed = await service.installOrUpdate();
+      expect(installed.ready, isTrue);
+      final command = File(installed.commandPath!);
+      final oldTime = DateTime.utc(2001, 1, 1);
+      await command.setLastModified(oldTime);
+
+      final unchanged = await service.installOrUpdate();
+      expect(unchanged.ready, isTrue);
+      expect(
+        (await command.lastModified()).millisecondsSinceEpoch,
+        oldTime.millisecondsSinceEpoch,
+      );
+    });
+
     test('reports conflict without replacing existing command', () async {
       final tempDir = await Directory.systemTemp.createTemp(
         'alera-cli-registration-conflict-',

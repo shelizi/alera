@@ -103,7 +103,8 @@ pub(crate) async fn cli_registration_status(runtime_dir: &Path) -> CliRegistrati
 
 pub(crate) async fn install_cli_registration(runtime_dir: &Path) -> Result<CliRegistrationStatus> {
     let current = cli_registration_status(runtime_dir).await;
-    if current.state == "conflict" || current.state == "unsupported" {
+    if current.state == "conflict" || current.state == "unsupported" || current.state == "installed"
+    {
         return Ok(current);
     }
     let command_path = command_path().context("CLI registration is not supported")?;
