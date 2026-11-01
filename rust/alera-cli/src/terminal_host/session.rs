@@ -230,7 +230,7 @@ impl Session {
             let worker_workspace_id = workspace_id.clone();
             let worker_tab_id = tab_id.clone();
             tokio::task::spawn_blocking(move || {
-                if pty_worker::enabled() {
+                if pty_worker::enabled() && !cfg!(test) {
                     if allow_reconnect {
                         if let Some(existing) = pty_worker::try_recover_worker(
                             &worker_runtime_dir,
