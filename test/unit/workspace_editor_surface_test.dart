@@ -392,7 +392,7 @@ void main() {
   });
 
   test('source location becomes a workspace editor reveal target', () {
-    final workspacePath = p.join('C:', 'repo', 'alera');
+    final workspacePath = p.absolute(p.join('test-fixtures', 'repo', 'alera'));
     final target = workspaceEditorNavigationTargetForLocation(
       workspaceId: 'ws-1',
       workspacePath: workspacePath,
@@ -433,14 +433,14 @@ void main() {
   }, skip: !Platform.isWindows);
 
   test('source navigation rejects targets outside the current workspace', () {
-    final workspacePath = p.join('C:', 'repo', 'alera');
+    final workspacePath = p.absolute(p.join('test-fixtures', 'repo', 'alera'));
     expect(
       workspaceEditorNavigationTargetForLocation(
         workspaceId: 'ws-1',
         workspacePath: workspacePath,
         location: SourceLocation(
           workspaceId: 'ws-1',
-          path: p.join('C:', 'sdk', 'library.rs'),
+          path: p.join(p.dirname(workspacePath), 'sdk', 'library.rs'),
           range: const SourceRange(
             start: SourcePosition(line: 0, scalarColumn: 0),
             end: SourcePosition(line: 0, scalarColumn: 1),

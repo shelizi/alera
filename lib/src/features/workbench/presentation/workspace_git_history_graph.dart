@@ -2,7 +2,6 @@ import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/shared/infra/git/git_diff_models.dart';
 import 'package:alera/src/shared/infra/git/git_history_graph.dart';
 import 'package:alera/src/design_system/buttons/alera_icon_button.dart';
-import 'package:alera/src/design_system/icons/alera_icons.dart';
 import 'package:flutter/material.dart';
 
 /// Swimlane rendering for one commit row, shared between the source-control

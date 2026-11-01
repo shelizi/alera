@@ -112,5 +112,4 @@ mixin _RustGitBackendParityOps {
       format: _toRustArchiveFormat(format),
     ),
   );
-
 }

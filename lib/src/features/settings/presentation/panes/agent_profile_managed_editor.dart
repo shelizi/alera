@@ -43,7 +43,8 @@ class const AgentProfileManagedEditor({
           keyName: 'ccsProfile',
           managedControlKey: false,
         ),
-      if (descriptor.modelOverride != AgentModelOverrideSnapshot.unsupported) ...<Widget>[
+      if (descriptor.modelOverride !=
+          AgentModelOverrideSnapshot.unsupported) ...<Widget>[
         _choiceRow(
           title: 'Model',
           description: 'Leave as default to use the agent configuration.',
@@ -119,8 +120,7 @@ class const AgentProfileManagedEditor({
       for (final rule in descriptor.launchSpec.rules)
         if (rule.key != 'agent' &&
             rule.key != 'model' &&
-            !(rule.suppressedBy != null &&
-                config[rule.suppressedBy] == true))
+            !(rule.suppressedBy != null && config[rule.suppressedBy] == true))
           _controlForRule(rule),
     ];
   }
@@ -166,7 +166,10 @@ class const AgentProfileManagedEditor({
   ) {
     return <ManagedAgentOption>[
       for (final value in rule.allowed)
-        ManagedAgentOption(value, metadata.valueLabels[value] ?? _titleForKey(value)),
+        ManagedAgentOption(
+          value,
+          metadata.valueLabels[value] ?? _titleForKey(value),
+        ),
     ];
   }
 
@@ -331,8 +334,7 @@ const Map<String, _ManagedControlMetadata> _managedControlMetadataMap =
       ),
       'planModeEffort': _ManagedControlMetadata(
         title: 'Plan Mode Reasoning Effort',
-        description:
-            'Applies only while Codex is in plan mode, which is entered with Shift+Tab or /plan. Codex has no way to start there.',
+        description: 'Applies only while Codex is in plan mode, which is entered with Shift+Tab or /plan. Codex has no way to start there.',
         valueLabels: <String, String>{'xhigh': 'Extra High'},
       ),
       'sandbox': _ManagedControlMetadata(
@@ -344,7 +346,10 @@ const Map<String, _ManagedControlMetadata> _managedControlMetadataMap =
       ),
       'approvalPolicy': _ManagedControlMetadata(
         title: 'Approval Policy',
-        valueLabels: <String, String>{'on-request': 'On Request', 'never': 'Never Ask'},
+        valueLabels: <String, String>{
+          'on-request': 'On Request',
+          'never': 'Never Ask',
+        },
       ),
       'webSearch': _ManagedControlMetadata(
         title: 'Web Search',
@@ -356,8 +361,7 @@ const Map<String, _ManagedControlMetadata> _managedControlMetadataMap =
       ),
       'allowSkipPermissions': _ManagedControlMetadata(
         title: 'Allow Skip Permissions',
-        description:
-            'Make bypass available during the session without starting in it. Use the Bypass Permissions mode above to start in it.',
+        description: 'Make bypass available during the session without starting in it. Use the Bypass Permissions mode above to start in it.',
       ),
       'mode': _ManagedControlMetadata(title: 'Mode'),
       'context': _ManagedControlMetadata(
@@ -407,16 +411,13 @@ const Map<String, _ManagedControlMetadata> _managedControlMetadataMap =
       'projectTrust': _ManagedControlMetadata(title: 'Project Trust'),
       'amp:mode': _ManagedControlMetadata(
         title: 'Mode',
-        description:
-            'Amp permission rules continue to come from the global Amp configuration.',
+        description: 'Amp permission rules continue to come from the global Amp configuration.',
       ),
       'fast': _ManagedControlMetadata(
         title: 'Fast Mode',
         description: 'Prefer lower latency responses.',
       ),
-      'grok:permissionMode': _ManagedControlMetadata(
-        title: 'Permission Mode',
-      ),
+      'grok:permissionMode': _ManagedControlMetadata(title: 'Permission Mode'),
       'devin:sandbox': _ManagedControlMetadata(
         title: 'Sandbox',
         description: 'Sandbox Devin exec-tool processes where supported.',

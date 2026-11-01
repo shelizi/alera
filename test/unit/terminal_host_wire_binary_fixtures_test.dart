@@ -128,7 +128,12 @@ final class _WireFixtureServer {
 
   Future<void> dispose() async {
     await _subscription?.cancel();
-    for (final socket in _clients) {
+    // Socket.onDone removes clients asynchronously while destroy() runs.
+    // Iterating the mutable list directly can throw ConcurrentModificationError
+    // during teardown and turn a passing wire fixture into a CI failure.
+    final clients = List<Socket>.of(_clients);
+    _clients.clear();
+    for (final socket in clients) {
       socket.destroy();
     }
     await _listener.close();

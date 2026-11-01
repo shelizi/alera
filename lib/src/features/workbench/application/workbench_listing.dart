@@ -278,6 +278,7 @@ Set<String> defaultCollapsedArchivedSidebarKeys(
     if (row is WorkbenchArchivedHeaderRow && !expandedKeys.contains(row.key))
       row.key,
 };
+
 /// New sessions collapse Archived groups until they are explicitly expanded.
 /// A named key alongside this marker represents one expanded exception.
 /// Existing explicit collapsed sets without the marker stay compatible.

@@ -489,7 +489,7 @@ void main() {
       expect(launcher.fileRequests, hasLength(1));
       expect(
         launcher.fileRequests.single.filePath,
-        r'C:\repo\main\lib\main.dart',
+        p.join(workspace.path, 'lib', 'main.dart'),
       );
     },
   );

@@ -8,28 +8,31 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  testWidgets('renders every descriptor launch rule without adapter branching', (
+  testWidgets(
+    'renders every descriptor launch rule without adapter branching',
+    (tester) async {
+      for (final adapter in AgentType.values) {
+        await tester.pumpWidget(
+          _EditorHarness(adapter: adapter, launchMode: .managed),
+        );
+        final descriptor = agentDescriptorFor(adapter);
+        for (final rule in descriptor.launchSpec.rules) {
+          if (rule.key == 'agent' || rule.key == 'model') {
+            continue;
+          }
+          expect(
+            find.byKey(ValueKey<String>('ManagedControl:${rule.key}')),
+            findsOneWidget,
+            reason: '${adapter.key}:${rule.key}',
+          );
+        }
+      }
+    },
+  );
+
+  testWidgets('preserves Codex, Claude, and Grok managed labels', (
     tester,
   ) async {
-    for (final adapter in AgentType.values) {
-      await tester.pumpWidget(
-        _EditorHarness(adapter: adapter, launchMode: .managed),
-      );
-      final descriptor = agentDescriptorFor(adapter);
-      for (final rule in descriptor.launchSpec.rules) {
-        if (rule.key == 'agent' || rule.key == 'model') {
-          continue;
-        }
-        expect(
-          find.byKey(ValueKey<String>('ManagedControl:${rule.key}')),
-          findsOneWidget,
-          reason: '${adapter.key}:${rule.key}',
-        );
-      }
-    }
-  });
-
-  testWidgets('preserves Codex, Claude, and Grok managed labels', (tester) async {
     await tester.pumpWidget(const _EditorHarness(launchMode: .managed));
     expect(find.text('Reasoning Effort'), findsOneWidget);
     expect(find.text('Web Search'), findsOneWidget);

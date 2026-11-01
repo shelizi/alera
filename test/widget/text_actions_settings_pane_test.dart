@@ -1,6 +1,5 @@
 import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/design_system/forms/alera_text_field.dart';
-import 'package:alera/src/features/ai_assist/domain/ai_assist_settings.dart';
 import 'package:alera/src/features/settings/domain/alera_settings.dart';
 import 'package:alera/src/features/text_actions/domain/text_actions_settings.dart';
 import 'package:alera/src/features/text_actions/presentation/text_action_list_row.dart';

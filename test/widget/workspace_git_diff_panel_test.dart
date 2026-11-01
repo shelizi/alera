@@ -31,6 +31,7 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:path/path.dart' as p;
 
 import '../unit/fake_git_backend.dart';
 import '../unit/fake_source_control_watcher.dart';
@@ -171,11 +172,11 @@ void main() {
       expect(launcher.fileGroups.single.filePaths, hasLength(2));
       expect(
         launcher.fileGroups.single.filePaths[0],
-        endsWith(r'lib\one.dart'),
+        endsWith(p.join('lib', 'one.dart')),
       );
       expect(
         launcher.fileGroups.single.filePaths[1],
-        endsWith(r'lib\two.dart'),
+        endsWith(p.join('lib', 'two.dart')),
       );
     },
   );

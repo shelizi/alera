@@ -52,7 +52,7 @@ Future<void> terminateResourceSessions({
 }
 
 /// Whether the resource panel is on screen. Drives the polling cadence.
-@riverpod
+@Riverpod(keepAlive: true)
 class ResourcePanelOpen extends _$ResourcePanelOpen {
   @override
   bool build() => false;

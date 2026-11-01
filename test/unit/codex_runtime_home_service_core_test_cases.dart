@@ -208,8 +208,31 @@ void _registerCodexRuntimeHomeServiceCoreTests() {
         '[hooks.state."${_escapeTomlString('$canonicalRuntimeHooksPath:stop:1:0')}"]',
       ),
     );
-    expect(runtimeToml, isNot(contains('$canonicalSystemHooksPath:stop:0:0')));
-    expect(runtimeToml, isNot(contains('$canonicalSystemHooksPath:stop:1:0')));
+    // prepareForTerminalLaunch now installs in the real Codex home. The
+    // runtime and system paths therefore coincide; a missing old path is no
+    // longer a meaningful security assertion. Validate the repaired trust
+    // hashes for each user command instead of accepting stale swapped hashes.
+    expect(canonicalRuntimeHooksPath, canonicalSystemHooksPath);
+    final states =
+        (TomlDocument.parse(runtimeToml).toMap()['hooks'] as Map)['state']
+            as Map;
+    for (final (index, command) in <String>[
+      'first-stop-hook',
+      'second-stop-hook',
+    ].indexed) {
+      final state = states['$canonicalSystemHooksPath:stop:$index:0'] as Map;
+      expect(state['enabled'], isTrue);
+      expect(
+        state['trusted_hash'],
+        computeCodexTrustedHashForTesting(
+          sourcePath: systemHooksPath,
+          eventLabel: 'stop',
+          groupIndex: index,
+          handlerIndex: 0,
+          command: command,
+        ),
+      );
+    }
   });
 
   test('enables hooks in a fresh global Codex config', () async {

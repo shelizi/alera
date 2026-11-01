@@ -23,7 +23,7 @@ final class ResourcePanelOpenProvider
         argument: null,
         retry: null,
         name: r'resourcePanelOpenProvider',
-        isAutoDispose: true,
+        isAutoDispose: false,
         dependencies: null,
         $allTransitiveDependencies: null,
       );
@@ -44,7 +44,7 @@ final class ResourcePanelOpenProvider
   }
 }
 
-String _$resourcePanelOpenHash() => r'bc22c6b74fdcbfc79dc5befcc04b43a1f8109d94';
+String _$resourcePanelOpenHash() => r'f30ec7accfc62aa30442ad9446e5ba0086132b66';
 
 /// Whether the resource panel is on screen. Drives the polling cadence.
 

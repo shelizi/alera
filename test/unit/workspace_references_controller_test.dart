@@ -11,7 +11,7 @@ import 'package:path/path.dart' as p;
 
 void main() {
   test('groups references by file, reads one preview snapshot per file, and filters outside workspace', () async {
-    final root = p.join('C:', 'repo');
+    final root = p.absolute(p.join('test-fixtures', 'repo'));
     final query = _FakeWorkspaceReferencesQueryPort(
       results: <WorkspaceReferencesQueryResult>[
         WorkspaceReferencesQueryResult(
@@ -43,7 +43,7 @@ void main() {
             ),
             SourceLocation(
               workspaceId: 'workspace-a',
-              path: p.join('C:', 'sdk', 'outside.rs'),
+              path: p.join(p.dirname(root), 'sdk', 'outside.rs'),
               range: const SourceRange(
                 start: SourcePosition(line: 0, scalarColumn: 0),
                 end: SourcePosition(line: 0, scalarColumn: 1),

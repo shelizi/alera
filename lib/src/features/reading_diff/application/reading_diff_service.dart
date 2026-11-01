@@ -315,7 +315,6 @@ class ReadingDiffService({
 }
 
 const int _defaultReadingDiffChunkBytes = 160 * 1024;
-const int _argvPromptBytes = 24000;
 
 int _promptLimit(AiAssistCapability spec) => spec.maxPromptBytes;
 

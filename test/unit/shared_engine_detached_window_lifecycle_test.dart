@@ -39,6 +39,10 @@ void main() {
     ),
   );
 
+  // These native view tests are Windows-only. Keep them fully asserted on the
+  // Windows runner, not falsely exercised on Linux where supports() is false.
+  void windowsTest(String name, Future<void> Function() body) =>
+      test(name, body, skip: !Platform.isWindows);
   test('Terminal sharing is opt-in and other kinds retain legacy windows', () {
     final regular = SharedEngineDetachedTabWindows();
     final experimental = SharedEngineDetachedTabWindows(
@@ -127,7 +131,7 @@ void main() {
     expect(bridge.isLaunching(terminal.tab.id), isFalse);
   });
 
-  test(
+  windowsTest(
     'two-stage handoff cannot mount child before source frame barrier',
     () async {
       final barrier = Completer<void>();
@@ -175,7 +179,7 @@ void main() {
     },
   );
 
-  test(
+  windowsTest(
     'detached window stays hidden until mounted content owns input',
     () async {
       final shown = <int>[];
@@ -202,32 +206,35 @@ void main() {
     },
   );
 
-  test('close before mount releases the pending show waiter first', () async {
-    final shown = <int>[];
-    final closed = <int>[];
-    final bridge = SharedEngineDetachedTabWindows(
-      openNativeWindow: (builder, options) async => 61,
-      completeNativeShow: shown.add,
-      sourceFrameBarrier: () => Future<void>.value(),
-      closeNativeWindow: (id) async {
-        closed.add(id);
-        return true;
-      },
-    );
-    addTearDown(bridge.dispose);
-    final launched = bridge.detach(fixture());
-    await Future<void>.delayed(Duration.zero);
-    expect(shown, isEmpty);
-    await bridge.closeTabWindow('tab-a', 61);
-    // The pending openWindow future is released before the view is torn
-    // down, otherwise its showOnInit wait would leak.
-    expect(shown, <int>[61]);
-    expect(closed, <int>[61]);
-    bridge.onWindowClosed(61);
-    expect(await launched, isFalse);
-    await Future<void>.delayed(Duration.zero);
-    expect(bridge.isDetached('tab-a'), isFalse);
-  });
+  windowsTest(
+    'close before mount releases the pending show waiter first',
+    () async {
+      final shown = <int>[];
+      final closed = <int>[];
+      final bridge = SharedEngineDetachedTabWindows(
+        openNativeWindow: (builder, options) async => 61,
+        completeNativeShow: shown.add,
+        sourceFrameBarrier: () => Future<void>.value(),
+        closeNativeWindow: (id) async {
+          closed.add(id);
+          return true;
+        },
+      );
+      addTearDown(bridge.dispose);
+      final launched = bridge.detach(fixture());
+      await Future<void>.delayed(Duration.zero);
+      expect(shown, isEmpty);
+      await bridge.closeTabWindow('tab-a', 61);
+      // The pending openWindow future is released before the view is torn
+      // down, otherwise its showOnInit wait would leak.
+      expect(shown, <int>[61]);
+      expect(closed, <int>[61]);
+      bridge.onWindowClosed(61);
+      expect(await launched, isFalse);
+      await Future<void>.delayed(Duration.zero);
+      expect(bridge.isDetached('tab-a'), isFalse);
+    },
+  );
 
   test(
     'native close during unmount prevents duplicate editor and restores',
@@ -251,7 +258,7 @@ void main() {
     },
   );
 
-  test(
+  windowsTest(
     'native close holds main editor hidden through child teardown frame',
     () async {
       final closeFrame = Completer<void>();
@@ -283,51 +290,54 @@ void main() {
     },
   );
 
-  test('dragging a shared Editor off its child docks on the main HWND and '
-      'spawns a window on empty space', () async {
-    var overMain = false;
-    var nextViewId = 12;
-    final closed = <int>[];
-    final bridge = SharedEngineDetachedTabWindows(
-      openNativeWindow: (_, _) async => nextViewId++,
-      sourceFrameBarrier: () async {},
-      closeNativeWindow: (id) async {
-        closed.add(id);
-        return true;
-      },
-      isCursorOverMainWindow: () async => overMain,
-      cursorWindowProbe: () => null,
-    );
-    addTearDown(bridge.dispose);
-    final launched = bridge.detach(fixture());
-    await Future<void>.delayed(Duration.zero);
-    bridge.reportContentMounted('tab-a', 12);
-    expect(await launched, isTrue);
+  windowsTest(
+    'dragging a shared Editor off its child docks on the main HWND and '
+    'spawns a window on empty space',
+    () async {
+      var overMain = false;
+      var nextViewId = 12;
+      final closed = <int>[];
+      final bridge = SharedEngineDetachedTabWindows(
+        openNativeWindow: (_, _) async => nextViewId++,
+        sourceFrameBarrier: () async {},
+        closeNativeWindow: (id) async {
+          closed.add(id);
+          return true;
+        },
+        isCursorOverMainWindow: () async => overMain,
+        cursorWindowProbe: () => null,
+      );
+      addTearDown(bridge.dispose);
+      final launched = bridge.detach(fixture());
+      await Future<void>.delayed(Duration.zero);
+      bridge.reportContentMounted('tab-a', 12);
+      expect(await launched, isTrue);
 
-    // Off the main window and off every detached window: a fresh
-    // detached window opens for the dragged tab.
-    final moved = bridge.tryReturnTabAtPointer('tab-a', 12);
-    await Future<void>.delayed(Duration.zero);
-    bridge.reportContentMounted('tab-a', 13);
-    expect(await moved, isTrue);
-    expect(bridge.isDetached('tab-a'), isTrue);
-    expect(bridge.tabsForView(13).map((d) => d.tab.id), ['tab-a']);
-    expect(closed, [12]);
-    bridge.onWindowClosed(12);
-    await Future<void>.delayed(Duration.zero);
+      // Off the main window and off every detached window: a fresh
+      // detached window opens for the dragged tab.
+      final moved = bridge.tryReturnTabAtPointer('tab-a', 12);
+      await Future<void>.delayed(Duration.zero);
+      bridge.reportContentMounted('tab-a', 13);
+      expect(await moved, isTrue);
+      expect(bridge.isDetached('tab-a'), isTrue);
+      expect(bridge.tabsForView(13).map((d) => d.tab.id), ['tab-a']);
+      expect(closed, [12]);
+      bridge.onWindowClosed(12);
+      await Future<void>.delayed(Duration.zero);
 
-    // A stale drag end with an unknown source view id is still refused.
-    expect(await bridge.tryReturnTabAtPointer('tab-a', 999), isFalse);
+      // A stale drag end with an unknown source view id is still refused.
+      expect(await bridge.tryReturnTabAtPointer('tab-a', 999), isFalse);
 
-    overMain = true;
-    expect(await bridge.tryReturnTabAtPointer('tab-a', 13), isTrue);
-    expect(closed, [12, 13]);
-    bridge.onWindowClosed(13);
-    await Future<void>.delayed(Duration.zero);
-    expect(bridge.isDetached('tab-a'), isFalse);
-  });
+      overMain = true;
+      expect(await bridge.tryReturnTabAtPointer('tab-a', 13), isTrue);
+      expect(closed, [12, 13]);
+      bridge.onWindowClosed(13);
+      await Future<void>.delayed(Duration.zero);
+      expect(bridge.isDetached('tab-a'), isFalse);
+    },
+  );
 
-  test(
+  windowsTest(
     'stale native drag hit-test cannot close an already recycled Editor window',
     () async {
       final probe = Completer<bool>();
@@ -358,7 +368,7 @@ void main() {
     },
   );
 
-  test(
+  windowsTest(
     'duplicate drag end requests cannot close one Editor view twice',
     () async {
       final probe = Completer<bool>();
@@ -387,7 +397,7 @@ void main() {
     },
   );
 
-  test(
+  windowsTest(
     'closing one of two Editor windows does not restore the other',
     () async {
       var nextViewId = 40;

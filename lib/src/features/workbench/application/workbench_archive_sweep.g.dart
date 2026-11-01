@@ -8,21 +8,21 @@ part of 'workbench_archive_sweep.dart';
 
 // GENERATED CODE - DO NOT MODIFY BY HAND
 // ignore_for_file: type=lint, type=warning
-/// Session-local collapse state for Archived group headers, keyed by
-/// `WorkbenchArchivedHeaderRow.key`. Deliberately kept out of
+/// Session-local *expanded* Archived group keys (empty means collapsed).
+/// Kept under the historical provider name for compatibility, and out of
 /// [WorkbenchViewPrefs] so it never persists or syncs to other clients.
 
 @ProviderFor(WorkbenchArchivedSectionsCollapse)
 final workbenchArchivedSectionsCollapseProvider =
     WorkbenchArchivedSectionsCollapseProvider._();
 
-/// Session-local collapse state for Archived group headers, keyed by
-/// `WorkbenchArchivedHeaderRow.key`. Deliberately kept out of
+/// Session-local *expanded* Archived group keys (empty means collapsed).
+/// Kept under the historical provider name for compatibility, and out of
 /// [WorkbenchViewPrefs] so it never persists or syncs to other clients.
 final class WorkbenchArchivedSectionsCollapseProvider
     extends $NotifierProvider<WorkbenchArchivedSectionsCollapse, Set<String>> {
-  /// Session-local collapse state for Archived group headers, keyed by
-  /// `WorkbenchArchivedHeaderRow.key`. Deliberately kept out of
+  /// Session-local *expanded* Archived group keys (empty means collapsed).
+  /// Kept under the historical provider name for compatibility, and out of
   /// [WorkbenchViewPrefs] so it never persists or syncs to other clients.
   WorkbenchArchivedSectionsCollapseProvider._()
     : super(
@@ -54,10 +54,10 @@ final class WorkbenchArchivedSectionsCollapseProvider
 }
 
 String _$workbenchArchivedSectionsCollapseHash() =>
-    r'd25ef49c14d2d88404eaaa80160910188899e7a4';
+    r'36b88190cd263381f3222ec792946fe7f97c11c2';
 
-/// Session-local collapse state for Archived group headers, keyed by
-/// `WorkbenchArchivedHeaderRow.key`. Deliberately kept out of
+/// Session-local *expanded* Archived group keys (empty means collapsed).
+/// Kept under the historical provider name for compatibility, and out of
 /// [WorkbenchViewPrefs] so it never persists or syncs to other clients.
 
 abstract class _$WorkbenchArchivedSectionsCollapse

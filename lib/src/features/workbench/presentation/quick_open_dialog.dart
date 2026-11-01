@@ -64,6 +64,9 @@ class _QuickOpenDialogState extends ConsumerState<QuickOpenDialog> {
   StreamSubscription<String>? _indexRefreshSubscription;
   String _previousQuery = '';
 
+  // The actions extension delegates protected setState to the State owner.
+  void _updateContextSelection(VoidCallback update) => setState(update);
+
   @override
   void initState() {
     super.initState();
@@ -181,8 +184,7 @@ class _QuickOpenDialogState extends ConsumerState<QuickOpenDialog> {
         return;
       }
       setState(() {
-        // A failed background refresh should not hide an already available
-        // index. Keep the cached results usable until the next search.
+        // Preserve cached results when a background refresh fails.
         _loadError = _matches.isEmpty ? error : null;
         _loading = false;
       });
@@ -322,9 +324,7 @@ class _QuickOpenDialogState extends ConsumerState<QuickOpenDialog> {
   void _openFile(String relativePath, {bool forceAlera = false}) {
     final workspace = ref.read(workbenchControllerProvider).activeWorkspace;
     if (workspace == null) return;
-    // Opening a Ctrl+P result also selects it in the real Explorer tree.
-    // Queue the reveal before closing the dialog, so an Explorer tab that
-    // mounts afterward can consume the request.
+    // Queue Explorer reveal before closing; a later-mounted tab may consume it.
     ref
         .read(workbenchControllerProvider.notifier)
         .revealInExplorer(workspace: workspace, relativePath: relativePath);

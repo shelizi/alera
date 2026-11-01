@@ -311,7 +311,6 @@ class const _MermanSvgColorMapper() extends ColorMapper {
   }
 }
 
-@visibleForTesting
 String prepareMermanSvgForFlutterSvg(String svg) {
   var next = svg
       .replaceAll('fill="#333"', 'fill="${_svgColor(AleraTokens.foreground)}"')

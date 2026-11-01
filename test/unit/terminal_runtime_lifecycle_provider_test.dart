@@ -1,6 +1,5 @@
 import 'package:alera/src/app/terminal_runtime_composition.dart';
 import 'package:alera/src/features/workbench/application/terminal_runtime_bindings.dart';
-import 'package:alera/src/features/workbench/application/terminal_session_title_source.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 import 'package:alera/src/features/workbench/presentation/terminal_runtime.dart';

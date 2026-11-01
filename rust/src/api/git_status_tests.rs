@@ -10,7 +10,10 @@ fn operates_from_subdirectory() {
     let repository_root = git_repository_root(subdir_path.clone())
         .unwrap()
         .expect("repository root");
-    assert_eq!(canonical(&repository_root), canonical(&path_str(repo.path())));
+    assert_eq!(
+        canonical(&repository_root),
+        canonical(&path_str(repo.path()))
+    );
     assert!(is_git_repository(subdir_path.clone()).unwrap());
     assert_eq!(current_branch(subdir_path.clone()).unwrap(), "main");
     assert!(list_branches(subdir_path)

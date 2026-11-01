@@ -1,6 +1,5 @@
 import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/design_system/buttons/alera_icon_button.dart';
-import 'package:alera/src/design_system/feedback/alera_toast.dart';
 import 'package:alera/src/features/shell/presentation/alera_shell_page.dart';
 import 'package:alera/src/features/workbench/application/workbench_branch_favorites.dart';
 import 'package:alera/src/features/workbench/application/workbench_controller.dart';

@@ -48,7 +48,8 @@ final List<AgentType> agentTypesWithStatusHooks = List<AgentType>.unmodifiable(
                 AgentStatusStrategySnapshot.hookEvents ||
             descriptor.statusStrategy ==
                 AgentStatusStrategySnapshot.hookEventsWithTranscriptWatch ||
-            descriptor.statusStrategy == AgentStatusStrategySnapshot.herdrSocket,
+            descriptor.statusStrategy ==
+                AgentStatusStrategySnapshot.herdrSocket,
       )
       .map(_agentTypeForDescriptor),
 );
@@ -75,7 +76,9 @@ const Set<String> _globalManagedHookAgentIds = <String>{'agy', 'grok', 'devin'};
 final List<AgentType> agentTypesWithGlobalManagedHooks =
     List<AgentType>.unmodifiable(
       agentDescriptorSnapshots
-          .where((descriptor) => _globalManagedHookAgentIds.contains(descriptor.id))
+          .where(
+            (descriptor) => _globalManagedHookAgentIds.contains(descriptor.id),
+          )
           .map(_agentTypeForDescriptor),
     );
 

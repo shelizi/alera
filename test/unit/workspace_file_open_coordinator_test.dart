@@ -3,6 +3,7 @@ import 'package:alera/src/features/external_editor/domain/external_editor_launch
 import 'package:alera/src/features/workbench/application/workspace_file_open_coordinator.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:path/path.dart' as p;
 
 void main() {
   late _FakeExternalEditorLauncher launcher;
@@ -61,7 +62,10 @@ void main() {
     expect(result.status, WorkspaceFileOpenStatus.opened);
     expect(result.destination, WorkspaceFileOpenDestination.external);
     expect(internalOpens, isEmpty);
-    expect(launcher.files.single.filePath, endsWith('lib\\main.dart'));
+    expect(
+      launcher.files.single.filePath,
+      endsWith(p.join('lib', 'main.dart')),
+    );
     expect(launcher.files.single.line, 12);
     expect(launcher.files.single.column, 4);
   });

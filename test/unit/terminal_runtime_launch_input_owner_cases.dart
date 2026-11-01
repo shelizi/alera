@@ -10,31 +10,38 @@ void _registerTerminalRuntimeLaunchInputOwnerTests() {
         onOsc52Blocked: () {},
       );
 
-      expect(owner.candidateLaunches(), equals(<GhosttyTerminalShellLaunch>[launch]));
+      expect(
+        owner.candidateLaunches(),
+        equals(<GhosttyTerminalShellLaunch>[launch]),
+      );
     });
 
-    test('buildAgentHookEnvironment invokes builder with tab details', () async {
-      final owner = TerminalRuntimeLaunchInputOwner(
-        shellLaunchesBuilder: () => const <GhosttyTerminalShellLaunch>[],
-        agentHookEnvironmentBuilder: ({
-          required terminalSessionId,
-          required workspaceId,
-          required tabId,
-        }) async {
-          return <String, String>{'SESSION': terminalSessionId};
-        },
-        clipboard: _FakeTerminalClipboard(),
-        onOsc52Blocked: () {},
-      );
+    test(
+      'buildAgentHookEnvironment invokes builder with tab details',
+      () async {
+        final owner = TerminalRuntimeLaunchInputOwner(
+          shellLaunchesBuilder: () => const <GhosttyTerminalShellLaunch>[],
+          agentHookEnvironmentBuilder:
+              ({
+                required terminalSessionId,
+                required workspaceId,
+                required tabId,
+              }) async {
+                return <String, String>{'SESSION': terminalSessionId};
+              },
+          clipboard: _FakeTerminalClipboard(),
+          onOsc52Blocked: () {},
+        );
 
-      final env = await owner.buildAgentHookEnvironment(
-        terminalSessionId: 'sess-1',
-        workspaceId: 'ws-1',
-        tabId: 'tab-1',
-      );
+        final env = await owner.buildAgentHookEnvironment(
+          terminalSessionId: 'sess-1',
+          workspaceId: 'ws-1',
+          tabId: 'tab-1',
+        );
 
-      expect(env, equals(<String, String>{'SESSION': 'sess-1'}));
-    });
+        expect(env, equals(<String, String>{'SESSION': 'sess-1'}));
+      },
+    );
 
     test('prepareLaunch applies working directory and login shell', () async {
       final launch = GhosttyTerminalShellLaunch(
@@ -60,35 +67,41 @@ void _registerTerminalRuntimeLaunchInputOwnerTests() {
       expect(prepared.environment['HOOK'], '1');
     });
 
-    test('onProcessCreated calls process created and delivers startup', () async {
-      String? createdSessionId;
-      final session = _FakeTerminalPtySession();
-      final launch = GhosttyTerminalShellLaunch(
-        label: 'sh',
-        shell: '/bin/sh',
-        arguments: const <String>[],
-        environment: const <String, String>{},
-        setupCommand: 'echo ready\n',
-      );
-      final owner = TerminalRuntimeLaunchInputOwner(
-        shellLaunchesBuilder: () => <GhosttyTerminalShellLaunch>[launch],
-        terminalProcessCreated: (id) => createdSessionId = id,
-        clipboard: _FakeTerminalClipboard(),
-        onOsc52Blocked: () {},
-      );
+    test(
+      'onProcessCreated calls process created and delivers startup',
+      () async {
+        String? createdSessionId;
+        final session = _FakeTerminalPtySession();
+        final launch = GhosttyTerminalShellLaunch(
+          label: 'sh',
+          shell: '/bin/sh',
+          arguments: const <String>[],
+          environment: const <String, String>{},
+          setupCommand: 'echo ready\n',
+        );
+        final owner = TerminalRuntimeLaunchInputOwner(
+          shellLaunchesBuilder: () => <GhosttyTerminalShellLaunch>[launch],
+          terminalProcessCreated: (id) => createdSessionId = id,
+          clipboard: _FakeTerminalClipboard(),
+          onOsc52Blocked: () {},
+        );
 
-      await owner.onProcessCreated(
-        terminalSessionId: 'sess-99',
-        session: session,
-        workspaceLaunch: launch,
-        interactiveShell: '/bin/sh',
-        initialCommand: null,
-        isCurrent: () => true,
-      );
+        await owner.onProcessCreated(
+          terminalSessionId: 'sess-99',
+          session: session,
+          workspaceLaunch: launch,
+          interactiveShell: '/bin/sh',
+          initialCommand: null,
+          isCurrent: () => true,
+        );
 
-      expect(createdSessionId, 'sess-99');
-      expect(session.writes.map(utf8.decode).join(), contains('echo ready\n'));
-    });
+        expect(createdSessionId, 'sess-99');
+        expect(
+          session.writes.map(utf8.decode).join(),
+          contains('echo ready\n'),
+        );
+      },
+    );
 
     test('notifyInteraction invokes callback', () {
       final notices = <String>[];

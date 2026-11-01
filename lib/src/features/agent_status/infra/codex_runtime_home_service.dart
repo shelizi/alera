@@ -289,9 +289,10 @@ final class CodexRuntimeHomeService({
         (entry) => _MirroredRuntimeUserHookTrustEntry(entry, true),
       ),
     );
-    if (!inPlace) {
-      _upsertHookTrustEntries(descriptor.tomlPath, plan.trustEntries);
-    }
+    // Repair approved user-hook trust indices for in-place Codex homes too.
+    // Only entries with a previously trusted matching command hash are
+    // restored; unknown hooks remain untrusted.
+    _upsertHookTrustEntries(descriptor.tomlPath, plan.trustEntries);
     return status();
   }
 

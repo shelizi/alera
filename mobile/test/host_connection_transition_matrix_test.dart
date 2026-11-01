@@ -89,52 +89,55 @@ void main() {
     );
   });
 
-  test('Runtime restart reports disconnected during an in-flight reconnect', () async {
-    final secondHello = Completer<Map<String, Object?>>();
-    late DirectRuntimeGateway gateway;
-    gateway = await DirectRuntimeGateway.start(
-      response: (request, connectionNumber) {
-        if (request['type'] == 'mobile.hello' && connectionNumber == 2) {
-          if (!secondHello.isCompleted) secondHello.complete(request);
-          return null;
-        }
-        return _directResponse()(request, connectionNumber);
-      },
-    );
-    final repository = await _pairedHostRepository(gateway.endpoint);
-    final container = _createContainer(repository);
-    final provider = hostConnectionControllerProvider('runtime-1');
-    final listener = container.listen(provider, (_, _) {});
-    addTearDown(listener.close);
-    addTearDown(container.dispose);
-    addTearDown(gateway.dispose);
+  test(
+    'Runtime restart reports disconnected during an in-flight reconnect',
+    () async {
+      final secondHello = Completer<Map<String, Object?>>();
+      late DirectRuntimeGateway gateway;
+      gateway = await DirectRuntimeGateway.start(
+        response: (request, connectionNumber) {
+          if (request['type'] == 'mobile.hello' && connectionNumber == 2) {
+            if (!secondHello.isCompleted) secondHello.complete(request);
+            return null;
+          }
+          return _directResponse()(request, connectionNumber);
+        },
+      );
+      final repository = await _pairedHostRepository(gateway.endpoint);
+      final container = _createContainer(repository);
+      final provider = hostConnectionControllerProvider('runtime-1');
+      final listener = container.listen(provider, (_, _) {});
+      addTearDown(listener.close);
+      addTearDown(container.dispose);
+      addTearDown(gateway.dispose);
 
-    await container.read(provider.future);
-    await gateway.closeSocket(0);
-    final stalledHello = await secondHello.future.timeout(
-      const Duration(seconds: 5),
-    );
-    final stateWhileOpening = container.read(provider);
-    expect(stateWhileOpening.isLoading, isTrue);
-    // AsyncNotifier retains the previous value while loading, but that value
-    // is the client the reconnect path already disposed; restart must refuse
-    // it rather than reuse it.
-    expect(stateWhileOpening.hasValue, isTrue);
+      await container.read(provider.future);
+      await gateway.closeSocket(0);
+      final stalledHello = await secondHello.future.timeout(
+        const Duration(seconds: 5),
+      );
+      final stateWhileOpening = container.read(provider);
+      expect(stateWhileOpening.isLoading, isTrue);
+      // AsyncNotifier retains the previous value while loading, but that value
+      // is the client the reconnect path already disposed; restart must refuse
+      // it rather than reuse it.
+      expect(stateWhileOpening.hasValue, isTrue);
 
-    final controller = container.read(provider.notifier);
-    await expectLater(
-      controller.restartRuntime(),
-      throwsA(isA<StateError>()),
-    );
+      final controller = container.read(provider.notifier);
+      await expectLater(
+        controller.restartRuntime(),
+        throwsA(isA<StateError>()),
+      );
 
-    gateway.reply(1, stalledHello, _directPayload(stalledHello));
-    await _waitUntil(() {
-      final state = container.read(provider);
-      return state.hasValue &&
-          !state.isLoading &&
-          state.requireValue.isConnectionUsable;
-    });
-  });
+      gateway.reply(1, stalledHello, _directPayload(stalledHello));
+      await _waitUntil(() {
+        final state = container.read(provider);
+        return state.hasValue &&
+            !state.isLoading &&
+            state.requireValue.isConnectionUsable;
+      });
+    },
+  );
 
   test('Disposing during opening cancels the client and retry work', () async {
     final helloReceived = Completer<void>();

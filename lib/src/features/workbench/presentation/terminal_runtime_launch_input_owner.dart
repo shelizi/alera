@@ -84,8 +84,8 @@ final class TerminalRuntimeLaunchInputOwner {
     );
     final workspaceAwarePowerShellLaunch =
         _isWindowsPowerShellLaunch(sanitizedLaunch)
-            ? _launchInWorkingDirectory(sanitizedLaunch, workspacePath)
-            : null;
+        ? _launchInWorkingDirectory(sanitizedLaunch, workspacePath)
+        : null;
     final preparedLaunch = await _shellStartupPreparer?.prepare(
       workspaceAwarePowerShellLaunch ?? sanitizedLaunch,
     );
@@ -192,10 +192,7 @@ final class TerminalRuntimeLaunchInputOwner {
     }
     unawaited(
       _clipboard.writeText(text).catchError((Object error) {
-        notifyInteraction(
-          'Could not copy terminal selection.',
-          error: true,
-        );
+        notifyInteraction('Could not copy terminal selection.', error: true);
       }),
     );
   }

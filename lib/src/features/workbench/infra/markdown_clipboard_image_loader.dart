@@ -202,7 +202,7 @@ Future<MarkdownClipboardImage?> markdownClipboardRasterizeSvg(
     final height = math.max(1, (size.height * scale).ceil());
     if (width * height > 4 * 1024 * 1024) return null;
     final recorder = ui.PictureRecorder();
-    final canvas = ui.Canvas(recorder)
+    ui.Canvas(recorder)
       ..drawColor(const ui.Color(0xffffffff), ui.BlendMode.src)
       ..scale(width / size.width, height / size.height)
       ..drawPicture(info.picture);

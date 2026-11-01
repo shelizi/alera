@@ -142,10 +142,7 @@ mixin _FakeGitBackendCommitOps {
     }
   }
 
-  Future<String?> mergeRef({
-    required String path,
-    required String ref,
-  }) async {
+  Future<String?> mergeRef({required String path, required String ref}) async {
     calls.add(
       GitBackendCall('mergeRef', <String, Object?>{'path': path, 'ref': ref}),
     );
@@ -194,7 +191,10 @@ mixin _FakeGitBackendCommitOps {
 
   Future<void> deleteTag({required String path, required String name}) async {
     calls.add(
-      GitBackendCall('deleteTag', <String, Object?>{'path': path, 'name': name}),
+      GitBackendCall('deleteTag', <String, Object?>{
+        'path': path,
+        'name': name,
+      }),
     );
     final error = deleteTagError;
     if (error != null) {

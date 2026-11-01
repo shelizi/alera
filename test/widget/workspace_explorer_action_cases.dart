@@ -816,7 +816,9 @@ void _registerWorkspaceExplorerActionTests() {
     await _pumpExplorer(
       tester,
       service,
-      workspace: _workspace(path: r'\\?\C:\repo\alera'),
+      workspace: _workspace(
+        path: Platform.isWindows ? r'\\?\C:\repo\alera' : '/repo/alera',
+      ),
     );
 
     await tester.tap(find.text('readme.md'), buttons: kSecondaryMouseButton);

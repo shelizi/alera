@@ -144,7 +144,7 @@ extension _SocketTerminalHostClientConnections on SocketTerminalHostClient {
       // its control identity and retry the same host instead of deleting the
       // file and starting a second sidecar that can only lose ownership.
       if (!DateTime.now().isBefore(deadline)) {
-        Error.throwWithStackTrace(lastError!, StackTrace.current);
+        Error.throwWithStackTrace(lastError, StackTrace.current);
       }
       await Future.pause(const Duration(milliseconds: 100));
     }

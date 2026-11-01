@@ -13,7 +13,7 @@ extension _QuickOpenContextActions on _QuickOpenDialogState {
   void _selectQuickOpenContextTarget(int index) {
     if (index < 0 || index >= _matches.length) return;
     final path = _matches[index].relativePath;
-    setState(() {
+    _updateContextSelection(() {
       _selectedIndex = index;
       if (!_contextSelectedPaths.contains(path)) {
         _contextSelectedPaths
@@ -34,7 +34,7 @@ extension _QuickOpenContextActions on _QuickOpenDialogState {
       if (anchor >= 0) {
         final first = anchor < index ? anchor : index;
         final last = anchor > index ? anchor : index;
-        setState(() {
+        _updateContextSelection(() {
           _selectedIndex = index;
           _contextSelectedPaths
             ..clear()
@@ -49,7 +49,7 @@ extension _QuickOpenContextActions on _QuickOpenDialogState {
       }
     }
     if (keyboard.isControlPressed || keyboard.isMetaPressed) {
-      setState(() {
+      _updateContextSelection(() {
         _selectedIndex = index;
         if (!_contextSelectedPaths.add(path)) {
           _contextSelectedPaths.remove(path);

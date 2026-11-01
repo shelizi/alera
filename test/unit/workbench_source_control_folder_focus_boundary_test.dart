@@ -11,10 +11,7 @@ void main() {
       'lib/src/features/workbench/application/workbench_source_control_folder_focus_service.dart',
     ).readAsStringSync();
 
-    expect(
-      ownerSource,
-      contains('WorkbenchSourceControlFolderFocusService('),
-    );
+    expect(ownerSource, contains('WorkbenchSourceControlFolderFocusService('));
     expect(ownerSource, isNot(contains('gitBackendProvider')));
     expect(ownerSource, isNot(contains('Directory(')));
     expect(ownerSource, isNot(contains('File(')));

@@ -24,8 +24,9 @@ void main() {
   });
 
   test('export forwards the selected destination and runtime facts', () async {
-    final runtimeLogs = Directory('${root.path}${Platform.pathSeparator}runtime')
-      ..createSync();
+    final runtimeLogs = Directory(
+      '${root.path}${Platform.pathSeparator}runtime',
+    )..createSync();
     final captured = <String, Object?>{};
     final builder = DiagnosticsBundleBuilder(
       nativeWriter:
@@ -68,8 +69,8 @@ void main() {
     expect(captured['outputPath'], destination);
     expect(captured['appLogDirectory'], root.path);
     expect(captured['runtimeLogDirectory'], runtimeLogs.path);
-    final metadata = jsonDecode(captured['metadataJson']! as String)
-        as Map<String, Object?>;
+    final metadata =
+        jsonDecode(captured['metadataJson']! as String) as Map<String, Object?>;
     final app = metadata['app']! as Map<String, Object?>;
     final runtime = metadata['runtime']! as Map<String, Object?>;
     expect(app['version'], '1.2.3+456');

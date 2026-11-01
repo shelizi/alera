@@ -63,4 +63,4 @@ final class WorkbenchGitAutoFetchCoordinatorProvider
 }
 
 String _$workbenchGitAutoFetchCoordinatorHash() =>
-    r'0b5fb02eb1f638e8d4593181d30ce5be3c69989a';
+    r'923b8e1c89854753c7d81f933d14d2ac5ad73fcd';

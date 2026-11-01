@@ -15,9 +15,21 @@ extension _CodexRuntimeHomeServiceHookPlanning on CodexRuntimeHomeService {
         nextHooks[entry.key] = definitions;
       }
     }
+    // Codex trust keys contain positional indices. Preserve approvals when
+    // hooks are reordered by matching the approved command hash within the
+    // same event, then repair the trust key at its current index.
+    final trusted = _trustedSystemUserHookSignatures(
+      descriptor,
+      _hooksMap(config),
+    );
     return _RuntimeHookPlan(
       nextHooks,
-      const <_MirroredRuntimeUserHookTrustEntry>[],
+      _collectMirroredRuntimeUserHookTrustEntries(
+        runtimeConfigPath: descriptor.configPath,
+        runtimeHooks: nextHooks,
+        trustedSystemHookSignatures: trusted,
+        managedScriptFileNames: descriptor.managedScriptFileNames,
+      ),
     );
   }
 

@@ -231,7 +231,8 @@ const Map<String, String> _traditionalChineseSettings = <String, String>{
   'Tab Size': 'Tab 寬度',
   'Two-row tabs': '雙層分頁模式',
   'Choose how pinned and regular workspace tabs appear.': '設定釘選與一般工作區分頁的排列方式。',
-  'Pinned tabs appear on the first row; regular tabs appear below.': '第一層顯示釘選分頁，第二層顯示一般分頁。',
+  'Pinned tabs appear on the first row; regular tabs appear below.':
+      '第一層顯示釘選分頁，第二層顯示一般分頁。',
   'Control dependency and build directories that Quick Open never indexes.':
       '管理快速開啟永遠不建立索引的套件庫與建置目錄。',
   'Manage dependency and build directory names excluded from indexing.':
