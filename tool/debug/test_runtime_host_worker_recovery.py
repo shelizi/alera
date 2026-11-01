@@ -116,7 +116,7 @@ def main():
     if not exe.is_file():
         raise FileNotFoundError(exe)
 
-    with tempfile.TemporaryDirectory(prefix="alera-host-recovery-", dir=Path.cwd()) as temporary:
+    with tempfile.TemporaryDirectory(prefix="alera-host-recovery-") as temporary:
         runtime = Path(temporary)
         hosts = []
         session_id = "host-crash-" + uuid.uuid4().hex[:16]
@@ -215,6 +215,8 @@ def main():
         finally:
             for host in reversed(hosts):
                 host.kill()
+            # Windows keeps localhost sockets / SQLite handles briefly after
+            # a forced Host exit. Allow handles to settle before temp cleanup.
             # Tear down only the recorded Worker created under this test runtime.
             if record is not None:
                 try:
@@ -232,6 +234,29 @@ def main():
                     )
                 except (OSError, subprocess.TimeoutExpired):
                     pass
+            # Detect lingering test-only processes before TemporaryDirectory
+            # removes its runtime; never kill any unrelated application.
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                if record is None:
+                    break
+                try:
+                    import ctypes
+                    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+                    kernel32.OpenProcess.argtypes = [
+                        ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32
+                    ]
+                    kernel32.OpenProcess.restype = ctypes.c_void_p
+                    kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+                    kernel32.CloseHandle.restype = ctypes.c_int
+                    handle = kernel32.OpenProcess(0x00100000, False, int(record["workerPid"]))
+                    if not handle:
+                        break
+                    kernel32.CloseHandle(handle)
+                except (OSError, ValueError):
+                    break
+                time.sleep(0.1)
+            time.sleep(0.3)
 
 
 if __name__ == "__main__":
