@@ -72,7 +72,7 @@ struct ClientPermit(Arc<ClientSlots>);
 impl ClientSlots {
     fn try_acquire(self: &Arc<Self>) -> Option<ClientPermit> {
         self.0
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
                 (current < MAX_CLIENT_CONNECTIONS).then_some(current + 1)
             })
             .ok()?;

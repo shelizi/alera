@@ -201,6 +201,24 @@ struct WorkerMaster {
 }
 
 impl MasterPty for WorkerMaster {
+    #[cfg(unix)]
+    fn process_group_leader(&self) -> Option<i32> {
+        // The real PTY is owned by the separate Worker. The Host must not
+        // treat its own process group as the shell's controlling group.
+        None
+    }
+
+    #[cfg(unix)]
+    fn as_raw_fd(&self) -> Option<std::os::fd::RawFd> {
+        // A TCP control socket is not a PTY fd and must not be advertised as one.
+        None
+    }
+
+    #[cfg(unix)]
+    fn tty_name(&self) -> Option<std::path::PathBuf> {
+        None
+    }
+
     fn resize(&self, size: PtySize) -> anyhow::Result<()> {
         self.connection
             .resize_tx
