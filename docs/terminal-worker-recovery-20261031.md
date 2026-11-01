@@ -24,6 +24,7 @@
 - `python tool/debug/test_terminal_worker_memory_limit.py D:\\c\\t\\debug\\alera.exe`: in an isolated test Runtime, a 384 MiB Windows Job limit on one Shell rejected one child 512 MiB `VirtualAlloc(MEM_COMMIT|MEM_RESERVE)` request. The limited Shell, its Worker, and an independent uncapped sibling Terminal all stayed responsive. No machine-wide OOM and no physical page-touch stress was performed.
 - `python tool/debug/test_terminal_worker_output_pressure.py D:\\c\\t\\debug\\alera.exe`: the disconnected Terminal generated 256 KiB of output with a 64 KiB maximum replay tail; reattachment returned an advanced absolute replay cursor (233275 in the successful run), preserved the final output marker and kept both Workers responsive.
 - `python tool/debug/test_terminal_worker_offline_backlog.py D:\\c\\t\\debug\\alera.exe`: while Host was disconnected, one Worker emitted 6 MiB with a 64 KiB offline ring; new connection replayed only 65573 bytes (including protocol/control bytes), with an advanced cursor at 7091879, preserving the original Worker/Shell and accepting more input.
+- `python tool/debug/test_terminal_worker_resource_soak.py D:\\c\\t\\debug\\alera.exe` (optional test dependency: Python `psutil`): 60.4-second Windows Worker CPU/RSS and reconnect soak **passed**, with 2 isolated PTYs, 86 paired, shell-confirmed commands, 9 authenticated Host-socket reconnections. Worker RSS initial/peak/final in KiB: `(13220,13360,13344)` and `(13260,13308,13292)`; cumulative Worker CPU was `0.06s` and `0.03s`. Earlier rapid-loop attempt was invalid because PTY input echo alone is not command completion; the revised test waits for a fresh file marker written by the Shell for each command. 60 seconds is not evidence of multi-hour stability.
 - `cargo test --locked --manifest-path rust/Cargo.toml -p alera-cli --bin alera configured_session_memory_budget_is_enforced_in_windows_job_flags`: queried Windows Job Object and verified the 384 MiB per-session memory limit flag and value.
 - Windows Session regression tests: `cargo test --locked --manifest-path rust/Cargo.toml -p alera-cli --bin alera terminal_host::session::` — 38 passed after Windows token ACL hardening.
 - T2 transfer contract regression: `cargo test --locked --manifest-path rust/Cargo.toml -p alera-cli --bin alera terminal_tab_transfer` — 4 passed.
@@ -55,4 +56,5 @@ If the Worker has already trimmed output from before the latest durable Host cur
 - `tool/debug/test_terminal_worker_memory_limit.py`
 - `tool/debug/test_terminal_worker_output_pressure.py`
 - `tool/debug/pty_output_flood_probe.py`
+- `tool/debug/test_terminal_worker_resource_soak.py`
 - `tool/debug/test_terminal_worker_offline_backlog.py`
