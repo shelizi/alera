@@ -68,9 +68,17 @@ python3 tool/testing/mcp_cross_platform_smoke.py --cli rust/target/debug/alera
 To check the packaged desktop sidecar instead, pass its full path to
 `--cli`. The Python smoke suite creates a temporary Runtime Host and OS
 PTY, exercises MCP initialization, tools, file/Agent inventory, output
-cursors and scoped authorization denial, and stops/deletes only that test
-runtime. It never connects to Alera's normal runtime, launches a model,
-opens user files or changes a global profile.
+cursors and scoped authorization denial. The smoke additionally creates a
+**real Host-owned Agent PTY without running a model**, then checks from inside
+that PTY that the Host-minted capability is usable, removing the token is
+rejected locally by MCP, and an altered token is rejected by the Host.
+No Flutter window is connected, so actual UI operations still fail closed.
+The suite stops/deletes only its test Runtime. It never connects to Alera's
+normal runtime, launches a model, opens user files or changes a global profile.
+
+The complete native security and PTY probe, including the stronger in-Agent
+capability tests, has passed against a **Windows** test Host. Native macOS
+ARM64 and Linux x64 remain pending until their own CI runners execute.
 
 CI wiring:
 
@@ -82,6 +90,12 @@ CI wiring:
   then runs the same isolated Host/PTY smoke on macOS, Linux and Windows.
 - `test/unit/alera_cli_sidecar_test.dart` checks app-side sidecar discovery
   paths on macOS and Linux as well as Windows.
+
+The two GitHub Actions workflow changes remain **uncommitted** in the
+isolated MCP worktree: the connected Git tool refuses staging protected
+`.github/workflows/` paths. Do not bypass that protection through direct
+`git add` or another transport. An authorized repository workflow reviewer
+must stage/approve those changes before native CI can run for this branch.
 
 These CI checks are defined but **do not count as passing until they have
 actually run successfully on native runners**. Real model-initiated UI and

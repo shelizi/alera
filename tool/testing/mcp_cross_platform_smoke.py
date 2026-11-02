@@ -15,12 +15,15 @@ import argparse
 import json
 import os
 from pathlib import Path
+import shlex
 import shutil
 import socket
 import subprocess
+import sys
 import tempfile
 import time
 import uuid
+from datetime import datetime, timezone
 
 PROTOCOL = "2025-06-18"
 REQUEST_TIMEOUT = 38
@@ -123,8 +126,8 @@ def stop_host(exe: Path, runtime: Path) -> None:
     raise AssertionError("disposable Runtime Host remained running")
 
 
-def agent_presence(runtime: Path, handle: str) -> None:
-    """Inject a synthetic Agent hook ONLY through the temporary Host socket."""
+def private_host_request(runtime: Path, kind: str, payload: dict) -> dict:
+    """Issue only a fixture-scoped RPC through the disposable Host socket."""
     control = json.loads((runtime / "runtime-host.json").read_text(encoding="utf-8"))
     with socket.create_connection(("127.0.0.1", int(control["port"])), timeout=8) as sock:
         sock.settimeout(8)
@@ -151,15 +154,175 @@ def agent_presence(runtime: Path, handle: str) -> None:
                 "protocolVersion": control["protocolVersion"],
                 "token": control["token"], "clientKind": "cli",
             })
-            rpc(2, "orchestration.agentStatus", {"entries": [{
+            return rpc(2, kind, payload)
+        finally:
+            writer.close()
+            reader.close()
+
+
+def agent_presence(runtime: Path, handle: str) -> None:
+    """Inject a synthetic Agent hook ONLY through the temporary Host socket."""
+    private_host_request(runtime, "orchestration.agentStatus", {"entries": [{
                 "terminalSessionId": handle, "state": "working",
                 "agentType": "codex", "toolName": "ReadFile",
                 "toolInput": "PRIVATE_MCP_AGENT_INPUT_NEVER_EXPOSE",
                 "lastAssistantMessage": "Non-sensitive test activity",
             }]})
-        finally:
-            writer.close()
-            reader.close()
+
+
+def test_real_agent_pty_capability(exe: Path, runtime: Path, workspace: Path,
+                                   workspace_id: str) -> None:
+    """Prove native Agent PTY inherits Host capability; stripped token fails."""
+    tab_id = "native-agent-tab-" + uuid.uuid4().hex
+    handle = "native-agent-pty-" + uuid.uuid4().hex
+    now = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    record = private_host_request(runtime, "tab.upsert", {
+        "id": tab_id, "workspaceId": workspace_id, "kind": "terminal",
+        "title": "Disposable native MCP Agent shell",
+        "createdAt": now, "updatedAt": now,
+        "payload": {
+            "terminalSessionId": handle,
+            "agentType": "codex",  # Host owns token; no model executable started
+            "spawnOnCreate": True,
+        },
+    })
+    check(record.get("id") == tab_id, "native Host creates true Agent PTY without model")
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        inventory = cli(exe, "terminal", "--runtime-dir", str(runtime),
+                        "--json", "list", "--workspace", workspace_id)
+        if any(item.get("handle") == handle and item.get("running") is True
+               for item in inventory.get("items", [])):
+            break
+        time.sleep(0.15)
+    else:
+        raise AssertionError("native Agent PTY was not running")
+
+    # This file contains only a test request, never a bearer. The child
+    # Python process must inherit the actual Host-PTY environment; the
+    # parent harness cannot insert or discover the private UI capability.
+    probe = workspace / "native_agent_mcp_capability_probe.py"
+    probe.write_text(
+        """import json, os, socket, subprocess, sys
+print("MCP_NATIVE_AGENT_PROBE_STARTED",flush=True)
+cli, runtime, expected_handle, expected_workspace = sys.argv[1:]
+assert os.environ.get("ALERA_TERMINAL_HANDLE") == expected_handle
+assert os.environ.get("ALERA_WORKSPACE_ID") == expected_workspace
+assert len(os.environ.get("ALERA_MCP_UI_TOKEN", "")) == 64
+print("MCP_NATIVE_AGENT_ENV_VERIFIED",flush=True)
+request = {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+    "name":"alera.open_file","arguments":{"relativePath":"src/mcp_fixture.rs"}}}
+def invoke(env):
+    child = subprocess.run([cli,"mcp","--runtime-dir",runtime,"serve"],
+        input=json.dumps(request)+"\\n",capture_output=True,text=True,
+        encoding="utf-8",errors="replace",timeout=18,env=env)
+    print("MCP_NATIVE_AGENT_MCP_CHILD_EXIT_"+str(child.returncode),flush=True)
+    assert child.returncode == 0
+    reply = json.loads(child.stdout.strip())["result"]
+    print("MCP_NATIVE_AGENT_MCP_TOOL_ERROR_"+str(reply.get("isError") is True),flush=True)
+    assert reply.get("isError") is True
+    return " ".join(item.get("text","") for item in reply.get("content",[])
+                    if isinstance(item,dict)).lower()
+authorized = invoke(os.environ.copy())
+print("MCP_NATIVE_AGENT_MCP_AUTH_ERROR_KIND_"+next(
+    (category for category, phrase in [
+        ("host_redacted","alera runtime host request failed"),
+        ("capability_missing","agent capability is unavailable"),
+        ("identity_invalid","host rejected the agent identity"),
+        ("host_not_running","runtime host is not running"),
+    ] if phrase in authorized),"other"),flush=True)
+assert "alera runtime host request failed" in authorized
+print("MCP_NATIVE_AGENT_MCP_REJECTED_NO_APP",flush=True)
+forged = os.environ.copy()
+forged.pop("ALERA_MCP_UI_TOKEN",None)
+unauthorized = invoke(forged)
+# With the bearer removed the MCP client must reject locally *before*
+# sending a privileged request to the Host.
+assert "agent capability is unavailable" in unauthorized
+print("MCP_NATIVE_AGENT_STRIPPED_MCP_DENIED",flush=True)
+# MCP intentionally strips detailed Host errors, so do not weaken its
+# privacy contract just for a test. Verify the Host-issued bearer through
+# the *same* authenticated local Host protocol, while still inside the
+# actual Agent PTY. A bearer-less request must be denied.
+control = json.load(open(os.path.join(runtime,"runtime-host.json"),encoding="utf-8"))
+print("MCP_NATIVE_AGENT_HOST_CONTROL_READ",flush=True)
+with socket.create_connection(("127.0.0.1",int(control["port"])),timeout=8) as sock:
+    print("MCP_NATIVE_AGENT_HOST_SOCKET_OPEN",flush=True)
+    sock.settimeout(8)
+    reader = sock.makefile("r",encoding="utf-8",newline="\\n")
+    writer = sock.makefile("w",encoding="utf-8",newline="\\n")
+    def rpc(number,name,payload):
+        writer.write(json.dumps({"id":number,"type":name,"payload":payload})+"\\n")
+        writer.flush()
+        for _ in range(30):
+            line=reader.readline()
+            if not line: break
+            frame=json.loads(line)
+            if frame.get("id")==number: return frame
+        raise AssertionError("Host fixture response missing")
+    hello = rpc(1,"hello",{"protocolVersion":control["protocolVersion"],
+                           "token":control["token"],"clientKind":"cli"})
+    assert hello.get("ok") is True
+    print("MCP_NATIVE_AGENT_HOST_HELLO_OK",flush=True)
+    payload={"sessionId":expected_handle,"workspaceId":expected_workspace,
+             "capability":os.environ["ALERA_MCP_UI_TOKEN"]}
+    accepted=rpc(2,"uiControl.windows",payload)
+    assert accepted.get("ok") is True
+    print("MCP_NATIVE_AGENT_HOST_BEARER_OK",flush=True)
+    assert accepted.get("payload",{}).get("windows")==[]
+    print("MCP_NATIVE_AGENT_AUTH_VERIFIED",flush=True)
+    payload["capability"]="invalid-test-capability"
+    denied=rpc(3,"uiControl.windows",payload)
+    assert denied.get("ok") is False
+    print("MCP_NATIVE_AGENT_REVOKE_VERIFIED",flush=True)
+    writer.close()
+    reader.close()
+print("MCP_NATIVE_AGENT_CAPABILITY_PASS",flush=True)
+""",
+        encoding="utf-8",
+    )
+    argv = [sys.executable, str(probe), str(exe), str(runtime), handle, workspace_id]
+    command = (subprocess.list2cmdline(argv) if os.name == "nt"
+               else shlex.join(argv))
+    cli(exe, "terminal", "--runtime-dir", str(runtime), "--json",
+        "write", "--handle", handle, "--text", command, "--enter")
+    deadline = time.monotonic() + 32
+    last_text = ""
+    while time.monotonic() < deadline:
+        output = cli(exe, "terminal", "--runtime-dir", str(runtime),
+                     "--json", "read", "--handle", handle, "--max-bytes", "8192")
+        last_text = str(output.get("text", ""))
+        if "MCP_NATIVE_AGENT_CAPABILITY_PASS" in last_text:
+            check(True, "native Agent PTY received Host-issued scoped MCP capability")
+            check(True, "removing Agent bearer rejects the identical UI MCP request")
+            return
+        if "Traceback (most recent call last)" in last_text:
+            break
+        time.sleep(0.25)
+    milestones = {
+        "started": "MCP_NATIVE_AGENT_PROBE_STARTED" in last_text,
+        "identity": "MCP_NATIVE_AGENT_ENV_VERIFIED" in last_text,
+        "mcp_child_ok": "MCP_NATIVE_AGENT_MCP_CHILD_EXIT_0" in last_text,
+        "mcp_tool_error": "MCP_NATIVE_AGENT_MCP_TOOL_ERROR_True" in last_text,
+        "mcp_no_app": "MCP_NATIVE_AGENT_MCP_REJECTED_NO_APP" in last_text,
+        "stripped_mcp_denied": "MCP_NATIVE_AGENT_STRIPPED_MCP_DENIED" in last_text,
+        "control_read": "MCP_NATIVE_AGENT_HOST_CONTROL_READ" in last_text,
+        "socket_open": "MCP_NATIVE_AGENT_HOST_SOCKET_OPEN" in last_text,
+        "host_hello": "MCP_NATIVE_AGENT_HOST_HELLO_OK" in last_text,
+        "host_bearer": "MCP_NATIVE_AGENT_HOST_BEARER_OK" in last_text,
+        "host_redacted": "MCP_NATIVE_AGENT_MCP_AUTH_ERROR_KIND_host_redacted" in last_text,
+        "capability_missing": "MCP_NATIVE_AGENT_MCP_AUTH_ERROR_KIND_capability_missing" in last_text,
+        "identity_invalid": "MCP_NATIVE_AGENT_MCP_AUTH_ERROR_KIND_identity_invalid" in last_text,
+        "host_not_running": "MCP_NATIVE_AGENT_MCP_AUTH_ERROR_KIND_host_not_running" in last_text,
+        "auth": "MCP_NATIVE_AGENT_AUTH_VERIFIED" in last_text,
+        "revoked": "MCP_NATIVE_AGENT_REVOKE_VERIFIED" in last_text,
+        "python_exception": "Traceback (most recent call last)" in last_text,
+        "socket_timeout": "TimeoutError" in last_text,
+        "assert_failed": "AssertionError" in last_text,
+        "missing_program": "not recognized" in last_text.lower()
+                          or "not found" in last_text.lower(),
+    }
+    raise AssertionError(f"native Agent PTY capability proof incomplete: {milestones}")
 
 
 def check(value: bool, message: str) -> None:
@@ -320,6 +483,7 @@ def run(exe: Path) -> None:
         forbidden = mcp(exe, runtime, [request(40, "alera.list_tabs")], forged_env)
         result(forbidden, 40, error=True)
         check(True, "unknown caller PTY identity cannot query live tabs")
+        test_real_agent_pty_capability(exe, runtime, workspace, workspace_id)
         check((workspace / "src" / "mcp_fixture.rs").read_text(encoding="utf-8")
               == "// Alera cross-platform MCP read-only test\n",
               "read-only MCP smoke never changes workspace file")

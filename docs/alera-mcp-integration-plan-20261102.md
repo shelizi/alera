@@ -28,7 +28,10 @@ acceptance remain pending. No feature merged, pushed or released.
 portable stdio MCP implementation and Mac/Linux packaged CLI locations are
 now covered by `tool/testing/mcp_cross_platform_smoke.py` plus a dedicated
 native Mac ARM64/Linux x64 workflow and post-desktop-package smoke. The shared
-Host/PTY smoke passed locally on a disposable Windows runtime; **CI has not
+Host/PTY smoke, including genuine Host-minted Agent bearer inheritance and
+denial after stripping/altering the bearer, passed locally on a disposable
+Windows runtime. The two protected `.github/workflows/` changes are
+still uncommitted due connector staging policy; **CI has not
 yet run on native macOS/Linux**, and their real Flutter/Agent E2E gates remain
 pending. See `docs/alera-mcp-cross-platform.md` for opt-in testing.
 
