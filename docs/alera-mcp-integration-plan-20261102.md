@@ -5,8 +5,10 @@
 **Owner branch:** `feat/alera-mcp-control-20261102`
 
 **Base HEAD:** `29781ab2545459a010095e700a19c7c49f952355`
-**Status:** Step 1 read-only alpha implemented and unit-tested; real Host-connected
-smoke and steps 2–4 remain pending. No feature has been enabled or released.
+
+**Status:** Step 1 read-only alpha verified against a disposable Windows
+Runtime Host (8/8 focused tests + live Host smoke); steps 2–4 and privileged
+identity binding are pending. No feature has been enabled or released.
 
 ## Intent / fixed scope
 
@@ -63,10 +65,12 @@ operations report separate `accepted` and `applied` acknowledgments.
       initialize, tools/list, tools/call and standardized errors.
 - [x] Reuse authenticated Runtime Host RPC for project, workspace, tab and
       agent inventory; validate arguments and output bounds.
-- [x] Add stdio protocol and tool schema/unknown-command tests.
-- [ ] Exercise Host-backed reads with a live Alera Runtime Host. The transport
-      smoke confirms an expected `isError` when no Host is available; this is
-      not equivalent to a successful live query.
+- [x] Add stdio protocol and tool schema/unknown-command tests, including
+      strict 1 MiB pre-buffer bound with drain-and-recover for oversized lines
+      and invalid UTF-8 recovery.
+- [x] Exercise Host-backed reads with an isolated live Alera Runtime Host,
+      registered Project/Workspace/PTY and an injected test-only Agent status.
+      Verify successful queries, output cursor and denial conditions.
 - **Exit:** valid MCP client can initialize and query data without creating
   tabs; invalid calls receive stable JSON-RPC/MCP errors.
 
@@ -86,6 +90,10 @@ operations report separate `accepted` and `applied` acknowledgments.
 - [x] Initial **same-workspace read-only** live agent discovery, bounded
       Terminal output cursor and structured progress.
 - [ ] Add explicit cross-workspace authorization and focus/continuation.
+- [ ] Bind caller identity to a Host-issued session-scoped proof before
+      enabling wider Agent visibility or any mutating MCP tools. Present
+      validation only checks that environment-provided handle/workspace values
+      match an active Host record; these values alone are **spoofable**.
 - [ ] Reuse Orchestration v2 messaging and dispatch; enforce session scope,
       idle delivery, idempotency, and an explicit gate for raw PTY input.
 - [ ] Validate stop/restart/stale handle, busy agent, dedupe and unauthorized
@@ -120,6 +128,23 @@ operations report separate `accepted` and `applied` acknowledgments.
   passed. Built binary stdio smoke: initialize and seven tools/list entries
   passed; Host-backed list_projects appropriately returned `isError=true`
   because a live Host was not available on the tested runtime profile.
+- 2026-11-02: Continued verification: `cargo test -p alera-cli mcp::tests`
+  passed **8/8**, including oversized 1 MiB input and invalid UTF-8 / CRLF
+  framing. `cargo build -p alera-cli` passed. Actual executable proved it
+  rejects an oversized frame and still answers a following valid `ping`.
+- 2026-11-02: Added repeatable Windows integration harness
+  `rust/alera-cli/tests/mcp_live_host_smoke.ps1`. It creates only disposable
+  temp Runtime Host/Project/Workspace/PTY fixtures, injects test Agent status
+  through the isolated Host socket and checks all seven read-only MCP tools.
+  Live checks passed: project/workspace/tab/file search; Agent search/activity;
+  actual PTY output marker and incremental cursor; raw `toolInput` redaction;
+  cross-Workspace, foreign Agent, stale handle and bound violations denied.
+  Script enforces shutdown and cleanup: zero test runtime directories remain.
+  The user's normal Alera runtime remained stopped.
+- **Limitations:** No real Flutter UI or Agent Profile injection has been
+  exercised; no macOS/Linux smoke. The existing same-Workspace check is a
+  useful accidental-scope guard, **not** a cryptographic authorization
+  boundary, so do not enable mutating or cross-Workspace operations.
 
 ## Current usage (read-only alpha)
 
@@ -136,3 +161,12 @@ active Alera-managed Terminal and an existing authenticated Host. Until the
 later adapter-aware launch integration is implemented, this is not injected
 automatically into Agent Profiles. Tool names for UI navigation, messaging,
 raw input and settings are intentionally **not** advertised yet.
+
+### Reproducible Windows integration smoke
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File rust/alera-cli/tests/mcp_live_host_smoke.ps1 -AleraExe <built-alera.exe>
+```
+
+The harness creates a unique temporary profile, never touches the active
+profile's projects and stops its own Host/PTYs before deletion.

@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use ignore::WalkBuilder;
 use serde_json::{json, Map, Value};
-use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{self, AsyncBufRead, AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 use crate::cli::{McpAction, McpCommand, RuntimeDirArgs};
 use crate::runtime_host_client::RuntimeHostRpcClient;
@@ -27,24 +27,27 @@ pub(crate) async fn run(command: McpCommand) -> i32 {
 
 async fn serve(runtime: &RuntimeDirArgs) -> i32 {
     let stdin = io::stdin();
-    let mut input = BufReader::new(stdin).lines();
+    let mut input = BufReader::new(stdin);
     let mut output = io::stdout();
     // Do not start a Host as a side effect of a read-only MCP tool.
     let mut client = None;
 
     loop {
-        let line = match input.next_line().await {
-            Ok(Some(line)) => line,
+        let response = match read_mcp_line(&mut input).await {
+            Ok(Some(McpLine::Data(line))) => dispatch(&line, runtime, &mut client).await,
+            Ok(Some(McpLine::Oversized)) => {
+                Some(rpc_error(Value::Null, -32600, "MCP request is too large"))
+            }
+            Ok(Some(McpLine::InvalidUtf8)) => Some(rpc_error(
+                Value::Null,
+                -32700,
+                "Invalid UTF-8 in MCP request",
+            )),
             Ok(None) => break,
             Err(error) => {
                 eprintln!("Alera MCP stdin closed: {error}");
                 return 1;
             }
-        };
-        let response = if line.len() > MAX_LINE_BYTES {
-            Some(rpc_error(Value::Null, -32600, "MCP request is too large"))
-        } else {
-            dispatch(&line, runtime, &mut client).await
         };
         if let Some(response) = response {
             let mut frame = match serde_json::to_vec(&response) {
@@ -66,6 +69,54 @@ async fn serve(runtime: &RuntimeDirArgs) -> i32 {
         }
     }
     0
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum McpLine {
+    Data(String),
+    Oversized,
+    InvalidUtf8,
+}
+
+/// Read a newline-delimited JSON-RPC frame without buffering an unbounded
+/// request. Oversized input is drained to the next newline so a subsequent
+/// valid request on the same stdio channel remains usable.
+async fn read_mcp_line<R: AsyncBufRead + Unpin>(reader: &mut R) -> io::Result<Option<McpLine>> {
+    let mut content = Vec::new();
+    let mut oversized = false;
+    loop {
+        let available = reader.fill_buf().await?;
+        if available.is_empty() {
+            if content.is_empty() && !oversized {
+                return Ok(None);
+            }
+            break;
+        }
+        let separator = available.iter().position(|byte| *byte == b'\n');
+        let content_len = separator.unwrap_or(available.len());
+        if !oversized {
+            if content.len().saturating_add(content_len) > MAX_LINE_BYTES {
+                oversized = true;
+                content.clear();
+            } else {
+                content.extend_from_slice(&available[..content_len]);
+            }
+        }
+        reader.consume(content_len + usize::from(separator.is_some()));
+        if separator.is_some() {
+            break;
+        }
+    }
+    if oversized {
+        return Ok(Some(McpLine::Oversized));
+    }
+    if content.last() == Some(&b'\r') {
+        content.pop();
+    }
+    Ok(Some(match String::from_utf8(content) {
+        Ok(line) => McpLine::Data(line),
+        Err(_) => McpLine::InvalidUtf8,
+    }))
 }
 
 async fn dispatch(
@@ -728,6 +779,45 @@ mod tests {
 
     fn runtime() -> RuntimeDirArgs {
         RuntimeDirArgs { runtime_dir: None }
+    }
+
+    #[tokio::test]
+    async fn oversized_stdio_frame_is_bounded_drained_and_followed_by_valid_frame() {
+        let oversized = vec![b'x'; MAX_LINE_BYTES + 1];
+        let valid = br#"{"jsonrpc":"2.0","id":42,"method":"ping"}"#;
+        let mut frames = oversized;
+        frames.push(b'\n');
+        frames.extend_from_slice(valid);
+        frames.push(b'\n');
+        let mut reader = BufReader::with_capacity(7, std::io::Cursor::new(frames));
+        assert_eq!(
+            read_mcp_line(&mut reader).await.unwrap(),
+            Some(McpLine::Oversized)
+        );
+        assert_eq!(
+            read_mcp_line(&mut reader).await.unwrap(),
+            Some(McpLine::Data(
+                std::str::from_utf8(valid).unwrap().to_string()
+            ))
+        );
+        assert_eq!(read_mcp_line(&mut reader).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn invalid_utf8_and_crlf_frames_do_not_break_stdio_reader() {
+        let mut reader = BufReader::with_capacity(
+            2,
+            std::io::Cursor::new(b"\xff\n{\"jsonrpc\":\"2.0\"}\r\n".to_vec()),
+        );
+        assert_eq!(
+            read_mcp_line(&mut reader).await.unwrap(),
+            Some(McpLine::InvalidUtf8)
+        );
+        assert_eq!(
+            read_mcp_line(&mut reader).await.unwrap(),
+            Some(McpLine::Data(r#"{"jsonrpc":"2.0"}"#.to_string()))
+        );
+        assert_eq!(read_mcp_line(&mut reader).await.unwrap(), None);
     }
 
     #[test]
