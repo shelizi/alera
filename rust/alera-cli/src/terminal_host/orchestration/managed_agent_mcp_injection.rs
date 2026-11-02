@@ -90,6 +90,7 @@ mod tests {
     use super::*;
     use crate::terminal_host::orchestration::agent_profile_launch_snapshot::AgentInitialDeliveryMechanismV1;
     use crate::terminal_host::orchestration::agent_startup_command::append_initial_prompt_argument_for;
+    use crate::terminal_host::orchestration::managed_launch_shell_rendering::render_managed_launch;
 
     fn cli() -> ManagedAgentLaunch {
         ManagedAgentLaunch {
@@ -232,5 +233,71 @@ mod tests {
         assert!(launch.arguments[..launch.arguments.len() - 2]
             .iter()
             .any(|arg| arg.starts_with("mcp_servers.alera-workbench.args=")));
+    }
+
+    #[test]
+    fn mcp_native_posix_shell_quoting_preserves_opaque_paths_and_prompt() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = dir.path().join("a runtime's state");
+        let exe = dir.path().join("Alera's Resources").join("alera");
+        std::fs::create_dir_all(&runtime).unwrap();
+        std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+        std::fs::write(&exe, b"stub").unwrap();
+
+        for agent in ["codex", "claude"] {
+            let mut launch = ManagedAgentLaunch {
+                executable: agent.to_owned(),
+                arguments: Vec::new(),
+            };
+            assert!(inject_managed_agent_mcp(agent, &mut launch, &exe, &runtime));
+            append_initial_prompt_argument_for(
+                &AgentInitialDeliveryMechanismV1::PositionalAfterTerminator,
+                &mut launch.arguments,
+                "Inspect O'Reilly's workspace",
+            );
+            assert_eq!(
+                &launch.arguments[launch.arguments.len() - 2..],
+                ["--", "Inspect O'Reilly's workspace"]
+            );
+
+            let command = render_managed_launch(&launch, "/bin/zsh");
+            assert!(
+                command.contains("'\"'\"'"),
+                "a POSIX shell must escape apostrophes in paths/prompt"
+            );
+            assert!(
+                command.contains("alera-workbench"),
+                "native MCP registration must be present in Posix argv"
+            );
+
+            match agent {
+                "codex" => {
+                    let command_key = "mcp_servers.alera-workbench.command=";
+                    let entry = launch
+                        .arguments
+                        .iter()
+                        .find_map(|argument| argument.strip_prefix(command_key))
+                        .unwrap();
+                    assert_eq!(
+                        serde_json::from_str::<String>(entry).unwrap(),
+                        exe.to_string_lossy()
+                    );
+                }
+                "claude" => {
+                    let flag = launch
+                        .arguments
+                        .iter()
+                        .position(|argument| argument == "--mcp-config")
+                        .unwrap();
+                    let config: serde_json::Value =
+                        serde_json::from_str(&launch.arguments[flag + 1]).unwrap();
+                    assert_eq!(
+                        config["mcpServers"][SERVER_NAME]["args"][2],
+                        runtime.to_string_lossy().as_ref()
+                    );
+                }
+                _ => unreachable!(),
+            }
+        }
     }
 }

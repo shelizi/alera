@@ -24,6 +24,14 @@ Natural Agent collaboration/response, model-driven settings changes, explicit
 cross-workspace grants, macOS/Linux and two-real-Flutter-window platform
 acceptance remain pending. No feature merged, pushed or released.
 
+**Cross-platform enablement follow-up (same isolated branch):** the existing
+portable stdio MCP implementation and Mac/Linux packaged CLI locations are
+now covered by `tool/testing/mcp_cross_platform_smoke.py` plus a dedicated
+native Mac ARM64/Linux x64 workflow and post-desktop-package smoke. The shared
+Host/PTY smoke passed locally on a disposable Windows runtime; **CI has not
+yet run on native macOS/Linux**, and their real Flutter/Agent E2E gates remain
+pending. See `docs/alera-mcp-cross-platform.md` for opt-in testing.
+
 ## Intent / fixed scope
 
 Agents launched by Alera can inspect and navigate the running Alera workspace,

@@ -47,6 +47,60 @@ void main() {
     expect(command.prefixArguments, isEmpty);
   });
 
+  test('finds macOS app Resources sidecar for MCP', () async {
+    final tempDir = await Directory.systemTemp.createTemp(
+      'alera-mcp-sidecar-macos-',
+    );
+    addTearDown(() async {
+      if (await tempDir.exists()) {
+        await tempDir.delete(recursive: true);
+      }
+    });
+    final appDir = p.join(tempDir.path, 'Alera.app', 'Contents');
+    final nativeCli = File(p.join(appDir, 'Resources', 'alera', 'alera'));
+    await nativeCli.parent.create(recursive: true);
+    await nativeCli.writeAsString('macOS ARM64 sidecar fixture');
+    final resolver = DefaultAleraCliResolver(
+      environment: const <String, String>{},
+      operatingSystem: 'macos',
+      resolvedExecutable: p.join(appDir, 'MacOS', 'Alera'),
+      currentDirectoryPath: tempDir.path,
+    );
+
+    final command = await resolver.resolve(
+      runtimeDir: p.join(tempDir.path, 'host profile', 'runtime'),
+    );
+    expect(command.executable, nativeCli.path);
+    expect(command.prefixArguments, isEmpty);
+  });
+
+  test('finds bundled Linux executable sidecar for MCP', () async {
+    final tempDir = await Directory.systemTemp.createTemp(
+      'alera-mcp-sidecar-linux-',
+    );
+    addTearDown(() async {
+      if (await tempDir.exists()) {
+        await tempDir.delete(recursive: true);
+      }
+    });
+    final bundleDir = p.join(tempDir.path, 'bundle');
+    final nativeCli = File(p.join(bundleDir, 'resources', 'alera', 'alera'));
+    await nativeCli.parent.create(recursive: true);
+    await nativeCli.writeAsString('Linux x64 sidecar fixture');
+    final resolver = DefaultAleraCliResolver(
+      environment: const <String, String>{},
+      operatingSystem: 'linux',
+      resolvedExecutable: p.join(bundleDir, 'alera'),
+      currentDirectoryPath: tempDir.path,
+    );
+
+    final command = await resolver.resolve(
+      runtimeDir: p.join(tempDir.path, 'host profile', 'runtime'),
+    );
+    expect(command.executable, nativeCli.path);
+    expect(command.prefixArguments, isEmpty);
+  });
+
   test('falls back to cargo run after checking bundle candidates', () async {
     final tempDir = await Directory.systemTemp.createTemp(
       'alera-cli-sidecar-fallback-',
