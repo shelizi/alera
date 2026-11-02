@@ -56,6 +56,8 @@ import 'package:alera/src/features/workbench/presentation/workspace_workbench_vi
 import 'package:alera/src/shared/infra/git/git_providers.dart';
 import 'package:alera/src/shared/infra/git/git_remote.dart';
 import 'package:alera/src/features/settings/presentation/github_star_prompt_watch.dart';
+import 'package:alera/src/features/settings/application/settings_controller.dart';
+import 'package:alera/src/features/workbench/presentation/workbench_dialog_launchers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';

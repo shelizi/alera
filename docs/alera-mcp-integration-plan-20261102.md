@@ -6,12 +6,14 @@
 
 **Base HEAD:** `29781ab2545459a010095e700a19c7c49f952355`
 
-**Status:** Steps 1–2 verified. **Step 3 same-workspace Agent focus and
-durable messaging Windows desktop accepted** on 2026-11-02, with 10/10
-two-Agent E2E assertions passing. Step 2 Windows desktop 12/12 also passed.
-Step 3 cross-workspace grants and natural busy-to-idle delivery/restart
-recovery have **not** been accepted. Step 4 and macOS/Linux / two-real-window
-platform acceptance remain pending. No feature released.
+**Status:** Steps 1–2 verified. Step 3 same-workspace Agent focus and durable
+messaging Windows desktop **10/10 PASS**; synthetic busy→done status with
+**real PTY paste/deferred Enter/persisted delivery 4/4 PASS**. Step 4 typed
+settings Windows desktop **13/13 PASS**, and managed Codex/Claude MCP launch
+argument injection is implemented but **opt-in only (default OFF)**. Full
+Agent Profile real-provider startup, actual model response, real Host restart
+E2E, explicit cross-workspace grants, macOS/Linux and two-real-Flutter-window
+platform acceptance remain pending. No feature merged, pushed or released.
 
 ## Intent / fixed scope
 
@@ -30,7 +32,7 @@ Git Graph/Diff UI.
 | Files | `alera.search_files`, `alera.open_file`, `alera.reveal_file` | Find; edit or independently reveal a file in Alera Explorer |
 | Git / UI | `alera.open_git_graph`, `alera.compare_branches` | Show existing Graph / branch comparison Tab |
 | Agents | `alera.search_agents`, `alera.get_agent_activity`, `alera.read_agent_output`, `alera.focus_agent` | Locate live session; read bounded progress; focus correct UI |
-| Collaboration | `alera.send_agent_message`, `alera.send_agent_input` | Durable coordination / separately authorized direct PTY input |
+| Collaboration | `alera.send_agent_message`, `alera.get_agent_message_status` | Durable coordination; queued/delivered are distinct from Agent completion; raw PTY input is intentionally not exposed |
 | Settings | `alera.list_settings`, `alera.get_setting`, `alera.update_setting`, `alera.open_settings` | Typed, scoped, redacted setting discovery and updates |
 
 `alera.*` names are intentional MCP identifiers, not direct Runtime Host RPC
@@ -51,9 +53,11 @@ operations report separate `accepted` and `applied` acknowledgments.
    successful MCP connection. Prefer existing queued Orchestration messages;
    ensure input delivery is not misreported as task completion.
 5. Settings have three ownership tiers: local UI, operational Runtime Host,
-   portable configuration. Changes go through their actual owner with typed
-   allowlist, expected revision, audit trail, sensitive-value redaction and
-   post-write verification. Never output API keys, tokens or arbitrary blobs.
+   portable configuration. Changes go through the existing Flutter
+   SettingsController and underlying owner with a typed allowlist,
+   per-field `expectedValue` compare-and-set and post-write verification.
+   An end-to-end Runtime revision/audit contract is **not yet implemented**.
+   Never output API keys, tokens or arbitrary blobs.
 6. Host-to-Flutter commands address a specific live window/workspace, carry
    request IDs and timeout, and return explicit applied/error ACK. Switching
    tabs does not recreate PTY sessions; missing UI is an error, not success.
@@ -116,9 +120,14 @@ operations report separate `accepted` and `applied` acknowledgments.
 - [ ] Define and verify **explicit cross-workspace grants**, if enabled in
       the future. The currently supported scope is same-workspace only,
       fail closed.
-- [ ] Natural real-Agent busy→idle→delivered→response lifecycle and
-      Host restart/PTY capability rotation E2E still require acceptance.
-      A message being read or delivered is **not** task completion.
+- [x] Synthetic Agent `working`→`done` status sent through the actual Host
+      event path, real recipient PTY paste/deferred Enter and persisted
+      `delivered_at` E2E **4/4 PASS**. No manual DB delivery marking or raw
+      forced input. `completionConfirmed=false` even after delivery.
+- [ ] True external Codex/Claude Agent idle→delivery→response lifecycle and
+      full Host process restart/PTY capability rotation **E2E** still require
+      acceptance. Host replacement/old token rejection is covered separately
+      with a new in-process actor test, not a true OS Host restart test.
 - **Current Step 3 exit (same-workspace only):** Agent can find another
   Agent, read bounded progress, focus its existing Tab, queue one permitted
   durable message, and inspect its delivery state. Global/cross-workspace
@@ -126,10 +135,19 @@ operations report separate `accepted` and `applied` acknowledgments.
   explicitly outside this accepted subset.
 
 ### 4. Settings + injection + final acceptance
-- [ ] Expose typed settings catalog and ownership-aware getter/updater; never
-      return secret plaintext; block privileged or unsupported mutations.
-- [ ] Inject MCP into supported Alera Agent Profile launches with adapter-aware
-      config, no rewriting of unrelated global agent MCP configuration.
+- [x] Expose a typed **eight-entry allowlisted** settings catalog via
+      `alera.list_settings/get_setting/update_setting/open_settings`.
+      Five harmless settings can be changed via the existing Flutter
+      SettingsController. Three destructive-confirmation/archive controls are
+      read-only. Unknown/secret paths and wrong scalar types fail closed.
+      Require `expectedValue` CAS, serialized owner persistence and
+      Host-verified Flutter scalar readback; Windows desktop **13/13 PASS**,
+      including real Terminal settings dialog visibly selected.
+- [x] Implement **default-off** per-Managed-Agent-Profile opt-in injection
+      (`ALERA_MCP_PROFILE_INJECTION=1`) for Codex/Claude adapter-specific
+      CLI arguments. No global MCP config writes; duplicate/custom config
+      does not get replaced; no token in the config. Static argument tests
+      **3/3 PASS**. Do not advertise this as real Agent process E2E accepted.
 - [ ] Test MCP over real agent/stdio, UI behavior, settings notifications,
       auth scope, platform smoke tests and CI build; update usage docs.
 - **Exit:** all supported tools have tests, feature-flag or opt-in policy is
@@ -254,6 +272,36 @@ operations report separate `accepted` and `applied` acknowledgments.
   This proves queue + focus, **not natural real Agent idle delivery or task
   completion**. The host status unit test separately verified the stored
   delivered-state projection.
+- 2026-11-02: **Stage 3 delivery follow-up:** in an isolated Alera Flutter
+  GUI with two real Host-spawned PTYs, `tool/testing/mcp_agent_delivery_e2e.py`
+  verified **4/4**: working recipient remains queued; `done` Agent status
+  causes real Host PTY paste + deferred Enter and `delivered_at` in SQLite;
+  message status changes to delivered; `completionConfirmed=false`.
+  Result JSON at ignored
+  `build/windows/shared_gui_ninja/mcp_stage3_delivery_e2e_result.json`.
+  The hook status is **synthetic**, not a real Codex/Claude model turn.
+- 2026-11-02: **Stage 4 settings Windows desktop E2E PASS 13/13** from a
+  Host-issued Agent PTY, using the same private Alera Flutter GUI. Tested
+  catalog, rejection of secrets/unsafe switches/out-of-range values,
+  Terminal font size and Git Auto Fetch frequency owner-backed updates,
+  readback, stale expected value rejection and restoration of original
+  settings, plus actual Settings dialog opened to the Terminal pane.
+  `tool/testing/mcp_settings_desktop_e2e.py`; JSON:
+  `build/windows/shared_gui_ninja/mcp_settings_stage4_e2e_result.json`,
+  screenshot:
+  `build/windows/shared_gui_ninja/diagnostics/mcp-stage4-settings-dialog-13passed.png`.
+  Initial E2E found 16.0 from Flutter != integer 16 from MCP input;
+  fixed the Rust numeric readback equivalence, retaining strict type/range
+  validation, and reran all 13 cases successfully. In-memory Drift CAS/owner
+  tests **2/2 PASS**; Host settings receipt/test and MCP protocol tests pass.
+- 2026-11-02: The per-managed-profile MCP auto-injection implementation
+  adds transient Codex `--config mcp_servers.alera-workbench...` or Claude
+  `--mcp-config` only when `ALERA_MCP_PROFILE_INJECTION=1` at Host launch.
+  Requires Host-managed Agent Profile, existing sidecar executable and
+  runtime dir; unsupported/custom profiles fail closed. Pure adapter argument
+  regression **3/3 PASS**. Real provider startup and macOS/Linux not yet
+  exercised; do not enable by default. Existing global client config is
+  never modified.
 
 ### Reproduce Step 2 Windows desktop acceptance (disposable profile only)
 
@@ -291,12 +339,16 @@ opened and no Runtime Host is auto-started. Current workspace file/Tab/Agent
 reads check a live Host handle and matching `ALERA_TERMINAL_HANDLE` /
 `ALERA_WORKSPACE_ID`, but that read-only check alone is not a cryptographic
 identity proof. All **five UI navigation/focus tools**, plus same-workspace
-durable Agent send and own-message status, additionally require a Host-issued
-per-PTY capability; no UI response reports `applied` before Flutter confirms
-it. `send_agent_message` returns queued/delivered, never task completed.
-Automatic Agent Profile MCP injection, privileged cross-workspace grants,
-raw Terminal input, and settings catalog/mutations remain
-**unimplemented/not advertised**.
+durable Agent send, own-message status, and typed settings read/write/open
+tools additionally require a Host-issued per-PTY capability. No UI response
+reports `applied` before Flutter confirms it; settings updates validate
+allowed scalar types, an expected prior value and returned actual value.
+`send_agent_message` returns queued/delivered, never task completed.
+Managed Codex/Claude Agent Profile MCP injection is currently **opt-in only**:
+set `ALERA_MCP_PROFILE_INJECTION=1` for the *isolated Host launch* to enable
+per-launch adapter config. Never modify global Codex/Claude MCP files.
+Unverified real-provider startup, privileged cross-workspace grants, raw
+Terminal input and arbitrary settings mutation remain unavailable.
 
 ### Reproducible Windows integration smoke
 

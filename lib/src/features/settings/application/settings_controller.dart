@@ -19,6 +19,7 @@ part 'settings_controller.g.dart';
 part 'settings_controller_local_ui.dart';
 part 'settings_controller_runtime_operational.dart';
 part 'settings_controller_portable.dart';
+part 'settings_controller_mcp.dart';
 
 const String _runtimeSettingsRevisionConflictCode =
     'runtime_settings_revision_conflict';

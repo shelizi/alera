@@ -40,6 +40,8 @@ struct McpUiReceipt {
     created: Instant,
     status: &'static str,
     tab_id: Option<String>,
+    setting_path: Option<String>,
+    setting_value: Option<Value>,
     error_code: Option<&'static str>,
 }
 
@@ -54,6 +56,8 @@ impl McpUiReceipt {
             "applied": self.status == "applied",
             "windowId": self.window_id,
             "tabId": self.tab_id,
+            "settingPath": self.setting_path,
+            "settingValue": self.setting_value,
             "errorCode": self.error_code,
         })
     }
@@ -159,6 +163,11 @@ impl ServerActor {
                 }
                 let action = required_short(payload, "action", 40)?;
                 let mut arguments = validate_ui_arguments(&action, payload.get("arguments"))?;
+                let setting_path = if matches!(action.as_str(), "get_setting" | "update_setting") {
+                    Some(required_short(&arguments, "path", 128)?)
+                } else {
+                    None
+                };
                 if action == "focus_agent" {
                     // Resolve from the live Host, not an MCP-supplied Tab ID.
                     // A caller may only focus a running Agent in its own
@@ -225,6 +234,8 @@ impl ServerActor {
                         created: Instant::now(),
                         status: "accepted",
                         tab_id: None,
+                        setting_path,
+                        setting_value: None,
                         error_code: None,
                     },
                 );
@@ -264,8 +275,21 @@ impl ServerActor {
                 if receipt.status != "accepted" || receipt.created.elapsed() >= REQUEST_TTL {
                     return Err(HostError::state("UI command is no longer pending."));
                 }
+                let setting_value = match receipt.setting_path.as_deref() {
+                    Some(path) if applied => {
+                        let value = payload.get("settingValue").ok_or_else(|| {
+                            HostError::format("Settings response must include a typed value.")
+                        })?;
+                        if !mcp_setting_value_valid(path, value) {
+                            return Err(HostError::format("Invalid MCP settings reply value."));
+                        }
+                        Some(value.clone())
+                    }
+                    _ => None,
+                };
                 receipt.status = if applied { "applied" } else { "failed" };
                 receipt.tab_id = if applied { tab_id } else { None };
+                receipt.setting_value = setting_value;
                 receipt.error_code = if applied {
                     None
                 } else {
@@ -311,6 +335,8 @@ impl ServerActor {
 
 fn public_ui_error_code(code: Option<&str>) -> &'static str {
     match code {
+        Some("setting_conflict") => "setting_conflict",
+        Some("setting_invalid") => "setting_invalid",
         Some("invalid_path") => "invalid_path",
         Some("file_missing") => "file_missing",
         Some("workspace_missing") => "workspace_missing",
@@ -373,6 +399,9 @@ fn validate_ui_arguments(action: &str, raw: Option<&Value>) -> HostResult<Value>
     let allowed: &[&str] = match action {
         "open_file" | "reveal_file" => &["relativePath"],
         "focus_agent" => &["handle"],
+        "get_setting" => &["path"],
+        "update_setting" => &["path", "expectedValue", "value"],
+        "open_settings" => &["sectionId"],
         "open_git_graph" => &[
             "filePath",
             "gitDiffRoot",
@@ -394,6 +423,38 @@ fn validate_ui_arguments(action: &str, raw: Option<&Value>) -> HostResult<Value>
     if action == "focus_agent" {
         let handle = required_short(raw.unwrap(), "handle", 128)?;
         validated.insert("handle".into(), json!(handle));
+    }
+    if matches!(action, "get_setting" | "update_setting") {
+        let path = required_short(raw.unwrap(), "path", 128)?;
+        let writable = mcp_setting_writable(&path);
+        if writable.is_none() || (action == "update_setting" && writable != Some(true)) {
+            return Err(HostError::format("MCP setting path is not permitted."));
+        }
+        validated.insert("path".into(), json!(path));
+        if action == "update_setting" {
+            let value = args
+                .get("value")
+                .ok_or_else(|| HostError::format("MCP setting value is required."))?;
+            let expected = args
+                .get("expectedValue")
+                .ok_or_else(|| HostError::format("MCP setting expectedValue is required."))?;
+            if !mcp_setting_value_valid(&path, value) || !mcp_setting_value_valid(&path, expected) {
+                return Err(HostError::format("MCP setting value is invalid."));
+            }
+            validated.insert("value".into(), value.clone());
+            validated.insert("expectedValue".into(), expected.clone());
+        }
+    }
+    if action == "open_settings" {
+        let section = optional_short(raw.unwrap(), "sectionId", 64)?
+            .unwrap_or_else(|| "application".to_string());
+        if !matches!(
+            section.as_str(),
+            "application" | "terminal" | "editor" | "agents" | "agentProfiles"
+        ) {
+            return Err(HostError::format("Unknown Alera settings section."));
+        }
+        validated.insert("sectionId".into(), json!(section));
     }
     if action == "compare_branches" {
         for key in ["baseRef", "headRef"] {
@@ -421,6 +482,40 @@ fn validate_ui_arguments(action: &str, raw: Option<&Value>) -> HostResult<Value>
         validated.insert("gitDiffRoot".into(), json!(validate_relative_path(&value)?));
     }
     Ok(Value::Object(validated))
+}
+
+/// Flat settings whitelist. No freeform nested objects, executable paths,
+/// credentials, quota provider configs, or arbitrary storage operations.
+fn mcp_setting_writable(path: &str) -> Option<bool> {
+    match path {
+        "general.autoGitFetchEnabled"
+        | "general.autoGitFetchIntervalMinutes"
+        | "terminal.fontSize"
+        | "editor.autosaveEnabled"
+        | "editor.tabSize" => Some(true),
+        "general.confirmProjectRemoval"
+        | "general.confirmWorkspaceRemoval"
+        | "general.autoArchiveWorkspacesAfterDays" => Some(false),
+        _ => None,
+    }
+}
+
+fn mcp_setting_value_valid(path: &str, value: &Value) -> bool {
+    match path {
+        "general.autoGitFetchEnabled"
+        | "editor.autosaveEnabled"
+        | "general.confirmProjectRemoval"
+        | "general.confirmWorkspaceRemoval" => value.is_boolean(),
+        "general.autoGitFetchIntervalMinutes" => {
+            value.as_u64().is_some_and(|v| (1..=60).contains(&v))
+        }
+        "editor.tabSize" => value.as_u64().is_some_and(|v| (1..=16).contains(&v)),
+        "general.autoArchiveWorkspacesAfterDays" => value.as_u64().is_some_and(|v| v <= 36_500),
+        "terminal.fontSize" => value
+            .as_f64()
+            .is_some_and(|v| v.is_finite() && (8.0..=48.0).contains(&v)),
+        _ => false,
+    }
 }
 
 #[cfg(test)]
@@ -464,6 +559,69 @@ mod tests {
             Some(&json!({"relativePath":"src/main.rs","shell":"cmd"}))
         )
         .is_err());
+        assert!(validate_ui_arguments(
+            "get_setting",
+            Some(&json!({
+                "path":"terminal.fontSize",
+            }))
+        )
+        .is_ok());
+        assert!(validate_ui_arguments(
+            "update_setting",
+            Some(&json!({
+                "path":"terminal.fontSize", "value":16, "expectedValue":13,
+            }))
+        )
+        .is_ok());
+        assert!(validate_ui_arguments(
+            "update_setting",
+            Some(&json!({
+                "path":"terminal.fontSize", "value":100, "expectedValue":13,
+            }))
+        )
+        .is_err());
+        assert!(validate_ui_arguments(
+            "update_setting",
+            Some(&json!({
+                "path":"general.autoGitFetchIntervalMinutes", "value":0, "expectedValue":5,
+            }))
+        )
+        .is_err());
+        assert!(validate_ui_arguments(
+            "update_setting",
+            Some(&json!({
+                "path":"general.confirmProjectRemoval", "value":false,"expectedValue":true,
+            }))
+        )
+        .is_err());
+        assert!(validate_ui_arguments(
+            "get_setting",
+            Some(&json!({
+                "path":"agents.quotas",
+            }))
+        )
+        .is_err());
+        assert!(validate_ui_arguments(
+            "update_setting",
+            Some(&json!({
+                "path":"terminal.fontSize","value":14,"expectedValue":13,"danger":"shell",
+            }))
+        )
+        .is_err());
+        assert!(validate_ui_arguments(
+            "open_settings",
+            Some(&json!({
+                "sectionId":"terminal",
+            }))
+        )
+        .is_ok());
+        assert!(validate_ui_arguments(
+            "open_settings",
+            Some(&json!({
+                "sectionId":"secrets",
+            }))
+        )
+        .is_err());
     }
 
     #[test]
@@ -475,6 +633,8 @@ mod tests {
             created: Instant::now(),
             status: "accepted",
             tab_id: None,
+            setting_path: None,
+            setting_value: None,
             error_code: None,
         };
         assert_eq!(receipt.report()["applied"], false);
@@ -499,6 +659,8 @@ mod tests {
                 created: Instant::now(),
                 status: "accepted",
                 tab_id: None,
+                setting_path: None,
+                setting_value: None,
                 error_code: None,
             },
         );

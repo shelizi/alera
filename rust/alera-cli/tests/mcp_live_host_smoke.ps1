@@ -227,11 +227,11 @@ try {
         throw 'MCP initialization failed'
     }
     $listing = @($responses | Where-Object { $_.id -eq 2 })[0]
-    if ($listing.result.tools.Count -ne 14) {
-        throw "Expected 14 tools (8 read-only, 6 guarded UI/Agent), found $($listing.result.tools.Count)"
+    if ($listing.result.tools.Count -ne 18) {
+        throw "Expected 18 tools (10 read-only, 8 guarded UI/Agent/Settings), found $($listing.result.tools.Count)"
     }
-    if (@($listing.result.tools | Where-Object { $_.annotations.readOnlyHint -eq $true }).Count -ne 8) {
-        throw 'Expected eight read-only tools'
+    if (@($listing.result.tools | Where-Object { $_.annotations.readOnlyHint -eq $true }).Count -ne 10) {
+        throw 'Expected ten read-only tools'
     }
     $projects = Assert-McpResult -Responses $responses -Id 3 -IsError $false
     if (@($projects.structuredContent.items | Where-Object { $_.id -eq $projectId }).Count -ne 1) {
@@ -314,7 +314,7 @@ try {
     $null = Assert-McpResult -Responses $invalid -Id 10 -IsError $true
 
     Write-Output 'PASS isolated Host online and authenticated'
-    Write-Output 'PASS MCP stdio initialize + 8 read-only and 6 guarded UI/Agent tool descriptions'
+    Write-Output 'PASS MCP stdio initialize + 10 read-only and 8 guarded UI/Agent/Settings tool descriptions'
     Write-Output 'PASS UI, Agent focus, message and receipt tools fail closed without Host-issued PTY capability'
     Write-Output 'PASS Host-backed projects, workspaces, tabs, file search, live Agent inventory'
     Write-Output 'PASS Host-injected Agent activity + bounded terminal output'

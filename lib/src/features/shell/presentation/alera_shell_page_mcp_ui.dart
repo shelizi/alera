@@ -45,8 +45,16 @@ extension _AleraShellMcpUi on _AleraShellPageBodyState {
     if (id is! String || id.isEmpty || !mounted) return;
     String? tabId;
     String? errorCode;
+    Object? settingValue;
     try {
-      tabId = await _applyMcpUiCommand(command);
+      if (command['action'] == 'get_setting' ||
+          command['action'] == 'update_setting') {
+        settingValue = await _applyMcpSettingCommand(command);
+      } else if (command['action'] == 'open_settings') {
+        await _mcpOpenSettingsDialog(command);
+      } else {
+        tabId = await _applyMcpUiCommand(command);
+      }
     } on _McpUiFailure catch (error) {
       errorCode = error.code;
     } catch (_) {
@@ -60,6 +68,8 @@ extension _AleraShellMcpUi on _AleraShellPageBodyState {
           'requestId': id,
           'applied': errorCode == null,
           if (tabId != null && errorCode == null) 'tabId': tabId,
+          if (settingValue != null && errorCode == null)
+            'settingValue': settingValue,
           if (errorCode != null) 'errorCode': errorCode,
         },
       );
@@ -68,6 +78,65 @@ extension _AleraShellMcpUi on _AleraShellPageBodyState {
       // complete by the UI. The MCP caller will receive its Host-side error.
       Logger('AleraMcpUi').fine('MCP UI command receipt could not be sent.');
     }
+  }
+
+  Future<Object> _applyMcpSettingCommand(Map<String, Object?> command) async {
+    if (!mounted || command['windowId'] != _mcpWindowId) {
+      throw const _McpUiFailure('ui_not_ready');
+    }
+    final args = command['arguments'];
+    if (args is! Map || args['path'] is! String) {
+      throw const _McpUiFailure('setting_invalid');
+    }
+    final path = args['path'] as String;
+    final controller = ref.read(settingsControllerProvider.notifier);
+    try {
+      if (command['action'] == 'get_setting') {
+        return controller.readMcpSetting(path);
+      }
+      if (!args.containsKey('expectedValue') || !args.containsKey('value')) {
+        throw const _McpUiFailure('setting_invalid');
+      }
+      final actual = await controller.updateMcpSetting(
+        path: path,
+        expectedValue: args['expectedValue'],
+        value: args['value'],
+      );
+      if (!mounted ||
+          mcpSettingValue(ref.read(settingsControllerProvider), path) !=
+              actual) {
+        throw const _McpUiFailure('ui_not_ready');
+      }
+      return actual;
+    } on ArgumentError {
+      throw const _McpUiFailure('setting_invalid');
+    } on StateError catch (error) {
+      if (error.toString().contains('mcp_setting_conflict')) {
+        throw const _McpUiFailure('setting_conflict');
+      }
+      rethrow;
+    }
+  }
+
+  Future<void> _mcpOpenSettingsDialog(Map<String, Object?> command) async {
+    if (!mounted || command['windowId'] != _mcpWindowId) {
+      throw const _McpUiFailure('ui_not_ready');
+    }
+    final args = command['arguments'];
+    final section = args is Map ? args['sectionId'] : null;
+    if (section is! String ||
+        !<String>{
+          'application',
+          'terminal',
+          'editor',
+          'agents',
+          'agentProfiles',
+        }.contains(section)) {
+      throw const _McpUiFailure('setting_invalid');
+    }
+    unawaited(openSettingsDialog(context, initialSectionId: section));
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted) throw const _McpUiFailure('ui_not_ready');
   }
 
   Future<String?> _applyMcpUiCommand(Map<String, Object?> command) async {

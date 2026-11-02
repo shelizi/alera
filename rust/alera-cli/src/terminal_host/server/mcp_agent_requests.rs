@@ -218,7 +218,6 @@ mod tests {
     };
     use crate::terminal_host::session::Session;
 
-
     fn fixture() -> HashMap<String, Session> {
         let mut foreign = Session::driver_test_stub("foreign", 80, 24);
         foreign.workspace_id = "other-workspace".into();
@@ -398,6 +397,66 @@ mod tests {
                 .await
                 .is_err(),
             "stopped caller cannot inspect old receipts"
+        );
+    }
+
+    #[tokio::test]
+    async fn host_replacement_and_pty_respawn_never_accept_old_agent_capability() {
+        let dir = tempfile::tempdir().unwrap();
+        let (first_client, _) = ClientHandle::test_channels();
+        let mut before = test_actor(
+            &dir,
+            HashMap::from([(1, local_client(first_client))]),
+            fixture(),
+        )
+        .await;
+        let first_token = before.mcp_ui.mint_token("sender");
+        let old_proof = proof(&first_token);
+        assert!(before
+            .handle_mcp_agent_request(1, "agentControl.scope", &old_proof)
+            .await
+            .is_ok());
+        // Replace the whole ServerActor while keeping the same RuntimeStore
+        // directory and session handle: in-memory capability is NOT persisted.
+        drop(before);
+        let (next_client, _) = ClientHandle::test_channels();
+        let mut replacement = test_actor(
+            &dir,
+            HashMap::from([(1, local_client(next_client))]),
+            fixture(),
+        )
+        .await;
+        assert!(
+            replacement
+                .handle_mcp_agent_request(1, "agentControl.scope", &old_proof)
+                .await
+                .is_err(),
+            "Host restart must reject the previous token"
+        );
+        let new_token = replacement.mcp_ui.mint_token("sender");
+        assert_ne!(
+            new_token, first_token,
+            "PTY respawn must rotate the capability"
+        );
+        let new_proof = proof(&new_token);
+        assert!(replacement
+            .handle_mcp_agent_request(1, "agentControl.scope", &new_proof)
+            .await
+            .is_ok());
+        assert!(
+            replacement
+                .handle_mcp_agent_request(1, "agentControl.scope", &old_proof)
+                .await
+                .is_err(),
+            "Old token must remain unusable after fresh PTY minted one"
+        );
+        replacement.mcp_ui.revoke("sender");
+        assert!(
+            replacement
+                .handle_mcp_agent_request(1, "agentControl.scope", &new_proof)
+                .await
+                .is_err(),
+            "PTY termination revokes the currently valid token"
         );
     }
 }

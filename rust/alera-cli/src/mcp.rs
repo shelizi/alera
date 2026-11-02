@@ -347,6 +347,75 @@ fn tool_definitions() -> Vec<Value> {
             }, "required": ["messageId"], "additionalProperties": false},
             "annotations": {"readOnlyHint": true}
         }),
+        json!({
+            "name": "alera.list_settings",
+            "description": "Discover supported, strictly typed Alera settings including ownership and write limits. Sensitive settings are excluded.",
+            "inputSchema": {"type": "object", "properties": {
+                "query": {"type": "string"},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 100}
+            }, "additionalProperties": false},
+            "annotations": {"readOnlyHint": true}
+        }),
+        json!({
+            "name": "alera.get_setting",
+            "description": "Read one allowlisted non-sensitive setting from the live Alera Flutter SettingsController with a Host-verified Agent capability.",
+            "inputSchema": {"type": "object", "properties": {
+                "path": {"type": "string", "minLength": 1},
+                "windowId": {"type": "string"}
+            }, "required": ["path"], "additionalProperties": false},
+            "annotations": {"readOnlyHint": true}
+        }),
+        json!({
+            "name": "alera.update_setting",
+            "description": "Update one allowlisted safe setting through its real Alera UI settings owner; requires expectedValue compare-and-set and readback confirmation. Rejects unsafe/secret options.",
+            "inputSchema": {"type": "object", "properties": {
+                "path": {"type": "string", "minLength": 1},
+                "value": {"type": ["boolean", "integer", "number"]},
+                "expectedValue": {"type": ["boolean", "integer", "number"]},
+                "windowId": {"type": "string"}
+            }, "required": ["path", "value", "expectedValue"], "additionalProperties": false},
+            "annotations": {"readOnlyHint": false}
+        }),
+        json!({
+            "name": "alera.open_settings",
+            "description": "Open the existing Alera settings dialog at an allowed section and confirm the Flutter UI rendered it.",
+            "inputSchema": {"type": "object", "properties": {
+                "sectionId": {"type": "string", "enum": ["application", "terminal", "editor", "agents", "agentProfiles"]},
+                "windowId": {"type": "string"}
+            }, "additionalProperties": false},
+            "annotations": {"readOnlyHint": false}
+        }),
+    ]
+}
+
+/// Only explicitly reviewed non-secret settings are discoverable over MCP.
+/// Host and Flutter each independently enforce the exact path/type allowlist.
+fn mcp_settings_catalog() -> Vec<Value> {
+    vec![
+        json!({"path":"general.autoGitFetchEnabled",
+            "owner":"localOnlyUi","sectionId":"application","type":"boolean",
+            "writable":true,"default":true}),
+        json!({"path":"general.autoGitFetchIntervalMinutes",
+            "owner":"localOnlyUi","sectionId":"application","type":"integer",
+            "minimum":1,"maximum":60,"writable":true,"default":5}),
+        json!({"path":"terminal.fontSize",
+            "owner":"portableConfiguration","sectionId":"terminal","type":"number",
+            "minimum":8,"maximum":48,"writable":true,"default":13}),
+        json!({"path":"editor.autosaveEnabled",
+            "owner":"portableConfiguration","sectionId":"editor","type":"boolean",
+            "writable":true,"default":false}),
+        json!({"path":"editor.tabSize",
+            "owner":"portableConfiguration","sectionId":"editor","type":"integer",
+            "minimum":1,"maximum":16,"writable":true,"default":4}),
+        json!({"path":"general.confirmProjectRemoval",
+            "owner":"runtimeOperational+portableConfiguration","sectionId":"application",
+            "type":"boolean","writable":false,"default":true}),
+        json!({"path":"general.confirmWorkspaceRemoval",
+            "owner":"runtimeOperational+portableConfiguration","sectionId":"application",
+            "type":"boolean","writable":false,"default":true}),
+        json!({"path":"general.autoArchiveWorkspacesAfterDays",
+            "owner":"runtimeOperational+portableConfiguration","sectionId":"application",
+            "type":"integer","writable":false,"default":30}),
     ]
 }
 
@@ -367,6 +436,10 @@ fn supported_tool(name: &str) -> bool {
             | "alera.focus_agent"
             | "alera.send_agent_message"
             | "alera.get_agent_message_status"
+            | "alera.list_settings"
+            | "alera.get_setting"
+            | "alera.update_setting"
+            | "alera.open_settings"
     )
 }
 
@@ -401,6 +474,22 @@ async fn execute_tool_connected(
         .as_mut()
         .ok_or_else(|| "Alera runtime host is not running; open Alera first".to_string())?;
     match name {
+        "alera.list_settings" => {
+            let query = optional_str(args, "query")?.unwrap_or_default();
+            let limit = limit(args)?;
+            let items = mcp_settings_catalog();
+            let filtered = items
+                .iter()
+                .filter(|item| matches_query(item, &query, &["path", "owner", "type", "sectionId"]))
+                .collect::<Vec<_>>();
+            let count = filtered.len();
+            Ok(json!({
+                "kind": "settingsCatalog",
+                "items": filtered.into_iter().take(limit).collect::<Vec<_>>(),
+                "totalMatches": count,
+                "truncated": count > limit,
+            }))
+        }
         "alera.list_projects" => {
             let limit = limit(args)?;
             let query = optional_str(args, "query")?.unwrap_or_default();
@@ -502,7 +591,10 @@ async fn execute_tool_connected(
         | "alera.reveal_file"
         | "alera.open_git_graph"
         | "alera.compare_branches"
-        | "alera.focus_agent" => execute_ui_tool(client, name, args).await,
+        | "alera.focus_agent"
+        | "alera.get_setting"
+        | "alera.update_setting"
+        | "alera.open_settings" => execute_ui_tool(client, name, args).await,
         "alera.send_agent_message" => {
             let (session, workspace, capability) = agent_identity(client).await?;
             let to_handle = required_str(args, "toHandle")?;
@@ -635,6 +727,9 @@ async fn execute_ui_tool(
         "alera.open_git_graph" => "open_git_graph",
         "alera.compare_branches" => "compare_branches",
         "alera.focus_agent" => "focus_agent",
+        "alera.get_setting" => "get_setting",
+        "alera.update_setting" => "update_setting",
+        "alera.open_settings" => "open_settings",
         _ => return Err("Unknown MCP UI tool".to_string()),
     };
     let mut arguments = args.as_object().cloned().unwrap_or_default();
@@ -681,6 +776,24 @@ async fn execute_ui_tool(
         match status["status"].as_str() {
             Some("accepted") => continue,
             Some("applied") if status["applied"] == true => {
+                if matches!(action, "get_setting" | "update_setting") {
+                    let path = required_str(args, "path")?;
+                    if status["settingPath"] != path || status["settingValue"].is_null() {
+                        return Err("Alera Host did not acknowledge the requested setting".into());
+                    }
+                    if action == "update_setting"
+                        && !mcp_setting_values_equal(&status["settingValue"], &args["value"])
+                    {
+                        return Err(
+                            "Alera setting readback differs from the requested value".into()
+                        );
+                    }
+                    return Ok(json!({
+                        "kind":"setting","path":path,
+                        "value":status["settingValue"],
+                        "status":"applied",
+                    }));
+                }
                 return Ok(json!({
                     "kind": "uiOperation", "action": action, "workspaceId": workspace,
                     "requestId": request_id, "status": "applied",
@@ -696,6 +809,17 @@ async fn execute_ui_tool(
             _ => return Err("Invalid Alera UI operation status".to_string()),
         }
     }
+}
+
+/// Flutter stores numeric terminal settings as double, whereas a caller can
+/// send integral JSON (16). The two finite numeric values are equivalent;
+/// booleans and all other types still compare exactly.
+fn mcp_setting_values_equal(actual: &Value, expected: &Value) -> bool {
+    actual == expected
+        || actual
+            .as_f64()
+            .zip(expected.as_f64())
+            .is_some_and(|(a, b)| a.is_finite() && b.is_finite() && a == b)
 }
 
 /// Validates a Host-minted per-PTY proof before any Agent write or UI action.
@@ -750,6 +874,10 @@ fn check_keys(tool: &str, args: &Value) -> Result<(), String> {
         ],
         "alera.compare_branches" => &["windowId", "gitDiffRoot", "baseRef", "headRef"],
         "alera.focus_agent" => &["handle", "windowId"],
+        "alera.list_settings" => &["query", "limit"],
+        "alera.get_setting" => &["path", "windowId"],
+        "alera.update_setting" => &["path", "value", "expectedValue", "windowId"],
+        "alera.open_settings" => &["sectionId", "windowId"],
         "alera.search_agents" => &["query", "limit"],
         "alera.get_agent_activity" => &["handle"],
         "alera.read_agent_output" => &["handle", "cursor", "maxBytes"],
@@ -1095,13 +1223,13 @@ mod tests {
         .unwrap();
         assert_eq!(listed["id"], "list");
         let tools = listed["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 14);
+        assert_eq!(tools.len(), 18);
         assert_eq!(
             tools
                 .iter()
                 .filter(|tool| tool["annotations"]["readOnlyHint"] == true)
                 .count(),
-            8
+            10
         );
         assert!(tools
             .iter()
@@ -1143,6 +1271,14 @@ mod tests {
         assert!(supported_tool("alera.focus_agent"));
         assert!(supported_tool("alera.get_agent_message_status"));
         assert!(!supported_tool("alera.send_agent_input"));
+        for name in [
+            "alera.list_settings",
+            "alera.get_setting",
+            "alera.update_setting",
+            "alera.open_settings",
+        ] {
+            assert!(supported_tool(name), "{name}");
+        }
     }
 
     #[test]
@@ -1164,6 +1300,32 @@ mod tests {
             &json!({"handle":"agent", "tabId":"foreign-tab"}),
         )
         .is_err());
+        assert!(check_keys(
+            "alera.update_setting",
+            &json!({
+                "path":"terminal.fontSize", "value":16, "expectedValue":13,
+                "secret":"forbidden",
+            })
+        )
+        .is_err());
+        let catalog = mcp_settings_catalog();
+        assert_eq!(catalog.len(), 8);
+        assert!(catalog
+            .iter()
+            .all(|entry| entry["path"].is_string() && entry["owner"].is_string()));
+        assert!(catalog.iter().all(|entry| {
+            let path = entry["path"].as_str().unwrap();
+            !path.contains("quota") && !path.contains("token") && !path.contains("executable")
+        }));
+    }
+
+    #[test]
+    fn settings_readback_accepts_equivalent_finite_numbers_only() {
+        assert!(mcp_setting_values_equal(&json!(16.0), &json!(16)));
+        assert!(mcp_setting_values_equal(&json!(13), &json!(13.0)));
+        assert!(!mcp_setting_values_equal(&json!(16.5), &json!(16)));
+        assert!(!mcp_setting_values_equal(&json!(true), &json!(1)));
+        assert!(!mcp_setting_values_equal(&json!("16"), &json!(16)));
     }
 
     #[test]
