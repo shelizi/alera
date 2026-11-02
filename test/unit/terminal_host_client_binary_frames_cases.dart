@@ -25,6 +25,35 @@ Future<SocketTerminalHostClient> _binaryClient(
 }
 
 void _registerTerminalHostClientBinaryFrameTests() {
+  test('Host MCP UI command survives runtime event allowlist and reaches Flutter listeners', () async {
+    final server = await _TerminalHostTestServer.start();
+    addTearDown(server.dispose);
+    final client = await _binaryClient(server, advertiseCapability: false);
+    await client.runtimeRequest('status.get');
+    final eventFuture = client.runtimeEvents
+        .where((event) => event.name == 'mcpUiCommand')
+        .first
+        .timeout(const Duration(seconds: 3));
+    server.send(<String, Object?>{
+      'event': 'mcpUiCommand',
+      'payload': <String, Object?>{
+        'requestId': 'request-123',
+        'windowId': 'window-abc',
+        'workspaceId': 'test-workspace',
+        'action': 'open_file',
+        'arguments': <String, Object?>{'relativePath': 'src/deep/needle.dart'},
+      },
+    });
+    final received = await eventFuture;
+    expect(received.payload['requestId'], 'request-123');
+    expect(received.payload['windowId'], 'window-abc');
+    expect(received.payload['action'], 'open_file');
+    expect(received.payload['arguments'], <String, Object?>{
+      'relativePath': 'src/deep/needle.dart',
+    });
+    expect(runtimeHostEventNames.contains('untrustedUiCommand'), isFalse);
+  });
+
   test('a burst of 1500 framed outputs keeps one socket connected', () async {
     final server = await _TerminalHostTestServer.start(
       negotiateBinaryFrames: true,

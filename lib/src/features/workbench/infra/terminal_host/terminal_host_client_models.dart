@@ -337,4 +337,7 @@ const Set<String> runtimeHostEventNames = <String>{
   'agentPresenceChanged',
   'codexThreadChanged',
   'codexServerChanged',
+  // Host-authorized MCP UI requests must reach the mounted Flutter Shell.
+  // This only delivers the request; it does not imply visual application.
+  'mcpUiCommand',
 };

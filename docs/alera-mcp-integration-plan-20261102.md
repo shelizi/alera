@@ -6,10 +6,12 @@
 
 **Base HEAD:** `29781ab2545459a010095e700a19c7c49f952355`
 
-**Status:** Step 1 verified; Step 2 Host/Flutter bridge and four UI tools
-implemented in the isolated branch, with Host unit tests and Flutter static
-analysis passing. **Step 2 is not accepted** until real desktop UI E2E and
-multi-window failure/reuse cases pass. Steps 3–4 pending. No feature released.
+**Status:** Steps 1 and 2 verified. **Step 2 Windows desktop accepted** on
+2026-11-02: actual Alera Agent PTY → MCP stdio → Host → mounted Flutter UI,
+12/12 E2E assertions passing, actual Git Graph/branch Diff screens captured.
+The two-client window-routing test uses one real Flutter window plus a test
+App client; two simultaneous real Flutter windows and macOS/Linux belong to
+final platform acceptance. Steps 3–4 pending. No feature released.
 
 ## Intent / fixed scope
 
@@ -85,11 +87,12 @@ operations report separate `accepted` and `applied` acknowledgments.
       Workbench services. Explorer ACK comes only after its tree controller
       has actually consumed the reveal/scroll request.
 - [x] Initial **read-only** workspace file-name/relative-path search with
-      `ignore` walker and scan bounds; full UI navigation remains pending.
-- [ ] Verify multi-window target, missing window, invalid path/ref and repeated
-      open (reuse existing Tab) in a **running Flutter desktop app**. Host
-      admission/denial and trusted App ACK are unit tested, but no real UI E2E
-      has been completed.
+      `ignore` walker and scan bounds; UI navigation is now implemented.
+- [x] Verify missing/unknown window, two-client ambiguous routing, explicitly
+      selected real window, invalid path/ref, and repeated open (reuse the
+      same Tab ID) from a **running Windows Flutter desktop app**, using a
+      second synthetic App connection for ambiguity tests. No second real
+      Flutter desktop window was started for this phase.
 - **Exit:** real UI displays selected target; receipt acknowledges the UI
   action, not just database writes.
 
@@ -149,8 +152,9 @@ operations report separate `accepted` and `applied` acknowledgments.
   cross-Workspace, foreign Agent, stale handle and bound violations denied.
   Script enforces shutdown and cleanup: zero test runtime directories remain.
   The user's normal Alera runtime remained stopped.
-- **Limitations:** No real Flutter UI or Agent Profile injection has been
-  exercised; no macOS/Linux smoke. The existing same-Workspace check is a
+- **Step 1 limitations at its original acceptance:** No real Flutter UI or
+  Agent Profile injection had been exercised; no macOS/Linux smoke.
+  The existing same-Workspace check is a
   useful accidental-scope guard, **not** a cryptographic authorization
   boundary, so do not enable mutating or cross-Workspace operations.
 - 2026-11-02: Step 2 bridge implemented in the isolated branch:
@@ -176,10 +180,61 @@ operations report separate `accepted` and `applied` acknowledgments.
   submodules were checked out at pinned commits **only inside this
   worktree** and `flutter pub get --offline` succeeded. Project dependency
   manifests and the original dirty `main` were not changed.
-- **Step 2 still pending:** inspect actual MCP commands in a running Flutter
-  desktop process, visually verify Git Graph / branch-compare selection,
-  repeated-open Tab reuse and multi-window targeting; these are not covered
-  by the protocol/Widget tests above.
+- 2026-11-02: **Step 2 Windows desktop acceptance PASS (12/12)**. Built an
+  isolated debug GUI with `ALERA_E2E_DESKTOP=1` and an explicit compile-time
+  `ALERA_E2E_SUPPORT_DIR`, then initialized only its own Drift/Host SQLite.
+  `tool/testing/mcp_ui_desktop_fixture.py` created a disposable workspace
+  and nested Git repository with `main` / `feature/demo` commits. A real
+  Host-created Agent PTY (not a manually forged environment) invoked the
+  MCP server through `tool/testing/mcp_ui_agent_desktop_e2e.py`.
+  All 12 cases passed: open, repeat-open Tab ID reuse, Explorer reveal,
+  Git Graph, branch compare, missing file denial, traversal denial,
+  invalid Git ref denial, unknown-window denial, ambiguous two-client denial,
+  explicitly routed real window, and single-window routing restoration.
+- The **first real E2E found a product bug**: `uiControl.request` was
+  accepted but Flutter filtered `mcpUiCommand` out of
+  `runtimeHostEventNames`; MCP correctly reported `ui_timeout`. Added
+  `mcpUiCommand` to the event allowlist and a socket-level Flutter
+  regression that verifies the event reaches `runtimeEvents` while unknown
+  events remain filtered. Rebuilt the real Windows debug executable, reran
+  12/12 passing. The earlier Windows kernel compiler also found and fixed
+  a missing `runtimeHostClientProvider` import in `alera_shell_page.dart`.
+- Visual proof captured **only from the isolated E2E PID** under ignored
+  `build/windows/shared_gui_ninja/diagnostics/`:
+  `mcp-desktop-12passed.png` shows the reopened `needle.dart` and Git Graph
+  Tab; `mcp-git-compare-applied.png` shows the `main ... feature/demo`
+  Diff and modified `README.md`; `mcp-git-graph-applied.png` shows the
+  commit graph with both actual test refs and their two commits.
+- Host multi-window authorization tests **5/5 PASS**, including wrong-window
+  ACK denial; Flutter socket event-routing regression PASS; earlier MCP
+  protocol **8/8 PASS** and Explorer Widget/reveal-controller tests PASS.
+  No production profile, unrelated Alera GUI, or dirty `main` was touched.
+  **Remaining final acceptance:** two simultaneous *real* Flutter windows,
+  macOS/Linux/platform smoke, Agent Profile MCP auto-injection and settings
+  ownership. These remain in Steps 3–4, not additional stages in Step 2.
+
+### Reproduce Step 2 Windows desktop acceptance (disposable profile only)
+
+1. Compile the Windows debug app in the MCP worktree with the existing
+   `tool/multiview_poc/build_alera_in_worktree_debug.cmd` after generating
+   Flutter `--dart-define` for `ALERA_E2E_DESKTOP=1`, the absolute
+   `ALERA_E2E_SUPPORT_DIR` under this worktree's ignored
+   `build/windows/shared_gui_ninja/e2e_support`, and
+   `ALERA_E2E_AUTO_SELECT_TERMINAL=true`. Use the current branch's Rust
+   sidecar; do **not** point it at the normal Alera runtime.
+2. Start and quit the isolated `runner/Debug/alera-dev.exe` once to create
+   the two test databases. Run
+   `python tool/testing/mcp_ui_desktop_fixture.py prepare`.
+3. Restart only the isolated app, then run
+   `python tool/testing/mcp_ui_desktop_fixture.py spawn-agent`.
+   Run `mcp_ui_agent_desktop_e2e.py` **inside that live test Agent PTY**,
+   passing the isolated Host `--runtime`, bundled `--cli`, and a result
+   `--result` under ignored `build/windows/shared_gui_ninja/`.
+   The test does not print or persist the Host-issued PTY capability.
+4. Expect `E2E_SUMMARY 12 passed` and the same count in the JSON result.
+   Optionally replay `--focus git_graph` / `--focus branch_compare` inside
+   the same test PTY to inspect the real displayed Tabs. Stop only the
+   isolated test Terminal/GUI when finished; never terminate another Alera.
 
 ## Current usage (unreleased alpha)
 

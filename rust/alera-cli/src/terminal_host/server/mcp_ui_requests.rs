@@ -590,4 +590,116 @@ mod tests {
             .handle_mcp_ui_request(2, "uiControl.status", &status)
             .is_err());
     }
+
+    #[tokio::test]
+    async fn explicit_window_target_delivers_only_to_that_app_and_ambiguity_fails_closed() {
+        let dir = tempfile::tempdir().unwrap();
+        let (first_events, mut first_output) = mpsc::unbounded_channel();
+        let (first_pty, _) = mpsc::channel(4);
+        let (second_events, mut second_output) = mpsc::unbounded_channel();
+        let (second_pty, _) = mpsc::channel(4);
+        let (cli_events, _cli_output) = mpsc::unbounded_channel();
+        let (cli_pty, _) = mpsc::channel(4);
+        let mut actor = test_actor(
+            &dir,
+            HashMap::from([
+                (
+                    10,
+                    ClientState::local(ClientHandle::new(first_events, first_pty), true),
+                ),
+                (
+                    20,
+                    ClientState::local(ClientHandle::new(second_events, second_pty), true),
+                ),
+                (
+                    30,
+                    ClientState::local(ClientHandle::new(cli_events, cli_pty), false),
+                ),
+            ]),
+            HashMap::from([(
+                "handle".to_string(),
+                Session::driver_test_stub("handle", 80, 24),
+            )]),
+        )
+        .await;
+        let token = actor.mcp_ui.mint_token("handle");
+        let mut request = json!({
+            "sessionId":"handle",
+            "workspaceId":"workspace",
+            "capability": token,
+            "action":"open_git_graph",
+            "arguments":{},
+        });
+        assert!(actor
+            .handle_mcp_ui_request(30, "uiControl.request", &request)
+            .is_err());
+        actor
+            .handle_mcp_ui_request(10, "uiControl.register", &json!({"windowId":"first"}))
+            .unwrap();
+        actor
+            .handle_mcp_ui_request(20, "uiControl.register", &json!({"windowId":"second"}))
+            .unwrap();
+        assert!(actor
+            .handle_mcp_ui_request(30, "uiControl.request", &request)
+            .is_err());
+        request["windowId"] = json!("missing");
+        assert!(actor
+            .handle_mcp_ui_request(30, "uiControl.request", &request)
+            .is_err());
+        request["windowId"] = json!("second");
+        let accepted = actor
+            .handle_mcp_ui_request(30, "uiControl.request", &request)
+            .unwrap();
+        assert_eq!(accepted["applied"], false);
+        assert!(
+            first_output.try_recv().is_err(),
+            "untargeted Flutter App received a command"
+        );
+        assert!(
+            second_output.try_recv().is_ok(),
+            "targeted Flutter App did not receive a command"
+        );
+        let id = accepted["requestId"].as_str().unwrap();
+        assert!(
+            actor
+                .handle_mcp_ui_request(
+                    10,
+                    "uiControl.complete",
+                    &json!({
+                        "requestId":id, "applied":true
+                    })
+                )
+                .is_err(),
+            "wrong App must not ACK other window's command"
+        );
+        actor
+            .handle_mcp_ui_request(
+                20,
+                "uiControl.complete",
+                &json!({
+                    "requestId":id, "applied":true, "tabId":"git-history"
+                }),
+            )
+            .unwrap();
+        let mut status = request.clone();
+        status["requestId"] = json!(id);
+        assert_eq!(
+            actor
+                .handle_mcp_ui_request(30, "uiControl.status", &status)
+                .unwrap()["tabId"],
+            "git-history"
+        );
+        assert!(
+            actor
+                .handle_mcp_ui_request(
+                    10,
+                    "uiControl.unregister",
+                    &json!({
+                        "windowId":"second"
+                    })
+                )
+                .is_err(),
+            "cannot unregister another window"
+        );
+    }
 }
