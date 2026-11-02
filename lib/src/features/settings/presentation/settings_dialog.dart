@@ -195,6 +195,7 @@ class _SettingsDialogState extends ConsumerState<SettingsDialog> {
     const aiAssistGroups = <SettingsGroupSpec>[
       SettingsGroupSpec(id: 'generation', title: 'Generation'),
       SettingsGroupSpec(id: 'commitMessage', title: 'Commit Messages'),
+      SettingsGroupSpec(id: 'mergeConflicts', title: 'Merge Conflicts'),
       SettingsGroupSpec(
         id: 'pullRequestDetails',
         title: 'Pull Request Details',

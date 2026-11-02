@@ -31,6 +31,7 @@ class _AiAssistSettingsPaneState extends ConsumerState<AiAssistSettingsPane> {
   static const List<AiAssistOperation> _configuredOperations =
       <AiAssistOperation>[
         AiAssistOperation.commitMessage,
+        AiAssistOperation.mergeConflicts,
         AiAssistOperation.pullRequestDetails,
         AiAssistOperation.readingDiff,
         AiAssistOperation.workspaceIdentity,
@@ -208,16 +209,19 @@ class _AiAssistSettingsPaneState extends ConsumerState<AiAssistSettingsPane> {
     AiAssistSettings settings,
     AiAssistOperation operation,
   ) {
-    final agentType = operation == AiAssistOperation.readingDiff
-        ? readingDiffAgentTypeForSettings(settings)
+    final agentType =
+        (operation == AiAssistOperation.readingDiff ||
+            operation == AiAssistOperation.mergeConflicts)
+        ? restrictedAgentTypeForOperation(settings, operation)
         : settings.agentTypeFor(operation);
     if (agentType == null) {
       return const <Widget>[];
     }
     final model = modelForAgentType(
       agentType,
-      (operation == AiAssistOperation.readingDiff
-              ? readingDiffModelForSettingsType(settings, agentType)
+      ((operation == AiAssistOperation.readingDiff ||
+                  operation == AiAssistOperation.mergeConflicts)
+              ? restrictedModelForSettingsType(settings, operation, agentType)
               : settings.modelForOperation(operation)) ??
           defaultModelIdForAgentType(agentType, settings),
       extraModels: discoveredModelsForAgentType(settings, agentType),
@@ -273,12 +277,14 @@ class _AiAssistSettingsPaneState extends ConsumerState<AiAssistSettingsPane> {
     AiAssistOperation operation,
   ) {
     final promptSettings = settings.promptSettingsFor(operation);
-    final isReadingDiff = operation == AiAssistOperation.readingDiff;
+    final isReadingDiff =
+        (operation == AiAssistOperation.readingDiff ||
+        operation == AiAssistOperation.mergeConflicts);
     final globalSupported = supportsDiffOnlyAiAssistAgentType(
       settings.agentType,
     );
     final agentType = isReadingDiff
-        ? readingDiffAgentTypeForSettings(settings)
+        ? restrictedAgentTypeForOperation(settings, operation)
         : settings.agentTypeFor(operation);
     final effectiveChoice = agentType == null
         ? const AiAssistAgentChoice.custom()
@@ -314,7 +320,9 @@ class _AiAssistSettingsPaneState extends ConsumerState<AiAssistSettingsPane> {
         value: promptChoice,
         allowedAgentTypes: isReadingDiff ? diffOnlyAiAssistAgentTypes : null,
         allowGlobal: !isReadingDiff || globalSupported,
-        allowCustom: operation != AiAssistOperation.speechMessage,
+        allowCustom:
+            operation != AiAssistOperation.speechMessage &&
+            operation != AiAssistOperation.mergeConflicts,
         onChanged: (choice) =>
             unawaited(_selectAgent(choice, operation: operation)),
       ),
@@ -363,7 +371,8 @@ class _AiAssistSettingsPaneState extends ConsumerState<AiAssistSettingsPane> {
       }
       final previousAgentType = settings.agentTypeFor(operation);
       final usesFallback =
-          operation == AiAssistOperation.readingDiff &&
+          (operation == AiAssistOperation.readingDiff ||
+              operation == AiAssistOperation.mergeConflicts) &&
           !supportsDiffOnlyAiAssistAgentType(previousAgentType);
       final selectedAgent = _persistedAgentForChoice(choice);
       final selectedAgentType = choice.isGlobal

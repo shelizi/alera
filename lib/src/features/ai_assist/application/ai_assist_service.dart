@@ -1,4 +1,6 @@
 import 'package:alera/src/features/ai_assist/application/ai_assist_agent_runner.dart';
+import 'package:alera/src/features/ai_assist/application/ai_assist_diff_only_execution.dart';
+import 'package:alera/src/features/ai_assist/application/ai_assist_merge_resolution.dart';
 import 'package:alera/src/features/ai_assist/application/ai_assist_errors.dart';
 import 'package:alera/src/features/ai_assist/application/ai_assist_prompt.dart';
 import 'package:alera/src/features/ai_assist/application/ai_assist_registry.dart';
@@ -15,10 +17,12 @@ class const AiAssistRequest({
   required final String workspacePath,
   required final AiAssistSettings settings,
   this.baseBranch,
+  this.mergeConflict,
   this.headBranch,
 }) {
   /// Required when [operation] is [AiAssistOperation.pullRequestDetails].
   final String? baseBranch;
+  final AiAssistMergeConflictContext? mergeConflict;
 
   /// Optional head branch hint for pull-request prompts.
   final String? headBranch;
@@ -73,12 +77,22 @@ class CliAiAssistService({
       if (_canceled.contains(key)) {
         throw const AiAssistCanceledException();
       }
-      final agentType = request.settings.agentTypeFor(request.operation);
+      final agentType = request.operation == AiAssistOperation.mergeConflicts
+          ? restrictedAgentTypeForOperation(request.settings, request.operation)
+          : request.settings.agentTypeFor(request.operation);
       final model = agentType == null
           ? const AiAssistModel(id: 'custom', label: 'Custom')
           : modelForAgentType(
               agentType,
-              request.settings.modelForOperation(request.operation) ??
+              (request.operation == AiAssistOperation.mergeConflicts
+                      ? restrictedModelForSettingsType(
+                          request.settings,
+                          request.operation,
+                          agentType,
+                        )
+                      : request.settings.modelForOperation(
+                          request.operation,
+                        )) ??
                   defaultModelIdForAgentType(agentType, request.settings),
               extraModels: discoveredModelsForAgentType(
                 request.settings,
@@ -98,6 +112,9 @@ class CliAiAssistService({
             request.operation,
             model.id,
           ),
+          accessPolicy: request.operation == AiAssistOperation.mergeConflicts
+              ? AgentTaskAccessPolicy.diffOnly
+              : AgentTaskAccessPolicy.repositoryReadOnly,
           cleanOutput: request.operation == AiAssistOperation.commitMessage
               ? cleanGeneratedCommitMessage
               : cleanGeneratedText,
@@ -140,6 +157,15 @@ class CliAiAssistService({
         customInstructions: promptInstructionsFor(
           request.settings,
           .pullRequestDetails,
+        ),
+      ),
+      AiAssistOperation.mergeConflicts => buildMergeConflictsPrompt(
+        context:
+            request.mergeConflict ??
+            (throw const AiAssistException('Missing selected merge conflict.')),
+        customInstructions: promptInstructionsFor(
+          request.settings,
+          .mergeConflicts,
         ),
       ),
       AiAssistOperation.branchName ||

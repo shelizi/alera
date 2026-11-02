@@ -411,6 +411,19 @@ const List<SettingsSearchEntry> aiAssistSearchEntries = <SettingsSearchEntry>[
     groupId: 'commitMessage',
   ),
   SettingsSearchEntry(
+    title: 'AI Assist Merge Conflicts',
+    description: 'Choose the agent, model, reasoning and instructions for merge resolution suggestions.',
+    keywords: <String>[
+      'merge',
+      'conflict',
+      'resolution',
+      'llm',
+      'model',
+      'instructions',
+    ],
+    groupId: 'mergeConflicts',
+  ),
+  SettingsSearchEntry(
     title: 'AI Assist Pull Request Details',
     description: 'Choose the agent, model, reasoning and instructions for pull request details.',
     keywords: <String>[

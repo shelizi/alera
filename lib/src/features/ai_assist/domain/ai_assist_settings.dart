@@ -6,6 +6,7 @@ part 'ai_assist_settings.mapper.dart';
 @MappableEnum()
 enum AiAssistOperation(this.key) {
   commitMessage('commitMessage'),
+  mergeConflicts('mergeConflicts'),
   pullRequestDetails('pullRequestDetails'),
   branchName('branchName'),
   readingDiff('readingDiff'),
@@ -17,6 +18,7 @@ enum AiAssistOperation(this.key) {
 
   String get label => switch (this) {
     AiAssistOperation.commitMessage => 'Commit Messages',
+    AiAssistOperation.mergeConflicts => 'Merge Conflicts',
     AiAssistOperation.pullRequestDetails => 'Pull Request Details',
     AiAssistOperation.branchName => 'Branch Names',
     AiAssistOperation.readingDiff => 'Reading Diffs',
