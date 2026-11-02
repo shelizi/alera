@@ -135,6 +135,16 @@ fn merge_conflict_is_left_for_resolution_and_blocks_non_clean_operations() {
         super::merge_conflicted_paths(path_str(&directory)).expect("list conflicts"),
         vec!["README.md".to_string()]
     );
+    let preview =
+        super::merge_conflict_preview(path_str(&directory), "README.md").expect("preview");
+    assert_eq!(preview.ours.as_deref(), Some("main\n"));
+    assert_eq!(preview.theirs.as_deref(), Some("feature\n"));
+    assert!(!preview.is_binary);
+    super::resolve_merge_conflict(path_str(&directory), "README.md", true).expect("resolve ours");
+    assert!(super::merge_conflicted_paths(path_str(&directory))
+        .expect("resolved")
+        .is_empty());
+    assert_eq!(read_file(&directory, "README.md"), "main\n");
     let non_clean =
         rebase_onto(path_str(&directory), "main").expect_err("in-progress merge blocks rebase");
     assert_eq!(non_clean.kind, GitErrorKind::Conflict);

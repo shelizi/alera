@@ -10,6 +10,7 @@ void main() {
       AiAssistOperation.values.map((operation) => operation.label),
       <String>[
         'Commit Messages',
+        'Merge Conflicts',
         'Pull Request Details',
         'Branch Names',
         'Reading Diffs',

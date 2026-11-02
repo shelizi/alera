@@ -13,3 +13,58 @@ Future<String?> mergeRef({required String path, required String reference}) =>
       path: path,
       reference: reference,
     );
+
+Future<List<String>> mergeConflictedPaths({required String path}) =>
+    RustLib.instance.api.crateApiGitGitMergeOpsMergeConflictedPaths(path: path);
+
+Future<bool> mergeInProgress({required String path}) =>
+    RustLib.instance.api.crateApiGitGitMergeOpsMergeInProgress(path: path);
+
+Future<GitMergeConflictPreview> mergeConflictPreview({
+  required String path,
+  required String filePath,
+}) => RustLib.instance.api.crateApiGitGitMergeOpsMergeConflictPreview(
+  path: path,
+  filePath: filePath,
+);
+
+Future<void> resolveMergeConflict({
+  required String path,
+  required String filePath,
+  required bool ours,
+}) => RustLib.instance.api.crateApiGitGitMergeOpsResolveMergeConflict(
+  path: path,
+  filePath: filePath,
+  ours: ours,
+);
+
+Future<void> abortMergeInProgress({required String path}) =>
+    RustLib.instance.api.crateApiGitGitMergeOpsAbortMergeInProgress(path: path);
+
+class GitMergeConflictPreview {
+  final String? base;
+  final String? ours;
+  final String? theirs;
+  final bool isBinary;
+
+  const GitMergeConflictPreview({
+    this.base,
+    this.ours,
+    this.theirs,
+    required this.isBinary,
+  });
+
+  @override
+  int get hashCode =>
+      base.hashCode ^ ours.hashCode ^ theirs.hashCode ^ isBinary.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is GitMergeConflictPreview &&
+          runtimeType == other.runtimeType &&
+          base == other.base &&
+          ours == other.ours &&
+          theirs == other.theirs &&
+          isBinary == other.isBinary;
+}

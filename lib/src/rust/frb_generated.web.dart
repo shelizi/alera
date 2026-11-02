@@ -342,6 +342,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   GitIntralineRange dco_decode_git_intraline_range(dynamic raw);
 
   @protected
+  GitMergeConflictPreview dco_decode_git_merge_conflict_preview(dynamic raw);
+
+  @protected
   GitRangeCommit dco_decode_git_range_commit(dynamic raw);
 
   @protected
@@ -1141,6 +1144,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   GitIntralineRange sse_decode_git_intraline_range(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  GitMergeConflictPreview sse_decode_git_merge_conflict_preview(
     SseDeserializer deserializer,
   );
 
@@ -2159,6 +2167,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_git_intraline_range(
     GitIntralineRange self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_git_merge_conflict_preview(
+    GitMergeConflictPreview self,
     SseSerializer serializer,
   );
 

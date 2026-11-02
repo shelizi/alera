@@ -33,7 +33,10 @@ pub use branch_operations::{
 };
 pub use commit_operations::{checkout_commit, reset_to_commit, revert_commit, GitResetMode};
 pub use commit_replay_operations::{cherry_pick_commit, drop_commit, rebase_onto};
-pub use merge_operations::{merge_conflicted_paths, merge_ref};
+pub use merge_operations::{
+    abort_merge_in_progress, merge_conflict_preview, merge_conflicted_paths, merge_in_progress,
+    merge_ref, resolve_merge_conflict, GitMergeConflictPreview,
+};
 pub use remote_operations::{delete_remote_branch, push_tag};
 pub use repository_metadata::{current_branch, is_worktree_clean, repository_remote_url};
 pub use tag_operations::{create_tag, delete_tag};

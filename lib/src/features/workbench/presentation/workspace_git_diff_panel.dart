@@ -45,6 +45,7 @@ import 'package:alera/src/shared/infra/git/git_diff_models.dart';
 import 'package:alera/src/shared/infra/git/git_exception.dart';
 import 'package:alera/src/shared/infra/git/git_history_graph.dart';
 import 'package:alera/src/shared/infra/git/git_providers.dart';
+import 'package:alera/src/features/workbench/presentation/workspace_git_merge_resolution_dialog.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -223,6 +224,14 @@ class _WorkspaceGitDiffPanelState extends ConsumerState<WorkspaceGitDiffPanel> {
 
   void _setPanelState(VoidCallback fn) => setState(fn);
 
+  Future<void> _openMergeResolver() async {
+    await showWorkspaceGitMergeResolutionDialog(
+      context,
+      path: widget.sourceControlScope.path,
+    );
+    if (mounted) await _refresh();
+  }
+
   void _focusFilter() {
     aleraFocusSearchInput(
       focusNode: _filterFocusNode,
@@ -324,6 +333,7 @@ class _WorkspaceGitDiffPanelState extends ConsumerState<WorkspaceGitDiffPanel> {
           onCancelGenerateCommitMessage: _cancelGenerateCommitMessage,
           onFilterChanged: () => setState(() {}),
           onRefresh: () => unawaited(_refresh()),
+          onResolveConflicts: () => unawaited(_openMergeResolver()),
           onClearSourceControlRoot: widget.onClearSourceControlRoot,
           onToggleCollapseAll: () =>
               _toggleAllVisibleNodes(state.asData?.value),

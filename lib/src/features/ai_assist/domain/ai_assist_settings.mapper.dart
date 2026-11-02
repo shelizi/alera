@@ -29,6 +29,7 @@ class AiAssistOperationMapper extends EnumMapper<AiAssistOperation> {
     switch (value) {
       case r'commitMessage':
         return AiAssistOperation.commitMessage;
+      case r'mergeConflicts': return AiAssistOperation.mergeConflicts;
       case r'pullRequestDetails':
         return AiAssistOperation.pullRequestDetails;
       case r'branchName':
@@ -51,6 +52,7 @@ class AiAssistOperationMapper extends EnumMapper<AiAssistOperation> {
     switch (self) {
       case AiAssistOperation.commitMessage:
         return r'commitMessage';
+      case AiAssistOperation.mergeConflicts: return r'mergeConflicts';
       case AiAssistOperation.pullRequestDetails:
         return r'pullRequestDetails';
       case AiAssistOperation.branchName:

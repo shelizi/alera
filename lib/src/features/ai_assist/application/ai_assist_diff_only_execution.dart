@@ -49,20 +49,26 @@ Set<AgentType> aiAssistAgentTypesForModelDiscovery(
 ) => <AgentType>{
   ?settings.agentType,
   for (final operation in operations)
-    if (operation == AiAssistOperation.readingDiff)
-      readingDiffAgentTypeForSettings(settings)
+    if (operation == AiAssistOperation.readingDiff ||
+        operation == AiAssistOperation.mergeConflicts)
+      restrictedAgentTypeForOperation(settings, operation)
     else
       ?settings.agentTypeFor(operation),
 };
 
 AgentType readingDiffAgentTypeForSettings(AiAssistSettings settings) {
-  final prompt = settings.promptSettingsFor(.readingDiff);
+  return restrictedAgentTypeForOperation(settings, .readingDiff);
+}
+
+AgentType restrictedAgentTypeForOperation(
+  AiAssistSettings settings,
+  AiAssistOperation operation,
+) {
+  final prompt = settings.promptSettingsFor(operation);
   final configured = prompt.agentType ?? settings.agentType;
   if (supportsDiffOnlyAiAssistAgentType(configured)) {
     return configured!;
   }
-  // Pick the registered backend that owns restricted-filesystem isolation;
-  // do not duplicate an agent-specific fallback in the common policy.
   return aiAssistCapabilities.values
       .firstWhere(
         (spec) =>
@@ -72,16 +78,24 @@ AgentType readingDiffAgentTypeForSettings(AiAssistSettings settings) {
       .agentType;
 }
 
-String? readingDiffModelForSettingsType(
+String? restrictedModelForSettingsType(
   AiAssistSettings settings,
+  AiAssistOperation operation,
   AgentType agentType,
 ) {
-  final prompt = settings.promptSettingsFor(.readingDiff);
+  final prompt = settings.promptSettingsFor(operation);
   final configuredAgentType = prompt.agentType ?? settings.agentType;
   if (configuredAgentType != agentType) {
     return settings.modelForType(agentType);
   }
   return prompt.model ?? settings.modelForType(agentType);
+}
+
+String? readingDiffModelForSettingsType(
+  AiAssistSettings settings,
+  AgentType agentType,
+) {
+  return restrictedModelForSettingsType(settings, .readingDiff, agentType);
 }
 
 AiAssistDiffOnlyExecution planDiffOnlyAiAssistExecution({

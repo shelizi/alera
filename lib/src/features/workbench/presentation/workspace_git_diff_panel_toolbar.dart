@@ -17,6 +17,7 @@ class const _SourceControlToolbar({
   required final VoidCallback onCancelGenerateCommitMessage,
   required final VoidCallback onFilterChanged,
   required final VoidCallback onRefresh,
+  required final VoidCallback onResolveConflicts,
   required final VoidCallback? onClearSourceControlRoot,
   required final VoidCallback onToggleCollapseAll,
   required final bool canOpenChangesExternally,
@@ -145,6 +146,12 @@ class const _SourceControlToolbar({
             ],
           ),
           const SizedBox(height: AleraTokens.space8),
+          if (hasConflicts)
+            OutlinedButton.icon(
+              onPressed: busy ? null : onResolveConflicts,
+              icon: const Icon(AleraIcons.gitMerge, size: 16),
+              label: Text(context.tr("Resolve Merge Conflicts")),
+            ),
           _CommitMessageField(
             controller: messageController,
             focusNode: messageFocusNode,
