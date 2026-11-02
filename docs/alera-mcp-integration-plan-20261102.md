@@ -15,10 +15,14 @@ argument injection is implemented but **opt-in only (default OFF)**.
 rotation 5/5 PASS**, installed native Codex/Claude CLI parsing and bundled
 MCP stdio 3/3 PASS. **Actual authenticated Codex and Claude model →
 MCP tool call → Host workspace result 2/2 PASS** using a disposable
-Host-issued PTY and transient CLI configuration. Full Alera Managed Profile
-auto-injection, natural Agent collaboration/response, explicit cross-workspace
-grants, macOS/Linux and two-real-Flutter-window platform acceptance remain
-pending. No feature merged, pushed or released.
+Host-issued PTY and transient CLI configuration. **Alera Managed Profile
+auto-launch and MCP argument injection on real Codex/Claude OS processes
+5/5 PASS**, while managed Claude's *model execution* pauses on the normal
+new-folder trust gate. **Actual Claude model → Alera MCP open_file →
+Flutter applied ACK 1/1 PASS**, with the test editor tab visually verified.
+Natural Agent collaboration/response, model-driven settings changes, explicit
+cross-workspace grants, macOS/Linux and two-real-Flutter-window platform
+acceptance remain pending. No feature merged, pushed or released.
 
 ## Intent / fixed scope
 
@@ -172,10 +176,27 @@ operations report separate `accepted` and `applied` acknowledgments.
       2/2 PASS** using `tool/testing/mcp_real_model_agent_e2e.py`. The models
       ran inside the Host-owned PTY with transient MCP CLI flags, not through
       Alera Managed Profile auto-spawn.
-- [ ] Test Managed Profile auto-spawn with real provider, model-driven UI
-      changes/settings notifications, macOS/Linux, two true Flutter windows,
-      cross-workspace grants and final CI/release gates. Do not equate a
-      read-only model tool call with full feature acceptance.
+- [x] Real Windows Host `agentProfile.launch` created **Codex and Claude
+      Managed Profiles** in a disposable Workspace with the Host opt-in
+      environment set. Both live PTYs and both native OS launch command lines
+      contained the per-session Alera MCP config; Codex also spawned a real
+      Alera MCP stdio child. **5/5 PASS** via
+      `tool/testing/mcp_managed_profile_injection_inspect.py`.
+- [x] One actual Claude Code model (in the Host-issued disposable PTY)
+      invoked only `alera.open_file` for `src/deep/needle.dart`. The exact
+      correlated tool result contained `status: applied` and `tabId`;
+      the Windows Flutter editor visibly selected `needle.dart`. **1/1 PASS**,
+      `tool/testing/mcp_real_model_flutter_ui_e2e.py`.
+- [ ] Approve managed Claude's new **disposable** Workspace trust challenge
+      through its normal UI before claiming that *the Managed Profile's own
+      model* completed a tool call. An empty isolated Claude config has no
+      existing OAuth, so the test did not copy credentials, silently approve
+      trust or rewrite the user's Claude config. Managed Codex startup and
+      MCP server process were independently verified.
+- [ ] Model-initiated settings changes/notifications, real Managed Profile
+      Claude model response after trust approval, macOS/Linux, two true
+      Flutter windows, cross-workspace grants and final CI/release gates.
+      Do not equate startup/injection with model task completion.
 - **Exit:** all supported tools have tests, feature-flag or opt-in policy is
   clear, integration passes; only then consider opt-in enablement/merge.
 
@@ -379,6 +400,38 @@ operations report separate `accepted` and `applied` acknowledgments.
   Alera MCP source. These tests do **not** yet verify Alera Managed Profile
   opt-in auto-injection, mutating UI controls, or natural inter-Agent
   conversation completion.
+- 2026-11-02: **Real Windows Managed Profile launch + MCP injection 5/5
+  PASS**. Launched a private Host with
+  `ALERA_MCP_PROFILE_INJECTION=1` under ignored
+  `build/windows/shared_gui_ninja/e2e_host_restart`, declared two
+  `launchMode=managed` Agent Profiles (Codex `sandbox=read-only`;
+  Claude `permissionMode=plan`) and invoked the existing
+  `agentProfile.launch` RPC, not custom or manual Agent CLI commands.
+  Both PTYs ran in the disposable Workspace; Windows native process
+  inspection verified transient Alera MCP arguments for both and an actual
+  MCP stdio child spawned by Codex. Test-only inspection script:
+  `tool/testing/mcp_managed_profile_injection_inspect.py`; sanitized
+  report in ignored
+  `build/windows/shared_gui_ninja/e2e_host_restart/mcp_managed_profile_injection_result.json`.
+  Managed Claude halted at its normal new-folder trust confirmation; the
+  test **did not** approve it, alter global Claude trust settings or copy
+  OAuth into an isolated config. The managed Host was stopped afterward.
+- 2026-11-02: **Actual Claude model-driven Windows Flutter UI open 1/1
+  PASS**. Started only the isolated Alera Dev GUI using the existing
+  `e2e_support` Host and its Host-minted test Agent PTY. A real bounded
+  Claude session was allowed exactly the
+  `mcp__alera-workbench__alera_open_file` operation targeting
+  `src/deep/needle.dart`. The model emitted the real MCP tool_use and a
+  correlated successful tool_result containing **status applied + tabId**;
+  a screenshot verified `needle.dart` selected in Flutter. The direct
+  MCP-from-PTY preflight also passed. Repro:
+  `tool/testing/mcp_real_model_flutter_ui_e2e.py`; sanitized result in
+  `build/windows/shared_gui_ninja/mcp_real_model_flutter_ui_result.json`,
+  screenshot in
+  `build/windows/shared_gui_ninja/diagnostics/mcp-real-claude-flutter-open-file-applied.png`.
+  Initial false negatives came from test code JSON-encoding an already
+  JSON-formatted tool_result string; corrected and reran successfully.
+  Only a disposable test editor tab was opened; no files were modified.
 
 ### Reproduce Step 2 Windows desktop acceptance (disposable profile only)
 
