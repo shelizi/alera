@@ -384,25 +384,12 @@ fn quick_open_relative_path(
     if relative_path.is_empty() || exclusions.excludes_path(std::path::Path::new(&relative_path)) {
         return Ok(None);
     }
-    // Files can disappear between directory enumeration and metadata lookup.
-    // Skip these transient entries instead of failing the entire workspace
-    // index. Inaccessible descendants are likewise not searchable files.
+    // Entries can disappear, become inaccessible, or be invalid to Windows
+    // filesystem APIs (for example `nul` in a checkout made on another OS).
+    // Skip just the affected entry; the workspace root is validated separately.
     let link_metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
-        Err(error)
-            if matches!(
-                error.kind(),
-                std::io::ErrorKind::NotFound | std::io::ErrorKind::PermissionDenied
-            ) =>
-        {
-            return Ok(None);
-        }
-        Err(error) => {
-            return Err(WorkspaceFileError::from_io(
-                error,
-                path.display().to_string(),
-            ));
-        }
+        Err(_) => return Ok(None),
     };
     let is_symlink = link_metadata.file_type().is_symlink();
     if is_symlink {
