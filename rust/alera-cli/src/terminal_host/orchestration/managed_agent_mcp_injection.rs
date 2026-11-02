@@ -88,6 +88,8 @@ pub fn inject_managed_agent_mcp(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::terminal_host::orchestration::agent_profile_launch_snapshot::AgentInitialDeliveryMechanismV1;
+    use crate::terminal_host::orchestration::agent_startup_command::append_initial_prompt_argument_for;
 
     fn cli() -> ManagedAgentLaunch {
         ManagedAgentLaunch {
@@ -170,5 +172,65 @@ mod tests {
             dir.path()
         ));
         assert_eq!(launch.arguments, vec!["--search"]);
+    }
+
+    #[test]
+    fn claude_vararg_mcp_flag_does_not_consume_initial_prompt() {
+        let dir = tempfile::tempdir().unwrap();
+        let exe = dir.path().join("alera.exe");
+        std::fs::write(&exe, b"stub").unwrap();
+        let mut launch = ManagedAgentLaunch {
+            executable: "claude".into(),
+            arguments: vec!["--permission-mode".into(), "manual".into()],
+        };
+        assert!(inject_managed_agent_mcp(
+            "claude",
+            &mut launch,
+            &exe,
+            dir.path()
+        ));
+        append_initial_prompt_argument_for(
+            &AgentInitialDeliveryMechanismV1::PositionalAfterTerminator,
+            &mut launch.arguments,
+            "- Inspect the current workspace",
+        );
+        assert_eq!(
+            &launch.arguments[launch.arguments.len() - 2..],
+            ["--", "- Inspect the current workspace",]
+        );
+        let index = launch
+            .arguments
+            .iter()
+            .position(|arg| arg == "--mcp-config")
+            .unwrap();
+        assert_eq!(index, 2);
+        assert_eq!(launch.arguments[index + 2], "--");
+        assert_eq!(launch.arguments[0], "--permission-mode");
+    }
+
+    #[test]
+    fn codex_mcp_options_precede_existing_terminated_prompt() {
+        let dir = tempfile::tempdir().unwrap();
+        let exe = dir.path().join("alera.exe");
+        std::fs::write(&exe, b"stub").unwrap();
+        let mut launch = cli();
+        assert!(inject_managed_agent_mcp(
+            "codex",
+            &mut launch,
+            &exe,
+            dir.path()
+        ));
+        append_initial_prompt_argument_for(
+            &AgentInitialDeliveryMechanismV1::PositionalAfterTerminator,
+            &mut launch.arguments,
+            "Use alera.list_projects in read-only mode",
+        );
+        assert_eq!(
+            &launch.arguments[launch.arguments.len() - 2..],
+            ["--", "Use alera.list_projects in read-only mode",]
+        );
+        assert!(launch.arguments[..launch.arguments.len() - 2]
+            .iter()
+            .any(|arg| arg.starts_with("mcp_servers.alera-workbench.args=")));
     }
 }

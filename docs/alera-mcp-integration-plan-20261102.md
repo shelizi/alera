@@ -10,10 +10,12 @@
 messaging Windows desktop **10/10 PASS**; synthetic busy→done status with
 **real PTY paste/deferred Enter/persisted delivery 4/4 PASS**. Step 4 typed
 settings Windows desktop **13/13 PASS**, and managed Codex/Claude MCP launch
-argument injection is implemented but **opt-in only (default OFF)**. Full
-Agent Profile real-provider startup, actual model response, real Host restart
-E2E, explicit cross-workspace grants, macOS/Linux and two-real-Flutter-window
-platform acceptance remain pending. No feature merged, pushed or released.
+argument injection is implemented but **opt-in only (default OFF)**.
+**Real Windows Host OS-process restart + same-handle Agent capability
+rotation 5/5 PASS**, installed native Codex/Claude CLI parsing and bundled
+MCP stdio 3/3 PASS. Actual model-initiated tool use/response, explicit
+cross-workspace grants, macOS/Linux and two-real-Flutter-window platform
+acceptance remain pending. No feature merged, pushed or released.
 
 ## Intent / fixed scope
 
@@ -124,10 +126,16 @@ operations report separate `accepted` and `applied` acknowledgments.
       event path, real recipient PTY paste/deferred Enter and persisted
       `delivered_at` E2E **4/4 PASS**. No manual DB delivery marking or raw
       forced input. `completionConfirmed=false` even after delivery.
-- [ ] True external Codex/Claude Agent idle→delivery→response lifecycle and
-      full Host process restart/PTY capability rotation **E2E** still require
-      acceptance. Host replacement/old token rejection is covered separately
-      with a new in-process actor test, not a true OS Host restart test.
+- [x] Full **Windows OS Host process stop/restart/PTY token rotation 5/5
+      PASS** with a disposable private runtime, project and same session
+      handle. Host-issued token is transferred in-memory through test-only
+      loopback (never printed/stored); stopped Host uses `--force` because
+      a live Agent PTY correctly blocks ordinary shutdown; old bearer is
+      rejected, new PTY bearer accepted, old remains revoked. The separate
+      in-process Host-replacement unit test also passes.
+- [ ] True external Codex/Claude Agent idle→delivery→response lifecycle:
+      model-initiated tool invocation remains unverified. Synthetic status
+      and real PTY delivery acceptance are not a model response.
 - **Current Step 3 exit (same-workspace only):** Agent can find another
   Agent, read bounded progress, focus its existing Tab, queue one permitted
   durable message, and inspect its delivery state. Global/cross-workspace
@@ -147,7 +155,11 @@ operations report separate `accepted` and `applied` acknowledgments.
       (`ALERA_MCP_PROFILE_INJECTION=1`) for Codex/Claude adapter-specific
       CLI arguments. No global MCP config writes; duplicate/custom config
       does not get replaced; no token in the config. Static argument tests
-      **3/3 PASS**. Do not advertise this as real Agent process E2E accepted.
+      **3/3 PASS**, plus regression for Claude's variadic MCP config option
+      and both adapters' initial prompt terminator.
+      Real installed Codex 0.165.0 discovers the transient config, Claude
+      2.1.312 accepts the transient flag, bundled MCP stdio lists all 18
+      tools: **3/3 PASS**. This is NOT a model/tool call E2E.
 - [ ] Test MCP over real agent/stdio, UI behavior, settings notifications,
       auth scope, platform smoke tests and CI build; update usage docs.
 - **Exit:** all supported tools have tests, feature-flag or opt-in policy is
@@ -302,6 +314,34 @@ operations report separate `accepted` and `applied` acknowledgments.
   regression **3/3 PASS**. Real provider startup and macOS/Linux not yet
   exercised; do not enable by default. Existing global client config is
   never modified.
+- 2026-11-02: **Actual Windows Host OS restart E2E 5/5 PASS** using
+  `tool/testing/mcp_real_host_restart_e2e.py` against only
+  `build/windows/shared_gui_ninja/e2e_host_restart/runtime`. Start a
+  private Host, register a private project/workspace, spawn an Agent-style
+  Host-owned PTY, verify its in-memory Host capability, then force-stop
+  the **test Host only** because Alera correctly refuses an ordinary stop
+  with a live Terminal. Restart actual Host executable with persistent
+  SQLite and same session handle; prove stale bearer rejected, freshly
+  minted bearer accepted, old bearer remains revoked. The test passes only
+  ephemeral credentials over loopback within memory; result JSON at
+  `build/windows/shared_gui_ninja/e2e_host_restart/mcp_real_host_restart_result.json`.
+  Script also guards against reusing any existing private data.
+  First harness attempt exposed two testing issues (read-only status
+  initializes the SQLite profile, starter pipe inherited by background
+  Host); fixed harness preflight/DEVNULL spawning. No production Alera
+  process/profile was stopped. Private Host stopped after completion.
+- 2026-11-02: **Installed Agent CLI compatibility 3/3 PASS**:
+  `tool/testing/mcp_installed_cli_compat.py` uses isolated Codex/Claude
+  CLI config homes, no copied credentials/model requests/global MCP
+  modifications. Real Codex 0.165.0 parses two per-launch TOML
+  `mcp_servers.alera-workbench` overrides and reports the exact stdio
+  command and args. Real Claude Code 2.1.312 accepts the per-launch
+  `--mcp-config` JSON flag; its varargs require the existing `--`
+  initial prompt separator, now regression-tested. Bundled Alera MCP
+  handshake advertises 18 tools. Report at ignored
+  `build/windows/shared_gui_ninja/mcp_installed_cli_compat_result.json`.
+  This verifies CLI native parsing, **not** real model-initiated tool calls,
+  which remain an explicit pending gate.
 
 ### Reproduce Step 2 Windows desktop acceptance (disposable profile only)
 
