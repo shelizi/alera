@@ -291,12 +291,20 @@ extension _WorkspaceGitHistorySurfaceActions
       isCurrentBranch: isCurrentBranch,
       canPullIntoCurrentBranch: isCurrentUpstream,
       canCompareBranches: true,
+      canCompareWithCurrentBranch:
+          !isCurrentBranch &&
+          _currentBranch != null &&
+          _currentBranch != 'HEAD',
     );
     if (!mounted || action == null) {
       return;
     }
     if (action == GitHistoryRefMenuAction.compareWithBranch) {
       await _openBranchCompare(initialHeadRef: itemRef.name);
+      return;
+    }
+    if (action == GitHistoryRefMenuAction.compareFilesWithCurrentBranch) {
+      await _compareFilesWithCurrentBranch(itemRef.name);
       return;
     }
     await runGitHistoryRefMenuAction(

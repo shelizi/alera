@@ -2,6 +2,35 @@ part of 'workspace_git_history_surface.dart';
 
 extension _WorkspaceGitHistoryBranchComparison
     on _WorkspaceGitHistorySurfaceState {
+  /// Git Graph ref shortcut: open the existing pinned, per-file Diff surface
+  /// immediately, using the live current branch as the comparison base.
+  Future<void> _compareFilesWithCurrentBranch(String targetBranch) async {
+    try {
+      final snapshot = await BranchCompareCurrentService(
+        ref.read(gitBackendProvider),
+      ).prepare(path: _sourceControlScope.path, compareBranch: targetBranch);
+      if (!mounted) return;
+      await ref
+          .read(workbenchControllerProvider.notifier)
+          .openGitBranchCompareTab(
+            workspace: widget.workspace,
+            gitDiffRoot: _sourceControlScope.relativeRoot,
+            baseRef: snapshot.baseRef,
+            headRef: snapshot.headRef,
+            headOid: snapshot.headOid,
+            mergeBaseOid: snapshot.mergeBaseOid,
+          );
+    } catch (error) {
+      if (mounted) {
+        AleraToast.show(
+          context,
+          message: gitHistoryErrorMessage(error),
+          tone: .error,
+        );
+      }
+    }
+  }
+
   Future<void> _openBranchCompare({String? initialHeadRef}) async {
     try {
       final backend = ref.read(gitBackendProvider);

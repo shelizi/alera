@@ -138,6 +138,13 @@ const Map<String, String> _japaneseShell = <String, String>{
   'Create Archive…': 'アーカイブを作成…',
   'Copy Tag Name': 'タグ名をコピー',
   'Copy Branch Name': 'ブランチ名をコピー',
+  'Compare Files with Current Branch': '現在のブランチとファイルの差分を比較',
+  'Merge Current Branch into This Branch...': '現在のブランチをこのブランチにマージ...',
+  'Merge into this branch?': 'このブランチにマージしますか？',
+  'Merge committed changes from {source} into {target} in an idle worktree. Your current checkout will not be changed.': 'コミット済みの変更を {source} から {target} にマージします。空いている Worktree を使用し、現在の作業ツリーは変更しません。',
+  'Merged {source} into {target}': '{source} を {target} にマージしました',
+  'Merge conflicts in {branch}. Resolve them in Source Control.':
+      '{branch} でマージの競合が発生しました。ソース管理で解決してください。',
   'Switch to Branch': 'ブランチに切り替え',
   'Rename Branch...': 'ブランチ名を変更…',
   'Delete Branch': 'ブランチを削除',

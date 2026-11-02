@@ -1,8 +1,10 @@
 import 'package:alera/src/design_system/feedback/alera_toast.dart';
 import 'package:alera/src/design_system/menus/alera_dropdown_entry.dart';
+import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_git_history_ref_menus.dart';
 import 'package:alera/src/shared/infra/git/git_diff_models.dart';
 import 'package:flutter/gestures.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../unit/fake_git_backend.dart';
@@ -23,6 +25,8 @@ void main() {
     expect(find.text('Rebase Current Branch onto feature'), findsOneWidget);
     expect(find.text('Create Archive...'), findsOneWidget);
     expect(find.text('Copy Branch Name'), findsOneWidget);
+    expect(find.text('Compare Files with Current Branch'), findsOneWidget);
+    expect(find.text('Compare with Branch...'), findsOneWidget);
     final actions = tester
         .widgetList<AleraDropdownEntry<GitHistoryRefMenuAction>>(
           find.byType(AleraDropdownEntry<GitHistoryRefMenuAction>),
@@ -30,6 +34,77 @@ void main() {
     expect(actions, isNotEmpty);
     expect(actions.every((entry) => entry.localizeLabel), isTrue);
   });
+
+  testWidgets(
+    'Git Graph branch right-click opens the existing pinned file diff tab',
+    (tester) async {
+      final backend = _refBackend()
+        ..sourceBranches = <String>['main', 'feature']
+        ..compareRangeResult = const GitCommitCompareResult(
+          summary: GitCommitCompareSummary(
+            commitOid: 'feature-tip',
+            parentOid: 'common-ancestor',
+            baseRef: 'main',
+            compareRef: 'feature',
+            changedFiles: 1,
+            status: GitCommitCompareStatus.ready,
+          ),
+          entries: <GitCommitChangeEntry>[
+            GitCommitChangeEntry(
+              path: 'lib/changed.dart',
+              status: GitChangeStatus.modified,
+            ),
+          ],
+        );
+      final repository = GitHistoryFakeWorkbenchRepository()
+        ..tabs.add(gitHistoryTab());
+      await pumpGitHistorySurface(
+        tester,
+        backend: backend,
+        repository: repository,
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('feature'), buttons: kSecondaryMouseButton);
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('git-history-ref-compare-current')),
+        findsOneWidget,
+      );
+      await tester.tap(
+        find.byKey(const ValueKey('git-history-ref-compare-current')),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        backend.calls
+            .where((call) => call.method == 'compareRange')
+            .single
+            .args,
+        <String, Object?>{
+          'path': '/tmp/project',
+          'baseRef': 'main',
+          'headRef': 'feature',
+        },
+      );
+      final comparison = repository.tabs.singleWhere(
+        (tab) => tab.gitDiffSource == WorkspaceGitDiffSource.branchCompare,
+      );
+      expect(comparison.gitBranchCompareBaseRef, 'main');
+      expect(comparison.gitBranchCompareHeadRef, 'feature');
+      expect(comparison.gitDiffCommitOid, 'feature-tip');
+      expect(comparison.gitDiffParentOid, 'common-ancestor');
+      expect(
+        backend.calls.where((call) => call.method == 'checkoutBranch'),
+        isEmpty,
+      );
+      expect(backend.calls.where((call) => call.method == 'mergeRef'), isEmpty);
+      expect(
+        backend.calls.where((call) => call.method == 'createWorktree'),
+        isEmpty,
+      );
+    },
+  );
 
   testWidgets('current branch disables switch and delete', (tester) async {
     final backend = _refBackend();
@@ -39,6 +114,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Current Branch'), findsOneWidget);
+    expect(find.text('Compare Files with Current Branch'), findsNothing);
     await tester.tap(find.text('Current Branch'));
     await tester.tap(find.text('Delete Branch'));
     await tester.pump();

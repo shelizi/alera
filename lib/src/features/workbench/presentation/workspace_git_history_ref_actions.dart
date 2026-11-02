@@ -51,7 +51,8 @@ Future<void> runGitHistoryRefMenuAction({
 }) async {
   switch (action) {
     case GitHistoryRefMenuAction.compareWithBranch:
-      // Only the commit graph offers this action; it handles the picker.
+    case GitHistoryRefMenuAction.compareFilesWithCurrentBranch:
+      // Both compare actions are handled by the commit graph's Diff opening.
       return;
     case GitHistoryRefMenuAction.switchBranch:
       if (onSwitchBranch != null) {

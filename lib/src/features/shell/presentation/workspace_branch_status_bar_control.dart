@@ -5,6 +5,9 @@ class const WorkspaceBranchStatusBarControl({
   required final Workspace workspace,
   required final WorkspaceSourceControlScope sourceControlScope,
   required final Future<void> Function(String branch) onSwitchBranch,
+  final Future<void> Function(String branch)? onCompareWithCurrentBranch,
+  final Future<Workspace> Function(String branch)? onCreateMergeWorkspace,
+  final Future<void> Function(Workspace workspace)? onOpenMergeWorkspace,
 }) extends ConsumerStatefulWidget {
   @override
   ConsumerState<WorkspaceBranchStatusBarControl> createState() =>
@@ -24,6 +27,12 @@ class _WorkspaceBranchStatusBarControlState
   bool _loading = false;
   bool _switching = false;
   int _generation = 0;
+
+  // Copy remains available on the current branch; comparing and merging are
+  // available only on a *different* local branch in the quick-switch list.
+  static const _copyAction = 'copy';
+  static const _compareAction = 'compare';
+  static const _mergeAction = 'merge';
 
   @override
   void initState() {
@@ -110,8 +119,20 @@ class _WorkspaceBranchStatusBarControlState
     }
   }
 
-  Future<void> _showCopyBranchMenu(Offset position, String branch) async {
-    final selected = await showMenu<bool>(
+  Future<void> _showBranchContextMenu(Offset position, String branch) async {
+    final canCompare =
+        widget.onCompareWithCurrentBranch != null &&
+        !_switching &&
+        branch != _current &&
+        _current != null &&
+        _current != 'HEAD';
+    final canMerge =
+        widget.onCreateMergeWorkspace != null &&
+        !_switching &&
+        branch != _current &&
+        _current != null &&
+        _current != 'HEAD';
+    final selected = await showMenu<String>(
       context: context,
       position: RelativeRect.fromLTRB(
         position.dx,
@@ -119,15 +140,143 @@ class _WorkspaceBranchStatusBarControlState
         position.dx,
         position.dy,
       ),
-      items: <PopupMenuEntry<bool>>[
-        PopupMenuItem<bool>(
-          value: true,
+      items: <PopupMenuEntry<String>>[
+        PopupMenuItem<String>(
+          value: _copyAction,
           child: Text(context.tr('Copy Branch Name')),
         ),
+        if (canCompare)
+          PopupMenuItem<String>(
+            key: ValueKey<String>(
+              'workspace-branch-compare-with-current:$branch',
+            ),
+            value: _compareAction,
+            child: Text(context.tr('Compare Files with Current Branch')),
+          ),
+        if (canMerge)
+          PopupMenuItem<String>(
+            key: ValueKey<String>('workspace-branch-merge-to:$branch'),
+            value: _mergeAction,
+            child: Text(context.tr('Merge Current Branch into This Branch...')),
+          ),
       ],
     );
-    if (selected == true && mounted) {
+    if (!mounted) return;
+    if (selected == _copyAction) {
       await _copyBranchName(branch);
+    } else if (selected == _compareAction) {
+      await _compareWithCurrentBranch(branch);
+    } else if (selected == _mergeAction) {
+      await _mergeToBranch(branch);
+    }
+  }
+
+  Future<void> _compareWithCurrentBranch(String branch) async {
+    if (_switching || widget.onCompareWithCurrentBranch == null) return;
+    _menu.close();
+    setState(() => _switching = true);
+    try {
+      await widget.onCompareWithCurrentBranch!(branch);
+    } catch (error) {
+      if (mounted) {
+        AleraToast.show(context, message: error.toString(), tone: .error);
+      }
+    } finally {
+      if (mounted) setState(() => _switching = false);
+    }
+  }
+
+  Future<void> _mergeToBranch(String target) async {
+    if (_switching || widget.onCreateMergeWorkspace == null) return;
+    final source = await ref
+        .read(gitBackendProvider)
+        .currentBranch(widget.sourceControlScope.path);
+    if (!mounted || source == 'HEAD' || source == target) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(dialogContext.tr('Merge into this branch?')),
+        content: Text(
+          dialogContext.trTemplate(
+            'Merge committed changes from {source} into {target} in an idle worktree. Your current checkout will not be changed.',
+            {'source': source, 'target': target},
+          ),
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: Text(dialogContext.tr('Cancel')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: Text(dialogContext.tr('Merge')),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    _menu.close();
+    setState(() => _switching = true);
+    try {
+      final state = ref.read(workbenchControllerProvider);
+      final idleWorkspaces = state
+          .workspacesFor(widget.workspace.projectId)
+          .where(
+            (workspace) =>
+                workspace.kind == WorkspaceKind.linked &&
+                workspace.isActive &&
+                !workspace.isArchived &&
+                workspace.id != state.activeWorkspaceId &&
+                state.tabsFor(workspace.id).isEmpty,
+          )
+          .toList(growable: false);
+      Workspace? createdWorkspace;
+      final result =
+          await BranchMergeToTargetService(ref.read(gitBackendProvider)).merge(
+            sourcePath: widget.sourceControlScope.path,
+            sourceBranch: source,
+            targetBranch: target,
+            idleWorktreePaths: {
+              for (final workspace in idleWorkspaces) workspace.path,
+            },
+            createWorktree: (branch) async {
+              final workspace = await widget.onCreateMergeWorkspace!(branch);
+              createdWorkspace = workspace;
+              return workspace.path;
+            },
+          );
+      if (result.conflicted) {
+        final workspace =
+            createdWorkspace ??
+            idleWorkspaces
+                .where((entry) => isSamePath(entry.path, result.path))
+                .firstOrNull;
+        if (workspace != null) {
+          await widget.onOpenMergeWorkspace?.call(workspace);
+        }
+      }
+      if (mounted) {
+        AleraToast.show(
+          context,
+          message: result.conflicted
+              ? context.trTemplate(
+                  'Merge conflicts in {branch}. Resolve them in Source Control.',
+                  {'branch': target},
+                )
+              : context.trTemplate('Merged {source} into {target}', {
+                  'source': source,
+                  'target': target,
+                }),
+          tone: result.conflicted ? .error : .success,
+        );
+        unawaited(_loadBranches());
+      }
+    } catch (error) {
+      if (mounted) {
+        AleraToast.show(context, message: error.toString(), tone: .error);
+      }
+    } finally {
+      if (mounted) setState(() => _switching = false);
     }
   }
 
@@ -269,7 +418,7 @@ class _WorkspaceBranchStatusBarControlState
                               onSecondaryTapDown: row.branch == null
                                   ? null
                                   : (details) => unawaited(
-                                      _showCopyBranchMenu(
+                                      _showBranchContextMenu(
                                         details.globalPosition,
                                         row.branch!,
                                       ),
@@ -392,7 +541,7 @@ class _WorkspaceBranchStatusBarControlState
         child: GestureDetector(
           behavior: HitTestBehavior.translucent,
           onSecondaryTapDown: (details) =>
-              unawaited(_showCopyBranchMenu(details.globalPosition, label)),
+              unawaited(_showBranchContextMenu(details.globalPosition, label)),
           child: InkWell(
             key: const ValueKey<String>('workspace-branch-status'),
             onTap: _switching

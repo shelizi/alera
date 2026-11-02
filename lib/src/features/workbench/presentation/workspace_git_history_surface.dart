@@ -10,6 +10,7 @@ import 'package:alera/src/design_system/feedback/alera_toast.dart';
 import 'package:alera/src/design_system/icons/alera_icons.dart';
 import 'package:alera/src/design_system/typography/alera_search_highlighted_text.dart';
 import 'package:alera/src/features/workbench/application/workbench_controller.dart';
+import 'package:alera/src/features/workbench/application/branch_compare_current_service.dart';
 import 'package:alera/src/features/workbench/application/workbench_branch_favorites.dart';
 import 'package:alera/src/features/workbench/application/workspace_source_control_controller.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';

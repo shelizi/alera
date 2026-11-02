@@ -435,6 +435,50 @@ class _AleraShellPageBodyState extends ConsumerState<_AleraShellPageBody>
                           WorkspaceBranchStatusBarControl(
                             workspace: workspace,
                             sourceControlScope: sourceControlScope,
+                            onCompareWithCurrentBranch: (branch) async {
+                              final snapshot =
+                                  await BranchCompareCurrentService(
+                                    ref.read(gitBackendProvider),
+                                  ).prepare(
+                                    path: sourceControlScope.path,
+                                    compareBranch: branch,
+                                  );
+                              if (!mounted ||
+                                  ref
+                                          .read(workbenchControllerProvider)
+                                          .activeWorkspaceId !=
+                                      workspace.id) {
+                                return;
+                              }
+                              await controller.openGitBranchCompareTab(
+                                workspace: workspace,
+                                gitDiffRoot: sourceControlScope.relativeRoot,
+                                baseRef: snapshot.baseRef,
+                                headRef: snapshot.headRef,
+                                headOid: snapshot.headOid,
+                                mergeBaseOid: snapshot.mergeBaseOid,
+                              );
+                            },
+                            onCreateMergeWorkspace: (branch) async {
+                              // Register the linked checkout with Alera so
+                              // a conflicted merge can be resolved in-app.
+                              final result = await ref
+                                  .read(workspaceServiceProvider)
+                                  .createLinkedWorkspace(
+                                    project: project!,
+                                    sourceBranch: '',
+                                    newBranchName: branch,
+                                    reuseExistingBranch: true,
+                                    name:
+                                        'Merge $branch ${DateTime.now().millisecondsSinceEpoch}',
+                                  );
+                              return result.workspace;
+                            },
+                            onOpenMergeWorkspace: (mergeWorkspace) =>
+                                controller.selectWorkspace(
+                                  project: project!,
+                                  workspace: mergeWorkspace,
+                                ),
                             onSwitchBranch: (branch) async {
                               await controller.switchWorkspaceBranch(
                                 project: project!,

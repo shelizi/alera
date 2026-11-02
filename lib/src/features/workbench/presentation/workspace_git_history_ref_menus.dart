@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 enum GitHistoryRefMenuAction {
   switchBranch,
   compareWithBranch,
+  compareFilesWithCurrentBranch,
   renameBranch,
   deleteBranch,
   mergeIntoCurrentBranch,
@@ -68,6 +69,7 @@ Future<GitHistoryRefMenuAction?> showGitHistoryRefMenuForKind(
   required GitHistoryRefMenuKind kind,
   required bool isCurrentBranch,
   bool canCompareBranches = false,
+  bool canCompareWithCurrentBranch = false,
   bool canPullIntoCurrentBranch = false,
 }) async {
   if (kind == GitHistoryRefMenuKind.unsupported) {
@@ -220,6 +222,16 @@ Future<GitHistoryRefMenuAction?> showGitHistoryRefMenuForKind(
           label: 'Compare with Branch...',
           localizeLabel: true,
           leading: Icon(Icons.compare_arrows, size: 16),
+        ),
+      if (kind == GitHistoryRefMenuKind.localBranch &&
+          !isCurrentBranch &&
+          canCompareWithCurrentBranch)
+        const AleraDropdownEntry<GitHistoryRefMenuAction>(
+          key: ValueKey<String>('git-history-ref-compare-current'),
+          value: .compareFilesWithCurrentBranch,
+          label: 'Compare Files with Current Branch',
+          localizeLabel: true,
+          leading: Icon(Icons.difference_outlined, size: 16),
         ),
       AleraDropdownEntry<GitHistoryRefMenuAction>(
         value: .copyName,
