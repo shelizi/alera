@@ -1,7 +1,13 @@
 import 'dart:async';
+import 'dart:io';
+
+import 'package:path/path.dart' as p;
+import 'package:uuid/uuid.dart';
 
 import 'package:alera/src/design_system/buttons/alera_icon_button.dart';
 import 'package:alera/src/features/workbench/application/workbench_branch_favorites.dart';
+import 'package:alera/src/features/workbench/application/workspace_explorer_reveal.dart';
+import 'package:alera/src/features/workbench/domain/workspace_source_control_scope.dart';
 import 'package:alera/src/features/workbench/application/detached_tab_window_service.dart';
 
 import 'package:alera/src/app/providers.dart';
@@ -37,7 +43,8 @@ import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 import 'package:alera/src/features/workbench/domain/workbench_layout.dart';
 import 'package:alera/src/features/workbench/domain/workbench_view_prefs.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
-import 'package:alera/src/features/workbench/domain/workspace_source_control_scope.dart';
+import 'package:alera/src/platform/runtime_host/protocol/terminal_host_protocol.dart';
+import 'package:alera/src/shared/infra/git/git_diff_models.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_context_sidebar.dart';
 import 'package:alera/src/features/workbench/presentation/project_workbench_sidebar.dart';
 import 'package:alera/src/features/workbench/presentation/welcome_dashboard.dart';
@@ -57,6 +64,7 @@ part 'alera_shell_page_body.dart';
 part 'workspace_branch_status_bar_control.dart';
 part 'workspace_branch_tree_projection.dart';
 part 'alera_shell_page_body_content.dart';
+part 'alera_shell_page_mcp_ui.dart';
 
 class const AleraShellPage({super.key}) extends ConsumerWidget {
   @override

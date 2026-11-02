@@ -5,6 +5,7 @@
 //! not delegate to the existing human-oriented CLI printing paths.
 
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use ignore::WalkBuilder;
 use serde_json::{json, Map, Value};
@@ -18,6 +19,7 @@ const MAX_LINE_BYTES: usize = 1_048_576;
 const MAX_RESULT_COUNT: usize = 100;
 const MAX_TERMINAL_OUTPUT_BYTES: u64 = 8_192;
 const MAX_FILE_SCAN_ENTRIES: usize = 20_000;
+const MCP_UI_WAIT: Duration = Duration::from_secs(13);
 
 pub(crate) async fn run(command: McpCommand) -> i32 {
     match command.action {
@@ -160,7 +162,7 @@ async fn dispatch(
                 "protocolVersion": PROTOCOL_VERSION,
                 "capabilities": {"tools": {"listChanged": false}},
                 "serverInfo": {"name": "alera", "version": env!("CARGO_PKG_VERSION")},
-                "instructions": "Alera MCP reads the local runtime. Tab and agent details are restricted to the current live Alera terminal/workspace. UI and write tools are not enabled in this version."
+                "instructions": "Alera MCP reads the local runtime. UI controls require a live Host-minted Terminal capability and an explicit Flutter applied acknowledgment."
             })
         }
         "ping" => json!({}),
@@ -249,6 +251,48 @@ fn tool_definitions() -> Vec<Value> {
             "annotations": {"readOnlyHint": true}
         }),
         json!({
+            "name": "alera.open_file",
+            "description": "Open an existing file in Alera editor. Requires Host-minted PTY UI capability and App acknowledgment.",
+            "inputSchema": {"type": "object", "properties": {
+                "relativePath": {"type": "string", "minLength": 1},
+                "windowId": {"type": "string"}
+            }, "required": ["relativePath"], "additionalProperties": false},
+            "annotations": {"readOnlyHint": false}
+        }),
+        json!({
+            "name": "alera.reveal_file",
+            "description": "Locate an existing file in Alera Explorer without opening a Tab; confirms Explorer selection and scroll.",
+            "inputSchema": {"type": "object", "properties": {
+                "relativePath": {"type": "string", "minLength": 1},
+                "windowId": {"type": "string"}
+            }, "required": ["relativePath"], "additionalProperties": false},
+            "annotations": {"readOnlyHint": false}
+        }),
+        json!({
+            "name": "alera.open_git_graph",
+            "description": "Open or reuse Alera Git Graph Tab; wait for actual UI acknowledgment.",
+            "inputSchema": {"type": "object", "properties": {
+                "windowId": {"type": "string"},
+                "gitDiffRoot": {"type": "string"},
+                "filePath": {"type": "string"},
+                "allBranches": {"type": "boolean"},
+                "favoritesOnly": {"type": "boolean"},
+                "selectedRef": {"type": "string"}
+            }, "additionalProperties": false},
+            "annotations": {"readOnlyHint": false}
+        }),
+        json!({
+            "name": "alera.compare_branches",
+            "description": "Compare two Git refs with existing Alera Git engine and display Diff Tab.",
+            "inputSchema": {"type": "object", "properties": {
+                "windowId": {"type": "string"},
+                "gitDiffRoot": {"type": "string"},
+                "baseRef": {"type": "string", "minLength": 1},
+                "headRef": {"type": "string", "minLength": 1}
+            }, "required": ["baseRef", "headRef"], "additionalProperties": false},
+            "annotations": {"readOnlyHint": false}
+        }),
+        json!({
             "name": "alera.search_agents",
             "description": "Search running agents inside the caller's live workspace by prompt, type, activity or state.",
             "inputSchema": {"type": "object", "properties": {
@@ -285,6 +329,10 @@ fn supported_tool(name: &str) -> bool {
             | "alera.list_workspaces"
             | "alera.list_tabs"
             | "alera.search_files"
+            | "alera.open_file"
+            | "alera.reveal_file"
+            | "alera.open_git_graph"
+            | "alera.compare_branches"
             | "alera.search_agents"
             | "alera.get_agent_activity"
             | "alera.read_agent_output"
@@ -419,6 +467,10 @@ async fn execute_tool_connected(
                 "truncated": result.matches > limit
             }))
         }
+        "alera.open_file"
+        | "alera.reveal_file"
+        | "alera.open_git_graph"
+        | "alera.compare_branches" => execute_ui_tool(client, name, args).await,
         "alera.search_agents" => {
             let workspace = caller_workspace(client).await?;
             let limit = limit(args)?;
@@ -503,12 +555,102 @@ async fn execute_tool_connected(
     }
 }
 
+async fn execute_ui_tool(
+    client: &mut RuntimeHostRpcClient,
+    name: &str,
+    args: &Value,
+) -> Result<Value, String> {
+    let workspace = caller_workspace(client).await?;
+    let session = std::env::var("ALERA_TERMINAL_HANDLE")
+        .map_err(|_| "Alera MCP UI requires a Host-managed Terminal".to_string())?;
+    let capability = std::env::var("ALERA_MCP_UI_TOKEN")
+        .ok()
+        .filter(|token| token.len() == 64)
+        .ok_or("Alera MCP UI capability is unavailable for this Terminal")?;
+    let action = match name {
+        "alera.open_file" => "open_file",
+        "alera.reveal_file" => "reveal_file",
+        "alera.open_git_graph" => "open_git_graph",
+        "alera.compare_branches" => "compare_branches",
+        _ => return Err("Unknown MCP UI tool".to_string()),
+    };
+    let mut arguments = args.as_object().cloned().unwrap_or_default();
+    let window_id = arguments.remove("windowId");
+    let mut request = json!({
+        "sessionId": session,
+        "workspaceId": workspace,
+        "capability": capability,
+        "action": action,
+        "arguments": arguments
+    });
+    if let Some(window_id) = window_id {
+        request["windowId"] = window_id;
+    }
+    let accepted = client
+        .request_value("uiControl.request", &request)
+        .await
+        .map_err(host_error)?;
+    let request_id = accepted["requestId"]
+        .as_str()
+        .ok_or("Host did not return a UI command request ID")?
+        .to_owned();
+    if accepted["status"] != "accepted" || accepted["applied"] != false {
+        return Err("Host returned an invalid UI receipt".to_string());
+    }
+    let deadline = Instant::now() + MCP_UI_WAIT;
+    loop {
+        if Instant::now() >= deadline {
+            return Err("Alera UI did not confirm the command in time".to_string());
+        }
+        tokio::time::sleep(Duration::from_millis(75)).await;
+        let status = client
+            .request_value(
+                "uiControl.status",
+                &json!({
+                    "sessionId": session,
+                    "workspaceId": workspace,
+                    "capability": capability,
+                    "requestId": request_id,
+                }),
+            )
+            .await
+            .map_err(host_error)?;
+        match status["status"].as_str() {
+            Some("accepted") => continue,
+            Some("applied") if status["applied"] == true => {
+                return Ok(json!({
+                    "kind": "uiOperation", "action": action, "workspaceId": workspace,
+                    "requestId": request_id, "status": "applied",
+                    "windowId": status["windowId"], "tabId": status["tabId"]
+                }));
+            }
+            Some("failed") => {
+                let code = status["errorCode"]
+                    .as_str()
+                    .unwrap_or("ui_operation_failed");
+                return Err(format!("Alera UI operation failed: {code}"));
+            }
+            _ => return Err("Invalid Alera UI operation status".to_string()),
+        }
+    }
+}
+
 fn check_keys(tool: &str, args: &Value) -> Result<(), String> {
     let allowed: &[&str] = match tool {
         "alera.list_projects" => &["query", "limit"],
         "alera.list_workspaces" => &["projectId", "includeArchived", "limit"],
         "alera.list_tabs" => &["workspaceId", "limit"],
         "alera.search_files" => &["query", "includeHidden", "limit"],
+        "alera.open_file" | "alera.reveal_file" => &["relativePath", "windowId"],
+        "alera.open_git_graph" => &[
+            "windowId",
+            "gitDiffRoot",
+            "filePath",
+            "allBranches",
+            "favoritesOnly",
+            "selectedRef",
+        ],
+        "alera.compare_branches" => &["windowId", "gitDiffRoot", "baseRef", "headRef"],
         "alera.search_agents" => &["query", "limit"],
         "alera.get_agent_activity" => &["handle"],
         "alera.read_agent_output" => &["handle", "cursor", "maxBytes"],
@@ -852,10 +994,14 @@ mod tests {
         .unwrap();
         assert_eq!(listed["id"], "list");
         let tools = listed["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 7);
-        assert!(tools
-            .iter()
-            .all(|tool| tool["annotations"]["readOnlyHint"] == true));
+        assert_eq!(tools.len(), 11);
+        assert_eq!(
+            tools
+                .iter()
+                .filter(|tool| tool["annotations"]["readOnlyHint"] == true)
+                .count(),
+            7
+        );
         assert!(tools
             .iter()
             .all(|tool| supported_tool(tool["name"].as_str().unwrap())));

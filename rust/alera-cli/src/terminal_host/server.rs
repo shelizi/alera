@@ -133,6 +133,7 @@ mod lifecycle;
 #[cfg(test)]
 mod managed_workspace_cleanup_tests;
 mod managed_workspace_requests;
+mod mcp_ui_requests;
 mod mobile_device_pairing_requests;
 mod mobile_gateway_replacement;
 mod mobile_gateway_surface;
@@ -337,6 +338,7 @@ struct ServerActor {
     mobile_prompt_file_uploads: HashMap<u64, HashSet<String>>,
     mobile_prompt_image_uploads: HashMap<u64, HashSet<String>>,
     agent_presence: AgentPresenceRegistry,
+    mcp_ui: mcp_ui_requests::McpUiControlState,
     orchestration_waiters: MessageWaiterRegistry,
     orchestration_delivery_in_flight: HashSet<String>,
     orchestration_delivery_backpressured: HashSet<String>,

@@ -4,6 +4,9 @@ class _AleraShellPageBodyState extends ConsumerState<_AleraShellPageBody>
     with WidgetsBindingObserver {
   String? _lastErrorMessage;
   late final WorkbenchGitRepositoryLifecycleMonitor _gitRepositoryMonitor;
+  final String _mcpWindowId = const Uuid().v4();
+  StreamSubscription<RuntimeHostEvent>? _mcpUiSubscription;
+  Future<void> _mcpUiQueue = Future<void>.value();
 
   @override
   void initState() {
@@ -23,6 +26,7 @@ class _AleraShellPageBodyState extends ConsumerState<_AleraShellPageBody>
       final controller = ref.read(workbenchControllerProvider.notifier);
       await controller.bootstrap();
       if (!mounted) return;
+      _startMcpUiBridge();
       _gitRepositoryMonitor.selectProject(
         ref.read(workbenchControllerProvider).activeProject,
       );
@@ -82,6 +86,18 @@ class _AleraShellPageBodyState extends ConsumerState<_AleraShellPageBody>
 
   @override
   void dispose() {
+    unawaited(_mcpUiSubscription?.cancel());
+    _mcpUiSubscription = null;
+    // The long-lived Runtime Host may outlive this Flutter window. Explicitly
+    // unregister so subsequent MCP requests cannot target a disposed Shell.
+    unawaited(
+      ref
+          .read(runtimeHostClientProvider)
+          .runtimeRequest('uiControl.unregister', <String, Object?>{
+            'windowId': _mcpWindowId,
+          })
+          .then((_) {}, onError: (Object _) {}),
+    );
     WidgetsBinding.instance.removeObserver(this);
     _gitRepositoryMonitor.dispose();
     super.dispose();

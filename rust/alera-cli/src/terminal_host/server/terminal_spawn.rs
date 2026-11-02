@@ -489,12 +489,25 @@ impl ServerActor {
         .await
         .map_err(|error| HostError::state(error.to_string()))?
         .map_err(|error| HostError::state(error.to_string()))?;
+        // Strip any inherited token before considering an app-owned Agent
+        // profile. A nested shell may inherit its parent's environment, but
+        // that is never evidence of authority for a newly created session.
+        launch.environment.remove("ALERA_MCP_UI_TOKEN");
         if let Ok(Some(tab)) = WorkspaceTabStoreHandler::new(&self.runtime_store)
             .find(&tab_id)
             .await
         {
             apply_host_owned_tab_identity(&mut launch, &tab, &workspace_id, &tab_id, &session_id);
+            if tab_agent_type(&tab).is_some() || agent_profile_id(&tab).is_some() {
+                let ui_capability = self.mcp_ui.mint_token(&session_id);
+                launch
+                    .environment
+                    .insert("ALERA_MCP_UI_TOKEN".into(), ui_capability);
+            }
         }
+        // Tokens are minted only for Alera-managed Agent tabs, never for a
+        // generic interactive shell. A recovered worker without the current
+        // Host proof fails closed until its next fresh Agent launch.
         let inbox = self.inbox.clone();
         let reader_session_id = session_id.clone();
         let session = Box::pin(Session::start(
@@ -513,7 +526,14 @@ impl ServerActor {
             &self.history,
             move |event| forward_pty_event(&inbox, &reader_session_id, event),
         ))
-        .await?;
+        .await;
+        let session = match session {
+            Ok(session) => session,
+            Err(error) => {
+                self.mcp_ui.revoke(&session_id);
+                return Err(error);
+            }
+        };
         self.sessions.insert(session_id, session);
         Ok(())
     }

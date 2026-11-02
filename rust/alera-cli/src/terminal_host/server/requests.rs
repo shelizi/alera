@@ -254,6 +254,12 @@ impl ServerActor {
             RequestHandlerFamily::Core | RequestHandlerFamily::Orchestration => {}
         }
         match request_type {
+            "uiControl.register"
+            | "uiControl.unregister"
+            | "uiControl.request"
+            | "uiControl.status"
+            | "uiControl.complete"
+            | "uiControl.windows" => self.handle_mcp_ui_request(client_id, request_type, payload),
             "mobile.workspaceQuickOpen.stop" => self.stop_mobile_workspace_quick_open(payload),
             "configure" => {
                 self.require_auth(client_id)?;

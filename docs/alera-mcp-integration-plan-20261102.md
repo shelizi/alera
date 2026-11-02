@@ -6,9 +6,10 @@
 
 **Base HEAD:** `29781ab2545459a010095e700a19c7c49f952355`
 
-**Status:** Step 1 read-only alpha verified against a disposable Windows
-Runtime Host (8/8 focused tests + live Host smoke); steps 2–4 and privileged
-identity binding are pending. No feature has been enabled or released.
+**Status:** Step 1 verified; Step 2 Host/Flutter bridge and four UI tools
+implemented in the isolated branch, with Host unit tests and Flutter static
+analysis passing. **Step 2 is not accepted** until real desktop UI E2E and
+multi-window failure/reuse cases pass. Steps 3–4 pending. No feature released.
 
 ## Intent / fixed scope
 
@@ -75,14 +76,20 @@ operations report separate `accepted` and `applied` acknowledgments.
   tabs; invalid calls receive stable JSON-RPC/MCP errors.
 
 ### 2. Workbench navigation + Git
-- [ ] Introduce one authorized Host → Flutter Workbench UI command/ACK bridge.
-- [ ] Wire file search/open/reveal (including Explorer folder expansion,
+- [x] Implement one Host → Flutter Workbench UI command/ACK bridge with
+      per-Agent-PTY random Host-minted capability, local registered App window,
+      request ID, 12-second Host timeout and separate accepted/applied receipt.
+      An ordinary Terminal receives no UI token.
+- [x] Wire file search/open/reveal (including Explorer folder expansion,
       scroll-to-highlight), open Git Graph and branch compare through existing
-      Workbench services.
+      Workbench services. Explorer ACK comes only after its tree controller
+      has actually consumed the reveal/scroll request.
 - [x] Initial **read-only** workspace file-name/relative-path search with
       `ignore` walker and scan bounds; full UI navigation remains pending.
 - [ ] Verify multi-window target, missing window, invalid path/ref and repeated
-      open (reuse existing Tab).
+      open (reuse existing Tab) in a **running Flutter desktop app**. Host
+      admission/denial and trusted App ACK are unit tested, but no real UI E2E
+      has been completed.
 - **Exit:** real UI displays selected target; receipt acknowledges the UI
   action, not just database writes.
 
@@ -90,10 +97,11 @@ operations report separate `accepted` and `applied` acknowledgments.
 - [x] Initial **same-workspace read-only** live agent discovery, bounded
       Terminal output cursor and structured progress.
 - [ ] Add explicit cross-workspace authorization and focus/continuation.
-- [ ] Bind caller identity to a Host-issued session-scoped proof before
-      enabling wider Agent visibility or any mutating MCP tools. Present
-      validation only checks that environment-provided handle/workspace values
-      match an active Host record; these values alone are **spoofable**.
+- [x] Bind **UI-only** operations to a Host-minted per-Agent-PTY capability,
+      live handle and workspace; revoke on PTY exit and rotate on respawn.
+- [ ] Wider Agent observation/collaboration and other writes still need their
+      own scoped authorization. Existing read-only Agent handle/workspace
+      checks alone are **not** proof of caller identity.
 - [ ] Reuse Orchestration v2 messaging and dispatch; enforce session scope,
       idle delivery, idempotency, and an explicit gate for raw PTY input.
 - [ ] Validate stop/restart/stale handle, busy agent, dedupe and unauthorized
@@ -145,8 +153,35 @@ operations report separate `accepted` and `applied` acknowledgments.
   exercised; no macOS/Linux smoke. The existing same-Workspace check is a
   useful accidental-scope guard, **not** a cryptographic authorization
   boundary, so do not enable mutating or cross-Workspace operations.
+- 2026-11-02: Step 2 bridge implemented in the isolated branch:
+  `alera.open_file`, `alera.reveal_file`, `alera.open_git_graph`,
+  `alera.compare_branches` are now included in the 11-tool MCP catalog but
+  fail closed without a Host-minted per-Agent-PTY `ALERA_MCP_UI_TOKEN` and a
+  registered local Flutter window. Generic Terminal tabs receive no token.
+  Host distinguishes queued/accepted from confirmed applied/error, validates
+  paths and Git refs, and revokes authority on PTY exit/window disconnect.
+  Flutter reuses Workbench editor, Explorer reveal, Git Graph, and Git Diff
+  services; direct Workspace selection never spawns a new Terminal.
+- 2026-11-02: Host MCP UI bridge tests **4/4 PASS**, including forged
+  capability/workspace denial and App-only ACK (a CLI cannot confirm an
+  operation). Original MCP tests **8/8 PASS** and Rust CLI build PASS.
+  Disposable Windows Host integration smoke PASS with all 11 schemas,
+  read-only queries and denial of non-capability UI tools. Flutter
+  `flutter analyze --no-pub` found **0 issues**; actual Explorer widget test
+  confirms path reveal/selection/scroll ACK and the Workbench unit test
+  confirms timeout/supersession fail closed.
+- Flutter tests initially failed to load in the isolated worktree because
+  local `.dart_tool/package_config.json` and pinned `third_party/xterm`
+  and `third_party/dart_terminal` submodules were absent. Those two
+  submodules were checked out at pinned commits **only inside this
+  worktree** and `flutter pub get --offline` succeeded. Project dependency
+  manifests and the original dirty `main` were not changed.
+- **Step 2 still pending:** inspect actual MCP commands in a running Flutter
+  desktop process, visually verify Git Graph / branch-compare selection,
+  repeated-open Tab reuse and multi-window targeting; these are not covered
+  by the protocol/Widget tests above.
 
-## Current usage (read-only alpha)
+## Current usage (unreleased alpha)
 
 ```bash
 alera mcp serve
@@ -159,8 +194,10 @@ opened and no Runtime Host is auto-started. Current workspace file/Tab/Agent
 tools require `ALERA_TERMINAL_HANDLE` and `ALERA_WORKSPACE_ID` from an
 active Alera-managed Terminal and an existing authenticated Host. Until the
 later adapter-aware launch integration is implemented, this is not injected
-automatically into Agent Profiles. Tool names for UI navigation, messaging,
-raw input and settings are intentionally **not** advertised yet.
+automatically into Agent Profiles. The four UI navigation tools are listed
+but can only act from a live Host-issued Agent-PTY token; no result reports
+`applied` before Flutter explicitly confirms it. Agent collaboration, raw
+input and settings mutation tools remain **unimplemented/not advertised**.
 
 ### Reproducible Windows integration smoke
 

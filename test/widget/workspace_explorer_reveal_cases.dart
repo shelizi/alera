@@ -42,13 +42,17 @@ void _registerWorkspaceExplorerRevealTests() {
     await tester.pumpAndSettle();
     expect(find.text('main.dart'), findsNothing);
 
-    container
-        .read(workspaceExplorerRevealControllerProvider.notifier)
-        .reveal(workspaceId: 'workspace-1', relativePath: 'src/main.dart');
+    final reveal = container.read(
+      workspaceExplorerRevealControllerProvider.notifier,
+    );
+    reveal.reveal(workspaceId: 'workspace-1', relativePath: 'src/main.dart');
+    final request = container.read(workspaceExplorerRevealControllerProvider)!;
+    final confirmation = reveal.waitForConsumed(request);
     await tester.pumpAndSettle();
 
     expect(find.text('main.dart'), findsOneWidget);
     expect(container.read(workspaceExplorerRevealControllerProvider), isNull);
+    expect(await confirmation, isTrue);
   });
 
   testWidgets(
