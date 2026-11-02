@@ -138,6 +138,21 @@ mod windows_file_clipboard {
     unsafe extern "system" {
         fn OpenClipboard(owner: HWnd) -> i32;
         fn CloseClipboard() -> i32;
+        fn CreateWindowExW(
+            extended_style: u32,
+            class_name: *const u16,
+            window_name: *const u16,
+            style: u32,
+            x: i32,
+            y: i32,
+            width: i32,
+            height: i32,
+            parent: HWnd,
+            menu: Handle,
+            instance: Handle,
+            parameter: *const c_void,
+        ) -> HWnd;
+        fn DestroyWindow(window: HWnd) -> i32;
         fn EmptyClipboard() -> i32;
         fn SetClipboardData(format: u32, memory: Handle) -> Handle;
         fn GetClipboardData(format: u32) -> Handle;
@@ -179,16 +194,23 @@ mod windows_file_clipboard {
             FileClipboardOperation::Cut => DROPEFFECT_MOVE,
         };
         let preferred_drop_effect = preferred_drop_effect_format()?;
-        let drop_handle = global_memory(&dropfiles)?;
-        let effect_handle = match global_memory(&effect.to_le_bytes()) {
-            Ok(handle) => handle,
-            Err(error) => {
-                free_global(drop_handle);
-                return Err(error);
-            }
-        };
 
-        with_open_clipboard(|| {
+        // EmptyClipboard transfers clipboard ownership to the HWND passed to
+        // OpenClipboard. With a NULL HWND, SetClipboardData fails on Windows.
+        // The Rust bridge call may run on a thread without a Flutter window,
+        // so create a short-lived message-only owner on this same thread.
+        let owner = ClipboardOwnerWindow::new()?;
+        with_open_clipboard(owner.handle, || {
+            // Allocate only after opening the clipboard. If another app holds
+            // it open, there must be no orphaned HGLOBAL allocations.
+            let drop_handle = global_memory(&dropfiles)?;
+            let effect_handle = match global_memory(&effect.to_le_bytes()) {
+                Ok(handle) => handle,
+                Err(error) => {
+                    free_global(drop_handle);
+                    return Err(error);
+                }
+            };
             if unsafe { EmptyClipboard() } == 0 {
                 free_global(drop_handle);
                 free_global(effect_handle);
@@ -211,7 +233,7 @@ mod windows_file_clipboard {
     }
 
     pub(super) fn read_file_clipboard() -> Result<Option<FileClipboardPayload>, String> {
-        with_open_clipboard(|| {
+        with_open_clipboard(ptr::null_mut(), || {
             if unsafe { IsClipboardFormatAvailable(CF_HDROP) } == 0 {
                 return Ok(None);
             }
@@ -260,7 +282,7 @@ mod windows_file_clipboard {
         if expected == 0 {
             return Ok(false);
         }
-        with_open_clipboard(|| {
+        with_open_clipboard(ptr::null_mut(), || {
             if unsafe { GetClipboardSequenceNumber() } != expected {
                 return Ok(false);
             }
@@ -306,10 +328,75 @@ mod windows_file_clipboard {
         }
     }
 
-    fn with_open_clipboard<T>(operation: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
+    /// Owns a real hidden HWND for eagerly publishing CF_HDROP clipboard data.
+    /// We do not use delayed rendering; the OS retains the published memory
+    /// even after this short-lived window has been destroyed.
+    struct ClipboardOwnerWindow {
+        handle: HWnd,
+    }
+
+    impl ClipboardOwnerWindow {
+        fn new() -> Result<Self, String> {
+            let class = "STATIC\0".encode_utf16().collect::<Vec<_>>();
+            let handle = unsafe {
+                CreateWindowExW(
+                    0,
+                    class.as_ptr(),
+                    ptr::null(),
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    (-3_isize) as HWnd, // HWND_MESSAGE, never shows UI.
+                    ptr::null_mut(),
+                    ptr::null_mut(),
+                    ptr::null(),
+                )
+            };
+            if handle.is_null() {
+                return Err("Could not create a Windows clipboard owner window.".to_string());
+            }
+            Ok(Self { handle })
+        }
+    }
+
+    impl Drop for ClipboardOwnerWindow {
+        fn drop(&mut self) {
+            unsafe {
+                DestroyWindow(self.handle);
+            }
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[link(name = "user32")]
+        unsafe extern "system" {
+            fn IsWindow(window: HWnd) -> i32;
+        }
+
+        #[test]
+        fn temporary_clipboard_owner_is_a_real_window_and_gets_destroyed() {
+            // This checks the native HWND without replacing the user's
+            // global clipboard during automated tests.
+            let owner = ClipboardOwnerWindow::new().expect("clipboard owner");
+            let handle = owner.handle;
+            assert_ne!(unsafe { IsWindow(handle) }, 0);
+            drop(owner);
+            assert_eq!(unsafe { IsWindow(handle) }, 0);
+        }
+    }
+
+    fn with_open_clipboard<T>(
+        owner: HWnd,
+        operation: impl FnOnce() -> Result<T, String>,
+    ) -> Result<T, String> {
         let mut opened = false;
         for attempt in 0..OPEN_CLIPBOARD_ATTEMPTS {
-            if unsafe { OpenClipboard(ptr::null_mut()) } != 0 {
+            if unsafe { OpenClipboard(owner) } != 0 {
                 opened = true;
                 break;
             }

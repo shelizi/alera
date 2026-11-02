@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:desktop_drop/desktop_drop.dart';
 import 'package:alera/src/design_system/icons/alera_icons.dart';
 import 'package:alera/src/design_system/typography/alera_search_highlighted_text.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
@@ -58,5 +59,6 @@ void main() {
   _registerWorkspaceExplorerModeTests();
   _registerWorkspaceExplorerActionTests();
   _registerWorkspaceExplorerNativeDragTests();
+  _registerWorkspaceExplorerExternalDropTests();
   _registerWorkspaceExplorerWatchTests();
 }

@@ -1,5 +1,91 @@
 part of 'workspace_explorer_test.dart';
 
+void _registerWorkspaceExplorerExternalDropTests() {
+  testWidgets('OS files and directories dropped onto a folder are copied', (
+    tester,
+  ) async {
+    final service = _FakeWorkspaceFileService()
+      ..childrenByDirectory[''] = <native.WorkspaceFileEntry>[
+        _directory('destination', hasChildrenHint: false),
+      ];
+    await _pumpExplorer(tester, service);
+
+    final target = tester.widget<DropTarget>(find.byType(DropTarget));
+    target.onDragDone!(
+      DropDoneDetails(
+        files: <DropItem>[
+          DropItemFile('/outside/example.txt'),
+          DropItemDirectory('/outside/photos', <DropItem>[]),
+        ],
+        localPosition: Offset.zero,
+        globalPosition: tester.getCenter(find.text('destination')),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(service.importedClipboardCalls, hasLength(1));
+    final imported = service.importedClipboardCalls.single;
+    expect(imported.sourcePaths, <String>[
+      '/outside/example.txt',
+      '/outside/photos',
+    ]);
+    expect(imported.targetParentRelativePath, 'destination');
+    expect(imported.moveSources, isFalse);
+  });
+
+  testWidgets('OS drop on blank Explorer space imports to workspace root', (
+    tester,
+  ) async {
+    final service = _FakeWorkspaceFileService()
+      ..childrenByDirectory[''] = <native.WorkspaceFileEntry>[
+        _file('first.txt'),
+      ];
+    await _pumpExplorer(tester, service);
+    final target = tester.widget<DropTarget>(find.byType(DropTarget));
+    final bounds = tester.getRect(find.byType(DropTarget));
+    target.onDragDone!(
+      DropDoneDetails(
+        files: <DropItem>[DropItemFile('/outside/second.txt')],
+        localPosition: Offset.zero,
+        globalPosition: bounds.bottomRight - const Offset(16, 16),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(service.importedClipboardCalls, hasLength(1));
+    expect(
+      service.importedClipboardCalls.single.targetParentRelativePath,
+      isEmpty,
+    );
+  });
+
+  testWidgets('OS drop on filtered file row imports into its parent folder', (
+    tester,
+  ) async {
+    final service = _FakeWorkspaceFileService()
+      ..quickOpenEntries = <String>['src/deep/first.dart'];
+    await _pumpExplorer(tester, service);
+    await tester.enterText(find.byType(TextField), 'first.dart');
+    await tester.pumpAndSettle();
+
+    final target = tester.widget<DropTarget>(find.byType(DropTarget));
+    target.onDragDone!(
+      DropDoneDetails(
+        files: <DropItem>[DropItemFile('/outside/second.dart')],
+        localPosition: Offset.zero,
+        globalPosition: tester.getCenter(find.text('src/deep/first.dart')),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(service.importedClipboardCalls, hasLength(1));
+    expect(
+      service.importedClipboardCalls.single.targetParentRelativePath,
+      'src/deep',
+    );
+  });
+}
+
 void _registerWorkspaceExplorerNativeDragTests() {
   testWidgets('filtered Windows drag copies selected files to Explorer', (
     tester,

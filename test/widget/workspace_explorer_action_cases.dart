@@ -586,6 +586,75 @@ void _registerWorkspaceExplorerActionTests() {
     expect(service.importedClipboardCalls, isEmpty);
   });
 
+  testWidgets('Windows clipboard exports entire folders for copy and cut', (
+    tester,
+  ) async {
+    if (!Platform.isWindows) return;
+    final service = _FakeWorkspaceFileService()
+      ..childrenByDirectory[''] = <native.WorkspaceFileEntry>[
+        _directory('photos', hasChildrenHint: true),
+      ]
+      ..childrenByDirectory['photos'] = <native.WorkspaceFileEntry>[
+        _file('photos/inside.png'),
+      ];
+    await _pumpExplorer(tester, service);
+
+    await tester.tap(find.text('photos'), buttons: kSecondaryMouseButton);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Copy'));
+    await tester.pumpAndSettle();
+    expect(service.systemClipboardWrites, hasLength(1));
+    expect(service.systemClipboardWrites.single.paths.map(p.basename), <String>[
+      'photos',
+    ]);
+    expect(
+      service.systemClipboardWrites.single.operation,
+      WorkspaceFileClipboardOperation.copy,
+    );
+
+    await tester.tap(find.text('photos'), buttons: kSecondaryMouseButton);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Cut'));
+    await tester.pumpAndSettle();
+    expect(service.systemClipboardWrites, hasLength(2));
+    expect(service.systemClipboardWrites.last.paths.map(p.basename), <String>[
+      'photos',
+    ]);
+    expect(
+      service.systemClipboardWrites.last.operation,
+      WorkspaceFileClipboardOperation.cut,
+    );
+  });
+
+  testWidgets(
+    'external Windows clipboard imports folders without moving on copy',
+    (tester) async {
+      if (!Platform.isWindows) return;
+      final service = _FakeWorkspaceFileService()
+        ..childrenByDirectory[''] = <native.WorkspaceFileEntry>[
+          _directory('dest', hasChildrenHint: false),
+        ]
+        ..systemClipboard = const WorkspaceFileClipboardPayload(
+          paths: <String>[r'C:\outside\photos', r'C:\outside\one.txt'],
+          operation: WorkspaceFileClipboardOperation.copy,
+          sequenceNumber: 42,
+        );
+      await _pumpExplorer(tester, service);
+      await tester.tap(find.text('dest'));
+      await tester.pumpAndSettle();
+      await _pressExplorerPasteShortcut(tester);
+      expect(service.importedClipboardCalls, hasLength(1));
+      final imported = service.importedClipboardCalls.single;
+      expect(imported.sourcePaths, <String>[
+        r'C:\outside\photos',
+        r'C:\outside\one.txt',
+      ]);
+      expect(imported.targetParentRelativePath, 'dest');
+      expect(imported.moveSources, isFalse);
+      expect(service.clearedClipboardSequences, isEmpty);
+    },
+  );
+
   testWidgets('cut stays internal and clears the matching system clipboard', (
     tester,
   ) async {

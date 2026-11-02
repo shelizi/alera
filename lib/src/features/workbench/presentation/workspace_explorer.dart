@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:desktop_drop/desktop_drop.dart';
 import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/providers.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
@@ -160,6 +161,9 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
   final WindowsFileDrag _nativeFileDrag = const WindowsFileDrag();
   bool _checkingNativeDrag = false;
   bool _nativeDragHandedOff = false;
+  final Map<String, GlobalKey> _externalDropRowKeys = <String, GlobalKey>{};
+  bool _externalDragHovering = false;
+  String _externalDropDirectory = '';
   bool _loading = true;
   bool _suppressNextBackgroundMenu = false;
   String? _lastOpenedFilePath;
@@ -223,6 +227,9 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
       _saveWorkspaceUiState(oldWidget.workspace);
       _loading = true;
       _clipboard = null;
+      _externalDropRowKeys.clear();
+      _externalDragHovering = false;
+      _externalDropDirectory = '';
       _filterController.clear();
       _filterMatches = const <native.WorkspaceQuickOpenMatch>[];
       _filterSelectedPaths.clear();
@@ -347,63 +354,107 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
         ),
         const Divider(height: 1, color: AleraTokens.borderSubtle),
         Expanded(
-          child: CallbackShortcuts(
-            bindings: <ShortcutActivator, VoidCallback>{
-              const SingleActivator(LogicalKeyboardKey.keyA, control: true):
-                  _handleSelectAllShortcut,
-              const SingleActivator(LogicalKeyboardKey.keyA, meta: true):
-                  _handleSelectAllShortcut,
-              const SingleActivator(LogicalKeyboardKey.keyV, control: true):
-                  _handlePasteShortcut,
-              const SingleActivator(LogicalKeyboardKey.keyC, control: true):
-                  _handleCopyShortcut,
-              const SingleActivator(LogicalKeyboardKey.keyX, control: true):
-                  _handleCutShortcut,
-              const SingleActivator(LogicalKeyboardKey.keyV, meta: true):
-                  _handlePasteShortcut,
-              const SingleActivator(LogicalKeyboardKey.keyC, meta: true):
-                  _handleCopyShortcut,
-              const SingleActivator(LogicalKeyboardKey.keyX, meta: true):
-                  _handleCutShortcut,
-            },
-            child: Focus(
-              focusNode: _explorerFocusNode,
-              child: Listener(
-                behavior: .translucent,
-                onPointerDown: (_) => _explorerFocusNode.requestFocus(),
-                child: _ExplorerBackgroundMenu(
-                  shouldSuppress: _consumeBackgroundMenuSuppression,
-                  onAction: _handleBackgroundAction,
-                  child: _filterController.text.trim().isNotEmpty
-                      ? _buildFilterResults(entryMenuDelegate)
-                      : _loading && _controller.visibleNodes.isEmpty
-                      ? const Center(child: CircularProgressIndicator())
-                      : tree.DirectoryTreeTheme(
-                          data: const tree.DirectoryTreeThemeData(
-                            rowHeight: AleraTokens.space32,
-                            indent: AleraTokens.space16,
-                            selectionColor: AleraTokens.surfaceElevated,
-                            focusColor: AleraTokens.surfaceElevated,
-                            hoverColor: AleraTokens.surface,
-                            roundedCorners: false,
-                          ),
-                          child: tree.DirectoryTreeView(
-                            key: PageStorageKey<String>(
-                              'workspace-explorer:${widget.workspace.id}',
-                            ),
-                            controller: _controller,
-                            padding: const .symmetric(
-                              vertical: AleraTokens.space4,
-                            ),
-                            expanderSize: AleraTokens.space24,
-                            expanderGap: 0,
-                            expanderBuilder: _buildExpander,
-                            contextMenuDelegate: entryMenuDelegate,
-                            nodeBuilder: _buildNode,
-                          ),
-                        ),
+          child: DropTarget(
+            onDragEntered: (details) =>
+                _updateExternalDropHover(details.globalPosition),
+            onDragUpdated: (details) =>
+                _updateExternalDropHover(details.globalPosition),
+            onDragExited: (_) => _clearExternalDropHover(),
+            onDragDone: (details) {
+              final directory = _externalDropDirectoryAt(
+                details.globalPosition,
+              );
+              _clearExternalDropHover();
+              unawaited(
+                _importExternalDroppedPaths(
+                  details.files
+                      .map((file) => file.path)
+                      .toList(growable: false),
+                  directory,
                 ),
-              ),
+              );
+            },
+            child: Stack(
+              fit: StackFit.expand,
+              children: <Widget>[
+                CallbackShortcuts(
+                  bindings: <ShortcutActivator, VoidCallback>{
+                    const SingleActivator(
+                      LogicalKeyboardKey.keyA,
+                      control: true,
+                    ): _handleSelectAllShortcut,
+                    const SingleActivator(LogicalKeyboardKey.keyA, meta: true):
+                        _handleSelectAllShortcut,
+                    const SingleActivator(
+                      LogicalKeyboardKey.keyV,
+                      control: true,
+                    ): _handlePasteShortcut,
+                    const SingleActivator(
+                      LogicalKeyboardKey.keyC,
+                      control: true,
+                    ): _handleCopyShortcut,
+                    const SingleActivator(
+                      LogicalKeyboardKey.keyX,
+                      control: true,
+                    ): _handleCutShortcut,
+                    const SingleActivator(LogicalKeyboardKey.keyV, meta: true):
+                        _handlePasteShortcut,
+                    const SingleActivator(LogicalKeyboardKey.keyC, meta: true):
+                        _handleCopyShortcut,
+                    const SingleActivator(LogicalKeyboardKey.keyX, meta: true):
+                        _handleCutShortcut,
+                  },
+                  child: Focus(
+                    focusNode: _explorerFocusNode,
+                    child: Listener(
+                      behavior: .translucent,
+                      onPointerDown: (_) => _explorerFocusNode.requestFocus(),
+                      child: _ExplorerBackgroundMenu(
+                        shouldSuppress: _consumeBackgroundMenuSuppression,
+                        onAction: _handleBackgroundAction,
+                        child: _filterController.text.trim().isNotEmpty
+                            ? _buildFilterResults(entryMenuDelegate)
+                            : _loading && _controller.visibleNodes.isEmpty
+                            ? const Center(child: CircularProgressIndicator())
+                            : tree.DirectoryTreeTheme(
+                                data: const tree.DirectoryTreeThemeData(
+                                  rowHeight: AleraTokens.space32,
+                                  indent: AleraTokens.space16,
+                                  selectionColor: AleraTokens.surfaceElevated,
+                                  focusColor: AleraTokens.surfaceElevated,
+                                  hoverColor: AleraTokens.surface,
+                                  roundedCorners: false,
+                                ),
+                                child: tree.DirectoryTreeView(
+                                  key: PageStorageKey<String>(
+                                    'workspace-explorer:${widget.workspace.id}',
+                                  ),
+                                  controller: _controller,
+                                  padding: const .symmetric(
+                                    vertical: AleraTokens.space4,
+                                  ),
+                                  expanderSize: AleraTokens.space24,
+                                  expanderGap: 0,
+                                  expanderBuilder: _buildExpander,
+                                  contextMenuDelegate: entryMenuDelegate,
+                                  nodeBuilder: _buildNode,
+                                ),
+                              ),
+                      ),
+                    ),
+                  ),
+                ),
+                if (_externalDragHovering)
+                  Positioned.fill(
+                    child: IgnorePointer(
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          border: Border.all(color: AleraTokens.info, width: 2),
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
             ),
           ),
         ),
@@ -476,26 +527,92 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
     required native.WorkspaceFileEntry entry,
     required Widget child,
   }) {
-    return DragTarget<_ExplorerDragData>(
-      onWillAcceptWithDetails: (details) =>
-          !_nativeDragHandedOff &&
-          _isDirectoryEntry(entry) &&
-          _canDrop(details.data, entry.relativePath),
-      onAcceptWithDetails: (details) => unawaited(
-        _moveSelectedEntries(details.data.relativePaths, entry.relativePath),
-      ),
-      builder: (context, _, _) => TerminalPathDraggable<_ExplorerDragData>(
-        onDragStarted: () => _nativeDragHandedOff = false,
-        onDragUpdate: (details) =>
-            unawaited(_maybeHandOffNativeDrag(details, entry)),
-        data: _explorerDragData(entry),
-        feedback: Material(
-          color: Colors.transparent,
-          child: SizedBox(width: AleraTokens.sidebarDefaultWidth, child: child),
+    return KeyedSubtree(
+      key: _externalDropRowKeys.putIfAbsent(entry.relativePath, GlobalKey.new),
+      child: DragTarget<_ExplorerDragData>(
+        onWillAcceptWithDetails: (details) =>
+            !_nativeDragHandedOff &&
+            _isDirectoryEntry(entry) &&
+            _canDrop(details.data, entry.relativePath),
+        onAcceptWithDetails: (details) => unawaited(
+          _moveSelectedEntries(details.data.relativePaths, entry.relativePath),
         ),
-        child: child,
+        builder: (context, _, _) => TerminalPathDraggable<_ExplorerDragData>(
+          onDragStarted: () => _nativeDragHandedOff = false,
+          onDragUpdate: (details) =>
+              unawaited(_maybeHandOffNativeDrag(details, entry)),
+          data: _explorerDragData(entry),
+          feedback: Material(
+            color: Colors.transparent,
+            child: SizedBox(
+              width: AleraTokens.sidebarDefaultWidth,
+              child: child,
+            ),
+          ),
+          child: child,
+        ),
       ),
     );
+  }
+
+  // The native OS file drop is delivered to one DropTarget covering the whole
+  // tree. Resolve a mounted row at the drop position so nested native targets
+  // cannot process the same drop twice (once for the row and once for root).
+  String _externalDropDirectoryAt(Offset globalPosition) {
+    for (final row in _externalDropRowKeys.entries) {
+      final render = row.value.currentContext?.findRenderObject();
+      if (render is! RenderBox || !render.attached || !render.hasSize) {
+        continue;
+      }
+      if (!render.size.contains(render.globalToLocal(globalPosition))) {
+        continue;
+      }
+      final entry = _visibleEntryForPath(row.key);
+      return _isDirectoryEntry(entry) ? row.key : _parentPath(row.key);
+    }
+    return '';
+  }
+
+  void _updateExternalDropHover(Offset globalPosition) {
+    final directory = _externalDropDirectoryAt(globalPosition);
+    if (_externalDragHovering && _externalDropDirectory == directory) return;
+    setState(() {
+      _externalDragHovering = true;
+      _externalDropDirectory = directory;
+    });
+  }
+
+  void _clearExternalDropHover() {
+    if (!_externalDragHovering) return;
+    setState(() {
+      _externalDragHovering = false;
+      _externalDropDirectory = '';
+    });
+  }
+
+  Future<void> _importExternalDroppedPaths(
+    List<String> paths,
+    String targetDirectory,
+  ) async {
+    final sources = paths.where((path) => path.trim().isNotEmpty).toList();
+    if (sources.isEmpty) return;
+    try {
+      await _workspaceFiles.importEntries(
+        workspacePath: widget.workspace.path,
+        sourcePaths: sources,
+        targetParentRelativePath: targetDirectory,
+        // Native Explorer drag-and-drop must not remove the source files.
+        moveSources: false,
+      );
+      if (!mounted) return;
+      await _refreshDirectory(targetDirectory);
+      _workspaceFiles.scheduleQuickOpenRefresh(
+        workspacePath: widget.workspace.path,
+        debounce: Duration.zero,
+      );
+    } catch (error) {
+      if (mounted) _showError(error);
+    }
   }
 
   _ExplorerDragData _explorerDragData(native.WorkspaceFileEntry entry) {
