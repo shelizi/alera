@@ -6,12 +6,12 @@
 
 **Base HEAD:** `29781ab2545459a010095e700a19c7c49f952355`
 
-**Status:** Steps 1 and 2 verified. **Step 2 Windows desktop accepted** on
-2026-11-02: actual Alera Agent PTY → MCP stdio → Host → mounted Flutter UI,
-12/12 E2E assertions passing, actual Git Graph/branch Diff screens captured.
-The two-client window-routing test uses one real Flutter window plus a test
-App client; two simultaneous real Flutter windows and macOS/Linux belong to
-final platform acceptance. Steps 3–4 pending. No feature released.
+**Status:** Steps 1–2 verified. **Step 3 same-workspace Agent focus and
+durable messaging Windows desktop accepted** on 2026-11-02, with 10/10
+two-Agent E2E assertions passing. Step 2 Windows desktop 12/12 also passed.
+Step 3 cross-workspace grants and natural busy-to-idle delivery/restart
+recovery have **not** been accepted. Step 4 and macOS/Linux / two-real-window
+platform acceptance remain pending. No feature released.
 
 ## Intent / fixed scope
 
@@ -99,18 +99,31 @@ operations report separate `accepted` and `applied` acknowledgments.
 ### 3. Agent observation + collaboration
 - [x] Initial **same-workspace read-only** live agent discovery, bounded
       Terminal output cursor and structured progress.
-- [ ] Add explicit cross-workspace authorization and focus/continuation.
-- [x] Bind **UI-only** operations to a Host-minted per-Agent-PTY capability,
-      live handle and workspace; revoke on PTY exit and rotate on respawn.
-- [ ] Wider Agent observation/collaboration and other writes still need their
-      own scoped authorization. Existing read-only Agent handle/workspace
-      checks alone are **not** proof of caller identity.
-- [ ] Reuse Orchestration v2 messaging and dispatch; enforce session scope,
-      idle delivery, idempotency, and an explicit gate for raw PTY input.
-- [ ] Validate stop/restart/stale handle, busy agent, dedupe and unauthorized
-      cross-workspace access.
-- **Exit:** an agent can locate another agent, read progress, send a permitted
-  message, and distinguish queued, delivered and completed.
+- [x] `alera.focus_agent` uses a Host-verified live same-workspace Agent
+      handle, resolves its actual Terminal Tab ID and waits for Flutter's
+      `applied` receipt. Repeated focus never creates or restarts a PTY.
+- [x] Bind all **new Agent focus/messaging/status writes** to a Host-minted
+      per-Agent-PTY capability, live handle and workspace; revoke on PTY exit.
+      Do not treat original read-only env/handle checks as cryptographic proof.
+- [x] Reuse Orchestration v2 durable inbox for `alera.send_agent_message`;
+      require caller-scoped `clientMutationId` idempotency, same-workspace
+      live Agent recipient, busy-Agent queuing and bounded input. Report
+      `queued` or `delivered` separately from task completion.
+- [x] Raw PTY input **not offered** by MCP. Cross-workspace writes/groups
+      are denied. Host unit tests cover forged capability, stale/missing or
+      foreign handles, busy queuing, idempotency, receipt privacy, and focus
+      target validation. Actual Windows UI/Agent E2E **10/10 PASS**.
+- [ ] Define and verify **explicit cross-workspace grants**, if enabled in
+      the future. The currently supported scope is same-workspace only,
+      fail closed.
+- [ ] Natural real-Agent busy→idle→delivered→response lifecycle and
+      Host restart/PTY capability rotation E2E still require acceptance.
+      A message being read or delivered is **not** task completion.
+- **Current Step 3 exit (same-workspace only):** Agent can find another
+  Agent, read bounded progress, focus its existing Tab, queue one permitted
+  durable message, and inspect its delivery state. Global/cross-workspace
+  authorization, actual natural idle delivery and restart recovery remain
+  explicitly outside this accepted subset.
 
 ### 4. Settings + injection + final acceptance
 - [ ] Expose typed settings catalog and ownership-aware getter/updater; never
@@ -212,6 +225,35 @@ operations report separate `accepted` and `applied` acknowledgments.
   **Remaining final acceptance:** two simultaneous *real* Flutter windows,
   macOS/Linux/platform smoke, Agent Profile MCP auto-injection and settings
   ownership. These remain in Steps 3–4, not additional stages in Step 2.
+- 2026-11-02: **Step 3 same-workspace Windows acceptance PASS**.
+  `alera.focus_agent` uses the existing Host→Flutter UI command/ACK bridge;
+  the Host verifies a running local Agent and resolves the existing Tab ID,
+  and Flutter checks the Tab's Terminal session before focusing. Added
+  `agentControl.scope/send/messageStatus` with Host-minted live Agent
+  capability, local CLI role, same-workspace recipient requirement, bounded
+  subject/body, mandatory caller-scoped idempotency and private message
+  receipts. `send` reuses Orchestration v2 durable queued delivery; no
+  direct PTY input or cross-workspace send was enabled.
+- **Stage 3 tests:** Host authorization/focus/message **3/3 PASS**;
+  MCP stdio **8/8 PASS** with **14 advertised tools (8 read-only, 6 guarded)**;
+  disposable Windows Host integration smoke PASS including denial of all new
+  controls without a Host capability; Flutter Shell compilation **6/6 PASS**
+  and Host event regression **1/1 PASS**; Windows Debug isolated GUI built
+  with same-branch Rust sidecar and compile-time E2E support directory.
+- **Real desktop E2E 10/10 PASS:** two disposable Host-spawned PTYs, synthetic
+  `working` Agent presence confined to the test profile, actual MCP stdio
+  calls from the sender's capability-bearing PTY, live Agent search/activity,
+  busy recipient message queued, repeat ID deduplicated, conflicting ID
+  rejected, own-message status, foreign/unknown target denied, and
+  focus/repeated-focus of actual recipient Terminal Tab acknowledged by
+  Flutter. Report at ignored
+  `build/windows/shared_gui_ninja/mcp_agent_stage3_e2e_result.json`;
+  visual screenshot at ignored
+  `build/windows/shared_gui_ninja/diagnostics/mcp-stage3-focus-agent-10passed.png`.
+  Repro harness: `tool/testing/mcp_agent_desktop_e2e.py`.
+  This proves queue + focus, **not natural real Agent idle delivery or task
+  completion**. The host status unit test separately verified the stored
+  delivered-state projection.
 
 ### Reproduce Step 2 Windows desktop acceptance (disposable profile only)
 
@@ -246,13 +288,15 @@ alera mcp --runtime-dir /path/to/alera/runtime serve
 
 The MCP client connects to the executable over stdio. No network listener is
 opened and no Runtime Host is auto-started. Current workspace file/Tab/Agent
-tools require `ALERA_TERMINAL_HANDLE` and `ALERA_WORKSPACE_ID` from an
-active Alera-managed Terminal and an existing authenticated Host. Until the
-later adapter-aware launch integration is implemented, this is not injected
-automatically into Agent Profiles. The four UI navigation tools are listed
-but can only act from a live Host-issued Agent-PTY token; no result reports
-`applied` before Flutter explicitly confirms it. Agent collaboration, raw
-input and settings mutation tools remain **unimplemented/not advertised**.
+reads check a live Host handle and matching `ALERA_TERMINAL_HANDLE` /
+`ALERA_WORKSPACE_ID`, but that read-only check alone is not a cryptographic
+identity proof. All **five UI navigation/focus tools**, plus same-workspace
+durable Agent send and own-message status, additionally require a Host-issued
+per-PTY capability; no UI response reports `applied` before Flutter confirms
+it. `send_agent_message` returns queued/delivered, never task completed.
+Automatic Agent Profile MCP injection, privileged cross-workspace grants,
+raw Terminal input, and settings catalog/mutations remain
+**unimplemented/not advertised**.
 
 ### Reproducible Windows integration smoke
 

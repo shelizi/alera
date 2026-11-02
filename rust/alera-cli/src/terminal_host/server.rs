@@ -133,6 +133,9 @@ mod lifecycle;
 #[cfg(test)]
 mod managed_workspace_cleanup_tests;
 mod managed_workspace_requests;
+#[cfg(test)]
+mod mcp_agent_focus_tests;
+mod mcp_agent_requests;
 mod mcp_ui_requests;
 mod mobile_device_pairing_requests;
 mod mobile_gateway_replacement;

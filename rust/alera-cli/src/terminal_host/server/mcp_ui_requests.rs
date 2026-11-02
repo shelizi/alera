@@ -158,7 +158,27 @@ impl ServerActor {
                     return Err(HostError::state("Workbench UI control queue is full."));
                 }
                 let action = required_short(payload, "action", 40)?;
-                let arguments = validate_ui_arguments(&action, payload.get("arguments"))?;
+                let mut arguments = validate_ui_arguments(&action, payload.get("arguments"))?;
+                if action == "focus_agent" {
+                    // Resolve from the live Host, not an MCP-supplied Tab ID.
+                    // A caller may only focus a running Agent in its own
+                    // workspace, never guess a foreign Tab or stale PTY.
+                    let handle = required_short(&arguments, "handle", 128)?;
+                    let target = self
+                        .sessions
+                        .get(&handle)
+                        .filter(|target| {
+                            target.running()
+                                && target.workspace_id == workspace_id
+                                && self.agent_presence.get(&handle).is_some()
+                        })
+                        .ok_or_else(|| {
+                            HostError::unauthorized(
+                                "Agent is not running in the authorized workspace.",
+                            )
+                        })?;
+                    arguments["tabId"] = json!(target.tab_id);
+                }
                 let requested_window = optional_short(payload, "windowId", 128)?;
                 let (target_client_id, window_id) = match requested_window {
                     Some(target) => self
@@ -271,7 +291,7 @@ impl ServerActor {
         ))
     }
 
-    fn require_mcp_ui_session(&self, payload: &Value) -> HostResult<&Session> {
+    pub(super) fn require_mcp_ui_session(&self, payload: &Value) -> HostResult<&Session> {
         let handle = required_short(payload, "sessionId", 128)?;
         let workspace_id = required_short(payload, "workspaceId", 128)?;
         let token = required_short(payload, "capability", 128)?;
@@ -352,6 +372,7 @@ fn validate_ui_arguments(action: &str, raw: Option<&Value>) -> HostResult<Value>
         .ok_or_else(|| HostError::format("UI command arguments must be an object."))?;
     let allowed: &[&str] = match action {
         "open_file" | "reveal_file" => &["relativePath"],
+        "focus_agent" => &["handle"],
         "open_git_graph" => &[
             "filePath",
             "gitDiffRoot",
@@ -369,6 +390,10 @@ fn validate_ui_arguments(action: &str, raw: Option<&Value>) -> HostResult<Value>
     if matches!(action, "open_file" | "reveal_file") {
         let path = required_short(raw.unwrap(), "relativePath", 1024)?;
         validated.insert("relativePath".into(), json!(validate_relative_path(&path)?));
+    }
+    if action == "focus_agent" {
+        let handle = required_short(raw.unwrap(), "handle", 128)?;
+        validated.insert("handle".into(), json!(handle));
     }
     if action == "compare_branches" {
         for key in ["baseRef", "headRef"] {

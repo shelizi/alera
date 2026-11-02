@@ -1,5 +1,5 @@
-//! Local MCP stdio server. This is a deliberately read-only initial slice;
-//! Workbench actions and mutations must wait for scoped Host/UI acknowledgments.
+//! Local MCP stdio server with read-only discovery and capability-bound
+//! Workbench navigation and Agent collaboration using the authenticated Host.
 //!
 //! Keep all stdout traffic as newline-delimited JSON-RPC. In particular, do
 //! not delegate to the existing human-oriented CLI printing paths.
@@ -319,6 +319,34 @@ fn tool_definitions() -> Vec<Value> {
             }, "required": ["handle"], "additionalProperties": false},
             "annotations": {"readOnlyHint": true}
         }),
+        json!({
+            "name": "alera.focus_agent",
+            "description": "Focus an existing running same-workspace Agent Terminal; requires Host capability and Flutter applied ACK, never recreates PTY.",
+            "inputSchema": {"type": "object", "properties": {
+                "handle": {"type": "string", "minLength": 1},
+                "windowId": {"type": "string"}
+            }, "required": ["handle"], "additionalProperties": false},
+            "annotations": {"readOnlyHint": false}
+        }),
+        json!({
+            "name": "alera.send_agent_message",
+            "description": "Queue one durable Orchestration v2 message to a different live same-workspace Agent. Busy Agents receive it when idle; queued/delivered is not task completion.",
+            "inputSchema": {"type": "object", "properties": {
+                "toHandle": {"type": "string", "minLength": 1, "maxLength": 128},
+                "subject": {"type": "string", "minLength": 1, "maxLength": 128},
+                "body": {"type": "string", "minLength": 1, "maxLength": 8192},
+                "clientMutationId": {"type": "string", "minLength": 1, "maxLength": 128}
+            }, "required": ["toHandle", "subject", "body", "clientMutationId"], "additionalProperties": false},
+            "annotations": {"readOnlyHint": false}
+        }),
+        json!({
+            "name": "alera.get_agent_message_status",
+            "description": "Read queued/delivered/read status for this Agent's own message. Delivery or read is not task completion.",
+            "inputSchema": {"type": "object", "properties": {
+                "messageId": {"type": "string", "minLength": 1, "maxLength": 128}
+            }, "required": ["messageId"], "additionalProperties": false},
+            "annotations": {"readOnlyHint": true}
+        }),
     ]
 }
 
@@ -336,6 +364,9 @@ fn supported_tool(name: &str) -> bool {
             | "alera.search_agents"
             | "alera.get_agent_activity"
             | "alera.read_agent_output"
+            | "alera.focus_agent"
+            | "alera.send_agent_message"
+            | "alera.get_agent_message_status"
     )
 }
 
@@ -470,7 +501,44 @@ async fn execute_tool_connected(
         "alera.open_file"
         | "alera.reveal_file"
         | "alera.open_git_graph"
-        | "alera.compare_branches" => execute_ui_tool(client, name, args).await,
+        | "alera.compare_branches"
+        | "alera.focus_agent" => execute_ui_tool(client, name, args).await,
+        "alera.send_agent_message" => {
+            let (session, workspace, capability) = agent_identity(client).await?;
+            let to_handle = required_str(args, "toHandle")?;
+            let subject = required_str(args, "subject")?;
+            let body = args
+                .get("body")
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty() && value.len() <= 8192)
+                .ok_or("body must be non-empty text no longer than 8192 bytes")?;
+            let mutation_id = required_str(args, "clientMutationId")?;
+            client
+                .request_value(
+                    "agentControl.send",
+                    &json!({
+                        "sessionId": session, "workspaceId": workspace,
+                        "capability": capability, "toHandle": to_handle,
+                        "subject": subject, "body": body, "clientMutationId": mutation_id
+                    }),
+                )
+                .await
+                .map_err(host_error)
+        }
+        "alera.get_agent_message_status" => {
+            let (session, workspace, capability) = agent_identity(client).await?;
+            let message_id = required_str(args, "messageId")?;
+            client
+                .request_value(
+                    "agentControl.messageStatus",
+                    &json!({
+                        "sessionId": session, "workspaceId": workspace,
+                        "capability": capability, "messageId": message_id
+                    }),
+                )
+                .await
+                .map_err(host_error)
+        }
         "alera.search_agents" => {
             let workspace = caller_workspace(client).await?;
             let limit = limit(args)?;
@@ -560,18 +628,13 @@ async fn execute_ui_tool(
     name: &str,
     args: &Value,
 ) -> Result<Value, String> {
-    let workspace = caller_workspace(client).await?;
-    let session = std::env::var("ALERA_TERMINAL_HANDLE")
-        .map_err(|_| "Alera MCP UI requires a Host-managed Terminal".to_string())?;
-    let capability = std::env::var("ALERA_MCP_UI_TOKEN")
-        .ok()
-        .filter(|token| token.len() == 64)
-        .ok_or("Alera MCP UI capability is unavailable for this Terminal")?;
+    let (session, workspace, capability) = agent_identity(client).await?;
     let action = match name {
         "alera.open_file" => "open_file",
         "alera.reveal_file" => "reveal_file",
         "alera.open_git_graph" => "open_git_graph",
         "alera.compare_branches" => "compare_branches",
+        "alera.focus_agent" => "focus_agent",
         _ => return Err("Unknown MCP UI tool".to_string()),
     };
     let mut arguments = args.as_object().cloned().unwrap_or_default();
@@ -635,6 +698,41 @@ async fn execute_ui_tool(
     }
 }
 
+/// Validates a Host-minted per-PTY proof before any Agent write or UI action.
+/// Caller-provided environment IDs alone never authorize these operations.
+async fn agent_identity(
+    client: &mut RuntimeHostRpcClient,
+) -> Result<(String, String, String), String> {
+    let session = std::env::var("ALERA_TERMINAL_HANDLE")
+        .ok()
+        .filter(|value| !value.is_empty())
+        .ok_or("Alera MCP requires a Host-managed Agent Terminal")?;
+    let workspace = std::env::var("ALERA_WORKSPACE_ID")
+        .ok()
+        .filter(|value| !value.is_empty())
+        .ok_or("Alera MCP requires a Host-managed Agent workspace")?;
+    let capability = std::env::var("ALERA_MCP_UI_TOKEN")
+        .ok()
+        .filter(|value| value.len() == 64)
+        .ok_or("Alera MCP Agent capability is unavailable")?;
+    let proof = client
+        .request_value(
+            "agentControl.scope",
+            &json!({
+                "sessionId": session, "workspaceId": workspace, "capability": capability
+            }),
+        )
+        .await
+        .map_err(host_error)?;
+    if proof["authorized"] != true
+        || proof["sessionId"] != session
+        || proof["workspaceId"] != workspace
+    {
+        return Err("Alera Host rejected the Agent identity or workspace".into());
+    }
+    Ok((session, workspace, capability))
+}
+
 fn check_keys(tool: &str, args: &Value) -> Result<(), String> {
     let allowed: &[&str] = match tool {
         "alera.list_projects" => &["query", "limit"],
@@ -651,9 +749,12 @@ fn check_keys(tool: &str, args: &Value) -> Result<(), String> {
             "selectedRef",
         ],
         "alera.compare_branches" => &["windowId", "gitDiffRoot", "baseRef", "headRef"],
+        "alera.focus_agent" => &["handle", "windowId"],
         "alera.search_agents" => &["query", "limit"],
         "alera.get_agent_activity" => &["handle"],
         "alera.read_agent_output" => &["handle", "cursor", "maxBytes"],
+        "alera.send_agent_message" => &["toHandle", "subject", "body", "clientMutationId"],
+        "alera.get_agent_message_status" => &["messageId"],
         _ => return Err("Unknown tool".to_string()),
     };
     let args = args.as_object().ok_or("Tool arguments must be an object")?;
@@ -994,13 +1095,13 @@ mod tests {
         .unwrap();
         assert_eq!(listed["id"], "list");
         let tools = listed["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 11);
+        assert_eq!(tools.len(), 14);
         assert_eq!(
             tools
                 .iter()
                 .filter(|tool| tool["annotations"]["readOnlyHint"] == true)
                 .count(),
-            7
+            8
         );
         assert!(tools
             .iter()
@@ -1038,6 +1139,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(unknown_tool["error"]["code"], -32602);
+        assert!(supported_tool("alera.send_agent_message"));
+        assert!(supported_tool("alera.focus_agent"));
+        assert!(supported_tool("alera.get_agent_message_status"));
+        assert!(!supported_tool("alera.send_agent_input"));
     }
 
     #[test]
@@ -1048,6 +1153,17 @@ mod tests {
         assert!(limit(&json!({"limit": -1})).is_err());
         assert!(require_current_workspace(Some("foreign"), "current").is_err());
         assert!(require_current_workspace(Some("current"), "current").is_ok());
+        assert!(check_keys(
+            "alera.send_agent_message",
+            &json!({"toHandle":"agent", "body":"hi", "subject":"status",
+                "clientMutationId":"id", "arbitraryPtyInput":"rm -rf"}),
+        )
+        .is_err());
+        assert!(check_keys(
+            "alera.focus_agent",
+            &json!({"handle":"agent", "tabId":"foreign-tab"}),
+        )
+        .is_err());
     }
 
     #[test]

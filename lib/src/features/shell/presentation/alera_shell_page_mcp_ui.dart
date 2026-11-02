@@ -115,6 +115,29 @@ extension _AleraShellMcpUi on _AleraShellPageBodyState {
     }
     if (!mounted) throw const _McpUiFailure('ui_not_ready');
     switch (action) {
+      case 'focus_agent':
+        final handle = arguments['handle'];
+        final tabId = arguments['tabId'];
+        if (handle is! String || tabId is! String) {
+          throw const _McpUiFailure('agent_missing');
+        }
+        final tabs =
+            ref
+                .read(workbenchControllerProvider)
+                .tabsByWorkspace[workspaceId] ??
+            const <WorkspaceTabRecord>[];
+        final targets = tabs.where(
+          (tab) =>
+              tab.id == tabId &&
+              tab.kind == WorkspaceTabKind.terminal &&
+              tab.payload[workspaceTabTerminalSessionIdPayloadKey] == handle,
+        );
+        if (targets.length != 1) {
+          throw const _McpUiFailure('agent_missing');
+        }
+        // This only selects the existing Tab; no PTY is created or restarted.
+        await _mcpSelectAndVerifyTab(workspaceId, tabId);
+        return tabId;
       case 'open_file':
         final path = await _mcpExistingWorkspacePath(
           workspace,

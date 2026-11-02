@@ -213,7 +213,10 @@ try {
         @{jsonrpc='2.0'; id=14; method='tools/call'; params=@{name='alera.read_agent_output'; arguments=@{handle=$terminal.handle; maxBytes=8193}}},
         @{jsonrpc='2.0'; id=15; method='tools/call'; params=@{name='alera.list_projects'; arguments=@{limit=999}}},
         @{jsonrpc='2.0'; id=18; method='tools/call'; params=@{name='alera.open_file'; arguments=@{relativePath='src/mcp_test_file.rs'}}},
-        @{jsonrpc='2.0'; id=19; method='tools/call'; params=@{name='alera.compare_branches'; arguments=@{baseRef='main'; headRef='dev'}}}
+        @{jsonrpc='2.0'; id=19; method='tools/call'; params=@{name='alera.compare_branches'; arguments=@{baseRef='main'; headRef='dev'}}},
+        @{jsonrpc='2.0'; id=20; method='tools/call'; params=@{name='alera.send_agent_message'; arguments=@{toHandle=$terminal.handle; subject='test'; body='must deny unbound'; clientMutationId='unguarded-1'}}},
+        @{jsonrpc='2.0'; id=21; method='tools/call'; params=@{name='alera.focus_agent'; arguments=@{handle=$terminal.handle}}},
+        @{jsonrpc='2.0'; id=22; method='tools/call'; params=@{name='alera.get_agent_message_status'; arguments=@{messageId='msg-not-owned'}}}
     )
     $responses = Invoke-Mcp -Requests $requests
     if ($responses.Count -ne ($requests.Count - 1)) {
@@ -224,11 +227,11 @@ try {
         throw 'MCP initialization failed'
     }
     $listing = @($responses | Where-Object { $_.id -eq 2 })[0]
-    if ($listing.result.tools.Count -ne 11) {
-        throw "Expected 11 tools (7 read-only, 4 guarded UI), found $($listing.result.tools.Count)"
+    if ($listing.result.tools.Count -ne 14) {
+        throw "Expected 14 tools (8 read-only, 6 guarded UI/Agent), found $($listing.result.tools.Count)"
     }
-    if (@($listing.result.tools | Where-Object { $_.annotations.readOnlyHint -eq $true }).Count -ne 7) {
-        throw 'Expected seven read-only tools'
+    if (@($listing.result.tools | Where-Object { $_.annotations.readOnlyHint -eq $true }).Count -ne 8) {
+        throw 'Expected eight read-only tools'
     }
     $projects = Assert-McpResult -Responses $responses -Id 3 -IsError $false
     if (@($projects.structuredContent.items | Where-Object { $_.id -eq $projectId }).Count -ne 1) {
@@ -275,6 +278,9 @@ try {
     $null = Assert-McpResult -Responses $responses -Id 15 -IsError $true
     $null = Assert-McpResult -Responses $responses -Id 18 -IsError $true
     $null = Assert-McpResult -Responses $responses -Id 19 -IsError $true
+    $null = Assert-McpResult -Responses $responses -Id 20 -IsError $true
+    $null = Assert-McpResult -Responses $responses -Id 21 -IsError $true
+    $null = Assert-McpResult -Responses $responses -Id 22 -IsError $true
     $hasCursorMarker = $false
     for ($i = 0; $i -lt 20; $i++) {
         $read = Invoke-Mcp -Requests @(
@@ -308,8 +314,8 @@ try {
     $null = Assert-McpResult -Responses $invalid -Id 10 -IsError $true
 
     Write-Output 'PASS isolated Host online and authenticated'
-    Write-Output 'PASS MCP stdio initialize + 7 read-only and 4 gated UI tool descriptions'
-    Write-Output 'PASS UI tools fail closed when PTY capability was not inherited'
+    Write-Output 'PASS MCP stdio initialize + 8 read-only and 6 guarded UI/Agent tool descriptions'
+    Write-Output 'PASS UI, Agent focus, message and receipt tools fail closed without Host-issued PTY capability'
     Write-Output 'PASS Host-backed projects, workspaces, tabs, file search, live Agent inventory'
     Write-Output 'PASS Host-injected Agent activity + bounded terminal output'
     Write-Output 'PASS Terminal output marker and incremental cursor'

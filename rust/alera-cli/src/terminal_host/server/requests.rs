@@ -260,6 +260,10 @@ impl ServerActor {
             | "uiControl.status"
             | "uiControl.complete"
             | "uiControl.windows" => self.handle_mcp_ui_request(client_id, request_type, payload),
+            "agentControl.scope" | "agentControl.send" | "agentControl.messageStatus" => {
+                self.handle_mcp_agent_request(client_id, request_type, payload)
+                    .await
+            }
             "mobile.workspaceQuickOpen.stop" => self.stop_mobile_workspace_quick_open(payload),
             "configure" => {
                 self.require_auth(client_id)?;
