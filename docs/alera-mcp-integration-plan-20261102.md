@@ -13,9 +13,12 @@ settings Windows desktop **13/13 PASS**, and managed Codex/Claude MCP launch
 argument injection is implemented but **opt-in only (default OFF)**.
 **Real Windows Host OS-process restart + same-handle Agent capability
 rotation 5/5 PASS**, installed native Codex/Claude CLI parsing and bundled
-MCP stdio 3/3 PASS. Actual model-initiated tool use/response, explicit
-cross-workspace grants, macOS/Linux and two-real-Flutter-window platform
-acceptance remain pending. No feature merged, pushed or released.
+MCP stdio 3/3 PASS. **Actual authenticated Codex and Claude model →
+MCP tool call → Host workspace result 2/2 PASS** using a disposable
+Host-issued PTY and transient CLI configuration. Full Alera Managed Profile
+auto-injection, natural Agent collaboration/response, explicit cross-workspace
+grants, macOS/Linux and two-real-Flutter-window platform acceptance remain
+pending. No feature merged, pushed or released.
 
 ## Intent / fixed scope
 
@@ -133,14 +136,19 @@ operations report separate `accepted` and `applied` acknowledgments.
       a live Agent PTY correctly blocks ordinary shutdown; old bearer is
       rejected, new PTY bearer accepted, old remains revoked. The separate
       in-process Host-replacement unit test also passes.
-- [ ] True external Codex/Claude Agent idle→delivery→response lifecycle:
-      model-initiated tool invocation remains unverified. Synthetic status
+- [x] Real authenticated Codex and Claude Code models each invoked
+      `alera.list_workspaces` over their own transient MCP registration from
+      an Alera Host-owned PTY. The test checked actual model tool-call events
+      and **the returned disposable Workspace ID**, not model prose: **2/2
+      PASS**. Both used limited, read-only test sessions.
+- [ ] True external Codex/Claude Agent **idle→queued message delivery→
+      recipient response** lifecycle remains unverified. Synthetic status
       and real PTY delivery acceptance are not a model response.
 - **Current Step 3 exit (same-workspace only):** Agent can find another
   Agent, read bounded progress, focus its existing Tab, queue one permitted
   durable message, and inspect its delivery state. Global/cross-workspace
-  authorization, actual natural idle delivery and restart recovery remain
-  explicitly outside this accepted subset.
+  authorization and actual natural Agent idle delivery/response remain
+  explicitly outside this accepted subset. OS Host token rotation is verified.
 
 ### 4. Settings + injection + final acceptance
 - [x] Expose a typed **eight-entry allowlisted** settings catalog via
@@ -160,8 +168,14 @@ operations report separate `accepted` and `applied` acknowledgments.
       Real installed Codex 0.165.0 discovers the transient config, Claude
       2.1.312 accepts the transient flag, bundled MCP stdio lists all 18
       tools: **3/3 PASS**. This is NOT a model/tool call E2E.
-- [ ] Test MCP over real agent/stdio, UI behavior, settings notifications,
-      auth scope, platform smoke tests and CI build; update usage docs.
+- [x] Actual Codex/Claude **model-initiated read-only MCP tool call and result
+      2/2 PASS** using `tool/testing/mcp_real_model_agent_e2e.py`. The models
+      ran inside the Host-owned PTY with transient MCP CLI flags, not through
+      Alera Managed Profile auto-spawn.
+- [ ] Test Managed Profile auto-spawn with real provider, model-driven UI
+      changes/settings notifications, macOS/Linux, two true Flutter windows,
+      cross-workspace grants and final CI/release gates. Do not equate a
+      read-only model tool call with full feature acceptance.
 - **Exit:** all supported tools have tests, feature-flag or opt-in policy is
   clear, integration passes; only then consider opt-in enablement/merge.
 
@@ -342,6 +356,29 @@ operations report separate `accepted` and `applied` acknowledgments.
   `build/windows/shared_gui_ninja/mcp_installed_cli_compat_result.json`.
   This verifies CLI native parsing, **not** real model-initiated tool calls,
   which remain an explicit pending gate.
+- 2026-11-02: **Actual Codex/Claude model-initiated MCP read-only calls 2/2
+  PASS**. Reused only the private, already-registered
+  `build/windows/shared_gui_ninja/e2e_host_restart` Runtime and spawned
+  Host-managed Agent PTY. Actual authenticated Codex 0.165.0 ran an
+  ephemeral read-only `codex exec` with transient MCP overrides. Actual
+  authenticated Claude Code 2.1.312 ran a nonpersistent bounded
+  `--print` session, `--strict-mcp-config`, disabled built-in tools and
+  pre-approved **only** the read-only MCP tool being tested. Both models
+  called `alera.list_workspaces`. The E2E parser correlated actual tool
+  call events with the real tool result and checked the isolated Workspace ID;
+  it does not trust the model's final text as proof.
+  Reproduction: `tool/testing/mcp_real_model_agent_e2e.py` invoked from
+  the same disposable Host-issued PTY. Sanitized reports (no auth or tool
+  transcript) at ignored
+  `build/windows/shared_gui_ninja/e2e_host_restart/mcp_real_model_codex_result.json`
+  and `mcp_real_model_claude_result.json`.
+  Initial Claude probe using `--bare` could not use existing OAuth because
+  that flag intentionally disables OAuth/Keychain access; a subsequent
+  attempt also needed explicit approval of the one read-only MCP tool.
+  Both issues were confined to test invocation parameters, not production
+  Alera MCP source. These tests do **not** yet verify Alera Managed Profile
+  opt-in auto-injection, mutating UI controls, or natural inter-Agent
+  conversation completion.
 
 ### Reproduce Step 2 Windows desktop acceptance (disposable profile only)
 
