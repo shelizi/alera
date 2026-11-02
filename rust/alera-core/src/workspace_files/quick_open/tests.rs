@@ -200,6 +200,54 @@ fn skips_files_removed_while_building_a_quick_open_index() {
 }
 
 #[test]
+fn skips_invalid_metadata_errors_without_breaking_the_index() {
+    let workspace = tempfile::tempdir().unwrap();
+    let root = dunce::canonicalize(workspace.path()).unwrap();
+    let invalid = root.join("invalid\0file");
+    // An invalid path produces an error beyond NotFound/PermissionDenied.
+    // As with Windows `nul`, it must not abort the shared index.
+    let error = fs::symlink_metadata(&invalid).unwrap_err();
+    assert!(!matches!(
+        error.kind(),
+        io::ErrorKind::NotFound | io::ErrorKind::PermissionDenied
+    ));
+    assert!(
+        quick_open_relative_path(&root, &invalid, true, &QuickOpenExclusions::new(vec![]))
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn skips_windows_reserved_device_paths_without_aborting_other_searches() {
+    let workspace = tempfile::tempdir().unwrap();
+    let root = dunce::canonicalize(workspace.path()).unwrap();
+    fs::create_dir(root.join("src")).unwrap();
+    fs::write(root.join("src/working_file.rs"), "fn main() {}").unwrap();
+
+    // A checkout made on another OS can contain names like `nul` which
+    // Windows cannot query as ordinary files (often os error 1).
+    let invalid = root.join("nul");
+    assert!(
+        quick_open_relative_path(&root, &invalid, true, &QuickOpenExclusions::new(vec![]))
+            .unwrap()
+            .is_none()
+    );
+
+    // Ctrl+P and Explorer share one index and must both retain valid entries.
+    let session = start(&workspace);
+    assert!(paths(&session, "working_file", 20).contains(&"src/working_file.rs".to_string()));
+    assert!(
+        search_workspace_explorer_filter_session(session.clone(), "src".into(), 20, false)
+            .unwrap()
+            .iter()
+            .any(|item| item.relative_path == "src" && item.is_directory)
+    );
+    stop_workspace_quick_open_session(session);
+}
+
+#[test]
 fn indexes_gitignored_files_once_and_filters_them_at_query_time() {
     let workspace = tempfile::tempdir().unwrap();
     fs::write(workspace.path().join(".gitignore"), "ignored.txt\n").unwrap();
