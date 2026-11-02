@@ -207,3 +207,26 @@ fn abort_merge(repo: &Repository, head: &git2::Commit<'_>, original: GitError) -
     }
     GitError::new(kind, context)
 }
+
+/// Unresolved merge paths, returned from index stages rather than the status
+/// snapshot so both add/add and delete/modify conflicts are visible.
+pub fn merge_conflicted_paths(path: &str) -> Result<Vec<String>, GitError> {
+    let repo = open_repo(path)?;
+    if repo.state() != git2::RepositoryState::Merge {
+        return Ok(Vec::new());
+    }
+    let index = repo.index().map_err(GitError::from_git2)?;
+    let mut paths = Vec::new();
+    for conflict in index.conflicts().map_err(GitError::from_git2)? {
+        let conflict = conflict.map_err(GitError::from_git2)?;
+        let entry = conflict
+            .our
+            .or(conflict.their)
+            .or(conflict.ancestor)
+            .ok_or_else(|| GitError::new(GitErrorKind::Internal, "empty conflict"))?;
+        paths.push(String::from_utf8_lossy(&entry.path).to_string());
+    }
+    paths.sort();
+    paths.dedup();
+    Ok(paths)
+}

@@ -131,6 +131,10 @@ fn merge_conflict_is_left_for_resolution_and_blocks_non_clean_operations() {
     let repo = Repository::open(directory.path()).expect("reopen conflicted repository");
     assert_eq!(repo.state(), RepositoryState::Merge);
     assert!(repo.index().expect("open conflict index").has_conflicts());
+    assert_eq!(
+        super::merge_conflicted_paths(path_str(&directory)).expect("list conflicts"),
+        vec!["README.md".to_string()]
+    );
     let non_clean =
         rebase_onto(path_str(&directory), "main").expect_err("in-progress merge blocks rebase");
     assert_eq!(non_clean.kind, GitErrorKind::Conflict);
