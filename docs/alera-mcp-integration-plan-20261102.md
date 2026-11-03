@@ -20,8 +20,10 @@ auto-launch and MCP argument injection on real Codex/Claude OS processes
 5/5 PASS**, while managed Claude's *model execution* pauses on the normal
 new-folder trust gate. **Actual Claude model → Alera MCP open_file →
 Flutter applied ACK 1/1 PASS**, with the test editor tab visually verified.
-Natural Agent collaboration/response, model-driven settings changes, explicit
-cross-workspace grants, macOS/Linux and two-real-Flutter-window platform
+**Actual Claude model → allowlisted MCP setting mutation → Flutter
+SettingsController applied/readback → original value restored 1/1 PASS**.
+Natural Agent collaboration/response, model-driven *cross-window settings
+notification* verification, explicit cross-workspace grants, macOS/Linux and two-real-Flutter-window platform
 acceptance remain pending. No feature merged, pushed or released.
 
 **Cross-platform enablement follow-up (same isolated branch):** the existing
@@ -198,14 +200,23 @@ operations report separate `accepted` and `applied` acknowledgments.
       correlated tool result contained `status: applied` and `tabId`;
       the Windows Flutter editor visibly selected `needle.dart`. **1/1 PASS**,
       `tool/testing/mcp_real_model_flutter_ui_e2e.py`.
+- [x] One actual authenticated Claude model invoked only
+      `alera.update_setting` for a test-only `editor.tabSize`, with an
+      exact prior-value CAS. The correlated tool result confirmed
+      `kind=setting` and `status=applied`; a separate real Flutter
+      `alera.get_setting` confirmed the new value, and the harness
+      **restored the original value via Host-backed CAS even on failure**.
+      **1/1 PASS**, `tool/testing/mcp_real_model_settings_e2e.py`. This
+      verifies the Flutter settings owner, not every other open window
+      reacting to a setting notification.
 - [ ] Approve managed Claude's new **disposable** Workspace trust challenge
       through its normal UI before claiming that *the Managed Profile's own
       model* completed a tool call. An empty isolated Claude config has no
       existing OAuth, so the test did not copy credentials, silently approve
       trust or rewrite the user's Claude config. Managed Codex startup and
       MCP server process were independently verified.
-- [ ] Model-initiated settings changes/notifications, real Managed Profile
-      Claude model response after trust approval, macOS/Linux, two true
+- [ ] Settings change notifications in a second real window, real Managed
+      Profile Claude model response after trust approval, macOS/Linux, two true
       Flutter windows, cross-workspace grants and final CI/release gates.
       Do not equate startup/injection with model task completion.
 - **Exit:** all supported tools have tests, feature-flag or opt-in policy is
