@@ -40,7 +40,26 @@ x64 acceptance also remain pending. The Windows **two genuine Flutter Shells +
 Host-owned Agent PTY + explicit-window MCP routing, file navigation and
 setting CAS cross-window readback/rollback** passed **16/16** on 2026-11-03
 in a disposable E2E profile. This verifies observed setting reads, not
-unsolicited Settings UI rebuild notifications. No merge, push or release.
+unsolicited Settings UI rebuild notifications.
+
+**2026-11-03 rebuild gate:** the isolated Windows GUI kernel was rebuilt and
+the Rust CLI was force-recompiled with `ALERA_E2E_REUSE_CLI=0` (Cargo dev
+profile and isolated Debug install completed with exit 0). This exposed a
+dangerous fixture mismatch: the prior `ALERA_E2E_REUSE_CLI=1` Debug bundle
+contained a stale `alera.exe` that exited 64 for `mcp --help`. The isolated
+build script and dual-GUI test now fail closed if the installed CLI lacks
+`mcp`. With the newly built MCP CLI, `mcp_cross_platform_smoke.py` completed
+`MCP_NATIVE_PLATFORM_SMOKE_PASS`, including a real Host-owned PTY, inherited
+Agent bearer and unauthorized-access denial.
+
+The **new GUI dual-real-window regression still FAILS** after both genuine
+Flutter windows and an Agent PTY register: the child Python MCP verification
+does not complete and produces no new result file. The harness now reads PTY
+error markers from the cursor captured *after* previous scrollback, avoiding
+historical traceback false positives. The earlier 16/16 result is a historical
+pass only, not new-build acceptance. Native Managed Claude idle-hook/autonomous
+reply, macOS/Linux CI and broad Shell widget suite remain blocked.
+No merge, push or release.
 
 **Cross-platform enablement follow-up (same isolated branch):** the existing
 portable stdio MCP implementation and Mac/Linux packaged CLI locations are

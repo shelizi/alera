@@ -115,6 +115,13 @@ def spawn_agent() -> None:
 def run_in_real_agent() -> dict:
     INNER_REPORT.unlink(missing_ok=True)
     command = subprocess.list2cmdline([sys.executable, str(INNER)])
+    # Restrict failure markers to output produced after this test starts.
+    # Terminal scrollback can contain tracebacks from older invocations.
+    snapshot = cli("terminal", "--runtime-dir", str(RUNTIME), "--json",
+                   "read", "--handle", SESSION_ID, "--max-bytes", "1024")
+    cursor = snapshot.get("nextCursor")
+    if not isinstance(cursor, int):
+        raise AssertionError("disposable terminal did not provide a read cursor")
     cli("terminal", "--runtime-dir", str(RUNTIME), "--json",
         "write", "--handle", SESSION_ID, "--text", command, "--enter")
     deadline = time.monotonic() + 90
@@ -125,10 +132,13 @@ def run_in_real_agent() -> dict:
                 raise AssertionError("real two-Shell MCP acceptance report invalid")
             return report
         output = cli("terminal", "--runtime-dir", str(RUNTIME), "--json",
-                     "read", "--handle", SESSION_ID, "--max-bytes", "8192")
+                     "read", "--handle", SESSION_ID, "--cursor", str(cursor),
+                     "--max-bytes", "8192")
         text = str(output.get("text", ""))
-        if "TWO_REAL_FLUTTER_FAILURE" in text or "Traceback (most recent call last)" in text:
-            raise AssertionError("MCP E2E failed in disposable Agent terminal")
+        if isinstance(output.get("nextCursor"), int):
+            cursor = output["nextCursor"]
+        if "TWO_REAL_FLUTTER_FAILURE" in text:
+            raise AssertionError("current inner Agent MCP acceptance failed")
         time.sleep(0.3)
     raise AssertionError("real two-Shell MCP result timed out")
 
@@ -139,6 +149,12 @@ def main() -> None:
             or not (RUNTIME / "runtime.sqlite").is_file()
             or not (WORKSPACE / "src/deep/needle.dart").is_file()):
         raise RuntimeError("refusing non-isolated or incomplete Windows fixture")
+    # Reusing an earlier prebuilt CLI can silently put a non-MCP sidecar in
+    # the new Flutter bundle. Reject it before starting disposable windows.
+    check = subprocess.run([str(CLI), "mcp", "--help"], capture_output=True,
+                           timeout=12, check=False)
+    if check.returncode != 0:
+        raise RuntimeError("isolated GUI contains a stale alera.exe without MCP; rebuild Rust sidecar")
     if host_running():
         raise RuntimeError("disposable Host was already running; refusing to touch it")
     children: list[subprocess.Popen] = []
