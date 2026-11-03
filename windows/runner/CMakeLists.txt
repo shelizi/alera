@@ -41,6 +41,12 @@ target_compile_definitions(${BINARY_NAME} PRIVATE "NOMINMAX")
 target_compile_definitions(${BINARY_NAME} PRIVATE ALERA_APP_NAME=L"${ALERA_APP_NAME}")
 target_compile_definitions(${BINARY_NAME} PRIVATE ALERA_APP_ID=L"${ALERA_APP_ID}")
 
+# The disposable Windows MCP fixture may start a second real Flutter Shell.
+# Production releases never accept the alternate instance identity.
+if("$ENV{ALERA_E2E_DESKTOP}" STREQUAL "1")
+  target_compile_definitions(${BINARY_NAME} PRIVATE ALERA_MCP_E2E_SECOND_SHELL=1)
+endif()
+
 # Add dependency libraries and include directories. Add any application-specific
 # dependencies here.
 target_link_libraries(${BINARY_NAME} PRIVATE flutter flutter_wrapper_app flutter_wrapper_plugin)

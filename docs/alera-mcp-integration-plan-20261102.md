@@ -22,9 +22,13 @@ new-folder trust gate. **Actual Claude model → Alera MCP open_file →
 Flutter applied ACK 1/1 PASS**, with the test editor tab visually verified.
 **Actual Claude model → allowlisted MCP setting mutation → Flutter
 SettingsController applied/readback → original value restored 1/1 PASS**.
-Natural Agent collaboration/response, model-driven *cross-window settings
-notification* verification, explicit cross-workspace grants, macOS/Linux and two-real-Flutter-window platform
-acceptance remain pending. No feature merged, pushed or released.
+Natural Agent collaboration/response, proactive cross-window settings UI
+notifications, explicit cross-workspace grants, native macOS ARM64 and Linux x64
+acceptance remain pending. The Windows **two genuine Flutter Shells +
+Host-owned Agent PTY + explicit-window MCP routing, file navigation and
+setting CAS cross-window readback/rollback** passed **16/16** on 2026-11-03
+in a disposable E2E profile. This verifies observed setting reads, not
+unsolicited Settings UI rebuild notifications. No merge, push or release.
 
 **Cross-platform enablement follow-up (same isolated branch):** the existing
 portable stdio MCP implementation and Mac/Linux packaged CLI locations are
