@@ -448,9 +448,7 @@ class _AleraShellPageBodyState extends ConsumerState<_AleraShellPageBody>
                     trailing: Row(
                       mainAxisSize: .min,
                       children: <Widget>[
-                        if (project?.isGitRepository == true &&
-                            workspace != null &&
-                            sourceControlScope?.isWorkspaceRoot == true)
+                        if (workspace != null && sourceControlScope != null)
                           WorkspaceBranchStatusBarControl(
                             workspace: workspace,
                             sourceControlScope: sourceControlScope,
@@ -478,39 +476,58 @@ class _AleraShellPageBodyState extends ConsumerState<_AleraShellPageBody>
                                 mergeBaseOid: snapshot.mergeBaseOid,
                               );
                             },
-                            onCreateMergeWorkspace: (branch) async {
-                              // Register the linked checkout with Alera so
-                              // a conflicted merge can be resolved in-app.
-                              final result = await ref
-                                  .read(workspaceServiceProvider)
-                                  .createLinkedWorkspace(
-                                    project: project!,
-                                    sourceBranch: '',
-                                    newBranchName: branch,
-                                    reuseExistingBranch: true,
-                                    name:
-                                        'Merge $branch ${DateTime.now().millisecondsSinceEpoch}',
-                                  );
-                              return result.workspace;
-                            },
-                            onOpenMergeWorkspace: (mergeWorkspace) =>
-                                controller.selectWorkspace(
-                                  project: project!,
-                                  workspace: mergeWorkspace,
-                                ),
+                            // Do not merge an independent nested Git repo
+                            // using the parent project's linked worktrees.
+                            onCreateMergeWorkspace:
+                                project?.isGitRepository == true &&
+                                    sourceControlScope.isWorkspaceRoot
+                                ? (branch) async {
+                                    // Register the linked checkout with Alera so
+                                    // a conflicted merge can be resolved in-app.
+                                    final result = await ref
+                                        .read(workspaceServiceProvider)
+                                        .createLinkedWorkspace(
+                                          project: project!,
+                                          sourceBranch: '',
+                                          newBranchName: branch,
+                                          reuseExistingBranch: true,
+                                          name:
+                                              'Merge $branch ${DateTime.now().millisecondsSinceEpoch}',
+                                        );
+                                    return result.workspace;
+                                  }
+                                : null,
+                            onOpenMergeWorkspace:
+                                project?.isGitRepository == true &&
+                                    sourceControlScope.isWorkspaceRoot
+                                ? (mergeWorkspace) =>
+                                      controller.selectWorkspace(
+                                        project: project!,
+                                        workspace: mergeWorkspace,
+                                      )
+                                : null,
                             onSwitchBranch: (branch) async {
-                              await controller.switchWorkspaceBranch(
-                                project: project!,
-                                workspace: workspace,
-                                branch: branch,
-                              );
-                              await ref
-                                  .read(
-                                    workspaceSourceControlControllerProvider(
-                                      sourceControlScope.path,
-                                    ).notifier,
-                                  )
-                                  .refresh();
+                              if (sourceControlScope.isWorkspaceRoot) {
+                                await controller.switchWorkspaceBranch(
+                                  project: project!,
+                                  workspace: workspace,
+                                  branch: branch,
+                                );
+                              } else {
+                                await ref
+                                    .read(gitBackendProvider)
+                                    .checkoutBranch(
+                                      path: sourceControlScope.path,
+                                      branch: branch,
+                                    );
+                              }
+                              if (mounted) {
+                                ref.invalidate(
+                                  workspaceSourceControlControllerProvider(
+                                    sourceControlScope.path,
+                                  ),
+                                );
+                              }
                             },
                           ),
                         const LanguageIntelligenceStatusBarControl(),

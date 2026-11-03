@@ -182,7 +182,9 @@ class const WorkspaceContextSidebar({
                                         workspace: workspace,
                                         sourceControlScope: sourceControlScope,
                                         onRefreshRepository:
-                                            onRefreshRepository,
+                                            sourceControlScope.isWorkspaceRoot
+                                            ? onRefreshRepository
+                                            : null,
                                         viewMode: prefs.gitDiffViewMode,
                                         onViewModeChanged: onSetGitDiffViewMode,
                                         groupMode: prefs.gitDiffGroupMode,
