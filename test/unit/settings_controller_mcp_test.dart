@@ -29,6 +29,49 @@ void main() {
     );
   });
 
+  test(
+    'MCP fresh read reloads persisted value changed by another window',
+    () async {
+      final db = AleraDatabase(executor: NativeDatabase.memory());
+      addTearDown(db.close);
+      final repository = DriftSettingsRepository(db);
+      final first = ProviderContainer(
+        overrides: [settingsRepositoryProvider.overrideWithValue(repository)],
+      );
+      final second = ProviderContainer(
+        overrides: [settingsRepositoryProvider.overrideWithValue(repository)],
+      );
+      addTearDown(first.dispose);
+      addTearDown(second.dispose);
+
+      final controllerA = first.read(settingsControllerProvider.notifier);
+      final controllerB = second.read(settingsControllerProvider.notifier);
+      await controllerA.load();
+      await controllerB.load();
+      expect(controllerB.readMcpSetting('editor.tabSize'), 4);
+
+      expect(
+        await controllerA.updateMcpSetting(
+          path: 'editor.tabSize',
+          expectedValue: 4,
+          value: 5,
+        ),
+        5,
+      );
+      // Independent controller B has no in-memory event from A: this is
+      // exactly the two-process E2E race. Reading its cached state is stale.
+      expect(controllerB.readMcpSetting('editor.tabSize'), 4);
+      expect(await controllerB.readMcpSettingFresh('editor.tabSize'), 5);
+      await expectLater(
+        controllerB.readMcpSettingFresh('agents.quotas'),
+        throwsArgumentError,
+      );
+      // Repeated reads remain authoritative and the value stays persisted.
+      expect(await controllerB.readMcpSettingFresh('editor.tabSize'), 5);
+      expect((await repository.load()).editor.tabSize, 5);
+    },
+  );
+
   test('MCP settings CAS persists in real settings owner and denies stale overwrite', () async {
     final db = AleraDatabase(executor: NativeDatabase.memory());
     addTearDown(db.close);

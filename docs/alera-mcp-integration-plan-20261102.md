@@ -52,14 +52,27 @@ build script and dual-GUI test now fail closed if the installed CLI lacks
 `MCP_NATIVE_PLATFORM_SMOKE_PASS`, including a real Host-owned PTY, inherited
 Agent bearer and unauthorized-access denial.
 
-The **new GUI dual-real-window regression still FAILS** after both genuine
-Flutter windows and an Agent PTY register: the child Python MCP verification
-does not complete and produces no new result file. The harness now reads PTY
-error markers from the cursor captured *after* previous scrollback, avoiding
-historical traceback false positives. The earlier 16/16 result is a historical
-pass only, not new-build acceptance. Native Managed Claude idle-hook/autonomous
-reply, macOS/Linux CI and broad Shell widget suite remain blocked.
-No merge, push or release.
+**2026-11-04 Windows dual-GUI recovery (same disposable profile):**
+The rebuilt GUI and MCP sidecar now pass the stricter **17/17 real two-Flutter
+windows / Host-owned Agent PTY / MCP E2E** twice in succession with command
+exit 0, including both actual windows' open_file ACKs, ambiguous/forged window
+denials, an additional pre-navigation get_setting ACK, cross-window settings
+CAS and second-window readback, and restoration of the original setting.
+Both runs confirmed that the isolated Runtime Host shut down. No synthetic
+App registrations were counted. The earlier new-build failure had multiple
+real causes: UI registration raced the E2E-only initial workspace selection;
+Windows clients treated Host-advertised `configurationSyncV1` as unsupported;
+and broad settings loads could silently return a stale local Drift snapshot.
+The Shell now registers after initial selection; MCP scalar reads query the
+Host's authoritative portable/runtime settings with a strict 8-path whitelist,
+deny unavailable sources rather than returning stale values, and the client
+correctly parses the advertised configuration capability. The E2E cleanup
+harness waits for actual Host exit and never counts a teardown error as PASS.
+Focused Host capability unit 1/1, settings repository/controller 14/14 PASS,
+`git diff --check` PASS. This establishes Windows MCP readback, **not**
+automatic rebuild of Settings UI in the other window, native Managed Claude
+idle-hook/autonomous response, broad widget suite, macOS/Linux native CI, or
+cross-workspace grant authorization. No merge, push or release.
 
 **Cross-platform enablement follow-up (same isolated branch):** the existing
 portable stdio MCP implementation and Mac/Linux packaged CLI locations are

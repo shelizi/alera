@@ -92,7 +92,9 @@ extension _AleraShellMcpUi on _AleraShellPageBodyState {
     final controller = ref.read(settingsControllerProvider.notifier);
     try {
       if (command['action'] == 'get_setting') {
-        return controller.readMcpSetting(path);
+        // The MCP caller needs the committed Host value, not this window's
+        // potentially stale in-memory snapshot from an async event watcher.
+        return await controller.readMcpSettingFresh(path);
       }
       if (!args.containsKey('expectedValue') || !args.containsKey('value')) {
         throw const _McpUiFailure('setting_invalid');

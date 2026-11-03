@@ -25,7 +25,9 @@ EXE = BUILD / "runner" / "Debug" / "alera-dev.exe"
 CLI = EXE.parent / "resources" / "alera" / "alera.exe"
 INNER = Path(__file__).with_name("mcp_two_real_flutter_windows_e2e.py")
 INNER_REPORT = BUILD / "mcp_two_real_flutter_windows_result.json"
+INNER_FAILURE = BUILD / "mcp_two_real_flutter_failure.json"
 REPORT = BUILD / "mcp_two_real_windows_result.json"
+PHASE = "module"
 
 
 def cli(*args: str) -> dict:
@@ -114,6 +116,7 @@ def spawn_agent() -> None:
 
 def run_in_real_agent() -> dict:
     INNER_REPORT.unlink(missing_ok=True)
+    INNER_FAILURE.unlink(missing_ok=True)
     command = subprocess.list2cmdline([sys.executable, str(INNER)])
     # Restrict failure markers to output produced after this test starts.
     # Terminal scrollback can contain tracebacks from older invocations.
@@ -144,6 +147,8 @@ def run_in_real_agent() -> dict:
 
 
 def main() -> None:
+    global PHASE
+    PHASE = "preflight_files"
     if (os.name != "nt" or "feat-alera-mcp-control-20261102" not in str(BUILD)
             or not EXE.is_file() or not CLI.is_file() or not INNER.is_file()
             or not (RUNTIME / "runtime.sqlite").is_file()
@@ -151,17 +156,21 @@ def main() -> None:
         raise RuntimeError("refusing non-isolated or incomplete Windows fixture")
     # Reusing an earlier prebuilt CLI can silently put a non-MCP sidecar in
     # the new Flutter bundle. Reject it before starting disposable windows.
+    PHASE = "preflight_cli"
     check = subprocess.run([str(CLI), "mcp", "--help"], capture_output=True,
                            timeout=12, check=False)
     if check.returncode != 0:
         raise RuntimeError("isolated GUI contains a stale alera.exe without MCP; rebuild Rust sidecar")
+    PHASE = "preflight_host"
     if host_running():
         raise RuntimeError("disposable Host was already running; refusing to touch it")
     children: list[subprocess.Popen] = []
     checks: list[str] = []
     result = {"passed": False, "checks": checks, "disposableProfileOnly": True}
     host_started = False
+    phase = "start_primary"
     try:
+        PHASE = phase
         env = dict(os.environ, ALERA_MCP_PROFILE_INJECTION="0")
         primary = subprocess.Popen(
             [str(EXE)], cwd=str(EXE.parent), env=env,
@@ -174,6 +183,8 @@ def main() -> None:
         host_started = True
         checks.append("primary_native_shell_and_test_host")
 
+        phase = "start_secondary"
+        PHASE = phase
         second = subprocess.Popen(
             [str(EXE), "--alera-mcp-e2e-second-shell"],
             cwd=str(EXE.parent), env=env, stdin=subprocess.DEVNULL,
@@ -185,12 +196,22 @@ def main() -> None:
             raise AssertionError("two independent native Flutter processes required")
         checks.append("second_native_shell")
 
+        phase = "spawn_agent"
+        PHASE = phase
         spawn_agent()
         checks.append("host_minted_agent_pty")
+        phase = "run_mcp_inside_pty"
+        PHASE = phase
         inner = run_in_real_agent()
         checks.extend(inner["checks"])
         result["passed"] = True
+    except Exception as error:
+        # Persist only fixed stage/class for diagnostics, never PTY contents.
+        result["failurePhase"] = phase
+        result["failureType"] = type(error).__name__
+        raise
     finally:
+        PHASE = "cleanup_children"
         for child in reversed(children):
             if child.poll() is None:
                 child.terminate()
@@ -199,11 +220,42 @@ def main() -> None:
                 except subprocess.TimeoutExpired:
                     child.kill()
                     child.wait(timeout=5)
-        if host_started and host_running():
-            cli("runtime", "--runtime-dir", str(RUNTIME),
-                "--json", "stop", "--force")
-        result["hostShutdownConfirmed"] = not host_running()
+        # Closing both real Flutter GUIs can also stop their isolated Host.
+        # A concurrent CLI stop may fail because the Host *already* exited.
+        # Do not lose the original E2E result to that harmless shutdown race.
+        PHASE = "cleanup_host"
+        try:
+            if host_started and host_running():
+                try:
+                    cli("runtime", "--runtime-dir", str(RUNTIME),
+                        "--json", "stop", "--force")
+                except AssertionError:
+                    # Recheck actual status rather than trusting CLI stop exit.
+                    if host_running():
+                        result["hostStopFailed"] = True
+        except Exception:
+            result["hostStopFailed"] = True
+        PHASE = "cleanup_status"
+        # CLI stop can return before the isolated Windows Host process exits.
+        # Poll for actual process exit before declaring a cleanup failure.
+        stopped = False
+        until = time.monotonic() + 20
+        while time.monotonic() < until:
+            try:
+                if not host_running():
+                    stopped = True
+                    break
+            except Exception:
+                pass
+            time.sleep(0.3)
+        result["hostShutdownConfirmed"] = stopped
+        if not stopped:
+            result["functionalChecksPassed"] = bool(result["passed"])
+            result["passed"] = False
+        PHASE = "cleanup_report"
         REPORT.write_text(json.dumps(result, indent=2), encoding="utf-8")
+        if not stopped:
+            raise AssertionError("isolated Host did not shut down")
     print("MCP_TWO_REAL_WINDOWS " + ("PASS" if result["passed"] else "FAIL")
           + " checks=" + str(len(checks)), flush=True)
 
@@ -212,6 +264,7 @@ if __name__ == "__main__":
     try:
         main()
     except Exception as error:
-        print("MCP_TWO_REAL_WINDOWS_ERROR " + type(error).__name__,
+        print("MCP_TWO_REAL_WINDOWS_ERROR " + type(error).__name__ +
+              " stage=" + PHASE,
               file=sys.stderr, flush=True)
         sys.exit(1)

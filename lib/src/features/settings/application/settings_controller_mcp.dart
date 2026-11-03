@@ -36,6 +36,28 @@ bool mcpWritableSettingValue(String path, Object? value) => switch (path) {
 extension SettingsControllerMcpAccess on SettingsController {
   Object readMcpSetting(String path) => mcpSettingValue(state, path);
 
+  /// MCP reads must observe the Host-owned latest persisted settings. A
+  /// second Flutter process can have an old local controller snapshot even
+  /// after the first process has completed an authorized CAS update.
+  /// Serialize reloads with local mutations and fail closed on load errors;
+  /// never return an old value while claiming it is current.
+  Future<Object> readMcpSettingFresh(String path) async {
+    // Enforce the reviewed projection before any repository I/O and await
+    // pending local saves. A full repository load may silently fall back to
+    // legacy Drift, which is not an authoritative cross-window MCP read.
+    mcpSettingValue(state, path);
+    await _serialize(() async {});
+    final repository = _repository;
+    if (repository is RuntimeSettingsRepository) {
+      return repository.readAuthoritativeMcpSetting(path);
+    }
+    // Isolated offline controller tests have only a local repository.
+    await _serialize(() async {
+      state = await repository.load();
+    });
+    return mcpSettingValue(state, path);
+  }
+
   Future<Object> updateMcpSetting({
     required String path,
     required Object? expectedValue,

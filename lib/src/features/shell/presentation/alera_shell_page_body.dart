@@ -31,7 +31,6 @@ class _AleraShellPageBodyState extends ConsumerState<_AleraShellPageBody>
       final controller = ref.read(workbenchControllerProvider.notifier);
       await controller.bootstrap();
       if (!mounted) return;
-      _startMcpUiBridge();
       _gitRepositoryMonitor.selectProject(
         ref.read(workbenchControllerProvider).activeProject,
       );
@@ -79,6 +78,13 @@ class _AleraShellPageBodyState extends ConsumerState<_AleraShellPageBody>
               .info('E2E test workspace selected');
         }
       }
+      if (!mounted) return;
+      // Register this Flutter Shell as MCP-command-ready only after its
+      // initial Workbench selection completes. In isolated two-window E2E,
+      // registering beforehand raced a startup selectWorkspaceTab against
+      // MCP open_file, causing a second-window UI timeout. The production
+      // path has no test auto-selection and still registers after bootstrap.
+      _startMcpUiBridge();
     });
   }
 

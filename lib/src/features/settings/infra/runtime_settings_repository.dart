@@ -99,6 +99,72 @@ class RuntimeSettingsRepository({
     }
   }
 
+  /// Authoritative MCP scalar reads deliberately bypass the legacy Drift
+  /// fallback: a disconnected Host must fail closed rather than acknowledge
+  /// a stale value from another Flutter window. Only reviewed setting paths
+  /// are returned; never expose a whole configuration document.
+  Future<Object> readAuthoritativeMcpSetting(String path) async {
+    // Reject unknown fields before any Host RPC, not after a capability
+    // negotiation failure. Never permit free-form portable field access.
+    if (!const <String>{
+      'general.autoGitFetchEnabled',
+      'general.autoGitFetchIntervalMinutes',
+      'terminal.fontSize',
+      'editor.autosaveEnabled',
+      'editor.tabSize',
+      'general.confirmProjectRemoval',
+      'general.confirmWorkspaceRemoval',
+      'general.autoArchiveWorkspacesAfterDays',
+    }.contains(path)) {
+      throw ArgumentError.value(path, 'path', 'MCP setting is not exposed');
+    }
+    Object? value;
+    if (const <String>{
+      'general.confirmProjectRemoval',
+      'general.confirmWorkspaceRemoval',
+      'general.autoArchiveWorkspacesAfterDays',
+    }.contains(path)) {
+      final runtime = jsonMap(
+        await client.runtimeRequest('runtimeSettings.get'),
+      );
+      value = runtime[path.split('.').last];
+    } else {
+      if (!await _supportsConfiguration()) {
+        throw StateError('mcp_setting_authoritative_source_unavailable');
+      }
+      final portable = jsonMap(
+        await client.runtimeRequest('configuration.settings.get'),
+      );
+      final parts = path.split('.');
+      if (parts.length != 2) {
+        throw ArgumentError.value(path, 'path', 'MCP setting is not exposed');
+      }
+      value = jsonMap(portable[parts.first])[parts.last];
+    }
+    final valid = switch (path) {
+      'general.autoGitFetchEnabled' ||
+      'editor.autosaveEnabled' ||
+      'general.confirmProjectRemoval' ||
+      'general.confirmWorkspaceRemoval' => value is bool,
+      'general.autoGitFetchIntervalMinutes' =>
+        value is int && value >= 1 && value <= 60,
+      'editor.tabSize' => value is int && value >= 1 && value <= 16,
+      'general.autoArchiveWorkspacesAfterDays' =>
+        value is int && value >= 0 && value <= 36500,
+      'terminal.fontSize' =>
+        value is num && value.isFinite && value >= 8 && value <= 48,
+      _ => throw ArgumentError.value(
+        path,
+        'path',
+        'MCP setting is not exposed',
+      ),
+    };
+    if (!valid) {
+      throw StateError('mcp_setting_authoritative_value_unavailable');
+    }
+    return value as Object;
+  }
+
   @override
   Future<void> save(AleraSettings settings) async {
     await beforeAccess?.call();
