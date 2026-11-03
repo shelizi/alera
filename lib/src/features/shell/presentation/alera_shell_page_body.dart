@@ -4,6 +4,7 @@ class _AleraShellPageBodyState extends ConsumerState<_AleraShellPageBody>
     with WidgetsBindingObserver {
   String? _lastErrorMessage;
   late final WorkbenchGitRepositoryLifecycleMonitor _gitRepositoryMonitor;
+  late final RuntimeHostClient _mcpRuntimeHostClient;
   final String _mcpWindowId = const Uuid().v4();
   StreamSubscription<RuntimeHostEvent>? _mcpUiSubscription;
   Future<void> _mcpUiQueue = Future<void>.value();
@@ -11,6 +12,9 @@ class _AleraShellPageBodyState extends ConsumerState<_AleraShellPageBody>
   @override
   void initState() {
     super.initState();
+    // Flutter/Riverpod cannot safely use ref.read() from State.dispose().
+    // Keep the same Host client for this Shell's final MCP unregister.
+    _mcpRuntimeHostClient = ref.read(runtimeHostClientProvider);
     _gitRepositoryMonitor = WorkbenchGitRepositoryLifecycleMonitor(
       refreshProject: (projectId) async {
         await ref
@@ -23,6 +27,7 @@ class _AleraShellPageBodyState extends ConsumerState<_AleraShellPageBody>
     );
     WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
       final controller = ref.read(workbenchControllerProvider.notifier);
       await controller.bootstrap();
       if (!mounted) return;
@@ -91,9 +96,7 @@ class _AleraShellPageBodyState extends ConsumerState<_AleraShellPageBody>
     // The long-lived Runtime Host may outlive this Flutter window. Explicitly
     // unregister so subsequent MCP requests cannot target a disposed Shell.
     unawaited(
-      ref
-          .read(runtimeHostClientProvider)
-          .runtimeRequest('uiControl.unregister', <String, Object?>{
+      _mcpRuntimeHostClient.runtimeRequest('uiControl.unregister', <String, Object?>{
             'windowId': _mcpWindowId,
           })
           .then((_) {}, onError: (Object _) {}),
@@ -137,6 +140,11 @@ class _AleraShellPageBodyState extends ConsumerState<_AleraShellPageBody>
     );
     ref.watch(terminalHostWarmupCoordinatorProvider);
     ref.watch(runtimeAgentStatusSyncProvider);
+    // Keep the native hook receiver and Host presence forwarding alive while
+    // the real desktop Shell exists. Without these listeners the installed
+    // Claude/Codex Stop hook never makes the recipient injection-ready.
+    ref.watch(agentHookReceiverLifecycleCoordinatorProvider);
+    ref.watch(agentStatusHostForwarderProvider);
     ref.watch(agentHookInstallerCoordinatorProvider);
     ref.watch(agentStatusNotificationCoordinatorProvider);
     ref.watch(workspacePullRequestMonitorControllerProvider.notifier);

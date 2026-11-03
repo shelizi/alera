@@ -24,7 +24,14 @@ Flutter applied ACK 1/1 PASS**, with the test editor tab visually verified.
 SettingsController applied/readback → original value restored 1/1 PASS**.
 A real Claude sender model → authenticated MCP send → durable Host PTY delivery
 → a second real Claude model reply, with **5/5 PASS** and verified disposable
-Host cleanup (2026-11-03). The recipient's idle state is supplied by a
+Host cleanup (2026-11-03). On the actual Alera Shell startup path,
+Hook receiver lifecycle and AgentStatusHostForwarder are now both watched,
+and Shell dispose uses a captured RuntimeHostClient instead of ref.read after
+unmount. Targeted Shell widget **1/1 PASS** and enabled-Claude Hook HTTP
+UserPromptSubmit→Stop→AgentStatusController→Host working→done forwarding
+**1/1 PASS**. The broad Shell widget suite still fails with pending timers,
+animations, and widget cleanup errors; it is NOT an acceptance PASS. The
+recipient's idle state in the earlier collaboration E2E is supplied by a
 bounded test adapter only *after* its real prior model turn returned; native
 Managed Claude/Codex lifecycle hooks, first-folder trust, and autonomous
 Agent-to-Agent responses remain pending. Proactive cross-window Settings UI
