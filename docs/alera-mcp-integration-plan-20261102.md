@@ -22,9 +22,14 @@ new-folder trust gate. **Actual Claude model → Alera MCP open_file →
 Flutter applied ACK 1/1 PASS**, with the test editor tab visually verified.
 **Actual Claude model → allowlisted MCP setting mutation → Flutter
 SettingsController applied/readback → original value restored 1/1 PASS**.
-Natural Agent collaboration/response, proactive cross-window settings UI
-notifications, explicit cross-workspace grants, native macOS ARM64 and Linux x64
-acceptance remain pending. The Windows **two genuine Flutter Shells +
+A real Claude sender model → authenticated MCP send → durable Host PTY delivery
+→ a second real Claude model reply, with **5/5 PASS** and verified disposable
+Host cleanup (2026-11-03). The recipient's idle state is supplied by a
+bounded test adapter only *after* its real prior model turn returned; native
+Managed Claude/Codex lifecycle hooks, first-folder trust, and autonomous
+Agent-to-Agent responses remain pending. Proactive cross-window Settings UI
+notifications, explicit cross-workspace grants, and native macOS ARM64/Linux
+x64 acceptance also remain pending. The Windows **two genuine Flutter Shells +
 Host-owned Agent PTY + explicit-window MCP routing, file navigation and
 setting CAS cross-window readback/rollback** passed **16/16** on 2026-11-03
 in a disposable E2E profile. This verifies observed setting reads, not
@@ -162,9 +167,18 @@ operations report separate `accepted` and `applied` acknowledgments.
       an Alera Host-owned PTY. The test checked actual model tool-call events
       and **the returned disposable Workspace ID**, not model prose: **2/2
       PASS**. Both used limited, read-only test sessions.
-- [ ] True external Codex/Claude Agent **idle→queued message delivery→
-      recipient response** lifecycle remains unverified. Synthetic status
-      and real PTY delivery acceptance are not a model response.
+- [x] **Actual two-Claude-model collaboration E2E 5/5 PASS** in disposable
+      Host-owned sender/recipient Agent PTYs: the sender model issued exactly
+      one MCP `alera.send_agent_message` tool call with correlated receipt,
+      Host persisted/delivered the message into the recipient PTY, and a
+      separately invoked real Claude model returned the nonce-specific ACK.
+      Test cleanup confirmed; no user profile or global MCP config changed.
+      `tool/testing/mcp_real_model_collaboration_e2e.py`.
+- [ ] Native Managed Codex/Claude **idle hook → queued delivery → autonomous
+      recipient model response** still needs E2E. The test above uses an
+      adapter that reports idle *after* a real model turn and invokes another
+      model turn after receiving a real PTY message; it is NOT proof that
+      provider-native status hooks or automatic turn resumption work.
 - **Current Step 3 exit (same-workspace only):** Agent can find another
   Agent, read bounded progress, focus its existing Tab, queue one permitted
   durable message, and inspect its delivery state. Global/cross-workspace
