@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/buttons/alera_icon_button.dart';
 import 'package:alera/src/design_system/feedback/alera_empty_state.dart';
@@ -134,6 +135,7 @@ class const WorkspaceContextSidebar({
                             children: <Widget>[
                               if (onFocusSourceControlFolder != null)
                                 _GitRepositorySelector(
+                                  workspacePath: workspace.path,
                                   roots: repositoryRoots,
                                   activeRoot: selectedRoot,
                                   hasActiveRepository:
@@ -524,5 +526,247 @@ class _RightResizeHandleState extends State<_RightResizeHandle> {
     _dragWidth = null;
     setState(() => _dragging = false);
     widget.onResizeEnd(finalWidth);
+  }
+}
+
+/// Shows the workspace's repositories without merging their Git state.
+class const _GitRepositorySelector({
+  required this.workspacePath,
+  required this.roots,
+  required this.activeRoot,
+  required this.hasActiveRepository,
+  required this.scanning,
+  required this.onSelected,
+  required this.onRescan,
+}) extends ConsumerStatefulWidget {
+  final String workspacePath;
+  final List<String> roots;
+  final String? activeRoot;
+  final bool hasActiveRepository;
+  final bool scanning;
+  final ValueChanged<String> onSelected;
+  final VoidCallback onRescan;
+
+  @override
+  ConsumerState<_GitRepositorySelector> createState() =>
+      _GitRepositorySelectorState();
+}
+
+class _GitRepositorySelectorState
+    extends ConsumerState<_GitRepositorySelector> {
+  bool _overviewExpanded = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final summary = _overviewExpanded
+        ? ref.watch(
+            workspaceGitRepositoryOverviewProvider(widget.workspacePath),
+          )
+        : null;
+    final overviews =
+        summary?.asData?.value ??
+        const <String, GitRepositoryOverviewSummary>{};
+    final label = widget.hasActiveRepository
+        ? _labelForRoot(context, widget.activeRoot ?? '')
+        : widget.scanning
+        ? context.tr('Finding Git Repositories...')
+        : context.tr('Select Git Repository');
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        DecoratedBox(
+          decoration: const BoxDecoration(
+            border: Border(bottom: BorderSide(color: AleraTokens.borderSubtle)),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal: AleraTokens.space8,
+              vertical: AleraTokens.space4,
+            ),
+            child: Row(
+              children: <Widget>[
+                Expanded(
+                  child: PopupMenuButton<String>(
+                    key: const ValueKey<String>(
+                      'workspace-git-repository-selector',
+                    ),
+                    enabled: widget.roots.isNotEmpty,
+                    tooltip: context.tr('Switch Git Repository'),
+                    onSelected: _selectRoot,
+                    itemBuilder: (context) => <PopupMenuEntry<String>>[
+                      for (final root in widget.roots)
+                        PopupMenuItem<String>(
+                          value: root,
+                          child: Row(
+                            children: <Widget>[
+                              Icon(
+                                _isSelected(root)
+                                    ? Icons.check
+                                    : AleraIcons.gitBranch,
+                                size: 16,
+                              ),
+                              const SizedBox(width: AleraTokens.space8),
+                              Expanded(
+                                child: Text(
+                                  _labelForRoot(context, root),
+                                  overflow: TextOverflow.ellipsis,
+                                  maxLines: 1,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                    ],
+                    child: Row(
+                      children: <Widget>[
+                        const Icon(AleraIcons.gitBranch, size: 16),
+                        const SizedBox(width: AleraTokens.space8),
+                        Expanded(
+                          child: Text(
+                            label,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        const Icon(Icons.arrow_drop_down, size: 18),
+                      ],
+                    ),
+                  ),
+                ),
+                Text(
+                  widget.roots.length.toString(),
+                  style: Theme.of(context).textTheme.labelSmall
+                      ?.copyWith(color: AleraTokens.foregroundFaint),
+                ),
+                IconButton(
+                  key: const ValueKey<String>(
+                    'git-repositories-overview-toggle',
+                  ),
+                  tooltip: _overviewExpanded
+                      ? context.tr('Hide Git Repositories')
+                      : context.tr('Show Git Repositories'),
+                  icon: Icon(
+                    _overviewExpanded ? Icons.expand_less : Icons.expand_more,
+                    size: 18,
+                  ),
+                  visualDensity: VisualDensity.compact,
+                  onPressed: widget.roots.isEmpty
+                      ? null
+                      : () => setState(
+                          () => _overviewExpanded = !_overviewExpanded,
+                        ),
+                ),
+                IconButton(
+                  tooltip: context.tr('Rescan Git Repositories'),
+                  icon: const Icon(AleraIcons.gitRefresh, size: 18),
+                  visualDensity: VisualDensity.compact,
+                  onPressed: widget.scanning ? null : widget.onRescan,
+                ),
+              ],
+            ),
+          ),
+        ),
+        if (_overviewExpanded)
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 210),
+            child: ListView.builder(
+              shrinkWrap: true,
+              itemCount: widget.roots.length,
+              itemBuilder: (context, index) {
+                final root = widget.roots[index];
+                final detail = overviews[root];
+                final statusLabel = summary?.hasError ?? false
+                    ? context.tr('Status Unavailable')
+                    : detail == null
+                    ? context.tr('Loading...')
+                    : !detail.available
+                    ? context.tr('Status Unavailable')
+                    : _summaryLine(detail, context);
+                return InkWell(
+                  key: ValueKey<String>('git-repo-overview:$root'),
+                  onTap: () => _selectRoot(root),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: AleraTokens.space8,
+                      vertical: AleraTokens.space6,
+                    ),
+                    child: Row(
+                      children: <Widget>[
+                        Icon(
+                          _isSelected(root)
+                              ? Icons.radio_button_checked
+                              : Icons.radio_button_unchecked,
+                          size: 16,
+                          color: _isSelected(root)
+                              ? AleraTokens.foreground
+                              : AleraTokens.foregroundMuted,
+                        ),
+                        const SizedBox(width: AleraTokens.space8),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: <Widget>[
+                              Text(
+                                _labelForRoot(context, root),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              Text(
+                                statusLabel,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: Theme.of(context).textTheme.labelSmall
+                                    ?.copyWith(
+                                      color: AleraTokens.foregroundFaint,
+                                    ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        if (detail?.available == true &&
+                            detail!.changedFiles > 0)
+                          Text(
+                            detail.changedFiles.toString(),
+                            style: Theme.of(context).textTheme.labelMedium,
+                          ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+      ],
+    );
+  }
+
+  bool _isSelected(String root) =>
+      widget.hasActiveRepository && root == (widget.activeRoot ?? '');
+
+  void _selectRoot(String root) {
+    if (_isSelected(root)) return;
+    widget.onSelected(root);
+  }
+
+  static String _labelForRoot(BuildContext context, String root) =>
+      root.isEmpty ? context.tr('Workspace Root') : root;
+
+  static String _summaryLine(
+    GitRepositoryOverviewSummary value,
+    BuildContext context,
+  ) {
+    final parts = <String>[
+      value.branch!,
+      if (value.changedFiles == 0)
+        context.tr('Clean')
+      else
+        value.changedFiles.toString() + ' ' + context.tr('files'),
+      if (value.ahead > 0) '↑' + value.ahead.toString(),
+      if (value.behind > 0) '↓' + value.behind.toString(),
+      if (value.conflicts) context.tr('Conflicts'),
+    ];
+    return parts.join(' · ');
   }
 }

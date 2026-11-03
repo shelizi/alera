@@ -1,5 +1,7 @@
 import 'dart:io';
 
+import 'package:alera/src/shared/infra/git/git_diff_models.dart';
+import 'package:alera/src/shared/infra/git/git_providers.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path/path.dart' as p;
 
@@ -115,3 +117,113 @@ final class WorkspaceGitRepositoryScanner {
     return List<String>.unmodifiable(repositories);
   }
 }
+
+/// A lightweight, read-only, repository-scoped snapshot. Paths in two Git
+/// repositories must never be combined into the same status or branch.
+class const GitRepositoryOverviewSummary({
+  required this.branch,
+  required this.changedFiles,
+  required this.ahead,
+  required this.behind,
+  required this.conflicts,
+}) {
+  final String? branch;
+  final int changedFiles;
+  final int ahead;
+  final int behind;
+  final bool conflicts;
+
+  bool get available => branch != null;
+
+  const new unavailable()
+    : this(
+        branch: null,
+        changedFiles: 0,
+        ahead: 0,
+        behind: 0,
+        conflicts: false,
+      );
+}
+
+/// Loads at most [batchSize] repositories simultaneously, emitting partial
+/// results to keep large multi-repo workspaces responsive. Individual failures
+/// remain visible without failing the remaining repositories.
+Stream<Map<String, GitRepositoryOverviewSummary>> loadGitRepositoryOverview({
+  required String workspacePath,
+  required Future<List<String>> roots,
+  required Future<GitStatusResult> Function(String path) loadStatus,
+  required Future<GitRepositoryState> Function(String path) loadRepositoryState,
+  int batchSize = 3,
+  bool Function()? isCancelled,
+}) async* {
+  if (batchSize < 1) throw ArgumentError.value(batchSize, 'batchSize');
+  final discovered = await roots;
+  final summaries = <String, GitRepositoryOverviewSummary>{};
+  if (discovered.isEmpty) {
+    yield const <String, GitRepositoryOverviewSummary>{};
+  }
+  for (var start = 0; start < discovered.length; start += batchSize) {
+    if (isCancelled?.call() ?? false) return;
+    final batch = discovered.skip(start).take(batchSize);
+    final results = await Future.wait(
+      batch.map((relativeRoot) async {
+        final path = relativeRoot.isEmpty
+            ? workspacePath
+            : p.joinAll(<String>[workspacePath, ...relativeRoot.split('/')]);
+        try {
+          final values = await Future.wait<Object>(<Future<Object>>[
+            loadStatus(path),
+            loadRepositoryState(path),
+          ]);
+          final status = values[0] as GitStatusResult;
+          final repo = values[1] as GitRepositoryState;
+          return MapEntry(
+            relativeRoot,
+            GitRepositoryOverviewSummary(
+              branch: repo.branch,
+              changedFiles: status.entries
+                  .map((entry) => entry.path)
+                  .toSet()
+                  .length,
+              ahead: repo.ahead,
+              behind: repo.behind,
+              conflicts: repo.hasConflicts,
+            ),
+          );
+        } on Object {
+          return MapEntry(
+            relativeRoot,
+            const GitRepositoryOverviewSummary.unavailable(),
+          );
+        }
+      }),
+    );
+    if (isCancelled?.call() ?? false) return;
+    for (final entry in results) {
+      summaries[entry.key] = entry.value;
+    }
+    yield Map<String, GitRepositoryOverviewSummary>.unmodifiable(summaries);
+  }
+}
+
+/// Lazy: the sidebar watches this provider only when the overview expands.
+/// Closing the overview stops scheduling more Git reads after the current batch.
+final workspaceGitRepositoryOverviewProvider = StreamProvider.autoDispose
+    .family<Map<String, GitRepositoryOverviewSummary>, String>((
+      ref,
+      workspacePath,
+    ) {
+      var disposed = false;
+      ref.onDispose(() => disposed = true);
+      final roots = ref.watch(
+        workspaceGitRepositoriesProvider(workspacePath).future,
+      );
+      final backend = ref.read(gitBackendProvider);
+      return loadGitRepositoryOverview(
+        workspacePath: workspacePath,
+        roots: roots,
+        loadStatus: backend.status,
+        loadRepositoryState: backend.repositoryState,
+        isCancelled: () => disposed,
+      );
+    });
