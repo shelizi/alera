@@ -1,9 +1,12 @@
+import 'dart:async';
+
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/buttons/alera_icon_button.dart';
 import 'package:alera/src/design_system/feedback/alera_empty_state.dart';
 import 'package:alera/src/design_system/icons/alera_icons.dart';
 import 'package:alera/src/features/pull_requests/presentation/workspace_pull_requests_panel.dart';
 import 'package:alera/src/features/workbench/application/workspace_references_controller.dart';
+import 'package:alera/src/features/workbench/application/workspace_git_repositories.dart';
 import 'package:alera/src/features/workbench/domain/workbench_view_prefs.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/domain/workspace_source_control_scope.dart';
@@ -12,12 +15,14 @@ import 'package:alera/src/features/workbench/presentation/workspace_git_diff_pan
 import 'package:alera/src/features/workbench/presentation/workspace_references_panel.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_search_panel.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 class const WorkspaceContextSidebar({
   super.key,
   required final Workspace workspace,
   required final WorkbenchViewPrefs prefs,
   final WorkspaceSourceControlScope? sourceControlScope,
+  final bool isWorkspaceGitRepository = false,
   final Future<void> Function()? onRefreshRepository,
   final String? focusedSourceControlRoot,
   required final VoidCallback onToggleVisible,
@@ -43,11 +48,25 @@ class const WorkspaceContextSidebar({
     String newRelativePath,
   )
   onPathMoved,
-}) extends StatelessWidget {
+}) extends ConsumerWidget {
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final sourceControlScope = this.sourceControlScope;
     final activeTab = prefs.activeContextPanelTab;
+    final repositoryScan = activeTab == WorkbenchContextPanelTab.gitDiff
+        ? ref.watch(workspaceGitRepositoriesProvider(workspace.path))
+        : null;
+    final repositoryRoots = <String>[
+      for (final root in repositoryScan?.asData?.value ?? const <String>[])
+        if (root.isNotEmpty || isWorkspaceGitRepository) root,
+    ];
+    if (isWorkspaceGitRepository && !repositoryRoots.contains('')) {
+      repositoryRoots.insert(0, '');
+    }
+    final selectedRoot = sourceControlScope?.relativeRoot;
+    if (selectedRoot != null && !repositoryRoots.contains(selectedRoot)) {
+      repositoryRoots.add(selectedRoot);
+    }
     return DecoratedBox(
       decoration: const BoxDecoration(
         color: AleraTokens.surfaceVariant,
@@ -110,41 +129,78 @@ class const WorkspaceContextSidebar({
                               workspace: workspace,
                               onOpenReference: onOpenReference,
                             ),
-                          WorkbenchContextPanelTab.gitDiff =>
-                            sourceControlScope == null
-                                ? AleraEmptyState(
-                                    icon: AleraIcons.gitBranch,
-                                    title: 'Source Control Unavailable',
-                                    message: 'This workspace is not connected to a Git repository, so there are no changes to show.',
-                                    action: onRefreshRepository == null
-                                        ? null
-                                        : OutlinedButton.icon(
-                                            onPressed: onRefreshRepository,
-                                            icon: const Icon(
-                                              AleraIcons.gitRefresh,
-                                            ),
-                                            label: const Text('Re-detect Git'),
-                                          ),
-                                  )
-                                : WorkspaceGitDiffPanel(
-                                    workspace: workspace,
-                                    sourceControlScope: sourceControlScope,
-                                    onRefreshRepository: onRefreshRepository,
-                                    viewMode: prefs.gitDiffViewMode,
-                                    onViewModeChanged: onSetGitDiffViewMode,
-                                    groupMode: prefs.gitDiffGroupMode,
-                                    onGroupModeChanged: onSetGitDiffGroupMode,
-                                    onOpenGitDiff: onOpenGitDiff,
-                                    onOpenGitCommitDiff: onOpenGitCommitDiff,
-                                    onSwitchBranch: onSwitchBranch,
-                                    onOpenFile:
-                                        onOpenFilePermanently ?? onOpenFile,
-                                    onRevealInExplorer: onRevealInExplorer,
-                                    onClearSourceControlRoot:
-                                        sourceControlScope.isWorkspaceRoot
-                                        ? null
-                                        : onClearSourceControlRoot,
+                          WorkbenchContextPanelTab.gitDiff => Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: <Widget>[
+                              if (onFocusSourceControlFolder != null)
+                                _GitRepositorySelector(
+                                  roots: repositoryRoots,
+                                  activeRoot: selectedRoot,
+                                  hasActiveRepository:
+                                      sourceControlScope != null,
+                                  scanning: repositoryScan?.isLoading ?? false,
+                                  onSelected: (relativeRoot) {
+                                    if (relativeRoot.isEmpty) {
+                                      onClearSourceControlRoot?.call();
+                                    } else {
+                                      unawaited(
+                                        onFocusSourceControlFolder!(
+                                          relativeRoot,
+                                        ),
+                                      );
+                                    }
+                                  },
+                                  onRescan: () => ref.invalidate(
+                                    workspaceGitRepositoriesProvider(
+                                      workspace.path,
+                                    ),
                                   ),
+                                ),
+                              Expanded(
+                                child: sourceControlScope == null
+                                    ? AleraEmptyState(
+                                        icon: AleraIcons.gitBranch,
+                                        title: 'Source Control Unavailable',
+                                        message: repositoryRoots.isNotEmpty
+                                            ? 'Select a Git repository above to show its changes.'
+                                            : 'No Git repository selected. Rescan or open a Git repository.',
+                                        action: onRefreshRepository == null
+                                            ? null
+                                            : OutlinedButton.icon(
+                                                onPressed: onRefreshRepository,
+                                                icon: const Icon(
+                                                  AleraIcons.gitRefresh,
+                                                ),
+                                                label: const Text(
+                                                  'Re-detect Git',
+                                                ),
+                                              ),
+                                      )
+                                    : WorkspaceGitDiffPanel(
+                                        workspace: workspace,
+                                        sourceControlScope: sourceControlScope,
+                                        onRefreshRepository:
+                                            onRefreshRepository,
+                                        viewMode: prefs.gitDiffViewMode,
+                                        onViewModeChanged: onSetGitDiffViewMode,
+                                        groupMode: prefs.gitDiffGroupMode,
+                                        onGroupModeChanged:
+                                            onSetGitDiffGroupMode,
+                                        onOpenGitDiff: onOpenGitDiff,
+                                        onOpenGitCommitDiff:
+                                            onOpenGitCommitDiff,
+                                        onSwitchBranch: onSwitchBranch,
+                                        onOpenFile:
+                                            onOpenFilePermanently ?? onOpenFile,
+                                        onRevealInExplorer: onRevealInExplorer,
+                                        onClearSourceControlRoot:
+                                            sourceControlScope.isWorkspaceRoot
+                                            ? null
+                                            : onClearSourceControlRoot,
+                                      ),
+                              ),
+                            ],
+                          ),
                           WorkbenchContextPanelTab.pullRequests =>
                             sourceControlScope == null
                                 ? const AleraEmptyState(

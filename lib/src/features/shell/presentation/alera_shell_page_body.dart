@@ -190,7 +190,7 @@ class _AleraShellPageBodyState extends ConsumerState<_AleraShellPageBody>
         .watch(settingsControllerProvider)
         .editor
         .codeOpenTarget;
-    final canSelectSourceControlRoot = project?.isFolder == true;
+    final canSelectSourceControlRoot = project != null;
     final sourceControlScope = WorkspaceSourceControlScope.resolve(
       project: project,
       workspace: workspace,
@@ -232,6 +232,8 @@ class _AleraShellPageBodyState extends ConsumerState<_AleraShellPageBody>
                             workspace: workspace,
                             prefs: shell.viewPrefs,
                             sourceControlScope: sourceControlScope,
+                            isWorkspaceGitRepository:
+                                project?.isGitRepository ?? false,
                             onRefreshRepository: project == null
                                 ? null
                                 : () => _refreshGitRepository(
@@ -256,11 +258,28 @@ class _AleraShellPageBodyState extends ConsumerState<_AleraShellPageBody>
                             onSwitchBranch: project == null
                                 ? null
                                 : (branch) async {
-                                    await controller.switchWorkspaceBranch(
-                                      project: project,
-                                      workspace: workspace,
-                                      branch: branch,
-                                    );
+                                    // Do not switch the outer project's branch
+                                    // when a nested repository is selected.
+                                    if (sourceControlScope != null &&
+                                        !sourceControlScope.isWorkspaceRoot) {
+                                      await ref
+                                          .read(gitBackendProvider)
+                                          .checkoutBranch(
+                                            path: sourceControlScope.path,
+                                            branch: branch,
+                                          );
+                                      ref.invalidate(
+                                        workspaceSourceControlControllerProvider(
+                                          sourceControlScope.path,
+                                        ),
+                                      );
+                                    } else {
+                                      await controller.switchWorkspaceBranch(
+                                        project: project,
+                                        workspace: workspace,
+                                        branch: branch,
+                                      );
+                                    }
                                   },
                             onFocusSourceControlFolder:
                                 canSelectSourceControlRoot
@@ -431,7 +450,7 @@ class _AleraShellPageBodyState extends ConsumerState<_AleraShellPageBody>
                       children: <Widget>[
                         if (project?.isGitRepository == true &&
                             workspace != null &&
-                            sourceControlScope != null)
+                            sourceControlScope?.isWorkspaceRoot == true)
                           WorkspaceBranchStatusBarControl(
                             workspace: workspace,
                             sourceControlScope: sourceControlScope,

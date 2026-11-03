@@ -73,6 +73,18 @@ void main() {
     expect(repositoryScope?.isWorkspaceRoot, isTrue);
     expect(repositoryScope?.displayPath, isEmpty);
 
+    final nestedScope = WorkspaceSourceControlScope.resolve(
+      project: repository,
+      workspace: workspace,
+      prefs: WorkbenchViewPrefs.defaults.copyWith(
+        sourceControlRootByWorkspaceId: const <String, String>{
+          'workspace-1': 'packages/independent',
+        },
+      ),
+    );
+    expect(nestedScope?.path, p.join('/repo/alera', 'packages', 'independent'));
+    expect(nestedScope?.isWorkspaceRoot, isFalse);
+
     final folderScope = WorkspaceSourceControlScope.resolve(
       project: folder,
       workspace: workspace,

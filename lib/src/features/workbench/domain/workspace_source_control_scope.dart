@@ -21,28 +21,28 @@ class const WorkspaceSourceControlScope({
     if (project == null || workspace == null) {
       return null;
     }
-    if (project.isGitRepository) {
-      return WorkspaceSourceControlScope(
-        workspaceId: workspace.id,
-        workspacePath: workspace.path,
-        path: workspace.path,
-      );
-    }
+    // Explicit nested Git roots take precedence even inside a Git project.
     final relativeRoot = normalizeSourceControlRootRelativePath(
       prefs.sourceControlRootByWorkspaceId[workspace.id],
     );
-    if (relativeRoot == null) {
-      return null;
-    }
-    return WorkspaceSourceControlScope(
-      workspaceId: workspace.id,
-      workspacePath: workspace.path,
-      path: sourceControlRootAbsolutePath(
+    if (relativeRoot != null) {
+      return WorkspaceSourceControlScope(
+        workspaceId: workspace.id,
         workspacePath: workspace.path,
+        path: sourceControlRootAbsolutePath(
+          workspacePath: workspace.path,
+          relativeRoot: relativeRoot,
+        ),
         relativeRoot: relativeRoot,
-      ),
-      relativeRoot: relativeRoot,
-    );
+      );
+    }
+    return project.isGitRepository
+        ? WorkspaceSourceControlScope(
+            workspaceId: workspace.id,
+            workspacePath: workspace.path,
+            path: workspace.path,
+          )
+        : null;
   }
 
   String? toSourceRelativePath(String? workspaceRelativePath) {

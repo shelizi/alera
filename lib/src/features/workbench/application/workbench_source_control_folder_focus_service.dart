@@ -27,7 +27,8 @@ final class WorkbenchSourceControlFolderFocusService {
     required String relativePath,
     required bool Function() isSelectionActive,
   }) async {
-    if (!project.isFolder || !isSelectionActive()) {
+    // Independent nested repositories are valid in Git and folder projects.
+    if (project.id != workspace.projectId || !isSelectionActive()) {
       return null;
     }
     final normalized = normalizeSourceControlRootRelativePath(relativePath);

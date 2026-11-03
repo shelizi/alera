@@ -38,32 +38,33 @@ void main() {
     ]);
   });
 
-  test(
-    'non-folder project is rejected before selection or filesystem work',
-    () async {
-      final events = <String>[];
-      final service = WorkbenchSourceControlFolderFocusService(
-        gitRepositoryProbe: _FakeGitRepositoryProbe(events: events),
-        hasDirectGitEntry: (path) {
-          events.add('direct:$path');
-          return true;
-        },
-      );
-
-      final result = await service.resolve(
-        project: _project(kind: ProjectKind.gitRepository),
-        workspace: _workspace(),
-        relativePath: 'packages/app',
-        isSelectionActive: () {
-          events.add('selected');
-          return true;
-        },
-      );
-
-      expect(result, isNull);
-      expect(events, isEmpty);
-    },
-  );
+  test('a Git project can focus an independent nested repository', () async {
+    final events = <String>[];
+    final service = WorkbenchSourceControlFolderFocusService(
+      gitRepositoryProbe: _FakeGitRepositoryProbe(events: events),
+      hasDirectGitEntry: (path) {
+        events.add('direct:$path');
+        return true;
+      },
+    );
+    final result = await service.resolve(
+      project: _project(kind: ProjectKind.gitRepository),
+      workspace: _workspace(),
+      relativePath: 'packages/app',
+      isSelectionActive: () {
+        events.add('selected');
+        return true;
+      },
+    );
+    expect(result, 'packages/app');
+    final path = p.join('workspace-path', 'packages', 'app');
+    expect(events, <String>[
+      'selected',
+      'direct:$path',
+      'git:$path',
+      'selected',
+    ]);
+  });
 
   test('missing direct git entry skips the backend repository probe', () async {
     final events = <String>[];
