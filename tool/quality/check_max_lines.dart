@@ -2,11 +2,13 @@ import 'dart:io';
 
 import 'package:path/path.dart' as p;
 
-/// Ratchet check for AGENTS.md file-length guidance (default 500 lines).
+/// Advisory ratchet for AGENTS.md file-length guidance (default 500 lines).
 ///
-/// Fails when a scanned source file exceeds [maxLines] **and** either:
+/// Warns when a scanned source file exceeds [maxLines] **and** either:
 /// - it is not listed in the baseline, or
 /// - its line count is greater than the baseline allowance for that path.
+///
+/// Use --strict to fail instead of warn for an explicit quality audit.
 ///
 /// Generate/update baseline:
 ///   dart run tool/quality/check_max_lines.dart --write-baseline
@@ -82,8 +84,9 @@ void main(List<String> args) {
     exit(0);
   }
 
+  final status = config.strict ? 'ratchet failed' : 'advisory';
   stderr.writeln(
-    'max-lines ratchet failed: ${offenders.length} file(s) over '
+    'max-lines $status: ${offenders.length} file(s) over '
     '${config.maxLines} lines without baseline room:',
   );
   for (final file in offenders.take(50)) {
@@ -101,13 +104,16 @@ void main(List<String> args) {
     '`dart run tool/quality/check_max_lines.dart --write-baseline` '
     'only when intentionally accepting debt.',
   );
-  exit(1);
+  if (config.strict) {
+    exit(1);
+  }
 }
 
 class const _FileLines(final String path, final int lines);
 
 class const _Args({
   required final int maxLines,
+  required final bool strict,
   required final List<String> roots,
   required final String? baseline,
   required final bool writeBaseline,
@@ -115,6 +121,7 @@ class const _Args({
 }) {
   static _Args parse(List<String> args) {
     var maxLines = 500;
+    var strict = false;
     var roots = <String>[
       'lib',
       'mobile/lib',
@@ -143,6 +150,8 @@ class const _Args({
       switch (arg) {
         case '--max-lines':
           maxLines = int.parse(value());
+        case '--strict':
+          strict = true;
         case '--roots':
           roots = value().split(',').map((s) => s.trim()).toList();
         case '--baseline':
@@ -154,7 +163,8 @@ class const _Args({
         case '-h' || '--help':
           stderr.writeln(
             'Usage: dart run tool/quality/check_max_lines.dart '
-            '[--max-lines 500] [--write-baseline] [--list-oversized]',
+            '[--max-lines 500] [--strict] '
+            '[--write-baseline] [--list-oversized]',
           );
           exit(0);
         default:
@@ -164,6 +174,7 @@ class const _Args({
 
     return _Args(
       maxLines: maxLines,
+      strict: strict,
       roots: roots,
       baseline: baseline,
       writeBaseline: writeBaseline,

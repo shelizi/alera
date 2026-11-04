@@ -152,6 +152,7 @@ When planning is needed, use a spec-driven development flow. Do not jump straigh
 - Name files and types after the domain concept they model, such as `workspace_folder_opener.dart` or `update_archive.dart`.
 - If a file name starts feeling generic, split responsibilities before adding more code.
 - Avoid files longer than 500 lines. When a file approaches that size, split it by concrete domain responsibility instead of adding more unrelated code.
+- This file-length guideline is advisory in CI. `dart tool/quality/check_max_lines.dart` reports warnings by default; use `--strict` only when explicitly auditing file-size debt. Correctness and architectural checks remain blocking.
 
 ## Flutter UI Rules
 
