@@ -47,7 +47,7 @@ void main() {
           overrides: [
             settingsRepositoryProvider.overrideWithValue(repository),
             runtimeSettingsChangesProvider.overrideWith(
-              (ref) => const Stream<void>.empty(),
+              (ref) => const Stream<int>.empty(),
             ),
           ],
         );

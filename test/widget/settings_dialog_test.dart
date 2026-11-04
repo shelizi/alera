@@ -37,6 +37,7 @@ import 'package:alera/src/features/updater/application/update_service.dart';
 import 'package:alera/src/features/updater/domain/alera_update.dart';
 import 'package:alera/src/features/updater/domain/package_install_method.dart';
 import 'package:alera/src/platform/runtime_host/protocol/terminal_host_protocol.dart';
+import 'package:alera/src/shared/infra/runtime/runtime_host_providers.dart';
 import 'package:alera/src/shared/infra/runtime/runtime_change_coalescer.dart';
 import 'package:alera/src/design_system/feedback/alera_color_swatch.dart';
 import 'package:alera/src/design_system/forms/alera_checkbox.dart';
@@ -67,6 +68,7 @@ Future<ProviderContainer> _pumpSettingsDialog(
   WidgetTester tester, {
   _FakeGitHubStarController? starController,
   AleraSettings initialSettings = AleraSettings.defaults,
+  SettingsRepository? settingsRepository,
   Size surfaceSize = const Size(1200, 900),
   SystemFontService? fontService,
   AiAssistModelDiscoveryService? modelDiscoveryService,
@@ -81,7 +83,8 @@ Future<ProviderContainer> _pumpSettingsDialog(
   // (width/height fractions) sees the intended screen size.
   tester.view.physicalSize = surfaceSize * tester.view.devicePixelRatio;
   addTearDown(tester.view.resetPhysicalSize);
-  final repository = _FakeSettingsRepository(initialSettings);
+  final repository =
+      settingsRepository ?? _FakeSettingsRepository(initialSettings);
   final container = ProviderContainer(
     overrides: [
       settingsRepositoryProvider.overrideWithValue(repository),

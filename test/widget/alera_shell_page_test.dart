@@ -13,6 +13,7 @@ import 'package:alera/src/features/agent_profiles/application/local_agent_provid
 import 'package:alera/src/features/agent_profiles/domain/agent_profile.dart';
 import 'package:alera/src/features/agent_profiles/domain/agent_profile_adapters.dart';
 import 'package:alera/src/features/agent_status/domain/agent_status.dart';
+import 'package:alera/src/features/agent_status/application/agent_status_host_forwarder.dart';
 import 'package:alera/src/features/external_editor/application/external_editor_providers.dart';
 import 'package:alera/src/features/external_editor/domain/external_editor_spec.dart';
 import 'package:alera/src/features/agent_quota/domain/agent_quota.dart';
@@ -20,7 +21,6 @@ import 'package:alera/src/features/projects/domain/project.dart';
 import 'package:alera/src/features/settings/domain/alera_settings.dart';
 import 'package:alera/src/features/shell/presentation/alera_shell_page.dart';
 import 'package:alera/src/features/workbench/application/workbench_state.dart';
-import 'package:alera/src/features/workbench/application/workbench_providers.dart';
 import 'package:alera/src/features/workbench/application/workspace_file_service.dart';
 import 'package:alera/src/features/workbench/application/workspace_folder_opener.dart';
 import 'package:alera/src/features/workbench/application/workspace_graph_repository.dart';
@@ -274,19 +274,35 @@ void main() {
     },
   );
 
-  testWidgets('shell starts the agent hook installer coordinator', (
-    WidgetTester tester,
-  ) async {
-    var starts = 0;
+  testWidgets(
+    'shell activates native Agent hook, Host forwarder and installer',
+    (WidgetTester tester) async {
+      var starts = 0;
 
-    await _pumpShell(
-      tester,
-      state: _stackedWorkbenchState(),
-      onAgentHookInstallerCoordinatorStarted: () => starts += 1,
-    );
+      await _pumpShell(
+        tester,
+        state: _stackedWorkbenchState(),
+        onAgentHookInstallerCoordinatorStarted: () => starts += 1,
+      );
 
-    expect(starts, 1);
-  });
+      expect(starts, 1);
+      // The real Shell must instantiate these side-effect providers; testing
+      // their classes in isolation cannot catch a missing ref.watch().
+      final container = ProviderScope.containerOf(
+        tester.element(find.byType(AleraShellPage)),
+      );
+      expect(
+        container.exists(agentHookReceiverLifecycleCoordinatorProvider),
+        isTrue,
+      );
+      expect(container.exists(agentStatusHostForwarderProvider), isTrue);
+
+      // Dispose the Shell (and its long-lived coordinators) before the widget
+      // test framework checks for leaked timers.
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump();
+    },
+  );
 
   _registerAleraShellWorkbenchTests();
   _registerAleraShellSidebarActionTests();

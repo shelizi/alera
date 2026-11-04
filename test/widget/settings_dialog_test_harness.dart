@@ -43,6 +43,9 @@ class _FakeSettingsRepository([AleraSettings? initialSettings])
 
   AleraSettings _settings;
 
+  // Simulate a separate Flutter window committing to the same Host owner.
+  void commitFromOtherWindow(AleraSettings value) => _settings = value;
+
   @override
   Future<AleraSettings> load() async => _settings;
 
@@ -183,6 +186,12 @@ class _FakeRuntimeHostClient(
 
   @override
   Stream<RuntimeHostEvent> get runtimeEvents => _events.stream;
+
+  void emitRuntimeSettingsChanged() {
+    _events.add(
+      const RuntimeHostEvent('runtimeSettingsChanged', <String, Object?>{}),
+    );
+  }
 
   void emitSshTargetsChanged() {
     _events.add(

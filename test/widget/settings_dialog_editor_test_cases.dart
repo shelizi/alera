@@ -1,6 +1,57 @@
 part of 'settings_dialog_test.dart';
 
 void _registerSettingsDialogEditorTests() {
+  testWidgets(
+    'visible Editor tab-size field follows repeated Host settings notifications',
+    (tester) async {
+      final repository = _FakeSettingsRepository();
+      final host = _FakeRuntimeHostClient(<SshTarget>[]);
+      addTearDown(host.dispose);
+      final container = await _pumpSettingsDialog(
+        tester,
+        initialSectionId: 'editor',
+        settingsRepository: repository,
+        extraOverrides: <dynamic>[
+          runtimeHostClientProvider.overrideWithValue(host),
+        ],
+      );
+      final row = find.byKey(const ValueKey<String>('editor-tab-size-row'));
+      final field = find.descendant(of: row, matching: find.byType(TextField));
+      await tester.ensureVisible(row);
+      await tester.pump();
+      expect(field, findsOneWidget);
+      expect(tester.widget<TextField>(field).controller!.text, '4');
+
+      for (final updatedTabSize in <int>[2, 5]) {
+        repository.commitFromOtherWindow(
+          repository._settings.copyWith(
+            editor: repository._settings.editor.copyWith(
+              tabSize: updatedTabSize,
+            ),
+          ),
+        );
+        host.emitRuntimeSettingsChanged();
+        for (var attempt = 0; attempt < 80; attempt++) {
+          await tester.pump(const Duration(milliseconds: 20));
+          if (tester.widget<TextField>(field).controller?.text ==
+              '$updatedTabSize')
+            break;
+        }
+        expect(
+          container.read(settingsControllerProvider).editor.tabSize,
+          updatedTabSize,
+        );
+        // This inspects the actual TextField rendered in EditorSettingsPane,
+        // not an MCP read that could refresh stale Controller state.
+        expect(
+          tester.widget<TextField>(field).controller!.text,
+          '$updatedTabSize',
+        );
+      }
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump();
+    },
+  );
   testWidgets('two-row tabs setting toggles and persists', (tester) async {
     final container = await _pumpSettingsDialog(
       tester,

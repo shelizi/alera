@@ -28,7 +28,7 @@ void main() {
           return _FakeSettingsRepository();
         }),
         runtimeSettingsChangesProvider.overrideWith(
-          (ref) => const Stream<void>.empty(),
+          (ref) => const Stream<int>.empty(),
         ),
       ],
     );

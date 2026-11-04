@@ -36,6 +36,13 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   // activate (or replace) the primary Alera window.
   std::vector<std::string> command_line_arguments = GetCommandLineArguments();
   const bool detached_tab = IsDetachedChildInvocation(command_line_arguments);
+#if defined(ALERA_MCP_E2E_SECOND_SHELL)
+  // The exact flag is accepted only by the isolated test binary.
+  const bool mcp_second_shell = command_line_arguments.size() == 1 &&
+      command_line_arguments[0] == "--alera-mcp-e2e-second-shell";
+#else
+  const bool mcp_second_shell = false;
+#endif
   // Normal Windows startup now uses one Engine and multiple native Flutter
   // Views by default. Explicit --alera-legacy-detached-tabs (or an unknown
   // invocation) falls back to the proven multi-process window model. Detached
@@ -45,7 +52,9 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   Win32SingleInstance single_instance(
       detached_tab ? std::wstring(ALERA_APP_ID) + L".detached." +
                          std::to_wstring(GetCurrentProcessId())
-                   : std::wstring(ALERA_APP_ID));
+                   : mcp_second_shell
+                         ? std::wstring(ALERA_APP_ID) + L".mcp-e2e-second-shell"
+                         : std::wstring(ALERA_APP_ID));
   const auto start = single_instance.Start();
   if (start == Win32SingleInstance::StartResult::forwarded) {
     return EXIT_SUCCESS;

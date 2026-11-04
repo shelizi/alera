@@ -13,8 +13,8 @@ part of 'runtime_settings_changes.dart';
 final runtimeSettingsChangesProvider = RuntimeSettingsChangesProvider._();
 
 final class RuntimeSettingsChangesProvider
-    extends $FunctionalProvider<AsyncValue<void>, void, Stream<void>>
-    with $FutureModifier<void>, $StreamProvider<void> {
+    extends $FunctionalProvider<AsyncValue<int>, int, Stream<int>>
+    with $FutureModifier<int>, $StreamProvider<int> {
   RuntimeSettingsChangesProvider._()
     : super(
         from: null,
@@ -31,14 +31,14 @@ final class RuntimeSettingsChangesProvider
 
   @$internal
   @override
-  $StreamProviderElement<void> $createElement($ProviderPointer pointer) =>
+  $StreamProviderElement<int> $createElement($ProviderPointer pointer) =>
       $StreamProviderElement(pointer);
 
   @override
-  Stream<void> create(Ref ref) {
+  Stream<int> create(Ref ref) {
     return runtimeSettingsChanges(ref);
   }
 }
 
 String _$runtimeSettingsChangesHash() =>
-    r'2212d656004fe4280a2ac109ae6edcc253626130';
+    r'd53587e057e3ef1473c2aff822ed90ce81cffa3e';

@@ -12,6 +12,7 @@ final class _TerminalHostConnection {
     required this.supportsTerminalPulse,
     required this.supportsRemoteAiDictation,
     required this.supportsWorkspaceSections,
+    required this.supportsConfigurationSync,
   }) : _reader = null {
     _socketSub = _socket!.cast<List<int>>().listen(
       _consume,
@@ -36,6 +37,7 @@ final class _TerminalHostConnection {
     required this.supportsTerminalPulse,
     required this.supportsRemoteAiDictation,
     required this.supportsWorkspaceSections,
+    required this.supportsConfigurationSync,
   }) : _reader = reader,
        _socket = null {
     lines = reader.lines;
@@ -64,6 +66,7 @@ final class _TerminalHostConnection {
   final bool supportsTerminalPulse;
   final bool supportsRemoteAiDictation;
   final bool supportsWorkspaceSections;
+  final bool supportsConfigurationSync;
 
   /// One reader for the whole connection. It starts newline-delimited so the
   /// handshake works against a host without the capability, and switches to
@@ -173,6 +176,7 @@ final class const _TerminalHostControl({
   final bool supportsTerminalPulse = false,
   final bool supportsRemoteAiDictation = false,
   final bool supportsWorkspaceSections = false,
+  final bool supportsConfigurationSync = false,
 });
 
 final class const _PendingHostRequest(

@@ -8,6 +8,7 @@ import 'package:alera/src/features/keyboard/domain/keyboard_action.dart';
 import 'package:alera/src/features/settings/application/runtime_settings_changes.dart';
 import 'package:alera/src/features/settings/application/settings_providers.dart';
 import 'package:alera/src/features/settings/application/settings_repository.dart';
+import 'package:alera/src/features/settings/infra/runtime_settings_repository.dart';
 import 'package:alera/src/features/settings/domain/alera_settings.dart';
 import 'package:alera/src/features/text_actions/domain/text_actions_settings.dart';
 import 'package:alera/src/platform/runtime_host/protocol/terminal_host_protocol.dart';
@@ -19,6 +20,7 @@ part 'settings_controller.g.dart';
 part 'settings_controller_local_ui.dart';
 part 'settings_controller_runtime_operational.dart';
 part 'settings_controller_portable.dart';
+part 'settings_controller_mcp.dart';
 
 const String _runtimeSettingsRevisionConflictCode =
     'runtime_settings_revision_conflict';
@@ -28,7 +30,8 @@ class SettingsController extends _$SettingsController
     with
         _SettingsControllerLocalUiSettings,
         _SettingsControllerRuntimeOperationalSettings,
-        _SettingsControllerPortableSettings {
+        _SettingsControllerPortableSettings,
+        _SettingsControllerMcpAccess {
   bool _loadStarted = false;
 
   SettingsRepository get _repository => ref.read(settingsRepositoryProvider);

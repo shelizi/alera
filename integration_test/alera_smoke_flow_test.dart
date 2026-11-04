@@ -94,6 +94,9 @@ void main() {
           gitBackendProvider.overrideWithValue(gitBackend),
           terminalRuntimeProvider.overrideWith((ref) => terminalRuntime),
           terminalRuntimeBindingOverride(),
+          // Match main's title-only terminal metadata binding, which
+          // Resource Manager's status bar reads during real desktop tests.
+          terminalSessionTitleSourceOverride(),
         ],
         child: const AleraApp(),
       ),

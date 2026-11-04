@@ -119,6 +119,17 @@ mixin _WorkbenchControllerProjects
     );
   }
 
+  /// UI navigation initiated by MCP must never create a Terminal merely
+  /// because the target Workspace was not currently selected.
+  Future<void> selectWorkspaceWithoutTerminal({
+    required Project project,
+    required Workspace workspace,
+  }) => _selectionOwner.selectWorkspace(
+    project: project,
+    workspace: workspace,
+    ensureInitialTerminal: false,
+  );
+
   Future<void> activateProject(Project project) async {
     _selectionOwner.activateProject(project);
   }
