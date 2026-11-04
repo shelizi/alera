@@ -417,6 +417,100 @@ fn detects_complete_agy_usage_without_fixed_delay() {
 }
 
 #[test]
+fn parses_fifth_agy_argon_weekly_quota() {
+    let output = [
+        "│ GEMINI MODELS │",
+        "│ Weekly Limit │",
+        "│ 95% remaining │",
+        "│ Five Hour Limit │",
+        "│ 80% remaining │",
+        "│ CLAUDE AND GPT MODELS │",
+        "│ Weekly Limit │",
+        "│ 70% remaining │",
+        "│ Five Hour Limit │",
+        "│ 60% remaining │",
+        "│ GEMINI 4 ARGON │",
+        "│ Weekly Limit │",
+        "│ 81.5% remaining │",
+        "│ Refreshes in 5d 7h │",
+    ]
+    .join("\n");
+
+    let snapshot = parse_tui_snapshot("agy", "default", "Antigravity", &output);
+    assert!(agy_usage_complete(&output));
+    assert!(agy_has_argon_quota(&output));
+    assert_eq!(snapshot.buckets.len(), 5);
+    let argon = snapshot
+        .buckets
+        .iter()
+        .find(|bucket| bucket.name == "Gemini 4 Argon - Weekly")
+        .expect("Argon separate weekly quota");
+    assert_eq!(argon.used_percent, 18.5);
+    assert_eq!(argon.window_minutes, Some(WEEKLY_WINDOW_MINUTES));
+    assert_eq!(
+        argon.reset_description.as_deref(),
+        Some("Refreshes in 5d 7h │")
+    );
+}
+
+#[test]
+fn agy_waits_for_argon_percentage_once_fifth_pool_is_visible() {
+    let four = [
+        "Gemini Models",
+        "Weekly limit",
+        "99% left",
+        "5 hour limit",
+        "90% left",
+        "Claude and GPT Models",
+        "Weekly limit",
+        "75% left",
+        "5 hour limit",
+        "80% left",
+    ]
+    .join("\n");
+
+    // Plans without an Argon pool still provide the original four quotas.
+    assert!(agy_usage_complete(&four));
+    assert!(!agy_has_argon_quota(&four));
+    assert!(!agy_usage_complete(&format!("{four}\nGemini 4 Argon")));
+    assert!(!agy_usage_complete(&format!(
+        "{four}\nGemini 4 Argon\nWeekly Limit"
+    )));
+    assert!(agy_usage_complete(&format!(
+        "{four}\nGemini 4 Argon\nWeekly Limit\n80% remaining"
+    )));
+}
+
+#[test]
+fn agy_parses_argon_quota_when_heading_and_percent_share_a_line() {
+    let output = [
+        "Gemini Models",
+        "Weekly limit",
+        "99% left",
+        "5 hour limit",
+        "90% left",
+        "Claude and GPT Models",
+        "Weekly limit",
+        "75% left",
+        "5 hour limit",
+        "80% left",
+        "Gemini 4 Argon Weekly Limit Remaining 44%",
+    ]
+    .join("\n");
+
+    let snapshot = parse_tui_snapshot("agy", "default", "Antigravity", &output);
+    assert!(agy_usage_complete(&output));
+    assert_eq!(snapshot.buckets.len(), 5);
+    let argon = snapshot
+        .buckets
+        .iter()
+        .find(|bucket| bucket.name == "Gemini 4 Argon - Weekly")
+        .expect("inline Argon weekly quota");
+    assert_eq!(argon.used_percent, 56.0);
+    assert_eq!(argon.window_minutes, Some(WEEKLY_WINDOW_MINUTES));
+}
+
+#[test]
 fn canonicalizes_legacy_quota_provider_ids_at_the_wire_boundary() {
     assert_eq!(
         canonicalize_quota_provider_ids(vec![

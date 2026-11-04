@@ -85,6 +85,7 @@ void main() {
               ),
               _bucket('Claude And Gpt Models - 5 Hour', 25),
               _bucket('Claude And Gpt Models - Weekly', 35),
+              _bucket('Gemini 4 Argon - Weekly', 45),
             ],
           ),
         ],
@@ -97,6 +98,7 @@ void main() {
     expect(find.text('G·W'), findsOneWidget);
     expect(find.text('C/G·5H'), findsOneWidget);
     expect(find.text('C/G·W'), findsOneWidget);
+    expect(find.text('Ar·W'), findsOneWidget);
     expect(find.text('80%'), findsOneWidget);
     expect(find.text('60%'), findsOneWidget);
     expect(find.text('70%'), findsOneWidget);
@@ -127,6 +129,7 @@ void main() {
     expect(find.text('Antigravity'), findsOneWidget);
     expect(find.text('Live'), findsOneWidget);
     expect(find.text('Gemini Models - Weekly'), findsOneWidget);
+    expect(find.text('Gemini 4 Argon - Weekly'), findsOneWidget);
     expect(find.text('85% Left'), findsOneWidget);
     expect(find.text('Resets in 4d 5h 35m'), findsOneWidget);
     expect(
@@ -135,7 +138,7 @@ void main() {
             find.byType(LinearProgressIndicator),
           )
           .map((indicator) => indicator.value),
-      containsAll(<double>[0.9, 0.85, 0.75, 0.65]),
+      containsAll(<double>[0.9, 0.85, 0.75, 0.65, 0.55]),
     );
     expect(
       tester.getTopLeft(find.text('Antigravity')).dy,

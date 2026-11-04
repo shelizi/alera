@@ -228,8 +228,15 @@ async fn run_tui_command(
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     let settled = match completion {
                         TuiCompletion::Agy => {
-                            last_data.elapsed() > Duration::from_millis(300)
-                                && agy_usage_complete(&String::from_utf8_lossy(&output))
+                            // The optional Argon pool may render after the old
+                            // four quotas; give four-only accounts settle time.
+                            let output = String::from_utf8_lossy(&output);
+                            let settle_time = if agy_has_argon_quota(&output) {
+                                Duration::from_millis(300)
+                            } else {
+                                Duration::from_secs(2)
+                            };
+                            last_data.elapsed() > settle_time && agy_usage_complete(&output)
                         }
                         TuiCompletion::Generic => {
                             started.elapsed() > Duration::from_secs(4)
@@ -308,7 +315,7 @@ fn windows_tui_launches_through_alera_bootstrap_instead_of_cmd() {
 }
 
 fn agy_usage_complete(output: &str) -> bool {
-    const EXPECTED_BUCKETS: [&str; 4] = [
+    const BASE_BUCKETS: [&str; 4] = [
         "Gemini Models - Weekly",
         "Gemini Models - 5 Hour",
         "Claude And GPT Models - Weekly",
@@ -316,12 +323,32 @@ fn agy_usage_complete(output: &str) -> bool {
     ];
     let snapshot = parse_tui_snapshot("agy", "default", "Antigravity", output);
     snapshot.status == "ok"
-        && EXPECTED_BUCKETS.iter().all(|expected| {
-            snapshot
+        && BASE_BUCKETS.iter().all(|expected| {
+            snapshot.buckets.iter().any(|bucket| bucket.name == *expected)
+        })
+        // Argon is a separate weekly pool on eligible plans only. If its
+        // heading has appeared, wait for the percentage before completing.
+        && (!agy_argon_heading_visible(output)
+            || snapshot
                 .buckets
                 .iter()
-                .any(|bucket| bucket.name == *expected)
-        })
+                .any(|bucket| bucket.name == "Gemini 4 Argon - Weekly"))
+}
+
+fn agy_has_argon_quota(output: &str) -> bool {
+    parse_tui_snapshot("agy", "default", "Antigravity", output)
+        .buckets
+        .iter()
+        .any(|bucket| bucket.name == "Gemini 4 Argon - Weekly")
+}
+
+fn agy_argon_heading_visible(output: &str) -> bool {
+    strip_terminal_sequences(output).lines().any(|line| {
+        agy_group_name(line).as_deref() == Some("Gemini 4 Argon")
+            || line
+                .to_ascii_lowercase()
+                .contains("gemini 4 argon weekly limit")
+    })
 }
 
 fn parse_tui_snapshot(
@@ -349,8 +376,13 @@ fn parse_tui_snapshot(
             current_label = Some("Weekly".to_string());
         }
         if provider == "agy" {
+            if lower.contains("gemini 4 argon weekly limit") {
+                // Some CLI versions put group and quota on one line.
+                current_group = Some("Gemini 4 Argon".to_string());
+            }
             if let Some(group) = agy_group_name(&line) {
                 current_group = Some(group);
+                current_label = None;
                 last_bucket_name = None;
                 continue;
             }
@@ -458,15 +490,12 @@ fn agy_group_name(line: &str) -> Option<String> {
         .split(|value: char| !value.is_ascii_alphanumeric())
         .filter(|value| !value.is_empty())
         .collect::<Vec<_>>();
-    if words
-        .last()
-        .is_none_or(|word| !word.eq_ignore_ascii_case("models"))
-    {
-        return None;
-    }
     let normalized = words.join(" ");
     let lower = normalized.to_lowercase();
-    if lower == "gemini models" || lower == "claude and gpt models" || lower == "claude gpt models"
+    if lower == "gemini models"
+        || lower == "claude and gpt models"
+        || lower == "claude gpt models"
+        || lower == "gemini 4 argon"
     {
         return Some(title_case_words(&normalized));
     }
