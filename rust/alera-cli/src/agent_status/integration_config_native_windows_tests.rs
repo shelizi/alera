@@ -69,3 +69,58 @@ fn native_hooks_execute_batch_paths_with_spaces_and_parentheses() {
         }
     }
 }
+
+#[test]
+fn devin_hooks_execute_in_cmd_and_git_bash_with_spaced_paths() {
+    let root = tempfile::tempdir().expect("hook test directory");
+    let script_dir = root.path().join("user space (dev)'s & hooks");
+    std::fs::create_dir(&script_dir).expect("spaced script directory");
+    let script = script_dir.join("alera-runtime-agent-hook.cmd");
+    std::fs::write(&script, "@echo off\r\necho %~1:%~2\r\nexit /b 0\r\n")
+        .expect("test hook script");
+    let probe = root.path().join("probe.cmd");
+    let git_bash = std::env::var_os("ProgramFiles")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from(r"C:\Program Files"))
+        .join("Git/bin/bash.exe");
+
+    for event in ["PreToolUse", "PostToolUse", "Stop"] {
+        let command = managed_command(&script, "devin", event);
+        assert!(is_alera_managed_definition(&json!({"command": command})));
+
+        // Exercise the shell parser, not just command string construction.
+        // The path includes spaces, apostrophes, parentheses and ampersands.
+        std::fs::write(&probe, format!("@echo off\r\n{command}\r\n")).expect("hook command probe");
+        let cmd_result = alera_core::child_process::windowless_command("cmd.exe")
+            .args(["/d", "/c"])
+            .arg(&probe)
+            .output()
+            .expect("execute cmd hook probe");
+        assert!(
+            cmd_result.status.success(),
+            "cmd {event}: {}",
+            String::from_utf8_lossy(&cmd_result.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&cmd_result.stdout).trim(),
+            format!("devin:{event}")
+        );
+
+        // Git Bash is optional on Windows CI, but present on Devin machines.
+        if git_bash.is_file() {
+            let bash_result = alera_core::child_process::windowless_command(&git_bash)
+                .args(["-lc", &command])
+                .output()
+                .expect("execute Git Bash hook probe");
+            assert!(
+                bash_result.status.success(),
+                "Git Bash {event}: {}",
+                String::from_utf8_lossy(&bash_result.stderr)
+            );
+            assert_eq!(
+                String::from_utf8_lossy(&bash_result.stdout).trim(),
+                format!("devin:{event}")
+            );
+        }
+    }
+}

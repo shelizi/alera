@@ -104,7 +104,7 @@ extension _DevinManagedAgentHook on ManagedAgentHookInstallService {
       scriptFileName: scriptFileName,
       scriptPath: scriptPath,
       eventEnvVar: 'ALERA_DEVIN_EVENT',
-      windowsExecutionStrategy: .gitBashToCmd,
+      windowsExecutionStrategy: .shellNeutralCmd,
       // The runtime sidecar installs Devin hooks against its shared
       // alera-runtime-agent-hook script; both script families count as managed
       // so the two installers cannot leave duplicate handlers behind.

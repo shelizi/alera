@@ -42,7 +42,7 @@ enum _ManagedHookDefinitionShape {
   agyToolCommand,
 }
 
-enum _WindowsHookExecutionStrategy { nativeCmd, powerShell, gitBashToCmd }
+enum _WindowsHookExecutionStrategy { nativeCmd, powerShell, shellNeutralCmd }
 
 typedef _RuntimeOnlyStatusBuilder = ManagedAgentHookInstallStatus Function(
   ManagedAgentHookInstallService service,

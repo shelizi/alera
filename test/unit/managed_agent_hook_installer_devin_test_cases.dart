@@ -203,7 +203,7 @@ void _registerDevinHookInstallerTests(
     expect(status.configPath, p.join(appData, 'devin', 'config.json'));
   });
 
-  test('bridges Devin Windows hooks from Git Bash into cmd', () {
+  test('uses shell-neutral Devin Windows hook command', () {
     final appData = p.join(home().path, 'AppData', 'Roaming');
     final windowsService = ManagedAgentHookInstallService(
       homeDirectory: home().path,
@@ -216,16 +216,15 @@ void _registerDevinHookInstallerTests(
 
     windowsService.install(.devin);
 
-    // Devin invokes hook commands through Git Bash on Windows, but the managed
-    // hook itself can remain the normal Windows cmd script. Keep `call` and the
-    // script path as separate argv so MSYS does not serialize embedded quotes
-    // as literal backslash-quote pairs before cmd.exe sees them.
+    // Devin may invoke hooks through Git Bash or cmd.exe, so neither POSIX-only
+    // environment assignments nor a nested cmd.exe invocation should be used.
     final script = File(
       p.join(home().path, '.alera', 'agent-hooks', 'alera-devin-hook.cmd'),
     );
     expect(script.existsSync(), isTrue);
     final scriptSource = script.readAsStringSync();
     expect(scriptSource, contains('/hook/devin'));
+    expect(scriptSource, contains('set "ALERA_DEVIN_EVENT=%~1"'));
     expect(scriptSource, isNot(contains('endpoint.env')));
     expect(
       scriptSource,
@@ -241,11 +240,39 @@ void _registerDevinHookInstallerTests(
     final config = _readJson(p.join(appData, 'devin', 'config.json'));
     final hooks = Map<String, Object?>.from(config['hooks'] as Map);
     final command = _commandsFor(hooks, 'Stop').single;
-    expect(command, contains("MSYS2_ARG_CONV_EXCL='*'"));
-    expect(command, contains("ALERA_DEVIN_EVENT='Stop'"));
-    expect(command, contains('cmd.exe /d /s /c call '));
-    expect(command, isNot(contains('/c \'if exist "')));
+    expect(command, startsWith('"'));
+    expect(command, endsWith('alera-devin-hook.cmd" Stop'));
+    expect(command, isNot(contains('MSYS2_ARG_CONV_EXCL')));
+    expect(command, isNot(contains('cmd.exe /d /s /c')));
     expect(command, contains('alera-devin-hook.cmd'));
     expect(command, isNot(contains('alera-devin-hook.sh')));
+  });
+
+  test('escapes special-character Devin Windows hook paths for Git Bash', () {
+    final specialHome = Directory(
+      p.join(home().path, "user space (dev)'s & hooks"),
+    )..createSync(recursive: true);
+    final appData = p.join(specialHome.path, 'AppData', 'Roaming');
+    final windowsService = ManagedAgentHookInstallService(
+      homeDirectory: specialHome.path,
+      platform: .windows,
+      environment: <String, String>{
+        'USERPROFILE': specialHome.path,
+        'APPDATA': appData,
+      },
+    );
+    expect(
+      windowsService.install(.devin).state,
+      ManagedAgentHookInstallState.installed,
+    );
+
+    final config = _readJson(p.join(appData, 'devin', 'config.json'));
+    final hooks = Map<String, Object?>.from(config['hooks'] as Map);
+    final command = _commandsFor(hooks, 'PreToolUse').single;
+    expect(command, startsWith('powershell.exe -NoProfile -NonInteractive'));
+    expect(command, contains('-Command "& \''));
+    expect(command, contains("dev)''s & hooks"));
+    expect(command, endsWith("alera-devin-hook.cmd' PreToolUse\""));
+    expect(command, isNot(contains('MSYS2_ARG_CONV_EXCL')));
   });
 }
