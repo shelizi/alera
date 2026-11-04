@@ -202,13 +202,17 @@ class _AleraShellPageBodyState extends ConsumerState<_AleraShellPageBody>
         body: KeyboardShortcutsScope(
           child: LayoutBuilder(
             builder: (context, constraints) {
+              final maxContextSidebarWidth = _maxContextSidebarWidth(
+                shellWidth: constraints.maxWidth,
+                collapsed: shell.collapsed,
+                prefs: shell.viewPrefs,
+              );
+              final minContextSidebarWidth = shell.viewPrefs.rightSidebarVisible
+                  ? AleraTokens.sidebarMinWidth
+                  : AleraTokens.sidebarCollapsedWidth;
               final showContextSidebar =
                   workspace != null &&
-                  _canShowContextSidebar(
-                    shellWidth: constraints.maxWidth,
-                    collapsed: shell.collapsed,
-                    prefs: shell.viewPrefs,
-                  );
+                  maxContextSidebarWidth >= minContextSidebarWidth;
               return Column(
                 children: <Widget>[
                   Expanded(
@@ -231,6 +235,7 @@ class _AleraShellPageBodyState extends ConsumerState<_AleraShellPageBody>
                           WorkspaceContextSidebar(
                             workspace: workspace,
                             prefs: shell.viewPrefs,
+                            maxWidth: maxContextSidebarWidth,
                             sourceControlScope: sourceControlScope,
                             isWorkspaceGitRepository:
                                 project?.isGitRepository ?? false,

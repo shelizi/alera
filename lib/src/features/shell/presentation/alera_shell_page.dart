@@ -120,7 +120,7 @@ class const _AleraShellPageBody() extends ConsumerStatefulWidget {
       _AleraShellPageBodyState();
 }
 
-bool _canShowContextSidebar({
+double _maxContextSidebarWidth({
   required double shellWidth,
   required bool collapsed,
   required WorkbenchViewPrefs prefs,
@@ -128,10 +128,13 @@ bool _canShowContextSidebar({
   final leftWidth = collapsed
       ? AleraTokens.sidebarCollapsedWidth
       : prefs.sidebarWidth;
-  final rightWidth = prefs.rightSidebarVisible
-      ? prefs.rightSidebarWidth
-      : AleraTokens.sidebarCollapsedWidth;
-  return shellWidth - leftWidth - rightWidth >= AleraTokens.emptyStateMaxWidth;
+  // Reserve space for the editor before sizing the context sidebar. In
+  // particular, do not hide the panel after the user enlarges it.
+  return (shellWidth -
+          leftWidth -
+          AleraTokens.rightSidebarMinEditorWidth -
+          AleraTokens.space6)
+      .clamp(0.0, AleraTokens.rightSidebarMaxWidth);
 }
 
 String buildRawLogClipboardText(List<String> logs) {
