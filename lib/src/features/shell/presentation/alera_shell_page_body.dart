@@ -102,7 +102,8 @@ class _AleraShellPageBodyState extends ConsumerState<_AleraShellPageBody>
     // The long-lived Runtime Host may outlive this Flutter window. Explicitly
     // unregister so subsequent MCP requests cannot target a disposed Shell.
     unawaited(
-      _mcpRuntimeHostClient.runtimeRequest('uiControl.unregister', <String, Object?>{
+      _mcpRuntimeHostClient
+          .runtimeRequest('uiControl.unregister', <String, Object?>{
             'windowId': _mcpWindowId,
           })
           .then((_) {}, onError: (Object _) {}),
