@@ -81,6 +81,7 @@ class const _GitDiffBaseRow({
   required final int depth,
   required final Widget child,
   required final VoidCallback onTap,
+  final bool selected = false,
   final GestureTapDownCallback? onSecondaryTapDown,
   final GestureLongPressStartCallback? onLongPressStart,
 }) extends StatelessWidget {
@@ -93,14 +94,20 @@ class const _GitDiffBaseRow({
         onTap: onTap,
         onSecondaryTapDown: onSecondaryTapDown,
         onLongPressStart: onLongPressStart,
-        child: Padding(
-          padding: EdgeInsets.only(
-            left: AleraTokens.space8 + (depth * AleraTokens.space12),
-            right: AleraTokens.space8,
-            top: AleraTokens.space4,
-            bottom: AleraTokens.space4,
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: selected ? AleraTokens.accentSubtle : Colors.transparent,
+            borderRadius: BorderRadius.circular(AleraTokens.radiusSm),
           ),
-          child: child,
+          child: Padding(
+            padding: EdgeInsets.only(
+              left: AleraTokens.space8 + (depth * AleraTokens.space12),
+              right: AleraTokens.space8,
+              top: AleraTokens.space4,
+              bottom: AleraTokens.space4,
+            ),
+            child: child,
+          ),
         ),
       ),
     );

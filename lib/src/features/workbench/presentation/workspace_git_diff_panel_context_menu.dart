@@ -21,6 +21,7 @@ Future<void> _showGitChangeContextMenu(
   required bool canStage,
   required bool canUnstage,
   required bool canDiscard,
+  int selectionCount = 1,
   required bool busy,
   required VoidCallback? onOpenFile,
   required VoidCallback? onOpenWithDefaultApplication,
@@ -103,21 +104,21 @@ Future<void> _showGitChangeContextMenu(
       if (canUnstage)
         AleraDropdownEntry<_GitChangeContextAction>(
           value: .unstage,
-          label: 'Unstage',
+          label: selectionCount > 1 ? 'Unstage Selected' : 'Unstage',
           leading: const Icon(AleraIcons.gitUnstage, size: 16),
           enabled: !busy,
         ),
       if (canStage)
         AleraDropdownEntry<_GitChangeContextAction>(
           value: .stage,
-          label: 'Stage',
+          label: selectionCount > 1 ? 'Stage Selected' : 'Stage',
           leading: const Icon(AleraIcons.gitStage, size: 16),
           enabled: !busy,
         ),
       if (canDiscard)
         AleraDropdownEntry<_GitChangeContextAction>(
           value: .discard,
-          label: 'Discard',
+          label: selectionCount > 1 ? 'Discard Selected' : 'Discard',
           leading: const Icon(AleraIcons.gitDiscard, size: 16),
           enabled: !busy,
         ),

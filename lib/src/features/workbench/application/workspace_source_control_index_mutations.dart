@@ -46,6 +46,42 @@ final class WorkspaceSourceControlIndexMutations {
     }
   }
 
+  Future<void> stageEntries(String path, Iterable<GitChangeEntry> entries) =>
+      _applyEntries(path, entries, (entry) => entry.canStageFromParent, stage);
+
+  Future<void> unstageEntries(String path, Iterable<GitChangeEntry> entries) =>
+      _applyEntries(
+        path,
+        entries,
+        (entry) => entry.canUnstageFromParent,
+        unstage,
+      );
+
+  Future<void> discardEntries(String path, Iterable<GitChangeEntry> entries) =>
+      _applyEntries(
+        path,
+        entries,
+        (entry) => entry.canDiscardFromParent,
+        discard,
+      );
+
+  Future<void> _applyEntries(
+    String path,
+    Iterable<GitChangeEntry> entries,
+    bool Function(GitChangeEntry) permitted,
+    Future<void> Function(String, String?) mutate,
+  ) async {
+    final paths = <String>{};
+    for (final entry in entries) {
+      if (permitted(entry)) {
+        paths.addAll(_actionPaths(entry));
+      }
+    }
+    for (final filePath in paths) {
+      await mutate(path, filePath);
+    }
+  }
+
   static List<String> _actionPaths(GitChangeEntry entry) {
     final paths = <String>[];
     final oldPath = entry.oldPath;

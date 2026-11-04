@@ -135,4 +135,56 @@ void main() {
       ]);
     },
   );
+
+  test(
+    'batch operations touch only eligible selected files and dedupe renames',
+    () async {
+      final backend = _IndexFake();
+      final index = WorkspaceSourceControlIndexMutations(backend);
+      const unstaged = GitChangeEntry(
+        path: 'other.dart',
+        area: .unstaged,
+        status: .modified,
+      );
+      const staged = GitChangeEntry(
+        path: 'staged.dart',
+        area: .staged,
+        status: .modified,
+      );
+      const submoduleChild = GitChangeEntry(
+        path: 'module/child.dart',
+        submoduleRoot: 'module',
+        area: .unstaged,
+        status: .modified,
+      );
+
+      await index.stageEntries('/repo', <GitChangeEntry>[
+        renamedUnstaged,
+        renamedUnstaged,
+        staged,
+        submoduleChild,
+        unstaged,
+      ]);
+      await index.unstageEntries('/repo', <GitChangeEntry>[
+        unstaged,
+        staged,
+        staged,
+      ]);
+      await index.discardEntries('/repo', <GitChangeEntry>[
+        staged,
+        renamedUnstaged,
+        unstaged,
+        submoduleChild,
+      ]);
+      expect(backend.calls, <String>[
+        'stage:/repo:original.dart',
+        'stage:/repo:renamed.dart',
+        'stage:/repo:other.dart',
+        'unstage:/repo:staged.dart',
+        'discard:/repo:original.dart',
+        'discard:/repo:renamed.dart',
+        'discard:/repo:other.dart',
+      ]);
+    },
+  );
 }
