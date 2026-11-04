@@ -53,7 +53,7 @@ It runs the authoritative exporter, verifies Release identity and ZIP contents, 
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File tool/windows-finalizer/export_final_link_kit.ps1 -Force
 ```
 
-   - This is the authoritative workflow. It performs the Windows Release build and creates `build/final-link-kit/Alera-Final-Link-Kit.zip`.
+   - This is the authoritative workflow. It performs the Windows Release build, generates `CHANGELOG.md` from the prior release commit through the pinned source commit, and creates `build/final-link-kit/Alera-Final-Link-Kit.zip`. The package root changelog must identify the exact version and source commit.
    - Do not replace it with a hand-written ZIP or with `tool/release/build_windows_release.ps1`.
    - A Flutter progress line mentioning `alera-dev.exe` is **not evidence by itself** that the package is a dev build. The project defines a dev default name before `ALERA_FLAVOR=release` selects the production identity. Determine flavor only from the generated Release project, manifest, and AOT payload checks below.
    - Classify command output by terminal result, not by stream name or wording alone:
@@ -90,6 +90,7 @@ Before retrying a failed Windows build, classify the failure. Do not repeatedly 
      - `outputExecutable` is `Alera.exe`.
      - Release compiler definitions include `NDEBUG`, `ALERA_APP_NAME=L"Alera"`, and `ALERA_APP_ID=L"dev.leynier.alera"`.
    - Inspect the ZIP and confirm:
+     - root `CHANGELOG.md` displays the exact version/build number and source commit from `kit-manifest.json`; its SHA-256 entry is correct in `sha256sums.json`;
      - exactly one `payload/data/app.so` exists;
      - the runtime sidecar `payload/resources/alera/alera.exe` exists;
      - the build-machine final runner `Alera.exe` is not included in the transferable payload.

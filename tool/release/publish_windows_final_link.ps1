@@ -238,9 +238,10 @@ function Assert-ReleaseArtifact {
     $projectPath = Join-Path $script:BuildRoot 'build\windows\x64\runner\Alera.vcxproj'
     $appSoPath = Join-Path $script:BuildRoot 'build\windows\x64\runner\Release\data\app.so'
     $manifestPath = Join-Path $script:BuildRoot 'build\final-link-kit\Alera-Final-Link-Kit\kit-manifest.json'
+    $changelogPath = Join-Path $script:BuildRoot 'build\final-link-kit\Alera-Final-Link-Kit\CHANGELOG.md'
     $zipPath = Join-Path $script:BuildRoot 'build\final-link-kit\Alera-Final-Link-Kit.zip'
 
-    foreach ($path in @($projectPath, $appSoPath, $manifestPath, $zipPath)) {
+    foreach ($path in @($projectPath, $appSoPath, $manifestPath, $changelogPath, $zipPath)) {
         if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
             throw "Required Release artifact is missing: $path"
         }
@@ -265,6 +266,23 @@ function Assert-ReleaseArtifact {
     if ($manifest.outputExecutable -ne 'Alera.exe') {
         throw "Unexpected outputExecutable: $($manifest.outputExecutable)"
     }
+    if ($manifest.changelogFile -ne 'CHANGELOG.md') {
+        throw 'Release manifest does not identify the Final-Link changelog.'
+    }
+    $changelog = [System.IO.File]::ReadAllText($changelogPath)
+    $tick = [char]96
+    if (-not $changelog.Contains("- **Version:** $tick$($manifest.version)$tick")) {
+        throw 'Final-Link changelog version does not match the Release manifest.'
+    }
+    if (-not $changelog.Contains("- **Source commit:** $tick$ExpectedCommit$tick")) {
+        throw 'Final-Link changelog source commit does not match the Release manifest.'
+    }
+    $hashFile = Join-Path $script:BuildRoot 'build\final-link-kit\Alera-Final-Link-Kit\sha256sums.json'
+    $hashEntries = @(Get-Content -LiteralPath $hashFile -Raw | ConvertFrom-Json)
+    $changelogHash = @($hashEntries | Where-Object { $_.path -eq 'CHANGELOG.md' })
+    if ($changelogHash.Count -ne 1 -or $changelogHash[0].sha256 -ne (Get-FileHash -LiteralPath $changelogPath -Algorithm SHA256).Hash) {
+        throw 'Final-Link changelog is missing from sha256sums.json or has the wrong hash.'
+    }
     $definitions = @($manifest.compilerDefinitions)
     foreach ($definition in @('NDEBUG', 'ALERA_APP_NAME=L"Alera"', 'ALERA_APP_ID=L"dev.leynier.alera"')) {
         if ($definitions -notcontains $definition) {
@@ -276,6 +294,19 @@ function Assert-ReleaseArtifact {
     $archive = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
     try {
         $entries = @($archive.Entries | ForEach-Object { $_.FullName.Replace('\', '/') })
+        $zipChangelogEntry = $archive.GetEntry('CHANGELOG.md')
+        if ($null -eq $zipChangelogEntry) {
+            throw 'Final-Link ZIP is missing root CHANGELOG.md.'
+        }
+        $reader = [System.IO.StreamReader]::new($zipChangelogEntry.Open())
+        try {
+            if ($reader.ReadToEnd() -cne $changelog) {
+                throw 'Final-Link ZIP changelog differs from the verified package changelog.'
+            }
+        }
+        finally {
+            $reader.Dispose()
+        }
         $appSoEntries = @($entries | Where-Object { $_ -eq 'payload/data/app.so' })
         if ($appSoEntries.Count -ne 1) {
             $appSoCandidates = @($entries | Where-Object { $_ -match '(^|/)app\.so$' })
