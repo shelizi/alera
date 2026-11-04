@@ -55,7 +55,7 @@ fn windows_hook_execution_strategy_is_explicit_per_agent() {
     );
     assert_eq!(
         windows_hook_execution_strategy("devin"),
-        WindowsHookExecutionStrategy::GitBashToCmd
+        WindowsHookExecutionStrategy::DirectCmdScript
     );
     for agent in ["codex", "grok", "agy"] {
         assert_eq!(
@@ -144,7 +144,7 @@ fn devin_hooks_preserve_user_definitions_and_omit_matchers() {
 
 #[cfg(windows)]
 #[test]
-fn devin_windows_hooks_bridge_git_bash_into_cmd() {
+fn devin_windows_hooks_execute_in_both_git_bash_and_cmd() {
     let mut config = Map::new();
     apply_devin_hooks(
         &mut config,
@@ -155,13 +155,14 @@ fn devin_windows_hooks_bridge_git_bash_into_cmd() {
         .as_str()
         .expect("managed Devin command");
 
-    // Devin executes hook commands through Git Bash on Windows. Keep the shared
-    // Windows cmd hook and explicitly bridge into cmd.exe; MSYS argv conversion
-    // must be disabled or /d and /s are rewritten as POSIX-looking paths.
+    // Devin may invoke hooks through Git Bash or native cmd.exe. POSIX env
+    // assignments are invalid in the native runner, so use a direct .cmd path
+    // and pass agent/event via positional arguments instead.
     assert_eq!(
         command,
-        "MSYS2_ARG_CONV_EXCL='*' ALERA_AGENT_TYPE='devin' ALERA_AGENT_HOOK_EVENT='SessionStart' cmd.exe /d /s /c call 'C:\\Users\\u\\Alera Hooks\\alera-runtime-agent-hook.cmd'"
+        "\"C:/Users/u/Alera Hooks/alera-runtime-agent-hook.cmd\" devin SessionStart"
     );
+    assert!(!command.contains("MSYS2_ARG_CONV_EXCL"));
     assert!(!command.contains("alera-runtime-agent-hook.sh"));
 }
 

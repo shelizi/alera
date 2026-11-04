@@ -100,6 +100,10 @@ exit 0
 #[cfg(windows)]
 pub(super) const WINDOWS_HOOK_SCRIPT: &str = r#"@echo off
 setlocal
+rem Shell-neutral Devin hooks pass agent and event as positional arguments.
+rem Other agents still use ALERA_AGENT_TYPE / ALERA_AGENT_HOOK_EVENT env vars.
+if not "%~1"=="" set "ALERA_AGENT_TYPE=%~1"
+if not "%~2"=="" set "ALERA_AGENT_HOOK_EVENT=%~2"
 if /I "%ALERA_AGENT_TYPE%"=="agy" (
   if /I "%ALERA_AGENT_HOOK_EVENT%"=="Stop" (
     echo {"decision":""}
@@ -195,6 +199,21 @@ mod tests {
         assert!(WINDOWS_HOOK_SCRIPT.contains(r#"if /I "%ALERA_AGENT_TYPE%"=="agy" ("#));
         assert!(WINDOWS_HOOK_SCRIPT.contains(r#"else if /I "%ALERA_AGENT_TYPE%"=="copilot" ("#));
         assert!(WINDOWS_HOOK_SCRIPT.contains(r#"echo {"decision":""}"#));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_managed_script_accepts_shell_neutral_devin_arguments() {
+        let agent = WINDOWS_HOOK_SCRIPT
+            .find("set \"ALERA_AGENT_TYPE=%~1\"")
+            .expect("positional agent");
+        let event = WINDOWS_HOOK_SCRIPT
+            .find("set \"ALERA_AGENT_HOOK_EVENT=%~2\"")
+            .expect("positional event");
+        let guard = WINDOWS_HOOK_SCRIPT
+            .find("if /I \"%ALERA_AGENT_TYPE%\"==\"agy\"")
+            .expect("agent-specific guard");
+        assert!(agent < event && event < guard);
     }
 
     #[cfg(windows)]

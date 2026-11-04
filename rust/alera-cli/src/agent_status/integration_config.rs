@@ -561,14 +561,18 @@ fn devin_managed_command(script: &Path, event: &str) -> String {
 enum WindowsHookExecutionStrategy {
     NativeCmd,
     GitBashToCmd,
+    DirectCmdScript,
 }
 
 #[cfg(windows)]
 fn windows_hook_execution_strategy(agent: &str) -> WindowsHookExecutionStrategy {
     match agent {
-        // These agents launch shell-form hooks through Git Bash on Windows, so
-        // their cmd switches must be protected from MSYS argv conversion.
-        "claude" | "devin" => WindowsHookExecutionStrategy::GitBashToCmd,
+        // Claude launches shell-form hooks through Git Bash on Windows, so its
+        // cmd switches must be protected from MSYS argv conversion.
+        "claude" => WindowsHookExecutionStrategy::GitBashToCmd,
+        // Devin can execute hooks in Git Bash or a native Windows shell. Avoid
+        // POSIX-only environment assignments in generated Windows commands.
+        "devin" => WindowsHookExecutionStrategy::DirectCmdScript,
         // Codex, Grok and Antigravity use native Windows hook runners. Keep all
         // other integrations native by default so POSIX-only bridge syntax is
         // never injected into cmd.exe or PowerShell command parsing.
@@ -598,6 +602,25 @@ fn native_windows_managed_command(script: &Path, agent: &str, event: &str) -> St
     )
 }
 
+#[cfg(windows)]
+fn direct_windows_managed_command(script: &Path, agent: &str, event: &str) -> String {
+    // The direct command is fast for ordinary paths, but Git Bash dispatches
+    // .cmd files through cmd.exe and loses quoting around Windows shell
+    // metacharacters (especially '&'). Use PowerShell's call operator only for
+    // those uncommon paths; its -Command form works in Git Bash and cmd.exe.
+    let path = script.display().to_string().replace('\\', "/");
+    if path
+        .chars()
+        .any(|c| matches!(c, '&' | '(' | ')' | '^' | '%' | '!' | '\'' | '$' | '\u{60}'))
+    {
+        let ps_path = path.replace('\'', "''");
+        return format!(
+            "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command \"& '{ps_path}' {agent} {event}\""
+        );
+    }
+    format!("\"{path}\" {agent} {event}")
+}
+
 pub(super) fn managed_command(script: &Path, agent: &str, event: &str) -> String {
     #[cfg(windows)]
     {
@@ -610,6 +633,9 @@ pub(super) fn managed_command(script: &Path, agent: &str, event: &str) -> String
             }
             WindowsHookExecutionStrategy::GitBashToCmd => {
                 git_bash_windows_managed_command(script, agent, event)
+            }
+            WindowsHookExecutionStrategy::DirectCmdScript => {
+                direct_windows_managed_command(script, agent, event)
             }
         }
     }

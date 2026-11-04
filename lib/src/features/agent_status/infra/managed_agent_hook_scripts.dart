@@ -19,6 +19,20 @@ String _managedHookPowerShellCompletionEvents() => _managedHookCompletionEvents
     .map((event) => "'${_powerShellSingleQuote(event)}'")
     .join(',');
 
+String _shellNeutralWindowsCmdCommand(String scriptPath, String event) {
+  final normalized = scriptPath.replaceAll('\\', '/');
+  // Git Bash dispatches .cmd through cmd.exe, which can lose double quotes
+  // around paths containing shell metacharacters. The PowerShell call-operator
+  // form works in Git Bash and native Windows shells, but is slower, so reserve
+  // it for paths that actually need the extra escaping.
+  if (RegExp(r"[&()^%!'$\x60]").hasMatch(normalized)) {
+    final psPath = normalized.replaceAll("'", "''");
+    return 'powershell.exe -NoProfile -NonInteractive '
+        '-ExecutionPolicy Bypass -Command "& \'$psPath\' $event"';
+  }
+  return '"$normalized" $event';
+}
+
 extension _ManagedAgentHookScripts on ManagedAgentHookInstallService {
   String _managedCommand({
     required _AgentHookDescriptor descriptor,
@@ -39,14 +53,10 @@ extension _ManagedAgentHookScripts on ManagedAgentHookInstallService {
         '\$env:${descriptor.eventEnvVar} = \'${_powerShellSingleQuote(event.eventName)}\'; '
             'powershell.exe -NoProfile -ExecutionPolicy Bypass -File '
             '${_powerShellPath(descriptor.scriptPath)}',
-      _WindowsHookExecutionStrategy.gitBashToCmd =>
-        // Devin launches hook commands through Git Bash on Windows. Keep `call`
-        // and the batch path as separate argv: embedding quoted path text inside
-        // one `/c` argument makes MSYS pass literal backslash-quote pairs to cmd.
-        'if [ -f ${_shQuote(descriptor.scriptPath)} ]; then '
-            "MSYS2_ARG_CONV_EXCL='*' "
-            '${descriptor.eventEnvVar}=${_shQuote(event.eventName)} '
-            'cmd.exe /d /s /c call ${_shQuote(descriptor.scriptPath)}; fi',
+      _WindowsHookExecutionStrategy.shellNeutralCmd =>
+        // Devin can execute Windows hooks via Git Bash or a native shell.
+        // Pass the event as argv and escape shell-sensitive paths as needed.
+        _shellNeutralWindowsCmdCommand(descriptor.scriptPath, event.eventName),
       _WindowsHookExecutionStrategy.nativeCmd =>
         'cmd /d /s /c "if exist ""${descriptor.scriptPath}"" '
             '(set ${descriptor.eventEnvVar}=${event.eventName}&& call ""${descriptor.scriptPath}"")"',
@@ -75,6 +85,9 @@ extension _ManagedAgentHookScripts on ManagedAgentHookInstallService {
       return <String>[
         '@echo off',
         'setlocal',
+        if (descriptor.windowsExecutionStrategy ==
+            _WindowsHookExecutionStrategy.shellNeutralCmd)
+          'if not "%~1"=="" set "${descriptor.eventEnvVar}=%~1"',
         'if defined ALERA_AGENT_HOOK_ENDPOINT if exist "%ALERA_AGENT_HOOK_ENDPOINT%" call "%ALERA_AGENT_HOOK_ENDPOINT%" 2>nul',
         'if "%ALERA_AGENT_HOOK_PORT%"=="" exit /b 0',
         'if "%ALERA_AGENT_HOOK_TOKEN%"=="" exit /b 0',
