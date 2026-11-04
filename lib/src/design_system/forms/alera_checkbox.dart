@@ -56,12 +56,16 @@ class const AleraCheckbox({
                   children: <Widget>[
                     box,
                     const SizedBox(width: AleraTokens.space8),
-                    Text(
-                      translatedLabel!,
-                      style: theme.textTheme.bodyMedium?.copyWith(
-                        color: enabled
-                            ? AleraTokens.foreground
-                            : AleraTokens.foregroundFaint,
+                    Flexible(
+                      child: Text(
+                        translatedLabel!,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          color: enabled
+                              ? AleraTokens.foreground
+                              : AleraTokens.foregroundFaint,
+                        ),
                       ),
                     ),
                   ],

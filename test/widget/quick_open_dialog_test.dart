@@ -25,6 +25,68 @@ import 'package:alera/src/shared/infra/process/process_runner.dart';
 import 'package:path/path.dart' as p;
 
 void main() {
+  testWidgets('Ctrl+P keeps filename readable before a very deep path', (
+    tester,
+  ) async {
+    const fileName = 'annual_financial_projection_review_2026.xlsx';
+    const relativePath =
+        'packages/organization/team/deliverables/quarterly/reports/$fileName';
+    final workspace = _workspace('workspace-1', 'Main', '/repo/main');
+    final controller = _QuickOpenTestController(_state(workspace));
+    await _pumpQuickOpen(
+      tester,
+      controller: controller,
+      service: _QuickOpenFileService(entries: <String>[relativePath]),
+    );
+
+    await tester.tap(find.text('Open Quick Open'));
+    await tester.pumpAndSettle();
+
+    final nameFinder = find.text(fileName);
+    final pathFinder = find.text(relativePath);
+    expect(nameFinder, findsOneWidget);
+    expect(pathFinder, findsOneWidget);
+    expect(find.byTooltip(relativePath), findsOneWidget);
+    expect(
+      tester.getTopLeft(nameFinder).dy,
+      lessThan(tester.getTopLeft(pathFinder).dy),
+    );
+    expect(tester.takeException(), isNull);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+    expect(controller.openedFiles, <String>[relativePath]);
+  });
+
+  testWidgets('Ctrl+P wraps long filenames safely in a narrow window', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(420, 720));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final fileName =
+        '${List<String>.filled(8, 'financial_report_section_').join()}final.dart';
+    final relativePath = 'src/reports/$fileName';
+    final workspace = _workspace('workspace-1', 'Main', '/repo/main');
+    final controller = _QuickOpenTestController(_state(workspace));
+    await _pumpQuickOpen(
+      tester,
+      controller: controller,
+      service: _QuickOpenFileService(entries: <String>[relativePath]),
+    );
+
+    await tester.tap(find.text('Open Quick Open'));
+    await tester.pumpAndSettle();
+
+    final nameFinder = find.text(fileName);
+    expect(nameFinder, findsOneWidget);
+    expect(tester.widget<Text>(nameFinder).maxLines, 2);
+    expect(find.byTooltip(relativePath), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+    expect(controller.openedFiles, <String>[relativePath]);
+  });
+
   testWidgets('repeated Ctrl+P refocuses Quick Open without nesting dialogs', (
     tester,
   ) async {
@@ -590,7 +652,9 @@ void main() {
     }
     await tester.pumpAndSettle();
 
-    expect(find.text('file_49.dart'), findsOneWidget);
+    // The result list is sorted lexicographically, so file_9.dart is last.
+    // The taller filename-first rows do not also expose file_49.dart.
+    expect(find.text('file_9.dart'), findsOneWidget);
   });
 
   testWidgets('shows empty and error states', (tester) async {

@@ -36,6 +36,9 @@ import 'package:path/path.dart' as p;
 part 'quick_open_dialog_context_actions.dart';
 
 const _quickOpenResultLimit = 50;
+const _quickOpenDialogWidth = 720.0;
+const _quickOpenDialogHeight = 620.0;
+const _quickOpenResultHeight = 76.0;
 
 class const QuickOpenDialog({super.key}) extends ConsumerStatefulWidget {
   @override
@@ -292,7 +295,7 @@ class _QuickOpenDialogState extends ConsumerState<QuickOpenDialog> {
         );
       } else if (_resultsScrollController.hasClients) {
         final position = _resultsScrollController.position;
-        final itemExtent = AleraTokens.space32;
+        final itemExtent = _quickOpenResultHeight;
         final itemTop = _selectedIndex * itemExtent;
         final itemBottom = itemTop + itemExtent;
         final visibleTop = position.pixels;
@@ -422,11 +425,11 @@ class _QuickOpenDialogState extends ConsumerState<QuickOpenDialog> {
     return Focus(
       onKeyEvent: _handleKey,
       child: AleraDialog(
-        maxWidth: AleraTokens.dialogWideWidth,
-        maxHeight: AleraTokens.dialogMaxHeight,
+        maxWidth: _quickOpenDialogWidth,
+        maxHeight: _quickOpenDialogHeight,
         child: SizedBox(
-          width: AleraTokens.dialogWideWidth,
-          height: AleraTokens.dialogMaxHeight,
+          width: _quickOpenDialogWidth,
+          height: _quickOpenDialogHeight,
           child: Padding(
             padding: const EdgeInsets.all(AleraTokens.space20),
             child: Column(
@@ -566,57 +569,85 @@ class _QuickOpenDialogState extends ConsumerState<QuickOpenDialog> {
     return ListView.builder(
       key: const ValueKey<String>('quick-open-results'),
       controller: _resultsScrollController,
-      itemExtent: AleraTokens.space32,
+      itemExtent: _quickOpenResultHeight,
       padding: EdgeInsets.zero,
       itemCount: _matches.length,
       itemBuilder: (context, index) {
         final match = _matches[index];
+        final relativePath = match.relativePath.replaceAll('\\', '/');
+        final fileName = p.posix.basename(relativePath);
+        final directory = p.posix.dirname(relativePath);
         final selected = index == _selectedIndex;
         final rowKey = _rowKeys.putIfAbsent(
           match.relativePath,
           () => GlobalKey(),
         );
-        final row = Material(
-          key: rowKey,
-          color: selected || _contextSelectedPaths.contains(match.relativePath)
-              ? AleraTokens.accentSubtle
-              : null,
-          child: InkWell(
-            onTap: () {
-              if (_handleQuickOpenModifiedSelection(index)) return;
-              setState(() {
-                _selectedIndex = index;
-                _contextSelectedPaths
-                  ..clear()
-                  ..add(match.relativePath);
-                _contextSelectionAnchor = match.relativePath;
-              });
-              _openSelected();
-            },
-            child: Padding(
-              padding: const EdgeInsets.symmetric(
-                horizontal: AleraTokens.space12,
-                vertical: AleraTokens.space8,
-              ),
-              child: Row(
-                children: <Widget>[
-                  AleraFileIcon(
-                    pathOrName: match.relativePath,
-                    kind: .file,
-                    size: AleraTokens.space16,
-                  ),
-                  const SizedBox(width: AleraTokens.space12),
-                  Expanded(
-                    child: AleraSearchHighlightedText(
-                      text: match.relativePath,
-                      query: _queryController.text,
-                      fuzzy: true,
-                      maxLines: 1,
-                      overflow: .ellipsis,
-                      style: theme.textTheme.bodyMedium,
+        final row = Tooltip(
+          message: match.relativePath,
+          child: Material(
+            key: rowKey,
+            color:
+                selected || _contextSelectedPaths.contains(match.relativePath)
+                ? AleraTokens.accentSubtle
+                : null,
+            child: InkWell(
+              onTap: () {
+                if (_handleQuickOpenModifiedSelection(index)) return;
+                setState(() {
+                  _selectedIndex = index;
+                  _contextSelectedPaths
+                    ..clear()
+                    ..add(match.relativePath);
+                  _contextSelectionAnchor = match.relativePath;
+                });
+                _openSelected();
+              },
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: AleraTokens.space12,
+                  vertical: AleraTokens.space4,
+                ),
+                child: Row(
+                  children: <Widget>[
+                    AleraFileIcon(
+                      pathOrName: match.relativePath,
+                      kind: .file,
+                      size: AleraTokens.space16,
                     ),
-                  ),
-                ],
+                    const SizedBox(width: AleraTokens.space12),
+                    Expanded(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: <Widget>[
+                          AleraSearchHighlightedText(
+                            text: fileName,
+                            query: _queryController.text,
+                            fuzzy: true,
+                            maxLines: 2,
+                            overflow: .ellipsis,
+                            style: theme.textTheme.bodyMedium?.copyWith(
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          if (directory != '.') ...<Widget>[
+                            const SizedBox(height: AleraTokens.space2),
+                            AleraSearchHighlightedText(
+                              text: relativePath,
+                              query: _queryController.text,
+                              fuzzy: true,
+                              maxLines: 1,
+                              overflow: .ellipsis,
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: AleraTokens.foregroundMuted,
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
           ),
