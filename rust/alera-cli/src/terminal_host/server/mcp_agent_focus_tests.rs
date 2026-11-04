@@ -54,6 +54,7 @@ async fn focus_only_resolves_live_local_agent_and_never_accepts_client_tab_id() 
     let token = actor.mcp_ui.mint_token("sender");
     actor
         .handle_mcp_ui_request(1, "uiControl.register", &json!({"windowId":"main"}))
+        .await
         .unwrap();
     let mut request = json!({
         "sessionId":"sender","workspaceId":"workspace",
@@ -62,6 +63,7 @@ async fn focus_only_resolves_live_local_agent_and_never_accepts_client_tab_id() 
     });
     let accepted = actor
         .handle_mcp_ui_request(2, "uiControl.request", &request)
+        .await
         .unwrap();
     assert_eq!(accepted["status"], "accepted");
     assert_eq!(accepted["applied"], false);
@@ -69,19 +71,23 @@ async fn focus_only_resolves_live_local_agent_and_never_accepts_client_tab_id() 
     request["arguments"]["handle"] = json!("foreign");
     assert!(actor
         .handle_mcp_ui_request(2, "uiControl.request", &request)
+        .await
         .is_err());
     request["arguments"]["handle"] = json!("missing");
     assert!(actor
         .handle_mcp_ui_request(2, "uiControl.request", &request)
+        .await
         .is_err());
     request["arguments"]["handle"] = json!("target");
     request["arguments"]["tabId"] = json!("foreign-tab");
     assert!(actor
         .handle_mcp_ui_request(2, "uiControl.request", &request)
+        .await
         .is_err());
     request["arguments"] = json!({"handle":"target"});
     actor.sessions.remove("target");
     assert!(actor
         .handle_mcp_ui_request(2, "uiControl.request", &request)
+        .await
         .is_err());
 }

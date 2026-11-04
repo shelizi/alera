@@ -40,6 +40,7 @@ async fn settings_result_requires_genuine_app_ack_and_known_scalar_type() {
                 "windowId":"main",
             }),
         )
+        .await
         .unwrap();
     let token = actor.mcp_ui.mint_token("agent");
     let request = json!({
@@ -49,6 +50,7 @@ async fn settings_result_requires_genuine_app_ack_and_known_scalar_type() {
     });
     let accepted = actor
         .handle_mcp_ui_request(2, "uiControl.request", &request)
+        .await
         .unwrap();
     assert_eq!(accepted["status"], "accepted");
     assert_eq!(accepted["applied"], false);
@@ -61,6 +63,7 @@ async fn settings_result_requires_genuine_app_ack_and_known_scalar_type() {
     assert_eq!(
         actor
             .handle_mcp_ui_request(2, "uiControl.status", &receipt,)
+            .await
             .unwrap()["settingValue"],
         serde_json::Value::Null
     );
@@ -73,6 +76,7 @@ async fn settings_result_requires_genuine_app_ack_and_known_scalar_type() {
                     "requestId":id,"applied":true,"settingValue":16,
                 }),
             )
+            .await
             .is_err(),
         "a CLI cannot claim Flutter settings were applied"
     );
@@ -86,6 +90,7 @@ async fn settings_result_requires_genuine_app_ack_and_known_scalar_type() {
                     "settingValue":{"privateSecret":"should never be exposed"},
                 }),
             )
+            .await
             .is_err(),
         "only known scalar setting values may traverse Host"
     );
@@ -98,6 +103,7 @@ async fn settings_result_requires_genuine_app_ack_and_known_scalar_type() {
                     "requestId":id,"applied":true,
                 }),
             )
+            .await
             .is_err(),
         "an ACK without actual readback is not successful"
     );
@@ -109,9 +115,11 @@ async fn settings_result_requires_genuine_app_ack_and_known_scalar_type() {
                 "requestId":id,"applied":true,"settingValue":16,
             }),
         )
+        .await
         .unwrap();
     let status = actor
         .handle_mcp_ui_request(2, "uiControl.status", &receipt)
+        .await
         .unwrap();
     assert_eq!(status["status"], "applied");
     assert_eq!(status["settingPath"], "terminal.fontSize");
@@ -125,6 +133,7 @@ async fn settings_result_requires_genuine_app_ack_and_known_scalar_type() {
                     "requestId":id,"applied":true,"settingValue":17,
                 }),
             )
+            .await
             .is_err(),
         "repeat ACK must not overwrite completed receipts"
     );

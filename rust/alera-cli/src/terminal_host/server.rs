@@ -137,6 +137,8 @@ mod managed_workspace_requests;
 mod mcp_agent_focus_tests;
 mod mcp_agent_requests;
 #[cfg(test)]
+mod mcp_cross_project_navigation_tests;
+#[cfg(test)]
 mod mcp_settings_ack_tests;
 mod mcp_ui_requests;
 mod mobile_device_pairing_requests;

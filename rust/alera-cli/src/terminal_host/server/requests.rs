@@ -259,7 +259,10 @@ impl ServerActor {
             | "uiControl.request"
             | "uiControl.status"
             | "uiControl.complete"
-            | "uiControl.windows" => self.handle_mcp_ui_request(client_id, request_type, payload),
+            | "uiControl.windows" => {
+                self.handle_mcp_ui_request(client_id, request_type, payload)
+                    .await
+            }
             "agentControl.scope" | "agentControl.send" | "agentControl.messageStatus" => {
                 self.handle_mcp_agent_request(client_id, request_type, payload)
                     .await

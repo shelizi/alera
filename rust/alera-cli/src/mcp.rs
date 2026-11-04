@@ -233,9 +233,10 @@ fn tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "alera.list_tabs",
-            "description": "List tabs in the caller's current live Alera workspace. Does not reveal tab payloads.",
+            "description": "List tabs in the current or an explicitly named active Alera workspace (cross-project requires projectId). Does not reveal tab payloads.",
             "inputSchema": {"type": "object", "properties": {
                 "workspaceId": {"type": "string"},
+                "projectId": {"type": "string"},
                 "limit": {"type": "integer", "minimum": 1, "maximum": 100}
             }, "additionalProperties": false},
             "annotations": {"readOnlyHint": true}
@@ -252,9 +253,12 @@ fn tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "alera.open_file",
-            "description": "Open an existing file in Alera editor. Requires Host-minted PTY UI capability and App acknowledgment.",
+            "description": "Open an existing editor file in the caller's workspace or an explicitly selected project/workspace. Open mode reuse is default; new creates an independent permanent Tab. Requires Host authorization and visible App acknowledgment.",
             "inputSchema": {"type": "object", "properties": {
                 "relativePath": {"type": "string", "minLength": 1},
+                "workspaceId": {"type": "string"},
+                "projectId": {"type": "string"},
+                "openMode": {"type": "string", "enum": ["reuse", "new"]},
                 "windowId": {"type": "string"}
             }, "required": ["relativePath"], "additionalProperties": false},
             "annotations": {"readOnlyHint": false}
@@ -264,8 +268,31 @@ fn tool_definitions() -> Vec<Value> {
             "description": "Locate an existing file in Alera Explorer without opening a Tab; confirms Explorer selection and scroll.",
             "inputSchema": {"type": "object", "properties": {
                 "relativePath": {"type": "string", "minLength": 1},
+                "workspaceId": {"type": "string"},
+                "projectId": {"type": "string"},
                 "windowId": {"type": "string"}
             }, "required": ["relativePath"], "additionalProperties": false},
+            "annotations": {"readOnlyHint": false}
+        }),
+        json!({
+            "name": "alera.focus_workspace",
+            "description": "Switch the Alera UI to an existing active Workspace, including another Project, without spawning a Terminal. Cross-workspace navigation requires projectId.",
+            "inputSchema": {"type": "object", "properties": {
+                "workspaceId": {"type": "string", "minLength": 1},
+                "projectId": {"type": "string"},
+                "windowId": {"type": "string"}
+            }, "required": ["workspaceId"], "additionalProperties": false},
+            "annotations": {"readOnlyHint": false}
+        }),
+        json!({
+            "name": "alera.select_tab",
+            "description": "Select an existing tab in an active Alera Workspace, including another Project. Never sends Terminal input or remints a PTY. Cross-workspace requires projectId.",
+            "inputSchema": {"type": "object", "properties": {
+                "workspaceId": {"type": "string", "minLength": 1},
+                "projectId": {"type": "string"},
+                "tabId": {"type": "string", "minLength": 1},
+                "windowId": {"type": "string"}
+            }, "required": ["workspaceId", "tabId"], "additionalProperties": false},
             "annotations": {"readOnlyHint": false}
         }),
         json!({
@@ -428,6 +455,8 @@ fn supported_tool(name: &str) -> bool {
             | "alera.search_files"
             | "alera.open_file"
             | "alera.reveal_file"
+            | "alera.focus_workspace"
+            | "alera.select_tab"
             | "alera.open_git_graph"
             | "alera.compare_branches"
             | "alera.search_agents"
@@ -540,9 +569,14 @@ async fn execute_tool_connected(
             )
         }
         "alera.list_tabs" => {
-            let workspace = caller_workspace(client).await?;
-            let requested = optional_str(args, "workspaceId")?;
-            require_current_workspace(requested.as_deref(), &workspace)?;
+            let caller = caller_workspace(client).await?;
+            let workspace = resolve_navigation_workspace(
+                client,
+                &caller,
+                optional_str(args, "workspaceId")?,
+                optional_str(args, "projectId")?,
+            )
+            .await?;
             let limit = limit(args)?;
             let tabs = host_array(client, "tab.list", &json!({"workspaceId": workspace})).await?;
             let items = tabs.iter().take(limit).map(tab_fields).collect::<Vec<_>>();
@@ -589,6 +623,8 @@ async fn execute_tool_connected(
         }
         "alera.open_file"
         | "alera.reveal_file"
+        | "alera.focus_workspace"
+        | "alera.select_tab"
         | "alera.open_git_graph"
         | "alera.compare_branches"
         | "alera.focus_agent"
@@ -724,6 +760,8 @@ async fn execute_ui_tool(
     let action = match name {
         "alera.open_file" => "open_file",
         "alera.reveal_file" => "reveal_file",
+        "alera.focus_workspace" => "focus_workspace",
+        "alera.select_tab" => "select_tab",
         "alera.open_git_graph" => "open_git_graph",
         "alera.compare_branches" => "compare_branches",
         "alera.focus_agent" => "focus_agent",
@@ -776,6 +814,19 @@ async fn execute_ui_tool(
         match status["status"].as_str() {
             Some("accepted") => continue,
             Some("applied") if status["applied"] == true => {
+                let expected_workspace = if matches!(
+                    action,
+                    "open_file" | "reveal_file" | "focus_workspace" | "select_tab"
+                ) {
+                    args.get("workspaceId")
+                        .and_then(Value::as_str)
+                        .unwrap_or(&workspace)
+                } else {
+                    &workspace
+                };
+                if status["workspaceId"].as_str() != Some(expected_workspace) {
+                    return Err("Alera Host acknowledged a different destination Workspace".into());
+                }
                 if matches!(action, "get_setting" | "update_setting") {
                     let path = required_str(args, "path")?;
                     if status["settingPath"] != path || status["settingValue"].is_null() {
@@ -795,7 +846,7 @@ async fn execute_ui_tool(
                     }));
                 }
                 return Ok(json!({
-                    "kind": "uiOperation", "action": action, "workspaceId": workspace,
+                    "kind": "uiOperation", "action": action, "workspaceId": status["workspaceId"],
                     "requestId": request_id, "status": "applied",
                     "windowId": status["windowId"], "tabId": status["tabId"]
                 }));
@@ -861,9 +912,18 @@ fn check_keys(tool: &str, args: &Value) -> Result<(), String> {
     let allowed: &[&str] = match tool {
         "alera.list_projects" => &["query", "limit"],
         "alera.list_workspaces" => &["projectId", "includeArchived", "limit"],
-        "alera.list_tabs" => &["workspaceId", "limit"],
+        "alera.list_tabs" => &["workspaceId", "projectId", "limit"],
         "alera.search_files" => &["query", "includeHidden", "limit"],
-        "alera.open_file" | "alera.reveal_file" => &["relativePath", "windowId"],
+        "alera.open_file" => &[
+            "relativePath",
+            "workspaceId",
+            "projectId",
+            "openMode",
+            "windowId",
+        ],
+        "alera.reveal_file" => &["relativePath", "workspaceId", "projectId", "windowId"],
+        "alera.focus_workspace" => &["workspaceId", "projectId", "windowId"],
+        "alera.select_tab" => &["workspaceId", "projectId", "tabId", "windowId"],
         "alera.open_git_graph" => &[
             "windowId",
             "gitDiffRoot",
@@ -928,11 +988,45 @@ fn required_str(args: &Value, key: &str) -> Result<String, String> {
         .ok_or_else(|| format!("{key} is required"))
 }
 
-fn require_current_workspace(requested: Option<&str>, current: &str) -> Result<(), String> {
-    if requested.is_some_and(|value| value != current) {
-        return Err("This MCP session is not authorized to read another workspace".to_string());
+fn require_navigation_project(
+    caller: &str,
+    target: &str,
+    project_id: Option<&str>,
+) -> Result<(), String> {
+    if target != caller && !project_id.is_some_and(|value| !value.is_empty()) {
+        return Err("Cross-workspace navigation requires projectId".to_owned());
     }
     Ok(())
+}
+
+/// Cross-project navigation is an explicit choice, not a side effect of
+/// discovering another workspace ID. This read-only path never changes the
+/// caller's live PTY identity or grants agent-control authority.
+async fn resolve_navigation_workspace(
+    client: &mut RuntimeHostRpcClient,
+    caller: &str,
+    requested: Option<String>,
+    project_id: Option<String>,
+) -> Result<String, String> {
+    let target = requested.unwrap_or_else(|| caller.to_owned());
+    require_navigation_project(caller, &target, project_id.as_deref())?;
+    if target == caller && project_id.is_none() {
+        return Ok(target);
+    }
+    let project_id = project_id
+        .filter(|value| !value.is_empty())
+        .ok_or("Cross-workspace navigation requires projectId")?;
+    let workspaces = host_array(client, "workspace.listAll", &json!({})).await?;
+    let valid = workspaces.iter().any(|workspace| {
+        workspace["id"] == target
+            && workspace["projectId"] == project_id
+            && workspace["status"] == "active"
+            && workspace["archivedAt"].is_null()
+    });
+    if !valid {
+        return Err("Target workspace is missing, archived or belongs to another project".into());
+    }
+    Ok(target)
 }
 
 async fn caller_workspace(client: &mut RuntimeHostRpcClient) -> Result<String, String> {
@@ -1223,7 +1317,7 @@ mod tests {
         .unwrap();
         assert_eq!(listed["id"], "list");
         let tools = listed["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 18);
+        assert_eq!(tools.len(), 20);
         assert_eq!(
             tools
                 .iter()
@@ -1283,12 +1377,39 @@ mod tests {
 
     #[test]
     fn tool_arguments_fail_closed_on_unknown_or_unbounded_values() {
+        for (tool, arguments) in [
+            (
+                "alera.focus_workspace",
+                json!({"workspaceId":"other","projectId":"project-b"}),
+            ),
+            (
+                "alera.select_tab",
+                json!({"workspaceId":"other","projectId":"project-b","tabId":"tab-b"}),
+            ),
+            (
+                "alera.open_file",
+                json!({"relativePath":"src/main.rs","workspaceId":"other","projectId":"project-b","openMode":"new"}),
+            ),
+            (
+                "alera.list_tabs",
+                json!({"workspaceId":"other","projectId":"project-b"}),
+            ),
+        ] {
+            assert!(supported_tool(tool), "missing MCP navigation tool: {tool}");
+            assert!(check_keys(tool, &arguments).is_ok(), "{tool}: {arguments}");
+        }
+        assert!(check_keys(
+            "alera.select_tab",
+            &json!({"workspaceId":"other","tabId":"tab-b","ptyInput":"whoami"})
+        )
+        .is_err());
         assert!(check_keys("alera.list_projects", &json!({"secret": "x"})).is_err());
         assert!(limit(&json!({"limit": 0})).is_err());
         assert!(limit(&json!({"limit": 101})).is_err());
         assert!(limit(&json!({"limit": -1})).is_err());
-        assert!(require_current_workspace(Some("foreign"), "current").is_err());
-        assert!(require_current_workspace(Some("current"), "current").is_ok());
+        assert!(require_navigation_project("current", "foreign", None).is_err());
+        assert!(require_navigation_project("current", "foreign", Some("project-b")).is_ok());
+        assert!(require_navigation_project("current", "current", None).is_ok());
         assert!(check_keys(
             "alera.send_agent_message",
             &json!({"toHandle":"agent", "body":"hi", "subject":"status",

@@ -33,6 +33,7 @@ import 'package:alera/src/features/workbench/domain/workspace_source_control_sco
 import 'package:alera/src/features/workbench/domain/workspace_creation_result.dart';
 import 'package:alera/src/features/workbench/domain/workspace_storage_impact.dart';
 import 'package:alera/src/features/workbench/application/terminal_runtime_lifecycle.dart';
+import 'package:alera/src/features/workbench/application/terminal_runtime_bindings.dart';
 import 'package:alera/src/features/workbench/application/external_terminal_providers.dart';
 import 'package:alera/src/features/workbench/domain/external_terminal_launcher.dart';
 import 'package:alera/src/features/workbench/presentation/terminal_runtime.dart';
@@ -41,6 +42,8 @@ import 'package:alera/src/features/workbench/presentation/project_workbench_side
 import 'package:alera/src/features/workbench/presentation/widgets/workspace_agent_compact_summary.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_workbench_view.dart';
 import 'package:alera/src/features/workbench/presentation/workbench_tab_drag_data.dart';
+import 'package:alera/src/platform/runtime_host/protocol/terminal_host_protocol.dart';
+import 'package:alera/src/shared/infra/runtime/runtime_host_providers.dart';
 import 'package:alera/src/shared/infra/git/git_providers.dart';
 import 'package:alera/src/shared/infra/process/process_runner.dart';
 import 'package:alera/src/shared/infra/storage/drift_database.dart';
@@ -66,6 +69,7 @@ part 'alera_shell_page_sidebar_feedback_test_cases.dart';
 part 'alera_shell_page_sidebar_titles_test_cases.dart';
 part 'alera_shell_page_pinning_test_cases.dart';
 part 'alera_shell_page_sidebar_identity_test_cases.dart';
+part 'alera_shell_page_mcp_navigation_test_cases.dart';
 
 Future<AleraDatabase> _openMemoryDb() async {
   return AleraDatabase(executor: NativeDatabase.memory());
@@ -78,6 +82,7 @@ Future<_ShellPumpHarness> _pumpShell(
   WorkspaceFolderOpener? workspaceFolderOpener,
   _ShellTestWorkbenchController? controller,
   EditorSessionRegistry? editorSessionRegistry,
+  RuntimeHostClient? mcpRuntimeHostClient,
   AleraSettings? settings,
   Map<String, AgentStatusEntry> agentStatuses =
       const <String, AgentStatusEntry>{},
@@ -125,6 +130,12 @@ Future<_ShellPumpHarness> _pumpShell(
         ),
         terminalRuntimeProvider.overrideWith((ref) => runtime),
         terminalHostClientProvider.overrideWithValue(terminalHostClient),
+        if (mcpRuntimeHostClient != null)
+          runtimeHostClientProvider.overrideWithValue(mcpRuntimeHostClient),
+        if (mcpRuntimeHostClient != null)
+          terminalSessionTitleSourceProvider.overrideWithValue(
+            const _McpNavigationTitleSource(),
+          ),
         terminalRuntimeBindingOverride(),
         if (editorSessionRegistry != null)
           editorSessionRegistryProvider.overrideWithValue(
@@ -311,6 +322,7 @@ void main() {
   _registerAleraShellSidebarTitleTests();
   _registerAleraShellPinningTests();
   _registerAleraShellSidebarIdentityTests();
+  _registerAleraShellMcpNavigationTests();
 }
 
 WorkbenchState _stackedWorkbenchState() {

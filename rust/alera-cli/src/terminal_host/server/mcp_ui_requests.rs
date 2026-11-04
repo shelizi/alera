@@ -11,6 +11,7 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
+use alera_core::runtime::WorkspaceStatus;
 use serde_json::{json, Value};
 use uuid::Uuid;
 
@@ -35,6 +36,8 @@ pub(super) struct McpUiControlState {
 
 struct McpUiReceipt {
     session_handle: String,
+    target_workspace_id: String,
+    expected_tab_id: Option<String>,
     target_client_id: u64,
     window_id: String,
     created: Instant,
@@ -55,6 +58,7 @@ impl McpUiReceipt {
             "status": self.status,
             "applied": self.status == "applied",
             "windowId": self.window_id,
+            "workspaceId": self.target_workspace_id,
             "tabId": self.tab_id,
             "settingPath": self.setting_path,
             "settingValue": self.setting_value,
@@ -104,7 +108,7 @@ impl McpUiControlState {
 }
 
 impl ServerActor {
-    pub(super) fn handle_mcp_ui_request(
+    pub(super) async fn handle_mcp_ui_request(
         &mut self,
         client_id: u64,
         request_type: &str,
@@ -163,6 +167,14 @@ impl ServerActor {
                 }
                 let action = required_short(payload, "action", 40)?;
                 let mut arguments = validate_ui_arguments(&action, payload.get("arguments"))?;
+                let target_workspace_id = self
+                    .validate_navigation_target(&action, &arguments, &workspace_id)
+                    .await?;
+                let expected_tab_id = if action == "select_tab" {
+                    Some(required_short(&arguments, "tabId", 128)?)
+                } else {
+                    None
+                };
                 let setting_path = if matches!(action.as_str(), "get_setting" | "update_setting") {
                     Some(required_short(&arguments, "path", 128)?)
                 } else {
@@ -215,7 +227,7 @@ impl ServerActor {
                     json!({
                         "requestId": request_id,
                         "windowId": window_id,
-                        "workspaceId": workspace_id,
+                        "workspaceId": target_workspace_id,
                         "action": action,
                         "arguments": arguments,
                     }),
@@ -229,6 +241,8 @@ impl ServerActor {
                     request_id.clone(),
                     McpUiReceipt {
                         session_handle,
+                        target_workspace_id,
+                        expected_tab_id,
                         target_client_id,
                         window_id,
                         created: Instant::now(),
@@ -287,6 +301,14 @@ impl ServerActor {
                     }
                     _ => None,
                 };
+                if applied
+                    && receipt.expected_tab_id.is_some()
+                    && tab_id.as_deref() != receipt.expected_tab_id.as_deref()
+                {
+                    return Err(HostError::format(
+                        "Selected tab does not match the authorized target.",
+                    ));
+                }
                 receipt.status = if applied { "applied" } else { "failed" };
                 receipt.tab_id = if applied { tab_id } else { None };
                 receipt.setting_value = setting_value;
@@ -299,6 +321,79 @@ impl ServerActor {
             }
             _ => Err(HostError::state("Unknown Workbench UI operation.")),
         }
+    }
+
+    /// Distinguish the Host-proven caller PTY from a *navigation-only* target.
+    /// A forged target ID never grants agent input, shell launch or a foreign
+    /// capability. The destination must remain a live, nonarchived workspace
+    /// attached to the explicitly named project before any Flutter event.
+    async fn validate_navigation_target(
+        &self,
+        action: &str,
+        args: &Value,
+        caller_workspace_id: &str,
+    ) -> HostResult<String> {
+        let navigation = matches!(
+            action,
+            "open_file" | "reveal_file" | "focus_workspace" | "select_tab"
+        );
+        let target_workspace_id = if navigation {
+            args.get("workspaceId")
+                .and_then(Value::as_str)
+                .unwrap_or(caller_workspace_id)
+        } else {
+            caller_workspace_id
+        };
+        let project_id = args.get("projectId").and_then(Value::as_str);
+        if target_workspace_id != caller_workspace_id && project_id.is_none() {
+            return Err(HostError::unauthorized(
+                "Cross-workspace navigation requires an explicit projectId.",
+            ));
+        }
+        if navigation && (target_workspace_id != caller_workspace_id || project_id.is_some()) {
+            let project_id = project_id.ok_or_else(|| {
+                HostError::unauthorized("Target project identity was not provided.")
+            })?;
+            let project_exists = self
+                .runtime_store
+                .find_project(project_id)
+                .await
+                .map_err(|error| HostError::state(error.to_string()))?
+                .is_some();
+            let workspace = self
+                .runtime_store
+                .find_workspace(target_workspace_id)
+                .await
+                .map_err(|error| HostError::state(error.to_string()))?;
+            if !project_exists
+                || !workspace.as_ref().is_some_and(|workspace| {
+                    workspace.project_id == project_id
+                        && workspace.status == WorkspaceStatus::Active
+                        && workspace.archived_at.is_none()
+                })
+            {
+                return Err(HostError::unauthorized(
+                    "Navigation target is unavailable or does not belong to the project.",
+                ));
+            }
+        }
+        if action == "select_tab" {
+            let tab_id = required_short(args, "tabId", 128)?;
+            let tab = self
+                .runtime_store
+                .find_workspace_tab(&tab_id)
+                .await
+                .map_err(|error| HostError::state(error.to_string()))?;
+            if !tab
+                .as_ref()
+                .is_some_and(|tab| tab.workspace_id == target_workspace_id)
+            {
+                return Err(HostError::unauthorized(
+                    "The selected Tab is not in the authorized target Workspace.",
+                ));
+            }
+        }
+        Ok(target_workspace_id.to_owned())
     }
 
     fn require_mcp_ui_app(&self, client_id: u64) -> HostResult<()> {
@@ -339,6 +434,7 @@ fn public_ui_error_code(code: Option<&str>) -> &'static str {
         Some("setting_invalid") => "setting_invalid",
         Some("invalid_path") => "invalid_path",
         Some("file_missing") => "file_missing",
+        Some("tab_missing") => "tab_missing",
         Some("workspace_missing") => "workspace_missing",
         Some("git_compare_failed") => "git_compare_failed",
         Some("ui_not_ready") => "ui_not_ready",
@@ -397,7 +493,10 @@ fn validate_ui_arguments(action: &str, raw: Option<&Value>) -> HostResult<Value>
         .and_then(Value::as_object)
         .ok_or_else(|| HostError::format("UI command arguments must be an object."))?;
     let allowed: &[&str] = match action {
-        "open_file" | "reveal_file" => &["relativePath"],
+        "open_file" => &["relativePath", "workspaceId", "projectId", "openMode"],
+        "reveal_file" => &["relativePath", "workspaceId", "projectId"],
+        "focus_workspace" => &["workspaceId", "projectId"],
+        "select_tab" => &["workspaceId", "projectId", "tabId"],
         "focus_agent" => &["handle"],
         "get_setting" => &["path"],
         "update_setting" => &["path", "expectedValue", "value"],
@@ -416,6 +515,35 @@ fn validate_ui_arguments(action: &str, raw: Option<&Value>) -> HostResult<Value>
         return Err(HostError::format("Unsupported Workbench UI argument."));
     }
     let mut validated = serde_json::Map::new();
+    if matches!(
+        action,
+        "open_file" | "reveal_file" | "focus_workspace" | "select_tab"
+    ) {
+        for key in ["workspaceId", "projectId"] {
+            if let Some(value) = optional_short(raw.unwrap(), key, 128)? {
+                validated.insert(key.to_string(), json!(value));
+            }
+        }
+        if matches!(action, "focus_workspace" | "select_tab")
+            && !validated.contains_key("workspaceId")
+        {
+            return Err(HostError::format("Navigation workspaceId is required."));
+        }
+    }
+    if action == "select_tab" {
+        validated.insert(
+            "tabId".into(),
+            json!(required_short(raw.unwrap(), "tabId", 128)?),
+        );
+    }
+    if action == "open_file" {
+        let mode =
+            optional_short(raw.unwrap(), "openMode", 16)?.unwrap_or_else(|| "reuse".to_owned());
+        if !matches!(mode.as_str(), "reuse" | "new") {
+            return Err(HostError::format("openMode must be reuse or new."));
+        }
+        validated.insert("openMode".into(), json!(mode));
+    }
     if matches!(action, "open_file" | "reveal_file") {
         let path = required_short(raw.unwrap(), "relativePath", 1024)?;
         validated.insert("relativePath".into(), json!(validate_relative_path(&path)?));
@@ -529,6 +657,39 @@ mod tests {
 
     #[test]
     fn validates_ui_command_paths_refs_and_types() {
+        for (action, args) in [
+            (
+                "focus_workspace",
+                json!({"workspaceId":"target","projectId":"project-b"}),
+            ),
+            (
+                "select_tab",
+                json!({"workspaceId":"target","projectId":"project-b","tabId":"tab-b"}),
+            ),
+            (
+                "open_file",
+                json!({"workspaceId":"target","projectId":"project-b","relativePath":"src/main.rs","openMode":"new"}),
+            ),
+            (
+                "reveal_file",
+                json!({"workspaceId":"target","projectId":"project-b","relativePath":"src/main.rs"}),
+            ),
+        ] {
+            assert!(
+                validate_ui_arguments(action, Some(&args)).is_ok(),
+                "{action}: {args}"
+            );
+        }
+        assert!(validate_ui_arguments(
+            "open_file",
+            Some(&json!({"relativePath":"a.rs","openMode":"execute"}))
+        )
+        .is_err());
+        assert!(validate_ui_arguments(
+            "select_tab",
+            Some(&json!({"workspaceId":"other","tabId":"tab","stdin":"echo unsafe"}))
+        )
+        .is_err());
         assert!(
             validate_ui_arguments("open_file", Some(&json!({"relativePath":"src/main.rs"})))
                 .is_ok()
@@ -628,6 +789,8 @@ mod tests {
     fn receipts_require_real_ui_ack_and_expire() {
         let mut receipt = McpUiReceipt {
             session_handle: "session".into(),
+            target_workspace_id: "workspace".into(),
+            expected_tab_id: None,
             target_client_id: 1,
             window_id: "main".into(),
             created: Instant::now(),
@@ -654,6 +817,8 @@ mod tests {
             "request".into(),
             McpUiReceipt {
                 session_handle: "handle".into(),
+                target_workspace_id: "workspace".into(),
+                expected_tab_id: None,
                 target_client_id: 5,
                 window_id: "window".into(),
                 created: Instant::now(),
@@ -700,9 +865,11 @@ mod tests {
         .await;
         assert!(actor
             .handle_mcp_ui_request(2, "uiControl.register", &json!({"windowId":"main"}),)
+            .await
             .is_err());
         actor
             .handle_mcp_ui_request(1, "uiControl.register", &json!({"windowId":"main"}))
+            .await
             .unwrap();
         let token = actor.mcp_ui.mint_token("handle");
         let request = json!({
@@ -716,14 +883,17 @@ mod tests {
         forged["capability"] = json!("not-host-minted");
         assert!(actor
             .handle_mcp_ui_request(2, "uiControl.request", &forged)
+            .await
             .is_err());
         forged["capability"] = request["capability"].clone();
         forged["workspaceId"] = json!("foreign-workspace");
         assert!(actor
             .handle_mcp_ui_request(2, "uiControl.request", &forged)
+            .await
             .is_err());
         let accepted = actor
             .handle_mcp_ui_request(2, "uiControl.request", &request)
+            .await
             .unwrap();
         assert_eq!(accepted["status"], "accepted");
         assert_eq!(accepted["applied"], false);
@@ -737,6 +907,7 @@ mod tests {
         });
         let waiting = actor
             .handle_mcp_ui_request(2, "uiControl.status", &status)
+            .await
             .unwrap();
         assert_eq!(waiting["applied"], false);
         assert_eq!(waiting["status"], "accepted");
@@ -748,6 +919,7 @@ mod tests {
                     "requestId":request_id, "applied":true
                 })
             )
+            .await
             .is_err());
         actor
             .handle_mcp_ui_request(
@@ -757,9 +929,11 @@ mod tests {
                     "requestId":request_id, "applied":true, "tabId":"file-tab"
                 }),
             )
+            .await
             .unwrap();
         let applied = actor
             .handle_mcp_ui_request(2, "uiControl.status", &status)
+            .await
             .unwrap();
         assert_eq!(applied["applied"], true);
         assert_eq!(applied["tabId"], "file-tab");
@@ -771,10 +945,12 @@ mod tests {
                     "requestId":request_id, "applied":true
                 })
             )
+            .await
             .is_err());
         actor.mcp_ui.revoke("handle");
         assert!(actor
             .handle_mcp_ui_request(2, "uiControl.status", &status)
+            .await
             .is_err());
     }
 
@@ -819,23 +995,29 @@ mod tests {
         });
         assert!(actor
             .handle_mcp_ui_request(30, "uiControl.request", &request)
+            .await
             .is_err());
         actor
             .handle_mcp_ui_request(10, "uiControl.register", &json!({"windowId":"first"}))
+            .await
             .unwrap();
         actor
             .handle_mcp_ui_request(20, "uiControl.register", &json!({"windowId":"second"}))
+            .await
             .unwrap();
         assert!(actor
             .handle_mcp_ui_request(30, "uiControl.request", &request)
+            .await
             .is_err());
         request["windowId"] = json!("missing");
         assert!(actor
             .handle_mcp_ui_request(30, "uiControl.request", &request)
+            .await
             .is_err());
         request["windowId"] = json!("second");
         let accepted = actor
             .handle_mcp_ui_request(30, "uiControl.request", &request)
+            .await
             .unwrap();
         assert_eq!(accepted["applied"], false);
         assert!(
@@ -856,6 +1038,7 @@ mod tests {
                         "requestId":id, "applied":true
                     })
                 )
+                .await
                 .is_err(),
             "wrong App must not ACK other window's command"
         );
@@ -867,12 +1050,14 @@ mod tests {
                     "requestId":id, "applied":true, "tabId":"git-history"
                 }),
             )
+            .await
             .unwrap();
         let mut status = request.clone();
         status["requestId"] = json!(id);
         assert_eq!(
             actor
                 .handle_mcp_ui_request(30, "uiControl.status", &status)
+                .await
                 .unwrap()["tabId"],
             "git-history"
         );
@@ -885,6 +1070,7 @@ mod tests {
                         "windowId":"second"
                     })
                 )
+                .await
                 .is_err(),
             "cannot unregister another window"
         );

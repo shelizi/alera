@@ -21,6 +21,7 @@ extension WorkspaceTabFileOpening on WorkspaceTabService {
     required String workspaceId,
     required String relativePath,
     bool preview = false,
+    bool forceNew = false,
     String? replacePreviewTabId,
   }) {
     return _openOrCreateFileTab(
@@ -28,6 +29,7 @@ extension WorkspaceTabFileOpening on WorkspaceTabService {
       relativePath: relativePath,
       kind: .editor,
       preview: preview,
+      forceNew: forceNew,
       replacePreviewTabId: replacePreviewTabId,
     );
   }
@@ -102,11 +104,12 @@ extension WorkspaceTabFileOpening on WorkspaceTabService {
     required String relativePath,
     required WorkspaceTabKind kind,
     bool preview = false,
+    bool forceNew = false,
     String? replacePreviewTabId,
   }) async {
     final normalizedPath = _normalizeRelativePath(relativePath);
     final existing = await _repository.listWorkspaceTabs(workspaceId);
-    for (final tab in existing) {
+    for (final tab in forceNew ? const <WorkspaceTabRecord>[] : existing) {
       if (tab.isMermanPreview ||
           tab.payload[workspaceTabFilePathPayloadKey] != normalizedPath) {
         continue;

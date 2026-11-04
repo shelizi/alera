@@ -167,6 +167,15 @@ extension _AleraShellMcpUi on _AleraShellPageBodyState {
     if (workspace == null) {
       throw const _McpUiFailure('workspace_missing');
     }
+    // The Host has already validated the durable target; the App checks that
+    // the target is still visible in this window's current project catalog.
+    final requestedProjectId = arguments['projectId'];
+    if (!workspace.isActive ||
+        workspace.isArchived ||
+        (requestedProjectId != null &&
+            requestedProjectId != workspace.projectId)) {
+      throw const _McpUiFailure('workspace_missing');
+    }
     final matchingProject = before.projects.where(
       (item) => item.id == workspace!.projectId,
     );
@@ -186,6 +195,28 @@ extension _AleraShellMcpUi on _AleraShellPageBodyState {
     }
     if (!mounted) throw const _McpUiFailure('ui_not_ready');
     switch (action) {
+      case 'focus_workspace':
+        await WidgetsBinding.instance.endOfFrame;
+        if (!mounted ||
+            ref.read(workbenchControllerProvider).activeWorkspaceId !=
+                workspaceId) {
+          throw const _McpUiFailure('not_visible');
+        }
+        // Deliberately do not create a Terminal or change a PTY ownership.
+        return null;
+      case 'select_tab':
+        final tabId = arguments['tabId'];
+        if (tabId is! String ||
+            !(ref
+                        .read(workbenchControllerProvider)
+                        .tabsByWorkspace[workspaceId] ??
+                    const <WorkspaceTabRecord>[])
+                .any((tab) => tab.id == tabId)) {
+          throw const _McpUiFailure('tab_missing');
+        }
+        // This is view-only, even when the target is a Terminal Tab.
+        await _mcpSelectAndVerifyTab(workspaceId, tabId);
+        return tabId;
       case 'focus_agent':
         final handle = arguments['handle'];
         final tabId = arguments['tabId'];
@@ -217,6 +248,7 @@ extension _AleraShellMcpUi on _AleraShellPageBodyState {
         final tab = await controller.openEditorTab(
           workspace: workspace,
           relativePath: path,
+          forceNew: arguments['openMode'] == 'new',
         );
         await _mcpSelectAndVerifyTab(workspaceId, tab.id);
         return tab.id;

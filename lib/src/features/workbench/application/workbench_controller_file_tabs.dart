@@ -8,11 +8,13 @@ mixin _WorkbenchControllerFileTabs
     required String relativePath,
     String? targetGroupId,
     bool preview = false,
+    bool forceNew = false,
   }) => _tabLayoutOwner.openEditorTab(
     workspace: workspace,
     relativePath: relativePath,
     targetGroupId: targetGroupId,
     preview: preview,
+    forceNew: forceNew,
   );
 
   Future<WorkspaceTabRecord> openMarkdownViewerTab({

@@ -181,6 +181,31 @@ void main() {
       expect(repository.tabs, hasLength(1));
     });
 
+    test(
+      'opening a requested new editor tab preserves the existing editor tab',
+      () async {
+        final repository = _FakeWorkbenchRepository();
+        final service = WorkspaceTabService(repository: repository);
+        final first = await service.openOrCreateEditorTab(
+          workspaceId: 'workspace-b',
+          relativePath: 'lib/main.dart',
+        );
+        final second = await service.openOrCreateEditorTab(
+          workspaceId: 'workspace-b',
+          relativePath: 'lib/main.dart',
+          forceNew: true,
+        );
+        expect(second.id, isNot(first.id));
+        expect(second.filePath, first.filePath);
+        expect(repository.tabs, hasLength(2));
+        final reused = await service.openOrCreateEditorTab(
+          workspaceId: 'workspace-b',
+          relativePath: 'lib/main.dart',
+        );
+        expect(reused.id, first.id);
+      },
+    );
+
     test('openOrCreateEditorTab ignores merman preview tabs', () async {
       final repository = _FakeWorkbenchRepository()
         ..tabs.add(
