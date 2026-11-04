@@ -54,8 +54,13 @@ impl ServerActor {
             .runtime_store
             .find_workspace_tab(tab_id)
             .await
-            .map_err(|error| HostError::state(error.to_string()))?
-            .ok_or_else(|| HostError::state("Terminal tab does not exist."))?;
+            .map_err(|error| HostError::state(error.to_string()))?;
+        // First-time terminal sessions may precede the asynchronous tab
+        // persistence. The original-directory guard only applies to a tab
+        // with a verified transfer receipt; absence is not a transfer.
+        let Some(tab) = tab else {
+            return Ok(());
+        };
         if !tab
             .payload
             .get("lastTerminalTabTransfer")

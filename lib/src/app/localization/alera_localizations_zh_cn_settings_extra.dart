@@ -471,6 +471,7 @@ const Map<String, String> _simplifiedChineseSettingsExtra = <String, String>{
   'Automatically save dirty editor tabs after a pause.': '编辑器变更一段时间没有操作后自动保存。',
   'AI Assist Agent': 'AI Assist Agent',
   'AI Assist Commit Messages': 'AI Assist Commit 消息',
+  'AI Assist Merge Conflicts': 'AI Assist 合并冲突',
   'AI Assist Pull Request Details': 'AI Assist Pull Request 详细信息',
   'AI Assist Agent Titles': 'AI Assist Agent 标题',
   'AI Assist Workspace Identity': 'AI Assist 工作区标识',

@@ -108,7 +108,12 @@ final class _WireFixtureServer {
 
   Future<void> dispose() async {
     await _subscription?.cancel();
-    for (final socket in _clients) {
+    // destroy() can synchronously or asynchronously trigger the onDone
+    // handler, which removes the socket from _clients. Iterate over a
+    // snapshot instead of mutating the list being traversed.
+    final clients = List<Socket>.of(_clients);
+    _clients.clear();
+    for (final socket in clients) {
       socket.destroy();
     }
     await _listener.close();
@@ -166,6 +171,29 @@ _connectFixtureClient() async {
 }
 
 void main() {
+  test(
+    'fixture server disposal tolerates concurrent socket completion',
+    () async {
+      final server = await _WireFixtureServer.start();
+      final clients = await Future.wait(
+        List<Future<Socket>>.generate(
+          3,
+          (_) => Socket.connect(InternetAddress.loopbackIPv4, server.port),
+        ),
+      );
+      // Yield to the listener before closing all accepted sockets. Its onDone
+      // callbacks may mutate the server's live _clients collection.
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(server._clients, hasLength(3));
+      await server.dispose();
+      for (final socket in clients) {
+        socket.destroy();
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(server._clients, isEmpty);
+    },
+  );
+
   test('registerProject round-trips the shared request and response', () async {
     final harness = await _connectFixtureClient();
     harness.server.respondWith(

@@ -38,6 +38,8 @@ const Map<String, String> _japaneseParity1 = <String, String>{
   "Choose the CLI used for AI Assist jobs.": "AI Assist ジョブに使用する CLI を選択します。",
   "Choose the agent, model, reasoning and instructions for commit messages.":
       "コミットメッセージ生成に使用するエージェント、モデル、推論設定、指示を選択します。",
+  "Choose the agent, model, reasoning and instructions for merge resolution suggestions.":
+      "マージ競合の解決案に使用するエージェント、モデル、推論設定、指示を選択します。",
   "Choose the agent, model, reasoning and instructions for pull request details.":
       "Pull Request の詳細作成に使用するエージェント、モデル、推論設定、指示を選択します。",
   "Choose the agent, model, reasoning and instructions for reading diffs.":
