@@ -13,8 +13,6 @@ use std::os::unix::io::AsRawFd;
 #[cfg(windows)]
 use std::os::windows::io::{AsRawHandle, OwnedHandle};
 use std::path::Path;
-#[cfg(unix)]
-use std::process::Command;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{sync_channel, SyncSender};
@@ -275,15 +273,13 @@ impl Write for WorkerWriter {
     }
 }
 
-fn worker_streams(
-    stream: TcpStream,
-    cols: u16,
-    rows: u16,
-) -> HostResult<(
+type WorkerPtyStreams = (
     Box<dyn MasterPty + Send>,
     Box<dyn Read + Send>,
     Box<dyn Write + Send>,
-)> {
+);
+
+fn worker_streams(stream: TcpStream, cols: u16, rows: u16) -> HostResult<WorkerPtyStreams> {
     let reader = stream
         .try_clone()
         .map_err(|error| HostError::state(error.to_string()))?;
@@ -538,10 +534,7 @@ pub(super) fn spawn_worker_pty(
 ) -> HostResult<SpawnedPty> {
     let exe = std::env::current_exe()
         .map_err(|error| HostError::state(format!("PTY worker executable missing: {error}")))?;
-    #[cfg(windows)]
-    let mut command = alera_core::child_process::windowless_command(exe.clone());
-    #[cfg(unix)]
-    let mut command = Command::new(exe);
+    let mut command = alera_core::child_process::windowless_command(exe);
     command
         .arg(WORKER_ARGUMENT)
         .stdin(Stdio::piped())

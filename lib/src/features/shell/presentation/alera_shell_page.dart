@@ -35,7 +35,6 @@ import 'package:alera/src/features/pull_requests/application/workspace_pull_requ
 import 'package:alera/src/features/workbench/application/workbench_archive_sweep.dart';
 import 'package:alera/src/features/workbench/application/workbench_git_auto_fetch.dart';
 import 'package:alera/src/features/workbench/application/workbench_git_repository_lifecycle_monitor.dart';
-import 'package:alera/src/features/workbench/application/workspace_service.dart';
 import 'package:alera/src/features/workbench/application/workspace_language_intelligence_prewarm_coordinator.dart';
 import 'package:alera/src/features/workbench/application/workspace_source_control_controller.dart';
 import 'package:alera/src/features/workbench/application/workspace_file_service.dart';
@@ -60,10 +59,8 @@ import 'package:alera/src/features/workbench/presentation/workbench_close_confir
 import 'package:alera/src/features/workbench/presentation/workspace_workbench_view.dart';
 import 'package:alera/src/shared/infra/git/git_providers.dart';
 import 'package:alera/src/shared/infra/git/git_remote.dart';
-import 'package:alera/src/shared/infra/files/path_identity.dart';
 import 'package:alera/src/features/settings/presentation/github_star_prompt_watch.dart';
 import 'package:alera/src/features/settings/application/settings_controller.dart';
-import 'package:alera/src/features/workbench/presentation/workbench_dialog_launchers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';

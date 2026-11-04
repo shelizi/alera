@@ -19,6 +19,14 @@ use super::ServerActor;
 // and the Session's per-PTY instance number for a conservative proof.
 static TRANSFER_HOST_EPOCH: OnceLock<Uuid> = OnceLock::new();
 
+struct TransferExitObservation<'a> {
+    source_workspace_id: &'a str,
+    target_workspace_id: &'a str,
+    mutation_id: &'a str,
+    exit_code: i64,
+    different_host_generation: bool,
+}
+
 #[cfg(test)]
 #[path = "terminal_tab_transfer_contract_tests.rs"]
 mod transfer_contract_tests;
@@ -333,11 +341,7 @@ impl ServerActor {
         &self,
         tab: &WorkspaceTabRecord,
         session_id: &str,
-        source_workspace_id: &str,
-        target_workspace_id: &str,
-        mutation_id: &str,
-        exit_code: i64,
-        different_host_generation: bool,
+        observation: TransferExitObservation<'_>,
     ) -> HostResult<Value> {
         let token = tab.payload["lastTerminalTabTransfer"]["ptyInstanceToken"]
             .as_str()
@@ -349,23 +353,24 @@ impl ServerActor {
             .inspect_transferred_terminal_retirement_evidence(
                 &tab.id,
                 session_id,
-                source_workspace_id,
-                target_workspace_id,
-                mutation_id,
+                observation.source_workspace_id,
+                observation.target_workspace_id,
+                observation.mutation_id,
                 token,
             )
             .await
             .map_err(|err| HostError::state(err.to_string()))?
             .is_some_and(|verified| {
-                verified.payload["lastTerminalTabExit"]["exitCode"].as_i64() == Some(exit_code)
+                verified.payload["lastTerminalTabExit"]["exitCode"].as_i64()
+                    == Some(observation.exit_code)
             });
         Ok(json!({
             "applied": false,
             "recoveryRequired": true,
             "reason": "pty_exit_observed",
-            "exitCode": exit_code,
+            "exitCode": observation.exit_code,
             "originalExitAndLayoutsConsistent": consistent,
-            "hostGenerationMismatch": different_host_generation
+            "hostGenerationMismatch": observation.different_host_generation
         }))
     }
 
@@ -454,11 +459,13 @@ impl ServerActor {
                     .observed_transfer_exit_diagnostic(
                         &tab,
                         session_id,
-                        source,
-                        target,
-                        mutation_id,
-                        exit_code,
-                        true,
+                        TransferExitObservation {
+                            source_workspace_id: source,
+                            target_workspace_id: target,
+                            mutation_id,
+                            exit_code,
+                            different_host_generation: true,
+                        },
                     )
                     .await;
             }
@@ -480,11 +487,13 @@ impl ServerActor {
                     .observed_transfer_exit_diagnostic(
                         &tab,
                         session_id,
-                        source,
-                        target,
-                        mutation_id,
-                        exit_code,
-                        false,
+                        TransferExitObservation {
+                            source_workspace_id: source,
+                            target_workspace_id: target,
+                            mutation_id,
+                            exit_code,
+                            different_host_generation: false,
+                        },
                     )
                     .await;
             }
@@ -505,11 +514,13 @@ impl ServerActor {
                     .observed_transfer_exit_diagnostic(
                         &tab,
                         session_id,
-                        source,
-                        target,
-                        mutation_id,
-                        exit_code,
-                        false,
+                        TransferExitObservation {
+                            source_workspace_id: source,
+                            target_workspace_id: target,
+                            mutation_id,
+                            exit_code,
+                            different_host_generation: false,
+                        },
                     )
                     .await;
             }

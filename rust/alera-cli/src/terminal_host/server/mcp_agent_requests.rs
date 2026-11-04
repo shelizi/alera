@@ -340,7 +340,7 @@ mod tests {
         assert!(queued.get("body").is_none());
         actor
             .runtime_store
-            .mark_orchestration_messages_delivered(&[message_id.clone()])
+            .mark_orchestration_messages_delivered(std::slice::from_ref(&message_id))
             .await
             .unwrap();
         let delivered = actor

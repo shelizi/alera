@@ -62,6 +62,7 @@ impl PendingLocalLineBudget {
 /// `pending` belongs to the connection loop, NOT this future. The reader is
 /// used inside tokio::select!, and dropping a partially read future must not
 /// discard already consumed bytes when a control frame wins that select.
+#[cfg(test)]
 pub(super) async fn next_client_line<R: AsyncBufRead + Unpin>(
     reader: &mut R,
     max_bytes: usize,
@@ -239,7 +240,9 @@ mod client_line_reader_tests {
 
     #[test]
     fn upper_bound_is_finite_and_supports_2mib_transfer_chunks() {
-        assert!(MAX_LOCAL_REQUEST_LINE_BYTES >= 2 * 1024 * 1024 + 1024);
-        assert!(MAX_LOCAL_REQUEST_LINE_BYTES <= 16 * 1024 * 1024);
+        const {
+            assert!(MAX_LOCAL_REQUEST_LINE_BYTES >= 2 * 1024 * 1024 + 1024);
+            assert!(MAX_LOCAL_REQUEST_LINE_BYTES <= 16 * 1024 * 1024);
+        }
     }
 }

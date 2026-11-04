@@ -221,6 +221,9 @@ async fn next_actor_command(
     })
 }
 
+// These queue-specific tests stay adjacent to their algorithm; the Unix
+// signal listener implementations follow because they are platform-specific.
+#[allow(clippy::items_after_test_module)]
 #[cfg(test)]
 mod priority_receiver_tests {
     use super::*;

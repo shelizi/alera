@@ -283,7 +283,7 @@ fn walk_agy_launcher(
     if depth > 4 {
         return;
     }
-    let key = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let key = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     if !seen.insert(normalized_path_key(&key)) {
         return;
     }

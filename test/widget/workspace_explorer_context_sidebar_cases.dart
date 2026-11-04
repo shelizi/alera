@@ -130,7 +130,7 @@ void _registerWorkspaceExplorerContextSidebarTests() {
       expect(find.text('Source Control Unavailable'), findsOneWidget);
       expect(
         find.text(
-          'This workspace is not connected to a Git repository, so there are no changes to show.',
+          'No Git repository selected. Rescan or open a Git repository.',
         ),
         findsOneWidget,
       );

@@ -145,6 +145,7 @@ struct SimilarityScratch {
 
 // Do not derive Default here: FRB codegen incorrectly exposes the private
 // scratch struct through a generated public default_() bridge method.
+#[allow(clippy::derivable_impls)]
 impl Default for SimilarityScratch {
     fn default() -> Self {
         Self {
@@ -683,7 +684,7 @@ mod tests {
             kind,
             text: text.to_owned(),
         };
-        let cases = vec![
+        let cases = [
             vec![],
             vec![line(GitDiffLineKind::Addition, "+hello")],
             vec![line(GitDiffLineKind::Deletion, "-goodbye")],

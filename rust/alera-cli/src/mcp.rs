@@ -502,7 +502,7 @@ async fn execute_tool_connected(
                 .iter()
                 .filter(|project| matches_query(project, &query, &["name", "repoPath"]))
                 .take(limit)
-                .map(|project| project_fields(project))
+                .map(project_fields)
                 .collect::<Vec<_>>();
             Ok(
                 json!({"kind": "projects", "items": items, "totalMatches": matched, "truncated": matched > limit}),

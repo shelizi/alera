@@ -30,9 +30,9 @@ void main() {
 
     expect(
       _catalogFingerprint(catalogs),
-      // Current audited Settings search metadata/order after adding new
-      // sidebar, keyboard and workspace entries on the integration branch.
-      '29faf1023bec2bd4d507cc3ef8dfcc804d253b09603deea3c85c566dba14b237',
+      // Audited Settings search metadata/order including merge-conflict
+      // resolution and other entries from the integrated main branch.
+      '52d836336660949cfa1dfd54c2480757614da1d2b671d22c2cf3aaac0f107ce1',
     );
   });
 

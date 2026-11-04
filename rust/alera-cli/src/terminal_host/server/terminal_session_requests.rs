@@ -71,12 +71,12 @@ impl ServerActor {
             .ok_or_else(|| HostError::state(
                 "Transferred terminal lacks its original execution path; refusing to start a shell in another project.",
             ))?;
-        let original_path = std::fs::canonicalize(original).map_err(|_| {
+        let original_path = dunce::canonicalize(original).map_err(|_| {
             HostError::state(format!(
                 "Transferred Terminal original launch directory is unavailable: {original}. The tab was preserved."
             ))
         })?;
-        let requested_path = std::fs::canonicalize(requested_directory).map_err(|_| {
+        let requested_path = dunce::canonicalize(requested_directory).map_err(|_| {
             HostError::state(
                 "Requested Terminal launch directory does not exist; no new process was started.",
             )
