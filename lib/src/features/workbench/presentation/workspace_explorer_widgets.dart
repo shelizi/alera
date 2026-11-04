@@ -94,6 +94,7 @@ class const _ExplorerRow({
   required final bool selected,
   required final bool sourceControlRoot,
   required final VoidCallback onTap,
+  final bool filterResult = false,
   final double leadingPadding = 0,
 }) extends StatelessWidget {
   @override
@@ -101,6 +102,13 @@ class const _ExplorerRow({
     final color = selected
         ? AleraTokens.foreground
         : AleraTokens.foregroundMuted;
+    final fileName = filterResult
+        ? p.posix.basename(name.replaceAll('\\', '/'))
+        : name;
+    final showRelativePath = filterResult && fileName != name;
+    final labelStyle = Theme.of(context).textTheme.bodySmall?.copyWith(
+      color: entry?.isProtected ?? false ? AleraTokens.foregroundFaint : color,
+    );
     return MouseRegion(
       cursor: SystemMouseCursors.click,
       child: GestureDetector(
@@ -128,18 +136,46 @@ class const _ExplorerRow({
                 Expanded(
                   child: Tooltip(
                     message: name,
-                    child: AleraSearchHighlightedText(
-                      text: name,
-                      query: filterQuery,
-                      fuzzy: true,
-                      maxLines: 1,
-                      overflow: .ellipsis,
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: entry?.isProtected ?? false
-                            ? AleraTokens.foregroundFaint
-                            : color,
-                      ),
-                    ),
+                    child: filterResult
+                        ? Column(
+                            mainAxisSize: MainAxisSize.min,
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: <Widget>[
+                              AleraSearchHighlightedText(
+                                text: fileName,
+                                query: filterQuery,
+                                fuzzy: true,
+                                maxLines: 2,
+                                overflow: .ellipsis,
+                                style: labelStyle?.copyWith(
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                              if (showRelativePath) ...<Widget>[
+                                const SizedBox(height: AleraTokens.space2),
+                                AleraSearchHighlightedText(
+                                  text: name,
+                                  query: filterQuery,
+                                  fuzzy: true,
+                                  maxLines: 1,
+                                  overflow: .ellipsis,
+                                  style: Theme.of(context).textTheme.labelSmall
+                                      ?.copyWith(
+                                        color: AleraTokens.foregroundFaint,
+                                      ),
+                                ),
+                              ],
+                            ],
+                          )
+                        : AleraSearchHighlightedText(
+                            text: name,
+                            query: filterQuery,
+                            fuzzy: true,
+                            maxLines: 1,
+                            overflow: .ellipsis,
+                            style: labelStyle,
+                          ),
                   ),
                 ),
                 if (entry?.gitStatus case final status?)

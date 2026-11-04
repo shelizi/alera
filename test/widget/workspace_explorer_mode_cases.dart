@@ -98,6 +98,66 @@ void _registerWorkspaceExplorerModeTests() {
   });
 
   testWidgets(
+    'Explorer filter displays a long nested filename above its full path',
+    (tester) async {
+      const fileName =
+          'customer-invoice-reconciliation-processing-report-v2-final.dart';
+      const relativePath =
+          'packages/customer_accounts/lib/src/internal/reports/$fileName';
+      final service = _FakeWorkspaceFileService()
+        ..quickOpenEntries = <String>[relativePath];
+      final opened = <String>[];
+      await _pumpExplorer(tester, service, onOpenFile: opened.add);
+
+      await tester.enterText(find.byType(TextField), 'reconciliation');
+      await tester.pumpAndSettle();
+
+      expect(find.text(fileName), findsOneWidget);
+      expect(find.text(relativePath), findsOneWidget);
+      expect(find.byTooltip(relativePath), findsOneWidget);
+
+      final nameWidget = tester.widget<Text>(find.text(fileName));
+      expect(nameWidget.maxLines, 2);
+      expect(nameWidget.overflow, TextOverflow.ellipsis);
+      expect(
+        tester.getTopLeft(find.text(fileName)).dy,
+        lessThan(tester.getTopLeft(find.text(relativePath)).dy),
+      );
+      expect(tester.takeException(), isNull);
+
+      await tester.tap(find.text(fileName));
+      await tester.pumpAndSettle();
+      expect(opened, <String>[relativePath]);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'Explorer filter wraps a root filename and keeps nested folder names',
+    (tester) async {
+      const rootName =
+          'this-is-a-very-long-filename-that-needs-more-than-one-line-in-sidebar.dart';
+      const folderPath =
+          'apps/very-deep/long-nested-folder-name-that-should-be-readable';
+      final service = _FakeWorkspaceFileService()
+        ..quickOpenEntries = <String>[rootName]
+        ..quickOpenDirectories = <String>[folderPath];
+      await _pumpExplorer(tester, service);
+
+      await tester.enterText(find.byType(TextField), 'long');
+      await tester.pumpAndSettle();
+
+      expect(find.text(rootName), findsOneWidget);
+      expect(find.byTooltip(rootName), findsOneWidget);
+      expect(tester.widget<Text>(find.text(rootName)).maxLines, 2);
+      expect(find.text(p.posix.basename(folderPath)), findsOneWidget);
+      expect(find.text(folderPath), findsOneWidget);
+      expect(find.byTooltip(folderPath), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
     'Explorer fuzzy filter matches a loaded folder without a literal substring',
     (tester) async {
       final service = _FakeWorkspaceFileService()
