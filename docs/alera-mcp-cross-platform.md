@@ -80,6 +80,32 @@ The complete native security and PTY probe, including the stronger in-Agent
 capability tests, has passed against a **Windows** test Host. Native macOS
 ARM64 and Linux x64 remain pending until their own CI runners execute.
 
+## GitHub fork native desktop CI (2026-11-04)
+
+The MCP feature branch was pushed to `shelizi/alera` at
+`ab3fdbd4`. Existing, unchanged **Desktop Builds** was manually dispatched
+as [run 41749708040](https://github.com/shelizi/alera/actions/runs/41749708040)
+for macOS, Linux and Windows. This executes native desktop builds and
+integration suites, **not** the pending MCP-specific Host/PTY Python smoke.
+
+The initial Linux x64 **desktop build passed**, but its
+`integration_test/alera_smoke_flow_test.dart` failed because the isolated
+test `ProviderScope` omitted
+`terminalSessionTitleSourceOverride()` even though the real app
+composition root supplies it. The resulting Resource Manager
+`ProviderException` also rendered an oversized Flutter error widget in
+Agent Quota status-bar layout. The integration fixture now uses the same
+title-source binding as the real app. The repaired Linux integration test
+has not yet passed a native Linux runner; do not mark that job green based
+on this source change. The initial macOS/Windows jobs are independent of
+this Linux fixture result and require their own final checks.
+
+Only an authorized workflow reviewer can commit the protected
+`.github/workflows/mcp-cross-platform.yml` and
+`.github/workflows/desktop-build.yml` changes. Do not bypass tool
+protection to insert them into GitHub. The native MCP-specific CI
+remains **unexecuted** until authorized workflow changes are accepted.
+
 CI wiring:
 
 - `.github/workflows/mcp-cross-platform.yml` builds native Rust binaries,
