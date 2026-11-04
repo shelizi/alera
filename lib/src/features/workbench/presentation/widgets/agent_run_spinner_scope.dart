@@ -48,7 +48,9 @@ class _AgentRunSpinnerScopeState extends State<AgentRunSpinnerScope>
   static const int _periodMilliseconds = 1400;
 
   final ValueNotifier<double> _progress = ValueNotifier<double>(0);
-  final Stopwatch _clock = Stopwatch();
+  // Accumulate scheduled ticks instead of real Stopwatch time: Flutter's
+  // fake-async test clock advances timers without advancing wall time.
+  int _elapsedMilliseconds = 0;
   Timer? _timer;
   Duration? _timerInterval;
   int _spinners = 0;
@@ -111,7 +113,7 @@ class _AgentRunSpinnerScopeState extends State<AgentRunSpinnerScope>
       _timer!.cancel();
       _timer = null;
       _timerInterval = null;
-      _clock.stop();
+      // Keep the phase when hidden, just as a paused animation would.
       return;
     }
 
@@ -121,9 +123,9 @@ class _AgentRunSpinnerScopeState extends State<AgentRunSpinnerScope>
 
     _timer?.cancel();
     _timerInterval = interval;
-    _clock.start();
     _timer = Timer.periodic(interval, (_) {
-      final phase = _clock.elapsedMilliseconds % _periodMilliseconds;
+      _elapsedMilliseconds += interval.inMilliseconds;
+      final phase = _elapsedMilliseconds % _periodMilliseconds;
       _progress.value = phase / _periodMilliseconds;
     });
   }
