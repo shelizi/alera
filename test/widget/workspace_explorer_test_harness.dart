@@ -153,12 +153,18 @@ Widget _withWorkspaceFiles(
   );
 }
 
-Widget _workspaceContextSidebar(Workspace workspace) {
+Widget _workspaceContextSidebar(
+  Workspace workspace, {
+  WorkbenchViewPrefs? prefs,
+  double maxWidth = AleraTokens.rightSidebarMaxWidth,
+  ValueChanged<double>? onResize,
+}) {
   return WorkspaceContextSidebar(
     workspace: workspace,
-    prefs: .defaults,
+    prefs: prefs ?? .defaults,
+    maxWidth: maxWidth,
     onToggleVisible: () {},
-    onResize: (_) {},
+    onResize: onResize ?? (_) {},
     onSetContextPanelTab: (_) {},
     onSetExplorerMode: (_) {},
     onSetShowHiddenFiles: (_) {},

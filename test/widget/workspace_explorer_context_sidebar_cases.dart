@@ -1,6 +1,76 @@
 part of 'workspace_explorer_test.dart';
 
 void _registerWorkspaceExplorerContextSidebarTests() {
+  testWidgets('right context sidebar resizes beyond 460 and fits the window', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1800, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final service = _FakeWorkspaceFileService();
+    final workspace = _workspace();
+    var prefs = WorkbenchViewPrefs.defaults.copyWith(
+      activeContextPanelTab: .references,
+    );
+    double? savedWidth;
+
+    Widget page(double maxWidth) => _withWorkspaceFiles(
+      service,
+      child: MaterialApp(
+        home: Scaffold(
+          body: Align(
+            alignment: Alignment.centerRight,
+            child: StatefulBuilder(
+              builder: (context, setHarnessState) => _workspaceContextSidebar(
+                workspace,
+                prefs: prefs,
+                maxWidth: maxWidth,
+                onResize: (width) {
+                  savedWidth = width;
+                  setHarnessState(() {
+                    prefs = prefs.copyWith(rightSidebarWidth: width);
+                  });
+                },
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    final content = find.byKey(
+      const ValueKey<String>('workspace-context-sidebar-content'),
+    );
+    final resizeHandle = find.byKey(
+      const ValueKey<String>('workspace-context-sidebar-resize-handle'),
+    );
+
+    await tester.pumpWidget(page(900));
+    await tester.pumpAndSettle();
+    expect(tester.getSize(content).width, 280);
+
+    await tester.drag(resizeHandle, const Offset(-550, 0));
+    await tester.pumpAndSettle();
+    expect(savedWidth, closeTo(830, 1));
+    expect(tester.getSize(content).width, closeTo(830, 1));
+
+    // Narrowing the window temporarily constrains rendering without erasing
+    // the user's preferred width; restoring space brings the width back.
+    await tester.pumpWidget(page(600));
+    await tester.pumpAndSettle();
+    expect(tester.getSize(content).width, 600);
+    expect(prefs.rightSidebarWidth, closeTo(830, 1));
+
+    await tester.pumpWidget(page(900));
+    await tester.pumpAndSettle();
+    expect(tester.getSize(content).width, closeTo(830, 1));
+
+    await tester.drag(resizeHandle, const Offset(-900, 0));
+    await tester.pumpAndSettle();
+    expect(savedWidth, 900);
+    expect(tester.getSize(content).width, 900);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets(
     'context sidebar keeps source control tabs and explains missing git scope',
     (tester) async {

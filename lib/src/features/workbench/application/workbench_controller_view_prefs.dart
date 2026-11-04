@@ -230,7 +230,7 @@ mixin _WorkbenchControllerViewPrefs
   void setRightSidebarWidth(double value) {
     final clamped = value.clamp(
       AleraTokens.sidebarMinWidth,
-      AleraTokens.sidebarMaxWidth,
+      AleraTokens.rightSidebarMaxWidth,
     );
     if ((state.viewPrefs.rightSidebarWidth - clamped).abs() < 0.5) {
       return;

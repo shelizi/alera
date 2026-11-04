@@ -2,6 +2,29 @@ part of 'workbench_controller_test.dart';
 
 void _registerWorkbenchControllerViewPrefsTests() {
   test(
+    'right sidebar width limit is independent of the project sidebar',
+    () async {
+      await _controller.bootstrap();
+      _controller.setRightSidebarWidth(900);
+      _controller.setSidebarWidth(900);
+      await _flush();
+
+      expect(_controller.state.viewPrefs.rightSidebarWidth, 900);
+      expect(
+        _controller.state.viewPrefs.sidebarWidth,
+        AleraTokens.sidebarMaxWidth,
+      );
+
+      _controller.setRightSidebarWidth(AleraTokens.rightSidebarMaxWidth + 1000);
+      await _flush();
+      expect(
+        _controller.state.viewPrefs.rightSidebarWidth,
+        AleraTokens.rightSidebarMaxWidth,
+      );
+    },
+  );
+
+  test(
     'background layout load does not restore layout for a removed workspace',
     () async {
       final workspace = Workspace(

@@ -22,6 +22,7 @@ class const WorkspaceContextSidebar({
   super.key,
   required final Workspace workspace,
   required final WorkbenchViewPrefs prefs,
+  final double maxWidth = AleraTokens.rightSidebarMaxWidth,
   final WorkspaceSourceControlScope? sourceControlScope,
   final bool isWorkspaceGitRepository = false,
   final Future<void> Function()? onRefreshRepository,
@@ -79,6 +80,7 @@ class const WorkspaceContextSidebar({
             offstage: !prefs.rightSidebarVisible,
             child: _ResizableRightSidebar(
               persistedWidth: prefs.rightSidebarWidth,
+              maxWidth: maxWidth,
               onPersistWidth: onResize,
               child: Column(
                 children: <Widget>[
@@ -279,6 +281,7 @@ class _PersistentWorkspaceExplorerHostState
 
 class const _ResizableRightSidebar({
   required final double persistedWidth,
+  required final double maxWidth,
   required final ValueChanged<double> onPersistWidth,
   required final Widget child,
 }) extends StatefulWidget {
@@ -289,7 +292,15 @@ class const _ResizableRightSidebar({
 class _ResizableRightSidebarState extends State<_ResizableRightSidebar> {
   double? _transientWidth;
 
-  double get _width => _transientWidth ?? widget.persistedWidth;
+  double get _maxWidth => widget.maxWidth.clamp(
+    AleraTokens.sidebarMinWidth,
+    AleraTokens.rightSidebarMaxWidth,
+  );
+
+  double get _width => (_transientWidth ?? widget.persistedWidth).clamp(
+    AleraTokens.sidebarMinWidth,
+    _maxWidth,
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -302,16 +313,22 @@ class _ResizableRightSidebarState extends State<_ResizableRightSidebar> {
             setState(() {
               _transientWidth = width.clamp(
                 AleraTokens.sidebarMinWidth,
-                AleraTokens.sidebarMaxWidth,
+                _maxWidth,
               );
             });
           },
           onResizeEnd: (width) {
-            widget.onPersistWidth(width);
+            widget.onPersistWidth(
+              width.clamp(AleraTokens.sidebarMinWidth, _maxWidth),
+            );
             setState(() => _transientWidth = null);
           },
         ),
-        SizedBox(width: _width, child: widget.child),
+        SizedBox(
+          key: const ValueKey<String>('workspace-context-sidebar-content'),
+          width: _width,
+          child: widget.child,
+        ),
       ],
     );
   }
@@ -497,6 +514,7 @@ class _RightResizeHandleState extends State<_RightResizeHandle> {
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
       child: GestureDetector(
+        key: const ValueKey<String>('workspace-context-sidebar-resize-handle'),
         behavior: .translucent,
         onHorizontalDragStart: (_) {
           _dragWidth = widget.currentWidth;
