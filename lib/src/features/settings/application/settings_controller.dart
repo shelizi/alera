@@ -30,7 +30,8 @@ class SettingsController extends _$SettingsController
     with
         _SettingsControllerLocalUiSettings,
         _SettingsControllerRuntimeOperationalSettings,
-        _SettingsControllerPortableSettings {
+        _SettingsControllerPortableSettings,
+        _SettingsControllerMcpAccess {
   bool _loadStarted = false;
 
   SettingsRepository get _repository => ref.read(settingsRepositoryProvider);

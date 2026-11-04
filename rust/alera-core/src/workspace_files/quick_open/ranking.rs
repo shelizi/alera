@@ -4,6 +4,12 @@ use std::collections::BinaryHeap;
 use super::super::WorkspaceQuickOpenMatch;
 use super::index::{character_counts, QuickOpenFile, QuickOpenIndex, SegmentMatch};
 
+#[derive(Clone, Copy)]
+struct QuickOpenFilters {
+    include_gitignored: bool,
+    include_directories: bool,
+}
+
 pub(super) fn search(
     index: &QuickOpenIndex,
     query: &str,
@@ -15,6 +21,10 @@ pub(super) fn search(
     if limit == 0 {
         return Vec::new();
     }
+    let filters = QuickOpenFilters {
+        include_gitignored,
+        include_directories,
+    };
 
     let normalized_query = query.trim().to_lowercase();
     let query_code_units = normalized_query.encode_utf16().collect::<Vec<_>>();
@@ -23,8 +33,8 @@ pub(super) fn search(
             .files
             .iter()
             .filter(|file| {
-                (include_gitignored || !file.is_gitignored)
-                    && (include_directories || !file.is_directory)
+                (filters.include_gitignored || !file.is_gitignored)
+                    && (filters.include_directories || !file.is_directory)
             })
             .take(limit)
             .map(|file| WorkspaceQuickOpenMatch {
@@ -49,8 +59,7 @@ pub(super) fn search(
             &mut ranked,
             path_index,
             100_000,
-            include_gitignored,
-            include_directories,
+            filters,
         );
         path_index += 1;
     }
@@ -63,8 +72,7 @@ pub(super) fn search(
             &node.exact_matches,
             90_000,
             limit,
-            include_gitignored,
-            include_directories,
+            filters,
         );
     }
     if ranked.len() == limit {
@@ -83,8 +91,7 @@ pub(super) fn search(
             &mut ranked,
             path_index,
             80_000,
-            include_gitignored,
-            include_directories,
+            filters,
         );
         if ranked.len() == limit {
             return into_matches(ranked);
@@ -100,8 +107,7 @@ pub(super) fn search(
             &node.prefix_matches,
             70_000,
             limit,
-            include_gitignored,
-            include_directories,
+            filters,
         );
     }
     if ranked.len() == limit {
@@ -114,8 +120,7 @@ pub(super) fn search(
         &normalized_query,
         &query_code_units,
         limit - ranked.len(),
-        include_gitignored,
-        include_directories,
+        filters,
     ));
     into_matches(ranked)
 }
@@ -126,13 +131,12 @@ fn append_indexed_match<'a>(
     ranked: &mut Vec<RankedFile<'a>>,
     file_index: usize,
     score: i32,
-    include_gitignored: bool,
-    include_directories: bool,
+    filters: QuickOpenFilters,
 ) {
     if !indexed_files[file_index] {
         indexed_files[file_index] = true;
-        if (!include_gitignored && files[file_index].is_gitignored)
-            || (!include_directories && files[file_index].is_directory)
+        if (!filters.include_gitignored && files[file_index].is_gitignored)
+            || (!filters.include_directories && files[file_index].is_directory)
         {
             return;
         }
@@ -150,8 +154,7 @@ fn append_segment_matches<'a>(
     matches: &[SegmentMatch],
     base_score: i32,
     limit: usize,
-    include_gitignored: bool,
-    include_directories: bool,
+    filters: QuickOpenFilters,
 ) {
     for matching in matches {
         append_indexed_match(
@@ -160,8 +163,7 @@ fn append_segment_matches<'a>(
             ranked,
             matching.file_index,
             base_score - matching.segment_index as i32,
-            include_gitignored,
-            include_directories,
+            filters,
         );
         if ranked.len() == limit {
             break;
@@ -179,8 +181,7 @@ fn search_lower<'a>(
     query: &str,
     query_code_units: &[u16],
     limit: usize,
-    include_gitignored: bool,
-    include_directories: bool,
+    filters: QuickOpenFilters,
 ) -> Vec<RankedFile<'a>> {
     let query_character_counts = character_counts(query_code_units);
     let Some(candidates) = index.character_index.candidates(&query_character_counts) else {
@@ -191,8 +192,8 @@ fn search_lower<'a>(
         let file_index = candidate.file_index;
         let file = &index.files[file_index];
         if indexed_files[file_index]
-            || (!include_gitignored && file.is_gitignored)
-            || (!include_directories && file.is_directory)
+            || (!filters.include_gitignored && file.is_gitignored)
+            || (!filters.include_directories && file.is_directory)
             || !has_required_characters(file, &query_character_counts)
         {
             continue;

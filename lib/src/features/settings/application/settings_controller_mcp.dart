@@ -33,7 +33,9 @@ bool mcpWritableSettingValue(String path, Object? value) => switch (path) {
 /// persistence, portable configuration and UI notifications. CAS occurs
 /// inside its serialized mutation lane to avoid overwriting another setting
 /// change with a stale model. A caller must first read the expected value.
-extension SettingsControllerMcpAccess on SettingsController {
+mixin _SettingsControllerMcpAccess on _$SettingsController {
+  SettingsController get _controller => this as SettingsController;
+
   Object readMcpSetting(String path) => mcpSettingValue(state, path);
 
   /// MCP reads must observe the Host-owned latest persisted settings. A
@@ -46,13 +48,13 @@ extension SettingsControllerMcpAccess on SettingsController {
     // pending local saves. A full repository load may silently fall back to
     // legacy Drift, which is not an authoritative cross-window MCP read.
     mcpSettingValue(state, path);
-    await _serialize(() async {});
-    final repository = _repository;
+    await _controller._serialize(() async {});
+    final repository = _controller._repository;
     if (repository is RuntimeSettingsRepository) {
       return repository.readAuthoritativeMcpSetting(path);
     }
     // Isolated offline controller tests have only a local repository.
-    await _serialize(() async {
+    await _controller._serialize(() async {
       state = await repository.load();
     });
     return mcpSettingValue(state, path);
@@ -66,7 +68,7 @@ extension SettingsControllerMcpAccess on SettingsController {
     if (!mcpWritableSettingValue(path, value)) {
       throw ArgumentError.value(path, 'path', 'MCP setting is not writable');
     }
-    await _serialize(() async {
+    await _controller._serialize(() async {
       final current = mcpSettingValue(state, path);
       if (!_sameMcpSettingValue(current, expectedValue)) {
         throw StateError('mcp_setting_conflict');
@@ -98,7 +100,7 @@ extension SettingsControllerMcpAccess on SettingsController {
           'MCP setting is not writable',
         ),
       };
-      await _save(next);
+      await _controller._save(next);
     });
     return mcpSettingValue(state, path);
   }

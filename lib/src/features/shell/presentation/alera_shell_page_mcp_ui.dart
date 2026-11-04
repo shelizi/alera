@@ -20,7 +20,7 @@ extension _AleraShellMcpUi on _AleraShellPageBodyState {
       // Only one command per window at a time. The Host imposes an independent
       // deadline, so a queued command cannot imply successful visual control.
       _mcpUiQueue = _mcpUiQueue
-          .catchError((Object _, StackTrace __) {})
+          .catchError((Object _, StackTrace _) {})
           .then((_) => _handleMcpUiCommand(event.payload));
     });
     unawaited(_registerMcpUiWindow());
@@ -70,7 +70,7 @@ extension _AleraShellMcpUi on _AleraShellPageBodyState {
           if (tabId != null && errorCode == null) 'tabId': tabId,
           if (settingValue != null && errorCode == null)
             'settingValue': settingValue,
-          if (errorCode != null) 'errorCode': errorCode,
+          'errorCode': ?errorCode,
         },
       );
     } catch (_) {

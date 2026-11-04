@@ -29,7 +29,7 @@ void main() {
       final source = File(p.join(root.path, 'lib', 'oversize.dart'));
       await source.create(recursive: true);
       await source.writeAsString(
-        List.filled(510, '// fixture').join('\n') + '\n',
+        '${List.filled(510, '// fixture').join('\n')}\n',
       );
 
       Future<ProcessResult> check({bool strict = false}) => Process.run(
@@ -44,7 +44,7 @@ void main() {
 
       // Growth past the baseline is reported without blocking the default CI.
       await source.writeAsString(
-        List.filled(511, '// fixture').join('\n') + '\n',
+        '${List.filled(511, '// fixture').join('\n')}\n',
       );
       final advisory = await check();
       expect(advisory.exitCode, 0, reason: advisory.stderr as String);
@@ -60,7 +60,7 @@ void main() {
       // New oversized files also warn by default and fail in strict mode.
       final newFile = File(p.join(root.path, 'lib', 'new_oversize.dart'));
       await newFile.writeAsString(
-        List.filled(501, '// fixture').join('\n') + '\n',
+        '${List.filled(501, '// fixture').join('\n')}\n',
       );
       final newAdvisory = await check();
       expect(newAdvisory.exitCode, 0, reason: newAdvisory.stderr as String);

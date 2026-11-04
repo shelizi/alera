@@ -51,6 +51,8 @@ void main() {
         applicationSupportDirectory: () async => support,
         platform: .windows,
         environment: <String, String>{'USERPROFILE': home.path},
+        // Explicit test-only invocation; this fixture lives under tool/testing.
+        // ignore: invalid_use_of_visible_for_testing_member
         syncMacOSKeychainCredentials: false,
       ).prepareForTerminalLaunch();
       expect(prepared.hookStatus.state, ManagedAgentHookInstallState.installed);
