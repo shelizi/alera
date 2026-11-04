@@ -452,6 +452,37 @@ class _AleraShellPageBodyState extends ConsumerState<_AleraShellPageBody>
                           WorkspaceBranchStatusBarControl(
                             workspace: workspace,
                             sourceControlScope: sourceControlScope,
+                            onRenameBranch: (oldBranch, newBranch) async {
+                              final path = sourceControlScope.path;
+                              final git = ref.read(gitBackendProvider);
+                              await git.renameBranch(
+                                path: path,
+                                oldName: oldBranch,
+                                newName: newBranch,
+                              );
+                              // Renaming the primary checkout's current
+                              // branch must also update Alera's Workspace
+                              // record, not merely the Git ref.
+                              if (sourceControlScope.isWorkspaceRoot &&
+                                  workspace.isMain &&
+                                  project?.isGitRepository == true &&
+                                  await git.currentBranch(path) == newBranch) {
+                                await ref
+                                    .read(workspaceServiceProvider)
+                                    .ensureMainWorkspace(project!);
+                              }
+                              controller.renameBranchFavorite(
+                                scopeKey: branchFavoritesScopeKey(
+                                  workspace.projectId,
+                                  sourceControlScope.relativeRoot,
+                                ),
+                                oldBranch: oldBranch,
+                                newBranch: newBranch,
+                              );
+                              ref.invalidate(
+                                workspaceSourceControlControllerProvider(path),
+                              );
+                            },
                             onCompareWithCurrentBranch: (branch) async {
                               final snapshot =
                                   await BranchCompareCurrentService(
@@ -476,36 +507,6 @@ class _AleraShellPageBodyState extends ConsumerState<_AleraShellPageBody>
                                 mergeBaseOid: snapshot.mergeBaseOid,
                               );
                             },
-                            // Do not merge an independent nested Git repo
-                            // using the parent project's linked worktrees.
-                            onCreateMergeWorkspace:
-                                project?.isGitRepository == true &&
-                                    sourceControlScope.isWorkspaceRoot
-                                ? (branch) async {
-                                    // Register the linked checkout with Alera so
-                                    // a conflicted merge can be resolved in-app.
-                                    final result = await ref
-                                        .read(workspaceServiceProvider)
-                                        .createLinkedWorkspace(
-                                          project: project!,
-                                          sourceBranch: '',
-                                          newBranchName: branch,
-                                          reuseExistingBranch: true,
-                                          name:
-                                              'Merge $branch ${DateTime.now().millisecondsSinceEpoch}',
-                                        );
-                                    return result.workspace;
-                                  }
-                                : null,
-                            onOpenMergeWorkspace:
-                                project?.isGitRepository == true &&
-                                    sourceControlScope.isWorkspaceRoot
-                                ? (mergeWorkspace) =>
-                                      controller.selectWorkspace(
-                                        project: project!,
-                                        workspace: mergeWorkspace,
-                                      )
-                                : null,
                             onSwitchBranch: (branch) async {
                               if (sourceControlScope.isWorkspaceRoot) {
                                 await controller.switchWorkspaceBranch(

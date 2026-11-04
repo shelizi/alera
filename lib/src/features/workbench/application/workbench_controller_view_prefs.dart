@@ -15,6 +15,20 @@ mixin _WorkbenchControllerViewPrefs
     );
   }
 
+  void renameBranchFavorite({
+    required String scopeKey,
+    required String oldBranch,
+    required String newBranch,
+  }) {
+    final renamed = renameWorkbenchBranchFavorite(
+      prefs: state.viewPrefs,
+      scopeKey: scopeKey,
+      oldBranch: oldBranch,
+      newBranch: newBranch,
+    );
+    if (!identical(renamed, state.viewPrefs)) _updateViewPrefs(renamed);
+  }
+
   void toggleExpanded(String projectId) {
     toggleProjectCollapsed(projectId);
   }

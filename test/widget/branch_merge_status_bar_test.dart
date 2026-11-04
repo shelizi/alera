@@ -10,6 +10,170 @@ import 'package:flutter_test/flutter_test.dart';
 import '../unit/fake_git_backend.dart';
 
 void main() {
+  testWidgets('right-click rename updates the selected local branch in place', (
+    tester,
+  ) async {
+    final git = FakeGitBackend()
+      ..sourceBranches = <String>['main', 'feature/old']
+      ..headBranch = 'main'
+      ..currentBranchesByPath['/repo'] = 'main';
+    final now = DateTime.utc(2026, 11, 4);
+    final workspace = Workspace(
+      id: 'source-id',
+      projectId: 'project-id',
+      name: 'Source',
+      path: '/repo',
+      branch: 'main',
+      kind: .main,
+      status: .active,
+      createdAt: now,
+      updatedAt: now,
+    );
+    final renames = <(String, String)>[];
+    var switches = 0;
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [gitBackendProvider.overrideWithValue(git)],
+        child: MaterialApp(
+          home: Scaffold(
+            body: Align(
+              alignment: Alignment.bottomRight,
+              child: WorkspaceBranchStatusBarControl(
+                workspace: workspace,
+                sourceControlScope: WorkspaceSourceControlScope(
+                  workspaceId: workspace.id,
+                  workspacePath: '/repo',
+                  path: '/repo',
+                ),
+                onSwitchBranch: (_) async => switches++,
+                onRenameBranch: (oldBranch, newBranch) async {
+                  renames.add((oldBranch, newBranch));
+                  git.sourceBranches = <String>['main', newBranch];
+                },
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey('workspace-branch-status')));
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey('workspace-branch-option:feature/old')),
+      buttons: kSecondaryMouseButton,
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey('workspace-branch-rename:feature/old')),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Rename Branch'), findsOneWidget);
+    await tester.enterText(find.byType(TextField).last, 'feature/new');
+    await tester.tap(find.text('Rename'));
+    await tester.pumpAndSettle();
+
+    expect(renames, [('feature/old', 'feature/new')]);
+    expect(switches, 0);
+    expect(find.text('feature/new'), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('workspace-branch-status')));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('workspace-branch-option:feature/new')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('workspace-branch-option:feature/old')),
+      findsNothing,
+    );
+  });
+
+  testWidgets('right-click rename accepts current branch and cancel is safe', (
+    tester,
+  ) async {
+    final git = FakeGitBackend()
+      ..sourceBranches = <String>['main', 'feature']
+      ..headBranch = 'main'
+      ..currentBranchesByPath['/repo'] = 'main';
+    final now = DateTime.utc(2026, 11, 4);
+    final workspace = Workspace(
+      id: 'source-id',
+      projectId: 'project-id',
+      name: 'Source',
+      path: '/repo',
+      branch: 'main',
+      kind: .main,
+      status: .active,
+      createdAt: now,
+      updatedAt: now,
+    );
+    final renames = <(String, String)>[];
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [gitBackendProvider.overrideWithValue(git)],
+        child: MaterialApp(
+          home: Scaffold(
+            body: Align(
+              alignment: Alignment.bottomRight,
+              child: WorkspaceBranchStatusBarControl(
+                workspace: workspace,
+                sourceControlScope: WorkspaceSourceControlScope(
+                  workspaceId: workspace.id,
+                  workspacePath: '/repo',
+                  path: '/repo',
+                ),
+                onSwitchBranch: (_) async {},
+                onRenameBranch: (oldBranch, newBranch) async {
+                  renames.add((oldBranch, newBranch));
+                  git.sourceBranches = <String>['feature', newBranch];
+                  git.currentBranchesByPath['/repo'] = newBranch;
+                },
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('workspace-branch-status')));
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey('workspace-branch-option:main')),
+      buttons: kSecondaryMouseButton,
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('workspace-branch-rename:main')),
+      findsOneWidget,
+    );
+    await tester.tap(
+      find.byKey(const ValueKey('workspace-branch-rename:main')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+    expect(renames, isEmpty);
+
+    await tester.tap(find.byKey(const ValueKey('workspace-branch-status')));
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey('workspace-branch-option:main')),
+      buttons: kSecondaryMouseButton,
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey('workspace-branch-rename:main')),
+    );
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField).last, 'trunk');
+    await tester.tap(find.text('Rename'));
+    await tester.pumpAndSettle();
+
+    expect(renames, [('main', 'trunk')]);
+    expect(find.text('trunk'), findsOneWidget);
+  });
+
   testWidgets(
     'right click compares target branch without switching or merging',
     (tester) async {
@@ -30,7 +194,6 @@ void main() {
       );
       final compared = <String>[];
       final switched = <String>[];
-      var createdWorktrees = 0;
       await tester.pumpWidget(
         ProviderScope(
           overrides: [gitBackendProvider.overrideWithValue(git)],
@@ -48,12 +211,6 @@ void main() {
                   onSwitchBranch: (branch) async => switched.add(branch),
                   onCompareWithCurrentBranch: (branch) async =>
                       compared.add(branch),
-                  onCreateMergeWorkspace: (_) async {
-                    createdWorktrees++;
-                    throw StateError(
-                      'must not create a worktree for comparison',
-                    );
-                  },
                 ),
               ),
             ),
@@ -96,7 +253,10 @@ void main() {
 
       expect(compared, ['main']);
       expect(switched, isEmpty);
-      expect(createdWorktrees, 0);
+      expect(
+        git.calls.where((call) => call.method == 'createWorktree'),
+        isEmpty,
+      );
       expect(git.calls.where((call) => call.method == 'mergeRef'), isEmpty);
       expect(
         git.calls.where((call) => call.method == 'checkoutBranch'),
@@ -105,28 +265,25 @@ void main() {
     },
   );
 
-  testWidgets('right click merges current branch into selected target only', (
+  testWidgets('right click merges selected branch into current checkout only', (
     tester,
   ) async {
     final git = FakeGitBackend()
       ..sourceBranches = <String>['feature', 'main']
-      ..headBranch = 'feature'
-      ..currentBranchesByPath['/repo'] = 'feature'
-      ..currentBranchesByPath['/merge/main'] = 'main'
-      ..liveBranchByPath = <String, String>{'/repo': 'feature'};
+      ..headBranch = 'main'
+      ..currentBranchesByPath['/repo'] = 'main';
     final now = DateTime.utc(2026, 11, 2);
     final sourceWorkspace = Workspace(
       id: 'source-id',
       projectId: 'project-id',
       name: 'Source',
       path: '/repo',
-      branch: 'feature',
+      branch: 'main',
       kind: .main,
       status: .active,
       createdAt: now,
       updatedAt: now,
     );
-    var creations = 0;
     var switches = 0;
     await tester.pumpWidget(
       ProviderScope(
@@ -143,21 +300,6 @@ void main() {
                   path: '/repo',
                 ),
                 onSwitchBranch: (_) async => switches += 1,
-                onCreateMergeWorkspace: (branch) async {
-                  expect(branch, 'main');
-                  creations += 1;
-                  return Workspace(
-                    id: 'merge-id',
-                    projectId: 'project-id',
-                    name: 'Merge',
-                    path: '/merge/main',
-                    branch: branch,
-                    kind: .linked,
-                    status: .active,
-                    createdAt: now,
-                    updatedAt: now,
-                  );
-                },
               ),
             ),
           ),
@@ -169,37 +311,46 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('workspace-branch-status')));
     await tester.pumpAndSettle();
     await tester.tap(
-      find.byKey(const ValueKey('workspace-branch-option:feature')),
+      find.byKey(const ValueKey('workspace-branch-option:main')),
       buttons: kSecondaryMouseButton,
     );
     await tester.pumpAndSettle();
     expect(
-      find.byKey(const ValueKey('workspace-branch-merge-to:feature')),
+      find.byKey(const ValueKey('workspace-branch-merge-to:main')),
       findsNothing,
     );
     await tester.tap(find.text('Copy Branch Name'));
     await tester.pumpAndSettle();
 
     await tester.tap(
-      find.byKey(const ValueKey('workspace-branch-option:main')),
+      find.byKey(const ValueKey('workspace-branch-option:feature')),
       buttons: kSecondaryMouseButton,
     );
     await tester.pumpAndSettle();
     final mergeMenu = find.byKey(
-      const ValueKey('workspace-branch-merge-to:main'),
+      const ValueKey('workspace-branch-merge-to:feature'),
     );
     expect(mergeMenu, findsOneWidget);
+    expect(find.text('Merge into Current Branch'), findsOneWidget);
     await tester.tap(mergeMenu);
     await tester.pumpAndSettle();
-    expect(find.text('Merge into this branch?'), findsOneWidget);
+    expect(find.text('Merge feature into main?'), findsOneWidget);
     await tester.tap(find.text('Merge'));
     await tester.pumpAndSettle();
 
-    expect(creations, 1);
     expect(switches, 0);
     expect(git.calls.where((call) => call.method == 'mergeRef').single.args, {
-      'path': '/merge/main',
+      'path': '/repo',
       'ref': 'feature',
     });
+    expect(
+      git.calls.where(
+        (call) =>
+            call.method == 'createWorktree' ||
+            call.method == 'listWorktrees' ||
+            call.method == 'checkoutBranch',
+      ),
+      isEmpty,
+    );
   });
 }

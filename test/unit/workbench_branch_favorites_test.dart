@@ -57,4 +57,36 @@ void main() {
       isNot(branchFavoritesScopeKey('other', 'app')),
     );
   });
+
+  test('rename preserves favorite and does not change other repositories', () {
+    final root = branchFavoritesScopeKey('p', null);
+    final nested = branchFavoritesScopeKey('p', 'nested');
+    final before = toggleWorkbenchBranchFavorite(
+      prefs: toggleWorkbenchBranchFavorite(
+        prefs: WorkbenchViewPrefs.defaults,
+        scopeKey: root,
+        branch: 'feature/old',
+      ),
+      scopeKey: nested,
+      branch: 'feature/old',
+    );
+    final after = renameWorkbenchBranchFavorite(
+      prefs: before,
+      scopeKey: root,
+      oldBranch: 'feature/old',
+      newBranch: 'feature/new',
+    );
+    expect(after.favoriteBranchesByRepository[root], {'feature/new'});
+    expect(after.favoriteBranchesByRepository[nested], {'feature/old'});
+    expect(before.favoriteBranchesByRepository[root], {'feature/old'});
+    expect(
+      renameWorkbenchBranchFavorite(
+        prefs: after,
+        scopeKey: root,
+        oldBranch: 'not-pinned',
+        newBranch: 'elsewhere',
+      ),
+      same(after),
+    );
+  });
 }

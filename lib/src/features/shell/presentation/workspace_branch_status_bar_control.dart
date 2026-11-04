@@ -6,8 +6,8 @@ class const WorkspaceBranchStatusBarControl({
   required final WorkspaceSourceControlScope sourceControlScope,
   required final Future<void> Function(String branch) onSwitchBranch,
   final Future<void> Function(String branch)? onCompareWithCurrentBranch,
-  final Future<Workspace> Function(String branch)? onCreateMergeWorkspace,
-  final Future<void> Function(Workspace workspace)? onOpenMergeWorkspace,
+  final Future<void> Function(String oldBranch, String newBranch)?
+  onRenameBranch,
 }) extends ConsumerStatefulWidget {
   @override
   ConsumerState<WorkspaceBranchStatusBarControl> createState() =>
@@ -28,9 +28,9 @@ class _WorkspaceBranchStatusBarControlState
   bool _switching = false;
   int _generation = 0;
 
-  // Copy remains available on the current branch; comparing and merging are
-  // available only on a *different* local branch in the quick-switch list.
+  // Comparing and merging require a different local branch in the switch list.
   static const _copyAction = 'copy';
+  static const _renameAction = 'rename';
   static const _compareAction = 'compare';
   static const _mergeAction = 'merge';
 
@@ -127,7 +127,6 @@ class _WorkspaceBranchStatusBarControlState
         _current != null &&
         _current != 'HEAD';
     final canMerge =
-        widget.onCreateMergeWorkspace != null &&
         !_switching &&
         branch != _current &&
         _current != null &&
@@ -145,6 +144,12 @@ class _WorkspaceBranchStatusBarControlState
           value: _copyAction,
           child: Text(context.tr('Copy Branch Name')),
         ),
+        if (widget.onRenameBranch != null && !_switching)
+          PopupMenuItem<String>(
+            key: ValueKey<String>('workspace-branch-rename:$branch'),
+            value: _renameAction,
+            child: Text(context.tr('Rename Branch...')),
+          ),
         if (canCompare)
           PopupMenuItem<String>(
             key: ValueKey<String>(
@@ -157,17 +162,57 @@ class _WorkspaceBranchStatusBarControlState
           PopupMenuItem<String>(
             key: ValueKey<String>('workspace-branch-merge-to:$branch'),
             value: _mergeAction,
-            child: Text(context.tr('Merge Current Branch into This Branch...')),
+            child: Text(context.tr('Merge into Current Branch')),
           ),
       ],
     );
     if (!mounted) return;
     if (selected == _copyAction) {
       await _copyBranchName(branch);
+    } else if (selected == _renameAction) {
+      await _renameBranch(branch);
     } else if (selected == _compareAction) {
       await _compareWithCurrentBranch(branch);
     } else if (selected == _mergeAction) {
-      await _mergeToBranch(branch);
+      await _mergeIntoCurrentBranch(branch);
+    }
+  }
+
+  Future<void> _renameBranch(String oldBranch) async {
+    final rename = widget.onRenameBranch;
+    if (_switching || rename == null) return;
+    _menu.close();
+    final enteredName = await showRenameDialog(
+      context,
+      title: context.tr('Rename Branch'),
+      labelText: context.tr('Branch Name'),
+      initialValue: oldBranch,
+      confirmLabel: context.tr('Rename'),
+    );
+    if (!mounted || enteredName == null) return;
+    final newBranch = enteredName.trim();
+    if (newBranch.isEmpty || newBranch == oldBranch) return;
+    setState(() => _switching = true);
+    try {
+      await rename(oldBranch, newBranch);
+      if (!mounted) return;
+      await _loadBranches();
+      if (mounted) {
+        AleraToast.show(
+          context,
+          message: context.trTemplate('Renamed {old} to {new}', {
+            'old': oldBranch,
+            'new': newBranch,
+          }),
+          tone: .success,
+        );
+      }
+    } catch (error) {
+      if (mounted) {
+        AleraToast.show(context, message: error.toString(), tone: .error);
+      }
+    } finally {
+      if (mounted) setState(() => _switching = false);
     }
   }
 
@@ -186,19 +231,25 @@ class _WorkspaceBranchStatusBarControlState
     }
   }
 
-  Future<void> _mergeToBranch(String target) async {
-    if (_switching || widget.onCreateMergeWorkspace == null) return;
-    final source = await ref
-        .read(gitBackendProvider)
-        .currentBranch(widget.sourceControlScope.path);
-    if (!mounted || source == 'HEAD' || source == target) return;
+  Future<void> _mergeIntoCurrentBranch(String source) async {
+    if (_switching) return;
+    final path = widget.sourceControlScope.path;
+    final target = await ref.read(gitBackendProvider).currentBranch(path);
+    if (!mounted || target.isEmpty || target == 'HEAD' || source == target) {
+      return;
+    }
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: Text(dialogContext.tr('Merge into this branch?')),
+        title: Text(
+          dialogContext.trTemplate('Merge {branch} into {current}?', {
+            'branch': source,
+            'current': target,
+          }),
+        ),
         content: Text(
           dialogContext.trTemplate(
-            'Merge committed changes from {source} into {target} in an idle worktree. Your current checkout will not be changed.',
+            'Merge committed changes from {source} into {target} in the current workspace. Uncommitted changes or existing conflicts must be resolved first.',
             {'source': source, 'target': target},
           ),
         ),
@@ -215,47 +266,20 @@ class _WorkspaceBranchStatusBarControlState
       ),
     );
     if (confirmed != true || !mounted) return;
+    final activeWorkspaceId = ref
+        .read(workbenchControllerProvider)
+        .activeWorkspaceId;
+    if (activeWorkspaceId != null && activeWorkspaceId != widget.workspace.id) {
+      return;
+    }
     _menu.close();
     setState(() => _switching = true);
     try {
-      final state = ref.read(workbenchControllerProvider);
-      final idleWorkspaces = state
-          .workspacesFor(widget.workspace.projectId)
-          .where(
-            (workspace) =>
-                workspace.kind == WorkspaceKind.linked &&
-                workspace.isActive &&
-                !workspace.isArchived &&
-                workspace.id != state.activeWorkspaceId &&
-                state.tabsFor(workspace.id).isEmpty,
-          )
-          .toList(growable: false);
-      Workspace? createdWorkspace;
-      final result =
-          await BranchMergeToTargetService(ref.read(gitBackendProvider)).merge(
-            sourcePath: widget.sourceControlScope.path,
-            sourceBranch: source,
-            targetBranch: target,
-            idleWorktreePaths: {
-              for (final workspace in idleWorkspaces) workspace.path,
-            },
-            createWorktree: (branch) async {
-              final workspace = await widget.onCreateMergeWorkspace!(branch);
-              createdWorkspace = workspace;
-              return workspace.path;
-            },
-          );
-      if (result.conflicted) {
-        final workspace =
-            createdWorkspace ??
-            idleWorkspaces
-                .where((entry) => isSamePath(entry.path, result.path))
-                .firstOrNull;
-        if (workspace != null) {
-          await widget.onOpenMergeWorkspace?.call(workspace);
-        }
-      }
+      final result = await BranchMergeIntoCurrentService(
+        ref.read(gitBackendProvider),
+      ).merge(path: path, sourceBranch: source, expectedCurrentBranch: target);
       if (mounted) {
+        ref.invalidate(workspaceSourceControlControllerProvider(path));
         AleraToast.show(
           context,
           message: result.conflicted
@@ -273,6 +297,7 @@ class _WorkspaceBranchStatusBarControlState
       }
     } catch (error) {
       if (mounted) {
+        ref.invalidate(workspaceSourceControlControllerProvider(path));
         AleraToast.show(context, message: error.toString(), tone: .error);
       }
     } finally {

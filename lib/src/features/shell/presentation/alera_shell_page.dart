@@ -2,7 +2,7 @@ import 'dart:async';
 
 import 'package:alera/src/design_system/buttons/alera_icon_button.dart';
 import 'package:alera/src/features/workbench/application/branch_compare_current_service.dart';
-import 'package:alera/src/features/shell/application/branch_merge_to_target_service.dart';
+import 'package:alera/src/features/shell/application/branch_merge_into_current_service.dart';
 import 'package:alera/src/features/workbench/application/workbench_branch_favorites.dart';
 import 'package:alera/src/features/workbench/application/detached_tab_window_service.dart';
 
@@ -42,6 +42,7 @@ import 'package:alera/src/features/workbench/domain/workbench_view_prefs.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/domain/workspace_source_control_scope.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_context_sidebar.dart';
+import 'package:alera/src/features/workbench/presentation/workbench_dialog_launchers.dart';
 import 'package:alera/src/features/workbench/presentation/project_workbench_sidebar.dart';
 import 'package:alera/src/features/workbench/presentation/welcome_dashboard.dart';
 import 'package:alera/src/features/workbench/application/terminal_driver_presence_controller.dart';

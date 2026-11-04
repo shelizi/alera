@@ -140,10 +140,8 @@ const Map<String, String> _traditionalChineseShell = <String, String>{
   'Copy Tag Name': '複製 Tag 名稱',
   'Copy Branch Name': '複製 Branch 名稱',
   'Compare Files with Current Branch': '與目前分支比較檔案差異',
-  'Merge Current Branch into This Branch...': '將目前分支合併到此分支...',
-  'Merge into this branch?': '要合併到此分支嗎？',
-  'Merge committed changes from {source} into {target} in an idle worktree. Your current checkout will not be changed.':
-      '將 {source} 已提交的變更合併到 {target}，使用空閒 Worktree 處理，不會切換目前工作目錄。',
+  'Merge committed changes from {source} into {target} in the current workspace. Uncommitted changes or existing conflicts must be resolved first.':
+      '將 {source} 已提交的變更合併到目前 Workspace 的 {target} 分支。請先提交或暫存未提交的變更，並解決現有衝突。',
   'Merged {source} into {target}': '已將 {source} 合併到 {target}',
   'Merge conflicts in {branch}. Resolve them in Source Control.':
       '{branch} 發生合併衝突，請在原始碼控制中處理。',

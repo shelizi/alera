@@ -33,6 +33,30 @@ WorkbenchViewPrefs toggleWorkbenchBranchFavorite({
   );
 }
 
+/// Keep the pin on the local branch after a successful ref rename.
+WorkbenchViewPrefs renameWorkbenchBranchFavorite({
+  required WorkbenchViewPrefs prefs,
+  required String scopeKey,
+  required String oldBranch,
+  required String newBranch,
+}) {
+  if (oldBranch == newBranch) return prefs;
+  final existing = prefs.favoriteBranchesByRepository[scopeKey];
+  if (existing == null || !existing.contains(oldBranch)) return prefs;
+  final renamed = <String>{...existing}
+    ..remove(oldBranch)
+    ..add(newBranch);
+  final repositories = <String, Set<String>>{
+    ...prefs.favoriteBranchesByRepository,
+    scopeKey: Set.unmodifiable(renamed),
+  };
+  return prefs.copyWith(
+    favoriteBranchesByRepository: Map<String, Set<String>>.unmodifiableOf(
+      repositories,
+    ),
+  );
+}
+
 List<String> favoriteBranchesFirst(
   Iterable<String> branches,
   Set<String> favorites,
