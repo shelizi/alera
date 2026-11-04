@@ -1,6 +1,35 @@
 part of 'workspace_git_diff_surface_test.dart';
 
 void _registerWorkspaceGitDiffSurfaceOpenPathTests() {
+  testWidgets(
+    'standalone commit diff still does not open a working tree file',
+    (tester) async {
+      final backend = FakeGitBackend()
+        ..gitCommitDiffResult = const GitDiffResult(
+          files: [
+            GitDiffFile(
+              path: 'lib/main.dart',
+              area: .staged,
+              status: .modified,
+              lines: [GitDiffLine.addition('+commit')],
+            ),
+          ],
+        );
+      await _pumpDiffSurface(
+        tester,
+        backend: backend,
+        tab: _diffTab(
+          source: WorkspaceGitDiffSource.commit,
+          filePath: 'lib/main.dart',
+          commitOid: 'commit-oid',
+          parentOid: 'parent-oid',
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(_openFileButton(tester).onPressed, isNull);
+    },
+  );
+
   testWidgets('diff surface disables opening deleted files', (tester) async {
     final backend = FakeGitBackend()
       ..gitDiffResult = const GitDiffResult(

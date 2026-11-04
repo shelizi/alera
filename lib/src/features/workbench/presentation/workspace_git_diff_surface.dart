@@ -70,6 +70,7 @@ class _WorkspaceGitDiffSurfaceState
     extends ConsumerState<WorkspaceGitDiffSurface> {
   Future<GitDiffResult>? _future;
   GitDiffResult? _loadedResult;
+  String? _branchCompareExistingWorkingTreePath;
   Map<GitDiffFile, _FullFileContents> _fullFileContents =
       const <GitDiffFile, _FullFileContents>{};
   ReadingDiffResult? _readingDiffResult;
@@ -423,10 +424,15 @@ class _WorkspaceGitDiffSurfaceState
   }
 
   bool get _canOpenFile {
-    if (_isCommitBackedDiff) {
+    if (_isCommitBackedDiff && widget.branchCompareCache == null) {
       return false;
     }
-    return _openableDiffFile != null;
+    final file = _openableDiffFile;
+    if (file == null) return false;
+    if (widget.branchCompareCache == null) return true;
+    final relativePath = _sourceControlScope.toWorkspaceRelativePath(file.path);
+    return relativePath != null &&
+        _branchCompareExistingWorkingTreePath == relativePath;
   }
 
   GitDiffFile? get _openableDiffFile {
@@ -447,7 +453,9 @@ class _WorkspaceGitDiffSurfaceState
   }
 
   bool _isOpenableDiffFile(GitDiffFile file) {
-    if (file.isGitlink || file.status == GitChangeStatus.deleted) {
+    if (file.isGitlink ||
+        (file.status == GitChangeStatus.deleted &&
+            widget.branchCompareCache == null)) {
       return false;
     }
     if (file.status == GitChangeStatus.renamed && file.oldPath == file.path) {
@@ -595,15 +603,32 @@ class _WorkspaceGitDiffSurfaceState
     }
   }
 
-  Future<void> _openFile() {
+  Future<void> _openFile() async {
     final file = _openableDiffFile;
-    if (file == null) {
-      return Future<void>.value();
+    if (file == null) return;
+    final relativePath = _sourceControlScope.toWorkspaceRelativePath(file.path);
+    if (relativePath == null) return;
+    if (widget.branchCompareCache != null) {
+      // The compared revision may contain files absent from this workspace.
+      // Recheck on click so a removed file cannot open as a new empty editor.
+      final token = await ref
+          .read(workspaceFileServiceProvider)
+          .contentTokenForFile(
+            workspacePath: widget.workspace.path,
+            relativePath: relativePath,
+          );
+      if (!mounted) return;
+      if (token == null) {
+        _updateDiffState(() => _branchCompareExistingWorkingTreePath = null);
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+          const SnackBar(
+            content: Text('File is no longer available in this workspace.'),
+          ),
+        );
+        return;
+      }
     }
-    final relativePath = _sourceControlScope.toWorkspaceRelativePath(
-      file.path,
-    )!;
-    return ref
+    await ref
         .read(workspaceFileOpenCoordinatorProvider)
         .open<WorkspaceTabRecord>(
           workspace: widget.workspace,
@@ -617,8 +642,30 @@ class _WorkspaceGitDiffSurfaceState
                         relativePath: relativePath,
                         preview: preview,
                       ),
-        )
-        .then((_) {});
+        );
+  }
+
+  Future<void> _resolveBranchCompareWorkingTreePath({
+    required Future<GitDiffResult> nextFuture,
+    required int loadGeneration,
+  }) async {
+    if (widget.branchCompareCache == null) return;
+    final file = _openableDiffFile;
+    if (file == null) return;
+    final relativePath = _sourceControlScope.toWorkspaceRelativePath(file.path);
+    if (relativePath == null) return;
+    final token = await ref
+        .read(workspaceFileServiceProvider)
+        .contentTokenForFile(
+          workspacePath: widget.workspace.path,
+          relativePath: relativePath,
+        );
+    if (!_isCurrentDiffLoad(nextFuture, loadGeneration)) return;
+    _updateDiffState(() {
+      _branchCompareExistingWorkingTreePath = token == null
+          ? null
+          : relativePath;
+    });
   }
 
   Future<GitDiffResult> _loadFileRevisionDiff({

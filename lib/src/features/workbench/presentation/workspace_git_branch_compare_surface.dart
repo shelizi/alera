@@ -215,6 +215,13 @@ class _WorkspaceGitBranchCompareSurfaceState
 
   WorkspaceTabRecord _fileTab(GitCommitChangeEntry entry) {
     final snapshot = _snapshot!;
+    final root = normalizeSourceControlRootRelativePath(widget.tab.gitDiffRoot);
+    final scope = WorkspaceSourceControlScope(
+      workspaceId: widget.workspace.id,
+      workspacePath: widget.workspace.path,
+      path: _repositoryPath,
+      relativeRoot: root,
+    );
     return widget.tab.copyWith(
       title: entry.path,
       payload: <String, Object?>{
@@ -225,8 +232,12 @@ class _WorkspaceGitBranchCompareSurfaceState
         workspaceTabGitDiffParentOidPayloadKey: snapshot.summary.parentOid,
         workspaceTabGitDiffCompareRefPayloadKey:
             '${widget.tab.gitBranchCompareBaseRef}...${widget.tab.gitBranchCompareHeadRef}',
-        workspaceTabFilePathPayloadKey: entry.path,
-        workspaceTabGitDiffOldPathPayloadKey: entry.oldPath,
+        workspaceTabFilePathPayloadKey: scope.toWorkspaceRelativePath(
+          entry.path,
+        ),
+        workspaceTabGitDiffOldPathPayloadKey: scope.toWorkspaceRelativePath(
+          entry.oldPath,
+        ),
       },
     );
   }

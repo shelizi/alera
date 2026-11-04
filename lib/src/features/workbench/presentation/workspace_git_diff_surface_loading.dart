@@ -120,6 +120,7 @@ extension _WorkspaceGitDiffSurfaceLoading on _WorkspaceGitDiffSurfaceState {
           };
     _updateDiffState(() {
       _loadedResult = null;
+      _branchCompareExistingWorkingTreePath = null;
       _fullFileContents = const <GitDiffFile, _FullFileContents>{};
       _fullFilePreviewLimitedPaths.clear();
       if (!preserveEditableDocuments) {
@@ -146,6 +147,12 @@ extension _WorkspaceGitDiffSurfaceLoading on _WorkspaceGitDiffSurfaceState {
           _updateDiffState(() {
             _loadedResult = result;
           });
+          unawaited(
+            _resolveBranchCompareWorkingTreePath(
+              nextFuture: nextFuture,
+              loadGeneration: loadGeneration,
+            ),
+          );
           final allPathsFuture = progressiveAllPathsFuture;
           final firstPageFuture = progressiveFirstPageFuture;
           if (allPathsFuture != null && firstPageFuture != null) {
