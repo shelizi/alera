@@ -48,6 +48,21 @@ void main() {
     );
   });
 
+  test(
+    'finds child Git roots when the workspace root is a plain folder',
+    () async {
+      await createRepo('frontend');
+      await createRepo(p.join('backend', 'service'));
+      await createRepo(p.join('tools', 'cli'), worktree: true);
+
+      expect(await Directory(p.join(root.path, '.git')).exists(), isFalse);
+      expect(
+        await const WorkspaceGitRepositoryScanner().scan(root.path),
+        <String>['backend/service', 'frontend', 'tools/cli'],
+      );
+    },
+  );
+
   test('does not traverse generated caches or linked worktrees', () async {
     await createRepo(p.join('packages', 'app'));
     await createRepo(p.join('node_modules', 'package'));

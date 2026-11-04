@@ -557,9 +557,50 @@ class const _GitRepositorySelector({
 class _GitRepositorySelectorState
     extends ConsumerState<_GitRepositorySelector> {
   bool _overviewExpanded = false;
+  String? _initialAutoFocusedRoot;
+  bool _hasHadActiveRepository = false;
+
+  @override
+  void didUpdateWidget(covariant _GitRepositorySelector oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.workspacePath != widget.workspacePath) {
+      _initialAutoFocusedRoot = null;
+      _hasHadActiveRepository = false;
+    }
+  }
+
+  void _focusFirstNestedRepositoryIfNeeded() {
+    if (widget.hasActiveRepository) {
+      _hasHadActiveRepository = true;
+      return;
+    }
+    // A plain folder is a valid Alera workspace. Discovering nested Git
+    // repositories must also activate one, otherwise Git UI remains unavailable
+    // until the user knows to open the repository selector manually.
+    if (_hasHadActiveRepository ||
+        _initialAutoFocusedRoot != null ||
+        widget.scanning ||
+        widget.roots.isEmpty ||
+        widget.roots.contains('')) {
+      return;
+    }
+    final workspacePath = widget.workspacePath;
+    final firstRoot = widget.roots.first;
+    _initialAutoFocusedRoot = firstRoot;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted ||
+          widget.workspacePath != workspacePath ||
+          widget.hasActiveRepository ||
+          !widget.roots.contains(firstRoot)) {
+        return;
+      }
+      widget.onSelected(firstRoot);
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
+    _focusFirstNestedRepositoryIfNeeded();
     final summary = _overviewExpanded
         ? ref.watch(
             workspaceGitRepositoryOverviewProvider(widget.workspacePath),

@@ -13,6 +13,93 @@ import '../unit/fake_git_backend.dart';
 
 void main() {
   testWidgets(
+    'plain folder workspace automatically focuses its first discovered Git root',
+    (tester) async {
+      final workspacePath = p.join('projects', 'plain-folder');
+      final now = DateTime.utc(2026, 11, 4);
+      final workspace = Workspace(
+        id: 'workspace-folder',
+        projectId: 'project-folder',
+        name: 'Plain Folder',
+        path: workspacePath,
+        createdAt: now,
+        updatedAt: now,
+        kind: .main,
+        status: .active,
+      );
+      final focused = <String>[];
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            workspaceGitRepositoriesProvider(workspacePath)
+                .overrideWith((ref) async => <String>['backend', 'frontend']),
+          ],
+          child: MaterialApp(
+            home: Scaffold(
+              body: SizedBox(
+                width: 850,
+                height: 700,
+                child: WorkspaceContextSidebar(
+                  workspace: workspace,
+                  prefs: WorkbenchViewPrefs.defaults.copyWith(
+                    activeContextPanelTab: .gitDiff,
+                  ),
+                  isWorkspaceGitRepository: false,
+                  onToggleVisible: () {},
+                  onResize: (_) {},
+                  onSetContextPanelTab: (_) {},
+                  onSetExplorerMode: (_) {},
+                  onSetShowHiddenFiles: (_) {},
+                  onSetGitDiffViewMode: (_) {},
+                  onSetGitDiffGroupMode: (_) {},
+                  onFocusSourceControlFolder: (relativeRoot) async {
+                    focused.add(relativeRoot);
+                    return true;
+                  },
+                  onClearSourceControlRoot: () {},
+                  onOpenFile: (_) {},
+                  onOpenGitDiff: ({
+                    relativePath,
+                    area,
+                    gitDiffRoot,
+                    required scope,
+                    bool preview = false,
+                  }) async {},
+                  onOpenGitCommitDiff: ({
+                    relativePath,
+                    oldPath,
+                    required scope,
+                    gitDiffRoot,
+                    required commitOid,
+                    parentOid,
+                    required compareRef,
+                    subject,
+                    message,
+                    bool preview = false,
+                  }) async {},
+                  onOpenSearchMatch: (_) {},
+                  onPathMoved: (_, _) async {},
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+
+      await tester.pumpAndSettle();
+      expect(focused, <String>['backend']);
+      await tester.tap(
+        find.byKey(const ValueKey<String>('workspace-git-repository-selector')),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('backend'), findsOneWidget);
+      expect(find.text('frontend'), findsOneWidget);
+      expect(find.text('Workspace Root'), findsNothing);
+    },
+  );
+
+  testWidgets(
     'multi-repository selector discovers siblings, switches and shows isolated statuses',
     (tester) async {
       final workspacePath = p.join('repo', 'multi-project');
@@ -49,9 +136,8 @@ void main() {
       Widget buildSidebar() => ProviderScope(
         overrides: [
           gitBackendProvider.overrideWithValue(git),
-          workspaceGitRepositoriesProvider(workspacePath).overrideWith(
-            (ref) async => <String>['', 'backend', 'frontend'],
-          ),
+          workspaceGitRepositoriesProvider(workspacePath)
+              .overrideWith((ref) async => <String>['', 'backend', 'frontend']),
         ],
         child: MaterialApp(
           home: Scaffold(
