@@ -88,6 +88,24 @@ Hook-script-to-HTTP transport, **not** real provider model emission of native
 Stop events, Host inbox delivery following those real native events, or an
 autonomous Managed Agent reply. Those gates remain open.
 
+**2026-11-04 reactive cross-window SettingsController notifications:**
+`runtimeSettingsChangesProvider` previously emitted identical
+`AsyncData<void>(null)` values on each Host `runtimeSettingsChanged` event,
+so Riverpod deduplicated successive settings notifications. It now emits a
+monotonic integer revision with regenerated Riverpod provider types. The
+isolated negative control reproduced the bug: two identical revisions
+refreshed window B's SettingsController only once; two distinct revisions
+correctly refreshed it twice. A separate test verified actual Host
+`runtimeSettingsChanged` events become revisions 1 and 2 while unrelated
+events are ignored. Focused SettingsController + MCP CAS and concurrency
+suites **24/24 PASS**. The isolated Windows Flutter GUI/Rust sidecar was
+rebuilt successfully (exit 0), and the updated native two-real-window MCP
+routing/settings CAS/Host cleanup regression passed **17/17** (exit 0).
+These verify reactive Controller propagation and no regression in the
+existing real GUI MCP actions; they do not, by themselves, prove a second
+real Flutter GUI's visible Settings pane repaints without manual read.
+Full native real-GUI visual-notification acceptance remains pending.
+
 **Cross-platform enablement follow-up (same isolated branch):** the existing
 portable stdio MCP implementation and Mac/Linux packaged CLI locations are
 now covered by `tool/testing/mcp_cross_platform_smoke.py` plus a dedicated

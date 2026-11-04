@@ -4,11 +4,16 @@ import 'package:riverpod_annotation/riverpod_annotation.dart';
 part 'runtime_settings_changes.g.dart';
 
 @Riverpod(keepAlive: true)
-Stream<void> runtimeSettingsChanges(Ref ref) async* {
+Stream<int> runtimeSettingsChanges(Ref ref) async* {
   final client = ref.watch(runtimeHostClientProvider);
+  var revision = 0;
   await for (final event in client.runtimeEvents) {
     if (event.name == 'runtimeSettingsChanged') {
-      yield null;
+      // Riverpod may deduplicate equal AsyncData<void>(null) values. A
+      // monotonic revision makes every Host settings change observable by
+      // another Flutter window's SettingsController, including repeated
+      // updates to the same preference.
+      yield ++revision;
     }
   }
 }
