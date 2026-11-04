@@ -105,6 +105,17 @@ void main() {
 
       expect(() => create(languages: <LanguageId>[]), throwsArgumentError);
       expect(
+        () => LanguageProviderDescriptor(
+          id: '  ',
+          kind: LanguageProviderKind.semanticServer,
+          languages: <LanguageId>[rust],
+          capabilities: const <LanguageCapability>[.hover],
+          processScope: LanguageProviderProcessScope.workspace,
+          launchPolicy: LanguageProviderLaunchPolicy.explicit,
+        ),
+        throwsArgumentError,
+      );
+      expect(
         () => create(capabilities: <LanguageCapability>[]),
         throwsArgumentError,
       );
@@ -133,6 +144,9 @@ void main() {
       selectedThinkingByOperation: <AiAssistOperation, Map<String, String>>{
         AiAssistOperation.commitMessage: <String, String>{'gpt': 'high'},
       },
+      instructionsByOperation: <AiAssistOperation, String>{
+        AiAssistOperation.commitMessage: 'Explain the change',
+      },
       promptSettingsByOperation: <AiAssistOperation, AiAssistPromptSettings>{
         AiAssistOperation.commitMessage: AiAssistPromptSettings(
           agent: 'claude',
@@ -144,6 +158,9 @@ void main() {
     expect(map['selectedModelByAgent'], <String, String>{'codex': 'gpt'});
     expect(map['selectedThinkingByOperation'], <String, Object?>{
       'commitMessage': <String, String>{'gpt': 'high'},
+    });
+    expect(map['instructionsByOperation'], <String, String>{
+      'commitMessage': 'Explain the change',
     });
     expect(
       (map['promptSettingsByOperation']! as Map)['commitMessage'],
@@ -164,7 +181,7 @@ void main() {
         action.effectiveAgentType(const AiAssistSettings()),
         AgentType.claude,
       );
-      const terminalLine = TerminalSearchLine(
+      final terminalLine = TerminalSearchLine(
         id: 'line-1',
         index: 1,
         text: 'hi',
