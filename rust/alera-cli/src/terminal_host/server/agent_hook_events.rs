@@ -147,3 +147,100 @@ impl ServerActor {
             .await;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use serde_json::json;
+
+    use crate::agent_status::AgentHookEvent;
+    use crate::terminal_host::orchestration::agent_presence::AgentPresenceState;
+    use crate::terminal_host::server::actor_test_harness::test_actor;
+    use crate::terminal_host::session::Session;
+
+    fn native_hook(name: &str) -> AgentHookEvent {
+        AgentHookEvent {
+            terminal_session_id: "recipient".into(),
+            workspace_id: "workspace".into(),
+            tab_id: "tab-recipient".into(),
+            agent_type: "claude".into(),
+            event_name: Some(name.into()),
+            payload: json!({
+                "hook_event_name": name,
+                "session_id": "disposable-native-claude",
+            }),
+        }
+    }
+
+    #[tokio::test]
+    async fn native_hook_updates_host_presence_only_when_enabled_and_scoped() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut actor = test_actor(
+            &dir,
+            HashMap::new(),
+            HashMap::from([(
+                "recipient".to_string(),
+                Session::driver_test_stub("recipient", 80, 24),
+            )]),
+        )
+        .await;
+
+        // The Host receives a real Hook event without requiring a Flutter
+        // status adapter, but must ignore disabled Agent types by default.
+        actor
+            .handle_agent_hook_event(native_hook("UserPromptSubmit"))
+            .await;
+        assert!(actor.agent_presence.get("recipient").is_none());
+
+        actor
+            .runtime_store
+            .set_metadata("settings.agents.agentStatusHooks", r#"{"claude":true}"#)
+            .await
+            .unwrap();
+        actor
+            .handle_agent_hook_event(native_hook("UserPromptSubmit"))
+            .await;
+        assert_eq!(
+            actor.agent_presence.get("recipient").unwrap().state,
+            AgentPresenceState::Working,
+        );
+
+        let mut forged_tab = native_hook("Stop");
+        forged_tab.tab_id = "foreign-tab".into();
+        actor.handle_agent_hook_event(forged_tab).await;
+        let mut forged_workspace = native_hook("Stop");
+        forged_workspace.workspace_id = "foreign-workspace".into();
+        actor.handle_agent_hook_event(forged_workspace).await;
+        assert_eq!(
+            actor.agent_presence.get("recipient").unwrap().state,
+            AgentPresenceState::Working,
+            "an unrelated tab/workspace must never mark an Agent injection-ready",
+        );
+
+        // The same native Stop event that a real Claude Code turn emits
+        // changes the Host's own state to injection-ready. No synthetic
+        // orchestration.agentStatus request is used in this test.
+        actor.handle_agent_hook_event(native_hook("Stop")).await;
+        assert_eq!(
+            actor.agent_presence.get("recipient").unwrap().state,
+            AgentPresenceState::Done,
+        );
+        assert!(actor.agent_presence.is_injection_ready("recipient"));
+
+        // Disabling Claude Hook processing after a completed turn must not
+        // allow any new event to corrupt the terminal's last recorded state.
+        actor
+            .runtime_store
+            .set_metadata("settings.agents.agentStatusHooks", r#"{"claude":false}"#)
+            .await
+            .unwrap();
+        actor
+            .handle_agent_hook_event(native_hook("UserPromptSubmit"))
+            .await;
+        assert_eq!(
+            actor.agent_presence.get("recipient").unwrap().state,
+            AgentPresenceState::Done,
+        );
+    }
+}

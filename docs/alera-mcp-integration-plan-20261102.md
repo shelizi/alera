@@ -133,6 +133,34 @@ runners have NOT been executed. The local machine has no Docker executable
 or registered WSL distro, so it cannot substitute for native Linux CI.
 Protected workflow changes remain uncommitted; no merge/push/release.
 
+**2026-11-04 native Claude Hook status-to-Host acceptance (isolated):**
+An authenticated real Claude `--print` model turn emitted its own
+`UserPromptSubmit` and `Stop` via Alera's generated Windows command Hook.
+The private HTTP sink now passes the exact event envelope through the
+production `parseAgentHookRequest`, `AgentStatusController` and
+`AgentStatusHostForwarder`. This observes `working → done` plus the
+correct Agent terminal, workspace, tab and provider identities, without
+forging a state transition; explicit real-model acceptance **1/1 PASS**
+(twice). Its `RuntimeHostClient` is an in-memory recording test adapter,
+**not** the real Host/PTY. Separately, a Rust `ServerActor` test now
+exercises `handle_agent_hook_event` using only a disposable RuntimeStore:
+disabled Claude hooks are ignored, wrong tab/workspace cannot mark an Agent
+idle, the correctly scoped Claude `Stop` marks the real Host presence
+`Done`/injection-ready, and disabling hooks prevents subsequent updates
+(**1/1 PASS**). Rust MCP security/transport regression **25/25 PASS**;
+Flutter Hook receiver + Host forwarder regression **19/19 PASS**. These
+are distinct validated legs of the lifecycle, not a claim that a running
+interactive Managed Profile automatically receives a queued message and
+produces a second model reply.
+
+**2026-11-04 GitHub fork desktop and PTY CI (existing workflows):**
+The feature branch at `a9d6d2566` passed GitHub Desktop Builds on
+Windows/macOS/Linux (3/3), native Terminal Worker on macOS/Linux (2/2),
+and Windows PTY Job (1/1). The protected, dedicated
+`.github/workflows/mcp-cross-platform.yml` remains uncommitted; these
+six green jobs do **not** substitute for its unexecuted MCP-specific
+macOS/Linux Host/PTY smoke. No main merge or Release.
+
 **Cross-platform enablement follow-up (same isolated branch):** the existing
 portable stdio MCP implementation and Mac/Linux packaged CLI locations are
 now covered by `tool/testing/mcp_cross_platform_smoke.py` plus a dedicated
