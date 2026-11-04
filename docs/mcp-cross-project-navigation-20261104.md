@@ -17,11 +17,20 @@ The following MCP tools support project-scoped navigation:
 | `alera.list_tabs` | optional `workspaceId`, `projectId`, `limit` | Read only metadata for current or explicitly selected Workspace |
 | `alera.focus_workspace` | required `workspaceId`, optional `projectId`, `windowId` | Select existing Workspace without creating an initial Terminal |
 | `alera.select_tab` | required `workspaceId`, `tabId`; optional `projectId`, `windowId` | Select an existing Tab after target validation |
-| `alera.open_file` | required `relativePath`; optional `workspaceId`, `projectId`, `openMode`, `windowId` | Open and select file-backed Editor Tab |
+| `alera.open_file` | required `relativePath`; optional `workspaceId`, `projectId`, `openMode`, `line`, `windowId` | Open and select file-backed Editor Tab; optionally jump to a line |
 | `alera.reveal_file` | required `relativePath`; optional `workspaceId`, `projectId`, `windowId` | Reveal target file in Explorer without opening it |
 
 `openMode`: `reuse` is the default. `new` creates an independent permanent
 Editor Tab, even if the target file is already open.
+
+`line` is an optional **1-based** integer (1 through 1,000,000,000).
+When present, Alera moves the caret to the requested line and scrolls it into
+view. If it exceeds the loaded document's line count, Alera clamps to the last
+line (matching the built-in Editor Go to Line behavior). Without `line`,
+opening a file preserves its previous viewport and caret. An applied MCP
+receipt is sent only after the Editor has accepted the scroll, even when a
+newly opened tab needs to finish loading. Unavailable/failed scrolls time out
+and report failure instead of falsely claiming success.
 
 For any target Workspace other than the calling Agent's own, **both**
 `workspaceId` and `projectId` must be provided; the Host checks that they
@@ -37,7 +46,8 @@ Example:
     "projectId": "project-b",
     "workspaceId": "workspace-b",
     "relativePath": "lib/main.dart",
-    "openMode": "new"
+    "openMode": "new",
+    "line": 35
   }
 }
 ```

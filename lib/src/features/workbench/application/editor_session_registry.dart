@@ -6,6 +6,11 @@ class EditorSessionRegistry extends ChangeNotifier
       <String, EditorDocumentSession>{};
   final Map<String, EditorSessionHandle> _sessions =
       <String, EditorSessionHandle>{};
+  final Map<
+    String,
+    ({WorkspaceEditorRevealTarget target, Completer<bool> done})
+  >
+  _pendingRevealAcks = {};
   final Map<String, _EditorDocumentPath> _pathByTabId =
       <String, _EditorDocumentPath>{};
   final Map<_EditorDocumentPath, Set<String>> _tabIdsByPath =
@@ -178,6 +183,51 @@ class EditorSessionRegistry extends ChangeNotifier
     documentFor(tabId).pendingReveal = target;
   }
 
+  /// MCP must not acknowledge a line-navigation request merely because a Tab
+  /// was selected. An unloaded editor can defer the reveal until its document
+  /// and scroll viewport exist; only the mounted editor can confirm success.
+  Future<bool> revealAndWait(
+    String tabId,
+    WorkspaceEditorRevealTarget target, {
+    Duration timeout = const Duration(seconds: 8),
+  }) async {
+    final previous = _pendingRevealAcks.remove(tabId);
+    if (previous != null && !previous.done.isCompleted) {
+      previous.done.complete(false);
+    }
+    final done = Completer<bool>();
+    _pendingRevealAcks[tabId] = (target: target, done: done);
+    try {
+      reveal(tabId, target);
+      return await done.future.timeout(timeout, onTimeout: () => false);
+    } finally {
+      final pending = _pendingRevealAcks[tabId];
+      if (pending != null && identical(pending.target, target)) {
+        _pendingRevealAcks.remove(tabId);
+        final document = _documents[tabId];
+        if (document != null && identical(document.pendingReveal, target)) {
+          document.pendingReveal = null;
+        }
+      }
+    }
+  }
+
+  /// Called only after the actual Editor has accepted (or definitively failed)
+  /// its scroll request. Stale callbacks cannot complete a newer navigation.
+  void completeReveal(
+    String tabId,
+    WorkspaceEditorRevealTarget target, {
+    required bool applied,
+  }) {
+    final pending = _pendingRevealAcks[tabId];
+    if (pending == null ||
+        !identical(pending.target, target) ||
+        pending.done.isCompleted) {
+      return;
+    }
+    pending.done.complete(applied);
+  }
+
   WorkspaceEditorRevealTarget? takePendingReveal(String tabId) {
     final document = _documents[tabId];
     final target = document?.pendingReveal;
@@ -285,6 +335,10 @@ class EditorSessionRegistry extends ChangeNotifier
 
   @override
   void forget(String tabId) {
+    final pendingReveal = _pendingRevealAcks.remove(tabId);
+    if (pendingReveal != null && !pendingReveal.done.isCompleted) {
+      pendingReveal.done.complete(false);
+    }
     final hadSession = _sessions.remove(tabId) != null;
     final hadDocument = _documents.remove(tabId) != null;
     final path = _pathByTabId.remove(tabId);

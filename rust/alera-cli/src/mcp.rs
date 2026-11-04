@@ -253,12 +253,13 @@ fn tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "alera.open_file",
-            "description": "Open an existing editor file in the caller's workspace or an explicitly selected project/workspace. Open mode reuse is default; new creates an independent permanent Tab. Requires Host authorization and visible App acknowledgment.",
+            "description": "Open an existing editor file in the caller's or a target project/workspace; optional 1-based line scrolls the Editor caret to that line after the file has loaded. Open mode reuse is default; new creates an independent permanent Tab. Requires Host authorization and visible App acknowledgment.",
             "inputSchema": {"type": "object", "properties": {
                 "relativePath": {"type": "string", "minLength": 1},
                 "workspaceId": {"type": "string"},
                 "projectId": {"type": "string"},
                 "openMode": {"type": "string", "enum": ["reuse", "new"]},
+                "line": {"type": "integer", "minimum": 1, "maximum": 1000000000, "description": "Optional 1-based destination line. Out-of-file-range lines clamp to the last line."},
                 "windowId": {"type": "string"}
             }, "required": ["relativePath"], "additionalProperties": false},
             "annotations": {"readOnlyHint": false}
@@ -919,6 +920,7 @@ fn check_keys(tool: &str, args: &Value) -> Result<(), String> {
             "workspaceId",
             "projectId",
             "openMode",
+            "line",
             "windowId",
         ],
         "alera.reveal_file" => &["relativePath", "workspaceId", "projectId", "windowId"],
@@ -1377,6 +1379,10 @@ mod tests {
 
     #[test]
     fn tool_arguments_fail_closed_on_unknown_or_unbounded_values() {
+        assert!(check_keys(
+            "alera.open_file",
+            &json!({"relativePath":"src/main.rs","line":42,"workspaceId":"other","projectId":"project-b"})
+        ).is_ok(), "MCP open_file must accept a 1-based destination line");
         for (tool, arguments) in [
             (
                 "alera.focus_workspace",

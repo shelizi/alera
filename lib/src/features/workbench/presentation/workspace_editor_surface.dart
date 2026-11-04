@@ -102,6 +102,7 @@ class _WorkspaceEditorSurfaceState
   WorkspaceEditorPerformanceProfile? _lastPerformanceProfile;
   Offset? _lastSecondaryTapGlobalPosition;
   int _loadRequestId = 0;
+  int _revealSequence = 0;
   late int _lastObservedDocumentVersion;
   Timer? _documentSnapshotDebounceTimer;
   Timer? _languageIntelligenceSyncTimer;

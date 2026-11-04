@@ -241,6 +241,10 @@ extension _AleraShellMcpUi on _AleraShellPageBodyState {
         await _mcpSelectAndVerifyTab(workspaceId, tabId);
         return tabId;
       case 'open_file':
+        final line = arguments['line'];
+        if (line != null && (line is! int || line < 1 || line > 1000000000)) {
+          throw const _McpUiFailure('invalid_position');
+        }
         final path = await _mcpExistingWorkspacePath(
           workspace,
           arguments['relativePath'],
@@ -251,6 +255,26 @@ extension _AleraShellMcpUi on _AleraShellPageBodyState {
           forceNew: arguments['openMode'] == 'new',
         );
         await _mcpSelectAndVerifyTab(workspaceId, tab.id);
+        if (line is int) {
+          final navigated = await ref
+              .read(editorSessionRegistryProvider)
+              .revealAndWait(
+                tab.id,
+                WorkspaceEditorRevealTarget(
+                  line: line,
+                  column: 1,
+                  matchLength: 0,
+                ),
+              );
+          if (!navigated || !mounted) {
+            throw const _McpUiFailure('not_visible');
+          }
+          final active = ref.read(workbenchControllerProvider);
+          if (active.activeWorkspaceId != workspaceId ||
+              active.activeWorkspaceTab?.id != tab.id) {
+            throw const _McpUiFailure('not_visible');
+          }
+        }
         return tab.id;
       case 'reveal_file':
         final path = await _mcpExistingWorkspacePath(

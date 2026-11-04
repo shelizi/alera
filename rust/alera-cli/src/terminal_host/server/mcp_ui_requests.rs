@@ -435,6 +435,7 @@ fn public_ui_error_code(code: Option<&str>) -> &'static str {
         Some("invalid_path") => "invalid_path",
         Some("file_missing") => "file_missing",
         Some("tab_missing") => "tab_missing",
+        Some("invalid_position") => "invalid_position",
         Some("workspace_missing") => "workspace_missing",
         Some("git_compare_failed") => "git_compare_failed",
         Some("ui_not_ready") => "ui_not_ready",
@@ -493,7 +494,13 @@ fn validate_ui_arguments(action: &str, raw: Option<&Value>) -> HostResult<Value>
         .and_then(Value::as_object)
         .ok_or_else(|| HostError::format("UI command arguments must be an object."))?;
     let allowed: &[&str] = match action {
-        "open_file" => &["relativePath", "workspaceId", "projectId", "openMode"],
+        "open_file" => &[
+            "relativePath",
+            "workspaceId",
+            "projectId",
+            "openMode",
+            "line",
+        ],
         "reveal_file" => &["relativePath", "workspaceId", "projectId"],
         "focus_workspace" => &["workspaceId", "projectId"],
         "select_tab" => &["workspaceId", "projectId", "tabId"],
@@ -543,6 +550,13 @@ fn validate_ui_arguments(action: &str, raw: Option<&Value>) -> HostResult<Value>
             return Err(HostError::format("openMode must be reuse or new."));
         }
         validated.insert("openMode".into(), json!(mode));
+        if let Some(value) = args.get("line") {
+            let line = value
+                .as_u64()
+                .filter(|line| (1..=1_000_000_000).contains(line))
+                .ok_or_else(|| HostError::format("line must be a positive 1-based integer."))?;
+            validated.insert("line".into(), json!(line));
+        }
     }
     if matches!(action, "open_file" | "reveal_file") {
         let path = required_short(raw.unwrap(), "relativePath", 1024)?;
@@ -657,6 +671,31 @@ mod tests {
 
     #[test]
     fn validates_ui_command_paths_refs_and_types() {
+        for line in [1_u64, 42, 1_000_000_000] {
+            let command = validate_ui_arguments(
+                "open_file",
+                Some(&json!({"relativePath":"src/main.rs","line":line})),
+            )
+            .expect("valid 1-based line should be accepted");
+            assert_eq!(command["line"], line);
+        }
+        for invalid in [
+            json!(0),
+            json!(-1),
+            json!(1.2),
+            json!("42"),
+            json!(true),
+            json!(1_000_000_001_u64),
+        ] {
+            assert!(
+                validate_ui_arguments(
+                    "open_file",
+                    Some(&json!({"relativePath":"src/main.rs","line":invalid}))
+                )
+                .is_err(),
+                "invalid line must be rejected: {invalid}"
+            );
+        }
         for (action, args) in [
             (
                 "focus_workspace",

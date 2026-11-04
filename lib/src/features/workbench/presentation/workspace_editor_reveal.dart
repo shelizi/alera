@@ -137,8 +137,11 @@ extension _WorkspaceEditorReveal on _WorkspaceEditorSurfaceState {
 
   void _reveal(WorkspaceEditorRevealTarget target) {
     if (!mounted || _controller.lineCount == 0) {
+      _editorSessions.completeReveal(widget.tab.id, target, applied: false);
       return;
     }
+    final revealSequence = ++_revealSequence;
+    final tabId = widget.tab.id;
     final lineIndex = (target.line - 1)
         .clamp(0, _controller.lineCount - 1)
         .toInt();
@@ -159,16 +162,46 @@ extension _WorkspaceEditorReveal on _WorkspaceEditorSurfaceState {
       baseOffset: startOffset,
       extentOffset: endOffset,
     );
+    _scheduleEditorRevealScroll(
+      target,
+      lineIndex,
+      tabId: tabId,
+      sequence: revealSequence,
+    );
+  }
+
+  void _scheduleEditorRevealScroll(
+    WorkspaceEditorRevealTarget target,
+    int lineIndex, {
+    required String tabId,
+    required int sequence,
+    int attempt = 0,
+  }) {
     SchedulerBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) {
+      if (!mounted || widget.tab.id != tabId || sequence != _revealSequence) {
+        _editorSessions.completeReveal(tabId, target, applied: false);
         return;
       }
       try {
         _controller.scrollToLine(lineIndex);
+        _focusNode.requestFocus();
+        _editorSessions.completeReveal(tabId, target, applied: true);
       } on StateError {
-        _document.pendingReveal = target;
+        if (attempt >= _workspaceEditorScrollRestoreAttempts) {
+          _editorSessions.completeReveal(tabId, target, applied: false);
+          return;
+        }
+        // A newly mounted/native-loaded editor can need another layout frame
+        // before the viewport accepts scrollToLine. Never acknowledge early.
+        _scheduleEditorRevealScroll(
+          target,
+          lineIndex,
+          tabId: tabId,
+          sequence: sequence,
+          attempt: attempt + 1,
+        );
+        SchedulerBinding.instance.scheduleFrame();
       }
-      _focusNode.requestFocus();
     });
   }
 }

@@ -190,7 +190,7 @@ async fn cross_project_open_file_and_focus_are_ui_only_and_archived_targets_fail
         "action":"open_file",
         "arguments":{
             "relativePath":"lib/main.dart","workspaceId":"workspace-b",
-            "projectId":"project-b","openMode":"new"
+            "projectId":"project-b","openMode":"new","line":35
         }
     });
     actor
@@ -200,6 +200,7 @@ async fn cross_project_open_file_and_focus_are_ui_only_and_archived_targets_fail
     let event = app_events.try_recv().unwrap().as_json().unwrap();
     assert_eq!(event["payload"]["workspaceId"], "workspace-b");
     assert_eq!(event["payload"]["arguments"]["openMode"], "new");
+    assert_eq!(event["payload"]["arguments"]["line"], 35);
     assert_eq!(actor.sessions.len(), 1);
     request["action"] = json!("focus_workspace");
     request["arguments"] = json!({"workspaceId":"workspace-b","projectId":"project-b"});
