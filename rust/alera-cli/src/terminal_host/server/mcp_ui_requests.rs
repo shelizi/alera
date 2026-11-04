@@ -436,6 +436,9 @@ fn public_ui_error_code(code: Option<&str>) -> &'static str {
         Some("file_missing") => "file_missing",
         Some("tab_missing") => "tab_missing",
         Some("invalid_position") => "invalid_position",
+        Some("invalid_editor") => "invalid_editor",
+        Some("external_editor_unavailable") => "external_editor_unavailable",
+        Some("external_editor_failed") => "external_editor_failed",
         Some("workspace_missing") => "workspace_missing",
         Some("git_compare_failed") => "git_compare_failed",
         Some("ui_not_ready") => "ui_not_ready",
@@ -500,6 +503,8 @@ fn validate_ui_arguments(action: &str, raw: Option<&Value>) -> HostResult<Value>
             "projectId",
             "openMode",
             "line",
+            "column",
+            "editor",
         ],
         "reveal_file" => &["relativePath", "workspaceId", "projectId"],
         "focus_workspace" => &["workspaceId", "projectId"],
@@ -544,18 +549,36 @@ fn validate_ui_arguments(action: &str, raw: Option<&Value>) -> HostResult<Value>
         );
     }
     if action == "open_file" {
+        let editor =
+            optional_short(raw.unwrap(), "editor", 16)?.unwrap_or_else(|| "alera".to_owned());
+        if !matches!(editor.as_str(), "alera" | "zed" | "vscode") {
+            return Err(HostError::format("editor must be alera, zed or vscode."));
+        }
+        validated.insert("editor".into(), json!(editor));
         let mode =
             optional_short(raw.unwrap(), "openMode", 16)?.unwrap_or_else(|| "reuse".to_owned());
         if !matches!(mode.as_str(), "reuse" | "new") {
             return Err(HostError::format("openMode must be reuse or new."));
         }
+        if editor != "alera" && mode != "reuse" {
+            return Err(HostError::format(
+                "openMode new is only supported for Alera's built-in editor.",
+            ));
+        }
         validated.insert("openMode".into(), json!(mode));
-        if let Some(value) = args.get("line") {
-            let line = value
-                .as_u64()
-                .filter(|line| (1..=1_000_000_000).contains(line))
-                .ok_or_else(|| HostError::format("line must be a positive 1-based integer."))?;
-            validated.insert("line".into(), json!(line));
+        for key in ["line", "column"] {
+            if let Some(value) = args.get(key) {
+                let position = value
+                    .as_u64()
+                    .filter(|position| (1..=1_000_000_000).contains(position))
+                    .ok_or_else(|| {
+                        HostError::format(format!("{key} must be a positive 1-based integer."))
+                    })?;
+                validated.insert(key.into(), json!(position));
+            }
+        }
+        if validated.contains_key("column") && !validated.contains_key("line") {
+            return Err(HostError::format("column requires a 1-based line."));
         }
     }
     if matches!(action, "open_file" | "reveal_file") {
@@ -671,6 +694,68 @@ mod tests {
 
     #[test]
     fn validates_ui_command_paths_refs_and_types() {
+        for editor in ["alera", "zed", "vscode"] {
+            let valid = validate_ui_arguments(
+                "open_file",
+                Some(
+                    &json!({"relativePath":"lib/main.dart","editor":editor,"line":120,"column":8}),
+                ),
+            )
+            .expect("supported external editor and position should be valid");
+            assert_eq!(valid["editor"], editor);
+            assert_eq!(valid["column"], 8);
+        }
+        for invalid in [
+            json!("cursor"),
+            json!("shell"),
+            json!("Zed"),
+            json!(""),
+            json!(true),
+            json!(null),
+            json!("/tmp/cmd"),
+        ] {
+            assert!(
+                validate_ui_arguments(
+                    "open_file",
+                    Some(&json!({"relativePath":"main.dart","editor":invalid}))
+                )
+                .is_err(),
+                "unknown/editor executable input must be rejected: {invalid}"
+            );
+        }
+        for invalid in [
+            json!(0),
+            json!(-2),
+            json!(1.5),
+            json!("8"),
+            json!(true),
+            json!(1_000_000_001_u64),
+        ] {
+            assert!(
+                validate_ui_arguments(
+                    "open_file",
+                    Some(&json!({"relativePath":"main.dart","line":120,"column":invalid}))
+                )
+                .is_err(),
+                "column must be a bounded positive integer: {invalid}"
+            );
+        }
+        assert!(
+            validate_ui_arguments(
+                "open_file",
+                Some(&json!({"relativePath":"main.dart","column":8}))
+            )
+            .is_err(),
+            "column without line is ambiguous"
+        );
+        assert!(
+            validate_ui_arguments(
+                "open_file",
+                Some(&json!({"relativePath":"main.dart","editor":"zed","openMode":"new"}))
+            )
+            .is_err(),
+            "internal-only new Tab mode must not be silently applied to external editor"
+        );
         for line in [1_u64, 42, 1_000_000_000] {
             let command = validate_ui_arguments(
                 "open_file",

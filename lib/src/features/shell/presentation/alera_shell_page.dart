@@ -28,6 +28,8 @@ import 'package:alera/src/design_system/feedback/alera_toast.dart';
 import 'package:alera/src/design_system/icons/alera_icons.dart';
 import 'package:alera/src/features/app_menu/presentation/alera_app_menu_scope.dart';
 import 'package:alera/src/features/external_editor/domain/external_editor_launcher.dart';
+import 'package:alera/src/features/external_editor/application/external_editor_providers.dart';
+import 'package:alera/src/features/external_editor/domain/external_editor_launch_result.dart';
 import 'package:alera/src/features/keyboard/presentation/keyboard_shortcuts_scope.dart';
 import 'package:alera/src/features/projects/domain/project.dart';
 import 'package:alera/src/features/pull_requests/application/workspace_pull_request_monitor_providers.dart';
@@ -71,6 +73,20 @@ part 'workspace_branch_status_bar_control.dart';
 part 'workspace_branch_tree_projection.dart';
 part 'alera_shell_page_body_content.dart';
 part 'alera_shell_page_mcp_ui.dart';
+part 'alera_shell_page_mcp_path.dart';
+
+/// The production resolver canonicalizes real files and enforces Workspace
+/// boundaries. Injection allows Shell tests to verify UI/Host behavior without
+/// using async filesystem I/O inside Flutter's fake-async widget clock.
+typedef McpWorkspaceFilePathResolver = Future<String> Function(
+  Workspace workspace,
+  Object? rawPath,
+);
+
+final mcpWorkspaceFilePathResolverProvider =
+    Provider<McpWorkspaceFilePathResolver>(
+      (ref) => mcpResolveExistingWorkspacePath,
+    );
 
 class const AleraShellPage({super.key}) extends ConsumerWidget {
   @override

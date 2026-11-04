@@ -183,6 +183,13 @@ extension _AleraShellMcpUi on _AleraShellPageBodyState {
       throw const _McpUiFailure('workspace_missing');
     }
     final project = matchingProject.first;
+    // Explicit external opens do not change Alera's selected Workspace or Tab.
+    if (action == 'open_file' &&
+        arguments['editor'] != null &&
+        arguments['editor'] != 'alera') {
+      await _mcpOpenFileExternally(workspace, arguments);
+      return null;
+    }
     if (before.activeWorkspaceId != workspaceId) {
       await controller.selectWorkspaceWithoutTerminal(
         project: project,
@@ -241,10 +248,7 @@ extension _AleraShellMcpUi on _AleraShellPageBodyState {
         await _mcpSelectAndVerifyTab(workspaceId, tabId);
         return tabId;
       case 'open_file':
-        final line = arguments['line'];
-        if (line != null && (line is! int || line < 1 || line > 1000000000)) {
-          throw const _McpUiFailure('invalid_position');
-        }
+        final position = _mcpFilePosition(arguments);
         final path = await _mcpExistingWorkspacePath(
           workspace,
           arguments['relativePath'],
@@ -255,14 +259,14 @@ extension _AleraShellMcpUi on _AleraShellPageBodyState {
           forceNew: arguments['openMode'] == 'new',
         );
         await _mcpSelectAndVerifyTab(workspaceId, tab.id);
-        if (line is int) {
+        if (position.line != null) {
           final navigated = await ref
               .read(editorSessionRegistryProvider)
               .revealAndWait(
                 tab.id,
                 WorkspaceEditorRevealTarget(
-                  line: line,
-                  column: 1,
+                  line: position.line!,
+                  column: position.column ?? 1,
                   matchLength: 0,
                 ),
               );
@@ -369,31 +373,60 @@ extension _AleraShellMcpUi on _AleraShellPageBodyState {
     }
   }
 
+  ({int? line, int? column}) _mcpFilePosition(Map<String, Object?> arguments) {
+    final line = arguments['line'];
+    final column = arguments['column'];
+    if ((line != null && (line is! int || line < 1 || line > 1000000000)) ||
+        (column != null &&
+            (column is! int || column < 1 || column > 1000000000)) ||
+        (column != null && line == null)) {
+      throw const _McpUiFailure('invalid_position');
+    }
+    return (line: line as int?, column: column as int?);
+  }
+
+  Future<void> _mcpOpenFileExternally(
+    Workspace workspace,
+    Map<String, Object?> arguments,
+  ) async {
+    final kind = switch (arguments['editor']) {
+      'zed' => ExternalEditorKind.zed,
+      'vscode' => ExternalEditorKind.vscode,
+      _ => throw const _McpUiFailure('invalid_editor'),
+    };
+    if (arguments['openMode'] != null && arguments['openMode'] != 'reuse') {
+      throw const _McpUiFailure('invalid_editor');
+    }
+    final position = _mcpFilePosition(arguments);
+    final path = await _mcpExistingWorkspacePath(
+      workspace,
+      arguments['relativePath'],
+    );
+    final launcher = ref.read(externalEditorLauncherForProvider(kind));
+    if (!await launcher.isInstalled()) {
+      throw const _McpUiFailure('external_editor_unavailable');
+    }
+    final result = await launcher.openFile(
+      ExternalEditorOpenRequest(
+        workspacePath: workspace.path,
+        filePath: p.joinAll(<String>[workspace.path, ...path.split('/')]),
+        line: position.line,
+        column: position.column,
+      ),
+    );
+    if (!result.ok) {
+      throw _McpUiFailure(
+        result.failureKind == ExternalEditorLaunchFailureKind.unavailable
+            ? 'external_editor_unavailable'
+            : 'external_editor_failed',
+      );
+    }
+  }
+
   Future<String> _mcpExistingWorkspacePath(
     Workspace workspace,
     Object? rawPath,
-  ) async {
-    final candidate = rawPath is String
-        ? normalizeWorkspaceRelativePath(rawPath)
-        : null;
-    if (candidate == null ||
-        candidate.startsWith('/') ||
-        candidate.contains(':')) {
-      throw const _McpUiFailure('invalid_path');
-    }
-    final file = File(
-      p.joinAll(<String>[workspace.path, ...candidate.split('/')]),
-    );
-    if (!await file.exists()) {
-      throw const _McpUiFailure('file_missing');
-    }
-    final root = await Directory(workspace.path).resolveSymbolicLinks();
-    final resolved = await file.resolveSymbolicLinks();
-    if (!p.isWithin(root, resolved)) {
-      throw const _McpUiFailure('invalid_path');
-    }
-    return candidate;
-  }
+  ) => ref.read(mcpWorkspaceFilePathResolverProvider)(workspace, rawPath);
 
   Future<WorkspaceSourceControlScope> _mcpGitScope(
     Project project,

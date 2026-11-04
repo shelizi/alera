@@ -253,13 +253,15 @@ fn tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "alera.open_file",
-            "description": "Open an existing editor file in the caller's or a target project/workspace; optional 1-based line scrolls the Editor caret to that line after the file has loaded. Open mode reuse is default; new creates an independent permanent Tab. Requires Host authorization and visible App acknowledgment.",
+            "description": "Open an existing file in the caller's or a target project/workspace. editor defaults to Alera's built-in editor; zed/vscode launch explicitly in the installed external editor instead, without creating an Alera Tab. Optional 1-based line/column select the caret position. openMode reuse/new applies only to the built-in editor. Requires Host authorization and App acknowledgment.",
             "inputSchema": {"type": "object", "properties": {
                 "relativePath": {"type": "string", "minLength": 1},
                 "workspaceId": {"type": "string"},
                 "projectId": {"type": "string"},
                 "openMode": {"type": "string", "enum": ["reuse", "new"]},
+                "editor": {"type": "string", "enum": ["alera", "zed", "vscode"], "default": "alera", "description": "Built-in Alera editor (default), Zed, or Visual Studio Code. External editors must be installed; no implicit fallback or executable override."},
                 "line": {"type": "integer", "minimum": 1, "maximum": 1000000000, "description": "Optional 1-based destination line. Out-of-file-range lines clamp to the last line."},
+                "column": {"type": "integer", "minimum": 1, "maximum": 1000000000, "description": "Optional 1-based destination column; requires line."},
                 "windowId": {"type": "string"}
             }, "required": ["relativePath"], "additionalProperties": false},
             "annotations": {"readOnlyHint": false}
@@ -921,6 +923,8 @@ fn check_keys(tool: &str, args: &Value) -> Result<(), String> {
             "projectId",
             "openMode",
             "line",
+            "column",
+            "editor",
             "windowId",
         ],
         "alera.reveal_file" => &["relativePath", "workspaceId", "projectId", "windowId"],
@@ -1379,6 +1383,16 @@ mod tests {
 
     #[test]
     fn tool_arguments_fail_closed_on_unknown_or_unbounded_values() {
+        assert!(
+            check_keys(
+                "alera.open_file",
+                &json!({
+                    "relativePath":"lib/main.dart", "line":120, "column":8, "editor":"vscode"
+                })
+            )
+            .is_ok(),
+            "MCP tool must accept supported editor and caret column arguments"
+        );
         assert!(check_keys(
             "alera.open_file",
             &json!({"relativePath":"src/main.rs","line":42,"workspaceId":"other","projectId":"project-b"})

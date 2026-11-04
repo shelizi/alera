@@ -190,7 +190,7 @@ async fn cross_project_open_file_and_focus_are_ui_only_and_archived_targets_fail
         "action":"open_file",
         "arguments":{
             "relativePath":"lib/main.dart","workspaceId":"workspace-b",
-            "projectId":"project-b","openMode":"new","line":35
+            "projectId":"project-b","openMode":"new","line":35,"column":8
         }
     });
     actor
@@ -201,6 +201,48 @@ async fn cross_project_open_file_and_focus_are_ui_only_and_archived_targets_fail
     assert_eq!(event["payload"]["workspaceId"], "workspace-b");
     assert_eq!(event["payload"]["arguments"]["openMode"], "new");
     assert_eq!(event["payload"]["arguments"]["line"], 35);
+    assert_eq!(event["payload"]["arguments"]["column"], 8);
+    assert_eq!(event["payload"]["arguments"]["editor"], "alera");
+    // External launches are UI operations with no internal Tab ID. Only the
+    // registered App can acknowledge successful process startup.
+    request["arguments"] = json!({
+        "relativePath":"lib/main.dart","workspaceId":"workspace-b",
+        "projectId":"project-b","editor":"vscode","line":47,"column":9
+    });
+    let accepted = actor
+        .handle_mcp_ui_request(2, "uiControl.request", &request)
+        .await
+        .unwrap();
+    let external_event = app_events.try_recv().unwrap().as_json().unwrap();
+    assert_eq!(external_event["payload"]["arguments"]["editor"], "vscode");
+    assert_eq!(external_event["payload"]["arguments"]["line"], 47);
+    assert_eq!(external_event["payload"]["arguments"]["column"], 9);
+    let request_id = accepted["requestId"].as_str().unwrap();
+    actor
+        .handle_mcp_ui_request(
+            1,
+            "uiControl.complete",
+            &json!({"requestId":request_id,"applied":true}),
+        )
+        .await
+        .unwrap();
+    let status = actor
+        .handle_mcp_ui_request(
+            2,
+            "uiControl.status",
+            &json!({
+                "sessionId":"source-agent","workspaceId":"workspace",
+                "capability":token,"requestId":request_id
+            }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(status["applied"], true);
+    assert!(
+        status["tabId"].is_null(),
+        "external process launch has no Alera Tab"
+    );
+    assert_eq!(status["workspaceId"], "workspace-b");
     assert_eq!(actor.sessions.len(), 1);
     request["action"] = json!("focus_workspace");
     request["arguments"] = json!({"workspaceId":"workspace-b","projectId":"project-b"});

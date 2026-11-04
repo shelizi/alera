@@ -17,13 +17,29 @@ The following MCP tools support project-scoped navigation:
 | `alera.list_tabs` | optional `workspaceId`, `projectId`, `limit` | Read only metadata for current or explicitly selected Workspace |
 | `alera.focus_workspace` | required `workspaceId`, optional `projectId`, `windowId` | Select existing Workspace without creating an initial Terminal |
 | `alera.select_tab` | required `workspaceId`, `tabId`; optional `projectId`, `windowId` | Select an existing Tab after target validation |
-| `alera.open_file` | required `relativePath`; optional `workspaceId`, `projectId`, `openMode`, `line`, `windowId` | Open and select file-backed Editor Tab; optionally jump to a line |
+| `alera.open_file` | required `relativePath`; optional `workspaceId`, `projectId`, `editor`, `openMode`, `line`, `column`, `windowId` | Open in Alera or a supported installed external Editor, optionally at line and column |
 | `alera.reveal_file` | required `relativePath`; optional `workspaceId`, `projectId`, `windowId` | Reveal target file in Explorer without opening it |
 
+`editor` defaults to `alera` **regardless of the App's global default
+code-open setting**. The only other allowed values are `zed` and `vscode`,
+matching Alera's existing external editor registry. Explicit external opens
+reuse the existing configured launcher/executable (including user-configured
+paths), but the Agent cannot supply an arbitrary command or executable.
+The requested editor must be installed; failures do **not** silently fall
+back to the internal editor. An external launch does not create a Tab or
+change Alera's active Workspace, and its successful receipt confirms process
+startup, **not** external window focus or exact caret placement.
+
 `openMode`: `reuse` is the default. `new` creates an independent permanent
-Editor Tab, even if the target file is already open.
+**internal** Editor Tab, even if the target file is already open. `new` is
+rejected for an external editor, which follows its own window policy.
 
 `line` is an optional **1-based** integer (1 through 1,000,000,000).
+`column` is an optional **1-based** integer with the same bounds and requires
+`line`. With an internal editor, the caret column is clamped to the end of
+the selected line; with Zed and VS Code, Alera forwards both coordinates to
+the existing editor-specific CLI argument builder (`file:line:column` or
+`--goto file:line:column` respectively).
 When present, Alera moves the caret to the requested line and scrolls it into
 view. If it exceeds the loaded document's line count, Alera clamps to the last
 line (matching the built-in Editor Go to Line behavior). Without `line`,
@@ -47,7 +63,25 @@ Example:
     "workspaceId": "workspace-b",
     "relativePath": "lib/main.dart",
     "openMode": "new",
-    "line": 35
+    "line": 35,
+    "column": 8,
+    "editor": "alera"
+  }
+}
+```
+
+External-editor example:
+
+```json
+{
+  "name": "alera.open_file",
+  "arguments": {
+    "projectId": "project-b",
+    "workspaceId": "workspace-b",
+    "relativePath": "lib/main.dart",
+    "editor": "vscode",
+    "line": 120,
+    "column": 8
   }
 }
 ```
@@ -68,7 +102,12 @@ Example:
   can acknowledge the command, and a `select_tab` acknowledgment must match
   the requested Tab ID.
 - File paths remain workspace-relative and must exist within the resolved
-  target Workspace, including symlink boundary checks.
+  target Workspace, including symlink boundary checks. External editor
+  launches repeat canonical path containment checks in the existing launcher.
+- External execution is limited to supported editor kinds through Alera's
+  preconfigured launcher. It never accepts an arbitrary executable or adds
+  a target Agent/PTY capability. If no editor is installed or process startup
+  fails, MCP returns an explicit error without switching to Alera.
 - An explicit `windowId` is required when multiple Workbench windows are
   registered; no arbitrary window is selected silently.
 
