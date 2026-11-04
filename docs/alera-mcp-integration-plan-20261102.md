@@ -1,5 +1,47 @@
 # Alera MCP Integration — fixed implementation and acceptance plan
 
+**2026-11-04 latest production readiness / merge gate (native interactive Claude):**
+A new explicit-only acceptance at
+`tool/testing/mcp_managed_claude_interactive_autonomy_e2e.py` launched a real
+authenticated **interactive Claude TUI** directly in a disposable
+Host-owned Windows ConPTY, with private per-invocation `--settings` calling
+Alera's **real Rust `agent-hook-relay`** and the private Host listener.
+The real first `UserPromptSubmit` marked the Agent busy, a separate genuine
+Host-minted Agent PTY queued an MCP message, and the model's first native
+`Stop` caused Host paste/deferred Enter into the running Claude TUI.
+Claude **autonomously answered the new message** with a nonce-derived
+response not supplied by the first prompt or injected text, and emitted
+another native `UserPromptSubmit` and `Stop`. The report keeps only
+fixed assertions and Hook event names: **7/7 PASS, twice, exit 0; private
+Host shutdown and temporary filesystem removal both confirmed**.
+No Python adapter generated the second model response, no credentials were
+copied, no global Claude settings were mutated, and no trust/permission
+bypass was used. The first run completed 7 checks but initially failed
+strict Windows cleanup; after waiting for the real ConPTY child release,
+both consecutive complete reruns passed.
+
+Separately, the bounded single-turn noninteractive real Claude
+Hook→Host→ConPTY test at
+`tool/testing/mcp_real_claude_native_host_delivery_e2e.py` passed
+**7/7 twice**, with the receiver intentionally inert Python. Rust MCP
+authorization/transport regression **25/25 PASS**. GitHub's already
+authorized Desktop Builds (Windows/macOS/Linux 3/3), native Unix PTY
+(2/2) and Windows PTY (1/1) all passed at `239062cdf`, but those
+workflows do **not** run the dedicated native MCP macOS/Linux smoke.
+
+**No merge / no release yet:** this proves autonomous interactive Claude
+inside a Host-owned PTY, but **not** an `agentProfile.launch` production
+Managed Profile automatically achieving the same lifecycle, nor an
+equivalent interactive **Codex** real-model second-turn acceptance.
+Managed MCP launch injection remains explicitly opt-in/default OFF.
+The protected `.github/workflows/mcp-cross-platform.yml` is still
+uncommitted and the dedicated native macOS/Linux MCP E2E is unexecuted.
+The existing local `main` also has preexisting unrelated dirty files
+which must never be reset/overwritten by an integration attempt.
+Cross-workspace grants remain fail-closed; a visible second real
+Flutter Settings pane spontaneous repaint is still a separate acceptance
+item. No unsupported claim of a production-ready complete rollout.
+
 **Date:** 2026-11-02
 
 **Owner branch:** `feat/alera-mcp-control-20261102`
