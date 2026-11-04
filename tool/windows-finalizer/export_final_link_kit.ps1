@@ -359,6 +359,14 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Could not read the source Git commit.' }
     $sourceExeHash = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $releaseDir 'Alera.exe')).Hash
 
+    Write-Step 'Writing versioned Final-Link changelog'
+    $changelogGenerator = Join-Path $scriptDir 'generate_final_link_changelog.ps1'
+    Invoke-Checked -FilePath 'powershell.exe' -Arguments @(
+        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $changelogGenerator,
+        '-RepoRoot', $repoRoot, '-OutputDirectory', $OutputDirectory,
+        '-Version', $version, '-SourceCommit', $sourceCommit
+    )
+
     $includeDirectories = @('src', 'src\flutter_wrapper', 'src\flutter_wrapper\include', 'include\flutter_engine', 'include\flutter_cpp') + $pluginIncludeRoots
     $projectIncludes = ($includeDirectories | ForEach-Object { '$(ProjectDir)' + ($_ -replace '/', '\') }) -join ';'
     $projectIncludes += ';%(AdditionalIncludeDirectories)'
@@ -458,6 +466,7 @@ try {
         architecture = 'x64'
         version = $version
         sourceCommit = $sourceCommit
+        changelogFile = 'CHANGELOG.md'
         sourceRunnerSha256 = $sourceExeHash
         sourcePlatformToolset = $platformToolset
         targetPlatformToolset = $TargetPlatformToolset
