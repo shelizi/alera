@@ -38,6 +38,16 @@ def private_host_start(runtime: Path, private_home: Path) -> None:
     # for this isolated Host and its child PTYs; never touch user configs.
     env["USERPROFILE"] = str(private_home)
     env["HOME"] = str(private_home)
+    # Provider-specific home variables from a developer's normal shell can
+    # otherwise bypass this private profile and make Host startup reconcile
+    # a real user's hooks even though the test changes no production settings.
+    for key in (
+        "CLAUDE_CONFIG_DIR", "CODEX_HOME", "COPILOT_HOME", "GROK_HOME",
+        "OPENCODE_CONFIG_DIR", "PI_CODING_AGENT_DIR", "CCS_HOME",
+        "ALERA_ACCOUNT_CLAUDE_CONFIG_DIR", "ALERA_ACCOUNT_CODEX_HOME",
+        "ALERA_CLAUDE_CONFIG_DIR", "ALERA_CODEX_HOME",
+    ):
+        env.pop(key, None)
     p = subprocess.Popen(
         [str(CLI), "runtime", "--runtime-dir", str(runtime), "--json", "start"],
         env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
