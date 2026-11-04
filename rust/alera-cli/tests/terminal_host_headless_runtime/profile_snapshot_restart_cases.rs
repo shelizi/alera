@@ -3,10 +3,13 @@ use std::time::{Duration, Instant};
 use serde_json::json;
 
 use super::startup_command_cases::{wait_for_file, write_recorder};
-use super::{connect, read_response, send, spawn_host, workspace_payload};
+use super::{connect, read_response, send, spawn_host_with_restarted_pty, workspace_payload};
 
 #[test]
 fn profile_snapshot_restores_after_the_profile_is_edited_and_deleted() {
+    let _restart_lease = super::RESTART_TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let dir = tempfile::tempdir().unwrap();
     let marker = dir.path().join("profile-restarts.txt");
     let recorder = write_recorder(
@@ -15,7 +18,7 @@ fn profile_snapshot_restores_after_the_profile_is_edited_and_deleted() {
         &format!("printf X >> {}; sleep 30", marker.display()),
     );
     let token = "profile-snapshot-restart-token";
-    let (guard, port) = spawn_host(dir.path(), token);
+    let (guard, port) = spawn_host_with_restarted_pty(dir.path(), token);
     let (mut writer, mut reader) = connect(port, token);
 
     send(
@@ -135,9 +138,12 @@ fn profile_snapshot_restores_after_the_profile_is_edited_and_deleted() {
             .unwrap();
     });
 
-    let (_restarted_guard, restarted_port) = spawn_host(dir.path(), token);
+    let (_restarted_guard, restarted_port) = spawn_host_with_restarted_pty(dir.path(), token);
     let (_restarted_writer, _restarted_reader) = connect(restarted_port, token);
-    let deadline = Instant::now() + Duration::from_secs(10);
+    // Control-file publication precedes asynchronous tab reconciliation.
+    // Keep the exact snapshot assertion; allow a loaded Linux runner time to
+    // restore and execute the new generation after replacing the Host.
+    let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         let contents = std::fs::read_to_string(&marker).unwrap_or_default();
         if contents == "XX" {

@@ -86,6 +86,9 @@ Future<void> _bootstrap(List<String> args) async {
     // The Win32 runner already has a usable HWND and temporary Alera title.
     // Defer plugin window setup until after the first visible Flutter frame.
     AleraPerformanceTrace.recordFirstFrame();
+    // The lightweight first-paint preview owns no providers; the content
+    // app installs its ProviderScope during deferred initialization.
+    // ignore: missing_provider_scope
     runApp(DetachedTabStartupApp(title: client.descriptor.tab.title));
     WidgetsBinding.instance.addPostFrameCallback((_) {
       AleraPerformanceTrace.mark('detached_preview_first_frame');
@@ -189,6 +192,8 @@ Future<void> _finishDetachedTabInitialization(
     // task. This only covers failures after a fully successful bootstrap
     // (for example setPreventClose or building the actual app).
     await childDatabase?.close();
+    // Failed launch previews similarly do not access Riverpod providers.
+    // ignore: missing_provider_scope
     runApp(
       DetachedTabStartupApp(title: client.descriptor.tab.title, failed: true),
     );
@@ -249,6 +254,8 @@ Future<void> _startApp({bool sharedEngineTabs = false}) async {
       ),
     );
   } else {
+    // The custom appScope function wraps AleraApp with ProviderScope.
+    // ignore: missing_provider_scope
     runApp(appScope(const AleraApp()));
   }
   AleraPerformanceTrace.mark('run_app_called');

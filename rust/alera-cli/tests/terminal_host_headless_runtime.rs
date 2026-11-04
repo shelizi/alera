@@ -21,8 +21,15 @@ mod profile_snapshot_restart_cases;
 mod startup_command_cases;
 #[path = "terminal_host_headless_runtime/startup_reconciliation_case.rs"]
 mod startup_reconciliation_case;
+#[path = "terminal_host_headless_runtime/worker_persistence_cases.rs"]
+mod worker_persistence_cases;
 
 const PROTOCOL_VERSION: i64 = 4;
+
+// Restart cases exercise crash recovery through real Host child processes.
+// Give them exclusive admission so parallel test scheduling cannot overwhelm
+// reconciliation under CI's shared CPU quota.
+static RESTART_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 struct HostGuard(Child);
 
@@ -73,6 +80,22 @@ fn connect(port: u16, token: &str) -> (TcpStream, BufReader<TcpStream>) {
 }
 
 fn spawn_host(runtime_dir: &std::path::Path, token: &str) -> (HostGuard, u16) {
+    spawn_host_with_worker_mode(runtime_dir, token, true)
+}
+
+/// A Host-owned PTY is deliberately replaced when its Host exits. Use this
+/// mode only for cases asserting PTY-instance replay on restart; the default
+/// independent Worker survives Host restarts and must NOT replay commands.
+#[cfg(unix)]
+fn spawn_host_with_restarted_pty(runtime_dir: &std::path::Path, token: &str) -> (HostGuard, u16) {
+    spawn_host_with_worker_mode(runtime_dir, token, false)
+}
+
+fn spawn_host_with_worker_mode(
+    runtime_dir: &std::path::Path,
+    token: &str,
+    detached_worker: bool,
+) -> (HostGuard, u16) {
     let control_path = runtime_dir.join("runtime-host.json");
     let test_home = runtime_dir.join("test-home");
     std::fs::create_dir_all(&test_home).unwrap();
@@ -92,6 +115,10 @@ fn spawn_host(runtime_dir: &std::path::Path, token: &str) -> (HostGuard, u16) {
         ])
         .env("HOME", test_home)
         .env("SHELL", "/bin/sh")
+        .env(
+            "ALERA_TERMINAL_WORKER_PROCESS",
+            if detached_worker { "1" } else { "0" },
+        )
         .env_remove("CLAUDE_CONFIG_DIR")
         .env_remove("CODEX_HOME")
         .env_remove("COPILOT_HOME")

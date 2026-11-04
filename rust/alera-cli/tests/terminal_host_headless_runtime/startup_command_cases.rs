@@ -7,7 +7,9 @@ use std::time::{Duration, Instant};
 
 use serde_json::json;
 
-use super::{connect, read_response, send, spawn_host, workspace_payload};
+use super::{
+    connect, read_response, send, spawn_host, spawn_host_with_restarted_pty, workspace_payload,
+};
 
 #[test]
 #[cfg(unix)]
@@ -199,6 +201,9 @@ fn amp_receives_its_initial_prompt_on_standard_input() {
 #[test]
 #[cfg(unix)]
 fn orchestration_fx_rearms_its_bootstrap_once_per_restarted_pty() {
+    let _restart_lease = super::RESTART_TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let dir = tempfile::tempdir().unwrap();
     let marker = dir.path().join("fx-bootstrap.txt");
     let ready = dir.path().join("fx-ready.txt");
@@ -212,7 +217,7 @@ fn orchestration_fx_rearms_its_bootstrap_once_per_restarted_pty() {
         ),
     );
     let token = "fx-bootstrap-restart-token";
-    let (guard, port) = spawn_host(dir.path(), token);
+    let (guard, port) = spawn_host_with_restarted_pty(dir.path(), token);
     let (mut writer, mut reader) = connect(port, token);
 
     send(
@@ -345,7 +350,7 @@ fn orchestration_fx_rearms_its_bootstrap_once_per_restarted_pty() {
         );
     });
 
-    let (_restarted_guard, restarted_port) = spawn_host(dir.path(), token);
+    let (_restarted_guard, restarted_port) = spawn_host_with_restarted_pty(dir.path(), token);
     let (_restarted_writer, _restarted_reader) = connect(restarted_port, token);
     wait_for_file(&ready);
     report_fx_idle(dir.path(), &session_id);
@@ -381,7 +386,7 @@ pub(super) fn write_recorder(
 
 #[cfg(unix)]
 pub(super) fn wait_for_file(path: &std::path::Path) -> String {
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         if let Ok(contents) = std::fs::read_to_string(path) {
             if !contents.is_empty() {
@@ -407,7 +412,7 @@ fn occurrence_count(path: &std::path::Path, needle: &str) -> usize {
 
 #[cfg(unix)]
 fn wait_for_occurrences(path: &std::path::Path, needle: &str, expected: usize) {
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         let actual = occurrence_count(path, needle);
         if actual >= expected {

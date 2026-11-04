@@ -38,6 +38,9 @@ Future<bool> remoteAiDictationSupported(Ref ref) async {
 }
 
 @Riverpod(keepAlive: true)
+// The long-lived service's lifecycle is bound to ref.onDispose; it is not a
+// serializable state value, which is intentional for this service provider.
+// ignore: unsupported_provider_value
 AiDictationService aiDictationService(Ref ref) {
   final service = AiDictationService(
     settings: () => ref.read(settingsControllerProvider).aiDictation,
