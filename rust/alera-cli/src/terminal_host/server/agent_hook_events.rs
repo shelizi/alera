@@ -243,4 +243,164 @@ mod tests {
             AgentPresenceState::Done,
         );
     }
+    #[tokio::test]
+    async fn real_http_hook_receiver_drives_scoped_host_presence_without_adapter() {
+        use std::time::Duration;
+        use tokio::sync::mpsc;
+
+        use crate::agent_status::start_hook_receiver;
+        use crate::terminal_host::server::ServerCommand;
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut actor = test_actor(
+            &dir,
+            HashMap::new(),
+            HashMap::from([(
+                "recipient".to_string(),
+                Session::driver_test_stub("recipient", 80, 24),
+            )]),
+        )
+        .await;
+        actor
+            .runtime_store
+            .set_metadata("settings.agents.agentStatusHooks", r#"{"claude":true}"#)
+            .await
+            .unwrap();
+
+        // Bind an actual ephemeral HTTP listener, not a synthetic status
+        // request. Only the disposable Host directory receives its token.
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let port = start_hook_receiver(dir.path(), tx).await.unwrap();
+        let endpoint_path = dir.path().join("agent-hooks").join(if cfg!(windows) {
+            "endpoint.cmd"
+        } else {
+            "endpoint.env"
+        });
+        let endpoint = std::fs::read_to_string(endpoint_path).unwrap();
+        let bearer = endpoint
+            .lines()
+            .find_map(|line| {
+                line.split_once("ALERA_AGENT_HOOK_TOKEN=")
+                    .map(|(_, value)| value.trim())
+            })
+            .filter(|value| !value.is_empty())
+            .unwrap()
+            .to_owned();
+        let client = reqwest::Client::new();
+        async fn post(
+            client: &reqwest::Client,
+            port: u16,
+            token: &str,
+            workspace: &str,
+            tab: &str,
+            event: &str,
+        ) -> u16 {
+            client
+                .post(format!("http://127.0.0.1:{port}/hook/claude"))
+                .header("X-Alera-Agent-Hook-Token", token)
+                .json(&json!({
+                    "terminalSessionId": "recipient",
+                    "workspaceId": workspace,
+                    "tabId": tab,
+                    "hookEventName": event,
+                    "payload": {
+                        "hook_event_name": event,
+                        "session_id": "disposable-claude-turn",
+                    },
+                }))
+                .send()
+                .await
+                .unwrap()
+                .status()
+                .as_u16()
+        }
+
+        assert_eq!(
+            post(
+                &client,
+                port,
+                "invalid-token",
+                "workspace",
+                "tab-recipient",
+                "Stop"
+            )
+            .await,
+            403,
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "invalid bearer must not reach Host actor"
+        );
+
+        // A genuine HTTP UserPromptSubmit event drives Working, while a
+        // forged target cannot force Done or prematurely trigger PTY delivery.
+        assert_eq!(
+            post(
+                &client,
+                port,
+                &bearer,
+                "workspace",
+                "tab-recipient",
+                "UserPromptSubmit"
+            )
+            .await,
+            204,
+        );
+        let ServerCommand::AgentHookEvent { event } =
+            tokio::time::timeout(Duration::from_secs(3), rx.recv())
+                .await
+                .unwrap()
+                .unwrap()
+        else {
+            panic!("expected a parsed native Hook event");
+        };
+        actor.handle_agent_hook_event(event).await;
+        assert_eq!(
+            actor.agent_presence.get("recipient").unwrap().state,
+            AgentPresenceState::Working,
+        );
+
+        for (workspace, tab) in [
+            ("foreign-workspace", "tab-recipient"),
+            ("workspace", "foreign-tab"),
+        ] {
+            assert_eq!(
+                post(&client, port, &bearer, workspace, tab, "Stop").await,
+                204
+            );
+            let ServerCommand::AgentHookEvent { event } =
+                tokio::time::timeout(Duration::from_secs(3), rx.recv())
+                    .await
+                    .unwrap()
+                    .unwrap()
+            else {
+                panic!("expected a native Hook event for Host validation");
+            };
+            actor.handle_agent_hook_event(event).await;
+            assert_eq!(
+                actor.agent_presence.get("recipient").unwrap().state,
+                AgentPresenceState::Working,
+                "cross-workspace or cross-tab Hook must not mark the Agent ready",
+            );
+        }
+
+        assert_eq!(
+            post(&client, port, &bearer, "workspace", "tab-recipient", "Stop").await,
+            204,
+        );
+        let ServerCommand::AgentHookEvent { event } =
+            tokio::time::timeout(Duration::from_secs(3), rx.recv())
+                .await
+                .unwrap()
+                .unwrap()
+        else {
+            panic!("expected native Stop event");
+        };
+        actor.handle_agent_hook_event(event).await;
+        assert_eq!(
+            actor.agent_presence.get("recipient").unwrap().state,
+            AgentPresenceState::Done,
+        );
+        assert!(actor.agent_presence.is_injection_ready("recipient"));
+    }
 }

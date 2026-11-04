@@ -153,6 +153,29 @@ are distinct validated legs of the lifecycle, not a claim that a running
 interactive Managed Profile automatically receives a queued message and
 produces a second model reply.
 
+**2026-11-04 native HTTP Hook -> real Host inbox -> Windows PTY (disposable):**
+Two new independent acceptance layers are green. In Rust, a genuine
+localhost HTTP receiver created by `start_hook_receiver` reads an
+ephemeral private token, rejects 403 for invalid bearer, forwards authorized
+`UserPromptSubmit` and `Stop` through its `ServerCommand` queue to the
+real `ServerActor`, rejects forged Workspace/Tab identities, and verifies
+`Working -> Done` / injection-ready (**1/1 PASS**, repeated). In Windows
+`tool/testing/mcp_native_hook_host_delivery_e2e.py`, a fully disposable
+Runtime Host owns two real Agent-scoped ConPTY sessions: a sender uses its
+Host-minted MCP bearer to queue a message while a genuine Hook HTTP
+`UserPromptSubmit` has marked the receiver Working; invalid bearer and
+foreign Workspace/Tab Stop attempts do not deliver; a legitimate HTTP Stop
+causes actual Host PTY paste and deferred Enter. A safe Python stdin
+consumer confirms receipt, and the durable status stays `delivered` with
+`completionConfirmed=false`. **5/5 PASS twice, exit 0, private Host stopped
+and disposable filesystem cleaned**. The test-only Hook payload disables
+unrelated automatic title-generation jobs so cleanup cannot be blocked by
+an LLM subprocess. All Hook metadata stays local; tests do not install
+or change real user agent settings. These prove the real Host network and
+message-delivery boundary, but the HTTP events are sent by the isolated
+test harness and the receiving PTY runs inert Python, **not** an interactive
+Claude/Codex model; autonomous recipient model reply remains unverified.
+
 **2026-11-04 GitHub fork desktop and PTY CI (existing workflows):**
 The feature branch at `a9d6d2566` passed GitHub Desktop Builds on
 Windows/macOS/Linux (3/3), native Terminal Worker on macOS/Linux (2/2),
