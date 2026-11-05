@@ -206,6 +206,10 @@ fn agent_short(payload: &Value, key: &str, max_bytes: usize) -> HostResult<Strin
 }
 
 #[cfg(test)]
+#[path = "mcp_agent_scope_tests.rs"]
+mod scope_tests;
+
+#[cfg(test)]
 mod tests {
     use std::collections::HashMap;
 
@@ -218,7 +222,7 @@ mod tests {
     };
     use crate::terminal_host::session::Session;
 
-    fn fixture() -> HashMap<String, Session> {
+    pub(super) fn fixture() -> HashMap<String, Session> {
         let mut foreign = Session::driver_test_stub("foreign", 80, 24);
         foreign.workspace_id = "other-workspace".into();
         HashMap::from([
@@ -234,7 +238,7 @@ mod tests {
         ])
     }
 
-    fn proof(token: &str) -> Value {
+    pub(super) fn proof(token: &str) -> Value {
         json!({"sessionId":"sender", "workspaceId":"workspace", "capability":token})
     }
 

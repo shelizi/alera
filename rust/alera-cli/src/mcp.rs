@@ -671,7 +671,7 @@ async fn execute_tool_connected(
                 .map_err(host_error)
         }
         "alera.search_agents" => {
-            let workspace = caller_workspace(client).await?;
+            let (_, workspace, _) = agent_identity(client).await?;
             let limit = limit(args)?;
             let query = optional_str(args, "query")?.unwrap_or_default();
             let agents = workspace_agents(client, &workspace).await?;
@@ -701,14 +701,14 @@ async fn execute_tool_connected(
             )
         }
         "alera.get_agent_activity" => {
-            let workspace = caller_workspace(client).await?;
+            let (_, workspace, _) = agent_identity(client).await?;
             let handle = required_str(args, "handle")?;
             let agents = workspace_agents(client, &workspace).await?;
             let agent = find_agent(&agents, &handle)?;
             Ok(json!({"kind": "agentActivity", "agent": agent_fields(agent, true)}))
         }
         "alera.read_agent_output" => {
-            let workspace = caller_workspace(client).await?;
+            let (_, workspace, _) = agent_identity(client).await?;
             let handle = required_str(args, "handle")?;
             let agents = workspace_agents(client, &workspace).await?;
             find_agent(&agents, &handle)?;
@@ -1241,6 +1241,10 @@ fn search_workspace_files(
     }
     Ok(result)
 }
+
+#[cfg(test)]
+#[path = "mcp_agent_security_tests.rs"]
+mod agent_security_tests;
 
 #[cfg(test)]
 mod tests {

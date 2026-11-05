@@ -1,5 +1,7 @@
 # Alera MCP Integration — fixed implementation and acceptance plan
 
+**2026-11-05 cross-workspace security review:** Cross-workspace Agent grants remain fail-closed. The shared Host token plus caller-selected App role/window registration does not prove trusted App authority. See [the grant contract](alera-mcp-cross-workspace-grant-contract.md) for the required protected issuer channel, exact destination/operation scope, expiry, revocation, audit and acceptance gates. Agent observation regressions cover spoofed environment identities; observation must use the existing Host-minted PTY capability before accessing inventory/activity/output. No cross-workspace grant implementation or default enablement is claimed.
+
 **2026-11-04 latest production readiness / merge gate (native interactive Claude):**
 A new explicit-only acceptance at
 `tool/testing/mcp_managed_claude_interactive_autonomy_e2e.py` launched a real
@@ -696,10 +698,10 @@ alera mcp --runtime-dir /path/to/alera/runtime serve
 ```
 
 The MCP client connects to the executable over stdio. No network listener is
-opened and no Runtime Host is auto-started. Current workspace file/Tab/Agent
+opened and no Runtime Host is auto-started. Current workspace file/Tab
 reads check a live Host handle and matching `ALERA_TERMINAL_HANDLE` /
 `ALERA_WORKSPACE_ID`, but that read-only check alone is not a cryptographic
-identity proof. All **five UI navigation/focus tools**, plus same-workspace
+identity proof. Agent discovery, activity and output additionally require a Host-minted live PTY capability; guessed environment handle/workspace pairs cannot authorize Agent observations. All **five UI navigation/focus tools**, plus same-workspace
 durable Agent send, own-message status, and typed settings read/write/open
 tools additionally require a Host-issued per-PTY capability. No UI response
 reports `applied` before Flutter confirms it; settings updates validate

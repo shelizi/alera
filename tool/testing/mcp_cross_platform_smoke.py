@@ -197,6 +197,7 @@ def test_real_agent_pty_capability(exe: Path, runtime: Path, workspace: Path,
         time.sleep(0.15)
     else:
         raise AssertionError("native Agent PTY was not running")
+    agent_presence(runtime, handle)
 
     # This file contains only a test request, never a bearer. The child
     # Python process must inherit the actual Host-PTY environment; the
@@ -233,6 +234,18 @@ print("MCP_NATIVE_AGENT_MCP_AUTH_ERROR_KIND_"+next(
     ] if phrase in authorized),"other"),flush=True)
 assert "alera runtime host request failed" in authorized
 print("MCP_NATIVE_AGENT_MCP_REJECTED_NO_APP",flush=True)
+# Observation tools must succeed only inside the real Host-minted Agent PTY.
+output_request = {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{
+    "name":"alera.read_agent_output","arguments":{
+        "handle":expected_handle,"maxBytes":4096}}}
+observed = subprocess.run([cli,"mcp","--runtime-dir",runtime,"serve"],
+    input=json.dumps(output_request)+"\\n",capture_output=True,text=True,
+    encoding="utf-8",errors="replace",timeout=18,env=os.environ.copy())
+assert observed.returncode == 0
+observation = json.loads(observed.stdout.strip())["result"]
+assert observation.get("isError") is False
+assert observation.get("structuredContent",{}).get("kind") == "agentOutput"
+print("MCP_NATIVE_AGENT_AUTHORIZED_OUTPUT_PASS",flush=True)
 forged = os.environ.copy()
 forged.pop("ALERA_MCP_UI_TOKEN",None)
 unauthorized = invoke(forged)
@@ -240,6 +253,12 @@ unauthorized = invoke(forged)
 # sending a privileged request to the Host.
 assert "agent capability is unavailable" in unauthorized
 print("MCP_NATIVE_AGENT_STRIPPED_MCP_DENIED",flush=True)
+observed = subprocess.run([cli,"mcp","--runtime-dir",runtime,"serve"],
+    input=json.dumps(output_request)+"\\n",capture_output=True,text=True,
+    encoding="utf-8",errors="replace",timeout=18,env=forged)
+assert observed.returncode == 0
+assert json.loads(observed.stdout.strip())["result"].get("isError") is True
+print("MCP_NATIVE_AGENT_STRIPPED_OUTPUT_DENIED",flush=True)
 # MCP intentionally strips detailed Host errors, so do not weaken its
 # privacy contract just for a test. Verify the Host-issued bearer through
 # the *same* authenticated local Host protocol, while still inside the
@@ -292,9 +311,12 @@ print("MCP_NATIVE_AGENT_CAPABILITY_PASS",flush=True)
         output = cli(exe, "terminal", "--runtime-dir", str(runtime),
                      "--json", "read", "--handle", handle, "--max-bytes", "8192")
         last_text = str(output.get("text", ""))
-        if "MCP_NATIVE_AGENT_CAPABILITY_PASS" in last_text:
+        if ("MCP_NATIVE_AGENT_CAPABILITY_PASS" in last_text
+                and "MCP_NATIVE_AGENT_AUTHORIZED_OUTPUT_PASS" in last_text
+                and "MCP_NATIVE_AGENT_STRIPPED_OUTPUT_DENIED" in last_text):
             check(True, "native Agent PTY received Host-issued scoped MCP capability")
-            check(True, "removing Agent bearer rejects the identical UI MCP request")
+            check(True, "authorized Agent output reads require Host-issued bearer")
+            check(True, "removing Agent bearer rejects UI and output MCP requests")
             return
         if "Traceback (most recent call last)" in last_text:
             break
@@ -305,6 +327,8 @@ print("MCP_NATIVE_AGENT_CAPABILITY_PASS",flush=True)
         "mcp_child_ok": "MCP_NATIVE_AGENT_MCP_CHILD_EXIT_0" in last_text,
         "mcp_tool_error": "MCP_NATIVE_AGENT_MCP_TOOL_ERROR_True" in last_text,
         "mcp_no_app": "MCP_NATIVE_AGENT_MCP_REJECTED_NO_APP" in last_text,
+        "authorized_output": "MCP_NATIVE_AGENT_AUTHORIZED_OUTPUT_PASS" in last_text,
+        "denied_output": "MCP_NATIVE_AGENT_STRIPPED_OUTPUT_DENIED" in last_text,
         "stripped_mcp_denied": "MCP_NATIVE_AGENT_STRIPPED_MCP_DENIED" in last_text,
         "control_read": "MCP_NATIVE_AGENT_HOST_CONTROL_READ" in last_text,
         "socket_open": "MCP_NATIVE_AGENT_HOST_SOCKET_OPEN" in last_text,
@@ -441,20 +465,11 @@ def run(exe: Path) -> None:
         check(any(item.get("relativePath") == "src/mcp_fixture.rs"
                   for item in result(outputs, 13).get("items", [])),
               "MCP searches files inside private workspace")
-        agents = result(outputs, 14)
-        check(any(item.get("handle") == handle
-                  for item in agents.get("items", []))
-              and "PRIVATE_MCP_AGENT_INPUT_NEVER_EXPOSE" not in json.dumps(agents),
-              "MCP agent search is scoped and hides raw tool input")
-        activity = result(outputs, 15)
-        check(activity.get("agent", {}).get("agentState") == "working"
-              and "PRIVATE_MCP_AGENT_INPUT_NEVER_EXPOSE" not in json.dumps(activity),
-              "MCP Agent hook is visible but sensitive input is redacted")
-        check(result(outputs, 16).get("kind") == "agentOutput",
-              "MCP reads bounded native PTY output")
-        for number in (20, 21, 22, 23, 24, 25, 26, 27):
+        # A plain PTY may discover projects but never read sensitive Agent
+        # inventory or output without a Host-issued per-Agent capability.
+        for number in (14, 15, 16, 20, 21, 22, 23, 24, 25, 26, 27):
             result(outputs, number, error=True)
-        check(True, "foreign access, unauthorized mutations and limits denied")
+        check(True, "unbound Agent observations and unauthorized mutations denied")
 
         marker = "MCP_NATIVE_CURSOR_TEST"
         echo = "echo " + marker  # works in POSIX shells and cmd.exe
@@ -463,24 +478,20 @@ def run(exe: Path) -> None:
         deadline = time.monotonic() + 14
         next_cursor = None
         while time.monotonic() < deadline:
-            output = result(mcp(exe, runtime, [
-                request(30, "alera.read_agent_output", {
-                    "handle": handle, "cursor": 0, "maxBytes": 8192,
-                }),
-            ], caller_env), 30)
+            output = cli(exe, "terminal", "--runtime-dir", str(runtime),
+                         "--json", "read", "--handle", handle,
+                         "--cursor", "0", "--max-bytes", "8192")
             if marker in output.get("text", ""):
                 next_cursor = output.get("nextCursor")
                 break
             time.sleep(0.15)
-        check(isinstance(next_cursor, int), "real native PTY text arrives via MCP")
-        incremental = result(mcp(exe, runtime, [
-            request(31, "alera.read_agent_output", {
-                "handle": handle, "cursor": next_cursor, "maxBytes": 8192,
-            }),
-        ], caller_env), 31)
+        check(isinstance(next_cursor, int), "real native PTY text arrives via CLI")
+        incremental = cli(exe, "terminal", "--runtime-dir", str(runtime),
+                          "--json", "read", "--handle", handle,
+                          "--cursor", str(next_cursor), "--max-bytes", "8192")
         check(incremental.get("cursor", -1) >= next_cursor
               and incremental.get("truncated") is False,
-              "native PTY output cursor supports incremental MCP reads")
+              "native PTY output cursor supports incremental CLI reads")
 
         forged_env = dict(caller_env, ALERA_TERMINAL_HANDLE="not-an-existing-pty")
         forbidden = mcp(exe, runtime, [request(40, "alera.list_tabs")], forged_env)
