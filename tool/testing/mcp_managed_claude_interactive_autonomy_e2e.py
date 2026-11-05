@@ -1,11 +1,10 @@
-"""Actual authenticated Claude model native Hook -> disposable Host queued MCP -> PTY.
+"""Explicit-only DIRECT interactive Claude native Hook -> private Host -> PTY.
 
-Requires the official Alera-generated native Claude Hook installed into a
-private Host home. This deliberately does not approve interactive Claude
-workspace trust or copy credentials. Claude is invoked for ONE non-interactive
-read-only model turn using existing account auth, while the Host/Hook settings,
-project and PTYs are disposable. The recipient's prompt consumer is Python,
-not a continuously running autonomous Claude TUI: do not call this autonomous.
+Legacy filename: this does NOT exercise production agentProfile.launch or
+Managed Profile MCP injection. Claude itself owns stdin for both turns.
+Default invocation is read-only preflight. A real run requires
+--run-isolated-model and an already provisioned isolated --provider-home.
+Never approves trust, copies credentials or uses the developer's account home.
 No prompts, PTY contents, credentials or bearer values are logged or saved.
 """
 from __future__ import annotations
@@ -30,9 +29,10 @@ from mcp_real_model_collaboration_e2e import (
 )
 from mcp_ui_agent_desktop_e2e import HostRpc, call_mcp
 from mcp_native_hook_host_delivery_e2e import private_host_start
+from mcp_managed_profile_acceptance import isolated_provider_home
 
 ROOT = Path(__file__).resolve().parents[2]
-RESULT = BUILD / "mcp_managed_claude_interactive_result.json"
+RESULT = BUILD / "mcp_direct_claude_interactive_result.json"
 
 
 def wait_or_fail(state: Path, filename: str, *, timeout: float) -> dict:
@@ -63,7 +63,8 @@ def set_phase(state: Path, role: str, name: str) -> None:
 def private_pty(handle: str, runtime: Path, workspace: Path) -> None:
     if (
         os.name != "nt"
-        or "feat-alera-mcp-control-20261102" not in str(ROOT)
+        or not runtime.resolve().is_relative_to(BUILD.resolve())
+        or workspace.resolve().parent != runtime.resolve().parent
         or os.environ.get("ALERA_TERMINAL_HANDLE") != handle
         or os.environ.get("ALERA_WORKSPACE_ID") != WORKSPACE_ID
         or len(os.environ.get("ALERA_MCP_UI_TOKEN", "")) != 64
@@ -110,8 +111,8 @@ def recipient(runtime: Path, workspace: Path, state: Path, nonce: str) -> None:
     if not settings.is_file() or not account_file.is_file():
         raise AssertionError("private Claude settings/account-home path unavailable")
     provider_home = account_file.read_text(encoding="utf-8")
-    if not provider_home or not Path(provider_home).is_dir():
-        raise AssertionError("existing account HOME path unavailable")
+    if not isolated_provider_home(provider_home):
+        raise AssertionError("preprovisioned isolated provider HOME required")
     claude = shutil.which("claude.exe")
     if not claude:
         raise AssertionError("Claude Code native executable missing")
@@ -204,17 +205,20 @@ def sender(runtime: Path, workspace: Path, state: Path, nonce: str) -> None:
     raise AssertionError("real Claude native Stop never triggered Host delivery")
 
 
-def driver() -> None:
-    if (os.name != "nt" or "feat-alera-mcp-control-20261102" not in str(ROOT)
-            or not CLI.is_file() or not shutil.which("claude.exe")):
+def driver(provider_home: Path, *, allow_model: bool = False) -> None:
+    # Validate before touching reports, starting a Host or invoking a provider.
+    if not allow_model or not isolated_provider_home(provider_home):
+        raise RuntimeError("explicit isolated model run and private account required")
+    if (os.name != "nt" or not CLI.is_file() or not shutil.which("claude.exe")
+            or "dropbox" in [part.lower() for part in BUILD.resolve().parts]):
         raise RuntimeError("requires disposable Windows Alera Host + Claude Code")
-    original_home = os.environ.get("USERPROFILE", "")
-    if not Path(original_home).is_dir():
-        raise RuntimeError("provider account home is unavailable")
+    original_home = str(provider_home.resolve())
     RESULT.unlink(missing_ok=True)
     summary: dict = {
         "passed": False, "checks": [], "privateHostOnly": True,
         "providerEmitsNativeHook": False, "autonomousInteractiveModelReply": False,
+        "launchPath": "direct_provider_in_host_pty",
+        "productionManagedProfileAccepted": False,
     }
     BUILD.mkdir(parents=True, exist_ok=True)
     base: Path | None = None
@@ -369,7 +373,7 @@ def driver() -> None:
             # disposable harness, never raw Host/PTY/provider error messages.
             summary["failureHint"] = hint[:180]
     RESULT.write_text(json.dumps(summary, indent=2), encoding="utf-8")
-    print("MCP_MANAGED_CLAUDE_INTERACTIVE " +
+    print("MCP_DIRECT_CLAUDE_INTERACTIVE " +
           ("PASS" if summary["passed"] else "FAIL") +
           " checks=" + str(len(summary["checks"])), flush=True)
     if not summary["passed"]:
@@ -383,9 +387,20 @@ def main() -> None:
     p.add_argument("--workspace", type=Path)
     p.add_argument("--state", type=Path)
     p.add_argument("--nonce")
+    p.add_argument("--provider-home", type=Path)
+    p.add_argument("--run-isolated-model", action="store_true")
     a = p.parse_args()
     if a.mode == "driver":
-        driver()
+        if not a.run_isolated_model:
+            print(json.dumps({
+                "scope": "direct Claude launch; not production MANAGED acceptance",
+                "liveRunExecutedByThisCommand": False,
+                "isolatedProviderHomeReady": isolated_provider_home(a.provider_home),
+                "sidecarAvailable": CLI.is_file(),
+                "productionManagedProfileAccepted": False,
+            }))
+            return
+        driver(a.provider_home, allow_model=True)
         return
     try:
         if not all((a.runtime, a.workspace, a.state, a.nonce)):

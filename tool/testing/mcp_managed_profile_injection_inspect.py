@@ -15,6 +15,8 @@ import pathlib
 import subprocess
 
 from mcp_real_host_restart_e2e import BUILD, RUNTIME, WORKSPACE_ID
+from mcp_managed_profile_acceptance import managed_tab
+from mcp_ui_agent_desktop_e2e import HostRpc
 
 
 def live_sessions(cli: pathlib.Path) -> set[str]:
@@ -75,13 +77,22 @@ def verify(codex_handle: str, claude_handle: str) -> None:
     if not cli.is_file():
         raise RuntimeError("private MCP CLI is unavailable")
     handles = live_sessions(cli)
+    host = HostRpc(RUNTIME)
+    try:
+        tabs = host.request("tab.list", {"workspaceId": WORKSPACE_ID})
+    finally:
+        host.close()
+    if not isinstance(tabs, list):
+        raise RuntimeError("private Host returned invalid tab inventory")
     processes = private_processes()
     codex = any(item.get("codex") is True for item in processes)
     claude = any(item.get("claude") is True for item in processes)
     server = any(item.get("mcp") is True for item in processes)
     checks = {
-        "codexHostManagedPty": codex_handle in handles,
-        "claudeHostManagedPty": claude_handle in handles,
+        "codexHostManagedPty": codex_handle in handles and any(
+            managed_tab(tab, codex_handle, WORKSPACE_ID, "codex") for tab in tabs),
+        "claudeHostManagedPty": claude_handle in handles and any(
+            managed_tab(tab, claude_handle, WORKSPACE_ID, "claude") for tab in tabs),
         "codexActualProcessHasTransientMcpConfig": codex,
         "claudeActualProcessHasTransientMcpConfig": claude,
         "providerSpawnedPrivateMcpServer": server,
@@ -90,12 +101,15 @@ def verify(codex_handle: str, claude_handle: str) -> None:
         "checks": checks,
         "passed": sum(checks.values()),
         "total": len(checks),
-        "scope": "real Host Managed Agent launch + OS process injection",
+        "scope": "Managed Profile snapshots + uncorrelated OS process injection observations",
+        "productionManagedProfileAccepted": False,
         "doesNotProve": [
             "Claude Workspace trust approval",
             "model-initiated tool call inside Managed Agent",
             "model-replied task completion",
             "cross-workspace authorization",
+            "OS provider/MCP process ancestry bound to the named PTY",
+            "production agentProfile.launch plus native autonomous second turn",
         ],
         # The harness itself only reads Host/OS state and never writes a
         # Codex/Claude MCP config. Provider-internal session/cache writes
