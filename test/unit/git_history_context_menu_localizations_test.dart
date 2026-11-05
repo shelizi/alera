@@ -22,6 +22,8 @@ void main() {
     'Checkout Remote Branch',
     'Delete Remote Branch',
     'Pull into Current Branch',
+    'Pull Branch',
+    'Push Branch',
     'Open in New Worktree...',
     'Push Tag',
     'Delete Tag',

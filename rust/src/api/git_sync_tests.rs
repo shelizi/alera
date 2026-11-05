@@ -67,3 +67,81 @@ fn git_pull_respects_configured_rebase_strategy() {
         "local change"
     );
 }
+
+#[test]
+fn selected_branch_push_does_not_checkout_or_push_current_branch() {
+    let source = init_repo();
+    let bare = tempfile::tempdir().expect("bare remote");
+    run_git(bare.path(), &["init", "--bare"]);
+    run_git(
+        source.path(),
+        &["remote", "add", "origin", &path_str(bare.path())],
+    );
+    run_git(source.path(), &["push", "-u", "origin", "main"]);
+    run_git(source.path(), &["checkout", "-b", "feature"]);
+    commit_file(
+        source.path(),
+        "feature.txt",
+        "version 1\n",
+        "feature commit",
+    );
+    let feature_oid = branch_oid(source.path(), "feature");
+    run_git(source.path(), &["checkout", "main"]);
+
+    git_push_branch(path_str(source.path()), "feature".to_owned()).unwrap();
+
+    assert_eq!(current_branch(path_str(source.path())).unwrap(), "main");
+    let remote_feature = git_command(bare.path(), &["rev-parse", "refs/heads/feature"])
+        .output()
+        .expect("remote feature lookup");
+    assert!(remote_feature.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&remote_feature.stdout).trim(),
+        feature_oid.to_string()
+    );
+    assert_eq!(
+        git_command(
+            source.path(),
+            &["rev-parse", "--abbrev-ref", "feature@{upstream}"]
+        )
+        .output()
+        .unwrap()
+        .status
+        .success(),
+        true
+    );
+}
+
+#[test]
+fn selected_branch_pull_fast_forwards_non_current_without_checkout() {
+    let source = init_repo();
+    let bare = tempfile::tempdir().expect("bare remote");
+    run_git(bare.path(), &["init", "--bare"]);
+    run_git(
+        source.path(),
+        &["remote", "add", "origin", &path_str(bare.path())],
+    );
+    run_git(source.path(), &["push", "-u", "origin", "main"]);
+    run_git(source.path(), &["checkout", "-b", "feature"]);
+    commit_file(source.path(), "feature.txt", "old\n", "feature start");
+    run_git(source.path(), &["push", "-u", "origin", "feature"]);
+    run_git(source.path(), &["checkout", "main"]);
+
+    let clone_parent = tempfile::tempdir().expect("clone parent");
+    run_git(
+        clone_parent.path(),
+        &["clone", &path_str(bare.path()), "clone"],
+    );
+    let clone = clone_parent.path().join("clone");
+    configure_git_identity(&clone);
+    run_git(&clone, &["checkout", "-b", "feature", "origin/feature"]);
+    commit_file(&clone, "feature.txt", "new\n", "feature advance");
+    run_git(&clone, &["push", "origin", "feature"]);
+
+    git_pull_branch(path_str(source.path()), "feature".to_owned()).unwrap();
+    assert_eq!(current_branch(path_str(source.path())).unwrap(), "main");
+    assert_eq!(
+        branch_oid(source.path(), "feature"),
+        branch_oid(&clone, "feature")
+    );
+}

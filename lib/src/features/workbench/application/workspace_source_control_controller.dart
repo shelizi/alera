@@ -137,6 +137,14 @@ class WorkspaceSourceControlController
     );
   }
 
+  Future<void> stageEntries(List<GitChangeEntry> entries) => _run(
+    .stage,
+    (backend) =>
+        WorkspaceSourceControlIndexMutations(backend)
+            .stageEntries(workspacePath, entries),
+    statusFirst: true,
+  );
+
   Future<void> unstage(String? filePath) => _run(
     .unstage,
     (backend) =>
@@ -166,6 +174,14 @@ class WorkspaceSourceControlController
     );
   }
 
+  Future<void> unstageEntries(List<GitChangeEntry> entries) => _run(
+    .unstage,
+    (backend) =>
+        WorkspaceSourceControlIndexMutations(backend)
+            .unstageEntries(workspacePath, entries),
+    statusFirst: true,
+  );
+
   Future<void> discard(String? filePath) => _run(
     .discard,
     (backend) =>
@@ -191,6 +207,13 @@ class WorkspaceSourceControlController
               .discardEntry(workspacePath, entry),
     );
   }
+
+  Future<void> discardEntries(List<GitChangeEntry> entries) => _run(
+    .discard,
+    (backend) =>
+        WorkspaceSourceControlIndexMutations(backend)
+            .discardEntries(workspacePath, entries),
+  );
 
   Future<void> commit(String message) => _run(
     .commit,

@@ -3,6 +3,9 @@ part of 'workspace_git_diff_panel.dart';
 class const _GitFileActions({
   required final GitChangeEntry entry,
   required final bool busy,
+  final bool? canStage,
+  final bool? canUnstage,
+  final bool? canDiscard,
   required final ValueChanged<GitChangeEntry> onStage,
   required final ValueChanged<GitChangeEntry> onUnstage,
   required final ValueChanged<GitChangeEntry> onDiscard,
@@ -14,19 +17,19 @@ class const _GitFileActions({
       child: Row(
         mainAxisAlignment: .end,
         children: <Widget>[
-          if (entry.canUnstageFromParent)
+          if (canUnstage ?? entry.canUnstageFromParent)
             AleraIconButton(
               tooltip: 'Unstage',
               icon: AleraIcons.gitUnstage,
               onPressed: busy ? null : () => onUnstage(entry),
             )
-          else if (entry.canStageFromParent)
+          else if (canStage ?? entry.canStageFromParent)
             AleraIconButton(
               tooltip: 'Stage',
               icon: AleraIcons.gitStage,
               onPressed: busy ? null : () => onStage(entry),
             ),
-          if (entry.canDiscardFromParent)
+          if (canDiscard ?? entry.canDiscardFromParent)
             AleraIconButton(
               tooltip: 'Discard',
               icon: AleraIcons.gitDiscard,
@@ -178,17 +181,6 @@ extension _WorkspaceGitDiffPanelActions on _WorkspaceGitDiffPanelState {
     );
   }
 
-  Future<void> _stageEntry(GitChangeEntry entry) {
-    return _run(() => _notifier.stageEntry(entry), successMessage: 'Staged');
-  }
-
-  Future<void> _unstageEntry(GitChangeEntry entry) {
-    return _run(
-      () => _notifier.unstageEntry(entry),
-      successMessage: 'Unstaged',
-    );
-  }
-
   Future<void> _unstageArea(GitChangeArea area, String? filePath) {
     return _run(
       () => _notifier.unstageArea(area, filePath: filePath),
@@ -239,26 +231,6 @@ extension _WorkspaceGitDiffPanelActions on _WorkspaceGitDiffPanelState {
     await _run(
       () => _notifier.discardArea(area, filePath: filePath),
       successMessage: 'Changes discarded',
-    );
-  }
-
-  Future<void> _discardEntry(GitChangeEntry entry) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (_) => AleraConfirmDialog(
-        title: 'Discard Changes?',
-        message:
-            'This permanently discards unstaged and untracked changes in "${entry.path}".',
-        confirmLabel: 'Discard',
-        destructive: true,
-      ),
-    );
-    if (confirmed != true || !mounted) {
-      return;
-    }
-    await _run(
-      () => _notifier.discardEntry(entry),
-      successMessage: 'Change discarded',
     );
   }
 

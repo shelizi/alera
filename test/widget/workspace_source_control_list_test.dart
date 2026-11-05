@@ -7,6 +7,7 @@ import 'package:alera/src/features/workbench/presentation/workspace_git_diff_pan
 import 'package:alera/src/shared/infra/git/git_diff_models.dart';
 import 'package:alera/src/shared/infra/git/git_providers.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -14,6 +15,76 @@ import '../unit/fake_git_backend.dart';
 import '../unit/fake_source_control_watcher.dart';
 
 void main() {
+  testWidgets('Ctrl toggle selects separate Git files for one batch stage', (
+    tester,
+  ) async {
+    final backend = FakeGitBackend()
+      ..gitRepositoryStateResult = const GitRepositoryState(branch: 'main')
+      ..gitStatusResult = const GitStatusResult(
+        entries: <GitChangeEntry>[
+          GitChangeEntry(path: 'a.dart', area: .unstaged, status: .modified),
+          GitChangeEntry(path: 'b.dart', area: .unstaged, status: .modified),
+          GitChangeEntry(path: 'c.dart', area: .untracked, status: .untracked),
+        ],
+      );
+    await _pumpPanel(tester, backend);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('a.dart'));
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+    await tester.tap(find.text('c.dart'));
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+    await tester.pump();
+    expect(find.text('2 Selected'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Stage Selected'));
+    await tester.pumpAndSettle();
+    expect(
+      backend.calls
+          .where((call) => call.method == 'stage')
+          .map((call) => call.args['filePath'])
+          .toList(),
+      <Object?>['a.dart', 'c.dart'],
+    );
+    expect(find.text('2 Selected'), findsNothing);
+  });
+
+  testWidgets('Shift range selects files, discard leaves staged rows intact', (
+    tester,
+  ) async {
+    final backend = FakeGitBackend()
+      ..gitRepositoryStateResult = const GitRepositoryState(branch: 'main')
+      ..gitStatusResult = const GitStatusResult(
+        entries: <GitChangeEntry>[
+          GitChangeEntry(path: 'a.dart', area: .staged, status: .modified),
+          GitChangeEntry(path: 'b.dart', area: .unstaged, status: .modified),
+          GitChangeEntry(path: 'c.dart', area: .unstaged, status: .modified),
+        ],
+      );
+    await _pumpPanel(tester, backend);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('a.dart'));
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.tap(find.text('c.dart'));
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.pump();
+    expect(find.text('3 Selected'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Discard Selected'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('2 selected files'), findsOneWidget);
+    await tester.tap(find.text('Discard').last);
+    await tester.pumpAndSettle();
+    expect(
+      backend.calls
+          .where((call) => call.method == 'discard')
+          .map((call) => call.args['filePath'])
+          .toList(),
+      <Object?>['b.dart', 'c.dart'],
+    );
+  });
+
   testWidgets('large change lists render rows lazily', (tester) async {
     final backend = FakeGitBackend()
       ..gitRepositoryStateResult = const GitRepositoryState(branch: 'main')

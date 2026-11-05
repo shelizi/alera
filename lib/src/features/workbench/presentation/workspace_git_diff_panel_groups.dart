@@ -9,6 +9,8 @@ class const _GitDiffGroups({
   required final Set<String> collapsedSections,
   required final Set<String> collapsedTreeNodes,
   required final Set<String> expandedSubmodules,
+  required final Set<String> selectedChangeIds,
+  required final _GitChangeSelectionCallback onSelectEntry,
   required final ValueChanged<String> onToggleSection,
   required final ValueChanged<String> onToggleTreeNode,
   required final ValueChanged<GitChangeEntry> onToggleSubmodule,
@@ -41,6 +43,12 @@ class const _GitDiffGroups({
   Widget build(BuildContext context) {
     // Rows must stay lazy: eagerly inflating thousands of entries is what
     // stalls the desktop UI when a workspace reports a large change set.
+    final visibleIds = _visibleChangeIds();
+    final selectedEntries = <GitChangeEntry>[
+      for (final group in groups)
+        for (final entry in group.entries)
+          if (selectedChangeIds.contains(entry.id)) entry,
+    ];
     return CustomScrollView(
       // The panel is rebuilt whenever its sidebar tab comes back, so the
       // offset lives in the route's PageStorage, one entry per repository.
@@ -50,7 +58,8 @@ class const _GitDiffGroups({
           padding: const EdgeInsets.symmetric(vertical: AleraTokens.space6),
           sliver: SliverMainAxisGroup(
             slivers: <Widget>[
-              for (final group in groups) ..._sliversForGroup(group),
+              for (final group in groups)
+                ..._sliversForGroup(group, visibleIds, selectedEntries),
             ],
           ),
         ),
@@ -58,7 +67,38 @@ class const _GitDiffGroups({
     );
   }
 
-  List<Widget> _sliversForGroup(GitChangeGroup group) {
+  List<String> _visibleChangeIds() {
+    final ids = <String>[];
+    for (final group in groups) {
+      if (collapsedSections.contains(_sectionKeyForGroup(group))) continue;
+      if (viewMode == GitDiffViewMode.flat) {
+        ids.addAll(group.entries.map((entry) => entry.id));
+        continue;
+      }
+      int? collapsedDepth;
+      for (final row in group.treeRows) {
+        if (collapsedDepth case final depth?) {
+          if (row.depth > depth) continue;
+          collapsedDepth = null;
+        }
+        if (row.entry case final entry?) {
+          ids.add(entry.id);
+        } else if (row.kind == GitChangeTreeRowKind.directory &&
+            collapsedTreeNodes.contains(
+              'folder:${group.unified ? 'unified' : group.area.key}:${row.path}',
+            )) {
+          collapsedDepth = row.depth;
+        }
+      }
+    }
+    return ids;
+  }
+
+  List<Widget> _sliversForGroup(
+    GitChangeGroup group,
+    List<String> visibleIds,
+    List<GitChangeEntry> selectedEntries,
+  ) {
     if (group.entries.isEmpty) {
       return const <Widget>[];
     }
@@ -99,8 +139,12 @@ class const _GitDiffGroups({
               viewMode == GitDiffViewMode.flat
                   ? SliverList.builder(
                       itemCount: group.entries.length,
-                      itemBuilder: (context, index) =>
-                          _buildFlatEntry(group, group.entries[index]),
+                      itemBuilder: (context, index) => _buildFlatEntry(
+                        group,
+                        group.entries[index],
+                        visibleIds,
+                        selectedEntries,
+                      ),
                     )
                   : _GitDiffTree(
                       workspacePath: workspacePath,
@@ -110,6 +154,13 @@ class const _GitDiffGroups({
                       busy: busy,
                       collapsedTreeNodes: collapsedTreeNodes,
                       expandedSubmodules: expandedSubmodules,
+                      selectedChangeIds: selectedChangeIds,
+                      selectedEntries: selectedEntries,
+                      onSelectEntry: (entry, contextMenu) => onSelectEntry(
+                        entry,
+                        visibleIds,
+                        contextMenu: contextMenu,
+                      ),
                       onToggleTreeNode: onToggleTreeNode,
                       onToggleSubmodule: onToggleSubmodule,
                       onOpenGitDiff: onOpenGitDiff,
@@ -142,7 +193,12 @@ class const _GitDiffGroups({
     ];
   }
 
-  Widget _buildFlatEntry(GitChangeGroup group, GitChangeEntry entry) {
+  Widget _buildFlatEntry(
+    GitChangeGroup group,
+    GitChangeEntry entry,
+    List<String> visibleIds,
+    List<GitChangeEntry> selectedEntries,
+  ) {
     final submoduleExpanded = expandedSubmodules.contains(entry.id);
     final children = <Widget>[
       _GitDiffFileRow(
@@ -153,6 +209,19 @@ class const _GitDiffGroups({
         showRelativePath: true,
         showAreaMarker: group.unified,
         busy: busy,
+        selected: selectedChangeIds.contains(entry.id),
+        selectionCount: selectedEntries.length,
+        selectionCanStage: selectedEntries.any(
+          (candidate) => candidate.canStageFromParent,
+        ),
+        selectionCanUnstage: selectedEntries.any(
+          (candidate) => candidate.canUnstageFromParent,
+        ),
+        selectionCanDiscard: selectedEntries.any(
+          (candidate) => candidate.canDiscardFromParent,
+        ),
+        onSelect: (contextMenu) =>
+            onSelectEntry(entry, visibleIds, contextMenu: contextMenu),
         onOpenFile: onOpenFile == null ? null : () => onOpenFile!(entry.path),
         onOpenWithDefaultApplication: onOpenWithDefaultApplication == null
             ? null

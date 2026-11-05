@@ -29,6 +29,7 @@ import 'package:alera/src/features/workbench/application/workspace_git_commit_co
 import 'package:alera/src/features/workbench/application/workspace_git_history_loader.dart';
 import 'package:alera/src/features/workbench/application/workspace_service.dart';
 import 'package:alera/src/features/workbench/application/workspace_source_control_controller.dart';
+import 'package:alera/src/features/workbench/application/git_change_selection.dart';
 import 'package:alera/src/features/workbench/application/workspace_submodule_status_provider.dart';
 import 'package:alera/src/features/workbench/domain/workbench_view_prefs.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
@@ -70,6 +71,7 @@ part 'workspace_git_diff_panel_preview_opening.dart';
 part 'workspace_git_diff_panel_context_menu.dart';
 part 'workspace_git_diff_panel_inline_actions.dart';
 part 'workspace_git_diff_panel_navigation.dart';
+part 'workspace_git_diff_panel_selection.dart';
 
 class _GitDiffPanelUiState {
   const _GitDiffPanelUiState({
@@ -117,6 +119,7 @@ class _WorkspaceGitDiffPanelState extends ConsumerState<WorkspaceGitDiffPanel> {
   final Set<String> _collapsedSections = <String>{};
   final Set<String> _collapsedTreeNodes = <String>{};
   final Set<String> _expandedSubmodules = <String>{};
+  final GitChangeSelection _changeSelection = GitChangeSelection();
   late final AiAssistService _aiAssistService;
   bool _generatingCommitMessage = false;
   bool _historyCollapsed = true;
@@ -197,6 +200,7 @@ class _WorkspaceGitDiffPanelState extends ConsumerState<WorkspaceGitDiffPanel> {
       _collapsedSections.clear();
       _collapsedTreeNodes.clear();
       _expandedSubmodules.clear();
+      _changeSelection.clear();
       _generatingCommitMessage = false;
       _historyCollapsed = true;
       _restorePanelUiState(widget.sourceControlScope.path);
@@ -326,12 +330,27 @@ class _WorkspaceGitDiffPanelState extends ConsumerState<WorkspaceGitDiffPanel> {
           state: state,
           aiAssistSettings: aiAssistSettings,
           generatingCommitMessage: _generatingCommitMessage,
+          selectedEntries: _selectedChangeEntries(state.asData?.value),
+          onStageSelected: () => unawaited(
+            _stageSelectedEntries(_selectedChangeEntries(state.asData?.value)),
+          ),
+          onUnstageSelected: () => unawaited(
+            _unstageSelectedEntries(
+              _selectedChangeEntries(state.asData?.value),
+            ),
+          ),
+          onDiscardSelected: () => unawaited(
+            _discardSelectedEntries(
+              _selectedChangeEntries(state.asData?.value),
+            ),
+          ),
+          onClearSelection: () => _setPanelState(_changeSelection.clear),
           allCollapsed: _allVisibleNodesCollapsed(state.asData?.value),
           sourceControlRootLabel: widget.sourceControlScope.relativeRoot,
           onMessageChanged: () => setState(() {}),
           onGenerateCommitMessage: () => unawaited(_generateCommitMessage()),
           onCancelGenerateCommitMessage: _cancelGenerateCommitMessage,
-          onFilterChanged: () => setState(() {}),
+          onFilterChanged: () => _setPanelState(_changeSelection.clear),
           onRefresh: () => unawaited(_refresh()),
           onResolveConflicts: () => unawaited(_openMergeResolver()),
           onClearSourceControlRoot: widget.onClearSourceControlRoot,
@@ -385,6 +404,8 @@ class _WorkspaceGitDiffPanelState extends ConsumerState<WorkspaceGitDiffPanel> {
                           collapsedSections: _collapsedSections,
                           collapsedTreeNodes: _collapsedTreeNodes,
                           expandedSubmodules: _expandedSubmodules,
+                          selectedChangeIds: _changeSelection.ids,
+                          onSelectEntry: _selectChangeEntry,
                           onToggleSection: _toggleSectionCollapsed,
                           onToggleTreeNode: _toggleTreeNodeCollapsed,
                           onToggleSubmodule: _toggleSubmodule,
@@ -403,9 +424,9 @@ class _WorkspaceGitDiffPanelState extends ConsumerState<WorkspaceGitDiffPanel> {
                               _compareSourceFileWithLatestGitRevision,
                           onCompareGitBranch: _compareSourceFileWithBranch,
                           onAddToGitIgnore: _addToGitIgnore,
-                          onStage: _stageEntry,
-                          onUnstage: _unstageEntry,
-                          onDiscard: _discardEntry,
+                          onStage: _stageSelectedOrEntry,
+                          onUnstage: _unstageSelectedOrEntry,
+                          onDiscard: _discardSelectedOrEntry,
                           onStageArea: _stageArea,
                           onUnstageArea: _unstageArea,
                           onDiscardArea: _discardAreaWithConfirmation,

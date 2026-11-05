@@ -228,8 +228,15 @@ async fn run_tui_command(
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     let settled = match completion {
                         TuiCompletion::Agy => {
-                            last_data.elapsed() > Duration::from_millis(300)
-                                && agy_usage_complete(&String::from_utf8_lossy(&output))
+                            // The optional Argon pool may render after the old
+                            // four quotas; give four-only accounts settle time.
+                            let output = String::from_utf8_lossy(&output);
+                            let settle_time = if agy_has_argon_quota(&output) {
+                                Duration::from_millis(300)
+                            } else {
+                                Duration::from_secs(2)
+                            };
+                            last_data.elapsed() > settle_time && agy_usage_complete(&output)
                         }
                         TuiCompletion::Generic => {
                             started.elapsed() > Duration::from_secs(4)
@@ -308,7 +315,7 @@ fn windows_tui_launches_through_alera_bootstrap_instead_of_cmd() {
 }
 
 fn agy_usage_complete(output: &str) -> bool {
-    const EXPECTED_BUCKETS: [&str; 4] = [
+    const BASE_BUCKETS: [&str; 4] = [
         "Gemini Models - Weekly",
         "Gemini Models - 5 Hour",
         "Claude And GPT Models - Weekly",
@@ -316,12 +323,32 @@ fn agy_usage_complete(output: &str) -> bool {
     ];
     let snapshot = parse_tui_snapshot("agy", "default", "Antigravity", output);
     snapshot.status == "ok"
-        && EXPECTED_BUCKETS.iter().all(|expected| {
-            snapshot
+        && BASE_BUCKETS.iter().all(|expected| {
+            snapshot.buckets.iter().any(|bucket| bucket.name == *expected)
+        })
+        // Argon is a separate weekly pool on eligible plans only. If its
+        // heading has appeared, wait for the percentage before completing.
+        && (!agy_argon_heading_visible(output)
+            || snapshot
                 .buckets
                 .iter()
-                .any(|bucket| bucket.name == *expected)
-        })
+                .any(|bucket| bucket.name == "Gemini 4 Argon - Weekly"))
+}
+
+fn agy_has_argon_quota(output: &str) -> bool {
+    parse_tui_snapshot("agy", "default", "Antigravity", output)
+        .buckets
+        .iter()
+        .any(|bucket| bucket.name == "Gemini 4 Argon - Weekly")
+}
+
+fn agy_argon_heading_visible(output: &str) -> bool {
+    strip_terminal_sequences(output).lines().any(|line| {
+        agy_group_name(line).as_deref() == Some("Gemini 4 Argon")
+            || line
+                .to_ascii_lowercase()
+                .contains("gemini 4 argon weekly limit")
+    })
 }
 
 fn parse_tui_snapshot(
@@ -331,6 +358,9 @@ fn parse_tui_snapshot(
     output: &str,
 ) -> QuotaSnapshot {
     let clean = strip_terminal_sequences(output);
+    if provider == "agy" {
+        return parse_agy_tui_snapshot(account_id, display_name, &clean);
+    }
     let percent_re = Regex::new(r"(?i)(\d{1,3}(?:\.\d+)?)\s*%\s*(used|left|remaining)?").unwrap();
     let mut windows = Vec::new();
     let mut buckets: Vec<QuotaBucket> = Vec::new();
@@ -349,8 +379,13 @@ fn parse_tui_snapshot(
             current_label = Some("Weekly".to_string());
         }
         if provider == "agy" {
+            if lower.contains("gemini 4 argon weekly limit") {
+                // Some CLI versions put group and quota on one line.
+                current_group = Some("Gemini 4 Argon".to_string());
+            }
             if let Some(group) = agy_group_name(&line) {
                 current_group = Some(group);
+                current_label = None;
                 last_bucket_name = None;
                 continue;
             }
@@ -453,20 +488,121 @@ fn parse_tui_snapshot(
     QuotaSnapshot::ok(provider, account_id, display_name, windows, buckets)
 }
 
+/// AGY 1.5 renders multiple quota fields on the same terminal line.
+/// PTY screen redraws can even concatenate a percentage with the next
+/// heading (e.g. "100.00%Quota availableCLAUDE AND GPT MODELS").
+/// Parse the full text as ordered quota/group tokens rather than assuming
+/// that each field occupies a separate line.
+fn parse_agy_tui_snapshot(account_id: &str, display_name: &str, clean: &str) -> QuotaSnapshot {
+    let token_re = Regex::new(
+        r"(?i)(?:gemini\s+4\s+argon\s+weekly\s+limit|(?:five|5)\s+hour\s+limit|weekly\s+limit|claude\s+(?:and\s+)?gpt\s+models|gemini\s+models|gemini\s+4\s+argon)\b",
+    )
+    .unwrap();
+    let percent_re = Regex::new(r"(?i)(\d{1,3}(?:\.\d+)?)\s*%\s*(used|left|remaining)?").unwrap();
+    let tokens = token_re.find_iter(clean).collect::<Vec<_>>();
+    let mut group: Option<&str> = None;
+    let mut buckets: Vec<QuotaBucket> = Vec::new();
+
+    for (index, token) in tokens.iter().enumerate() {
+        let word = token.as_str().to_ascii_lowercase();
+        if word == "gemini models" {
+            group = Some("Gemini Models");
+            continue;
+        }
+        if word == "claude and gpt models" || word == "claude gpt models" {
+            group = Some("Claude And GPT Models");
+            continue;
+        }
+        if word == "gemini 4 argon" {
+            group = Some("Gemini 4 Argon");
+            continue;
+        }
+
+        let quota_group = if word.starts_with("gemini 4 argon") {
+            Some("Gemini 4 Argon")
+        } else {
+            group
+        };
+        let Some(quota_group) = quota_group else {
+            continue;
+        };
+        let quota_window = if word.contains("weekly") {
+            "Weekly"
+        } else {
+            "5 Hour"
+        };
+        let next = tokens
+            .get(index + 1)
+            .map(|match_| match_.start())
+            .unwrap_or(clean.len());
+        let section = &clean[token.end()..next];
+        let Some(percent) = percent_re.captures(section) else {
+            continue;
+        };
+        let raw_percent = percent
+            .get(1)
+            .and_then(|value| value.as_str().parse::<f64>().ok())
+            .unwrap_or(0.0);
+        let used_percent = if percent
+            .get(2)
+            .is_some_and(|value| value.as_str().eq_ignore_ascii_case("used"))
+        {
+            raw_percent
+        } else {
+            100.0 - raw_percent
+        }
+        .clamp(0.0, 100.0);
+        let name = format!("{quota_group} - {quota_window}");
+        let window_minutes = if quota_window == "Weekly" {
+            Some(WEEKLY_WINDOW_MINUTES)
+        } else {
+            Some(SESSION_WINDOW_MINUTES)
+        };
+        let after_percent = &section[percent.get(0).unwrap().end()..];
+        let reset_description = after_percent
+            .lines()
+            .find_map(extract_reset_description)
+            .map(|value| {
+                value
+                    .split("Quota available")
+                    .next()
+                    .unwrap_or(&value)
+                    .trim()
+                    .to_string()
+            });
+        buckets.retain(|bucket| bucket.name != name);
+        buckets.push(QuotaBucket {
+            name,
+            used_percent,
+            window_minutes,
+            resets_at: None,
+            reset_description,
+        });
+    }
+
+    if buckets.is_empty() {
+        QuotaSnapshot::error(
+            "agy",
+            account_id,
+            display_name,
+            "Usage output did not include recognizable quota percentages",
+        )
+    } else {
+        QuotaSnapshot::ok("agy", account_id, display_name, Vec::new(), buckets)
+    }
+}
+
 fn agy_group_name(line: &str) -> Option<String> {
     let words = line
         .split(|value: char| !value.is_ascii_alphanumeric())
         .filter(|value| !value.is_empty())
         .collect::<Vec<_>>();
-    if words
-        .last()
-        .is_none_or(|word| !word.eq_ignore_ascii_case("models"))
-    {
-        return None;
-    }
     let normalized = words.join(" ");
     let lower = normalized.to_lowercase();
-    if lower == "gemini models" || lower == "claude and gpt models" || lower == "claude gpt models"
+    if lower == "gemini models"
+        || lower == "claude and gpt models"
+        || lower == "claude gpt models"
+        || lower == "gemini 4 argon"
     {
         return Some(title_case_words(&normalized));
     }

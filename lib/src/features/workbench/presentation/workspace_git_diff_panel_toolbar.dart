@@ -10,6 +10,11 @@ class const _SourceControlToolbar({
   required final AsyncValue<WorkspaceSourceControlState> state,
   required final AiAssistSettings aiAssistSettings,
   required final bool generatingCommitMessage,
+  required final List<GitChangeEntry> selectedEntries,
+  required final VoidCallback onStageSelected,
+  required final VoidCallback onUnstageSelected,
+  required final VoidCallback onDiscardSelected,
+  required final VoidCallback onClearSelection,
   required final bool allCollapsed,
   required final String? sourceControlRootLabel,
   required final VoidCallback onMessageChanged,
@@ -203,6 +208,15 @@ class const _SourceControlToolbar({
             dense: true,
             onChanged: (_) => onFilterChanged(),
           ),
+          if (selectedEntries.isNotEmpty)
+            _GitSelectedChangesBar(
+              selected: selectedEntries,
+              busy: busy,
+              onStage: onStageSelected,
+              onUnstage: onUnstageSelected,
+              onDiscard: onDiscardSelected,
+              onClear: onClearSelection,
+            ),
         ],
       ),
     );

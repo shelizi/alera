@@ -573,6 +573,14 @@ class const RustGitBackend()
   Future<void> push(String path) => _guard(() => rust.gitPush(path: path));
 
   @override
+  Future<void> pullBranch({required String path, required String branch}) =>
+      _guard(() => rust.gitPullBranch(path: path, branch: branch));
+
+  @override
+  Future<void> pushBranch({required String path, required String branch}) =>
+      _guard(() => rust.gitPushBranch(path: path, branch: branch));
+
+  @override
   Future<List<GitStashEntry>> listStashes(String path) => _guard(() async {
     final entries = await rust.gitListStashes(path: path);
     return entries

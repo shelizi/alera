@@ -106,6 +106,36 @@ void main() {
     },
   );
 
+  testWidgets('Git Graph Pull and Push operate on clicked branch only', (
+    tester,
+  ) async {
+    final backend = _refBackend();
+    await _pumpRefSurface(tester, backend);
+    await tester.tap(find.text('feature'), buttons: kSecondaryMouseButton);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('git-history-ref-pull-branch')));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('feature'), buttons: kSecondaryMouseButton);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('git-history-ref-push-branch')));
+    await tester.pumpAndSettle();
+
+    expect(
+      backend.calls.where((call) => call.method == 'pullBranch').single.args,
+      {'path': '/tmp/project', 'branch': 'feature'},
+    );
+    expect(
+      backend.calls.where((call) => call.method == 'pushBranch').single.args,
+      {'path': '/tmp/project', 'branch': 'feature'},
+    );
+    expect(
+      backend.calls.where((call) => call.method == 'checkoutBranch'),
+      isEmpty,
+    );
+    expect(backend.calls.where((call) => call.method == 'mergeRef'), isEmpty);
+  });
+
   testWidgets('current branch disables switch and delete', (tester) async {
     final backend = _refBackend();
     await _pumpRefSurface(tester, backend);

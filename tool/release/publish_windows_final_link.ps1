@@ -278,7 +278,7 @@ function Assert-ReleaseArtifact {
         throw 'Final-Link changelog source commit does not match the Release manifest.'
     }
     $hashFile = Join-Path $script:BuildRoot 'build\final-link-kit\Alera-Final-Link-Kit\sha256sums.json'
-    $hashEntries = @(Get-Content -LiteralPath $hashFile -Raw | ConvertFrom-Json)
+    $hashEntries = Get-Content -LiteralPath $hashFile -Raw | ConvertFrom-Json
     $changelogHash = @($hashEntries | Where-Object { $_.path -eq 'CHANGELOG.md' })
     if ($changelogHash.Count -ne 1 -or $changelogHash[0].sha256 -ne (Get-FileHash -LiteralPath $changelogPath -Algorithm SHA256).Hash) {
         throw 'Final-Link changelog is missing from sha256sums.json or has the wrong hash.'

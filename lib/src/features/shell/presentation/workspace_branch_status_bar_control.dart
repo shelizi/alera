@@ -33,6 +33,8 @@ class _WorkspaceBranchStatusBarControlState
   static const _renameAction = 'rename';
   static const _compareAction = 'compare';
   static const _mergeAction = 'merge';
+  static const _pullAction = 'pull';
+  static const _pushAction = 'push';
 
   @override
   void initState() {
@@ -141,6 +143,17 @@ class _WorkspaceBranchStatusBarControlState
       ),
       items: <PopupMenuEntry<String>>[
         PopupMenuItem<String>(
+          key: ValueKey<String>('workspace-branch-pull:$branch'),
+          value: _pullAction,
+          child: Text(context.tr('Pull Branch')),
+        ),
+        PopupMenuItem<String>(
+          key: ValueKey<String>('workspace-branch-push:$branch'),
+          value: _pushAction,
+          child: Text(context.tr('Push Branch')),
+        ),
+        const PopupMenuDivider(),
+        PopupMenuItem<String>(
           value: _copyAction,
           child: Text(context.tr('Copy Branch Name')),
         ),
@@ -167,7 +180,11 @@ class _WorkspaceBranchStatusBarControlState
       ],
     );
     if (!mounted) return;
-    if (selected == _copyAction) {
+    if (selected == _pullAction) {
+      await _synchronizeBranch(branch, pull: true);
+    } else if (selected == _pushAction) {
+      await _synchronizeBranch(branch, pull: false);
+    } else if (selected == _copyAction) {
       await _copyBranchName(branch);
     } else if (selected == _renameAction) {
       await _renameBranch(branch);
@@ -175,6 +192,40 @@ class _WorkspaceBranchStatusBarControlState
       await _compareWithCurrentBranch(branch);
     } else if (selected == _mergeAction) {
       await _mergeIntoCurrentBranch(branch);
+    }
+  }
+
+  Future<void> _synchronizeBranch(String branch, {required bool pull}) async {
+    if (_switching) return;
+    _menu.close();
+    setState(() => _switching = true);
+    final path = widget.sourceControlScope.path;
+    try {
+      final backend = ref.read(gitBackendProvider);
+      if (pull) {
+        await backend.pullBranch(path: path, branch: branch);
+      } else {
+        await backend.pushBranch(path: path, branch: branch);
+      }
+      if (!mounted) return;
+      ref.invalidate(workspaceSourceControlControllerProvider(path));
+      await _loadBranches();
+      if (mounted) {
+        AleraToast.show(
+          context,
+          message: context.trTemplate(
+            pull ? 'Pulled {branch}' : 'Pushed {branch}',
+            {'branch': branch},
+          ),
+          tone: .success,
+        );
+      }
+    } catch (error) {
+      if (mounted) {
+        AleraToast.show(context, message: error.toString(), tone: .error);
+      }
+    } finally {
+      if (mounted) setState(() => _switching = false);
     }
   }
 

@@ -286,8 +286,18 @@ Future<void> gitFetch({required String path}) =>
 Future<void> gitPull({required String path}) =>
     RustLib.instance.api.crateApiGitGitPull(path: path);
 
+/// Fast-forwards the selected branch without checking it out here. If it is
+/// already checked out, the owning worktree performs the fast-forward.
+Future<void> gitPullBranch({required String path, required String branch}) =>
+    RustLib.instance.api.crateApiGitGitPullBranch(path: path, branch: branch);
+
 Future<void> gitPush({required String path}) =>
     RustLib.instance.api.crateApiGitGitPush(path: path);
+
+/// Pushes a local branch using an explicit source ref and its upstream
+/// destination, without moving HEAD or force-updating the remote.
+Future<void> gitPushBranch({required String path, required String branch}) =>
+    RustLib.instance.api.crateApiGitGitPushBranch(path: path, branch: branch);
 
 Future<List<GitStashEntry>> gitListStashes({required String path}) =>
     RustLib.instance.api.crateApiGitGitListStashes(path: path);

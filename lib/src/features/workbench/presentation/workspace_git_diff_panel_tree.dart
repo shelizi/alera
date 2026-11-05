@@ -8,6 +8,10 @@ class const _GitDiffTree({
   required final bool busy,
   required final Set<String> collapsedTreeNodes,
   required final Set<String> expandedSubmodules,
+  required final Set<String> selectedChangeIds,
+  required final List<GitChangeEntry> selectedEntries,
+  required final void Function(GitChangeEntry entry, bool contextMenu)
+  onSelectEntry,
   required final ValueChanged<String> onToggleTreeNode,
   required final ValueChanged<GitChangeEntry> onToggleSubmodule,
   required final OpenGitDiffTabCallback onOpenGitDiff,
@@ -124,6 +128,18 @@ class _GitDiffTreeState extends State<_GitDiffTree> {
           ),
           depth: row.depth,
           busy: widget.busy,
+          selected: widget.selectedChangeIds.contains(entry.id),
+          selectionCount: widget.selectedEntries.length,
+          selectionCanStage: widget.selectedEntries.any(
+            (candidate) => candidate.canStageFromParent,
+          ),
+          selectionCanUnstage: widget.selectedEntries.any(
+            (candidate) => candidate.canUnstageFromParent,
+          ),
+          selectionCanDiscard: widget.selectedEntries.any(
+            (candidate) => candidate.canDiscardFromParent,
+          ),
+          onSelect: (contextMenu) => widget.onSelectEntry(entry, contextMenu),
           onOpenFile: widget.onOpenFile == null
               ? null
               : () => widget.onOpenFile!(entry.path),
@@ -359,6 +375,12 @@ class const _GitDiffFileRow({
   required final int depth,
   required final VoidCallback onTap,
   required final bool busy,
+  final bool selected = false,
+  final int selectionCount = 0,
+  final bool selectionCanStage = false,
+  final bool selectionCanUnstage = false,
+  final bool selectionCanDiscard = false,
+  final ValueChanged<bool>? onSelect,
   final VoidCallback? onOpenFile,
   final VoidCallback? onOpenWithDefaultApplication,
   final VoidCallback? onAddToGitIgnore,
@@ -381,11 +403,24 @@ class const _GitDiffFileRow({
   Widget build(BuildContext context) {
     return _GitDiffBaseRow(
       depth: depth,
-      onTap: onTap,
-      onSecondaryTapDown: (details) =>
-          unawaited(_openMenu(context, details.globalPosition)),
-      onLongPressStart: (details) =>
-          unawaited(_openMenu(context, details.globalPosition)),
+      selected: selected,
+      onTap: () {
+        final keyboard = HardwareKeyboard.instance;
+        onSelect?.call(false);
+        if (!keyboard.isShiftPressed &&
+            !keyboard.isControlPressed &&
+            !keyboard.isMetaPressed) {
+          onTap();
+        }
+      },
+      onSecondaryTapDown: (details) {
+        onSelect?.call(true);
+        unawaited(_openMenu(context, details.globalPosition));
+      },
+      onLongPressStart: (details) {
+        onSelect?.call(true);
+        unawaited(_openMenu(context, details.globalPosition));
+      },
       child: Row(
         children: <Widget>[
           if (entry.isExpandableSubmodule)
@@ -453,6 +488,13 @@ class const _GitDiffFileRow({
           _GitFileActions(
             entry: entry,
             busy: busy,
+            canStage: selected && selectionCount > 1 ? selectionCanStage : null,
+            canUnstage: selected && selectionCount > 1
+                ? selectionCanUnstage
+                : null,
+            canDiscard: selected && selectionCount > 1
+                ? selectionCanDiscard
+                : null,
             onStage: onStage,
             onUnstage: onUnstage,
             onDiscard: onDiscard,
@@ -463,14 +505,20 @@ class const _GitDiffFileRow({
   }
 
   Future<void> _openMenu(BuildContext context, Offset position) {
+    final multiSelected = selected && selectionCount > 1;
     return _showGitChangeContextMenu(
       context,
       position,
       canOpenFile:
           onOpenFile != null && entry.status != GitChangeStatus.deleted,
-      canStage: entry.canStageFromParent,
-      canUnstage: entry.canUnstageFromParent,
-      canDiscard: entry.canDiscardFromParent,
+      canStage: multiSelected ? selectionCanStage : entry.canStageFromParent,
+      canUnstage: multiSelected
+          ? selectionCanUnstage
+          : entry.canUnstageFromParent,
+      canDiscard: multiSelected
+          ? selectionCanDiscard
+          : entry.canDiscardFromParent,
+      selectionCount: multiSelected ? selectionCount : 1,
       busy: busy,
       onOpenFile: onOpenFile,
       onOpenWithDefaultApplication: entry.status != GitChangeStatus.deleted
