@@ -389,7 +389,7 @@ fn pre_acceptance_terminal_exit_consumes_startup_budget() {
     // separate Host tasks. Wait for the bounded state transition rather than
     // assuming tab removal immediately updates task status under CI load.
     let deadline = Instant::now() + Duration::from_secs(5);
-    let shown = loop {
+    loop {
         let shown = expect_ok(request(
             &mut writer,
             &mut reader,
@@ -400,11 +400,11 @@ fn pre_acceptance_terminal_exit_consumes_startup_budget() {
         if shown["task"]["status"] == json!("ready")
             && shown["task"]["startup_failure_count"] == json!(1)
         {
-            break shown;
+            break;
         }
         assert!(Instant::now() < deadline, "{shown}");
         std::thread::sleep(Duration::from_millis(50));
-    };
+    }
     let dispatch = expect_ok(request(
         &mut writer,
         &mut reader,
