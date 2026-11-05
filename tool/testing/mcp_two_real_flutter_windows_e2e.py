@@ -3,9 +3,14 @@
 Run INSIDE the disposable Alera Host-owned Agent PTY after starting two test
 GUI processes (second uses --alera-mcp-e2e-second-shell). A separate fake app
 registration is not accepted as evidence. Never touches a normal user profile.
+
+Keep window B foreground for native accessibility inspection. The test opens
+its Editor Settings once before CAS; afterward it only observes UI Automation.
+Missing/ambiguous native field evidence fails closed, including during rollback.
 """
 from __future__ import annotations
 
+import base64
 import json
 import os
 from pathlib import Path
@@ -13,6 +18,9 @@ import sys
 
 from mcp_ui_agent_desktop_e2e import HostRpc, call_mcp
 from mcp_ui_desktop_fixture import BUILD, RUNTIME, WORKSPACE, WORKSPACE_ID, SESSION_ID
+from mcp_visible_settings import (
+    await_visible, native_snapshot, native_windows, observe_change,
+)
 
 CLI = BUILD / "runner" / "Debug" / "resources" / "alera" / "alera.exe"
 REPORT = BUILD / "mcp_two_real_flutter_windows_result.json"
@@ -22,17 +30,28 @@ ERROR_REPORT = BUILD / "mcp_two_real_flutter_failure.json"
 PHASE = "module"
 LAST_RESPONSE = {}
 PASSED_CHECKS = []
+NATIVE_EVIDENCE = {}
 
 
 def main() -> None:
     global PHASE, PASSED_CHECKS
     PHASE = "preflight"
-    if (os.name != "nt" or "feat-alera-mcp-control-20261102" not in str(BUILD)
+    REPORT.unlink(missing_ok=True)
+    ERROR_REPORT.unlink(missing_ok=True)
+    if (os.name != "nt"
             or os.environ.get("ALERA_TERMINAL_HANDLE") != SESSION_ID
             or os.environ.get("ALERA_WORKSPACE_ID") != WORKSPACE_ID
             or len(os.environ.get("ALERA_MCP_UI_TOKEN", "")) != 64
             or not CLI.is_file() or not (WORKSPACE / FILE).is_file()):
         raise RuntimeError("requires the disposable Host-owned Agent PTY")
+    # Pin isolation to this checkout's generated Flutter configuration rather
+    # than the name of an older feature worktree.
+    root = Path(__file__).resolve().parents[2]
+    config = root / "windows/flutter/ephemeral/generated_config.cmake"
+    support_define = "ALERA_E2E_SUPPORT_DIR=" + (BUILD / "e2e_support").as_posix()
+    token = base64.b64encode(support_define.encode()).decode()
+    if not config.is_file() or token not in config.read_text(encoding="utf-8"):
+        raise RuntimeError("current checkout disposable support define is missing")
 
     checks: list[str] = []
     PASSED_CHECKS = checks
@@ -140,75 +159,40 @@ def main() -> None:
         passed("two_shells_consistent_initial_setting")
 
 
-        # Test real cross-window setting propagation with a disposable scalar.
-        # All mutations are CAS-guarded, and rollback runs even on failure.
-        PHASE = "setting_cas_and_restore"
+        # Establish B's native identity causally: neither process has an
+        # Editor pane before the command addressed exclusively to B. Only B
+        # may expose the unique visible field afterward.
+        PHASE = "native_settings_baseline"
+        bundle = BUILD / "runner" / "Debug" / "alera-dev.exe"
+        snapshot = lambda: native_snapshot(bundle)
+        before = native_windows(snapshot())
+        if any(window["fields"] for window in before):
+            raise AssertionError("close existing Editor Settings panes before acceptance")
         original = values[0]
-        target = original + 1 if original < 16 else original - 1
-        restored = False
-        try:
-            PHASE = "setting_cas_mutation"
-            mutation = mcp("alera.update_setting", {
-                "path": SETTING, "expectedValue": original, "value": target,
-                "windowId": windows[0],
-            }, True)
-            if mutation.get("value") != target:
-                raise AssertionError("Window A update did not apply requested value")
-            passed("real_window_1_setting_cas_applied")
+        if not 1 <= original <= 8:
+            raise AssertionError("unexpected disposable editor tab-size range")
+        mcp("alera.open_settings", {
+            "sectionId": "editor", "windowId": windows[1],
+        }, True)
+        identity_b = await_visible(snapshot, original)
+        if identity_b not in {(w["pid"], w["hwnd"]) for w in before}:
+            raise AssertionError("native B was replaced while opening Settings")
+        passed("real_window_2_native_editor_field_visible_before_cas")
 
-            PHASE = "setting_cas_window_a_readback"
-            view_a = mcp("alera.get_setting",
-                         {"path": SETTING, "windowId": windows[0]}, True)
-            if view_a.get("value") != target:
-                portable = host.request("configuration.settings.get", {})
-                value = portable.get("editor", {}).get("tabSize")
-                LAST_RESPONSE["hostPortableValueMatchesExpected"] = value == target
-                LAST_RESPONSE["hostPortableValuePresent"] = isinstance(value, int)
-                raise AssertionError("Window A did not read back the applied value")
-            passed("real_window_1_setting_readback")
-
-            # The other Flutter process must update independently; no shared
-            # in-memory controller is assumed between the two real Shells.
-            PHASE = "setting_window_b_observation"
-            import time
-            deadline = time.monotonic() + 10
-            while True:
-                view_b = mcp("alera.get_setting",
-                             {"path": SETTING, "windowId": windows[1]}, True)
-                if view_b.get("value") == target:
-                    break
-                if time.monotonic() >= deadline:
-                    portable = host.request("configuration.settings.get", {})
-                    value = portable.get("editor", {}).get("tabSize")
-                    LAST_RESPONSE["hostPortableValueMatchesExpected"] = value == target
-                    LAST_RESPONSE["hostPortableValuePresent"] = isinstance(value, int)
-                    raise AssertionError("Window B did not observe Window A setting update")
-                time.sleep(0.35)
-            passed("real_window_2_observes_setting_change")
-        finally:
-            if sys.exc_info()[0] is None:
-                PHASE = "setting_original_restoration"
-            # Restoration cannot be skipped because an assertion failed.
-            view_a = mcp("alera.get_setting",
-                         {"path": SETTING, "windowId": windows[0]}, True)
-            if view_a.get("value") != original:
-                rollback = mcp("alera.update_setting", {
-                    "path": SETTING, "expectedValue": view_a["value"],
-                    "value": original, "windowId": windows[0],
-                }, True)
-                if rollback.get("value") != original:
-                    raise AssertionError("Could not restore disposable setting")
-            restored = mcp("alera.get_setting",
-                           {"path": SETTING, "windowId": windows[0]}, True).get("value") == original
-            if not restored:
-                raise AssertionError("Disposable Window A setting rollback failed")
-        passed("disposable_setting_restored")
+        PHASE = "native_setting_cas_observation_and_rollback"
+        observe_change(mcp, snapshot, windows, original, identity_b,
+                       evidence=NATIVE_EVIDENCE)
+        passed("real_window_2_visible_field_updated_without_mcp_read")
+        passed("disposable_setting_restored_and_visible_in_window_2")
 
         PHASE = "result_write"
         REPORT.write_text(json.dumps({
             "passed": len(checks), "checks": checks,
             "windows": len(windows), "realFlutterShells": True,
             "syntheticRegistrations": 0, "disposableProfileOnly": True,
+            "visibleSettingsEvidence": "native_windows_ui_automation",
+            "nativeSettingsObservation": NATIVE_EVIDENCE,
+            "windowBAfterCasMcpReads": 0, "visibleRollbackVerified": True,
         }, indent=2), encoding="utf-8")
         print(f"TWO_REAL_FLUTTER_SUMMARY {len(checks)} passed", flush=True)
     finally:
@@ -221,14 +205,17 @@ if __name__ == "__main__":
     except Exception as error:
         # The log is restricted to a fixed phase and exception class. Never
         # persist the prompt, raw exception, token, PTY output or model data.
-        ERROR_REPORT.write_text(json.dumps({
+        failure = json.dumps({
             "phase": PHASE,
             "errorType": type(error).__name__,
             "lastMcpResponse": LAST_RESPONSE,
             "lastPassedCheck": PASSED_CHECKS[-1] if PASSED_CHECKS else None,
             "passedCheckCount": len(PASSED_CHECKS),
+            "nativeSettingsObservation": NATIVE_EVIDENCE,
             "passed": False,
-        }, indent=2), encoding="utf-8")
+        }, indent=2)
+        if ERROR_REPORT.parent.is_dir():
+            ERROR_REPORT.write_text(failure, encoding="utf-8")
         print("TWO_REAL_FLUTTER_FAILURE " + type(error).__name__ +
               " phase=" + PHASE, file=sys.stderr, flush=True)
         sys.exit(1)
