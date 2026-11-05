@@ -205,6 +205,93 @@ void main() {
     expect(registry.takePendingReveal('tab-b'), isNull);
   });
 
+  test('MCP editor line reveal waits for real editor acknowledgment', () async {
+    final registry = EditorSessionRegistry();
+    const target = WorkspaceEditorRevealTarget(
+      line: 42,
+      column: 1,
+      matchLength: 0,
+    );
+    var completed = false;
+    final result = registry.revealAndWait(
+      'tab-42',
+      target,
+      timeout: const Duration(seconds: 1),
+    )..then((_) => completed = true);
+    expect(registry.takePendingReveal('tab-42'), same(target));
+    await Future<void>.delayed(Duration.zero);
+    expect(
+      completed,
+      isFalse,
+      reason: 'Tab selection alone must not ACK line scroll',
+    );
+    registry.completeReveal('tab-42', target, applied: true);
+    expect(await result, isTrue);
+  });
+
+  test(
+    'MCP editor line reveal rejects stale acknowledgment and times out',
+    () async {
+      final registry = EditorSessionRegistry();
+      const first = WorkspaceEditorRevealTarget(
+        line: 2,
+        column: 1,
+        matchLength: 0,
+      );
+      const second = WorkspaceEditorRevealTarget(
+        line: 9,
+        column: 1,
+        matchLength: 0,
+      );
+      final superseded = registry.revealAndWait('tab-a', first);
+      final latest = registry.revealAndWait('tab-a', second);
+      expect(await superseded, isFalse);
+      registry.completeReveal('tab-a', first, applied: true);
+      expect(registry.takePendingReveal('tab-a'), same(second));
+      registry.completeReveal('tab-a', second, applied: true);
+      expect(await latest, isTrue);
+
+      final timedOut = await registry.revealAndWait(
+        'tab-b',
+        first,
+        timeout: const Duration(milliseconds: 1),
+      );
+      expect(timedOut, isFalse);
+      expect(registry.takePendingReveal('tab-b'), isNull);
+    },
+  );
+
+  test(
+    'MCP reveal reaches a mounted Editor and cancels when its Tab closes',
+    () async {
+      final registry = EditorSessionRegistry();
+      const target = WorkspaceEditorRevealTarget(
+        line: 17,
+        column: 1,
+        matchLength: 0,
+      );
+      WorkspaceEditorRevealTarget? received;
+      registry.register(
+        'editor-tab',
+        EditorSessionHandle(
+          isDirty: () => false,
+          save: () async {},
+          discard: () async {},
+          reveal: (next) => received = next,
+        ),
+      );
+      final result = registry.revealAndWait('editor-tab', target);
+      expect(received, same(target));
+      expect(registry.takePendingReveal('editor-tab'), isNull);
+      registry.forget('editor-tab');
+      expect(
+        await result,
+        false,
+        reason: 'Closed Tab cannot ACK Editor scroll',
+      );
+    },
+  );
+
   test('native parser policy preserves legacy parsers and opts new grammars in explicitly', () {
     final registry = createBuiltinLanguageExtensionRegistry();
     final defaults = LanguageIntelligenceSettings.defaults;

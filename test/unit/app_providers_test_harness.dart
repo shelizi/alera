@@ -421,6 +421,36 @@ class _FakeStatusSink implements AgentStatusSink {
   }
 }
 
+class _RecordingAgentPresenceClient implements RuntimeHostClient {
+  final requests = <(String, Map<String, Object?>)>[];
+
+  @override
+  Stream<RuntimeHostEvent> get runtimeEvents =>
+      const Stream<RuntimeHostEvent>.empty();
+
+  @override
+  Future<Object?> runtimeRequest(
+    String type, [
+    Map<String, Object?> payload = const <String, Object?>{},
+    Duration? timeout,
+  ]) async {
+    requests.add((type, Map<String, Object?>.from(payload)));
+    return null;
+  }
+
+  List<String> statesFor(String sessionId) {
+    return <String>[
+      for (final (type, payload) in requests)
+        if (type == 'orchestration.agentStatus')
+          for (final raw in (payload['entries'] as List<Object?>? ?? const []))
+            if (raw is Map<String, Object?> &&
+                raw['terminalSessionId'] == sessionId &&
+                raw['state'] is String)
+              raw['state']! as String,
+    ];
+  }
+}
+
 class _FakeAgentHookServer implements AgentHookServer {
   final _batches = StreamController<AgentHookEventBatch>.broadcast();
   final _enabledAgents = <String>{};

@@ -31,13 +31,11 @@ AgentDescriptorSnapshot? agentDescriptorForKey(String key) {
 /// The descriptor for a typed adapter. Every `AgentType` has a table entry;
 /// a missing entry means the checked-in snapshot drifted from the Rust table,
 /// which `agent_descriptor_snapshot_is_fresh` exists to prevent.
-AgentDescriptorSnapshot agentDescriptorFor(AgentType type) {
-  final descriptor = agentDescriptorForKey(type.key);
-  if (descriptor == null) {
-    throw StateError('missing agent descriptor for ${type.key}');
-  }
-  return descriptor;
-}
+// Every AgentType is required to be present in the checked-in canonical
+// snapshot; descriptor parity is validated as a build contract. A missing
+// entry is therefore an invariant violation, not a recoverable lookup result.
+AgentDescriptorSnapshot agentDescriptorFor(AgentType type) =>
+    agentDescriptorForKey(type.key)!;
 
 /// Agent types whose status capability is backed by the status subsystem.
 final List<AgentType> agentTypesWithStatusHooks = List<AgentType>.unmodifiable(

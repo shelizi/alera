@@ -47,6 +47,38 @@ void main() {
   _registerTerminalHostClientProtocolMismatchTests();
   _registerTerminalHostClientRuntimeMutationTests();
   _registerTerminalHostClientRuntimeSettingsTests();
+  test(
+    'configuration sync capability follows authenticated Host declaration',
+    () async {
+      for (final enabled in <bool>[false, true]) {
+        final dir = await Directory.systemTemp.createTemp(
+          'mcp-capability-test-',
+        );
+        final server = await _TerminalHostTestServer.start();
+        final client = SocketTerminalHostClient(
+          launcher: _FakeTerminalHostLauncher(
+            server: server,
+            configurationSyncSupported: enabled,
+          ),
+          applicationSupportDirectory: () async => dir,
+        );
+        try {
+          expect(
+            await client.supportsRuntimeCapability('configurationSyncV1'),
+            enabled,
+          );
+          expect(
+            await client.supportsRuntimeCapability('untrustedCapability'),
+            isFalse,
+          );
+        } finally {
+          client.dispose();
+          await server.dispose();
+          await dir.delete(recursive: true);
+        }
+      }
+    },
+  );
   test('connects through launcher and sends lifecycle requests', () async {
     final tempDir = await Directory.systemTemp.createTemp('alera-host-client-');
     addTearDown(() async {

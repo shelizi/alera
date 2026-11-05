@@ -560,7 +560,7 @@ mod tests {
                 let full_elapsed = began.elapsed().as_secs_f64() * 1_000_000.0;
                 let began = Instant::now();
                 let expected =
-                    diff_projections(black_box(&current), black_box(&projected), round as u64 + 1);
+                    diff_projections(black_box(&current), black_box(&projected), round + 1);
                 let diff_elapsed = began.elapsed().as_secs_f64() * 1_000_000.0;
                 let began = Instant::now();
                 let actual = update(handle.clone(), replacement).unwrap();

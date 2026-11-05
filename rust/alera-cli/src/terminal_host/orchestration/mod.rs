@@ -9,6 +9,7 @@ pub mod dispatch_preamble;
 pub mod group_resolution;
 pub mod lifecycle_reconciliation;
 pub use alera_core::managed_agent_launch;
+pub mod managed_agent_mcp_injection;
 pub mod managed_launch_shell_rendering;
 pub mod message_delivery;
 pub mod message_formatter;

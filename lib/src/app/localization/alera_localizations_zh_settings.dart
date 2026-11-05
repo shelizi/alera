@@ -673,6 +673,9 @@ const Map<String, String> _traditionalChineseSettings = <String, String>{
   'AI Assist Commit Messages': 'AI Assist Commit 訊息',
   'Choose the agent, model, reasoning and instructions for commit messages.':
       '選擇產生 Commit 訊息使用的 Agent、模型、推理強度與指示。',
+  'AI Assist Merge Conflicts': 'AI Assist 衝突合併',
+  'Choose the agent, model, reasoning and instructions for merge resolution suggestions.':
+      '選擇產生合併衝突解決建議使用的 Agent、模型、推理強度與指示。',
   'AI Assist Pull Request Details': 'AI Assist Pull Request 詳細資料',
   'Choose the agent, model, reasoning and instructions for pull request details.':
       '選擇產生 Pull Request 詳細資料使用的 Agent、模型、推理強度與指示。',

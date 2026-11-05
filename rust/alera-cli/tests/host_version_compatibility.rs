@@ -166,6 +166,25 @@ fn assert_v049_baseline(binary: &str, expected_version: Option<&str>) -> Vec<Val
         .iter()
         .any(|profile| profile["name"] == json!("Cross Version Profile")));
 
+    // Modern Hosts require durable Tab ownership before minting a new PTY.
+    // Register the same ordinary terminal Tab through the v0.49 wire API,
+    // rather than relaxing the transfer receipt / remint safety checks.
+    send(
+        &mut writer,
+        json!({"id": 41, "type": "tab.upsert", "payload": {
+            "id": "compat-tab", "workspaceId": "compat-workspace", "kind": "terminal",
+            "title": "Compatibility Terminal", "createdAt": "2026-07-19T00:00:00Z",
+            "updatedAt": "2026-07-19T00:00:00Z",
+            "payload": {"terminalSessionId": "compat-session"}
+        }}),
+    );
+    let persisted_tab = read_response(&mut reader, 41);
+    assert_eq!(
+        persisted_tab["ok"],
+        json!(true),
+        "terminal Tab registration failed: {persisted_tab}"
+    );
+
     send(
         &mut writer,
         json!({"id": 5, "type": "createOrAttach", "payload": {

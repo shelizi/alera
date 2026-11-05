@@ -1,3 +1,8 @@
+// Golden snapshots intentionally override app-level controllers with fixed
+// test data; these are not scoped production providers and must not require
+// changing provider dependencies across the application.
+// ignore_for_file: scoped_providers_should_specify_dependencies
+
 import 'dart:convert';
 
 import 'package:alchemist/alchemist.dart';

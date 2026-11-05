@@ -8,6 +8,8 @@ import 'package:alera/src/app/providers.dart';
 import 'package:alera/src/features/command_terminal/domain/command_terminal_request.dart';
 import 'package:alera/src/features/agent_status/application/agent_awake_service.dart';
 import 'package:alera/src/features/agent_status/application/agent_status_controller.dart';
+import 'package:alera/src/features/agent_status/application/agent_status_host_forwarder.dart';
+import 'package:alera/src/shared/infra/runtime/runtime_host_providers.dart';
 import 'package:alera/src/features/agent_status/application/agent_status_notification_activation_service.dart';
 import 'package:alera/src/features/agent_status/application/agent_status_notifications.dart';
 import 'package:alera/src/features/agent_status/domain/agent_status.dart';
@@ -607,6 +609,84 @@ void main() {
         }
 
         expect(receiver.isRunning, isTrue);
+      },
+    );
+
+    test(
+      'native Hook events are forwarded to Runtime Host after activation',
+      () async {
+        final support = await Directory.systemTemp.createTemp(
+          'alera-mcp-native-hook-host-forwarder-',
+        );
+        addTearDown(() async {
+          if (await support.exists()) {
+            await support.delete(recursive: true);
+          }
+        });
+        final previousPathProvider = PathProviderPlatform.instance;
+        PathProviderPlatform.instance = _FakePathProviderPlatform(support.path);
+        addTearDown(() => PathProviderPlatform.instance = previousPathProvider);
+        final settings = AleraSettings.defaults.copyWith(
+          agents: AleraSettings.defaults.agents.copyWith(
+            agentStatusHooks: const AgentStatusHookSettings(
+              values: {'claude': true},
+            ),
+          ),
+        );
+        final host = _RecordingAgentPresenceClient();
+        final container = ProviderContainer(
+          overrides: [
+            settingsControllerProvider.overrideWithValue(settings),
+            agentHookServerProvider.overrideWithValue(_FakeAgentHookServer()),
+            runtimeHostClientProvider.overrideWithValue(host),
+          ],
+        );
+        addTearDown(container.dispose);
+
+        container.read(agentStatusHostForwarderProvider);
+        container.read(agentHookReceiverLifecycleCoordinatorProvider);
+        final receiver = container.read(agentHookReceiverProvider);
+        for (var attempt = 0; attempt < 40 && !receiver.isRunning; attempt++) {
+          await Future.pause(const Duration(milliseconds: 10));
+        }
+        expect(receiver.isRunning, isTrue);
+
+        Future<void> postStatus(String event) async {
+          final response = await _postHook(
+            receiver.endpoint!.port,
+            path: '/hook/claude',
+            token: receiver.endpoint!.token,
+            body: jsonEncode(<String, Object?>{
+              'terminalSessionId': 'mcp-hook-native-1',
+              'workspaceId': 'mcp-hook-workspace',
+              'tabId': 'mcp-hook-tab',
+              'hookEventName': event,
+              'payload': <String, Object?>{
+                'prompt': 'disposable integration test',
+              },
+            }),
+          );
+          expect(response.statusCode, HttpStatus.noContent);
+        }
+
+        Future<void> waitForForwarded(String state) async {
+          for (var attempt = 0; attempt < 60; attempt++) {
+            if (host.statesFor('mcp-hook-native-1').contains(state)) {
+              return;
+            }
+            await Future.pause(const Duration(milliseconds: 15));
+          }
+          fail('The native Hook $state transition never reached Runtime Host');
+        }
+
+        await postStatus('UserPromptSubmit');
+        await waitForForwarded('working');
+        await postStatus('Stop');
+        await waitForForwarded('done');
+        expect(
+          host.statesFor('mcp-hook-native-1'),
+          containsAllInOrder(['working', 'done']),
+        );
       },
     );
 

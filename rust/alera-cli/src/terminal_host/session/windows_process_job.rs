@@ -119,7 +119,7 @@ impl WindowsProcessJob {
         environment: &BTreeMap<String, String>,
     ) -> HostResult<CommandBuilder> {
         let mut command = pty_bootstrap_command(shell, arguments, working_directory, environment)
-            .map_err(|error| HostError::state(error))?;
+            .map_err(HostError::state)?;
         command.env(BOOTSTRAP_EVENT_ENV, &self.release_event_name);
         command.env(BOOTSTRAP_PARENT_PID_ENV, std::process::id().to_string());
         Ok(command)

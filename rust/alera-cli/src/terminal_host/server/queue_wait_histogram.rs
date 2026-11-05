@@ -48,7 +48,7 @@ impl QueueWaitHistogram {
         // Use u128 for the multiplication so the percentile target itself
         // cannot wrap after many days of runtime. The fixed array stays O(1).
         let percentage = percent.clamp(1, 100) as u128;
-        let target = ((self.samples as u128 * percentage + 99) / 100) as u64;
+        let target = (self.samples as u128 * percentage).div_ceil(100) as u64;
         let mut observed = 0u64;
         for (upper, count) in BUCKET_UPPER_MS.iter().zip(&self.counts) {
             observed = observed.saturating_add(*count);

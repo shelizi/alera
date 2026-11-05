@@ -43,6 +43,7 @@ async fn stale_ssh_bootstrap_progress_is_not_broadcast() {
         mobile_prompt_file_uploads: HashMap::new(),
         mobile_prompt_image_uploads: HashMap::new(),
         agent_presence: AgentPresenceRegistry::default(),
+        mcp_ui: Default::default(),
         orchestration_waiters: MessageWaiterRegistry::default(),
         orchestration_delivery_in_flight: HashSet::new(),
         orchestration_delivery_backpressured: HashSet::new(),

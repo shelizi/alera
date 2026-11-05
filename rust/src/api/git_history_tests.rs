@@ -319,6 +319,18 @@ fn file_history_preserves_cross_branch_ancestry_and_pages_only_matching_commits(
     run_git(repo.path(), &["commit", "-m", "file deleted"]);
     let deleted =
         git_file_history(path_str(repo.path()), "target.txt".into(), Some(50), None).unwrap();
-    assert_eq!(deleted.items[0].subject, "file deleted");
+    // Unrelated branch tips can appear first when commit timestamps coincide.
+    // A deletion must precede its own ancestor, not every other branch tip.
+    let deleted_index = deleted
+        .items
+        .iter()
+        .position(|item| item.subject == "file deleted")
+        .unwrap();
+    let main_index = deleted
+        .items
+        .iter()
+        .position(|item| item.subject == "file main")
+        .unwrap();
+    assert!(deleted_index < main_index);
     assert_eq!(deleted.items.len(), 4);
 }

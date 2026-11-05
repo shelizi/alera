@@ -4,10 +4,17 @@ class _AleraShellPageBodyState extends ConsumerState<_AleraShellPageBody>
     with WidgetsBindingObserver {
   String? _lastErrorMessage;
   late final WorkbenchGitRepositoryLifecycleMonitor _gitRepositoryMonitor;
+  late final RuntimeHostClient _mcpRuntimeHostClient;
+  final String _mcpWindowId = const Uuid().v4();
+  StreamSubscription<RuntimeHostEvent>? _mcpUiSubscription;
+  Future<void> _mcpUiQueue = Future<void>.value();
 
   @override
   void initState() {
     super.initState();
+    // Flutter/Riverpod cannot safely use ref.read() from State.dispose().
+    // Keep the same Host client for this Shell's final MCP unregister.
+    _mcpRuntimeHostClient = ref.read(runtimeHostClientProvider);
     _gitRepositoryMonitor = WorkbenchGitRepositoryLifecycleMonitor(
       refreshProject: (projectId) async {
         await ref
@@ -20,6 +27,7 @@ class _AleraShellPageBodyState extends ConsumerState<_AleraShellPageBody>
     );
     WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
       final controller = ref.read(workbenchControllerProvider.notifier);
       await controller.bootstrap();
       if (!mounted) return;
@@ -70,6 +78,13 @@ class _AleraShellPageBodyState extends ConsumerState<_AleraShellPageBody>
               .info('E2E test workspace selected');
         }
       }
+      if (!mounted) return;
+      // Register this Flutter Shell as MCP-command-ready only after its
+      // initial Workbench selection completes. In isolated two-window E2E,
+      // registering beforehand raced a startup selectWorkspaceTab against
+      // MCP open_file, causing a second-window UI timeout. The production
+      // path has no test auto-selection and still registers after bootstrap.
+      _startMcpUiBridge();
     });
   }
 
@@ -82,6 +97,17 @@ class _AleraShellPageBodyState extends ConsumerState<_AleraShellPageBody>
 
   @override
   void dispose() {
+    unawaited(_mcpUiSubscription?.cancel());
+    _mcpUiSubscription = null;
+    // The long-lived Runtime Host may outlive this Flutter window. Explicitly
+    // unregister so subsequent MCP requests cannot target a disposed Shell.
+    unawaited(
+      _mcpRuntimeHostClient
+          .runtimeRequest('uiControl.unregister', <String, Object?>{
+            'windowId': _mcpWindowId,
+          })
+          .then((_) {}, onError: (Object _) {}),
+    );
     WidgetsBinding.instance.removeObserver(this);
     _gitRepositoryMonitor.dispose();
     super.dispose();
@@ -121,6 +147,11 @@ class _AleraShellPageBodyState extends ConsumerState<_AleraShellPageBody>
     );
     ref.watch(terminalHostWarmupCoordinatorProvider);
     ref.watch(runtimeAgentStatusSyncProvider);
+    // Keep the native hook receiver and Host presence forwarding alive while
+    // the real desktop Shell exists. Without these listeners the installed
+    // Claude/Codex Stop hook never makes the recipient injection-ready.
+    ref.watch(agentHookReceiverLifecycleCoordinatorProvider);
+    ref.watch(agentStatusHostForwarderProvider);
     ref.watch(agentHookInstallerCoordinatorProvider);
     ref.watch(agentStatusNotificationCoordinatorProvider);
     ref.watch(workspacePullRequestMonitorControllerProvider.notifier);

@@ -27,6 +27,7 @@ mod managed_workspace_removal_tests;
 mod managed_workspace_setup_tests;
 #[cfg(test)]
 mod managed_workspace_tests;
+mod mcp;
 mod mobile_access;
 mod native_credential_entry;
 mod netbird;
@@ -164,6 +165,7 @@ async fn run(cli: Cli) -> i32 {
         Command::Orchestration(command) => {
             orchestration_commands::run_orchestration_command(command).await
         }
+        Command::Mcp(command) => mcp::run(command).await,
     }
 }
 

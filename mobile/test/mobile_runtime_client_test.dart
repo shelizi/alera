@@ -261,9 +261,15 @@ void main() {
       expect(client.supportsAgentQuotaClaudeTui, isFalse);
 
       await client.authenticate(deviceId: 'device-1', deviceToken: 'token-1');
-      // authenticate intentionally starts a background status.get probe.
-      // Drain its reply before teardown closes the loopback WebSocket.
-      await pumpEventQueue();
+      // Authentication starts a background status.get probe. Wait for the
+      // actual network reply instead of relying on one event pump in CI.
+      final deadline = DateTime.now().add(const Duration(seconds: 5));
+      while (client.debugPendingRequestCount != 0) {
+        if (DateTime.now().isAfter(deadline)) {
+          throw TimeoutException('Runtime metadata did not finish.');
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
       expect(client.debugPendingRequestCount, 0);
 
       expect(client.supportsAgentQuotaClaudeTui, isTrue);

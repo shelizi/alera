@@ -85,7 +85,9 @@ jobs:
           dart tool/quality/agent_extension_guard.dart
 
       - name: Analyze
-        run: flutter analyze
+        run: |
+          dart tool/quality/pr_analyzer.dart --self-test
+          dart tool/quality/pr_analyzer.dart
 
   packages:
     runs-on: ubuntu-latest

@@ -10,13 +10,21 @@ readonly root="$(git rev-parse --show-toplevel)"
 readonly stage="$(mktemp -d)"
 trap 'rm -rf "$stage"' EXIT
 
-# Fetch only the tagged history tip into a disposable repository. This neither
-# deepens the checkout nor updates a contributor's local tag.
-readonly origin="$(git remote get-url origin)"
+# This historical fixture belongs to shelizi/alera. A developer's `origin`
+# may instead point to leynier/alera, where this downstream tag is absent.
+# Allow mirrors to override the source, but always pin the expected commit.
+readonly release_source="${ALERA_PREVIOUS_HOST_REPO:-https://github.com/shelizi/alera.git}"
 readonly release_repo="$stage/release-repo"
 git init --quiet "$release_repo"
-git -C "$release_repo" fetch --quiet --depth=1 --no-tags \
-  "$origin" "refs/tags/$previous_tag"
+# Fetch into a disposable repository without changing the caller's tags or
+# shallow checkout. If a remote has dropped the tag, its immutable commit can
+# still be used as long as it matches the pinned compatibility fixture.
+if ! git -C "$release_repo" fetch --quiet --depth=1 --no-tags \
+  "$release_source" "refs/tags/$previous_tag"; then
+  echo "$previous_tag is unavailable at $release_source; fetching pinned commit" >&2
+  git -C "$release_repo" fetch --quiet --depth=1 --no-tags \
+    "$release_source" "$previous_commit"
+fi
 resolved_commit="$(git -C "$release_repo" rev-parse 'FETCH_HEAD^{commit}')"
 if [[ "$resolved_commit" != "$previous_commit" ]]; then
   echo "$previous_tag resolved to $resolved_commit, expected $previous_commit" >&2

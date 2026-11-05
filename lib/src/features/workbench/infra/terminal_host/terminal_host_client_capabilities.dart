@@ -29,6 +29,7 @@ mixin _RuntimeHostCapabilitySupport
         connection.supportsRemoteAiDictation,
       aleraRuntimeHostWorkspaceSectionsCapability =>
         connection.supportsWorkspaceSections,
+      'configurationSyncV1' => connection.supportsConfigurationSync,
       _ => false,
     };
   }

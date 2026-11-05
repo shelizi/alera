@@ -1,3 +1,7 @@
+// Long-lived service instances are managed by ref.onDispose, not exposed as
+// serializable immutable Riverpod state.
+// ignore_for_file: unsupported_provider_value
+
 import 'package:alera/src/features/ai_dictation/application/ai_dictation_service.dart';
 import 'package:alera/src/features/ai_dictation/application/ai_dictation_target_registry.dart';
 import 'package:alera/src/features/ai_dictation/infra/native_ai_dictation_provider.dart';
@@ -38,6 +42,8 @@ Future<bool> remoteAiDictationSupported(Ref ref) async {
 }
 
 @Riverpod(keepAlive: true)
+// The long-lived service's lifecycle is bound to ref.onDispose; it is not a
+// serializable state value, which is intentional for this service provider.
 AiDictationService aiDictationService(Ref ref) {
   final service = AiDictationService(
     settings: () => ref.read(settingsControllerProvider).aiDictation,

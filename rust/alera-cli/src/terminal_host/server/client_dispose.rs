@@ -84,6 +84,7 @@ impl ServerActor {
             self.immediate_checkpoint(&session_id).await;
         }
         self.clients.remove(&client_id);
+        self.mcp_ui.disconnect(client_id);
         self.configuration_transfers.disconnect(client_id);
         if mobile_disconnected {
             self.broadcast_authenticated(event("mobileDevicesChanged", json!({})));

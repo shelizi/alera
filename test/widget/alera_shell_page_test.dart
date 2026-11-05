@@ -1,5 +1,7 @@
 import 'dart:async';
-import 'dart:io' show Platform;
+import 'dart:io' show Directory, Platform;
+
+import 'package:path/path.dart' as p;
 
 import 'package:alera/src/app/providers.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
@@ -13,14 +15,16 @@ import 'package:alera/src/features/agent_profiles/application/local_agent_provid
 import 'package:alera/src/features/agent_profiles/domain/agent_profile.dart';
 import 'package:alera/src/features/agent_profiles/domain/agent_profile_adapters.dart';
 import 'package:alera/src/features/agent_status/domain/agent_status.dart';
+import 'package:alera/src/features/agent_status/application/agent_status_host_forwarder.dart';
 import 'package:alera/src/features/external_editor/application/external_editor_providers.dart';
+import 'package:alera/src/features/external_editor/domain/external_editor_launcher.dart';
+import 'package:alera/src/features/external_editor/domain/external_editor_launch_result.dart';
 import 'package:alera/src/features/external_editor/domain/external_editor_spec.dart';
 import 'package:alera/src/features/agent_quota/domain/agent_quota.dart';
 import 'package:alera/src/features/projects/domain/project.dart';
 import 'package:alera/src/features/settings/domain/alera_settings.dart';
 import 'package:alera/src/features/shell/presentation/alera_shell_page.dart';
 import 'package:alera/src/features/workbench/application/workbench_state.dart';
-import 'package:alera/src/features/workbench/application/workbench_providers.dart';
 import 'package:alera/src/features/workbench/application/workspace_file_service.dart';
 import 'package:alera/src/features/workbench/application/workspace_folder_opener.dart';
 import 'package:alera/src/features/workbench/application/workspace_graph_repository.dart';
@@ -32,7 +36,7 @@ import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/domain/workspace_source_control_scope.dart';
 import 'package:alera/src/features/workbench/domain/workspace_creation_result.dart';
 import 'package:alera/src/features/workbench/domain/workspace_storage_impact.dart';
-import 'package:alera/src/features/workbench/application/terminal_runtime_lifecycle.dart';
+import 'package:alera/src/features/workbench/application/terminal_runtime_bindings.dart';
 import 'package:alera/src/features/workbench/application/external_terminal_providers.dart';
 import 'package:alera/src/features/workbench/domain/external_terminal_launcher.dart';
 import 'package:alera/src/features/workbench/presentation/terminal_runtime.dart';
@@ -41,6 +45,8 @@ import 'package:alera/src/features/workbench/presentation/project_workbench_side
 import 'package:alera/src/features/workbench/presentation/widgets/workspace_agent_compact_summary.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_workbench_view.dart';
 import 'package:alera/src/features/workbench/presentation/workbench_tab_drag_data.dart';
+import 'package:alera/src/platform/runtime_host/protocol/terminal_host_protocol.dart';
+import 'package:alera/src/shared/infra/runtime/runtime_host_providers.dart';
 import 'package:alera/src/shared/infra/git/git_providers.dart';
 import 'package:alera/src/shared/infra/process/process_runner.dart';
 import 'package:alera/src/shared/infra/storage/drift_database.dart';
@@ -66,120 +72,9 @@ part 'alera_shell_page_sidebar_feedback_test_cases.dart';
 part 'alera_shell_page_sidebar_titles_test_cases.dart';
 part 'alera_shell_page_pinning_test_cases.dart';
 part 'alera_shell_page_sidebar_identity_test_cases.dart';
-
-Future<AleraDatabase> _openMemoryDb() async {
-  return AleraDatabase(executor: NativeDatabase.memory());
-}
-
-Future<_ShellPumpHarness> _pumpShell(
-  WidgetTester tester, {
-  required WorkbenchState state,
-  _FakeTerminalRuntime? terminalRuntime,
-  WorkspaceFolderOpener? workspaceFolderOpener,
-  _ShellTestWorkbenchController? controller,
-  EditorSessionRegistry? editorSessionRegistry,
-  AleraSettings? settings,
-  Map<String, AgentStatusEntry> agentStatuses =
-      const <String, AgentStatusEntry>{},
-  bool agentTitlesAvailable = false,
-  bool terminalTransferAvailable = false,
-  List<AgentType> installedAgents = const <AgentType>[],
-  ExternalTerminalLauncher? externalTerminalLauncher,
-  VoidCallback? onAgentHookInstallerCoordinatorStarted,
-}) async {
-  final shellController = controller ?? _ShellTestWorkbenchController(state);
-  final runtime = terminalRuntime ?? _FakeTerminalRuntime();
-  final terminalHostClient = FakeTerminalHostClient(
-    attachment: TerminalHostAttachment(
-      sessionId: 'shell-test-session',
-      created: true,
-      running: true,
-      snapshot: Uint8List(0),
-    ),
-  );
-  addTearDown(terminalHostClient.dispose);
-  final settingsController = _ShellSettingsController(
-    settings ?? AleraSettings.defaults,
-  );
-  final agentStatusController = _ShellTestAgentStatusController(agentStatuses);
-  final db = await _openMemoryDb();
-  addTearDown(db.close);
-
-  await tester.pumpWidget(
-    ProviderScope(
-      overrides: [
-        aleraDatabaseProvider.overrideWith((ref) async => db),
-        workbenchControllerProvider.overrideWith(() => shellController),
-        workbenchTerminalTransferAvailabilityProvider.overrideWith(
-          (ref) async => terminalTransferAvailable,
-        ),
-        agentProfilesProvider.overrideWith(() => _ShellAgentProfiles()),
-        agentStatusControllerProvider.overrideWith(() => agentStatusController),
-        agentQuotaStateProvider.overrideWith(
-          () => _ShellAgentQuotaSnapshotList(
-            state.activeWorkspace?.hostId ?? 'local',
-          ),
-        ),
-        managedWorkspaceRuntimeProvider.overrideWithValue(
-          const _FakeManagedWorkspaceRuntime(),
-        ),
-        terminalRuntimeProvider.overrideWith((ref) => runtime),
-        terminalHostClientProvider.overrideWithValue(terminalHostClient),
-        terminalRuntimeBindingOverride(),
-        if (editorSessionRegistry != null)
-          editorSessionRegistryProvider.overrideWithValue(
-            editorSessionRegistry,
-          ),
-        terminalHostWarmupCoordinatorProvider.overrideWith((ref) {}),
-        if (onAgentHookInstallerCoordinatorStarted != null)
-          agentHookInstallerCoordinatorProvider.overrideWith((ref) {
-            onAgentHookInstallerCoordinatorStarted();
-          }),
-        settingsControllerProvider.overrideWith(() => settingsController),
-        agentTitleAvailableProvider.overrideWith(
-          (ref) async => agentTitlesAvailable,
-        ),
-        installedAgentClisProvider.overrideWith((ref) async => installedAgents),
-        if (externalTerminalLauncher != null)
-          externalTerminalLauncherProvider.overrideWith(
-            (ref) => externalTerminalLauncher,
-          ),
-        installedExternalEditorsProvider.overrideWith(
-          (ref) async => const <ExternalEditorSpec>[],
-        ),
-        resolvedExternalEditorProvider.overrideWith((ref) async => null),
-        if (workspaceFolderOpener != null)
-          workspaceFolderOpenerProvider.overrideWith(
-            (ref) => workspaceFolderOpener,
-          ),
-      ],
-      child: MaterialApp(
-        home: AleraShellPage(key: const ValueKey<String>('alera-shell-page')),
-      ),
-    ),
-  );
-  await tester.pump();
-  await tester.pump(const Duration(milliseconds: 200));
-  return _ShellPumpHarness(
-    controller: shellController,
-    runtime: runtime,
-    agentStatus: agentStatusController,
-  );
-}
-
-class _ShellAgentProfiles extends AgentProfiles {
-  @override
-  Future<List<AgentProfile>> build() async => const <AgentProfile>[];
-}
-
-class _ShellAgentQuotaSnapshotList extends AgentQuotaSnapshotList {
-  _ShellAgentQuotaSnapshotList(this.hostId);
-
-  final String hostId;
-
-  @override
-  Future<AgentQuotaState> build() async => AgentQuotaState.empty(hostId);
-}
+part 'alera_shell_page_mcp_navigation_test_cases.dart';
+part 'alera_shell_page_mcp_external_editor_test_support.dart';
+part 'alera_shell_page_pump_test_harness.dart';
 
 void main() {
   testWidgets(
@@ -274,19 +169,35 @@ void main() {
     },
   );
 
-  testWidgets('shell starts the agent hook installer coordinator', (
-    WidgetTester tester,
-  ) async {
-    var starts = 0;
+  testWidgets(
+    'shell activates native Agent hook, Host forwarder and installer',
+    (WidgetTester tester) async {
+      var starts = 0;
 
-    await _pumpShell(
-      tester,
-      state: _stackedWorkbenchState(),
-      onAgentHookInstallerCoordinatorStarted: () => starts += 1,
-    );
+      await _pumpShell(
+        tester,
+        state: _stackedWorkbenchState(),
+        onAgentHookInstallerCoordinatorStarted: () => starts += 1,
+      );
 
-    expect(starts, 1);
-  });
+      expect(starts, 1);
+      // The real Shell must instantiate these side-effect providers; testing
+      // their classes in isolation cannot catch a missing ref.watch().
+      final container = ProviderScope.containerOf(
+        tester.element(find.byType(AleraShellPage)),
+      );
+      expect(
+        container.exists(agentHookReceiverLifecycleCoordinatorProvider),
+        isTrue,
+      );
+      expect(container.exists(agentStatusHostForwarderProvider), isTrue);
+
+      // Dispose the Shell (and its long-lived coordinators) before the widget
+      // test framework checks for leaked timers.
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump();
+    },
+  );
 
   _registerAleraShellWorkbenchTests();
   _registerAleraShellSidebarActionTests();
@@ -295,6 +206,7 @@ void main() {
   _registerAleraShellSidebarTitleTests();
   _registerAleraShellPinningTests();
   _registerAleraShellSidebarIdentityTests();
+  _registerAleraShellMcpNavigationTests();
 }
 
 WorkbenchState _stackedWorkbenchState() {

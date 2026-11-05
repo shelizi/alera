@@ -2,8 +2,11 @@ import 'dart:async';
 
 import 'package:alera/src/app/dependencies.dart';
 import 'package:alera/src/features/settings/application/settings_controller.dart';
+import 'package:alera/src/features/settings/application/runtime_settings_changes.dart';
 import 'package:alera/src/features/settings/application/settings_repository.dart';
 import 'package:alera/src/features/settings/domain/alera_settings.dart';
+import 'package:alera/src/platform/runtime_host/protocol/terminal_host_protocol.dart';
+import 'package:alera/src/shared/infra/runtime/runtime_host_providers.dart';
 import 'package:alera/src/features/text_actions/domain/text_actions_settings.dart';
 import 'package:alera/src/features/text_actions/domain/text_actions_mutations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -28,7 +31,109 @@ class DelayedSettingsRepository implements SettingsRepository {
   }
 }
 
+final class _TestSettingsRuntimeHostClient implements RuntimeHostClient {
+  final events = StreamController<RuntimeHostEvent>();
+
+  @override
+  Stream<RuntimeHostEvent> get runtimeEvents => events.stream;
+
+  @override
+  Future<Object?> runtimeRequest(
+    String type, [
+    Map<String, Object?> payload = const <String, Object?>{},
+    Duration? timeout,
+  ]) async => const <String, Object?>{};
+}
+
 void main() {
+  test(
+    'Host settings stream emits distinct revisions on repeated events',
+    () async {
+      final host = _TestSettingsRuntimeHostClient();
+      addTearDown(host.events.close);
+      final container = ProviderContainer(
+        overrides: [runtimeHostClientProvider.overrideWithValue(host)],
+      );
+      addTearDown(container.dispose);
+      final seen = <int>[];
+      final listener = container.listen(runtimeSettingsChangesProvider, (
+        previous,
+        next,
+      ) {
+        if (next.hasValue) seen.add(next.requireValue);
+      });
+      addTearDown(listener.close);
+
+      for (final expected in <int>[1, 2]) {
+        host.events.add(
+          const RuntimeHostEvent('runtimeSettingsChanged', <String, Object?>{}),
+        );
+        for (
+          var attempt = 0;
+          attempt < 100 && seen.length < expected;
+          attempt++
+        ) {
+          await Future<void>.delayed(const Duration(milliseconds: 10));
+        }
+        expect(seen, hasLength(expected));
+        expect(seen.last, expected);
+      }
+      host.events.add(
+        const RuntimeHostEvent('workspacesChanged', <String, Object?>{}),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      expect(seen, <int>[1, 2]);
+    },
+  );
+
+  test('every Host settings notification refreshes a second window', () async {
+    final repository = DelayedSettingsRepository();
+    final changes = StreamController<int>();
+    addTearDown(changes.close);
+    final container = ProviderContainer(
+      overrides: [
+        settingsRepositoryProvider.overrideWithValue(repository),
+        runtimeSettingsChangesProvider.overrideWith((ref) => changes.stream),
+      ],
+    );
+    addTearDown(container.dispose);
+    // A real Settings pane watches SettingsController; it must not need a
+    // separate, artificial listener to the internal event stream provider.
+    final observedValues = <int>[];
+    final subscription = container.listen(settingsControllerProvider, (
+      previous,
+      next,
+    ) {
+      observedValues.add(next.editor.tabSize);
+    });
+    addTearDown(subscription.close);
+    final controller = container.read(settingsControllerProvider.notifier);
+    await controller.load();
+    expect(container.read(settingsControllerProvider).editor.tabSize, 4);
+
+    for (final tabSize in <int>[2, 5]) {
+      repository.saved = repository.saved.copyWith(
+        editor: repository.saved.editor.copyWith(tabSize: tabSize),
+      );
+      changes.add(tabSize);
+      var refreshed = false;
+      for (var attempt = 0; attempt < 100; attempt++) {
+        if (container.read(settingsControllerProvider).editor.tabSize ==
+            tabSize) {
+          refreshed = true;
+          break;
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      expect(
+        refreshed,
+        isTrue,
+        reason:
+            'Window B did not refresh for $tabSize; observed: $observedValues',
+      );
+    }
+  });
+
   test('explicit reversions preserve unrelated queued edits', () async {
     final repository = DelayedSettingsRepository();
     final container = ProviderContainer(

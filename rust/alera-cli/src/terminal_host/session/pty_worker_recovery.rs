@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use alera_core::runtime::{create_private_runtime_file, prepare_private_runtime_directory};
 use portable_pty::{MasterPty, PtySize};
@@ -165,6 +165,26 @@ fn worker_is_alive(record: &WorkerRecord) -> bool {
         .is_some_and(|worker| worker.start_time == record.worker_start_time)
 }
 
+/// A terminated Host session may still have a worker awaiting its Unix
+/// process reaper. Never start a replacement until the sealed old PID is gone.
+/// A live worker (even with a closed socket or different tab) stays protected.
+fn wait_for_worker_shutdown(record: &WorkerRecord) -> bool {
+    wait_for_worker_shutdown_for(record, Duration::from_secs(3))
+}
+
+fn wait_for_worker_shutdown_for(record: &WorkerRecord, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if !worker_is_alive(record) {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+}
+
 /// An existing worker must never be silently replaced because its host cannot
 /// contact it; creating a second shell under the same session id is unsafe.
 pub(super) fn has_recoverable_worker(runtime_dir: &Path, session_id: &str, tab_id: &str) -> bool {
@@ -199,7 +219,17 @@ pub(super) fn attach_existing(
     let Some(record) = read_record(&manifest_path(runtime_dir, session_id))? else {
         return Ok(None);
     };
-    if record.session_id != session_id || record.tab_id != tab_id {
+    if record.session_id != session_id {
+        return Err(HostError::state(
+            "PTY worker registry identity does not match the requested terminal",
+        ));
+    }
+    if record.tab_id != tab_id {
+        // A new Tab may reuse a session ID immediately after explicit
+        // termination. Only a verifiably dead prior worker may be replaced.
+        if wait_for_worker_shutdown(&record) {
+            return Ok(None);
+        }
         return Err(HostError::state(
             "PTY worker registry identity does not match the requested terminal",
         ));
@@ -210,9 +240,15 @@ pub(super) fn attach_existing(
         return Ok(None);
     }
     let address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), record.port);
-    let mut stream = TcpStream::connect_timeout(&address, CONNECTION_TIMEOUT).map_err(|error| {
-        HostError::state(format!("live PTY worker cannot be reconnected: {error}"))
-    })?;
+    let mut stream = match TcpStream::connect_timeout(&address, CONNECTION_TIMEOUT) {
+        Ok(stream) => stream,
+        Err(_error) if wait_for_worker_shutdown(&record) => return Ok(None),
+        Err(error) => {
+            return Err(HostError::state(format!(
+                "live PTY worker cannot be reconnected: {error}"
+            )));
+        }
+    };
     stream
         .set_nodelay(true)
         .map_err(|error| HostError::state(error.to_string()))?;
@@ -331,6 +367,7 @@ impl RecoveryOutput {
 pub(super) struct WorkerRecoveryServer {
     tail: Arc<Mutex<OutputTail>>,
     stop: Arc<AtomicBool>,
+    initial_host_attached: Arc<AtomicBool>,
     registry: PathBuf,
     worker_pid: u32,
 }
@@ -405,8 +442,10 @@ impl WorkerRecoveryServer {
             generation: 0,
         }));
         let stop = Arc::new(AtomicBool::new(false));
+        let initial_host_attached = Arc::new(AtomicBool::new(false));
         let thread_tail = Arc::clone(&tail);
         let thread_stop = Arc::clone(&stop);
+        let thread_attached = Arc::clone(&initial_host_attached);
         let thread_record = record.clone();
         let client_slots = Arc::new(ClientSlots::default());
         let thread_result = thread::Builder::new()
@@ -424,6 +463,7 @@ impl WorkerRecoveryServer {
                             let stream_writer = Arc::clone(&writer);
                             let stream_master = Arc::clone(&master);
                             let current_record = thread_record.clone();
+                            let attached = Arc::clone(&thread_attached);
                             let _ = thread::Builder::new()
                                 .name("alera-pty-worker-client".to_string())
                                 .spawn(move || {
@@ -436,6 +476,7 @@ impl WorkerRecoveryServer {
                                         stream_tail,
                                         stream_writer,
                                         stream_master,
+                                        attached,
                                     );
                                 });
                         }
@@ -454,6 +495,7 @@ impl WorkerRecoveryServer {
         Ok(Self {
             tail,
             stop,
+            initial_host_attached,
             registry,
             worker_pid,
         })
@@ -461,6 +503,16 @@ impl WorkerRecoveryServer {
 
     pub(super) fn output(&self) -> RecoveryOutput {
         RecoveryOutput(Arc::clone(&self.tail))
+    }
+
+    /// A one-shot shell may exit before the parent Host authenticates and
+    /// constructs its PTY streams. Delay worker cleanup for a bounded period
+    /// until the first token-authorized Host has confirmed the attachment.
+    pub(super) fn wait_for_initial_host_attachment(&self) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !self.initial_host_attached.load(Ordering::Acquire) && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(5));
+        }
     }
 }
 
@@ -482,6 +534,7 @@ fn serve_client(
     tail: Arc<Mutex<OutputTail>>,
     writer: Arc<Mutex<Option<Box<dyn Write + Send>>>>,
     master: Arc<Mutex<Option<Box<dyn MasterPty + Send>>>>,
+    initial_host_attached: Arc<AtomicBool>,
 ) {
     // A connection accepted from a nonblocking listener may inherit that
     // socket mode on Windows. After auth, the input reader must block for
@@ -538,6 +591,11 @@ fn serve_client(
             break;
         }
         match kind {
+            // Acknowledgment only after token authentication, not merely a
+            // TCP connection or a Host reading the greeting header.
+            b'H' if payload.is_empty() => {
+                initial_host_attached.store(true, Ordering::Release);
+            }
             b'W' if payload.len() <= MAX_WRITE_BYTES => {
                 let Ok(mut locked) = writer.lock() else { break };
                 let Some(pty) = locked.as_mut() else { break };
@@ -569,81 +627,5 @@ fn serve_client(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[cfg(unix)]
-    #[test]
-    fn unix_reconnect_manifest_requires_private_owner_and_permissions() {
-        use std::os::unix::fs::{symlink, PermissionsExt};
-
-        let dir = tempfile::tempdir().unwrap();
-        let registry = dir.path().join("workers");
-        prepare_private_runtime_directory(&registry).unwrap();
-        verify_unix_registry_path(&registry, true).unwrap();
-
-        let manifest = registry.join("session.json");
-        create_private_runtime_file(&manifest).unwrap();
-        verify_unix_registry_path(&manifest, false).unwrap();
-
-        std::fs::set_permissions(&manifest, std::fs::Permissions::from_mode(0o644)).unwrap();
-        assert_eq!(
-            verify_unix_registry_path(&manifest, false)
-                .unwrap_err()
-                .kind(),
-            io::ErrorKind::PermissionDenied
-        );
-
-        std::fs::set_permissions(&manifest, std::fs::Permissions::from_mode(0o600)).unwrap();
-        let link = registry.join("malicious.json");
-        symlink(&manifest, &link).unwrap();
-        assert_eq!(
-            verify_unix_registry_path(&link, false).unwrap_err().kind(),
-            io::ErrorKind::PermissionDenied
-        );
-    }
-
-    #[test]
-    fn reconnect_client_threads_are_bounded_and_slots_released() {
-        let slots = Arc::new(ClientSlots::default());
-        let permits: Vec<ClientPermit> = (0..MAX_CLIENT_CONNECTIONS)
-            .map(|_| slots.try_acquire().expect("available slot"))
-            .collect();
-        assert!(
-            slots.try_acquire().is_none(),
-            "extra client must not spawn a thread"
-        );
-        drop(permits);
-        assert_eq!(slots.0.load(Ordering::Acquire), 0);
-        assert!(
-            slots.try_acquire().is_some(),
-            "disconnected clients release slots"
-        );
-    }
-
-    #[test]
-    fn reconnect_output_tail_is_bounded_and_replays_at_absolute_cursor() {
-        let mut buffer = OutputTail {
-            end: 100,
-            limit: 5,
-            tail: VecDeque::new(),
-            socket: None,
-            generation: 0,
-        };
-        buffer.push(b"abcdef");
-        assert_eq!(buffer.end, 106);
-        assert_eq!(buffer.replay_from(103), (103, b"def".to_vec()));
-        assert_eq!(buffer.replay_from(100), (101, b"bcdef".to_vec()));
-        buffer.push(b"XY");
-        assert_eq!(buffer.replay_from(106), (106, b"XY".to_vec()));
-        assert_eq!(buffer.tail.len(), 5);
-    }
-
-    #[test]
-    fn manifest_paths_do_not_interpret_session_id_as_paths() {
-        let root = Path::new("C:/alera");
-        let path = manifest_path(root, "../C:../\\escape");
-        assert_eq!(path.parent().unwrap(), root.join("pty-workers"));
-        assert_eq!(path.extension().unwrap(), "json");
-    }
-}
+#[path = "pty_worker_recovery_tests.rs"]
+mod tests;

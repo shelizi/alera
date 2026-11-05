@@ -87,6 +87,22 @@ pub enum Command {
 
     /// Inter-agent orchestration: messaging, task DAG, dispatch, gates, coordinator.
     Orchestration(OrchestrationCommand),
+    /// Expose authorized Alera capabilities over MCP stdio to local agents.
+    Mcp(McpCommand),
+}
+
+#[derive(Debug, Args)]
+pub struct McpCommand {
+    #[command(flatten)]
+    pub runtime: RuntimeDirArgs,
+    #[command(subcommand)]
+    pub action: McpAction,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum McpAction {
+    /// Serve newline-delimited MCP JSON-RPC on stdin/stdout (no network listener).
+    Serve,
 }
 
 #[derive(Debug, Args)]

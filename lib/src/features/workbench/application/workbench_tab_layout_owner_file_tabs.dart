@@ -7,6 +7,7 @@ extension WorkbenchTabLayoutOwnerFileTabs on WorkbenchTabLayoutOwner {
     required String relativePath,
     String? targetGroupId,
     bool preview = false,
+    bool forceNew = false,
   }) {
     return _openReplaceableTab(
       workspace: workspace,
@@ -18,6 +19,7 @@ extension WorkbenchTabLayoutOwnerFileTabs on WorkbenchTabLayoutOwner {
               workspaceId: workspaceId,
               relativePath: relativePath,
               preview: preview,
+              forceNew: forceNew,
               replacePreviewTabId: replacePreviewTabId,
             );
           },

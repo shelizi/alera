@@ -488,6 +488,7 @@ const Map<String, String> _japaneseSettingsExtra = <String, String>{
       '編集中のエディタータブを、操作が止まってから自動保存します。',
   'AI Assist Agent': 'AI Assist Agent',
   'AI Assist Commit Messages': 'AI Assist の Commit メッセージ',
+  'AI Assist Merge Conflicts': 'AI Assist のマージ競合',
   'AI Assist Pull Request Details': 'AI Assist の Pull Request 詳細',
   'AI Assist Agent Titles': 'AI Assist の Agent タイトル',
   'AI Assist Workspace Identity': 'AI Assist のワークスペース識別子',

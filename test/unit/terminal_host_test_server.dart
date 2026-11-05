@@ -313,6 +313,7 @@ final class _TerminalHostTestServer._(
 final class _FakeTerminalHostLauncher({
   required final _TerminalHostTestServer server,
   final Future<void>? beforePublish,
+  final bool configurationSyncSupported = false,
 }) implements TerminalHostProcessLauncher {
   int starts = 0;
   final List<TerminalHostConfig> configs = <TerminalHostConfig>[];
@@ -344,6 +345,7 @@ final class _FakeTerminalHostLauncher({
           aleraRuntimeHostTerminalRestartCapability,
           aleraRuntimeHostTerminalDeferredInputCapability,
           aleraRuntimeHostTerminalPulseCapability,
+          if (configurationSyncSupported) 'configurationSyncV1',
         ],
       }),
     );

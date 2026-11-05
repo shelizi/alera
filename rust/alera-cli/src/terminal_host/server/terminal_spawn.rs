@@ -11,6 +11,9 @@ use crate::terminal_host::orchestration::agent_startup_command::{
 use crate::terminal_host::orchestration::codex_terminal_launch::{
     isolate_codex_command, isolate_managed_codex_launch,
 };
+use crate::terminal_host::orchestration::managed_agent_mcp_injection::{
+    enabled_by_opt_in, inject_managed_agent_mcp,
+};
 use crate::terminal_host::protocol::TerminalHostLaunch;
 use crate::terminal_host::session::Session;
 
@@ -305,6 +308,15 @@ impl ServerActor {
         let prompt_arguments = delivery.as_ref().zip(prompt.as_deref());
         let command = if let Some(mut launch) = managed_launch {
             isolate_managed_codex_launch(descriptor.map(|item| item.id), &mut launch);
+            // Opt-in alpha: only declared Managed Agent Profiles receive a
+            // per-launch MCP config. The Host has already minted this PTY's
+            // ephemeral environment capability; never write it into argv or
+            // the user's global Codex/Claude configuration.
+            if agent_profile_id(tab).is_some() && enabled_by_opt_in() {
+                if let (Some(descriptor), Ok(exe)) = (descriptor, std::env::current_exe()) {
+                    inject_managed_agent_mcp(descriptor.id, &mut launch, &exe, &self.runtime_dir);
+                }
+            }
             if let Some((mechanism, prompt)) = prompt_arguments {
                 append_initial_prompt_argument_for(mechanism, &mut launch.arguments, prompt);
             }
@@ -489,12 +501,25 @@ impl ServerActor {
         .await
         .map_err(|error| HostError::state(error.to_string()))?
         .map_err(|error| HostError::state(error.to_string()))?;
+        // Strip any inherited token before considering an app-owned Agent
+        // profile. A nested shell may inherit its parent's environment, but
+        // that is never evidence of authority for a newly created session.
+        launch.environment.remove("ALERA_MCP_UI_TOKEN");
         if let Ok(Some(tab)) = WorkspaceTabStoreHandler::new(&self.runtime_store)
             .find(&tab_id)
             .await
         {
             apply_host_owned_tab_identity(&mut launch, &tab, &workspace_id, &tab_id, &session_id);
+            if tab_agent_type(&tab).is_some() || agent_profile_id(&tab).is_some() {
+                let ui_capability = self.mcp_ui.mint_token(&session_id);
+                launch
+                    .environment
+                    .insert("ALERA_MCP_UI_TOKEN".into(), ui_capability);
+            }
         }
+        // Tokens are minted only for Alera-managed Agent tabs, never for a
+        // generic interactive shell. A recovered worker without the current
+        // Host proof fails closed until its next fresh Agent launch.
         let inbox = self.inbox.clone();
         let reader_session_id = session_id.clone();
         let session = Box::pin(Session::start(
@@ -513,7 +538,14 @@ impl ServerActor {
             &self.history,
             move |event| forward_pty_event(&inbox, &reader_session_id, event),
         ))
-        .await?;
+        .await;
+        let session = match session {
+            Ok(session) => session,
+            Err(error) => {
+                self.mcp_ui.revoke(&session_id);
+                return Err(error);
+            }
+        };
         self.sessions.insert(session_id, session);
         Ok(())
     }

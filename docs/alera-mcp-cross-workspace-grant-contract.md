@@ -1,0 +1,37 @@
+# MCP cross-workspace grant contract
+
+## Decision and scope
+
+Cross-workspace Agent grants remain unavailable. Managed MCP injection remains opt-in with its default OFF. This contract describes a future implementation, not an authorization endpoint or a deployed capability. Navigation to another workspace is a separate existing UI operation and must never imply permission to read Agent data or send messages.
+
+The 2026-11-05 review of `terminal_host/server/mcp_agent_requests.rs` found that sends and private receipt reads already require a Host-minted live PTY capability and same-workspace scope. In `terminal_host/server/client_delivery.rs`, `handle_hello` authenticates the shared Host token, then `requested_local_role` accepts caller-supplied `clientKind: "app"`. `mcp_ui_requests.rs::require_mcp_ui_app` checks that role, and `uiControl.register` registers a caller-supplied window ID. Neither is independent proof of trusted App authority. A local Host connection, registered window, explicit project ID, environment variable, or successful UI ACK must not become a grant issuer.
+
+The initial Agent observation path used `mcp.rs::caller_workspace`, which checked only whether environment-supplied handle/workspace values matched a live terminal. Both values can be guessed together. Agent discovery, activity and bounded output must instead validate `agentControl.scope` using the existing per-PTY capability before inventory or output requests. Same-workspace target filtering remains required after caller validation. Generic terminal and unauthenticated/manual MCP invocations cannot observe Agent data. Inventory and file/navigation policy outside Agent observation is not expanded by this change.
+
+## Trusted App prerequisite
+
+Before adding any grant RPC, design and verify an App-only credential or protected control channel rooted in an OS trust boundary. A candidate is a Host-launched App connection authenticated through a private inherited handle that Agent PTYs and other local CLI clients cannot obtain, combined with OS peer identity and access controls where supported. Executable name, PID supplied by the client, environment variables, shared Host token, and `clientKind` alone are insufficient. The implementation must demonstrate protection against same-user Agent processes obtaining or replaying the issuer credential on Windows, macOS and Linux; if a platform cannot enforce that separation, grants stay disabled there. Do not claim that a random token stored in an ordinary same-user-readable profile provides this boundary.
+
+Bind the authenticated App connection to a Host epoch and window instance; require a local human confirmation flow outside Agent-controllable RPC/UI commands. The confirmation displays source Agent, source and destination project/workspace, requested operations, exact recipient constraints, and expiration. Agent messages and terminal output must not trigger consent or mint grants. Remote/mobile clients cannot issue grants through this contract. Existing role negotiation and UI registration must not be silently promoted to issuer authentication.
+
+## Grant data and checks
+
+The Host owns an opaque grant ID with server-side records. Caller claims never create authority. Records contain issuer identity and confirmation ID, Host epoch, source session and capability generation, exact source project/workspace, exact destination project/workspace, allowed operations, optional exact recipient session and generation, creation time, bounded expiry, revocation state and audit revision. No wildcard workspace, group recipient, transitive grant, raw PTY input, settings privilege or shell execution is implied. Use separate permissions for Agent discovery, activity, output, message send and sender-owned message status. A grant for one direction never authorizes the reverse direction.
+
+On every use, the Host authenticates the caller's current PTY capability, resolves live source and destination identities from owned state, checks project membership and active/nonarchived workspaces, operation and recipient scope, current epoch/generations, expiry and revocation. Use a monotonic deadline within an epoch; expired records cannot revive after clock rollback, and persisted timestamps do not revive grants after restart. The effective deadline is bounded by both issuer policy and explicit consent. Missing, malformed, stale or unavailable authorization state denies access before inventory queries, output reads, mutation receipts, message persistence or PTY delivery.
+
+For messages, include the grant identity/revision and scoped destination in the idempotency context. Revalidate before replaying a cached receipt and immediately before delivery of queued messages. Revocation or expiry cancels undelivered cross-workspace messages; a historic acceptance does not authorize later injection. A message-status grant only exposes the requesting sender's explicitly scoped receipt, never message bodies or arbitrary inboxes. A separate destination grant is required for output or activity. Do not reuse broad local Orchestration RPC access as proof of an MCP grant.
+
+## Revocation, audit and lifecycle
+
+The trusted App can list and revoke its grants through the protected channel. Serialize grant checks and mutations with the Host's lifecycle owner so revoke has a defined linearization point: no new read or delivery may pass after revocation completes. Recheck deferred requests before execution. Already disclosed bytes cannot be recalled. Revoke on explicit action, issuer disconnect, source/recipient termination or capability rotation, workspace retirement or transfer, and Host restart. The initial implementation should keep grants memory-only and require renewed consent after restart.
+
+Write durable audit events for creation, denied/allowed use, expiration, revocation and cancellation, correlated by grant ID, request ID, operation, source/destination identities, issuer identity, decision reason and timestamp/revision. Do not log bearer tokens, issuer secrets, message bodies, prompts or terminal bytes. Authorization and the relevant audit append must share a defined ordering/transaction; audit storage failure denies a new protected operation. Define access control, bounded retention and overflow behavior before enabling grants. A queued/delivered message remains distinct from task completion.
+
+## Acceptance gate
+
+- Prove an ordinary authenticated local CLI cannot become a trusted issuer by spoofing App role, window registration, PID, environment, or replaying a prior issuer proof; verify on each supported OS.
+- Exercise real create/list/use/revoke lifecycle through the protected App channel, plus denial for another source, destination, project, recipient, operation or capability generation.
+- Verify expiration, clock rollback, immediate revocation, pending-delivery cancellation, idempotency replay after revoke, Host replacement, workspace retirement and issuer disconnect. Check no unauthorized inventory/output access, receipt disclosure, persistence or PTY write occurs.
+- Verify audit success and denial records, secret redaction, transaction ordering and failure behavior. Keep same-workspace positive controls and MCP opt-in/default OFF regressions.
+- Until these prerequisites and tests pass, advertise `crossWorkspace: false`, expose no grant creation tool, and retain fail-closed Agent scope checks.

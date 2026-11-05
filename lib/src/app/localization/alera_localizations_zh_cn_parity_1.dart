@@ -34,6 +34,8 @@ const Map<String, String> _simplifiedChineseParity1 = <String, String>{
   "Choose the CLI used for AI Assist jobs.": "选择 AI 辅助任务使用的 CLI。",
   "Choose the agent, model, reasoning and instructions for commit messages.":
       "选择生成提交消息所用的代理、模型、推理强度和指令。",
+  "Choose the agent, model, reasoning and instructions for merge resolution suggestions.":
+      "选择生成合并冲突解决建议所用的代理、模型、推理强度和指令。",
   "Choose the agent, model, reasoning and instructions for pull request details.":
       "选择生成 Pull Request 详情所用的代理、模型、推理强度和指令。",
   "Choose the agent, model, reasoning and instructions for reading diffs.":

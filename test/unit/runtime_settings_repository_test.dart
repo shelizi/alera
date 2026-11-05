@@ -9,6 +9,50 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   test(
+    'MCP authoritative reads use Host values and reject stale fallbacks',
+    () async {
+      final legacy = _MemorySettingsRepository();
+      final host = _RecordingRuntimeHostClient()..configurationSupported = true;
+      host.responses['configuration.settings.get'] = <String, Object?>{
+        'editor': <String, Object?>{'tabSize': 5},
+      };
+      host.responses['runtimeSettings.get'] = <String, Object?>{
+        'confirmWorkspaceRemoval': true,
+      };
+      final repository = RuntimeSettingsRepository(
+        client: host,
+        legacyRepository: legacy,
+      );
+      expect(legacy.settings.editor.tabSize, 4);
+      expect(await repository.readAuthoritativeMcpSetting('editor.tabSize'), 5);
+      expect(
+        await repository.readAuthoritativeMcpSetting(
+          'general.confirmWorkspaceRemoval',
+        ),
+        true,
+      );
+      expect(legacy.settings.editor.tabSize, 4);
+
+      host.responses['configuration.settings.get'] = <String, Object?>{
+        'editor': <String, Object?>{},
+      };
+      await expectLater(
+        repository.readAuthoritativeMcpSetting('editor.tabSize'),
+        throwsStateError,
+      );
+      host.configurationSupported = false;
+      await expectLater(
+        repository.readAuthoritativeMcpSetting('editor.tabSize'),
+        throwsStateError,
+      );
+      await expectLater(
+        repository.readAuthoritativeMcpSetting('agents.quotas'),
+        throwsArgumentError,
+      );
+    },
+  );
+
+  test(
     'portable runtime values refresh the cache without exporting local paths',
     () async {
       final legacy = _MemorySettingsRepository();

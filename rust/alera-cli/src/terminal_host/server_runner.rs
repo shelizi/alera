@@ -105,6 +105,7 @@ pub async fn run_terminal_host_server(
         mobile_prompt_file_uploads: HashMap::new(),
         mobile_prompt_image_uploads: HashMap::new(),
         agent_presence: AgentPresenceRegistry::default(),
+        mcp_ui: Default::default(),
         orchestration_waiters: MessageWaiterRegistry::default(),
         orchestration_delivery_in_flight: HashSet::new(),
         orchestration_delivery_backpressured: HashSet::new(),
@@ -220,6 +221,9 @@ async fn next_actor_command(
     })
 }
 
+// These queue-specific tests stay adjacent to their algorithm; the Unix
+// signal listener implementations follow because they are platform-specific.
+#[allow(clippy::items_after_test_module)]
 #[cfg(test)]
 mod priority_receiver_tests {
     use super::*;
