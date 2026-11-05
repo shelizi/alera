@@ -41,7 +41,7 @@ It runs the authoritative exporter, verifies Release identity and ZIP contents, 
   - `desktop.artifactVersion` and `desktop.releaseVersion` = the new semantic version;
   - `desktop.buildNumber` = the new build number;
   - `desktop.tag` = `v<new version>`;
-  - `desktop.previousTag` = `v<previous version>`;
+  - `desktop.previousTag` = the newest prior `release: vX.Y.Z` commit reachable on the release source's **first-parent** history (not necessarily the immediately preceding version number when parallel histories were merged);
   - leave mobile fields unchanged unless the user explicitly requests a mobile release.
 - Commit only these release metadata changes as `release: v<new version>` before running the Final-Link publisher.
 - Use the resulting release commit as the intended local `main` HEAD for package identity checks and publication.
@@ -122,6 +122,32 @@ Before retrying a failed Windows build, classify the failure. Do not repeatedly 
    - Run `git status --short --branch` again.
    - Confirm the build/upload process did not add tracked modifications.
    - Leave pre-existing untracked files untouched.
+
+## Mandatory Git tag / commit identity gate
+
+For every successful formal Final-Link publication, create and push an **annotated** Git tag `vX.Y.Z` whose peeled commit is the exact release source commit recorded by `kit-manifest.json` and the ZIP's root `CHANGELOG.md`.
+
+1. Before publication, fetch `fork/main` and inspect remote `main` plus all `refs/tags/vX.Y.Z` values. Never overwrite or move an existing version tag. When local `main` and remote `main` diverge, integrate on a clean separate worktree and preserve the user's dirty `main`. Push the release commit to `fork/main` only after verifying it descends from the latest remote `main` and release metadata matches the intended commit.
+2. Keep `pubspec.yaml` version/build, `prepared_release.json` desktop version/build/tag, and the upcoming release commit synchronized. Verify `prepared_release.json.sourceSha` is the release commit's **first parent** and the previous release marker is reachable on its first-parent history. Commit these metadata changes as `release: vX.Y.Z` (other audited Skill changes can be committed separately before that release commit).
+3. Build and publish via the tracked Final-Link wrapper from an isolated pinned worktree (`-AllowNonMain` is valid only for a reviewed clean release branch whose HEAD has already been pushed as `fork/main`). Do not tag on a failed build, partial upload, missing artifact, failed SHA-256 comparison, or failed remote ZIP integrity check.
+4. After **successful** publication, verify: `git ls-remote fork refs/heads/main` equals the expected commit; `kit-manifest.json.sourceCommit` and the ZIP `CHANGELOG.md` source commit match that commit; then `git tag -a vX.Y.Z <sha> -m "Alera vX.Y.Z Final-Link Release"` and `git push fork refs/tags/vX.Y.Z`. Reject pre-existing different local/remote tags; never use `--force`.
+5. Verify the remote tag with `git ls-remote fork refs/tags/vX.Y.Z^{}` (for annotated tag) and compare to remote `main`, manifest, and changelog. A GitHub Release object is **not** implied by an internal semi-compiled Final-Link upload; only create one when specifically requested.
+6. Report the release version and build, final commit, remote branch and tag peeled SHA, ZIP SHA-256, remote `ZIP_OK`, and excluded dirty files. Never claim publication, tag creation, or remote upload before verifying the actual result.
+
+### Minimum repeatable tag-verification commands
+
+```powershell
+$expected = (git rev-parse HEAD).Trim()
+$branchSha = ((git ls-remote fork refs/heads/main) -split '\s+')[0]
+if ($branchSha -ne $expected) { throw 'Remote main does not match release commit' }
+$tag = 'vX.Y.Z' # replace with prepared_release.json desktop.tag
+$existing = @(git ls-remote fork "refs/tags/$tag" "refs/tags/$tag^{}")
+if ($existing.Count -gt 0) { throw "Tag already exists: $tag" }
+git tag -a $tag $expected -m "Alera $tag Final-Link Release"
+git push fork "refs/tags/$tag"
+$peeled = ((git ls-remote fork "refs/tags/$tag^{}") -split '\s+')[0]
+if ($peeled -ne $expected) { throw 'Tag does not point at published commit' }
+```
 
 ## Reporting
 
