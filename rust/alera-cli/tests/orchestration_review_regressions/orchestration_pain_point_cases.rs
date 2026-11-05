@@ -385,15 +385,26 @@ fn pre_acceptance_terminal_exit_consumes_startup_budget() {
         json!({"id": handle}),
     ));
     assert!(removed_tab.is_null(), "{removed_tab}");
-    let shown = expect_ok(request(
-        &mut writer,
-        &mut reader,
-        8_320,
-        "orchestration.taskShow",
-        json!({"id": task["id"]}),
-    ));
-    assert_eq!(shown["task"]["status"], json!("ready"), "{shown}");
-    assert_eq!(shown["task"]["startup_failure_count"], json!(1), "{shown}");
+    // Terminal termination and orchestration dispatch reconciliation run on
+    // separate Host tasks. Wait for the bounded state transition rather than
+    // assuming tab removal immediately updates task status under CI load.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let shown = loop {
+        let shown = expect_ok(request(
+            &mut writer,
+            &mut reader,
+            8_320,
+            "orchestration.taskShow",
+            json!({"id": task["id"]}),
+        ));
+        if shown["task"]["status"] == json!("ready")
+            && shown["task"]["startup_failure_count"] == json!(1)
+        {
+            break shown;
+        }
+        assert!(Instant::now() < deadline, "{shown}");
+        std::thread::sleep(Duration::from_millis(50));
+    };
     let dispatch = expect_ok(request(
         &mut writer,
         &mut reader,
