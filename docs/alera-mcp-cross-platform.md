@@ -1,11 +1,19 @@
 # Alera MCP on macOS and Linux
 
 This is the **opt-in desktop MCP alpha**. Alera's existing Rust CLI implements
-the same 18-tool MCP stdio protocol on Windows, macOS and Linux. An Agent
-launched from an Alera Managed Codex/Claude Profile can receive its own
-transient MCP registration; the Host supplies a fresh, per-PTY scoped
+the same 20-tool MCP stdio protocol (10 read-only tools) on Windows, macOS
+and Linux. An Agent launched from an Alera Managed Codex/Claude Profile can
+receive its own transient MCP registration; the Host supplies a fresh, per-PTY scoped
 capability through the child process environment, **not** through command-line
 arguments or the user's global Agent configuration.
+
+**2026-11-05 Windows smoke confirmation:** The native CLI at PR commit
+`dc8b9864b` was rebuilt, then `mcp_cross_platform_smoke.py` passed with
+`MCP_NATIVE_PLATFORM_SMOKE_PASS` (exit 0). The smoke asserts all 20 distinct
+tools, including `alera.focus_workspace` and `alera.select_tab`, and verifies
+Host-minted PTY capability inheritance, denial without a bearer, scoped reads,
+and cleanup. This is Windows-only evidence; dedicated macOS/Linux MCP runners
+remain pending authorized workflow approval.
 
 ## Platform support and acceptance
 
