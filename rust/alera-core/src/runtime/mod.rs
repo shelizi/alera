@@ -59,6 +59,8 @@ mod settings_store;
 mod settings_store_tests;
 mod store;
 mod store_error;
+#[cfg(test)]
+mod store_lock_contention_tests;
 mod text_actions_validation;
 mod workbench_shared_state_models;
 mod workbench_shared_state_store;

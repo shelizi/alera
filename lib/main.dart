@@ -1,3 +1,7 @@
+// The root ProviderScope is constructed by appScope or deferred bootstrap.
+// First-frame detached previews have no Riverpod consumers.
+// ignore_for_file: missing_provider_scope
+
 import 'dart:async';
 import 'dart:io';
 
@@ -88,7 +92,6 @@ Future<void> _bootstrap(List<String> args) async {
     AleraPerformanceTrace.recordFirstFrame();
     // The lightweight first-paint preview owns no providers; the content
     // app installs its ProviderScope during deferred initialization.
-    // ignore: missing_provider_scope
     runApp(DetachedTabStartupApp(title: client.descriptor.tab.title));
     WidgetsBinding.instance.addPostFrameCallback((_) {
       AleraPerformanceTrace.mark('detached_preview_first_frame');
@@ -132,7 +135,7 @@ Future<void> _finishDetachedTabInitialization(
           AleraPerformanceTrace.measureAsync('detached_window_setup', () async {
             await windowManager.ensureInitialized();
             await windowManager.setTitle(
-              'Alera - ' + client.descriptor.tab.title,
+              'Alera - ${client.descriptor.tab.title}',
             );
           }),
       initializeAleraRust: () => AleraPerformanceTrace.measureAsync(
@@ -193,7 +196,6 @@ Future<void> _finishDetachedTabInitialization(
     // (for example setPreventClose or building the actual app).
     await childDatabase?.close();
     // Failed launch previews similarly do not access Riverpod providers.
-    // ignore: missing_provider_scope
     runApp(
       DetachedTabStartupApp(title: client.descriptor.tab.title, failed: true),
     );
@@ -255,7 +257,6 @@ Future<void> _startApp({bool sharedEngineTabs = false}) async {
     );
   } else {
     // The custom appScope function wraps AleraApp with ProviderScope.
-    // ignore: missing_provider_scope
     runApp(appScope(const AleraApp()));
   }
   AleraPerformanceTrace.mark('run_app_called');

@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::Path;
+use std::time::Duration;
 
 use anyhow::{ensure, Result};
 use chrono::{DateTime, SecondsFormat, TimeZone, Utc};
@@ -22,6 +23,10 @@ use super::{
 pub const RUNTIME_DATABASE_FILE_NAME: &str = "runtime.sqlite";
 pub const LOCAL_HOST_ID: &str = "local";
 const RUNTIME_STORE_MAX_CONNECTIONS: u32 = 4;
+// The Host actor and terminal-exit/reconciliation callbacks can briefly
+// contend for SQLite's single WAL writer. Await the write lock rather than
+// failing a user-visible orchestration request during a short burst.
+const RUNTIME_STORE_BUSY_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Clone)]
 pub struct RuntimeStore {
@@ -128,7 +133,8 @@ impl RuntimeStore {
             .filename(&path)
             .create_if_missing(true)
             .journal_mode(SqliteJournalMode::Wal)
-            .synchronous(SqliteSynchronous::Normal);
+            .synchronous(SqliteSynchronous::Normal)
+            .busy_timeout(RUNTIME_STORE_BUSY_TIMEOUT);
         // SQLite gives every pooled connection its own worker thread. The
         // runtime actor serializes ordinary mutations, while a few background
         // jobs can read concurrently, so the default of ten only leaves idle

@@ -1,3 +1,7 @@
+// Runtime services are owned by the Riverpod provider lifecycle, not
+// serialized/compared as immutable state objects.
+// ignore_for_file: unsupported_provider_value
+
 import 'dart:async';
 
 import 'package:alera/src/features/agent_status/application/agent_status_controller.dart';
@@ -263,7 +267,6 @@ EditorSessionRegistry editorSessionRegistry(Ref ref) {
 @Riverpod(keepAlive: true)
 // This is an injected runtime service with a stable provider lifetime, not
 // application state or a value that needs Riverpod's equality comparisons.
-// ignore: unsupported_provider_value
 WorkspaceService workspaceService(Ref ref) {
   final override = ref.watch(
     settingsControllerProvider.select((s) => s.general.workspaceDirectory),
