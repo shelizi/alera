@@ -265,6 +265,85 @@ void main() {
     },
   );
 
+  testWidgets(
+    'right click Pull and Push target selected branch without switching',
+    (tester) async {
+      final git = FakeGitBackend()
+        ..sourceBranches = <String>['main', 'feature']
+        ..headBranch = 'main';
+      final now = DateTime.utc(2026, 11, 5);
+      final workspace = Workspace(
+        id: 'source-id',
+        projectId: 'project-id',
+        name: 'Source',
+        path: '/repo',
+        branch: 'main',
+        kind: .main,
+        status: .active,
+        createdAt: now,
+        updatedAt: now,
+      );
+      var switches = 0;
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [gitBackendProvider.overrideWithValue(git)],
+          child: MaterialApp(
+            home: Scaffold(
+              body: Align(
+                alignment: Alignment.bottomRight,
+                child: WorkspaceBranchStatusBarControl(
+                  workspace: workspace,
+                  sourceControlScope: WorkspaceSourceControlScope(
+                    workspaceId: workspace.id,
+                    workspacePath: '/repo',
+                    path: '/repo',
+                  ),
+                  onSwitchBranch: (_) async => switches++,
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('workspace-branch-status')));
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const ValueKey('workspace-branch-option:feature')),
+        buttons: kSecondaryMouseButton,
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const ValueKey('workspace-branch-pull:feature')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('workspace-branch-status')));
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const ValueKey('workspace-branch-option:feature')),
+        buttons: kSecondaryMouseButton,
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const ValueKey('workspace-branch-push:feature')),
+      );
+      await tester.pumpAndSettle();
+      expect(switches, 0);
+      expect(
+        git.calls.where((call) => call.method == 'pullBranch').single.args,
+        {'path': '/repo', 'branch': 'feature'},
+      );
+      expect(
+        git.calls.where((call) => call.method == 'pushBranch').single.args,
+        {'path': '/repo', 'branch': 'feature'},
+      );
+      expect(
+        git.calls.where((call) => call.method == 'checkoutBranch'),
+        isEmpty,
+      );
+    },
+  );
+
   testWidgets('right click merges selected branch into current checkout only', (
     tester,
   ) async {

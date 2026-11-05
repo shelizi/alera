@@ -65,6 +65,26 @@ Future<void> runGitHistoryRefMenuAction({
             ? 'Tag Name'
             : 'Branch Name',
       );
+    case GitHistoryRefMenuAction.pullBranch:
+      await _runGitHistoryMutation(
+        context: context,
+        operation: () => backend.pullBranch(path: path, branch: itemRef.name),
+        successMessage: context.trTemplate('Pulled {branch}', {
+          'branch': itemRef.name,
+        }),
+        onMutationSuccess: onMutationSuccess,
+        errorMessage: errorMessage,
+      );
+    case GitHistoryRefMenuAction.pushBranch:
+      await _runGitHistoryMutation(
+        context: context,
+        operation: () => backend.pushBranch(path: path, branch: itemRef.name),
+        successMessage: context.trTemplate('Pushed {branch}', {
+          'branch': itemRef.name,
+        }),
+        onMutationSuccess: onMutationSuccess,
+        errorMessage: errorMessage,
+      );
     case GitHistoryRefMenuAction.renameBranch:
       final newName = await showGitHistoryRenameBranchDialog(
         context,

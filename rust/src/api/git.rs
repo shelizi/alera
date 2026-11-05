@@ -1017,6 +1017,25 @@ pub fn git_pull(path: String) -> Result<(), GitError> {
     git_cli_in_path(&path, &["pull"])
 }
 
+/// Fast-forwards the selected branch without checking it out here. If it is
+/// already checked out, the owning worktree performs the fast-forward.
+pub fn git_pull_branch(path: String, branch: String) -> Result<(), GitError> {
+    let repo = open_repo(&path)?;
+    let local = repo
+        .find_branch(&branch, BranchType::Local)
+        .map_err(|error| match error.code() {
+            ErrorCode::NotFound => GitError::new(GitErrorKind::BranchNotFound, &branch),
+            _ => GitError::from_git2(error),
+        })?;
+    local.upstream().map_err(|error| match error.code() {
+        ErrorCode::NotFound => GitError::new(GitErrorKind::NoUpstream, &branch),
+        _ => GitError::from_git2(error),
+    })?;
+    drop(local);
+    drop(repo);
+    core_git::refresh_source_branch(&path, &branch).map_err(Into::into)
+}
+
 pub fn git_push(path: String) -> Result<(), GitError> {
     let repo = open_repo(&path)?;
     let state = git_repository_state(path.clone())?;
@@ -1036,6 +1055,38 @@ pub fn git_push(path: String) -> Result<(), GitError> {
         ));
     }
     git_cli_in_path(&path, &["push", "-u", "origin", &state.branch])
+}
+
+/// Pushes a local branch using an explicit source ref and its upstream
+/// destination, without moving HEAD or force-updating the remote.
+pub fn git_push_branch(path: String, branch: String) -> Result<(), GitError> {
+    let repo = open_repo(&path)?;
+    repo.find_branch(&branch, BranchType::Local)
+        .map_err(|error| match error.code() {
+            ErrorCode::NotFound => GitError::new(GitErrorKind::BranchNotFound, &branch),
+            _ => GitError::from_git2(error),
+        })?;
+    let config = repo.config().map_err(GitError::from_git2)?;
+    let remote = config
+        .get_string(&format!("branch.{branch}.remote"))
+        .unwrap_or_else(|_| "origin".to_owned());
+    if remote == "." || repo.find_remote(&remote).is_err() {
+        return Err(GitError::new(GitErrorKind::RemoteNotFound, remote));
+    }
+    let configured_merge = config.get_string(&format!("branch.{branch}.merge")).ok();
+    let destination = match configured_merge.as_deref() {
+        Some(name) => name
+            .strip_prefix("refs/heads/")
+            .filter(|name| !name.is_empty())
+            .ok_or_else(|| GitError::new(GitErrorKind::GitCli, "unsupported upstream ref"))?,
+        None => branch.as_str(),
+    };
+    let refspec = format!("refs/heads/{branch}:refs/heads/{destination}");
+    if configured_merge.is_some() {
+        git_cli_in_path(&path, &["push", &remote, &refspec])
+    } else {
+        git_cli_in_path(&path, &["push", "--set-upstream", &remote, &refspec])
+    }
 }
 
 pub fn git_list_stashes(path: String) -> Result<Vec<GitStashEntry>, GitError> {

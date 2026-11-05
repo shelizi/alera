@@ -44,6 +44,9 @@ const Map<String, String> _traditionalChineseGitHistory = <String, String>{
   'Merged {branch}': '已合併 {branch}',
   'Rebased onto {branch}': '已 Rebase 到 {branch}',
   'Created archive {path}': '已建立封存檔 {path}',
+  'Pull Branch': '拉取此分支',
+  'Push Branch': '推送此分支',
+  'Pushed {branch}': '已推送 {branch}',
   'Pulled {branch}': '已 Pull {branch}',
   'Pushed tag {tag}': '已 Push Tag {tag}',
   'Deleted tag {tag}': '已刪除 Tag {tag}',
@@ -93,6 +96,9 @@ const Map<String, String> _traditionalChineseGitHistory = <String, String>{
 };
 
 const Map<String, String> _simplifiedChineseGitHistory = <String, String>{
+  'Pull Branch': '拉取此分支',
+  'Push Branch': '推送此分支',
+  'Pushed {branch}': '已推送 {branch}',
   'Compare with Branch...': '与其他分支比较…',
   'Rename Branch': '重命名分支',
   'Delete Branch?': '要删除此分支吗？',
@@ -230,6 +236,9 @@ const Map<String, String> _japaneseGitHistory = <String, String>{
   'Merged {branch}': '{branch} をマージしました',
   'Rebased onto {branch}': '{branch} に Rebase しました',
   'Created archive {path}': 'アーカイブ {path} を作成しました',
+  'Pull Branch': 'このブランチを Pull',
+  'Push Branch': 'このブランチを Push',
+  'Pushed {branch}': '{branch} を Push しました',
   'Pulled {branch}': '{branch} を Pull しました',
   'Pushed tag {tag}': 'タグ {tag} を Push しました',
   'Deleted tag {tag}': 'タグ {tag} を削除しました',

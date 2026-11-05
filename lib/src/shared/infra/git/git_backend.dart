@@ -473,6 +473,13 @@ abstract interface class GitBackend
 
   Future<void> push(String path);
 
+  /// Fast-forwards a local branch from its upstream without switching the
+  /// requesting checkout. Diverged histories are rejected.
+  Future<void> pullBranch({required String path, required String branch});
+
+  /// Pushes a selected local branch, independent of the current checkout.
+  Future<void> pushBranch({required String path, required String branch});
+
   @override
   Future<List<GitStashEntry>> listStashes(String path);
 

@@ -140,8 +140,10 @@ class FakeGitBackend
   GitException? fetchError;
   void Function()? onFetch;
   GitException? pullError;
+  GitException? pullBranchError;
   GitException? refreshSourceBranchError;
   GitException? pushError;
+  GitException? pushBranchError;
   GitException? stashError;
   GitException? stashPopError;
 
@@ -644,6 +646,34 @@ class FakeGitBackend
     if (error != null) {
       throw error;
     }
+  }
+
+  @override
+  Future<void> pullBranch({
+    required String path,
+    required String branch,
+  }) async {
+    calls.add(
+      GitBackendCall('pullBranch', <String, Object?>{
+        'path': path,
+        'branch': branch,
+      }),
+    );
+    if (pullBranchError case final error?) throw error;
+  }
+
+  @override
+  Future<void> pushBranch({
+    required String path,
+    required String branch,
+  }) async {
+    calls.add(
+      GitBackendCall('pushBranch', <String, Object?>{
+        'path': path,
+        'branch': branch,
+      }),
+    );
+    if (pushBranchError case final error?) throw error;
   }
 
   @override
