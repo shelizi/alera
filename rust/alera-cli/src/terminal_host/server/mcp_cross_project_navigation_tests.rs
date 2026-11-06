@@ -39,6 +39,29 @@ async fn navigation_actor(
     )
     .await;
     let now = Utc::now();
+    // Creation needs a persisted caller Workspace, not just the PTY stub
+    // used by older navigation-only tests.
+    actor
+        .runtime_store
+        .upsert_project(Project {
+            id: "project-a".into(),
+            name: "Current Project".into(),
+            repo_path: dir.path().join("current").to_string_lossy().into_owned(),
+            created_at: now,
+            updated_at: now,
+            kind: ProjectKind::Folder,
+        })
+        .await
+        .unwrap();
+    let caller: Workspace = serde_json::from_value(json!({
+        "id":"workspace","projectId":"project-a",
+        "instanceId":"instance-a","hostId":"local",
+        "name":"Current", "path":dir.path().join("caller").to_string_lossy(),
+        "createdAt":now,"updatedAt":now,
+        "kind":"main","status":"active","reusesExistingBranch":false
+    }))
+    .unwrap();
+    actor.runtime_store.upsert_workspace(caller).await.unwrap();
     actor
         .runtime_store
         .upsert_project(Project {
@@ -179,6 +202,119 @@ async fn cross_project_navigation_is_authorized_only_for_matching_active_project
             .is_err(),
         "cross-workspace navigation needs explicit project identity"
     );
+}
+
+#[tokio::test]
+async fn managed_workspace_creation_requires_host_project_and_real_app_receipt() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut actor, mut app_events, token) = navigation_actor(&dir).await;
+    let request = json!({
+        "sessionId":"source-agent", "workspaceId":"workspace", "capability":token,
+        "action":"create_workspace", "arguments":{
+            "projectId":"project-b", "sourceBranch":"main",
+            "newBranchName":"feature/mcp-new", "name":"Agent Workspace"
+        }
+    });
+    let accepted = actor
+        .handle_mcp_ui_request(2, "uiControl.request", &request)
+        .await
+        .unwrap();
+    let event = app_events.try_recv().unwrap().as_json().unwrap();
+    assert_eq!(event["payload"]["workspaceId"], "workspace");
+    assert_eq!(event["payload"]["arguments"]["projectId"], "project-b");
+    assert_eq!(
+        actor.sessions.len(),
+        1,
+        "creation must not move the source PTY"
+    );
+    let request_id = accepted["requestId"].as_str().unwrap();
+    assert!(
+        actor
+            .handle_mcp_ui_request(
+                1,
+                "uiControl.complete",
+                &json!({"requestId":request_id,"applied":true,"createdWorkspaceId":"workspace-b"})
+            )
+            .await
+            .is_err(),
+        "an existing Workspace is not creation"
+    );
+    let now = Utc::now();
+    let created: Workspace = serde_json::from_value(json!({
+        "id":"workspace-new","projectId":"project-b",
+        "instanceId":"instance-new","hostId":"local",
+        "name":"Agent Workspace","path":dir.path().join("created").to_string_lossy(),
+        "createdAt":now,"updatedAt":now,
+        "kind":"linked","status":"active","reusesExistingBranch":false
+    }))
+    .unwrap();
+    actor.runtime_store.upsert_workspace(created).await.unwrap();
+    assert!(
+        actor
+            .handle_mcp_ui_request(
+                2,
+                "uiControl.complete",
+                &json!({"requestId":request_id,"applied":true,"createdWorkspaceId":"workspace-new"})
+            )
+            .await
+            .is_err(),
+        "a CLI cannot acknowledge the UI"
+    );
+    actor
+        .handle_mcp_ui_request(
+            1,
+            "uiControl.complete",
+            &json!({"requestId":request_id,"applied":true,"createdWorkspaceId":"workspace-new"}),
+        )
+        .await
+        .unwrap();
+    let status = actor
+        .handle_mcp_ui_request(
+            2,
+            "uiControl.status",
+            &json!({"sessionId":"source-agent","workspaceId":"workspace",
+            "capability":token,"requestId":request_id}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(status["applied"], true);
+    assert_eq!(status["workspaceId"], "workspace-new");
+    let caller_project = actor
+        .runtime_store
+        .find_workspace("workspace")
+        .await
+        .unwrap()
+        .unwrap()
+        .project_id;
+    let mut current_project = request.clone();
+    current_project["arguments"]
+        .as_object_mut()
+        .unwrap()
+        .remove("projectId");
+    actor
+        .handle_mcp_ui_request(2, "uiControl.request", &current_project)
+        .await
+        .unwrap();
+    let default_event = app_events.try_recv().unwrap().as_json().unwrap();
+    assert_eq!(
+        default_event["payload"]["arguments"]["projectId"],
+        caller_project
+    );
+    let mut foreign_parent = request.clone();
+    foreign_parent["arguments"]["parentWorkspaceId"] = json!("workspace");
+    assert!(
+        actor
+            .handle_mcp_ui_request(2, "uiControl.request", &foreign_parent)
+            .await
+            .is_err(),
+        "cross-project parent Workspace must be rejected"
+    );
+    let mut forged = request;
+    forged["arguments"]["projectId"] = json!("missing-project");
+    assert!(actor
+        .handle_mcp_ui_request(2, "uiControl.request", &forged)
+        .await
+        .is_err());
 }
 
 #[tokio::test]

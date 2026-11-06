@@ -232,6 +232,12 @@ fn tool_definitions() -> Vec<Value> {
             "annotations": {"readOnlyHint": true}
         }),
         json!({
+            "name": "alera.get_context",
+            "description": "Identify calling Agent's current Project and Workspace",
+            "inputSchema": {"type":"object","properties":{},"additionalProperties":false},
+            "annotations": {"readOnlyHint": true}
+        }),
+        json!({
             "name": "alera.list_tabs",
             "description": "List tabs in the current or an explicitly named active Alera workspace (cross-project requires projectId). Does not reveal tab payloads.",
             "inputSchema": {"type": "object", "properties": {
@@ -286,6 +292,20 @@ fn tool_definitions() -> Vec<Value> {
                 "windowId": {"type": "string"}
             }, "required": ["workspaceId"], "additionalProperties": false},
             "annotations": {"readOnlyHint": false}
+        }),
+        json!({
+            "name": "alera.create_workspace",
+            "description": "Create and open a new Alera-managed Workspace, defaulting to the calling Agent's Project; use projectId for cross-project creation. Uses Workbench creation and Host authorization.",
+            "inputSchema": {"type":"object","properties":{
+                "projectId":{"type":"string"},
+                "sourceBranch":{"type":"string","minLength":1},
+                "newBranchName":{"type":"string","minLength":1},
+                "reuseExistingBranch":{"type":"boolean","default":false},
+                "name":{"type":"string"},
+                "parentWorkspaceId":{"type":"string"},
+                "windowId":{"type":"string"}
+            },"required":["sourceBranch","newBranchName"],"additionalProperties":false},
+            "annotations":{"readOnlyHint":false}
         }),
         json!({
             "name": "alera.select_tab",
@@ -454,11 +474,13 @@ fn supported_tool(name: &str) -> bool {
         name,
         "alera.list_projects"
             | "alera.list_workspaces"
+            | "alera.get_context"
             | "alera.list_tabs"
             | "alera.search_files"
             | "alera.open_file"
             | "alera.reveal_file"
             | "alera.focus_workspace"
+            | "alera.create_workspace"
             | "alera.select_tab"
             | "alera.open_git_graph"
             | "alera.compare_branches"
@@ -571,6 +593,32 @@ async fn execute_tool_connected(
                 json!({"kind": "workspaces", "items": items, "totalMatches": filtered.len(), "truncated": filtered.len() > limit}),
             )
         }
+        "alera.get_context" => {
+            let (_, caller_id, _) = agent_identity(client).await?;
+            let workspaces = host_array(client, "workspace.listAll", &json!({})).await?;
+            let workspace = workspaces
+                .iter()
+                .find(|entry| {
+                    entry["id"] == caller_id
+                        && entry["status"] == "active"
+                        && entry["archivedAt"].is_null()
+                })
+                .ok_or("The caller Workspace is not active")?;
+            let project_id = workspace["projectId"]
+                .as_str()
+                .ok_or("The caller Workspace has no Project")?;
+            let projects = host_array(client, "project.list", &json!({})).await?;
+            let project = projects
+                .iter()
+                .find(|entry| entry["id"] == project_id)
+                .ok_or("The caller Project is missing")?;
+            Ok(json!({
+                "kind": "workspaceContext",
+                "project": project_fields(project),
+                "workspace": workspace_fields(workspace),
+                "defaultProjectId": project_id
+            }))
+        }
         "alera.list_tabs" => {
             let caller = caller_workspace(client).await?;
             let workspace = resolve_navigation_workspace(
@@ -627,6 +675,7 @@ async fn execute_tool_connected(
         "alera.open_file"
         | "alera.reveal_file"
         | "alera.focus_workspace"
+        | "alera.create_workspace"
         | "alera.select_tab"
         | "alera.open_git_graph"
         | "alera.compare_branches"
@@ -764,6 +813,7 @@ async fn execute_ui_tool(
         "alera.open_file" => "open_file",
         "alera.reveal_file" => "reveal_file",
         "alera.focus_workspace" => "focus_workspace",
+        "alera.create_workspace" => "create_workspace",
         "alera.select_tab" => "select_tab",
         "alera.open_git_graph" => "open_git_graph",
         "alera.compare_branches" => "compare_branches",
@@ -796,7 +846,12 @@ async fn execute_ui_tool(
     if accepted["status"] != "accepted" || accepted["applied"] != false {
         return Err("Host returned an invalid UI receipt".to_string());
     }
-    let deadline = Instant::now() + MCP_UI_WAIT;
+    let deadline = Instant::now()
+        + if action == "create_workspace" {
+            Duration::from_secs(180)
+        } else {
+            MCP_UI_WAIT
+        };
     loop {
         if Instant::now() >= deadline {
             return Err("Alera UI did not confirm the command in time".to_string());
@@ -827,7 +882,13 @@ async fn execute_ui_tool(
                 } else {
                     &workspace
                 };
-                if status["workspaceId"].as_str() != Some(expected_workspace) {
+                if action == "create_workspace" {
+                    if status["workspaceId"].as_str().is_none_or(str::is_empty)
+                        || status["workspaceId"] == workspace
+                    {
+                        return Err("Host did not confirm a new Workspace".into());
+                    }
+                } else if status["workspaceId"].as_str() != Some(expected_workspace) {
                     return Err("Alera Host acknowledged a different destination Workspace".into());
                 }
                 if matches!(action, "get_setting" | "update_setting") {
@@ -915,6 +976,16 @@ fn check_keys(tool: &str, args: &Value) -> Result<(), String> {
     let allowed: &[&str] = match tool {
         "alera.list_projects" => &["query", "limit"],
         "alera.list_workspaces" => &["projectId", "includeArchived", "limit"],
+        "alera.get_context" => &[],
+        "alera.create_workspace" => &[
+            "projectId",
+            "sourceBranch",
+            "newBranchName",
+            "reuseExistingBranch",
+            "name",
+            "parentWorkspaceId",
+            "windowId",
+        ],
         "alera.list_tabs" => &["workspaceId", "projectId", "limit"],
         "alera.search_files" => &["query", "includeHidden", "limit"],
         "alera.open_file" => &[
@@ -1327,13 +1398,13 @@ mod tests {
         .unwrap();
         assert_eq!(listed["id"], "list");
         let tools = listed["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 20);
+        assert_eq!(tools.len(), 22);
         assert_eq!(
             tools
                 .iter()
                 .filter(|tool| tool["annotations"]["readOnlyHint"] == true)
                 .count(),
-            10
+            11
         );
         assert!(tools
             .iter()
@@ -1374,6 +1445,15 @@ mod tests {
         assert!(supported_tool("alera.send_agent_message"));
         assert!(supported_tool("alera.focus_agent"));
         assert!(supported_tool("alera.get_agent_message_status"));
+        assert!(supported_tool("alera.get_context"));
+        assert!(supported_tool("alera.create_workspace"));
+        assert!(check_keys("alera.get_context", &json!({})).is_ok());
+        assert!(check_keys("alera.get_context", &json!({"projectId":"forged"})).is_err());
+        assert!(check_keys(
+            "alera.create_workspace",
+            &json!({"sourceBranch":"main","newBranchName":"feature/mcp"})
+        )
+        .is_ok());
         assert!(!supported_tool("alera.send_agent_input"));
         for name in [
             "alera.list_settings",

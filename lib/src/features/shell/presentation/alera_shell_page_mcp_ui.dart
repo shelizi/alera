@@ -44,6 +44,7 @@ extension _AleraShellMcpUi on _AleraShellPageBodyState {
     final id = command['requestId'];
     if (id is! String || id.isEmpty || !mounted) return;
     String? tabId;
+    String? createdWorkspaceId;
     String? errorCode;
     Object? settingValue;
     try {
@@ -52,6 +53,8 @@ extension _AleraShellMcpUi on _AleraShellPageBodyState {
         settingValue = await _applyMcpSettingCommand(command);
       } else if (command['action'] == 'open_settings') {
         await _mcpOpenSettingsDialog(command);
+      } else if (command['action'] == 'create_workspace') {
+        createdWorkspaceId = await _mcpCreateWorkspace(command);
       } else {
         tabId = await _applyMcpUiCommand(command);
       }
@@ -68,6 +71,8 @@ extension _AleraShellMcpUi on _AleraShellPageBodyState {
           'requestId': id,
           'applied': errorCode == null,
           if (tabId != null && errorCode == null) 'tabId': tabId,
+          if (createdWorkspaceId != null && errorCode == null)
+            'createdWorkspaceId': createdWorkspaceId,
           if (settingValue != null && errorCode == null)
             'settingValue': settingValue,
           'errorCode': ?errorCode,
@@ -77,6 +82,63 @@ extension _AleraShellMcpUi on _AleraShellPageBodyState {
       // A disconnected Host or expired request must not be reported as
       // complete by the UI. The MCP caller will receive its Host-side error.
       Logger('AleraMcpUi').fine('MCP UI command receipt could not be sent.');
+    }
+  }
+
+  Future<String> _mcpCreateWorkspace(Map<String, Object?> command) async {
+    if (!mounted || command['windowId'] != _mcpWindowId) {
+      throw const _McpUiFailure('ui_not_ready');
+    }
+    final args = command['arguments'];
+    if (args is! Map ||
+        args['projectId'] is! String ||
+        args['sourceBranch'] is! String ||
+        args['newBranchName'] is! String) {
+      throw const _McpUiFailure('workspace_create_failed');
+    }
+    final projectId = args['projectId'] as String;
+    final before = ref.read(workbenchControllerProvider);
+    final projects = before.projects.where(
+      (project) => project.id == projectId,
+    );
+    if (projects.length != 1) {
+      throw const _McpUiFailure('workspace_missing');
+    }
+    final project = projects.single;
+    final source = args['sourceBranch'] as String;
+    final branch = args['newBranchName'] as String;
+    if (source.isEmpty || branch.isEmpty) {
+      throw const _McpUiFailure('workspace_create_failed');
+    }
+    try {
+      // Existing Workbench workflow owns Git worktree creation, the catalog,
+      // initial tabs and deferred setup. Do not recreate it in the MCP bridge.
+      final result = await ref
+          .read(workbenchControllerProvider.notifier)
+          .createWorkspace(
+            project: project,
+            sourceBranch: source,
+            newBranchName: branch,
+            reuseExistingBranch: args['reuseExistingBranch'] == true,
+            name: args['name'] as String?,
+            parentWorkspaceId: args['parentWorkspaceId'] as String?,
+          );
+      if (!mounted) throw const _McpUiFailure('ui_not_ready');
+      final current = ref.read(workbenchControllerProvider);
+      if (result.workspace.projectId != projectId ||
+          current.activeWorkspaceId != result.workspace.id ||
+          !result.workspace.isActive ||
+          result.workspace.isArchived ||
+          !(current.workspacesByProject[projectId] ?? const <Workspace>[]).any(
+            (workspace) => workspace.id == result.workspace.id,
+          )) {
+        throw const _McpUiFailure('ui_not_ready');
+      }
+      return result.workspace.id;
+    } on _McpUiFailure {
+      rethrow;
+    } catch (_) {
+      throw const _McpUiFailure('workspace_create_failed');
     }
   }
 
