@@ -379,11 +379,12 @@ def run(exe: Path) -> None:
               "native MCP stdio initializes without starting Host")
         tools = frames[2].get("result", {}).get("tools", [])
         names = {item.get("name") for item in tools}
-        check(len(tools) == 20 and len(names) == 20 and
-              {"alera.focus_workspace", "alera.select_tab"}.issubset(names) and
+        check(len(tools) == 22 and len(names) == 22 and
+              {"alera.focus_workspace", "alera.select_tab",
+               "alera.get_context", "alera.create_workspace"}.issubset(names) and
               sum(item.get("annotations", {}).get("readOnlyHint") is True
-                  for item in tools) == 10 and not missing.exists(),
-              "20 unique MCP tool schemas including navigation, 10 read-only; "
+                  for item in tools) == 11 and not missing.exists(),
+              "22 unique MCP tool schemas including Workspace management, 11 read-only; "
               "no Host side effects")
 
     root = Path(tempfile.mkdtemp(prefix="alera-mcp-native-os-")).resolve()

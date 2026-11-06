@@ -1,7 +1,7 @@
 # Alera MCP on macOS and Linux
 
 This is the **opt-in desktop MCP alpha**. Alera's existing Rust CLI implements
-the same 20-tool MCP stdio protocol (10 read-only tools) on Windows, macOS
+the MCP stdio protocol (now 22 tools, 11 read-only) on Windows, macOS
 and Linux. An Agent launched from an Alera Managed Codex/Claude Profile can
 receive its own transient MCP registration; the Host supplies a fresh, per-PTY scoped
 capability through the child process environment, **not** through command-line
@@ -14,6 +14,25 @@ tools, including `alera.focus_workspace` and `alera.select_tab`, and verifies
 Host-minted PTY capability inheritance, denial without a bearer, scoped reads,
 and cleanup. This is Windows-only evidence; dedicated macOS/Linux MCP runners
 remain pending authorized workflow approval.
+
+## Project and Workspace control
+
+Managed Agents can call `alera.get_context` to identify their Host-verified
+Project and Workspace; `alera.list_projects` and `alera.list_workspaces`
+list the Alera catalog, which includes non-Git workspaces and cannot be
+reconstructed from `git worktree list` alone. `alera.focus_workspace`
+continues to switch to an existing Workspace without relocating the caller
+PTY. `alera.create_workspace` creates a new managed Git Workspace using the
+same Workbench creation, setup and selection flow as the UI. The Project
+defaults to the calling Agent's Project unless an explicit registered
+`projectId` is supplied. Creation requires `sourceBranch` and
+`newBranchName` and a real Host-issued Agent capability. The request is
+complete only after the Alera App reports the new Workspace and the Host
+verifies its durable Project membership and active status. A timeout is
+ambiguous: list Workspaces before retrying to avoid duplicates.
+
+The earlier 20-tool native smoke confirmation below is historical evidence
+for the prior toolset, not verification of these two new tools.
 
 ## Platform support and acceptance
 

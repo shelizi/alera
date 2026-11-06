@@ -37,6 +37,9 @@ pub(super) struct McpUiControlState {
 struct McpUiReceipt {
     session_handle: String,
     target_workspace_id: String,
+    expected_project_id: Option<String>,
+    existing_workspace_ids: Vec<String>,
+    is_creation: bool,
     expected_tab_id: Option<String>,
     target_client_id: u64,
     window_id: String,
@@ -49,8 +52,16 @@ struct McpUiReceipt {
 }
 
 impl McpUiReceipt {
+    fn timeout(&self) -> Duration {
+        if self.is_creation {
+            Duration::from_secs(180)
+        } else {
+            REQUEST_TTL
+        }
+    }
+
     fn report(&mut self) -> Value {
-        if self.status == "accepted" && self.created.elapsed() >= REQUEST_TTL {
+        if self.status == "accepted" && self.created.elapsed() >= self.timeout() {
             self.status = "failed";
             self.error_code = Some("ui_timeout");
         }
@@ -97,13 +108,18 @@ impl McpUiControlState {
     }
 
     fn compact(&mut self) {
-        // Abandoned requests must release their queue slot at the 12-second
-        // deadline even when their original MCP client never polls status.
+        // Abandoned requests expire at their action-specific deadlines.
         for receipt in self.requests.values_mut() {
             receipt.report();
         }
-        self.requests
-            .retain(|_, receipt| receipt.created.elapsed() < RECEIPT_TTL);
+        self.requests.retain(|_, receipt| {
+            receipt.created.elapsed()
+                < if receipt.is_creation {
+                    Duration::from_secs(240)
+                } else {
+                    RECEIPT_TTL
+                }
+        });
     }
 }
 
@@ -170,6 +186,66 @@ impl ServerActor {
                 let target_workspace_id = self
                     .validate_navigation_target(&action, &arguments, &workspace_id)
                     .await?;
+                // Resolve the default Project using the Host-owned caller Workspace.
+                let expected_project_id = if action == "create_workspace" {
+                    let caller = self
+                        .runtime_store
+                        .find_workspace(&workspace_id)
+                        .await
+                        .map_err(|error| HostError::state(error.to_string()))?
+                        .ok_or_else(|| {
+                            HostError::unauthorized("Caller Workspace is unavailable.")
+                        })?;
+                    let project_id = arguments
+                        .get("projectId")
+                        .and_then(Value::as_str)
+                        .unwrap_or(&caller.project_id)
+                        .to_owned();
+                    if self
+                        .runtime_store
+                        .find_project(&project_id)
+                        .await
+                        .map_err(|error| HostError::state(error.to_string()))?
+                        .is_none()
+                    {
+                        return Err(HostError::unauthorized("Target Project is unavailable."));
+                    }
+                    if let Some(parent_id) =
+                        arguments.get("parentWorkspaceId").and_then(Value::as_str)
+                    {
+                        let parent = self
+                            .runtime_store
+                            .find_workspace(parent_id)
+                            .await
+                            .map_err(|error| HostError::state(error.to_string()))?;
+                        if !parent.as_ref().is_some_and(|workspace| {
+                            workspace.project_id == project_id
+                                && workspace.status == WorkspaceStatus::Active
+                                && workspace.archived_at.is_none()
+                        }) {
+                            return Err(HostError::unauthorized(
+                                "Parent Workspace must belong to the active target Project.",
+                            ));
+                        }
+                    }
+                    arguments["projectId"] = json!(project_id);
+                    Some(project_id)
+                } else {
+                    None
+                };
+                // Snapshot known Workspace IDs before invoking the App;
+                // timestamps are rounded by some storage backends.
+                let existing_workspace_ids = if action == "create_workspace" {
+                    self.runtime_store
+                        .list_all_workspaces()
+                        .await
+                        .map_err(|error| HostError::state(error.to_string()))?
+                        .into_iter()
+                        .map(|workspace| workspace.id)
+                        .collect()
+                } else {
+                    Vec::new()
+                };
                 let expected_tab_id = if action == "select_tab" {
                     Some(required_short(&arguments, "tabId", 128)?)
                 } else {
@@ -242,10 +318,14 @@ impl ServerActor {
                     McpUiReceipt {
                         session_handle,
                         target_workspace_id,
+                        expected_project_id,
+                        existing_workspace_ids,
+                        is_creation: action == "create_workspace",
                         expected_tab_id,
                         target_client_id,
                         window_id,
                         created: Instant::now(),
+
                         status: "accepted",
                         tab_id: None,
                         setting_path,
@@ -278,6 +358,51 @@ impl ServerActor {
                     .ok_or_else(|| HostError::format("applied must be boolean."))?;
                 let tab_id = optional_short(payload, "tabId", 128)?;
                 let error_code = optional_short(payload, "errorCode", 60)?;
+                let created_workspace_id = if applied {
+                    let record = self
+                        .mcp_ui
+                        .requests
+                        .get(&request_id)
+                        .filter(|receipt| receipt.target_client_id == client_id)
+                        .ok_or_else(|| {
+                            HostError::unauthorized("UI command is not assigned to this window.")
+                        })?;
+                    if record.is_creation {
+                        let created_id = required_short(payload, "createdWorkspaceId", 128)?;
+                        if created_id == record.target_workspace_id {
+                            return Err(HostError::format(
+                                "Creation must produce a new Workspace.",
+                            ));
+                        }
+                        let created = self
+                            .runtime_store
+                            .find_workspace(&created_id)
+                            .await
+                            .map_err(|error| HostError::state(error.to_string()))?
+                            .ok_or_else(|| {
+                                HostError::state("Created Workspace is not registered.")
+                            })?;
+                        if record.existing_workspace_ids.contains(&created_id) {
+                            return Err(HostError::state(
+                                "Workspace existed before the creation request.",
+                            ));
+                        }
+                        if Some(created.project_id.as_str())
+                            != record.expected_project_id.as_deref()
+                            || created.status != WorkspaceStatus::Active
+                            || created.archived_at.is_some()
+                        {
+                            return Err(HostError::unauthorized(
+                                "Created Workspace does not match the authorized Project.",
+                            ));
+                        }
+                        Some(created_id)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
                 let receipt = self
                     .mcp_ui
                     .requests
@@ -286,7 +411,7 @@ impl ServerActor {
                     .ok_or_else(|| {
                         HostError::unauthorized("UI command is not assigned to this window.")
                     })?;
-                if receipt.status != "accepted" || receipt.created.elapsed() >= REQUEST_TTL {
+                if receipt.status != "accepted" || receipt.created.elapsed() >= receipt.timeout() {
                     return Err(HostError::state("UI command is no longer pending."));
                 }
                 let setting_value = match receipt.setting_path.as_deref() {
@@ -308,6 +433,9 @@ impl ServerActor {
                     return Err(HostError::format(
                         "Selected tab does not match the authorized target.",
                     ));
+                }
+                if let Some(created_id) = created_workspace_id {
+                    receipt.target_workspace_id = created_id;
                 }
                 receipt.status = if applied { "applied" } else { "failed" };
                 receipt.tab_id = if applied { tab_id } else { None };
@@ -439,6 +567,7 @@ fn public_ui_error_code(code: Option<&str>) -> &'static str {
         Some("invalid_editor") => "invalid_editor",
         Some("external_editor_unavailable") => "external_editor_unavailable",
         Some("external_editor_failed") => "external_editor_failed",
+        Some("workspace_create_failed") => "workspace_create_failed",
         Some("workspace_missing") => "workspace_missing",
         Some("git_compare_failed") => "git_compare_failed",
         Some("ui_not_ready") => "ui_not_ready",
@@ -508,6 +637,14 @@ fn validate_ui_arguments(action: &str, raw: Option<&Value>) -> HostResult<Value>
         ],
         "reveal_file" => &["relativePath", "workspaceId", "projectId"],
         "focus_workspace" => &["workspaceId", "projectId"],
+        "create_workspace" => &[
+            "projectId",
+            "sourceBranch",
+            "newBranchName",
+            "reuseExistingBranch",
+            "name",
+            "parentWorkspaceId",
+        ],
         "select_tab" => &["workspaceId", "projectId", "tabId"],
         "focus_agent" => &["handle"],
         "get_setting" => &["path"],
@@ -540,6 +677,26 @@ fn validate_ui_arguments(action: &str, raw: Option<&Value>) -> HostResult<Value>
             && !validated.contains_key("workspaceId")
         {
             return Err(HostError::format("Navigation workspaceId is required."));
+        }
+    }
+    if action == "create_workspace" {
+        if let Some(project_id) = optional_short(raw.unwrap(), "projectId", 128)? {
+            validated.insert("projectId".into(), json!(project_id));
+        }
+        for key in ["sourceBranch", "newBranchName"] {
+            let reference = required_short(raw.unwrap(), key, 128)?;
+            validated.insert(key.into(), json!(validate_git_ref(&reference)?));
+        }
+        for key in ["name", "parentWorkspaceId"] {
+            if let Some(value) = optional_short(raw.unwrap(), key, 128)? {
+                validated.insert(key.into(), json!(value));
+            }
+        }
+        if let Some(reuse) = args.get("reuseExistingBranch") {
+            if !reuse.is_boolean() {
+                return Err(HostError::format("reuseExistingBranch must be boolean."));
+            }
+            validated.insert("reuseExistingBranch".into(), reuse.clone());
         }
     }
     if action == "select_tab" {
@@ -838,6 +995,18 @@ mod tests {
         assert!(
             validate_ui_arguments("open_git_graph", Some(&json!({"allBranches":"yes"}))).is_err()
         );
+        assert!(validate_ui_arguments(
+            "create_workspace",
+            Some(&json!({"sourceBranch":"main","newBranchName":"feature/agent"}))
+        )
+        .is_ok());
+        assert!(validate_ui_arguments(
+            "create_workspace",
+            Some(&json!({"sourceBranch":"--exec","newBranchName":"feature/agent"}))
+        )
+        .is_err());
+        assert!(validate_ui_arguments("create_workspace",
+            Some(&json!({"sourceBranch":"main","newBranchName":"feature/agent","command":"echo unsafe"}))).is_err());
         assert!(validate_ui_arguments("untrusted", Some(&json!({}))).is_err());
         assert!(validate_ui_arguments(
             "open_file",
@@ -914,10 +1083,14 @@ mod tests {
         let mut receipt = McpUiReceipt {
             session_handle: "session".into(),
             target_workspace_id: "workspace".into(),
+            expected_project_id: None,
+            existing_workspace_ids: Vec::new(),
+            is_creation: false,
             expected_tab_id: None,
             target_client_id: 1,
             window_id: "main".into(),
             created: Instant::now(),
+
             status: "accepted",
             tab_id: None,
             setting_path: None,
@@ -942,10 +1115,14 @@ mod tests {
             McpUiReceipt {
                 session_handle: "handle".into(),
                 target_workspace_id: "workspace".into(),
+                expected_project_id: None,
+                existing_workspace_ids: Vec::new(),
+                is_creation: false,
                 expected_tab_id: None,
                 target_client_id: 5,
                 window_id: "window".into(),
                 created: Instant::now(),
+
                 status: "accepted",
                 tab_id: None,
                 setting_path: None,
