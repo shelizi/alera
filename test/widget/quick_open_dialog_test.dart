@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:alera/src/app/providers.dart';
+import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/features/external_editor/application/external_editor_providers.dart';
 import 'package:alera/src/features/external_editor/domain/external_editor_launch_result.dart';
 import 'package:alera/src/features/external_editor/domain/external_editor_launcher.dart';
@@ -25,6 +26,42 @@ import 'package:alera/src/shared/infra/process/process_runner.dart';
 import 'package:path/path.dart' as p;
 
 void main() {
+  testWidgets('Ctrl+P uses compact rows and expands only for wrapped names', (
+    tester,
+  ) async {
+    final longName =
+        '${List<String>.filled(12, 'long_filename_').join()}final.dart';
+    final workspace = _workspace('workspace-1', 'Main', '/repo/main');
+    await _pumpQuickOpen(
+      tester,
+      controller: _QuickOpenTestController(_state(workspace)),
+      service: _QuickOpenFileService(
+        entries: <String>['lib/alpha.dart', 'lib/beta.dart', 'lib/$longName'],
+      ),
+    );
+
+    await tester.tap(find.text('Open Quick Open'));
+    await tester.pumpAndSettle();
+
+    final results = tester.widget<ListView>(
+      find.byKey(const ValueKey<String>('quick-open-results')),
+    );
+    expect(results.itemExtent, isNull);
+    final spacing =
+        tester.getTopLeft(find.text('beta.dart')).dy -
+        tester.getTopLeft(find.text('alpha.dart')).dy;
+    expect(spacing, closeTo(AleraTokens.space48, 1));
+    final longRow = find.ancestor(
+      of: find.text(longName),
+      matching: find.byType(InkWell),
+    );
+    expect(
+      tester.getSize(longRow.first).height,
+      greaterThan(AleraTokens.space48),
+    );
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('Ctrl+P keeps filename readable before a very deep path', (
     tester,
   ) async {

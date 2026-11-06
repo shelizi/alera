@@ -1,6 +1,37 @@
 part of 'workspace_explorer_test.dart';
 
 void _registerWorkspaceExplorerModeTests() {
+  testWidgets('Explorer filter packs short rows but allows long filenames', (
+    tester,
+  ) async {
+    final longName =
+        '${List<String>.filled(9, 'long_filename_').join()}final.dart';
+    final service = _FakeWorkspaceFileService()
+      ..quickOpenEntries = <String>[
+        'lib/alpha.dart',
+        'lib/beta.dart',
+        'lib/$longName',
+      ];
+    await _pumpExplorer(tester, service);
+
+    await tester.enterText(find.byType(TextField), 'dart');
+    await tester.pumpAndSettle();
+
+    final spacing =
+        tester.getTopLeft(find.text('beta.dart')).dy -
+        tester.getTopLeft(find.text('alpha.dart')).dy;
+    expect(spacing, closeTo(AleraTokens.space48, 1));
+    final longRow = find.ancestor(
+      of: find.text(longName),
+      matching: find.byType(DecoratedBox),
+    );
+    expect(
+      tester.getSize(longRow.first).height,
+      greaterThan(AleraTokens.space48),
+    );
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets(
     'Windows hidden items toggle reloads and reveals hidden entries',
     (tester) async {

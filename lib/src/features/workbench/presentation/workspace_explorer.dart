@@ -126,7 +126,6 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
   static const String _rootId = 'workspace-root';
   static const String _placeholderPrefix = '__alera_placeholder__:';
   static const int _filterResultLimit = 200;
-  static const double _filterResultRowHeight = 72.0;
 
   late tree.DirectoryTreeController _controller;
   final Map<String, List<native.WorkspaceFileEntry>> _childrenByDirectory =
@@ -1317,7 +1316,6 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
     }
     return ListView.builder(
       padding: const EdgeInsets.symmetric(vertical: AleraTokens.space4),
-      itemExtent: _filterResultRowHeight,
       itemCount: entries.length,
       itemBuilder: (context, index) {
         final path = entries[index].relativePath;
@@ -1327,16 +1325,19 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
           valueListenable: _rowMetadataRevision,
           builder: (context, _, _) {
             final entry = _visibleEntryForPath(path);
-            final row = _ExplorerRow(
-              name: path,
-              filterQuery: query,
-              entry: entry,
-              expanded: false,
-              selected: _filterSelectedPaths.contains(path),
-              sourceControlRoot: path == widget.focusedSourceControlRoot,
-              filterResult: true,
-              leadingPadding: AleraTokens.space8,
-              onTap: () => _handleFilteredPrimaryTap(path),
+            final row = ConstrainedBox(
+              constraints: const BoxConstraints(minHeight: AleraTokens.space48),
+              child: _ExplorerRow(
+                name: path,
+                filterQuery: query,
+                entry: entry,
+                expanded: false,
+                selected: _filterSelectedPaths.contains(path),
+                sourceControlRoot: path == widget.focusedSourceControlRoot,
+                filterResult: true,
+                leadingPadding: AleraTokens.space8,
+                onTap: () => _handleFilteredPrimaryTap(path),
+              ),
             );
             return entryMenuDelegate.wrapFilteredEntryWithMenu(
               context,

@@ -38,7 +38,6 @@ part 'quick_open_dialog_context_actions.dart';
 const _quickOpenResultLimit = 50;
 const _quickOpenDialogWidth = 720.0;
 const _quickOpenDialogHeight = 620.0;
-const _quickOpenResultHeight = 76.0;
 
 class const QuickOpenDialog({super.key}) extends ConsumerStatefulWidget {
   @override
@@ -295,19 +294,14 @@ class _QuickOpenDialogState extends ConsumerState<QuickOpenDialog> {
         );
       } else if (_resultsScrollController.hasClients) {
         final position = _resultsScrollController.position;
-        final itemExtent = _quickOpenResultHeight;
-        final itemTop = _selectedIndex * itemExtent;
-        final itemBottom = itemTop + itemExtent;
-        final visibleTop = position.pixels;
-        final visibleBottom = visibleTop + position.viewportDimension;
-        final target = itemTop < visibleTop
-            ? itemTop
-            : itemBottom > visibleBottom
-            ? itemBottom - position.viewportDimension
-            : position.pixels;
+        // Results grow to fit wrapped filenames, so row offsets vary.
+        final fraction = _matches.length == 1
+            ? 0.0
+            : _selectedIndex / (_matches.length - 1);
+        final target = position.maxScrollExtent * fraction;
         if (target != position.pixels) {
           _resultsScrollController.animateTo(
-            target.clamp(0.0, position.maxScrollExtent),
+            target,
             duration: AleraTokens.durationFast,
             curve: Curves.easeOut,
           );
@@ -569,7 +563,6 @@ class _QuickOpenDialogState extends ConsumerState<QuickOpenDialog> {
     return ListView.builder(
       key: const ValueKey<String>('quick-open-results'),
       controller: _resultsScrollController,
-      itemExtent: _quickOpenResultHeight,
       padding: EdgeInsets.zero,
       itemCount: _matches.length,
       itemBuilder: (context, index) {
@@ -665,7 +658,10 @@ class _QuickOpenDialogState extends ConsumerState<QuickOpenDialog> {
             match.relativePath,
             action,
           ),
-          child: row,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(minHeight: AleraTokens.space48),
+            child: row,
+          ),
         );
       },
     );
