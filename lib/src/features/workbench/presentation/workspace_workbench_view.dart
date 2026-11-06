@@ -63,6 +63,9 @@ part 'workspace_workbench_resize_handle.dart';
 typedef CreateTerminalTabCallback = Future<void> Function({
   String? targetGroupId,
 });
+typedef CreateUntitledTabCallback = Future<void> Function({
+  String? targetGroupId,
+});
 typedef CreateAgentTabCallback = Future<void> Function({
   required AgentType agentType,
   String? targetGroupId,
@@ -235,6 +238,7 @@ class const WorkspaceWorkbenchView({
   final WorkbenchMobileDriverPresence? mobileDriverPresence,
   required final Map<String, AgentStatusEntry> agentStatuses,
   required final CreateTerminalTabCallback onCreateTab,
+  final CreateUntitledTabCallback? onCreateUntitledTab,
   required final CreateAgentTabCallback onCreateAgentTab,
   required final OpenFileTabCallback onOpenEditorTab,
   required final OpenMarkdownFileTabCallback onOpenMarkdownViewerTab,
@@ -326,6 +330,7 @@ class _WorkspaceWorkbenchViewState
             mobileDriverPresence: widget.mobileDriverPresence,
             agentStatuses: widget.agentStatuses,
             onCreateTab: widget.onCreateTab,
+            onCreateUntitledTab: widget.onCreateUntitledTab,
             onCreateAgentTab: widget.onCreateAgentTab,
             onOpenEditorTab: widget.onOpenEditorTab,
             onOpenMarkdownViewerTab: widget.onOpenMarkdownViewerTab,

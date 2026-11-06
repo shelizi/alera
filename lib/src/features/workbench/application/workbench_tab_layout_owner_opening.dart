@@ -2,6 +2,33 @@ part of 'workbench_tab_layout_owner.dart';
 
 /// Opening tabs: every entry point that adds a tab to a workspace.
 extension WorkbenchTabLayoutOwnerOpening on WorkbenchTabLayoutOwner {
+  Future<WorkspaceTabRecord> createUntitledEditorTab(
+    Workspace workspace, {
+    String? targetGroupId,
+  }) async {
+    try {
+      final previousTabs = _host.readState().tabsFor(workspace.id);
+      final layout = _layoutForMutation(workspace.id, previousTabs);
+      final tab = await WorkbenchTabPlacementCoordinator(
+        openTab: () =>
+            _host.workspaceTabService.createUntitledEditorTab(workspace.id),
+        planPlacement: (tab) => planWorkbenchTabAddedToGroup(
+          previousTabs: previousTabs,
+          layout: layout,
+          tab: tab,
+          targetGroupId: targetGroupId,
+        ),
+        applyTabs: (tabs) => applyWorkspaceTabs(workspace.id, tabs),
+        applyLayout: (layout) => applyWorkspaceLayout(layout, persist: true),
+      ).run();
+      _host.emitState(_host.readState().copyWith(error: null));
+      return tab;
+    } catch (error) {
+      _host.emitState(_host.readState().copyWith(error: error.toString()));
+      rethrow;
+    }
+  }
+
   Future<WorkspaceTabRecord> createTerminalTab(
     Workspace workspace, {
     String? targetGroupId,

@@ -1,5 +1,9 @@
 import 'package:alera/src/app/localization/alera_localizations.dart';
 
+import 'dart:io';
+
+import 'package:file_selector/file_selector.dart';
+
 import 'dart:async';
 
 import 'package:alera/src/app/providers.dart';
@@ -22,6 +26,8 @@ import 'package:alera/src/features/language_intelligence/domain/language_intelli
 import 'package:alera/src/features/language_intelligence/domain/source_location.dart';
 import 'package:alera/src/features/projects/application/project_providers.dart';
 import 'package:alera/src/features/settings/domain/editor_syntax_theme_catalog.dart';
+import 'package:alera/src/features/workbench/application/untitled_draft_store.dart';
+import 'package:alera/src/features/workbench/application/workbench_providers.dart';
 import 'package:alera/src/features/workbench/application/editor_autosave_controller.dart';
 import 'package:alera/src/features/workbench/application/workspace_file_preview_kind.dart';
 import 'package:alera/src/features/workbench/application/workspace_file_service.dart';
@@ -75,8 +81,8 @@ class const WorkspaceEditorSurface({
       _WorkspaceEditorSurfaceState();
 }
 
-class _WorkspaceEditorSurfaceState
-    extends ConsumerState<WorkspaceEditorSurface> {
+class _WorkspaceEditorSurfaceState extends ConsumerState<WorkspaceEditorSurface>
+    with WidgetsBindingObserver {
   late final code_forge.CodeForgeController _controller;
   late final code_forge.UndoRedoController _undoController;
   late final code_forge.FindController _findController;
@@ -85,6 +91,14 @@ class _WorkspaceEditorSurfaceState
   late final ScrollController _verticalScrollController;
   late final ScrollController _horizontalScrollController;
   late WorkspaceEditorFocusNode _focusNode;
+  late final UntitledDraftStore _drafts;
+  Timer? _draftWriteTimer;
+  String get _editorWorkspacePath => widget.tab.externalFilePath == null
+      ? widget.workspace.path
+      : p.dirname(widget.tab.externalFilePath!);
+  String? get _editorRelativePath => widget.tab.externalFilePath == null
+      ? widget.tab.filePath ?? (widget.tab.isUntitled ? widget.tab.title : null)
+      : p.basename(widget.tab.externalFilePath!);
   late final WorkspaceFileService _workspaceFiles;
   late final EditorSessionRegistry _editorSessions;
   late final EditorSessionHandle _sessionHandle;
@@ -133,6 +147,7 @@ class _WorkspaceEditorSurfaceState
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _controller = code_forge.CodeForgeController();
     _languageExtensionRegistry = ref.read(languageExtensionRegistryProvider);
     _controller.nativeSyntaxStatus.addListener(_handleNativeSyntaxStatus);
@@ -149,6 +164,7 @@ class _WorkspaceEditorSurfaceState
     _verticalScrollController = ScrollController();
     _horizontalScrollController = ScrollController();
     _focusNode = WorkspaceEditorFocusNode();
+    _drafts = UntitledDraftStore.shared;
     _workspaceFiles = ref.read(workspaceFileServiceProvider);
     _editorSessions = ref.read(editorSessionRegistryProvider);
     _languageIntelligence = ref.read(languageIntelligenceManagerProvider);
@@ -199,12 +215,24 @@ class _WorkspaceEditorSurfaceState
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached) {
+      if (widget.tab.isUntitled) _flushDraftWrite(widget.tab.id);
+    }
+  }
+
+  @override
   void didUpdateWidget(covariant WorkspaceEditorSurface oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.tab.id != widget.tab.id ||
         oldWidget.workspace.path != widget.workspace.path ||
-        oldWidget.tab.filePath != widget.tab.filePath) {
+        oldWidget.tab.filePath != widget.tab.filePath ||
+        oldWidget.tab.externalFilePath != widget.tab.externalFilePath) {
       // `_document` still belongs to the tab being left.
+      if (oldWidget.tab.isUntitled) _flushDraftWrite(oldWidget.tab.id);
       _rememberEditorViewState();
       _removeNativeSyntaxActivityForPath(oldWidget.tab.filePath);
       unawaited(_closeLanguageIntelligenceDocument());
@@ -216,7 +244,8 @@ class _WorkspaceEditorSurfaceState
       _editorSessions.unregister(oldWidget.tab.id, _sessionHandle);
       _document = _editorSessions.documentFor(widget.tab.id);
       if (oldWidget.tab.id == widget.tab.id &&
-          oldWidget.tab.filePath != widget.tab.filePath) {
+          (oldWidget.tab.filePath != widget.tab.filePath ||
+              oldWidget.tab.externalFilePath != widget.tab.externalFilePath)) {
         _document.clearSnapshot();
       }
       _resetOutlineForDocumentChange();
@@ -237,6 +266,9 @@ class _WorkspaceEditorSurfaceState
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    if (widget.tab.isUntitled) _flushDraftWrite(widget.tab.id);
+    _draftWriteTimer?.cancel();
     _selectionOccurrenceTimer?.cancel();
     _languageIntelligenceSyncTimer?.cancel();
     unawaited(_closeLanguageIntelligenceDocument());
@@ -311,7 +343,7 @@ class _WorkspaceEditorSurfaceState
 
   @override
   Widget build(BuildContext context) {
-    final filePath = widget.tab.filePath;
+    final filePath = _editorRelativePath;
     if (filePath == null) {
       return const _EditorMessage(message: 'This editor tab has no file.');
     }
@@ -463,29 +495,37 @@ class _WorkspaceEditorSurfaceState
           crossAxisAlignment: .stretch,
           children: <Widget>[
             _EditorFileBar(
-              path: workspaceEditorDisplayPath(
-                workspace: widget.workspace,
-                filePath: filePath,
-              ),
+              path: widget.tab.isUntitled
+                  ? widget.tab.title
+                  : widget.tab.externalFilePath ??
+                        workspaceEditorDisplayPath(
+                          workspace: widget.workspace,
+                          filePath: filePath,
+                        ),
               dirty: _document.isDirty,
               saving: _saving,
               encodingSelection: WorkspaceTextEncodingSelection.fromEncoding(
                 _document.requestedEncoding,
               ),
               detectedEncoding: _document.encoding,
-              onEncodingSelected: _loading || _saving
+              onEncodingSelected: widget.tab.isUntitled || _loading || _saving
                   ? null
                   : (selection) => unawaited(_changeEncoding(selection)),
-              onViewDiff: !_loading
+              onViewDiff: !widget.tab.isUntitled && !_loading
                   ? () => unawaited(_openDiffForFile())
                   : null,
-              onSave: _document.isDirty && !_loading && !_saving
+              onSave:
+                  (_document.isDirty || widget.tab.isUntitled) &&
+                      !_loading &&
+                      !_saving
                   ? () => unawaited(_save())
                   : null,
               onDiscard: _document.isDirty && !_loading && !_saving
                   ? () => unawaited(_discardChanges())
                   : null,
-              onOpenPreview: _openPreviewActionFor(filePath),
+              onOpenPreview: widget.tab.isUntitled
+                  ? null
+                  : _openPreviewActionFor(filePath),
               outlineOpen: _outlineOpen,
               onToggleOutline: _loading || _loadError != null
                   ? null
@@ -762,6 +802,33 @@ class _WorkspaceEditorSurfaceState
   int _currentEditorTabSize() {
     return normalizeWorkspaceEditorTabSize(
       ref.read(settingsControllerProvider).editor.tabSize,
+    );
+  }
+
+  void _scheduleDraftWrite() {
+    if (!widget.tab.isUntitled || _loading) return;
+    _draftWriteTimer?.cancel();
+    final tabId = widget.tab.id;
+    _draftWriteTimer = Timer(const Duration(seconds: 2), () {
+      unawaited(
+        _drafts
+            .write(tabId, _controller.text)
+            .catchError(
+              (Object error) =>
+                  _showToast('Draft autosave failed: $error', tone: .error),
+            ),
+      );
+    });
+  }
+
+  void _flushDraftWrite(String tabId) {
+    if (_loading || _loadError != null) return;
+    _draftWriteTimer?.cancel();
+    _draftWriteTimer = null;
+    unawaited(
+      _drafts.write(tabId, _controller.text).catchError((Object error) {
+        if (mounted) _showToast('Draft autosave failed: $error', tone: .error);
+      }),
     );
   }
 

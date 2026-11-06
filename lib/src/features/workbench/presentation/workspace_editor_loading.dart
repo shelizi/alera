@@ -9,8 +9,8 @@ extension _WorkspaceEditorLoading on _WorkspaceEditorSurfaceState {
     _clearPendingDocumentSnapshot();
     _resetLanguageIntelligenceSource();
     final requestId = ++_loadRequestId;
-    final workspacePath = widget.workspace.path;
-    final filePath = widget.tab.filePath;
+    final workspacePath = _editorWorkspacePath;
+    final filePath = _editorRelativePath;
     if (filePath == null) {
       unawaited(_closeLanguageIntelligenceDocument());
       _resetLanguageIntelligenceSource();
@@ -95,7 +95,17 @@ extension _WorkspaceEditorLoading on _WorkspaceEditorSurfaceState {
   }
 
   void _restoreDocumentOrLoad() {
-    final filePath = widget.tab.filePath;
+    final filePath = _editorRelativePath;
+    if (widget.tab.isUntitled) {
+      if (_document.hasSnapshot) {
+        _replaceControllerText(_document.currentText ?? '');
+        _loading = false;
+        _loadError = null;
+      } else {
+        unawaited(_loadUntitledDraft(widget.tab.id));
+      }
+      return;
+    }
     if (filePath == null) {
       _invalidatePendingLoads();
       _autosave.cancelPending();
@@ -104,7 +114,7 @@ extension _WorkspaceEditorLoading on _WorkspaceEditorSurfaceState {
       return;
     }
     _document.attachFile(
-      workspacePath: widget.workspace.path,
+      workspacePath: _editorWorkspacePath,
       relativePath: filePath,
     );
     if (_document.hasSnapshot &&
@@ -129,6 +139,30 @@ extension _WorkspaceEditorLoading on _WorkspaceEditorSurfaceState {
     unawaited(_load(restoreScrollPosition: _rememberedEditorScrollPosition()));
   }
 
+  Future<void> _loadUntitledDraft(String tabId) async {
+    final requestId = ++_loadRequestId;
+    _loading = true;
+    _loadError = null;
+    try {
+      final text = await _drafts.read(tabId) ?? '';
+      if (!mounted || requestId != _loadRequestId || widget.tab.id != tabId) {
+        return;
+      }
+      _document.acceptUntitled(text);
+      _replaceControllerText(text);
+      _setEditorState(() => _loading = false);
+      _scheduleOutlineRefresh(immediate: true);
+    } catch (error) {
+      if (!mounted || requestId != _loadRequestId || widget.tab.id != tabId) {
+        return;
+      }
+      _setEditorState(() {
+        _loadError = error;
+        _loading = false;
+      });
+    }
+  }
+
   bool _isCurrentLoadRequest(
     int requestId,
     String workspacePath,
@@ -139,9 +173,9 @@ extension _WorkspaceEditorLoading on _WorkspaceEditorSurfaceState {
           requestId: requestId,
           currentRequestId: _loadRequestId,
           workspacePath: workspacePath,
-          activeWorkspacePath: widget.workspace.path,
+          activeWorkspacePath: _editorWorkspacePath,
           filePath: filePath,
-          activeFilePath: widget.tab.filePath,
+          activeFilePath: _editorRelativePath,
         );
   }
 

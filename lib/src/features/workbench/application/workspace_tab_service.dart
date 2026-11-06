@@ -100,6 +100,60 @@ class WorkspaceTabService._(
     return tab;
   }
 
+  /// Creates a durable tab record before the draft has a file path.
+  Future<WorkspaceTabRecord> createUntitledEditorTab(String workspaceId) async {
+    final tabs = await _repository.listWorkspaceTabs(workspaceId);
+    final used = <int>{};
+    for (final tab in tabs) {
+      if (!tab.isUntitled) continue;
+      final match = RegExp(r'^Untitled (\d+)$').firstMatch(tab.title);
+      if (match != null) used.add(int.parse(match.group(1)!));
+    }
+    var ordinal = 1;
+    while (used.contains(ordinal)) ordinal += 1;
+    final tab = WorkspaceTabRecord(
+      id: _uuid.v4(),
+      workspaceId: workspaceId,
+      kind: .editor,
+      title: 'Untitled $ordinal',
+      createdAt: _now(),
+      updatedAt: _now(),
+      payload: const <String, Object?>{workspaceTabUntitledPayloadKey: true},
+    );
+    await _repository.upsertWorkspaceTab(tab);
+    return tab;
+  }
+
+  /// Preserve the existing tab ID and layout when assigning its first path.
+  Future<WorkspaceTabRecord> finishUntitledEditorTab({
+    required String tabId,
+    required String title,
+    String? relativePath,
+    String? externalPath,
+  }) async {
+    if ((relativePath == null) == (externalPath == null)) {
+      throw ArgumentError('Exactly one saved file path is required');
+    }
+    final tab = await _repository.findWorkspaceTabById(tabId);
+    if (tab == null || !tab.isUntitled) {
+      throw StateError('Untitled editor tab not found: $tabId');
+    }
+    final payload = Map<String, Object?>.of(tab.payload)
+      ..remove(workspaceTabUntitledPayloadKey)
+      ..remove(workspaceTabFilePathPayloadKey)
+      ..remove(workspaceTabExternalFilePathPayloadKey);
+    if (relativePath != null) {
+      payload[workspaceTabFilePathPayloadKey] = _normalizeRelativePath(
+        relativePath,
+      );
+    } else {
+      payload[workspaceTabExternalFilePathPayloadKey] = externalPath!;
+    }
+    return _repository.upsertWorkspaceTab(
+      tab.copyWith(title: title, updatedAt: _now(), payload: payload),
+    );
+  }
+
   Future<WorkspaceTabRecord> openOrCreateMermanPreviewTab({
     required String workspaceId,
     required String relativePath,

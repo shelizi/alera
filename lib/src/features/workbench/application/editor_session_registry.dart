@@ -517,6 +517,21 @@ class EditorDocumentSession({final VoidCallback? _onChanged}) {
     _notifyChanged();
   }
 
+  void acceptUntitled(String text) {
+    workspacePath = null;
+    relativePath = null;
+    loadedRawText = '';
+    loadedText = '';
+    currentText = text;
+    contentToken = null;
+    encoding = native.WorkspaceTextEncoding.utf8;
+    loadError = null;
+    nativeBacked = false;
+    loadedDocumentVersion = 0;
+    currentDocumentVersion = 0;
+    _notifyChanged();
+  }
+
   void acceptLoaded(
     native.WorkspaceEditorTextFile file, {
     int tabSize = 4,

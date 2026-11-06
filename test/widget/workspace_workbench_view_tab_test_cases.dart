@@ -1,6 +1,47 @@
 part of 'workspace_workbench_view_test.dart';
 
 void _registerWorkspaceWorkbenchViewTabTests() {
+  testWidgets('double clicking tab strip whitespace creates untitled editor', (
+    tester,
+  ) async {
+    final tabs = <WorkspaceTabRecord>[_tab('tab-1', title: 'Terminal 1')];
+    final untitledGroups = <String?>[];
+    await _pumpWorkbenchView(
+      tester,
+      tabs: tabs,
+      layout: _singleTabStripLayout(tabs, activeTabId: 'tab-1'),
+      terminalRuntime: terminalRuntime,
+      createdTabs: createdTabs,
+      createdUntitledTabs: untitledGroups,
+      selectedTabs: selectedTabs,
+      closedTabs: closedTabs,
+      closedTabGroups: closedTabGroups,
+      renamedTabs: renamedTabs,
+      movedTabs: movedTabs,
+      splitGroups: splitGroups,
+      mergedGroups: mergedGroups,
+      updatedRatios: updatedRatios,
+      size: const Size(720, 280),
+    );
+    await tester.pumpAndSettle();
+    final viewport = tester.getRect(
+      find.byKey(const ValueKey<String>('workspace-tab-scroll:group-a')),
+    );
+    final whitespace = Offset(viewport.right - 16, viewport.center.dy);
+    await tester.tapAt(whitespace);
+    await tester.pump(const Duration(milliseconds: 75));
+    await tester.tapAt(whitespace);
+    await tester.pumpAndSettle();
+    expect(untitledGroups, <String?>['group-a']);
+
+    final chip = find.byKey(const ValueKey<String>('workspace-tab-chip:tab-1'));
+    await tester.tapAt(tester.getCenter(chip));
+    await tester.pump(const Duration(milliseconds: 75));
+    await tester.tapAt(tester.getCenter(chip));
+    await tester.pumpAndSettle();
+    expect(untitledGroups, hasLength(1));
+  });
+
   testWidgets('two-row tabs show pinned above regular', (tester) async {
     final tabs = <WorkspaceTabRecord>[
       _tab('regular', title: 'Regular'),

@@ -16,6 +16,54 @@ void main() {
     _registerWorkspaceTabGitPreviewTests();
     _registerWorkspaceTabBranchCompareTests();
 
+    test(
+      'creates numbered untitled editors and promotes to saved path',
+      () async {
+        final repository = _FakeWorkbenchRepository();
+        final service = WorkspaceTabService(
+          repository: repository,
+          now: () => DateTime.utc(2026, 11, 6),
+        );
+        final first = await service.createUntitledEditorTab('workspace-1');
+        final second = await service.createUntitledEditorTab('workspace-1');
+        expect(first.title, 'Untitled 1');
+        expect(second.title, 'Untitled 2');
+        expect(first.isUntitled, isTrue);
+        expect(first.filePath, isNull);
+
+        final saved = await service.finishUntitledEditorTab(
+          tabId: first.id,
+          title: 'notes.txt',
+          relativePath: 'docs/notes.txt',
+        );
+        expect(saved.id, first.id);
+        expect(saved.isUntitled, isFalse);
+        expect(saved.filePath, 'docs/notes.txt');
+        expect(saved.title, 'notes.txt');
+        expect(
+          repository.tabs.where((tab) => tab.id == first.id).single.title,
+          'notes.txt',
+        );
+
+        final reuse = await service.createUntitledEditorTab('workspace-1');
+        expect(reuse.title, 'Untitled 1');
+      },
+    );
+
+    test('untitled editors can be promoted to external saved files', () async {
+      final repository = _FakeWorkbenchRepository();
+      final service = WorkspaceTabService(repository: repository);
+      final draft = await service.createUntitledEditorTab('workspace-1');
+      final saved = await service.finishUntitledEditorTab(
+        tabId: draft.id,
+        title: 'outside.txt',
+        externalPath: 'C:/other/outside.txt',
+      );
+      expect(saved.externalFilePath, 'C:/other/outside.txt');
+      expect(saved.filePath, isNull);
+      expect(saved.isUntitled, isFalse);
+    });
+
     test('ensureInitialTerminalTab creates the first terminal workspace tab when none exist', () async {
       final repository = _FakeWorkbenchRepository();
       final service = WorkspaceTabService(

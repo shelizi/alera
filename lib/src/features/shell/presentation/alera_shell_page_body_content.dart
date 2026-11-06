@@ -81,6 +81,12 @@ extension _AleraShellPageBodyContent on _AleraShellPageBodyState {
                 .sessionFor(workspace: workspace, tab: tab)
                 .requestFocus();
           },
+          onCreateUntitledTab: ({targetGroupId}) async {
+            await controller.createUntitledEditorTab(
+              workspace,
+              targetGroupId: targetGroupId,
+            );
+          },
           onCreateAgentTab: ({required agentType, targetGroupId}) async {
             final executablePath = ref
                 .read(settingsControllerProvider)
@@ -135,6 +141,9 @@ extension _AleraShellPageBodyContent on _AleraShellPageBodyState {
               workspace: workspace,
               tabId: tabId,
             );
+            if (tabs.any((tab) => tab.id == tabId && tab.isUntitled)) {
+              unawaited(UntitledDraftStore.shared.delete(tabId));
+            }
           },
           onCloseTabs: (tabIds) async {
             if (!await _confirmCloseTabs(tabs, tabIds)) {
@@ -146,6 +155,11 @@ extension _AleraShellPageBodyContent on _AleraShellPageBodyState {
               workspace: workspace,
               tabIds: tabIds,
             );
+            for (final tab in tabs) {
+              if (tab.isUntitled && tabIds.contains(tab.id)) {
+                unawaited(UntitledDraftStore.shared.delete(tab.id));
+              }
+            }
           },
           onRenameTab: ({required tabId, required title}) async {
             await controller.renameWorkspaceTab(tabId: tabId, title: title);

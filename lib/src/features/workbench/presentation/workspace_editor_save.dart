@@ -2,7 +2,11 @@ part of 'workspace_editor_surface.dart';
 
 extension _WorkspaceEditorSave on _WorkspaceEditorSurfaceState {
   Future<void> _save() async {
-    final filePath = widget.tab.filePath;
+    if (widget.tab.isUntitled) {
+      await _saveUntitled();
+      return;
+    }
+    final filePath = _editorRelativePath;
     if (filePath == null || _loading || _saving) {
       return;
     }
@@ -80,9 +84,62 @@ extension _WorkspaceEditorSave on _WorkspaceEditorSurfaceState {
     }
   }
 
+  Future<void> _saveUntitled() async {
+    if (!mounted || _loading || _saving || _loadError != null) return;
+    final tabId = widget.tab.id;
+    final location = await getSaveLocation(
+      suggestedName: '${widget.tab.title}.txt',
+    );
+    if (location == null || !mounted || widget.tab.id != tabId) return;
+    final path = p.normalize(p.absolute(location.path));
+    final file = File(path);
+    if (await file.exists()) {
+      if (!mounted || widget.tab.id != tabId) return;
+      final overwrite = await showDialog<bool>(
+        context: context,
+        builder: (context) => const AleraConfirmDialog(
+          title: 'File already exists',
+          message: 'Overwrite this file with the new document?',
+          confirmLabel: 'Overwrite',
+          destructive: true,
+        ),
+      );
+      if (overwrite != true || !mounted) return;
+    }
+    final textBeingSaved = _controller.text;
+    _setEditorState(() => _saving = true);
+    try {
+      await _drafts.write(tabId, textBeingSaved);
+      await file.writeAsString(textBeingSaved, flush: true);
+      if (!mounted || widget.tab.id != tabId) return;
+      final root = p.normalize(p.absolute(widget.workspace.path));
+      final isWorkspaceFile = p.isWithin(root, path);
+      await ref
+          .read(workspaceTabServiceProvider)
+          .finishUntitledEditorTab(
+            tabId: tabId,
+            title: p.basename(path),
+            relativePath: isWorkspaceFile
+                ? p.relative(path, from: root).replaceAll('\\', '/')
+                : null,
+            externalPath: isWorkspaceFile ? null : path,
+          );
+      if (!mounted) return;
+      _draftWriteTimer?.cancel();
+      _draftWriteTimer = null;
+      unawaited(_drafts.delete(tabId).catchError((Object _) {}));
+      _showToast('File saved');
+    } catch (error) {
+      if (mounted) _showToast('Could not save: $error', tone: .error);
+    } finally {
+      if (mounted) _setEditorState(() => _saving = false);
+    }
+  }
+
   Future<void> _saveAutomatically() async {
-    final filePath = widget.tab.filePath;
+    final filePath = _editorRelativePath;
     if (!mounted ||
+        widget.tab.isUntitled ||
         filePath == null ||
         _loading ||
         _saving ||
@@ -129,6 +186,21 @@ extension _WorkspaceEditorSave on _WorkspaceEditorSurfaceState {
 
   Future<void> _discardChanges() async {
     if (_loading || _saving || !_document.canSave) {
+      return;
+    }
+    if (widget.tab.isUntitled) {
+      _replaceControllerText('');
+      _document.acceptUntitled('');
+      _undoController.clear();
+      _draftWriteTimer?.cancel();
+      _draftWriteTimer = null;
+      try {
+        await _drafts.write(widget.tab.id, '');
+        if (mounted) _showToast('Changes discarded');
+      } catch (error) {
+        if (mounted) _showToast('Draft autosave failed: $error', tone: .error);
+      }
+      if (mounted) _refreshStateSafely();
       return;
     }
     if (_document.nativeBacked) {
@@ -233,8 +305,8 @@ extension _WorkspaceEditorSave on _WorkspaceEditorSurfaceState {
       );
     }
     final outcome = await _controller.saveWorkspaceSnapshot(
-      workspacePath: widget.workspace.path,
-      relativePath: widget.tab.filePath!,
+      workspacePath: _editorWorkspacePath,
+      relativePath: _editorRelativePath!,
       expectedContentToken: token,
       overwriteIfChanged: overwriteIfChanged,
       tabSize: _currentEditorTabSize(),
@@ -274,8 +346,8 @@ extension _WorkspaceEditorSave on _WorkspaceEditorSurfaceState {
     required String currentDisplayContent,
   }) {
     return _workspaceFiles.writeEditorTextFile(
-      workspacePath: widget.workspace.path,
-      relativePath: widget.tab.filePath!,
+      workspacePath: _editorWorkspacePath,
+      relativePath: _editorRelativePath!,
       currentDisplayContent: currentDisplayContent,
       originalRawContent: _document.loadedRawText,
       originalDisplayContent: _document.loadedText,
@@ -331,6 +403,7 @@ extension _WorkspaceEditorSave on _WorkspaceEditorSurfaceState {
 
   bool _isReadyForAutosave() {
     return mounted &&
+        !widget.tab.isUntitled &&
         !_loading &&
         !_saving &&
         _loadError == null &&
@@ -378,6 +451,7 @@ extension _WorkspaceEditorSave on _WorkspaceEditorSurfaceState {
       }
     }
     final isDirty = _isDirty();
+    _scheduleDraftWrite();
     if (!_loading && widget.tab.isPreview && !wasDirty && isDirty) {
       widget.onKeepPreview?.call();
     }

@@ -6,6 +6,14 @@ part of 'workbench_controller.dart';
 /// tabs that already exist: closing, renaming, moving and splitting.
 mixin _WorkbenchControllerTabOpening
     on _$WorkbenchController, _WorkbenchControllerInternals {
+  Future<WorkspaceTabRecord> createUntitledEditorTab(
+    Workspace workspace, {
+    String? targetGroupId,
+  }) => _tabLayoutOwner.createUntitledEditorTab(
+    workspace,
+    targetGroupId: targetGroupId,
+  );
+
   Future<WorkspaceTabRecord> createTerminalTab(
     Workspace workspace, {
     String? targetGroupId,

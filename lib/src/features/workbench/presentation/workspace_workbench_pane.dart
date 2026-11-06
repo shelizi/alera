@@ -10,6 +10,7 @@ class const _WorkbenchPane({
   required final WorkbenchMobileDriverPresence? mobileDriverPresence,
   required final Map<String, AgentStatusEntry> agentStatuses,
   required final CreateTerminalTabCallback onCreateTab,
+  final CreateUntitledTabCallback? onCreateUntitledTab,
   required final CreateAgentTabCallback onCreateAgentTab,
   required final OpenFileTabCallback onOpenEditorTab,
   required final OpenMarkdownFileTabCallback onOpenMarkdownViewerTab,
@@ -80,6 +81,11 @@ class const _WorkbenchPane({
                 onOpenExternalTerminal: onOpenExternalTerminal,
                 onCreateTab: () =>
                     unawaited(onCreateTab(targetGroupId: groupId)),
+                onCreateUntitledTab: onCreateUntitledTab == null
+                    ? null
+                    : () => unawaited(
+                        onCreateUntitledTab!(targetGroupId: groupId),
+                      ),
                 onCreateAgentTab: (agentType) => unawaited(
                   onCreateAgentTab(
                     agentType: agentType,

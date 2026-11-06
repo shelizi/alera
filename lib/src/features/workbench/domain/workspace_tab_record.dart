@@ -51,6 +51,8 @@ const String workspaceTabSpawnOnCreatePayloadKey = 'spawnOnCreate';
 const String workspaceTabAutoCloseOnSuccessPayloadKey = 'autoCloseOnSuccess';
 const String workspaceTabTerminalPulsePayloadKey = 'terminalPulse';
 const String workspaceTabFilePathPayloadKey = 'filePath';
+const String workspaceTabUntitledPayloadKey = 'untitled';
+const String workspaceTabExternalFilePathPayloadKey = 'externalFilePath';
 const String workspaceTabFileRolePayloadKey = 'fileRole';
 const String workspaceTabFileRoleMermanPreview = 'mermanPreview';
 const String workspaceTabPreviewPayloadKey = 'preview';
@@ -210,6 +212,13 @@ class WorkspaceTabRecord({
     final value = payload[workspaceTabFilePathPayloadKey];
     return value is String && value.trim().isNotEmpty ? value : null;
   }
+
+  bool get isUntitled =>
+      kind == WorkspaceTabKind.editor &&
+      payload[workspaceTabUntitledPayloadKey] == true;
+
+  String? get externalFilePath =>
+      _nonEmptyPayloadString(workspaceTabExternalFilePathPayloadKey);
 
   bool get isMermanPreview {
     return payload[workspaceTabFileRolePayloadKey] ==

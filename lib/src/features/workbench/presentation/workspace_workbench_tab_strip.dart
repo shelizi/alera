@@ -15,6 +15,7 @@ class const _WorkspaceTabStrip({
   required final RenameWorkspaceTabCallback onRenameTab,
   final OpenExternalTerminalCallback? onOpenExternalTerminal,
   required final VoidCallback onCreateTab,
+  final VoidCallback? onCreateUntitledTab,
   required final ValueChanged<AgentType> onCreateAgentTab,
   required final ValueChanged<WorkbenchDropZone> onSplitGroup,
   required final VoidCallback onMergeGroup,
@@ -29,6 +30,7 @@ class _WorkspaceTabStripState extends ConsumerState<_WorkspaceTabStrip> {
 
   final ScrollController _scrollController = ScrollController();
   final GlobalKey _scrollViewportKey = GlobalKey();
+  final GlobalKey _addButtonKey = GlobalKey();
   final Map<String, GlobalKey> _tabKeys = <String, GlobalKey>{};
   bool _hasOverflow = false;
   bool _canScrollLeft = false;
@@ -238,6 +240,23 @@ class _WorkspaceTabStripState extends ConsumerState<_WorkspaceTabStrip> {
     }
   }
 
+  bool _isEmptyTabStripArea(Offset position) {
+    final viewport = _scrollViewportKey.currentContext?.findRenderObject();
+    if (viewport is! RenderBox || !viewport.hasSize) return false;
+    final local = viewport.globalToLocal(position);
+    if (!(Offset.zero & viewport.size).contains(local)) return false;
+    for (final key in <GlobalKey>[..._tabKeys.values, _addButtonKey]) {
+      final render = key.currentContext?.findRenderObject();
+      if (render is! RenderBox || !render.hasSize) continue;
+      if ((render.localToGlobal(Offset.zero) & render.size)
+          .inflate(3)
+          .contains(position)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
   void _syncCompletionAcknowledgement() {
     final activeTabId = widget.activeTabId;
     if (activeTabId == null) {
@@ -338,10 +357,13 @@ class _WorkspaceTabStripState extends ConsumerState<_WorkspaceTabStrip> {
     final acknowledgedCompletions = ref.watch(
       workbenchTabCompletionAcknowledgementsControllerProvider,
     );
-    final addButton = _NewTabButton(
-      groupId: widget.groupId,
-      onCreateTab: widget.onCreateTab,
-      onCreateAgentTab: widget.onCreateAgentTab,
+    final addButton = KeyedSubtree(
+      key: _addButtonKey,
+      child: _NewTabButton(
+        groupId: widget.groupId,
+        onCreateTab: widget.onCreateTab,
+        onCreateAgentTab: widget.onCreateAgentTab,
+      ),
     );
     final visualTabs = _visualTabs(widget.tabs);
     final pinnedTabs = visualTabs
@@ -457,31 +479,43 @@ class _WorkspaceTabStripState extends ConsumerState<_WorkspaceTabStrip> {
                         ),
                       ),
                     Expanded(
-                      child: Listener(
-                        key: _scrollViewportKey,
-                        behavior: HitTestBehavior.opaque,
-                        onPointerSignal: _handlePointerSignal,
-                        child: SingleChildScrollView(
-                          key: ValueKey<String>(
-                            'workspace-tab-scroll:${widget.groupId}',
-                          ),
-                          controller: _scrollController,
-                          scrollDirection: .horizontal,
-                          padding: EdgeInsets.only(
-                            left: pinnedTabs.isEmpty
-                                ? AleraTokens.space8
-                                : AleraTokens.space4,
-                            right: AleraTokens.space8,
-                            top: AleraTokens.space6,
-                            bottom: AleraTokens.space6,
-                          ),
-                          child: Row(
-                            mainAxisSize: .min,
-                            children: <Widget>[
-                              for (final tab in scrollingTabs)
-                                buildTabEntry(tab),
-                              if (!_hasOverflow) addButton,
-                            ],
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.translucent,
+                        onDoubleTapDown: widget.onCreateUntitledTab == null
+                            ? null
+                            : (details) {
+                                if (_isEmptyTabStripArea(
+                                  details.globalPosition,
+                                )) {
+                                  widget.onCreateUntitledTab?.call();
+                                }
+                              },
+                        child: Listener(
+                          key: _scrollViewportKey,
+                          behavior: HitTestBehavior.opaque,
+                          onPointerSignal: _handlePointerSignal,
+                          child: SingleChildScrollView(
+                            key: ValueKey<String>(
+                              'workspace-tab-scroll:${widget.groupId}',
+                            ),
+                            controller: _scrollController,
+                            scrollDirection: .horizontal,
+                            padding: EdgeInsets.only(
+                              left: pinnedTabs.isEmpty
+                                  ? AleraTokens.space8
+                                  : AleraTokens.space4,
+                              right: AleraTokens.space8,
+                              top: AleraTokens.space6,
+                              bottom: AleraTokens.space6,
+                            ),
+                            child: Row(
+                              mainAxisSize: .min,
+                              children: <Widget>[
+                                for (final tab in scrollingTabs)
+                                  buildTabEntry(tab),
+                                if (!_hasOverflow) addButton,
+                              ],
+                            ),
                           ),
                         ),
                       ),

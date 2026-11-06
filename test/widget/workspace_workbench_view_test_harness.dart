@@ -16,6 +16,7 @@ Future<void> _pumpWorkbenchView(
   required List<_SplitGroupAction> splitGroups,
   required List<String> mergedGroups,
   required List<_UpdatedSplitRatioAction> updatedRatios,
+  List<String?>? createdUntitledTabs,
   List<String>? activatedGroups,
   List<String>? keptPreviewTabs,
   Size size = const Size(420, 280),
@@ -69,6 +70,11 @@ Future<void> _pumpWorkbenchView(
                 onCreateTab: ({String? targetGroupId}) async {
                   createdTabs.add(targetGroupId);
                 },
+                onCreateUntitledTab: createdUntitledTabs == null
+                    ? null
+                    : ({String? targetGroupId}) async {
+                        createdUntitledTabs.add(targetGroupId);
+                      },
                 onCreateAgentTab:
                     ({required agentType, String? targetGroupId}) async {
                       createdAgentTabs?.add((
