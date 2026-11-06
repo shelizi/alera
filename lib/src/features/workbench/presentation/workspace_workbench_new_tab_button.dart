@@ -8,6 +8,10 @@ final class _NewTerminalMenuAction extends _NewTabMenuAction {
   const _NewTerminalMenuAction();
 }
 
+final class _NewUntitledFileMenuAction extends _NewTabMenuAction {
+  const _NewUntitledFileMenuAction();
+}
+
 final class _NewAgentMenuAction extends _NewTabMenuAction {
   const _NewAgentMenuAction(this.agentType);
 
@@ -17,6 +21,7 @@ final class _NewAgentMenuAction extends _NewTabMenuAction {
 class const _NewTabButton({
   required final String groupId,
   required final VoidCallback onCreateTab,
+  final VoidCallback? onCreateUntitledTab,
   required final ValueChanged<AgentType> onCreateAgentTab,
 }) extends ConsumerWidget {
   Future<void> _openMenu(
@@ -41,6 +46,16 @@ class const _NewTabButton({
         Offset.zero & overlay.size,
       ),
       items: <PopupMenuEntry<_NewTabMenuAction>>[
+        if (onCreateUntitledTab != null)
+          const AleraDropdownEntry<_NewTabMenuAction>(
+            value: _NewUntitledFileMenuAction(),
+            label: 'New File',
+            leading: Icon(
+              AleraIcons.file,
+              size: 16,
+              color: AleraTokens.foregroundMuted,
+            ),
+          ),
         const AleraDropdownEntry<_NewTabMenuAction>(
           value: _NewTerminalMenuAction(),
           label: 'New Terminal',
@@ -71,6 +86,8 @@ class const _NewTabButton({
     }
 
     switch (selected) {
+      case _NewUntitledFileMenuAction():
+        onCreateUntitledTab?.call();
       case _NewTerminalMenuAction():
         onCreateTab();
       case _NewAgentMenuAction(:final agentType):

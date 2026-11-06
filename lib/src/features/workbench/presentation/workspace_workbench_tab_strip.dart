@@ -30,6 +30,9 @@ class _WorkspaceTabStripState extends ConsumerState<_WorkspaceTabStrip> {
 
   final ScrollController _scrollController = ScrollController();
   final GlobalKey _scrollViewportKey = GlobalKey();
+  final GlobalKey _pinnedScrollViewportKey = GlobalKey();
+  final GlobalKey _pinnedRowHitAreaKey = GlobalKey();
+  final GlobalKey _scrollRowHitAreaKey = GlobalKey();
   final GlobalKey _addButtonKey = GlobalKey();
   final Map<String, GlobalKey> _tabKeys = <String, GlobalKey>{};
   bool _hasOverflow = false;
@@ -240,21 +243,50 @@ class _WorkspaceTabStripState extends ConsumerState<_WorkspaceTabStrip> {
     }
   }
 
-  bool _isEmptyTabStripArea(Offset position) {
-    final viewport = _scrollViewportKey.currentContext?.findRenderObject();
-    if (viewport is! RenderBox || !viewport.hasSize) return false;
-    final local = viewport.globalToLocal(position);
-    if (!(Offset.zero & viewport.size).contains(local)) return false;
+  bool _isEmptyTabStripArea(
+    Offset position, {
+    required GlobalKey hitAreaKey,
+    required GlobalKey viewportKey,
+  }) {
+    final hitArea = hitAreaKey.currentContext?.findRenderObject();
+    final viewport = viewportKey.currentContext?.findRenderObject();
+    if (hitArea is! RenderBox ||
+        !hitArea.hasSize ||
+        viewport is! RenderBox ||
+        !viewport.hasSize) {
+      return false;
+    }
+    if (!(hitArea.localToGlobal(Offset.zero) & hitArea.size).contains(
+      position,
+    )) {
+      return false;
+    }
+    final viewportRect = viewport.localToGlobal(Offset.zero) & viewport.size;
     for (final key in <GlobalKey>[..._tabKeys.values, _addButtonKey]) {
       final render = key.currentContext?.findRenderObject();
       if (render is! RenderBox || !render.hasSize) continue;
-      if ((render.localToGlobal(Offset.zero) & render.size)
+      final visibleRect = (render.localToGlobal(Offset.zero) & render.size)
           .inflate(3)
-          .contains(position)) {
+          .intersect(viewportRect);
+      if (visibleRect.contains(position)) {
         return false;
       }
     }
     return true;
+  }
+
+  void _createUntitledTabInEmptyArea(
+    Offset position, {
+    required GlobalKey hitAreaKey,
+    required GlobalKey viewportKey,
+  }) {
+    if (_isEmptyTabStripArea(
+      position,
+      hitAreaKey: hitAreaKey,
+      viewportKey: viewportKey,
+    )) {
+      widget.onCreateUntitledTab?.call();
+    }
   }
 
   void _syncCompletionAcknowledgement() {
@@ -362,6 +394,7 @@ class _WorkspaceTabStripState extends ConsumerState<_WorkspaceTabStrip> {
       child: _NewTabButton(
         groupId: widget.groupId,
         onCreateTab: widget.onCreateTab,
+        onCreateUntitledTab: widget.onCreateUntitledTab,
         onCreateAgentTab: widget.onCreateAgentTab,
       ),
     );
@@ -443,20 +476,39 @@ class _WorkspaceTabStripState extends ConsumerState<_WorkspaceTabStrip> {
                     'workspace-pinned-tab-row:${widget.groupId}',
                   ),
                   height: AleraTokens.sidebarHeaderHeight,
-                  child: Align(
-                    alignment: Alignment.centerLeft,
-                    child: SingleChildScrollView(
-                      scrollDirection: Axis.horizontal,
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: AleraTokens.space8,
-                        vertical: AleraTokens.space6,
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: <Widget>[
-                          for (final tab in pinnedTabs) buildTabEntry(tab),
-                        ],
-                      ),
+                  child: GestureDetector(
+                    key: _pinnedRowHitAreaKey,
+                    behavior: HitTestBehavior.translucent,
+                    onDoubleTapDown: widget.onCreateUntitledTab == null
+                        ? null
+                        : (details) => _createUntitledTabInEmptyArea(
+                            details.globalPosition,
+                            hitAreaKey: _pinnedRowHitAreaKey,
+                            viewportKey: _pinnedScrollViewportKey,
+                          ),
+                    child: Row(
+                      children: <Widget>[
+                        const SizedBox(width: AleraTokens.space16),
+                        Expanded(
+                          child: Listener(
+                            key: _pinnedScrollViewportKey,
+                            child: SingleChildScrollView(
+                              scrollDirection: Axis.horizontal,
+                              padding: const EdgeInsets.symmetric(
+                                vertical: AleraTokens.space6,
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: <Widget>[
+                                  for (final tab in pinnedTabs)
+                                    buildTabEntry(tab),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: AleraTokens.space16),
+                      ],
                     ),
                   ),
                 ),
@@ -480,43 +532,45 @@ class _WorkspaceTabStripState extends ConsumerState<_WorkspaceTabStrip> {
                       ),
                     Expanded(
                       child: GestureDetector(
+                        key: _scrollRowHitAreaKey,
                         behavior: HitTestBehavior.translucent,
                         onDoubleTapDown: widget.onCreateUntitledTab == null
                             ? null
-                            : (details) {
-                                if (_isEmptyTabStripArea(
-                                  details.globalPosition,
-                                )) {
-                                  widget.onCreateUntitledTab?.call();
-                                }
-                              },
-                        child: Listener(
-                          key: _scrollViewportKey,
-                          behavior: HitTestBehavior.opaque,
-                          onPointerSignal: _handlePointerSignal,
-                          child: SingleChildScrollView(
-                            key: ValueKey<String>(
-                              'workspace-tab-scroll:${widget.groupId}',
+                            : (details) => _createUntitledTabInEmptyArea(
+                                details.globalPosition,
+                                hitAreaKey: _scrollRowHitAreaKey,
+                                viewportKey: _scrollViewportKey,
+                              ),
+                        child: Row(
+                          children: <Widget>[
+                            const SizedBox(width: AleraTokens.space16),
+                            Expanded(
+                              child: Listener(
+                                key: _scrollViewportKey,
+                                behavior: HitTestBehavior.opaque,
+                                onPointerSignal: _handlePointerSignal,
+                                child: SingleChildScrollView(
+                                  key: ValueKey<String>(
+                                    'workspace-tab-scroll:${widget.groupId}',
+                                  ),
+                                  controller: _scrollController,
+                                  scrollDirection: .horizontal,
+                                  padding: const EdgeInsets.symmetric(
+                                    vertical: AleraTokens.space6,
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: .min,
+                                    children: <Widget>[
+                                      for (final tab in scrollingTabs)
+                                        buildTabEntry(tab),
+                                      if (!_hasOverflow) addButton,
+                                    ],
+                                  ),
+                                ),
+                              ),
                             ),
-                            controller: _scrollController,
-                            scrollDirection: .horizontal,
-                            padding: EdgeInsets.only(
-                              left: pinnedTabs.isEmpty
-                                  ? AleraTokens.space8
-                                  : AleraTokens.space4,
-                              right: AleraTokens.space8,
-                              top: AleraTokens.space6,
-                              bottom: AleraTokens.space6,
-                            ),
-                            child: Row(
-                              mainAxisSize: .min,
-                              children: <Widget>[
-                                for (final tab in scrollingTabs)
-                                  buildTabEntry(tab),
-                                if (!_hasOverflow) addButton,
-                              ],
-                            ),
-                          ),
+                            const SizedBox(width: AleraTokens.space16),
+                          ],
                         ),
                       ),
                     ),

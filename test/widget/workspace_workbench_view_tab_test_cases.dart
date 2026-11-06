@@ -42,6 +42,140 @@ void _registerWorkspaceWorkbenchViewTabTests() {
     expect(untitledGroups, hasLength(1));
   });
 
+  testWidgets('two-row whitespace creates untitled files in both rows', (
+    tester,
+  ) async {
+    final tabs = <WorkspaceTabRecord>[
+      _tab('regular', title: 'Regular'),
+      _tab('pinned', title: 'Pinned', pinned: true),
+    ];
+    final untitledGroups = <String?>[];
+    await _pumpWorkbenchView(
+      tester,
+      tabs: tabs,
+      layout: _singleTabStripLayout(tabs, activeTabId: 'regular'),
+      terminalRuntime: terminalRuntime,
+      createdTabs: createdTabs,
+      createdUntitledTabs: untitledGroups,
+      selectedTabs: selectedTabs,
+      closedTabs: closedTabs,
+      closedTabGroups: closedTabGroups,
+      renamedTabs: renamedTabs,
+      movedTabs: movedTabs,
+      splitGroups: splitGroups,
+      mergedGroups: mergedGroups,
+      updatedRatios: updatedRatios,
+      twoRowTabs: true,
+      size: const Size(420, 280),
+    );
+    await tester.pumpAndSettle();
+
+    final pinnedRow = tester.getRect(
+      find.byKey(const ValueKey<String>('workspace-pinned-tab-row:group-a')),
+    );
+    final topRightGutter = Offset(pinnedRow.right - 8, pinnedRow.center.dy);
+    await tester.tapAt(topRightGutter);
+    await tester.pump(const Duration(milliseconds: 75));
+    await tester.tapAt(topRightGutter);
+    await tester.pumpAndSettle();
+    expect(untitledGroups, <String?>['group-a']);
+
+    final pinnedChip = find.byKey(
+      const ValueKey<String>('workspace-tab-chip:pinned'),
+    );
+    await tester.tapAt(tester.getCenter(pinnedChip));
+    await tester.pump(const Duration(milliseconds: 75));
+    await tester.tapAt(tester.getCenter(pinnedChip));
+    await tester.pumpAndSettle();
+    expect(untitledGroups, hasLength(1));
+
+    final bottomViewport = tester.getRect(
+      find.byKey(const ValueKey<String>('workspace-tab-scroll:group-a')),
+    );
+    final bottomLeftGutter = Offset(
+      bottomViewport.left - 8,
+      bottomViewport.center.dy,
+    );
+    await tester.tapAt(bottomLeftGutter);
+    await tester.pump(const Duration(milliseconds: 75));
+    await tester.tapAt(bottomLeftGutter);
+    await tester.pumpAndSettle();
+    expect(untitledGroups, <String?>['group-a', 'group-a']);
+  });
+
+  testWidgets('overflowing tabs preserve left and right blank gutters', (
+    tester,
+  ) async {
+    final tabs = _overflowingWorkbenchTabs();
+    final untitledGroups = <String?>[];
+    await _pumpWorkbenchView(
+      tester,
+      tabs: tabs,
+      layout: _singleTabStripLayout(tabs, activeTabId: tabs.first.id),
+      terminalRuntime: terminalRuntime,
+      createdTabs: createdTabs,
+      createdUntitledTabs: untitledGroups,
+      selectedTabs: selectedTabs,
+      closedTabs: closedTabs,
+      closedTabGroups: closedTabGroups,
+      renamedTabs: renamedTabs,
+      movedTabs: movedTabs,
+      splitGroups: splitGroups,
+      mergedGroups: mergedGroups,
+      updatedRatios: updatedRatios,
+      size: const Size(360, 280),
+    );
+    await tester.pumpAndSettle();
+
+    final viewport = tester.getRect(
+      find.byKey(const ValueKey<String>('workspace-tab-scroll:group-a')),
+    );
+    expect(
+      _tabStripScrollController(tester).position.maxScrollExtent,
+      greaterThan(0),
+    );
+
+    for (final x in <double>[viewport.left - 8, viewport.right + 8]) {
+      final point = Offset(x, viewport.center.dy);
+      await tester.tapAt(point);
+      await tester.pump(const Duration(milliseconds: 75));
+      await tester.tapAt(point);
+      await tester.pumpAndSettle();
+    }
+    expect(untitledGroups, <String?>['group-a', 'group-a']);
+  });
+
+  testWidgets('new tab menu creates an untitled file', (tester) async {
+    final tabs = <WorkspaceTabRecord>[_tab('tab-1', title: 'Terminal 1')];
+    final untitledGroups = <String?>[];
+    await _pumpWorkbenchView(
+      tester,
+      tabs: tabs,
+      layout: _singleTabStripLayout(tabs, activeTabId: 'tab-1'),
+      terminalRuntime: terminalRuntime,
+      createdTabs: createdTabs,
+      createdUntitledTabs: untitledGroups,
+      selectedTabs: selectedTabs,
+      closedTabs: closedTabs,
+      closedTabGroups: closedTabGroups,
+      renamedTabs: renamedTabs,
+      movedTabs: movedTabs,
+      splitGroups: splitGroups,
+      mergedGroups: mergedGroups,
+      updatedRatios: updatedRatios,
+      size: const Size(720, 280),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('New Tab'));
+    await tester.pump(const Duration(milliseconds: 400));
+    await tester.pumpAndSettle();
+    expect(find.text('New File'), findsOneWidget);
+    await tester.tap(find.text('New File'));
+    await tester.pumpAndSettle();
+    expect(untitledGroups, <String?>['group-a']);
+  });
+
   testWidgets('two-row tabs show pinned above regular', (tester) async {
     final tabs = <WorkspaceTabRecord>[
       _tab('regular', title: 'Regular'),
