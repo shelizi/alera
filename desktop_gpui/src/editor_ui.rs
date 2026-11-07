@@ -5,13 +5,16 @@
 //! a virtualized production code editor: only the first 600 lines are drawn,
 //! click places the caret at line end, and IME candidate rectangle/selection
 //! geometry need independent visual and real Chinese IME tests.
-use alera_gpui_desktop::editor::{byte_to_utf16, EditorDocument, EditorDraftStore};
-use gpui::{
-    actions, div, prelude::*, px, relative, rgb, App, Bounds, ClipboardItem, Context, CursorStyle,
-    Element, ElementId, ElementInputHandler, Entity, EntityInputHandler, FocusHandle, Focusable,
-    GlobalElementId, InspectorElementId, KeyBinding, LayoutId, MouseButton, Pixels, Point, Style,
-    UTF16Selection, Window,
+use alera_gpui_desktop::editor::{
+    byte_to_utf16, nearest_grapheme_edge, utf16_to_byte, EditorDocument, EditorDraftStore,
 };
+use gpui::{
+    actions, div, fill, point, prelude::*, px, relative, rgb, size, App, Bounds, ClipboardItem,
+    Context, CursorStyle, Element, ElementId, ElementInputHandler, Entity, EntityInputHandler,
+    FocusHandle, Focusable, GlobalElementId, InspectorElementId, KeyBinding, LayoutId, MouseButton,
+    Pixels, Point, ShapedLine, Style, TextRun, UTF16Selection, Window,
+};
+use std::collections::BTreeMap;
 use std::ops::Range;
 
 const MAX_RENDER_LINES: usize = 600;
@@ -90,6 +93,19 @@ pub struct NativeEditor {
     draft_store: Option<EditorDraftStore>,
     focus: FocusHandle,
     status: String,
+    line_geometry: BTreeMap<usize, EditorLineGeometry>,
+    mouse_selecting: bool,
+}
+
+/// Geometry is produced by GPUI's actual native font shaper during paint.
+/// It is not inferred from byte offsets, fixed-width guesses, or the scroll
+/// position. ContentMask is the visible part of the scroll container.
+struct EditorLineGeometry {
+    start: usize,
+    end: usize,
+    bounds: Bounds<Pixels>,
+    clip: Bounds<Pixels>,
+    shaped: ShapedLine,
 }
 
 impl NativeEditor {
@@ -108,11 +124,76 @@ impl NativeEditor {
             } else {
                 "Native UTF-8 text editor (experimental)".into()
             },
+            line_geometry: BTreeMap::new(),
+            mouse_selecting: false,
         }
     }
 
     pub fn has_unsaved_changes(&self) -> bool {
         self.document.is_dirty()
+    }
+
+    fn pointer_index_at(&self, position: Point<Pixels>) -> Option<usize> {
+        let y = f32::from(position.y);
+        let geometry = self
+            .line_geometry
+            .values()
+            // Skip off-screen rows. They may still have layout geometry
+            // because the experimental renderer isn't virtualized yet.
+            .filter(|row| {
+                row.bounds.bottom() > row.clip.top()
+                    && row.bounds.top() < row.clip.bottom()
+                    && row.start <= row.end
+            })
+            .min_by(|a, b| {
+                let distance = |row: &EditorLineGeometry| {
+                    let top = f32::from(row.bounds.top().max(row.clip.top()));
+                    let bottom = f32::from(row.bounds.bottom().min(row.clip.bottom()));
+                    if y < top {
+                        top - y
+                    } else if y > bottom {
+                        y - bottom
+                    } else {
+                        0.0
+                    }
+                };
+                distance(a).total_cmp(&distance(b))
+            })?;
+        let text = self.document.content().get(geometry.start..geometry.end)?;
+        let x = position.x - geometry.bounds.left();
+        let guessed = geometry.shaped.closest_index_for_x(x).min(text.len());
+        let grapheme = nearest_grapheme_edge(text, guessed, f32::from(x), |index| {
+            f32::from(geometry.shaped.x_for_index(index))
+        });
+        Some(geometry.start + grapheme)
+    }
+
+    fn pointer_down(&mut self, event: &gpui::MouseDownEvent, cx: &mut Context<Self>) {
+        let Some(offset) = self.pointer_index_at(event.position) else {
+            return;
+        };
+        let result = if event.modifiers.shift {
+            self.document.extend_pointer_selection(offset)
+        } else {
+            self.document.set_pointer_caret(offset)
+        };
+        if result.is_ok() {
+            self.mouse_selecting = true;
+        } else if let Err(error) = result {
+            self.status = format!("Pointer input blocked: {error}");
+        }
+        cx.notify();
+    }
+
+    fn pointer_move(&mut self, event: &gpui::MouseMoveEvent, cx: &mut Context<Self>) {
+        if !self.mouse_selecting {
+            return;
+        }
+        if let Some(offset) = self.pointer_index_at(event.position) {
+            if self.document.extend_pointer_selection(offset).is_ok() {
+                cx.notify();
+            }
+        }
     }
 
     pub fn save(&mut self, cx: &mut Context<Self>) -> bool {
@@ -329,29 +410,35 @@ impl EntityInputHandler for NativeEditor {
     }
     fn bounds_for_range(
         &mut self,
-        _: Range<usize>,
-        bounds: Bounds<Pixels>,
+        range_utf16: Range<usize>,
+        _: Bounds<Pixels>,
         _: &mut Window,
         _: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
-        // A real code editor needs scroll-aware text shaping and cursor
-        // rectangles for Windows/macOS candidate windows. This conservative
-        // rectangle keeps the platform IME pipeline intact without claiming
-        // full candidate placement support.
-        Some(bounds)
+        let byte = utf16_to_byte(self.document.content(), range_utf16.start);
+        let geometry = self.line_geometry.values().find(|row| {
+            row.start <= byte
+                && byte <= row.end
+                && row.bounds.bottom() > row.clip.top()
+                && row.bounds.top() < row.clip.bottom()
+        })?;
+        let x = geometry.bounds.left() + geometry.shaped.x_for_index(byte - geometry.start);
+        if x < geometry.clip.left() || x > geometry.clip.right() {
+            // Do not place the OS IME candidate window at an offscreen caret.
+            return None;
+        }
+        let top = geometry.bounds.top().max(geometry.clip.top());
+        let bottom = geometry.bounds.bottom().min(geometry.clip.bottom());
+        Some(Bounds::new(point(x, top), size(px(2.0), bottom - top)))
     }
     fn character_index_for_point(
         &mut self,
-        _: Point<Pixels>,
+        point: Point<Pixels>,
         _: &mut Window,
         _: &mut Context<Self>,
     ) -> Option<usize> {
-        // Return the active caret (which may be at the start of a reversed
-        // selection), never blindly the forward selection end.
-        Some(byte_to_utf16(
-            self.document.content(),
-            self.document.cursor(),
-        ))
+        self.pointer_index_at(point)
+            .map(|byte| byte_to_utf16(self.document.content(), byte))
     }
 }
 
@@ -419,8 +506,126 @@ impl IntoElement for NativeInputCapture {
     }
 }
 
+/// Transparent overlay occupying exactly the painted row. Unlike heuristic
+/// character-width hit testing, its native ShapedLine uses the inherited
+/// font and font size from the same GPUI text context as the visible text.
+struct EditorLineMetrics {
+    editor: Entity<NativeEditor>,
+    index: usize,
+    start: usize,
+    end: usize,
+    text: String,
+    caret: usize,
+}
+
+impl IntoElement for EditorLineMetrics {
+    type Element = Self;
+
+    fn into_element(self) -> Self::Element {
+        self
+    }
+}
+
+impl Element for EditorLineMetrics {
+    type RequestLayoutState = ();
+    type PrepaintState = Option<ShapedLine>;
+
+    fn id(&self) -> Option<ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, ()) {
+        let mut style = Style::default();
+        style.size.width = relative(1.0).into();
+        style.size.height = relative(1.0).into();
+        (window.request_layout(style, [], cx), ())
+    }
+
+    fn prepaint(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        _: Bounds<Pixels>,
+        _: &mut (),
+        window: &mut Window,
+        _: &mut App,
+    ) -> Option<ShapedLine> {
+        let style = window.text_style();
+        let run = TextRun {
+            len: self.text.len(),
+            font: style.font(),
+            color: style.color,
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        };
+        let font_size = style.font_size.to_pixels(window.rem_size());
+        Some(
+            window
+                .text_system()
+                .shape_line(self.text.clone().into(), font_size, &[run], None),
+        )
+    }
+
+    fn paint(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        _: &mut (),
+        shaped: &mut Option<ShapedLine>,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let Some(line) = shaped.take() else { return };
+        let clip = window.content_mask().bounds;
+        // Paint a 1px native caret without inserting a fake glyph into
+        // the visible text, which previously shifted all later glyphs.
+        if self.caret >= self.start
+            && self.caret <= self.end
+            && self.editor.read(cx).document.selection().is_empty()
+            && self.editor.read(cx).focus_handle(cx).is_focused(window)
+        {
+            let local = self.caret - self.start;
+            let cursor_x = bounds.left() + line.x_for_index(local);
+            if bounds.bottom() > clip.top() && bounds.top() < clip.bottom() {
+                window.paint_quad(fill(
+                    Bounds::new(
+                        point(cursor_x, bounds.top()),
+                        size(px(1.5), bounds.size.height),
+                    ),
+                    rgb(CURSOR_COLOR),
+                ));
+            }
+        }
+        self.editor.update(cx, |editor, _| {
+            editor.line_geometry.insert(
+                self.index,
+                EditorLineGeometry {
+                    start: self.start,
+                    end: self.end,
+                    bounds,
+                    clip,
+                    shaped: line,
+                },
+            );
+        });
+    }
+}
+
 impl Render for NativeEditor {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.line_geometry.clear();
         let text = self.document.content();
         let caret = self.document.cursor();
         let selection = self.document.selection();
@@ -478,22 +683,13 @@ impl Render for NativeEditor {
                             },
                         ));
                     }
-                } else if caret >= start && caret <= end && display.is_char_boundary(caret - start)
-                {
-                    let cursor_at = caret - start;
-                    display.insert(cursor_at, '│');
-                    highlights.push((
-                        cursor_at..cursor_at + '│'.len_utf8(),
-                        gpui::HighlightStyle {
-                            color: Some(rgb(CURSOR_COLOR).into()),
-                            ..Default::default()
-                        },
-                    ));
                 }
                 offset = end + 1;
                 (
                     i,
+                    start,
                     end,
+                    line.to_owned(),
                     gpui::StyledText::new(display).with_highlights(highlights),
                 )
             })
@@ -551,6 +747,17 @@ impl Render for NativeEditor {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, window, _cx| window.focus(&this.focus)),
+            )
+            .on_mouse_move(cx.listener(|this, event, _, cx| {
+                this.pointer_move(event, cx);
+            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _, _, _| this.mouse_selecting = false),
+            )
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(|this, _, _, _| this.mouse_selecting = false),
             )
             .child(
                 div()
@@ -614,28 +821,30 @@ impl Render for NativeEditor {
                     .child(NativeInputCapture {
                         editor: cx.entity(),
                     })
-                    .children(lines.into_iter().map(|(index, end, line)| {
+                    .children(lines.into_iter().map(|(index, start, end, raw, line)| {
                         div()
                             .id(("editable-line", index))
+                            .relative()
                             .min_h(px(19.0))
                             .line_height(px(19.0))
                             .whitespace_nowrap()
                             .cursor_pointer()
                             .on_mouse_down(
                                 MouseButton::Left,
-                                cx.listener(
-                                    move |this, event: &gpui::MouseDownEvent, window, cx| {
-                                        window.focus(&this.focus);
-                                        let _ = if event.modifiers.shift {
-                                            this.document.select_offset(end)
-                                        } else {
-                                            this.document.set_selection(end..end)
-                                        };
-                                        cx.notify();
-                                    },
-                                ),
+                                cx.listener(|this, event: &gpui::MouseDownEvent, window, cx| {
+                                    window.focus(&this.focus);
+                                    this.pointer_down(event, cx);
+                                }),
                             )
                             .child(line)
+                            .child(div().absolute().inset_0().child(EditorLineMetrics {
+                                editor: cx.entity(),
+                                index,
+                                start,
+                                end,
+                                text: raw,
+                                caret,
+                            }))
                     }))
                     .when(more, |surface| {
                         surface.child("… Rendering limited to first 600 lines in this prototype")

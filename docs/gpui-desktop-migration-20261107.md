@@ -112,6 +112,17 @@ without reproducible measurements.
   pass, including Unicode/IME/draft/selection regressions. This remains
   experimental: no pixel-accurate mouse caret, scroll-aware IME candidate
   placement, virtualized text viewport, or verified Windows Bopomofo UX.
+- Phase 2 geometry follow-up: introduced native GPUI \`ShapedLine\`
+  metrics for each painted editor row. Mouse click, Shift-click and
+  cross-line drag are mapped through actual glyph widths and snapped to
+  complete Unicode grapheme boundaries; the caret is painted as a slim
+  overlay rather than an inserted character that shifts the line. IME
+  bounds lookup uses the same pixel geometry and GPUI scroll clipping,
+  rejecting offscreen candidate anchors. Three pure Rust regressions cover
+  combining characters, ZWJ emoji, and reversed multiline pointer drag;
+  total 65 headless tests passed. Native Windows type check succeeded.
+  Actual pointer event routing, drag autoscroll and real Bopomofo
+  candidate window placement still need visual Windows acceptance testing.
 - Two-launch Windows smoke test confirmed a native window on each launch and
   recovery of the same workspace even when the second process started from
   a different working directory, using an isolated app-state directory.

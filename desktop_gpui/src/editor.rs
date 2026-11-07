@@ -385,6 +385,41 @@ impl EditorDocument {
         Ok(())
     }
 
+    /// Pointer caret positions must be complete Unicode grapheme boundaries.
+    pub fn set_pointer_caret(&mut self, offset: usize) -> io::Result<()> {
+        self.validate_pointer_offset(offset)?;
+        self.move_to(offset, false, true);
+        Ok(())
+    }
+
+    pub fn extend_pointer_selection(&mut self, offset: usize) -> io::Result<()> {
+        self.validate_pointer_offset(offset)?;
+        self.move_to(offset, true, true);
+        Ok(())
+    }
+
+    fn validate_pointer_offset(&self, offset: usize) -> io::Result<()> {
+        if self.marked.is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "Finish native IME composition before mouse selection",
+            ));
+        }
+        if offset > self.content.len()
+            || (offset != self.content.len()
+                && !self
+                    .content
+                    .grapheme_indices(true)
+                    .any(|(boundary, _)| boundary == offset))
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Mouse caret must be on a Unicode grapheme boundary",
+            ));
+        }
+        Ok(())
+    }
+
     fn move_to(&mut self, offset: usize, extend: bool, clear_column: bool) {
         if extend {
             let caret = self.cursor();
@@ -774,6 +809,40 @@ pub fn byte_to_utf16(text: &str, offset: usize) -> usize {
         .chars()
         .map(char::len_utf16)
         .sum()
+}
+
+/// Snap a shaped-glyph index to the closest complete grapheme boundary.
+/// The shaping engine can return indices inside ZWJ emoji or combining text.
+/// Consult only the two neighboring grapheme edges' pixel positions.
+pub fn nearest_grapheme_edge(
+    text: &str,
+    glyph_index: usize,
+    x: f32,
+    mut x_for_index: impl FnMut(usize) -> f32,
+) -> usize {
+    let index = glyph_index.min(text.len());
+    let mut previous = 0;
+    for (boundary, _) in text.grapheme_indices(true) {
+        if boundary == index {
+            return boundary;
+        }
+        if boundary > index {
+            let before = (x_for_index(previous) - x).abs();
+            let after = (x_for_index(boundary) - x).abs();
+            return if before <= after { previous } else { boundary };
+        }
+        previous = boundary;
+    }
+    if index == text.len() {
+        return index;
+    }
+    let before = (x_for_index(previous) - x).abs();
+    let after = (x_for_index(text.len()) - x).abs();
+    if before <= after {
+        previous
+    } else {
+        text.len()
+    }
 }
 
 #[cfg(test)]
@@ -1177,5 +1246,82 @@ mod tests {
         assert_eq!(doc.selection(), previous);
         doc.select_offset(0).unwrap();
         assert!(doc.selection().is_empty());
+    }
+
+    #[test]
+    fn pointer_caret_snaps_to_full_unicode_graphemes_not_individual_codepoints() {
+        let root = tempfile::tempdir().unwrap();
+        let mut doc = EditorDocument::scratch(root.path()).unwrap();
+        doc.replace(None, "ae\u{301}🧑‍💻中").unwrap();
+        assert!(
+            doc.set_pointer_caret(2).is_err(),
+            "combining mark is not a caret stop"
+        );
+        assert!(doc.set_pointer_caret(6).is_err(), "inside an emoji cluster");
+        doc.set_pointer_caret(4).unwrap();
+        assert_eq!(doc.cursor(), 4);
+        assert!(doc.extend_pointer_selection(2).is_err());
+        doc.extend_pointer_selection(doc.content().len()).unwrap();
+        assert_eq!(&doc.content()[doc.selection()], "🧑‍💻中");
+        assert_eq!(doc.cursor(), doc.content().len());
+        doc.extend_pointer_selection(1).unwrap();
+        assert!(doc.selection_reversed());
+    }
+
+    #[test]
+    fn shaped_hit_test_snaps_interior_emoji_and_combining_indices_to_nearest_edge() {
+        let family = "🧑‍💻";
+        assert_eq!(
+            nearest_grapheme_edge(family, 4, 4.0, |offset| {
+                if offset == 0 {
+                    0.0
+                } else {
+                    24.0
+                }
+            }),
+            0
+        );
+        assert_eq!(
+            nearest_grapheme_edge(family, 4, 19.0, |offset| {
+                if offset == 0 {
+                    0.0
+                } else {
+                    24.0
+                }
+            }),
+            family.len()
+        );
+        assert_eq!(
+            nearest_grapheme_edge("e\u{301}x", 1, 16.0, |offset| {
+                match offset {
+                    0 => 0.0,
+                    3 => 14.0,
+                    _ => 22.0,
+                }
+            }),
+            3
+        );
+        assert_eq!(
+            nearest_grapheme_edge("abc", 1, 8.0, |offset| offset as f32 * 8.0),
+            1
+        );
+        assert_eq!(nearest_grapheme_edge("", 99, 400.0, |_| 0.0), 0);
+    }
+
+    #[test]
+    fn pointer_drag_can_reverse_across_lines_without_changing_document_or_undo_stack() {
+        let root = tempfile::tempdir().unwrap();
+        let mut doc = EditorDocument::scratch(root.path()).unwrap();
+        doc.replace(None, "abc\n中文字\nend").unwrap();
+        let before = doc.history_depth();
+        doc.set_pointer_caret("abc\n中文".len()).unwrap();
+        doc.extend_pointer_selection(1).unwrap();
+        assert!(doc.selection_reversed());
+        assert_eq!(&doc.content()[doc.selection()], "bc\n中文");
+        assert_eq!(doc.cursor(), 1);
+        doc.extend_pointer_selection(doc.content().len()).unwrap();
+        assert_eq!(&doc.content()[doc.selection()], "字\nend");
+        assert!(!doc.selection_reversed());
+        assert_eq!(doc.history_depth(), before);
     }
 }
