@@ -128,6 +128,27 @@ pub struct NativeEditor {
 /// Geometry is produced by GPUI's actual native font shaper during paint.
 /// It is not inferred from byte offsets, fixed-width guesses, or the scroll
 /// position. ContentMask is the visible part of the scroll container.
+fn painted_frame(row: &EditorLineGeometry) -> VisibleLineGeometry {
+    VisibleLineGeometry {
+        start: row.start,
+        end: row.end,
+        top: f32::from(row.bounds.top()),
+        bottom: f32::from(row.bounds.bottom()),
+        left: f32::from(row.bounds.left()),
+        clip_top: f32::from(row.clip.top()),
+        clip_bottom: f32::from(row.clip.bottom()),
+        clip_left: f32::from(row.clip.left()),
+        clip_right: f32::from(row.clip.right()),
+    }
+}
+
+fn same_painted_row(row: &EditorLineGeometry, frame: &VisibleLineGeometry) -> bool {
+    row.start == frame.start
+        && row.end == frame.end
+        && f32::from(row.bounds.top()) == frame.top
+        && f32::from(row.bounds.left()) == frame.left
+}
+
 struct EditorLineGeometry {
     start: usize,
     end: usize,
@@ -292,18 +313,7 @@ impl NativeEditor {
     fn pointer_index_at(&self, position: Point<Pixels>) -> Option<usize> {
         let document = self.session.document()?;
         let stored: Vec<&EditorLineGeometry> = self.line_geometry.values().collect();
-        let frames: Vec<VisibleLineGeometry> = stored
-            .iter()
-            .map(|row| VisibleLineGeometry {
-                start: row.start,
-                end: row.end,
-                top: f32::from(row.bounds.top()),
-                bottom: f32::from(row.bounds.bottom()),
-                left: f32::from(row.bounds.left()),
-                clip_top: f32::from(row.clip.top()),
-                clip_bottom: f32::from(row.clip.bottom()),
-            })
-            .collect();
+        let frames: Vec<VisibleLineGeometry> = stored.iter().copied().map(painted_frame).collect();
         let mut hits = VisibleLineHitSet::default();
         hits.replace(frames);
         let shaped = |frame: &VisibleLineGeometry| {
@@ -586,21 +596,23 @@ impl EntityInputHandler for NativeEditor {
         _: &mut Window,
         _: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
-        let byte = utf16_to_byte(self.doc_mut().content(), range_utf16.start);
-        let geometry = self.line_geometry.values().find(|row| {
-            row.start <= byte
-                && byte <= row.end
-                && row.bounds.bottom() > row.clip.top()
-                && row.bounds.top() < row.clip.bottom()
+        let line_geometry = &self.line_geometry;
+        let document = self.session.document()?;
+        let content = document.content();
+        let byte = utf16_to_byte(content, range_utf16.start);
+        let mut hits = VisibleLineHitSet::default();
+        hits.replace(line_geometry.values().map(painted_frame));
+        let caret = hits.caret_bounds(content, byte, |frame, index| {
+            line_geometry
+                .values()
+                .find(|row| same_painted_row(row, frame))
+                .map(|row| f32::from(row.shaped.x_for_index(index)))
+                .unwrap_or(f32::NAN)
         })?;
-        let x = geometry.bounds.left() + geometry.shaped.x_for_index(byte - geometry.start);
-        if x < geometry.clip.left() || x > geometry.clip.right() {
-            // Do not place the OS IME candidate window at an offscreen caret.
-            return None;
-        }
-        let top = geometry.bounds.top().max(geometry.clip.top());
-        let bottom = geometry.bounds.bottom().min(geometry.clip.bottom());
-        Some(Bounds::new(point(x, top), size(px(2.0), bottom - top)))
+        Some(Bounds::new(
+            point(px(caret.x), px(caret.top)),
+            size(px(2.0), px(caret.bottom - caret.top)),
+        ))
     }
     fn character_index_for_point(
         &mut self,

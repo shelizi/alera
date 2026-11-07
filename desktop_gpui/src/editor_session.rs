@@ -198,6 +198,37 @@ impl EditorSession {
         SaveCommit::saved()
     }
 
+    /// Save the open buffer to `destination`.
+    /// The current file is left unchanged when the destination is different.
+    /// `overwrite` must already be the user's confirmed replacement.
+    pub fn save_as(&mut self, destination: &Path, overwrite: bool) -> SaveCommit {
+        let Some(document) = self.document.as_mut() else {
+            return SaveCommit::blocked_by(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "No editor is open",
+            ));
+        };
+        let previous = document.path().map(Path::to_path_buf);
+        let root = document.root().to_path_buf();
+        if let Err(error) = document.save_as(destination, overwrite) {
+            return SaveCommit::blocked_by(error);
+        }
+        if let Some(store) = &self.drafts {
+            if let Some(old) = previous.as_ref() {
+                if document.path() != Some(old.as_path()) {
+                    if let Err(error) = store.remove_identity(&root, old) {
+                        return SaveCommit::saved_draft_remains(error);
+                    }
+                }
+            }
+            if let Err(error) = store.remove(document) {
+                return SaveCommit::saved_draft_remains(error);
+            }
+        }
+        self.discard_armed = false;
+        SaveCommit::saved()
+    }
+
     /// Flush committed text only. Marked IME preedit is omitted by the store.
     pub fn persist_draft(&self) -> io::Result<()> {
         let (Some(document), Some(store)) = (&self.document, &self.drafts) else {

@@ -379,6 +379,44 @@ fn failed_replace_keeps_original_bytes_buffer_and_draft() {
 }
 
 #[test]
+fn save_as_keeps_the_source_and_refuses_a_path_outside_the_workspace() {
+    let workspace = tempfile::tempdir().unwrap();
+    let root = workspace.path();
+    let (state, mut editor) = session(root);
+    let path = write_file(root, "note.txt", b"before");
+    editor.open_file(root, &path).unwrap();
+    editor.document_mut().unwrap().replace(None, "!").unwrap();
+    editor.persist_draft().unwrap();
+    let copy = root.join("copy.txt");
+    let commit = editor.save_as(&copy, false);
+    assert!(commit.wrote_file(), "{}", commit.status());
+    assert_eq!(fs::read(&path).unwrap(), b"before");
+    assert_eq!(fs::read(&copy).unwrap(), b"before!");
+    assert_eq!(editor.target_path(), Some(copy.as_path()));
+    assert!(!editor.document().unwrap().is_dirty());
+    let mut restarted = EditorSession::new(Some(EditorDraftStore::new(state.path())));
+    restarted.open_file(root, &path).unwrap();
+    assert_eq!(
+        restarted.document().unwrap().content(),
+        "before",
+        "the old draft must not come back after Save As"
+    );
+
+    let outside = tempfile::tempdir().unwrap();
+    let secret = outside.path().join("secret.txt");
+    fs::write(&secret, b"do-not-touch").unwrap();
+    let link = root.join("escape.txt");
+    symlink_file(&secret, &link).expect("symlink creation");
+    editor.document_mut().unwrap().replace(None, "Z").unwrap();
+    let blocked = editor.save_as(&link, true);
+    assert!(blocked.blocked(), "{}", blocked.status());
+    assert_eq!(fs::read(&secret).unwrap(), b"do-not-touch");
+    assert_eq!(editor.document().unwrap().content(), "before!Z");
+    assert_eq!(fs::read(&copy).unwrap(), b"before!");
+    assert_eq!(editor.target_path(), Some(copy.as_path()));
+}
+
+#[test]
 fn crlf_and_final_newline_are_not_rewritten_on_save() {
     let workspace = tempfile::tempdir().unwrap();
     let root = workspace.path();

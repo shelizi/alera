@@ -96,9 +96,12 @@ impl EditorDraftStore {
                 "Scratch drafts are not enabled yet",
             )
         })?;
+        Ok(self.identity_path(&doc.root, path))
+    }
+
+    fn identity_path(&self, root: &Path, path: &Path) -> PathBuf {
         let mut hash: u64 = 0xcbf29ce484222325;
-        for byte in doc
-            .root
+        for byte in root
             .to_string_lossy()
             .bytes()
             .chain([0])
@@ -107,7 +110,16 @@ impl EditorDraftStore {
             hash ^= u64::from(byte);
             hash = hash.wrapping_mul(0x100000001b3);
         }
-        Ok(self.directory.join(format!("draft-{hash:016x}.json")))
+        self.directory.join(format!("draft-{hash:016x}.json"))
+    }
+
+    /// Remove a draft for a path the editor is about to leave.
+    pub fn remove_identity(&self, root: &Path, path: &Path) -> io::Result<()> {
+        match fs::remove_file(self.identity_path(root, path)) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error),
+        }
     }
 
     /// Store committed unsaved edits only in isolated user application data.
@@ -824,6 +836,149 @@ impl EditorDocument {
         self.original = Some(self.content.clone());
         Ok(())
     }
+
+    /// Write this buffer to a chosen workspace path.
+    /// `overwrite` is the confirmed replacement of a different existing file.
+    /// Cancelling the choice is simply not calling this method.
+    /// A refused destination leaves the buffer, path, and other files unchanged.
+    pub fn save_as(&mut self, destination: &Path, overwrite: bool) -> io::Result<()> {
+        if self.marked.is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "Finish IME composition before saving",
+            ));
+        }
+        if self.content.contains('\0') {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "NUL is not allowed",
+            ));
+        }
+        let destination = checked_destination(&self.root, destination)?;
+        if self.path.as_deref() == Some(destination.as_path()) {
+            return self.save();
+        }
+        if destination.exists() {
+            if !overwrite {
+                return Err(io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    "Save As destination already exists",
+                ));
+            }
+            replace_new_bytes(&destination, self.content.as_bytes())?;
+        } else {
+            create_new_bytes(&destination, self.content.as_bytes())?;
+        }
+        self.path = Some(destination);
+        self.original = Some(self.content.clone());
+        Ok(())
+    }
+}
+
+fn checked_destination(root: &Path, destination: &Path) -> io::Result<PathBuf> {
+    let root = dunce::canonicalize(root)?;
+    let joined = if destination.is_absolute() {
+        destination.to_path_buf()
+    } else {
+        root.join(destination)
+    };
+    let Some(name) = joined.file_name() else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Save As needs a file name",
+        ));
+    };
+    let name = name.to_os_string();
+    if name.is_empty() || name == "." || name == ".." {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Save As needs a file name",
+        ));
+    }
+    let Some(parent) = joined.parent() else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Save As needs a parent directory",
+        ));
+    };
+    if parent.as_os_str().is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Save As needs a parent directory",
+        ));
+    }
+    let parent = dunce::canonicalize(parent)
+        .map_err(|_| io::Error::new(io::ErrorKind::NotFound, "Save As directory does not exist"))?;
+    if !parent.starts_with(&root) {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "File is outside the workspace",
+        ));
+    }
+    let path = parent.join(name);
+    if !path.exists() {
+        return Ok(path);
+    }
+    let canonical = dunce::canonicalize(&path)?;
+    if !canonical.starts_with(&root) {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "File is outside the workspace",
+        ));
+    }
+    if !canonical.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Not a regular file",
+        ));
+    }
+    Ok(canonical)
+}
+
+fn create_new_bytes(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let created = (|| -> io::Result<()> {
+        let mut file = OpenOptions::new().write(true).create_new(true).open(path)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        Ok(())
+    })();
+    let failed_after_create = created
+        .as_ref()
+        .err()
+        .is_some_and(|error| error.kind() != io::ErrorKind::AlreadyExists && path.exists());
+    if failed_after_create {
+        let _ = fs::remove_file(path);
+    }
+    created
+}
+
+fn replace_new_bytes(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let permissions = fs::metadata(path)?.permissions();
+    if permissions.readonly() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "File is read-only",
+        ));
+    }
+    let parent = path
+        .parent()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "Missing parent"))?;
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let tmp = parent.join(format!(".alera-gpui-{}-{unique}.tmp", std::process::id()));
+    let result = (|| -> io::Result<()> {
+        let mut file = OpenOptions::new().write(true).create_new(true).open(&tmp)?;
+        file.set_permissions(permissions)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        fs::rename(&tmp, path)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    result
 }
 
 fn checked_root(root: &Path) -> io::Result<PathBuf> {
@@ -1046,6 +1201,60 @@ mod tests {
             io::ErrorKind::InvalidInput
         );
         assert_eq!(fs::read_to_string(&file).unwrap(), "untouched");
+    }
+
+    #[test]
+    fn save_as_writes_inside_the_workspace_and_keeps_the_buffer_on_refusal() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let secret = outside.path().join("secret.txt");
+        fs::write(&secret, "untouched").unwrap();
+        let source = root.path().join("source.txt");
+        fs::write(&source, "old").unwrap();
+        let occupied = root.path().join("occupied.txt");
+        fs::write(&occupied, "keep").unwrap();
+
+        let mut scratch = EditorDocument::scratch(root.path()).unwrap();
+        scratch.replace(None, "甲\r\n").unwrap();
+        assert_eq!(
+            scratch.save_as(&secret, true).unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        assert_eq!(fs::read_to_string(&secret).unwrap(), "untouched");
+        assert!(scratch.path().is_none());
+        assert_eq!(scratch.content(), "甲\r\n");
+
+        assert_eq!(
+            scratch.save_as(&occupied, false).unwrap_err().kind(),
+            io::ErrorKind::AlreadyExists
+        );
+        assert_eq!(fs::read_to_string(&occupied).unwrap(), "keep");
+        assert!(scratch.path().is_none());
+
+        let created = root.path().join("created.txt");
+        scratch.save_as(&created, false).unwrap();
+        assert_eq!(fs::read(&created).unwrap(), "甲\r\n".as_bytes());
+        assert_eq!(scratch.path(), Some(created.as_path()));
+        assert!(!scratch.is_dirty());
+        assert_eq!(fs::read_to_string(&source).unwrap(), "old");
+
+        let end = scratch.content().len();
+        scratch.set_selection(0..end).unwrap();
+        scratch.replace(None, "next").unwrap();
+        scratch.save_as(&occupied, true).unwrap();
+        assert_eq!(fs::read_to_string(&occupied).unwrap(), "next");
+        assert_eq!(fs::read_to_string(&created).unwrap(), "甲\r\n");
+        assert_eq!(scratch.path(), Some(occupied.as_path()));
+        assert!(!scratch.is_dirty());
+
+        scratch.replace_and_mark(None, "ㄅ", Some(1..1)).unwrap();
+        let blocked = root.path().join("during-ime.txt");
+        assert_eq!(
+            scratch.save_as(&blocked, false).unwrap_err().kind(),
+            io::ErrorKind::WouldBlock
+        );
+        assert!(!blocked.exists());
+        assert_eq!(scratch.path(), Some(occupied.as_path()));
     }
 
     #[test]

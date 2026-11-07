@@ -17,6 +17,17 @@ pub struct VisibleLineGeometry {
     pub left: f32,
     pub clip_top: f32,
     pub clip_bottom: f32,
+    pub clip_left: f32,
+    pub clip_right: f32,
+}
+
+/// Caret rectangle for the OS IME candidate window.
+/// Absent when the caret is not on a row from the latest viewport.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CaretBounds {
+    pub x: f32,
+    pub top: f32,
+    pub bottom: f32,
 }
 
 /// Rows the current frame may hit. [`Self::replace`] drops every previous row.
@@ -65,6 +76,33 @@ impl VisibleLineHitSet {
         let edge = nearest_grapheme_edge(text, guessed, local_x, |index| x_for_index(row, index));
         Some(row.start + edge)
     }
+
+    /// Pixel bounds of `byte` on a row installed by the latest [`Self::replace`].
+    /// A caret on a row that has scrolled away, or a caret outside the clip,
+    /// returns `None` so the caller does not invent an origin rectangle.
+    pub fn caret_bounds(
+        &self,
+        content: &str,
+        byte: usize,
+        mut x_for_index: impl FnMut(&VisibleLineGeometry, usize) -> f32,
+    ) -> Option<CaretBounds> {
+        if byte > content.len() || !content.is_char_boundary(byte) {
+            return None;
+        }
+        let row = self.lines.iter().find(|line| {
+            content.get(line.start..line.end).is_some() && line.start <= byte && byte <= line.end
+        })?;
+        let local_x = x_for_index(row, byte - row.start);
+        if !local_x.is_finite() {
+            return None;
+        }
+        let x = row.left + local_x;
+        if !x.is_finite() || x < row.clip_left || x > row.clip_right {
+            return None;
+        }
+        let (top, bottom) = clipped_span(row)?;
+        Some(CaretBounds { x, top, bottom })
+    }
 }
 
 /// Apply a hit from [`VisibleLineHitSet::pointer_offset`].
@@ -93,6 +131,8 @@ fn row_is_hittable(line: &VisibleLineGeometry) -> bool {
             line.left,
             line.clip_top,
             line.clip_bottom,
+            line.clip_left,
+            line.clip_right,
         ]
         .into_iter()
         .all(f32::is_finite)
@@ -123,6 +163,8 @@ mod tests {
             left: 4.0,
             clip_top: 0.0,
             clip_bottom,
+            clip_left: 0.0,
+            clip_right: 10_000.0,
         }
     }
 
@@ -184,5 +226,50 @@ mod tests {
         assert_eq!(document.cursor(), line2.start);
         assert_eq!(document.content(), original);
         assert_eq!(offset_of(&hits, document.content(), 4.0, f32::NAN), None);
+    }
+
+    #[test]
+    fn caret_bounds_follow_only_the_current_visible_line() {
+        let text = "aa\n😀b\nzz\n";
+        let index = EditorLineIndex::new(text);
+        let line1 = index.line_range(text, 1).unwrap();
+        let line2 = index.line_range(text, 2).unwrap();
+        let mut hits = VisibleLineHitSet::default();
+        assert_eq!(
+            hits.caret_bounds(text, line1.start, |_row, _index| 0.0),
+            None
+        );
+
+        let mut visible = frame(line1.start, line1.end, 19.0, 80.0);
+        visible.clip_left = 0.0;
+        visible.clip_right = 40.0;
+        let mut stale = frame(line1.start, line1.end, 400.0, 40.0);
+        stale.clip_left = 0.0;
+        stale.clip_right = 40.0;
+        hits.replace([visible, stale]);
+        let on_screen = hits
+            .caret_bounds(text, line1.start, |_row, index| index as f32 * 8.0)
+            .unwrap();
+        assert_eq!(on_screen.x, 4.0);
+        assert_eq!(on_screen.top, 19.0);
+        assert!(on_screen.bottom > on_screen.top);
+
+        let off_screen = hits.caret_bounds(text, line1.end, |_row, _index| 80.0);
+        assert_eq!(off_screen, None);
+        assert_eq!(
+            hits.caret_bounds(text, line1.start, |_row, _index| f32::NAN),
+            None
+        );
+
+        hits.replace([frame(line2.start, line2.end, 200.0, 400.0)]);
+        assert_eq!(
+            hits.caret_bounds(text, line1.start, |_row, _index| 0.0),
+            None
+        );
+        let current = hits
+            .caret_bounds(text, line2.start, |_row, _index| 0.0)
+            .unwrap();
+        assert_eq!(current.top, 200.0);
+        assert_eq!(current.x, 4.0);
     }
 }
