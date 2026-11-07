@@ -10,6 +10,7 @@ pub mod session;
 pub mod terminal;
 pub mod visible_line_hit;
 pub mod vt_screen;
+pub mod workspace_tree;
 
 #[cfg(test)]
 mod editor_safety;
