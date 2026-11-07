@@ -1,0 +1,19 @@
+[package]
+name = "alera-gpui-desktop"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Experimental native GPUI desktop frontend for Alera"
+
+# Deliberately separate from rust/Cargo.toml: Flutter, mobile, and the
+# production CLI/host must not acquire GPUI dependencies in this experiment.
+[workspace]
+resolver = "2"
+
+[dependencies]
+gpui = "=0.2.2"
+alera-core = { path = "../rust/alera-core", default-features = false }
+dunce = "=1.0.5"
+
+[dev-dependencies]
+tempfile = "3.27.0"
