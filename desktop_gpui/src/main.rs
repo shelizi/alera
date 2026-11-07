@@ -7,6 +7,7 @@ use alera_gpui_desktop::editor_tabs::EditorTabs;
 use alera_gpui_desktop::file_search::WorkspaceFileIndex;
 use alera_gpui_desktop::git_inspect::{read_file_diff, GitSnapshot};
 use alera_gpui_desktop::model::WorkbenchModel;
+use alera_gpui_desktop::project_search::{ContentMatch, ProjectSearch};
 use alera_gpui_desktop::runtime_bridge::RuntimeCliBridge;
 use alera_gpui_desktop::session::PreviewSessionStore;
 use alera_gpui_desktop::terminal::{
@@ -46,6 +47,13 @@ struct Workbench {
     quick_open: Option<Entity<QuickOpenInput>>,
     file_index: Option<Arc<WorkspaceFileIndex>>,
     file_index_loading: bool,
+    content_query: Option<Entity<QuickOpenInput>>,
+    content_loading: bool,
+    content_matches: Vec<ContentMatch>,
+    content_truncated: bool,
+    content_error: Option<String>,
+    content_searched_query: String,
+    content_request: u64,
     git_snapshot: Option<GitSnapshot>,
     git_loading: bool,
     git_error: Option<String>,
@@ -191,6 +199,81 @@ impl Workbench {
             })
             .detach();
         }
+        cx.notify();
+    }
+
+    fn toggle_content_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.content_query.is_some() {
+            self.content_query = None;
+            // A scan can finish after the panel is closed. Invalidating its
+            // ticket guarantees it never restores hidden or stale results.
+            self.content_request = self.content_request.wrapping_add(1);
+            self.content_loading = false;
+            self.content_matches.clear();
+            self.content_error = None;
+            self.content_searched_query.clear();
+            self.content_truncated = false;
+        } else {
+            let input = cx.new(QuickOpenInput::new);
+            window.focus(&input.read(cx).focus_handle(cx));
+            self.content_query = Some(input);
+        }
+        cx.notify();
+    }
+
+    fn search_project_contents(&mut self, cx: &mut Context<Self>) {
+        let Some(query) = self
+            .content_query
+            .as_ref()
+            .map(|input| input.read(cx).query().trim().to_owned())
+        else {
+            return;
+        };
+        self.content_request = self.content_request.wrapping_add(1);
+        let ticket = self.content_request;
+        self.content_matches.clear();
+        self.content_truncated = false;
+        self.content_error = None;
+        self.content_searched_query = query.clone();
+        if query.is_empty() {
+            self.content_loading = false;
+            self.content_error = Some("Type text to search within workspace files".into());
+            cx.notify();
+            return;
+        }
+        let generation = self.workspace_generation;
+        let root = self.model.root().to_path_buf();
+        self.content_loading = true;
+        cx.spawn(async move |view, cx| {
+            // Directory walking, decoding and matching are strictly off the
+            // GPUI UI thread. ProjectSearch never writes workspace files.
+            let result = cx
+                .background_spawn(async move {
+                    ProjectSearch::new(&root).and_then(|search| search.search(&query))
+                })
+                .await;
+            view.update(cx, |view, cx| {
+                if view.workspace_generation != generation || view.content_request != ticket {
+                    return;
+                }
+                view.content_loading = false;
+                match result {
+                    Ok(results) => {
+                        view.content_matches = results.matches;
+                        view.content_truncated = results.truncated;
+                        view.content_error = None;
+                    }
+                    Err(error) => {
+                        view.content_matches.clear();
+                        view.content_truncated = false;
+                        view.content_error = Some(format!("Content search failed: {error}"));
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
         cx.notify();
     }
 
@@ -429,6 +512,13 @@ impl Workbench {
         self.quick_open = None;
         self.file_index = None;
         self.file_index_loading = false;
+        self.content_query = None;
+        self.content_loading = false;
+        self.content_matches.clear();
+        self.content_error = None;
+        self.content_truncated = false;
+        self.content_searched_query.clear();
+        self.content_request = self.content_request.wrapping_add(1);
         self.git_snapshot = None;
         self.git_loading = false;
         self.git_diff = None;
@@ -790,6 +880,38 @@ impl Render for Workbench {
             .zip(self.file_index.as_ref())
             .map(|(input, index)| index.search(input.read(cx).query(), 18))
             .unwrap_or_default();
+        let content_query = self.content_query.clone();
+        let content_loading = self.content_loading;
+        let content_results_total = self.content_matches.len();
+        let content_results: Vec<_> = self
+            .content_matches
+            .iter()
+            .take(80)
+            .cloned()
+            .enumerate()
+            .collect();
+        let content_status = if content_loading {
+            "Searching workspace text…".to_string()
+        } else if let Some(error) = &self.content_error {
+            error.clone()
+        } else if self.content_searched_query.is_empty() {
+            "Enter text and click Search".to_string()
+        } else {
+            format!(
+                "{} match(es){}{}",
+                content_results_total,
+                if self.content_truncated {
+                    " · partial results"
+                } else {
+                    ""
+                },
+                if content_results_total > 80 {
+                    " · showing first 80"
+                } else {
+                    ""
+                }
+            )
+        };
         let git_changes = self
             .git_snapshot
             .as_ref()
@@ -1057,6 +1179,94 @@ impl Render for Workbench {
                                                                 }))
                                                         }
                                                     )),
+                                            )
+                                    } else {
+                                        div().h(px(0.0))
+                                    }),
+                            )
+                            .child(
+                                div()
+                                    .id("content-search-panel")
+                                    .px_3()
+                                    .py_2()
+                                    .border_b_1()
+                                    .border_color(rgb(BORDER))
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .justify_between()
+                                            .child(
+                                                div()
+                                                    .id("content-search-toggle")
+                                                    .cursor_pointer()
+                                                    .text_sm()
+                                                    .text_color(rgb(TEXT))
+                                                    .child(if content_query.is_some() {
+                                                        "⌕ Search Contents  ×"
+                                                    } else {
+                                                        "⌕ Search Contents"
+                                                    })
+                                                    .on_click(cx.listener(|this, _, window, cx| {
+                                                        this.toggle_content_search(window, cx);
+                                                    })),
+                                            )
+                                            .child(if content_query.is_some() {
+                                                div()
+                                                    .id("content-search-run")
+                                                    .cursor_pointer()
+                                                    .text_sm()
+                                                    .text_color(rgb(TEXT))
+                                                    .child(if content_loading { "Search again" } else { "Search" })
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.search_project_contents(cx);
+                                                    }))
+                                                    .into_any_element()
+                                            } else {
+                                                div().h(px(0.0)).into_any_element()
+                                            }),
+                                    )
+                                    .child(if let Some(input) = content_query {
+                                        div()
+                                            .mt_2()
+                                            .flex()
+                                            .flex_col()
+                                            .gap_1()
+                                            .child(input)
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(rgb(MUTED))
+                                                    .child(content_status),
+                                            )
+                                            .child(
+                                                div()
+                                                    .id("content-search-results")
+                                                    .max_h(px(230.0))
+                                                    .overflow_y_scroll()
+                                                    .children(content_results.into_iter().map(|(i, hit)| {
+                                                        let path = workspace_root.join(&hit.path);
+                                                        let label = format!(
+                                                            "{}:{}:{}  {}",
+                                                            hit.path.display(),
+                                                            hit.line,
+                                                            hit.column,
+                                                            hit.snippet
+                                                        );
+                                                        div()
+                                                            .id(("content-search-result", i))
+                                                            .cursor_pointer()
+                                                            .py_1()
+                                                            .text_xs()
+                                                            .hover(|style| style.bg(rgb(ACTIVE)))
+                                                            .child(label)
+                                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                                if this.model.open_path(&path) {
+                                                                    this.persist_session();
+                                                                }
+                                                                cx.notify();
+                                                            }))
+                                                    })),
                                             )
                                     } else {
                                         div().h(px(0.0))
@@ -1732,6 +1942,13 @@ fn main() {
                         quick_open: None,
                         file_index: None,
                         file_index_loading: false,
+                        content_query: None,
+                        content_loading: false,
+                        content_matches: Vec::new(),
+                        content_truncated: false,
+                        content_error: None,
+                        content_searched_query: String::new(),
+                        content_request: 0,
                         git_snapshot: None,
                         git_loading: false,
                         git_error: None,
