@@ -12,6 +12,7 @@ const VERSION: u32 = 1;
 const MAX_STATE_BYTES: u64 = 64 * 1024;
 const MAX_RESTORED_TABS: usize = 24;
 const MAX_RECENT_WORKSPACES: usize = 12;
+const MAX_SAVED_PROJECTS: usize = 32;
 
 #[derive(Debug, Clone)]
 pub struct PreviewSessionStore {
@@ -35,6 +36,14 @@ struct LastWorkspace {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct RecentWorkspaces {
+    version: u32,
+    roots: Vec<PathBuf>,
+}
+
+/// Explicit project registry. Separate from MRU so pin/unpin never removes
+/// preview tabs, drafts, worktrees or project files on disk.
+#[derive(Debug, Serialize, Deserialize)]
+struct SavedProjects {
     version: u32,
     roots: Vec<PathBuf>,
 }
@@ -126,6 +135,74 @@ impl PreviewSessionStore {
             }
         }
         Ok(recent)
+    }
+
+    /// Pinned project roots, independent from most-recently-opened history.
+    /// Invalid, missing and symlink-redirected paths are skipped on read.
+    pub fn saved_projects(&self) -> io::Result<Vec<PathBuf>> {
+        let saved = self.read_json::<SavedProjects>(&self.state_dir.join("projects.json"))?;
+        let Some(saved) = saved else {
+            return Ok(Vec::new());
+        };
+        if saved.version != VERSION {
+            return Ok(Vec::new());
+        }
+        let mut roots = Vec::new();
+        for path in saved.roots.into_iter().take(MAX_SAVED_PROJECTS * 2) {
+            if roots.len() == MAX_SAVED_PROJECTS {
+                break;
+            }
+            if let Ok(canonical) = dunce::canonicalize(&path) {
+                if canonical.is_dir() && canonical == path && !roots.contains(&canonical) {
+                    roots.push(canonical);
+                }
+            }
+        }
+        Ok(roots)
+    }
+
+    /// Register the project with the native desktop UI. No Git or filesystem
+    /// content is modified, and the current workspace is not switched.
+    pub fn save_project(&self, path: impl AsRef<Path>) -> io::Result<()> {
+        let canonical = dunce::canonicalize(path)?;
+        if !canonical.is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Project must be a directory",
+            ));
+        }
+        let roots = std::iter::once(canonical.clone())
+            .chain(
+                self.saved_projects()?
+                    .into_iter()
+                    .filter(|root| root != &canonical),
+            )
+            .take(MAX_SAVED_PROJECTS)
+            .collect();
+        self.write_json(
+            &self.state_dir.join("projects.json"),
+            &SavedProjects {
+                version: VERSION,
+                roots,
+            },
+        )
+    }
+
+    /// Unpin only; never deletes on-disk projects, preview sessions, or Git.
+    pub fn unsave_project(&self, path: impl AsRef<Path>) -> io::Result<()> {
+        let path = path.as_ref();
+        let roots = self
+            .saved_projects()?
+            .into_iter()
+            .filter(|root| root != path)
+            .collect();
+        self.write_json(
+            &self.state_dir.join("projects.json"),
+            &SavedProjects {
+                version: VERSION,
+                roots,
+            },
+        )
     }
 
     /// Restore directory and tabs in their saved order. All file paths are
@@ -343,6 +420,55 @@ mod tests {
         assert_eq!(reopened.active_tab(), Some(0));
         assert_eq!(reopened.content(), "modified on disk");
         assert!(reopened.directory().ends_with("src"));
+    }
+
+    #[test]
+    fn saved_projects_are_explicit_persistent_and_never_deleted_on_unpin() {
+        let state = tempfile::tempdir().unwrap();
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        fs::write(first.path().join("readme.txt"), "permanent").unwrap();
+        let store = PreviewSessionStore::new(state.path());
+        assert!(store.saved_projects().unwrap().is_empty());
+        store.save_project(first.path()).unwrap();
+        store.save_project(second.path()).unwrap();
+        store.save_project(first.path()).unwrap();
+        let items = store.saved_projects().unwrap();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0], dunce::canonicalize(first.path()).unwrap());
+        store.unsave_project(first.path()).unwrap();
+        assert_eq!(
+            store.saved_projects().unwrap(),
+            vec![dunce::canonicalize(second.path()).unwrap()]
+        );
+        assert_eq!(
+            fs::read_to_string(first.path().join("readme.txt")).unwrap(),
+            "permanent"
+        );
+        assert!(store.last_workspace().unwrap().is_none());
+    }
+
+    #[test]
+    fn saved_projects_ignore_missing_and_uncanonical_paths() {
+        let state = tempfile::tempdir().unwrap();
+        let first = tempfile::tempdir().unwrap();
+        let store = PreviewSessionStore::new(state.path());
+        let canonical = dunce::canonicalize(first.path()).unwrap();
+        store
+            .write_json(
+                &state.path().join("projects.json"),
+                &SavedProjects {
+                    version: VERSION,
+                    roots: vec![
+                        canonical.clone(),
+                        canonical.clone(),
+                        canonical.join(".."),
+                        PathBuf::from("relative"),
+                    ],
+                },
+            )
+            .unwrap();
+        assert_eq!(store.saved_projects().unwrap(), vec![canonical]);
     }
 
     #[test]
