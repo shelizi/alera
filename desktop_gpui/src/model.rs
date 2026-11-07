@@ -71,7 +71,7 @@ impl WorkbenchModel {
         &self.status
     }
     pub fn can_go_up(&self) -> bool {
-        self.directory != self.root
+        self.directory.as_path() != self.root()
     }
 
     pub fn refresh(&mut self) -> io::Result<()> {

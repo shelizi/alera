@@ -99,25 +99,30 @@ impl Render for Workbench {
                                             })),
                                     ),
                             )
-                            .child(div().flex_1().min_h_0().overflow_y_scroll().children(
-                                entries.into_iter().enumerate().map(|(i, item)| {
-                                    div()
-                                        .id(i)
-                                        .px_3()
-                                        .py_1()
-                                        .cursor_pointer()
-                                        .hover(|style| style.bg(rgb(ACTIVE)))
-                                        .child(format!(
-                                            "{} {}",
-                                            if item.is_directory { "▸" } else { "·" },
-                                            item.name
-                                        ))
-                                        .on_click(cx.listener(move |this, _, _, cx| {
-                                            this.model.open_entry(i);
-                                            cx.notify();
-                                        }))
-                                }),
-                            )),
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_h_0()
+                                    .id("explorer-scroll")
+                                    .overflow_y_scroll()
+                                    .children(entries.into_iter().enumerate().map(|(i, item)| {
+                                        div()
+                                            .id(i)
+                                            .px_3()
+                                            .py_1()
+                                            .cursor_pointer()
+                                            .hover(|style| style.bg(rgb(ACTIVE)))
+                                            .child(format!(
+                                                "{} {}",
+                                                if item.is_directory { "▸" } else { "·" },
+                                                item.name
+                                            ))
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                this.model.open_entry(i);
+                                                cx.notify();
+                                            }))
+                                    })),
+                            ),
                     )
                     .child(
                         div()
@@ -140,6 +145,7 @@ impl Render for Workbench {
                                 div()
                                     .flex_1()
                                     .min_h_0()
+                                    .id("preview-scroll")
                                     .overflow_y_scroll()
                                     .p_4()
                                     .text_sm()
