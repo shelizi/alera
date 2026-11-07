@@ -97,6 +97,18 @@ without reproducible measurements.
   discovery, pause/resume, bounded failure backoff and stale asynchronous
   reply rejection by tab generation/cursor/session identity. 26 headless
   model tests passed.
+- Phase 3 VT screen slice: added independent Rust `vt100` parser state for
+  each Host-owned terminal preview, supporting cursor motion, erase, scrolling,
+  alternate screen and Unicode, with a toggle back to the sanitized transcript.
+  The screen currently renders in monochrome at a fixed local 80x24 grid.
+  33 headless tests passed; this does not yet support keyboard/IME, Host resize
+  or an input-authorized terminal attachment lease. The isolated Host
+  integration test additionally passes actual PTY output through this parser.
+  Do not enable GPUI writes merely by calling the CLI's `terminal write`
+  verb: that can inject text into an existing session even when GPUI only has
+  a read-only view. First implement explicit user-scoped input consent,
+  attachment/session identity verification, session lease and IME composition
+  with controlled handoff to the existing Host.
 - Real Windows Runtime Host/CLI/PTY end-to-end regression passed using a
   separate temporary runtime/profile and test-only credential; verified
   session creation, CLI no-start safety, list/read and incremental cursors.

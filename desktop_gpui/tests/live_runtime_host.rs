@@ -5,6 +5,7 @@
 
 use alera_core::child_process::windowless_command;
 use alera_gpui_desktop::runtime_bridge::{RuntimeCliBridge, RuntimeStatus};
+use alera_gpui_desktop::vt_screen::VtScreen;
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpStream;
@@ -200,6 +201,12 @@ fn real_host_terminal_list_and_incremental_read_never_autostart() {
     let empty = bridge.read_terminal(session_id, cursor).unwrap();
     assert_eq!(empty.next_cursor, cursor.unwrap());
     assert!(empty.text.is_empty(), "cursor replayed old bytes");
+    let mut screen = VtScreen::default();
+    screen.feed(&transcript);
+    assert!(
+        screen.contents().contains(&marker),
+        "VT screen did not render marker from actual Host PTY output"
+    );
 
     // Optional native GUI process smoke against the SAME isolated Host.
     // It observes the existing test session through its window-owned

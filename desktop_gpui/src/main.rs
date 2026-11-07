@@ -2,7 +2,7 @@
 use alera_gpui_desktop::model::WorkbenchModel;
 use alera_gpui_desktop::runtime_bridge::RuntimeCliBridge;
 use alera_gpui_desktop::session::PreviewSessionStore;
-use alera_gpui_desktop::terminal::{TerminalDock, TerminalPollGate};
+use alera_gpui_desktop::terminal::{TerminalDock, TerminalPollGate, TerminalViewMode};
 use gpui::{
     div, prelude::*, px, rgb, size, App, Application, Bounds, Context, Window, WindowBounds,
     WindowOptions,
@@ -245,11 +245,15 @@ impl Render for Workbench {
         let terminal_output = self
             .terminals
             .active()
-            .map(|tab| tab.output.clone())
+            .map(|tab| match self.terminals.view_mode {
+                TerminalViewMode::Screen => tab.screen.contents(),
+                TerminalViewMode::Transcript => tab.output.clone(),
+            })
             .unwrap_or_default();
         let terminal_status = self.terminals.status.clone();
         let has_terminal_preview = self.terminals.active().is_some();
         let terminal_auto = self.terminal_poll.enabled();
+        let terminal_is_vt = self.terminals.view_mode == TerminalViewMode::Screen;
 
         div()
             .size_full()
@@ -526,6 +530,19 @@ impl Render for Workbench {
                                             )
                                             .child(
                                                 div()
+                                                    .id("terminal-vt-mode")
+                                                    .px_2()
+                                                    .cursor_pointer()
+                                                    .text_sm()
+                                                    .text_color(rgb(TEXT))
+                                                    .child(if terminal_is_vt { "VT screen" } else { "Text log" })
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.terminals.toggle_view_mode();
+                                                        cx.notify();
+                                                    })),
+                                            )
+                                            .child(
+                                                div()
                                                     .id("terminal-preview-autopoll")
                                                     .px_2()
                                                     .cursor_pointer()
@@ -568,7 +585,7 @@ impl Render for Workbench {
                                             .font_family("JetBrains Mono")
                                             .text_sm()
                                             .child(if terminal_output.is_empty() {
-                                                "No output available. Auto updates are enabled by default.".into()
+                                                "No terminal content yet. Auto updates are enabled by default.".into()
                                             } else {
                                                 terminal_output
                                             }),

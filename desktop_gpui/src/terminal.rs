@@ -2,6 +2,7 @@
 //! Terminal process, PTY, authentication and session lifetime remain owned by
 //! the existing Alera Runtime Host; this frontend uses the CLI --no-start mode.
 use crate::runtime_bridge::RuntimeCliBridge;
+use crate::vt_screen::VtScreen;
 use serde_json::Value;
 use std::ffi::OsString;
 use std::io;
@@ -259,7 +260,7 @@ impl TextDecoder {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct TerminalTab {
     pub handle: String,
     pub tab_id: String,
@@ -268,6 +269,7 @@ pub struct TerminalTab {
     pub running: bool,
     pub output: String,
     pub next_cursor: Option<u64>,
+    pub screen: VtScreen,
     generation: u64,
     decoder: TextDecoder,
 }
@@ -285,6 +287,7 @@ impl TerminalTab {
             running: session.running,
             output: String::new(),
             next_cursor: None,
+            screen: VtScreen::default(),
             generation,
             decoder: TextDecoder::default(),
         }
@@ -300,6 +303,7 @@ impl TerminalTab {
                 // the fresh tail, rather than using an invalid old cursor.
                 self.output.clear();
                 self.decoder = TextDecoder::default();
+                self.screen.reset();
                 self.next_cursor = None;
                 self.running = chunk.running;
                 return true;
@@ -311,14 +315,25 @@ impl TerminalTab {
         }
         if chunk.truncated {
             self.decoder = TextDecoder::default();
+            self.screen.reset();
             self.output
                 .push_str("\n[Earlier terminal scrollback was truncated]\n");
         }
+        // Replay exactly the Host bytes returned in this chunk into the VT
+        // screen before stripping escapes from the optional text transcript.
+        self.screen.feed(&chunk.text);
         self.decoder.append(&mut self.output, &chunk.text);
         self.next_cursor = Some(chunk.next_cursor);
         self.running = chunk.running;
         true
     }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum TerminalViewMode {
+    #[default]
+    Screen,
+    Transcript,
 }
 
 /// Correlates a read with exactly one local preview tab and cursor.
@@ -382,10 +397,18 @@ pub struct TerminalDock {
     pub tabs: Vec<TerminalTab>,
     pub active_tab: Option<usize>,
     pub status: String,
+    pub view_mode: TerminalViewMode,
     next_generation: u64,
 }
 
 impl TerminalDock {
+    pub fn toggle_view_mode(&mut self) {
+        self.view_mode = match self.view_mode {
+            TerminalViewMode::Screen => TerminalViewMode::Transcript,
+            TerminalViewMode::Transcript => TerminalViewMode::Screen,
+        };
+    }
+
     pub fn update_sessions(&mut self, sessions: Vec<TerminalSession>) {
         for tab in &mut self.tabs {
             if let Some(session) = sessions.iter().find(|item| {
@@ -638,6 +661,39 @@ mod tests {
         let output = &dock.active().unwrap().output;
         assert!(output.len() <= MAX_TRANSCRIPT_BYTES);
         assert!(output.chars().all(|c| c == '你'));
+    }
+
+    #[test]
+    fn real_vt_screen_tracks_cursor_while_text_log_remains_readable() {
+        let mut dock = TerminalDock::default();
+        assert_eq!(dock.view_mode, TerminalViewMode::Screen);
+        dock.update_sessions(vec![session("term-1")]);
+        dock.open("term-1");
+        assert!(dock.apply_chunk(chunk("term-1", 0, 10, "hello\x1b[2DXY")));
+        let tab = dock.active().unwrap();
+        assert!(tab.screen.contents().starts_with("helXY"));
+        assert!(!tab.screen.contents().contains("\x1b"));
+        assert_eq!(tab.output, "helloXY");
+        dock.toggle_view_mode();
+        assert_eq!(dock.view_mode, TerminalViewMode::Transcript);
+        dock.toggle_view_mode();
+        assert_eq!(dock.view_mode, TerminalViewMode::Screen);
+    }
+
+    #[test]
+    fn truncated_host_scroll_reinitializes_vt_state_and_text_decoder() {
+        let mut dock = TerminalDock::default();
+        dock.update_sessions(vec![session("term-1")]);
+        dock.open("term-1");
+        dock.apply_chunk(chunk("term-1", 0, 12, "old\x1b[?1049hAPP"));
+        assert!(dock.active().unwrap().screen.alternate_screen());
+        let mut snapshot = chunk("term-1", 12, 25, "new\n");
+        snapshot.truncated = true;
+        dock.apply_chunk(snapshot);
+        assert!(!dock.active().unwrap().screen.alternate_screen());
+        assert!(dock.active().unwrap().screen.contents().contains("new"));
+        assert!(!dock.active().unwrap().screen.contents().contains("APP"));
+        assert!(dock.active().unwrap().output.contains("truncated"));
     }
 
     #[test]

@@ -46,8 +46,21 @@ to open a local preview tab and retrieve the latest 8 KiB of output, or click
 `Read more` to read the next chunk. `Reconnect` refreshes the list while
 preserving local preview tabs. Output is rendered as a bounded plain-text
 transcript (48 KiB), with ANSI, OSC and DCS escape sequences removed. It
-is not a VT terminal emulator and does not provide keyboard input, resizing,
-TUI cursor painting or a PTY attach lease.
+also offers a **VT screen** rendering mode backed by the Rust `vt100`
+parser. The VT screen is the default; click `Text log` / `VT screen` to
+switch between the current 80-column, 24-row terminal screen and the
+sanitized historical text transcript. The parser understands cursor movement,
+clearing, scrolling, alternate-screen applications and Unicode. Its screen
+state is kept independently per preview tab, with a bounded 240-row
+scrollback. Terminal control strings are interpreted locally instead of
+being sent to the GPUI text widget.
+
+This remains a **read-only, monochrome VT screen preview**, not yet a full
+native terminal renderer: colored cell attributes, clickable selections,
+copy/paste, Chinese IME input, keyboard control, accessibility and Host PTY
+resizing/attach leases have not been migrated. Local VT preview dimensions
+are not advertised to the existing Host, so programs should not assume
+the displayed panel matches their allocated PTY size.
 
 An active terminal preview automatically checks for new output every 1.5
 seconds by default. The sidebar also refreshes the Session list every 15
@@ -90,7 +103,8 @@ start the Host as a fallback. The usual CLI default remains unchanged.
 - Persistent read-only preview navigation and last-workspace recovery.
 - Background, read-only Runtime Host status probe through the shared CLI.
 - Host-owned terminal session list, eight local transcript preview tabs,
-  cursor-based incremental reads and explicit manual reconnection.
+  cursor-based incremental reads, VT screen with ANSI cursor/erase/alternate
+  screen handling, Text log fallback and explicit manual reconnection.
 - Reuses `alera-core::git::current_branch` for Git branch metadata.
 - No Flutter, Dart VM or WebView in this executable.
 - No writes to workspace files from this preview.
@@ -106,9 +120,10 @@ sidecar/runtime contracts, not be reimplemented directly in GPUI views.
 ## Verification
 
 - Windows: `cargo check --all-targets` and debug `cargo build` passed with GPUI 0.2.2.
-- Headless tests: 26/26 passed (navigation, persistence, path containment,
+- Headless tests: 33/33 passed (navigation, persistence, path containment,
   file limits, tabs, reload, terminal cursor, auto-poll backoff, stale
-  response handling, ANSI filtering and CLI parsing) with
+  response handling, VT100 screen, alternate screen, Unicode, ANSI filtering
+  and CLI parsing) with
   `--no-default-features --lib`.
 - An opt-in Windows test passed against a real isolated Host and CLI: Host
   startup, session creation, authenticated list, incremental cursor reads,
