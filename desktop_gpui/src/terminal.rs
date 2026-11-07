@@ -609,6 +609,152 @@ pub struct TerminalReadTicket {
     generation: u64,
 }
 
+/// The native UI polls every 1.5 seconds. Never issue another create RPC just
+/// because Host list propagation is delayed: only re-list the existing Host.
+pub const TERMINAL_CONFIRM_TIMEOUT_TICKS: u8 = 20;
+const TERMINAL_CONFIRM_REFRESH_INTERVAL_TICKS: u8 = 2;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TerminalCreateTick {
+    None,
+    RefreshSessions,
+    TimedOut,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+enum TerminalCreatePhase {
+    #[default]
+    Idle,
+    Creating {
+        request_id: u64,
+    },
+    Awaiting {
+        created: CreatedHostTerminal,
+        ticks: u8,
+    },
+    TimedOut {
+        created: CreatedHostTerminal,
+    },
+}
+
+/// Local view-only lifecycle for a Host-owned Terminal creation RPC.
+/// Cancel only invalidates UI callbacks; it never terminates or creates a PTY.
+#[derive(Debug, Default)]
+pub struct TerminalCreateFlow {
+    phase: TerminalCreatePhase,
+    next_request_id: u64,
+}
+
+impl TerminalCreateFlow {
+    pub fn is_active(&self) -> bool {
+        !matches!(self.phase, TerminalCreatePhase::Idle)
+    }
+
+    pub fn is_creating(&self) -> bool {
+        matches!(self.phase, TerminalCreatePhase::Creating { .. })
+    }
+
+    pub fn is_waiting(&self) -> bool {
+        matches!(self.phase, TerminalCreatePhase::Awaiting { .. })
+    }
+
+    pub fn is_timed_out(&self) -> bool {
+        matches!(self.phase, TerminalCreatePhase::TimedOut { .. })
+    }
+
+    /// Returns a unique local request ID; repeated clicks while pending or
+    /// timed out are ignored instead of spawning duplicate Host PTYs.
+    pub fn start_request(&mut self) -> Option<u64> {
+        if self.is_active() {
+            return None;
+        }
+        self.next_request_id = self.next_request_id.wrapping_add(1).max(1);
+        let request_id = self.next_request_id;
+        self.phase = TerminalCreatePhase::Creating { request_id };
+        Some(request_id)
+    }
+
+    /// Reject any result from an operation canceled/replaced in the meantime.
+    pub fn finish_request(&mut self, request_id: u64, created: CreatedHostTerminal) -> bool {
+        if !matches!(self.phase, TerminalCreatePhase::Creating { request_id: active } if active == request_id)
+        {
+            return false;
+        }
+        self.phase = TerminalCreatePhase::Awaiting { created, ticks: 0 };
+        true
+    }
+
+    pub fn fail_request(&mut self, request_id: u64) -> bool {
+        if !matches!(self.phase, TerminalCreatePhase::Creating { request_id: active } if active == request_id)
+        {
+            return false;
+        }
+        self.phase = TerminalCreatePhase::Idle;
+        true
+    }
+
+    /// Only an exact triple identity from an authenticated Host list can
+    /// complete attachment. A failed/missing list preserves this expectation.
+    pub fn confirm_sessions(
+        &mut self,
+        sessions: &[TerminalSession],
+    ) -> Option<CreatedHostTerminal> {
+        let TerminalCreatePhase::Awaiting { created, .. } = &self.phase else {
+            return None;
+        };
+        if !sessions
+            .iter()
+            .any(|session| created.matches_live_session(session))
+        {
+            return None;
+        }
+        let confirmed = created.clone();
+        self.phase = TerminalCreatePhase::Idle;
+        Some(confirmed)
+    }
+
+    /// Advance once per native 1500ms tick. 20 ticks = 30s timeout.
+    /// Refresh requests are read-only list operations, never create RPCs.
+    pub fn tick(&mut self) -> TerminalCreateTick {
+        let TerminalCreatePhase::Awaiting { created, ticks } = &mut self.phase else {
+            return TerminalCreateTick::None;
+        };
+        *ticks = ticks.saturating_add(1);
+        if *ticks >= TERMINAL_CONFIRM_TIMEOUT_TICKS {
+            let created = created.clone();
+            self.phase = TerminalCreatePhase::TimedOut { created };
+            return TerminalCreateTick::TimedOut;
+        }
+        if *ticks % TERMINAL_CONFIRM_REFRESH_INTERVAL_TICKS == 0 {
+            TerminalCreateTick::RefreshSessions
+        } else {
+            TerminalCreateTick::None
+        }
+    }
+
+    /// After timeout the user can retry confirmation; no second Host create.
+    pub fn retry_confirmation(&mut self) -> bool {
+        let TerminalCreatePhase::TimedOut { created } = &self.phase else {
+            return false;
+        };
+        self.phase = TerminalCreatePhase::Awaiting {
+            created: created.clone(),
+            ticks: 0,
+        };
+        true
+    }
+
+    /// Dismiss all waiting/creation UI state and reject its future callbacks.
+    /// Does not send any Host session termination or process signal.
+    pub fn cancel(&mut self) -> bool {
+        if !self.is_active() {
+            return false;
+        }
+        self.phase = TerminalCreatePhase::Idle;
+        true
+    }
+}
+
 /// One tick per 1500 ms; errors back off to avoid spawning busy-loop CLI reads.
 #[derive(Debug, Clone)]
 pub struct TerminalPollGate {
@@ -1330,6 +1476,133 @@ mod tests {
         assert_eq!(output, "safeworld紅色\nnormal");
         assert!(!output.contains("clipboard"));
         assert!(!output.contains("private"));
+    }
+
+    #[test]
+    fn terminal_create_confirm_times_out_without_duplicate_pty_and_can_retry_listing() {
+        let mut flow = TerminalCreateFlow::default();
+        let request = flow.start_request().expect("first create allowed");
+        assert!(
+            flow.start_request().is_none(),
+            "double click must not create twice"
+        );
+        let created = CreatedHostTerminal {
+            handle: "term-1".into(),
+            workspace_id: "workspace-1".into(),
+            tab_id: "tab-term-1".into(),
+        };
+        assert!(flow.finish_request(request, created));
+        assert!(
+            flow.start_request().is_none(),
+            "awaiting Host list is not a new create"
+        );
+        let mut refreshes = 0usize;
+        for tick in 1..=TERMINAL_CONFIRM_TIMEOUT_TICKS {
+            match flow.tick() {
+                TerminalCreateTick::RefreshSessions => refreshes += 1,
+                TerminalCreateTick::TimedOut => assert_eq!(tick, TERMINAL_CONFIRM_TIMEOUT_TICKS),
+                TerminalCreateTick::None => {}
+            }
+        }
+        assert!(refreshes > 0 && refreshes < TERMINAL_CONFIRM_TIMEOUT_TICKS as usize);
+        assert!(flow.is_timed_out());
+        assert!(
+            flow.start_request().is_none(),
+            "timeout must not start second PTY"
+        );
+        assert_eq!(flow.tick(), TerminalCreateTick::None);
+        assert!(
+            flow.retry_confirmation(),
+            "retry only relists existing Host session"
+        );
+        assert!(flow.is_waiting());
+    }
+
+    #[test]
+    fn terminal_create_cancel_drops_stale_host_callback_without_killing_session() {
+        let mut flow = TerminalCreateFlow::default();
+        let old_request = flow.start_request().unwrap();
+        assert!(flow.cancel());
+        let fresh_request = flow.start_request().unwrap();
+        assert_ne!(old_request, fresh_request);
+        let created = CreatedHostTerminal {
+            handle: "term-old".into(),
+            workspace_id: "workspace-1".into(),
+            tab_id: "tab-old".into(),
+        };
+        assert!(!flow.finish_request(old_request, created.clone()));
+        assert!(flow.is_creating());
+        assert!(flow.finish_request(fresh_request, created));
+        assert!(
+            flow.cancel(),
+            "cancel detaches UI expectation, never kills Host PTY"
+        );
+        assert!(flow.confirm_sessions(&[session("term-old")]).is_none());
+        assert!(!flow.cancel());
+    }
+
+    #[test]
+    fn terminal_create_confirmation_requires_all_three_id_fields() {
+        let mut flow = TerminalCreateFlow::default();
+        let id = flow.start_request().unwrap();
+        let created = CreatedHostTerminal {
+            handle: "term-1".into(),
+            workspace_id: "workspace-1".into(),
+            tab_id: "tab-term-1".into(),
+        };
+        assert!(flow.finish_request(id, created));
+        let mut spoofed = session("term-1");
+        spoofed.tab_id = "previous-tab".into();
+        assert!(flow.confirm_sessions(&[spoofed]).is_none());
+        assert!(flow.is_waiting());
+        assert!(flow.confirm_sessions(&[session("term-2")]).is_none());
+        assert!(flow.confirm_sessions(&[session("term-1")]).is_some());
+        assert!(!flow.is_active());
+        assert!(flow.start_request().is_some());
+    }
+
+    #[test]
+    fn terminal_create_rpc_failure_resets_state_but_rejects_stale_failures() {
+        let mut flow = TerminalCreateFlow::default();
+        let first = flow.start_request().unwrap();
+        assert!(flow.fail_request(first));
+        assert!(
+            !flow.is_active(),
+            "failure must reenable an intentional new request"
+        );
+        let second = flow.start_request().unwrap();
+        assert_ne!(first, second);
+        assert!(
+            !flow.fail_request(first),
+            "late failure must not cancel a new request"
+        );
+        assert!(flow.is_creating());
+        assert!(flow.fail_request(second));
+        assert!(!flow.is_active());
+    }
+
+    #[test]
+    fn terminal_create_timeout_requires_explicit_retry_before_attach() {
+        let mut flow = TerminalCreateFlow::default();
+        let request = flow.start_request().unwrap();
+        let created = CreatedHostTerminal {
+            handle: "term-1".into(),
+            workspace_id: "workspace-1".into(),
+            tab_id: "tab-term-1".into(),
+        };
+        assert!(flow.finish_request(request, created));
+        for _ in 0..TERMINAL_CONFIRM_TIMEOUT_TICKS {
+            flow.tick();
+        }
+        assert!(flow.is_timed_out());
+        assert!(flow.confirm_sessions(&[session("term-1")]).is_none());
+        assert!(flow.retry_confirmation());
+        assert_eq!(
+            flow.confirm_sessions(&[session("term-1")])
+                .map(|terminal| terminal.handle),
+            Some("term-1".into())
+        );
+        assert!(!flow.is_active());
     }
 
     #[test]

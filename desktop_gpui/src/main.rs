@@ -13,8 +13,8 @@ use alera_gpui_desktop::project_tree::{collect_project_tree, ProjectTreeGroup};
 use alera_gpui_desktop::runtime_bridge::RuntimeCliBridge;
 use alera_gpui_desktop::session::{PreviewSessionStore, TerminalLayout, TerminalLayoutTab};
 use alera_gpui_desktop::terminal::{
-    select_registered_host_workspace, CreatedHostTerminal, TerminalDock, TerminalPollGate,
-    TerminalViewMode, HOST_SESSION_LIST_SCOPE,
+    select_registered_host_workspace, TerminalCreateFlow, TerminalCreateTick, TerminalDock,
+    TerminalPollGate, TerminalViewMode, HOST_SESSION_LIST_SCOPE,
 };
 use alera_gpui_desktop::workspace_tree::WorkspaceTree;
 use alera_gpui_desktop::worktree_manager::{WorktreeEntry, WorktreeManager};
@@ -122,8 +122,7 @@ struct Workbench {
     terminals: TerminalDock,
     terminal_input: Entity<QuickOpenInput>,
     show_terminal_attach_picker: bool,
-    terminal_create_busy: bool,
-    pending_created_terminal: Option<CreatedHostTerminal>,
+    terminal_create_flow: TerminalCreateFlow,
     terminal_layout_restore: Option<TerminalLayout>,
     terminal_send_loading: bool,
     terminal_list_loading: bool,
@@ -925,7 +924,7 @@ impl Workbench {
     }
 
     fn switch_workspace(&mut self, root: PathBuf, cx: &mut Context<Self>) {
-        if self.worktree_busy || self.terminal_create_busy {
+        if self.worktree_busy || self.terminal_create_flow.is_creating() {
             self.model.set_status(
                 "Finish the current Worktree or Host terminal create before switching projects",
             );
@@ -1007,8 +1006,7 @@ impl Workbench {
         // them on workspace changes to prevent cross-project output leakage.
         // Existing Host sessions remain alive and under Host ownership.
         self.terminals = TerminalDock::for_workspace(self.workspace_generation);
-        self.terminal_create_busy = false;
-        self.pending_created_terminal = None;
+        self.terminal_create_flow.cancel();
         self.load_terminal_layout();
         self.terminal_send_loading = false;
         self.terminal_input.update(cx, |input, cx| input.clear(cx));
@@ -1159,7 +1157,11 @@ impl Workbench {
     }
 
     fn create_host_terminal(&mut self, cx: &mut Context<Self>) {
-        if self.terminal_create_busy {
+        if self.terminal_create_flow.is_active() {
+            self.terminals.status =
+                "A Host terminal request is pending; confirm, retry its listing, or cancel first"
+                    .into();
+            cx.notify();
             return;
         }
         if self.runtime_bridge.is_none() {
@@ -1172,7 +1174,9 @@ impl Workbench {
         };
         let root = self.model.root().to_path_buf();
         let generation = self.workspace_generation;
-        self.terminal_create_busy = true;
+        let Some(request_id) = self.terminal_create_flow.start_request() else {
+            return;
+        };
         self.terminals.status =
             "Checking registered Host workspaces before creating terminal…".into();
         cx.notify();
@@ -1188,16 +1192,26 @@ impl Workbench {
                 if view.workspace_generation != generation {
                     return;
                 }
-                view.terminal_create_busy = false;
                 match result {
                     Ok(created) => {
-                        view.pending_created_terminal = Some(created);
+                        if !view
+                            .terminal_create_flow
+                            .finish_request(request_id, created)
+                        {
+                            // Canceled Host RPCs may still have created a PTY.
+                            // Never auto-attach a stale response.
+                            return;
+                        }
                         view.center_view = CenterView::Terminal;
                         view.terminals.status =
-                            "Host terminal created; waiting for session list…".into();
+                            "Host terminal created; confirming session identity (30s limit)…"
+                                .into();
                         view.refresh_terminals(cx);
                     }
                     Err(error) => {
+                        if !view.terminal_create_flow.fail_request(request_id) {
+                            return;
+                        }
                         view.terminals.status = format!("Cannot create Host terminal: {error}");
                     }
                 }
@@ -1206,6 +1220,24 @@ impl Workbench {
             .ok();
         })
         .detach();
+    }
+
+    fn retry_host_terminal_confirmation(&mut self, cx: &mut Context<Self>) {
+        if self.terminal_create_flow.retry_confirmation() {
+            self.terminals.status = "Rechecking the existing Host terminal (no new PTY)…".into();
+            self.refresh_terminals(cx);
+            cx.notify();
+        }
+    }
+
+    fn cancel_host_terminal_confirmation(&mut self, cx: &mut Context<Self>) {
+        if self.terminal_create_flow.cancel() {
+            // An RPC in flight can still create a Host terminal. Dismiss
+            // only the local expectation; never issue a Host kill request.
+            self.terminals.status =
+                "Stopped waiting. Host terminal may exist; use Attach existing to find it".into();
+            cx.notify();
+        }
     }
 
     fn refresh_terminals(&mut self, cx: &mut Context<Self>) {
@@ -1242,19 +1274,11 @@ impl Workbench {
                                 view.terminal_poll.reset();
                             }
                             view.restore_terminal_layout_from_host(cx);
-                            let confirmed =
-                                view.pending_created_terminal
-                                    .as_ref()
-                                    .is_some_and(|created| {
-                                        view.terminals
-                                            .sessions
-                                            .iter()
-                                            .any(|live| created.matches_live_session(live))
-                                    });
-                            if confirmed {
-                                if let Some(created) = view.pending_created_terminal.take() {
-                                    view.select_terminal(created.handle, cx);
-                                }
+                            if let Some(created) = view
+                                .terminal_create_flow
+                                .confirm_sessions(&view.terminals.sessions)
+                            {
+                                view.select_terminal(created.handle, cx);
                             }
                         }
                     }
@@ -1420,6 +1444,20 @@ impl Workbench {
             if view
                 .update(cx, |view, cx| {
                     view.terminal_tick = view.terminal_tick.wrapping_add(1);
+                    match view.terminal_create_flow.tick() {
+                        TerminalCreateTick::RefreshSessions => {
+                            // Retry only authenticated Host session listing.
+                            // Never call terminal.create again from a timer.
+                            view.refresh_terminals(cx);
+                        }
+                        TerminalCreateTick::TimedOut => {
+                            view.terminals.status =
+                                "Host confirmation timed out after 30s. Retry checking or Cancel; the PTY may still exist"
+                                    .into();
+                            cx.notify();
+                        }
+                        TerminalCreateTick::None => {}
+                    }
                     if view.terminal_tick % 10 == 1 {
                         view.refresh_terminals(cx);
                     }
@@ -1556,7 +1594,10 @@ impl Render for Workbench {
             .collect();
         let terminal_active = self.terminals.active_tab;
         let show_terminal_attach_picker = self.show_terminal_attach_picker;
-        let terminal_create_busy = self.terminal_create_busy;
+        let terminal_create_busy = self.terminal_create_flow.is_active();
+        let terminal_create_timed_out = self.terminal_create_flow.is_timed_out();
+        let terminal_create_waiting = self.terminal_create_flow.is_waiting();
+        let terminal_creating = self.terminal_create_flow.is_creating();
         let terminal_output = self
             .terminals
             .active()
@@ -2189,11 +2230,47 @@ impl Render for Workbench {
                                             .cursor_pointer()
                                             .text_sm()
                                             .text_color(rgb(if terminal_create_busy { MUTED } else { TEXT }))
-                                            .child(if terminal_create_busy { "Creating…" } else { "+ New Terminal" })
+                                            .child(if terminal_creating {
+                                                "Creating…"
+                                            } else if terminal_create_waiting {
+                                                "Waiting for Host…"
+                                            } else if terminal_create_timed_out {
+                                                "Confirmation timed out"
+                                            } else {
+                                                "+ New Terminal"
+                                            })
                                             .on_click(cx.listener(|this, _, _, cx| {
                                                 this.create_host_terminal(cx);
                                             })),
                                     )
+                                    .child(if terminal_create_timed_out {
+                                        div()
+                                            .id("terminal-confirmation-retry")
+                                            .cursor_pointer()
+                                            .text_sm()
+                                            .text_color(rgb(TEXT))
+                                            .child("Retry confirmation")
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.retry_host_terminal_confirmation(cx);
+                                            }))
+                                            .into_any_element()
+                                    } else {
+                                        div().h(px(0.0)).into_any_element()
+                                    })
+                                    .child(if terminal_create_busy {
+                                        div()
+                                            .id("terminal-confirmation-cancel")
+                                            .cursor_pointer()
+                                            .text_sm()
+                                            .text_color(rgb(MUTED))
+                                            .child("Cancel waiting")
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.cancel_host_terminal_confirmation(cx);
+                                            }))
+                                            .into_any_element()
+                                    } else {
+                                        div().h(px(0.0)).into_any_element()
+                                    })
                                     .child(
                                         div()
                                             .id("terminal-attach-existing")
@@ -3354,8 +3431,7 @@ fn main() {
                         terminals: TerminalDock::for_workspace(0),
                         terminal_input,
                         show_terminal_attach_picker: false,
-                        terminal_create_busy: false,
-                        pending_created_terminal: None,
+                        terminal_create_flow: TerminalCreateFlow::default(),
                         terminal_layout_restore: None,
                         terminal_send_loading: false,
                         terminal_list_loading: false,
