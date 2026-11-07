@@ -26,6 +26,10 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
+#[path = "editor_find_ui.rs"]
+mod editor_find_ui;
+use editor_find_ui::EditorFindUi;
+
 const EDITOR_LINE_HEIGHT: f32 = 19.0;
 const PANEL_BG: u32 = 0x15171b;
 const EDITOR_TEXT: u32 = 0xe1e4e8;
@@ -67,6 +71,7 @@ actions!(
 );
 
 pub fn bind_editor_keys(cx: &mut App) {
+    editor_find_ui::bind_find_keys(cx);
     cx.bind_keys([
         KeyBinding::new("left", MoveLeft, Some("AleraGpuiEditor")),
         KeyBinding::new("right", MoveRight, Some("AleraGpuiEditor")),
@@ -114,6 +119,7 @@ pub fn bind_editor_keys(cx: &mut App) {
 }
 
 pub struct NativeEditor {
+    find: EditorFindUi,
     tabs: EditorTabs,
     focus: FocusHandle,
     status: String,
@@ -171,6 +177,7 @@ impl NativeEditor {
         // A long-file editor must reveal that actual position on first paint.
         list_scroll.scroll_to_item(initial_line, ScrollStrategy::Center);
         Self {
+            find: EditorFindUi::new(cx),
             tabs,
             focus: cx.focus_handle(),
             status: if recovered {
@@ -956,7 +963,7 @@ impl NativeEditor {
 }
 
 impl Render for NativeEditor {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.tabs.is_empty() {
             return div()
                 .p_4()
@@ -992,14 +999,19 @@ impl Render for NativeEditor {
             if composing { " · composing" } else { "" },
             recovery
         );
+        let find_toolbar = self.render_find_toolbar(window, cx);
         div()
             .size_full()
             .flex()
             .flex_col()
             .bg(rgb(PANEL_BG))
             .text_color(rgb(EDITOR_TEXT))
-            .key_context("AleraGpuiEditor")
-            .track_focus(&self.focus_handle(cx))
+            .key_context("AleraGpuiEditorSurface")
+            .on_action(cx.listener(Self::show_find))
+            .on_action(cx.listener(Self::find_next))
+            .on_action(cx.listener(Self::find_previous))
+            .on_action(cx.listener(Self::hide_find))
+            .on_action(cx.listener(Self::focus_find_input))
             .cursor(CursorStyle::IBeam)
             .on_action(cx.listener(Self::move_left))
             .on_action(cx.listener(Self::move_right))
@@ -1063,10 +1075,7 @@ impl Render for NativeEditor {
                         )
                 }),
             ))
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, _, window, _cx| window.focus(&this.focus)),
-            )
+            .child(find_toolbar)
             .on_mouse_move(cx.listener(|this, event, _, cx| {
                 this.pointer_move(event, cx);
             }))
@@ -1129,6 +1138,12 @@ impl Render for NativeEditor {
             )
             .child(
                 div()
+                    .key_context("AleraGpuiEditor")
+                    .track_focus(&self.focus)
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, window, _| window.focus(&this.focus)),
+                    )
                     .flex_1()
                     .min_h_0()
                     .flex()
