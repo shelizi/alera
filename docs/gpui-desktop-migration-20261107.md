@@ -89,6 +89,18 @@ without reproducible measurements.
   Host session list remains explicitly global, not project-filtered. The
   headless Rust suite expanded to 41 passing tests, including MRU bounds,
   tampered/stale paths, cross-workspace session restore and failure rollback.
+- Phase 2 first editor slice: opted-in native file editing surface wired to
+  GPUI 0.2.2 EntityInputHandler for UTF-16 IME composition. Unicode grapheme
+  navigation, paste/cut, and explicit Save use a bounded pure Rust buffer.
+  Every disk Save checks canonical workspace containment and original file
+  contents; external changes fail closed. Committed unsaved edits persist to
+  a separate plaintext local draft file with original disk snapshot, and
+  are offered on next Edit. Uncommitted IME composition is not persisted.
+  Closing/discarding has a two-click confirmation and dirty edits block
+  workspace switching. 52 headless Rust tests passed. This is not full editor
+  parity: render limited to 600 lines, file size 256 KiB, line-end mouse
+  caret, no virtualized buffer, selection geometry/IME candidate rectangles,
+  syntax services, undo, or real Traditional Chinese IME UI acceptance tests.
 - Two-launch Windows smoke test confirmed a native window on each launch and
   recovery of the same workspace even when the second process started from
   a different working directory, using an isolated app-state directory.
@@ -134,7 +146,7 @@ without reproducible measurements.
 - Open issues: model performs small bounded disk reads and tiny state-file
   saves on the UI thread; Explorer is limited to 400 entries per directory.
   GPUI has no persistent direct runtime-host socket client yet, no persisted
-  terminal/editor buffers, PTY input/resize, or performance parity results.
+  terminal buffers or full editor sessions, PTY input/resize, or performance parity results.
   Automatic reads currently invoke the existing CLI subprocess, and are
   intentionally experimental until a persistent authenticated client and
   input/VT rendering are implemented.

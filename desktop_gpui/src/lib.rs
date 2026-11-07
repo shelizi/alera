@@ -1,5 +1,6 @@
 //! UI-agnostic workbench state and native desktop application services.
 //! Tests can build this library without the heavyweight GPUI renderer.
+pub mod editor;
 pub mod model;
 pub mod runtime_bridge;
 pub mod session;

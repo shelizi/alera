@@ -1,11 +1,15 @@
 //! Experimental Alera desktop shell powered by native GPUI (no Flutter/WebView).
+mod editor_ui;
+
+use alera_gpui_desktop::editor::{EditorDocument, EditorDraftStore};
 use alera_gpui_desktop::model::WorkbenchModel;
 use alera_gpui_desktop::runtime_bridge::RuntimeCliBridge;
 use alera_gpui_desktop::session::PreviewSessionStore;
 use alera_gpui_desktop::terminal::{TerminalDock, TerminalPollGate, TerminalViewMode};
+use editor_ui::{bind_editor_keys, NativeEditor};
 use gpui::{
-    div, prelude::*, px, rgb, size, App, Application, Bounds, Context, PathPromptOptions, Window,
-    WindowBounds, WindowOptions,
+    div, prelude::*, px, rgb, size, App, Application, Bounds, Context, Entity, PathPromptOptions,
+    Window, WindowBounds, WindowOptions,
 };
 use std::path::PathBuf;
 use std::time::Duration;
@@ -20,6 +24,8 @@ const ACTIVE: u32 = 0x303741;
 
 struct Workbench {
     model: WorkbenchModel,
+    editor: Option<Entity<NativeEditor>>,
+    editor_discard_pending: bool,
     session_store: Option<PreviewSessionStore>,
     recent_workspaces: Vec<PathBuf>,
     show_recent_workspaces: bool,
@@ -36,6 +42,121 @@ struct Workbench {
 }
 
 impl Workbench {
+    fn editor_dirty(&self, cx: &mut Context<Self>) -> bool {
+        self.editor
+            .as_ref()
+            .is_some_and(|editor| editor.read(cx).has_unsaved_changes())
+    }
+
+    fn open_editor(&mut self, cx: &mut Context<Self>) {
+        let Some(path) = self.model.selected_path().map(PathBuf::from) else {
+            self.model.set_status("Choose a text file before editing");
+            cx.notify();
+            return;
+        };
+        if let Some(existing) = &self.editor {
+            if existing.read(cx).document.path() == Some(path.as_path()) {
+                self.model
+                    .set_status("The selected file is already in the native editor");
+                cx.notify();
+                return;
+            }
+        }
+        if self.editor_dirty(cx) {
+            self.model
+                .set_status("Save or explicitly discard current edits before opening another file");
+            cx.notify();
+            return;
+        }
+        match EditorDocument::open(self.model.root(), &path) {
+            Ok(mut document) => {
+                let drafts = self
+                    .session_store
+                    .as_ref()
+                    .map(|store| EditorDraftStore::new(store.state_dir()));
+                if let Some(store) = &drafts {
+                    if let Err(error) = store.restore(&mut document) {
+                        self.model.set_status(format!(
+                            "Recovery draft invalid for {}: {error}. Preserved for investigation.",
+                            path.display()
+                        ));
+                        cx.notify();
+                        return;
+                    }
+                }
+                let recovered = document.is_dirty();
+                self.editor = Some(cx.new(|cx| NativeEditor::new(document, drafts, cx)));
+                self.editor_discard_pending = false;
+                self.model.set_status(if recovered {
+                    "Recovered unsaved editor changes; disk file was not changed"
+                } else {
+                    "Native text editor opened. Click a line to focus and type"
+                });
+            }
+            Err(error) => self
+                .model
+                .set_status(format!("Cannot edit {}: {error}", path.display())),
+        }
+        cx.notify();
+    }
+
+    fn save_editor(&mut self, cx: &mut Context<Self>) {
+        let Some(editor) = &self.editor else {
+            return;
+        };
+        let path = editor.read(cx).document.path().map(PathBuf::from);
+        let saved = editor.update(cx, |editor, cx| editor.save(cx));
+        if saved {
+            if self.model.selected_path() == path.as_deref() {
+                self.model.reload_active();
+            }
+            self.editor_discard_pending = false;
+            self.model
+                .set_status("Native editor saved the selected document");
+        } else {
+            self.model
+                .set_status("Save blocked; see native editor status");
+        }
+        cx.notify();
+    }
+
+    fn close_editor(&mut self, discard: bool, cx: &mut Context<Self>) {
+        if self.editor_dirty(cx) {
+            if !discard {
+                self.editor_discard_pending = false;
+                self.model
+                    .set_status("Unsaved editor changes: Save or use Discard twice");
+                cx.notify();
+                return;
+            }
+            if !self.editor_discard_pending {
+                self.editor_discard_pending = true;
+                self.model
+                    .set_status("Click Confirm discard to lose unsaved editor content");
+                cx.notify();
+                return;
+            }
+        }
+        if let Some(editor) = &self.editor {
+            if discard {
+                if let Err(error) = editor.read(cx).discard_recovery() {
+                    self.model
+                        .set_status(format!("Cannot clear local draft: {error}"));
+                    cx.notify();
+                    return;
+                }
+            }
+            if self.model.selected_path() == editor.read(cx).document.path() {
+                self.model.reload_active();
+            }
+        }
+        self.editor = None;
+        self.editor_discard_pending = false;
+        self.model
+            .set_status("Native editor closed; read-only preview remains available");
+        cx.notify();
+    }
+
     fn persist_session(&mut self) {
         if let Some(store) = &self.session_store {
             if let Err(error) = store.save(&self.model) {
@@ -49,6 +170,13 @@ impl Workbench {
     }
 
     fn switch_workspace(&mut self, root: PathBuf, cx: &mut Context<Self>) {
+        if self.editor_dirty(cx) {
+            self.model.set_status(
+                "Save or explicitly discard native editor changes before switching workspace",
+            );
+            cx.notify();
+            return;
+        }
         let canonical = match dunce::canonicalize(&root) {
             Ok(root) => root,
             Err(error) => {
@@ -79,6 +207,8 @@ impl Workbench {
             }
         };
         self.model = next;
+        self.editor = None;
+        self.editor_discard_pending = false;
         self.workspace_generation = self.workspace_generation.wrapping_add(1);
         // Terminal preview tabs are local UI state, never PTY owners. Drop
         // them on workspace changes to prevent cross-project output leakage.
@@ -327,6 +457,20 @@ impl Render for Workbench {
             .map(|(index, tab)| (index, tab.title.clone()))
             .collect();
         let active_tab = self.model.active_tab();
+        let editor = self.editor.clone();
+        let editor_dirty = self.editor_dirty(cx);
+        let discard_pending = self.editor_discard_pending;
+        let editor_title = self
+            .editor
+            .as_ref()
+            .and_then(|editor| {
+                editor
+                    .read(cx)
+                    .document
+                    .path()
+                    .map(|path| path.display().to_string())
+            })
+            .unwrap_or_else(|| filename.clone());
         let status = self.model.status().to_owned();
         let branch = self.model.branch().to_owned();
         let can_up = self.model.can_go_up();
@@ -669,23 +813,91 @@ impl Render for Workbench {
                             )
                             .child(
                                 div()
-                                    .h(px(24.0))
+                                    .h(px(29.0))
                                     .px_4()
                                     .bg(rgb(BG))
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
                                     .text_sm()
                                     .text_color(rgb(MUTED))
-                                    .child(format!("{} · read-only preview", filename)),
+                                    .child(if editor.is_some() {
+                                        format!("Editing: {}{}", editor_title, if editor_dirty { " ●" } else { "" })
+                                    } else {
+                                        format!("{} · read-only preview", filename)
+                                    })
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .gap_3()
+                                            .child(
+                                                div()
+                                                    .id("native-editor-edit")
+                                                    .cursor_pointer()
+                                                    .text_color(rgb(TEXT))
+                                                    .child("Edit")
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.open_editor(cx);
+                                                    })),
+                                            )
+                                            .when(editor.is_some(), |toolbar| {
+                                                toolbar
+                                                    .child(
+                                                        div()
+                                                            .id("native-editor-save")
+                                                            .cursor_pointer()
+                                                            .text_color(rgb(TEXT))
+                                                            .child("Save")
+                                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                                this.save_editor(cx);
+                                                            })),
+                                                    )
+                                                    .child(
+                                                        div()
+                                                            .id("native-editor-close")
+                                                            .cursor_pointer()
+                                                            .child("Close")
+                                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                                this.close_editor(false, cx);
+                                                            })),
+                                                    )
+                                                    .child(
+                                                        div()
+                                                            .id("native-editor-discard")
+                                                            .cursor_pointer()
+                                                            .text_color(rgb(MUTED))
+                                                            .child(if discard_pending {
+                                                                "Confirm discard"
+                                                            } else {
+                                                                "Discard"
+                                                            })
+                                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                                this.close_editor(true, cx);
+                                                            })),
+                                                    )
+                                            }),
+                                    ),
                             )
                             .child(
-                                div()
-                                    .flex_1()
-                                    .min_h_0()
-                                    .id("preview-scroll")
-                                    .overflow_y_scroll()
-                                    .p_4()
-                                    .text_sm()
-                                    .font_family("JetBrains Mono")
-                                    .child(content),
+                                if let Some(editor) = editor {
+                                    div()
+                                        .flex_1()
+                                        .min_h_0()
+                                        .child(editor)
+                                        .into_any_element()
+                                } else {
+                                    div()
+                                        .flex_1()
+                                        .min_h_0()
+                                        .id("preview-scroll")
+                                        .overflow_y_scroll()
+                                        .p_4()
+                                        .text_sm()
+                                        .font_family("JetBrains Mono")
+                                        .child(content)
+                                        .into_any_element()
+                                },
                             )
                             .child(if has_terminal_preview {
                                 div()
@@ -1023,6 +1235,7 @@ fn main() {
         .unwrap_or_else(|| vec![model.root().to_path_buf()]);
 
     Application::new().run(move |cx: &mut App| {
+        bind_editor_keys(cx);
         let bounds = Bounds::centered(None, size(px(1200.0), px(800.0)), cx);
         cx.open_window(
             WindowOptions {
@@ -1032,6 +1245,8 @@ fn main() {
             |_, cx| {
                 let view = cx.new(|_| Workbench {
                     model,
+                    editor: None,
+                    editor_discard_pending: false,
                     session_store,
                     recent_workspaces,
                     show_recent_workspaces: false,

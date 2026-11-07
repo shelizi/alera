@@ -46,6 +46,11 @@ impl PreviewSessionStore {
         }
     }
 
+    /// Location of isolated GPUI local state for optional editor recovery.
+    pub fn state_dir(&self) -> &Path {
+        &self.state_dir
+    }
+
     /// Persist outside the project and outside Alera's existing RuntimeStore.
     pub fn platform_default() -> Option<Self> {
         // Explicit absolute override supports isolated smoke tests without

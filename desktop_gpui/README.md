@@ -115,11 +115,42 @@ this experimental branch, which adds the fail-closed `--no-start` option.
 An older CLI lacking that flag will return an error and GPUI will not
 start the Host as a fallback. The usual CLI default remains unchanged.
 
+## Experimental native text editing (Phase 2, first slice)
+
+Open a UTF-8 file from Explorer and click **Edit** above the preview.
+The GPUI editor accepts native keyboard input through GPUI's
+`EntityInputHandler`, including UTF-16 IME marked text and committed text.
+It supports Unicode-grapheme Left/Right and Backspace/Delete, Enter,
+Select All, clipboard copy/cut/paste, and explicit **Save** or Ctrl/Cmd+S.
+Only `Save` writes back to the original source file. It validates workspace
+containment and compares the current disk contents to the original snapshot;
+external edits cause a conflict instead of silently being overwritten.
+
+File-backed unsaved edits are recovered on **Edit** after an app restart.
+Committed edits are written atomically to the experimental local
+`gpui-preview/editor-drafts` state directory. The draft includes the
+unmodified original text to recognize external edits even across restarts.
+**These drafts are local plaintext, not encrypted**; do not use this
+experimental editor for secrets. The draft is cleared after a successful
+source save, or after clicking **Discard** and **Confirm discard**. An unsaved
+editor blocks switching workspace or opening a different file until saved
+or explicitly discarded. IME preedit is not written to drafts.
+
+This is a **limited editor surface**, not the shipping IDE editor:
+documents are capped at 256 KiB and only the first 600 lines are drawn.
+Click places the caret at the end of a line, not at an arbitrary glyph;
+multiline selection, syntax highlighting, undo/redo, completion, line
+virtualization, scroll-aware IME candidate position, and proven Traditional
+Chinese IME UX are still pending. Editing and draft persistence currently
+run on the GPUI thread, which requires profiling before full-scale adoption.
+
 ## Current scope
 
 - Native GPUI window with dark workbench layout.
 - Bounded, read-only file browsing with explicit root containment; no shell spawning.
 - Read-only UTF-8 file preview, limited to 256 KiB / 600 lines.
+- Opt-in native GPUI file editor with guarded disk saves, Unicode/IME input
+  interface and local crash-recovery drafts (experimental, not production).
 - Up to 24 read-only file preview tabs: reuse, activate, close and reload without writing the source.
 - Explorer refresh button and folder-up navigation.
 - Persistent read-only preview navigation and last-workspace recovery.
@@ -132,21 +163,23 @@ start the Host as a fallback. The usual CLI default remains unchanged.
   Text log fallback and explicit manual reconnection.
 - Reuses `alera-core::git::current_branch` for Git branch metadata.
 - No Flutter, Dart VM or WebView in this executable.
-- No writes to workspace files from this preview.
+- Read-only preview and terminal surfaces never write files; only explicit
+  native editor **Save** may update its selected workspace text file.
 
-**Not implemented yet:** editable code editor/IME, file watches, full
+**Not implemented yet:** full code editor and tested IME interaction, file watches, full
 interactive terminal/PTY rendering and input, persistent terminal tabs,
-multi-workspace selection UI, Git
+complete multi-workspace workflow, Git
 Graph/diff/merge, Agent profiles, desktop tray, settings, debugging, plugins,
-MCP and parity with Alera desktop. The preview state is *not* terminal or
-unsaved-editor state. Future features should use existing Alera Rust
+MCP and parity with Alera desktop. Preview navigation and local editor
+recovery are independent of Terminal/Host state. Future features should use existing Alera Rust
 sidecar/runtime contracts, not be reimplemented directly in GPUI views.
 
 ## Verification
 
 - Windows: `cargo check --all-targets` and debug `cargo build` passed with GPUI 0.2.2.
-- Headless tests: 41/41 passed (navigation, workspace switching and recent
-  workspace history, persistence, path containment,
+- Headless tests: 52/52 passed (navigation, workspace switching and recent
+  workspace history, UTF-16 and Unicode grapheme edits, draft recovery and
+  conflict-safe file saves, persistence, path containment,
   file limits, tabs, reload, terminal cursor, auto-poll backoff, stale
   response handling, VT100 screen, ANSI 16/256/RGB colors and inverse,
   wide Unicode, alternate screen, ANSI filtering
