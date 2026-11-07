@@ -120,6 +120,10 @@ pub struct TerminalCommand {
 
 #[derive(Debug, Subcommand)]
 pub enum TerminalAction {
+    /// List registered Host workspaces without starting the Host.
+    Workspaces,
+    /// Create a new Runtime Host terminal in an existing Workspace.
+    Create(TerminalCreateArgs),
     /// List live terminal sessions.
     List(crate::cli_orchestration::OrchestrationTerminalListArgs),
     /// Show one terminal session.
@@ -134,6 +138,13 @@ pub enum TerminalAction {
     Write(TerminalWriteArgs),
     /// Attach an interactive native terminal client to an existing session.
     Attach(TerminalAttachArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct TerminalCreateArgs {
+    /// Host Workspace ID only; a filesystem path is not accepted.
+    #[arg(long = "workspace-id")]
+    pub workspace_id: String,
 }
 
 #[derive(Debug, Args)]

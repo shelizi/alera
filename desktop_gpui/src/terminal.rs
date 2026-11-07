@@ -6,6 +6,7 @@ use crate::vt_screen::VtScreen;
 use serde_json::Value;
 use std::ffi::OsString;
 use std::io;
+use std::path::PathBuf;
 
 pub const TERMINAL_READ_BYTES: u64 = 8 * 1024;
 pub const MAX_TERMINALS: usize = 128;
@@ -14,6 +15,8 @@ pub const HOST_SESSION_LIST_SCOPE: &str =
     "Existing Host sessions · all workspaces · input only to selected session";
 const MAX_OPEN_TABS: usize = 8;
 const MAX_TRANSCRIPT_BYTES: usize = 48 * 1024;
+const MAX_HOST_WORKSPACES: usize = 256;
+const MAX_HOST_PATH_BYTES: usize = 4096;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TerminalSession {
@@ -40,6 +43,24 @@ pub struct TerminalChunk {
     pub truncated: bool,
     pub running: bool,
     pub text: String,
+}
+
+/// A workspace already registered with the running Runtime Host. `id` is the
+/// Host-assigned identifier accepted by `terminal create`; `path` is the
+/// workspace root reported by the Host.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RegisteredHostWorkspace {
+    pub id: String,
+    pub path: PathBuf,
+}
+
+/// Identity returned after the Host creates a terminal tab inside a registered
+/// workspace. `handle` is the session id used by terminal list/read/write.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CreatedHostTerminal {
+    pub handle: String,
+    pub workspace_id: String,
+    pub tab_id: String,
 }
 
 pub fn list_terminal_verb() -> Vec<OsString> {
@@ -85,6 +106,22 @@ impl RuntimeCliBridge {
         self.terminal_json_with_input(&args, text.as_bytes())?;
         Ok(())
     }
+
+    /// List workspaces already registered with the running Host. Uses
+    /// --no-start only; a missing Host is an error, never an implicit start.
+    pub fn list_registered_workspaces(&self) -> io::Result<Vec<RegisteredHostWorkspace>> {
+        let response = self.terminal_json(&workspaces_verb())?;
+        parse_registered_workspaces(&response)
+    }
+
+    /// Create one Host-owned terminal tab inside an already-registered
+    /// workspace and return its session identity. The Host owns the PTY; this
+    /// bridge only relays the explicit request through the existing CLI.
+    pub fn create_terminal(&self, workspace_id: &str) -> io::Result<CreatedHostTerminal> {
+        let args = create_terminal_verb(workspace_id)?;
+        let response = self.terminal_json(&args)?;
+        parse_created_terminal(&response, workspace_id)
+    }
 }
 
 /// Construct an explicit write to an already-selected Host terminal.
@@ -113,6 +150,28 @@ pub fn write_terminal_verb(handle: &str, text: &str, enter: bool) -> io::Result<
         args.push(OsString::from("--enter"));
     }
     Ok(args)
+}
+
+/// List workspaces registered with the running Host. No arguments beyond the
+/// verb itself are permitted by the bridge allowlist.
+pub fn workspaces_verb() -> Vec<OsString> {
+    vec![OsString::from("workspaces")]
+}
+
+/// Explicit terminal creation inside an existing Host workspace. The CLI
+/// still requires --no-start and an already-running Host; this bridge never
+/// starts a runtime, reads a token, or spawns a shell itself.
+pub fn create_terminal_verb(workspace_id: &str) -> io::Result<Vec<OsString>> {
+    if !valid_host_id(workspace_id) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Invalid workspace id",
+        ));
+    }
+    Ok(vec![
+        OsString::from("create"),
+        OsString::from(format!("--workspace-id={workspace_id}")),
+    ])
 }
 
 pub fn parse_terminal_list(value: &Value) -> io::Result<Vec<TerminalSession>> {
@@ -204,6 +263,97 @@ pub fn parse_terminal_chunk(value: &Value, expected_handle: &str) -> io::Result<
     })
 }
 
+/// Parse `terminal workspaces` output: `{items:[{id,path}]}`. Ids and paths
+/// are bounded, duplicate ids are rejected, and the item count is capped so a
+/// malformed Host reply cannot hand the UI an unbounded list.
+pub fn parse_registered_workspaces(value: &Value) -> io::Result<Vec<RegisteredHostWorkspace>> {
+    let items = value
+        .get("items")
+        .and_then(Value::as_array)
+        .ok_or_else(|| invalid("CLI workspace list has no items"))?;
+    if items.len() > MAX_HOST_WORKSPACES {
+        return Err(invalid("Too many registered workspaces for preview"));
+    }
+    let mut workspaces = Vec::with_capacity(items.len());
+    for item in items {
+        let id = item
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|id| valid_host_id(id))
+            .ok_or_else(|| invalid("Registered workspace has invalid id"))?;
+        let path = item
+            .get("path")
+            .and_then(Value::as_str)
+            .filter(|path| valid_host_path(path))
+            .ok_or_else(|| invalid("Registered workspace has invalid path"))?;
+        if workspaces
+            .iter()
+            .any(|workspace: &RegisteredHostWorkspace| workspace.id == id)
+        {
+            return Err(invalid("Duplicate registered workspace id"));
+        }
+        workspaces.push(RegisteredHostWorkspace {
+            id: id.to_string(),
+            path: PathBuf::from(path),
+        });
+    }
+    Ok(workspaces)
+}
+
+/// Parse a `terminal create` reply of the form
+/// `{tab:{id,workspaceId},attachment:{sessionId,workspaceId,tabId}}` and prove
+/// it belongs to the workspace that was requested. A reply for a different
+/// workspace or tab is malformed rather than silently attached.
+pub fn parse_created_terminal(
+    value: &Value,
+    expected_workspace_id: &str,
+) -> io::Result<CreatedHostTerminal> {
+    let tab = value
+        .get("tab")
+        .ok_or_else(|| invalid("CLI create response has no tab"))?;
+    let tab_id = tab
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|id| valid_host_id(id))
+        .ok_or_else(|| invalid("CLI create response tab id is invalid"))?;
+    let tab_workspace = tab
+        .get("workspaceId")
+        .and_then(Value::as_str)
+        .filter(|id| valid_host_id(id))
+        .ok_or_else(|| invalid("CLI create response tab has no workspaceId"))?;
+    let attachment = value
+        .get("attachment")
+        .ok_or_else(|| invalid("CLI create response has no attachment"))?;
+    let handle = attachment
+        .get("sessionId")
+        .and_then(Value::as_str)
+        .filter(|handle| valid_handle(handle))
+        .ok_or_else(|| invalid("CLI create response session handle is invalid"))?;
+    let attachment_workspace = attachment
+        .get("workspaceId")
+        .and_then(Value::as_str)
+        .filter(|id| valid_host_id(id))
+        .ok_or_else(|| invalid("CLI create response attachment has no workspaceId"))?;
+    let attachment_tab = attachment
+        .get("tabId")
+        .and_then(Value::as_str)
+        .filter(|id| valid_host_id(id))
+        .ok_or_else(|| invalid("CLI create response attachment has no tabId"))?;
+    if tab_workspace != expected_workspace_id
+        || attachment_workspace != expected_workspace_id
+        || attachment_tab != tab_id
+    {
+        return Err(invalid(
+            "CLI create response does not match the requested workspace",
+        ));
+    }
+    Ok(CreatedHostTerminal {
+        handle: handle.to_string(),
+        workspace_id: expected_workspace_id.to_string(),
+        tab_id: tab_id.to_string(),
+    })
+}
+
 fn invalid(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
 }
@@ -214,6 +364,23 @@ fn valid_handle(handle: &str) -> bool {
         && handle
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | ':'))
+}
+
+/// Only the exact bounded ASCII identifier syntax accepted by the paired
+/// Alera CLI is forwarded, so a workspace cannot appear selectable then fail
+/// at the create boundary.
+fn valid_host_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 256
+        && id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':'))
+}
+
+/// Registered workspace paths are bounded identity data; a malformed Host
+/// reply must not hand the UI an unbounded or control-laden string.
+fn valid_host_path(path: &str) -> bool {
+    !path.is_empty() && path.len() <= MAX_HOST_PATH_BYTES && !path.chars().any(|c| c.is_control())
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -763,6 +930,106 @@ mod tests {
             running: true,
             text: text.into(),
         }
+    }
+
+    #[test]
+    fn workspace_and_create_verbs_are_bounded_and_never_start_host() {
+        use crate::runtime_bridge::terminal_cli_arguments;
+        use std::path::Path;
+        assert_eq!(workspaces_verb(), vec![OsString::from("workspaces")]);
+        let args = create_terminal_verb("ws-123").unwrap();
+        assert_eq!(args[0], "create");
+        assert_eq!(args[1], "--workspace-id=ws-123");
+        let routed = terminal_cli_arguments(Path::new("C:/runtime"), &args);
+        assert!(routed.iter().any(|arg| arg == "terminal"));
+        assert!(routed.iter().any(|arg| arg == "--no-start"));
+        assert!(routed.iter().any(|arg| arg == "--json"));
+        assert!(!routed.iter().any(|arg| arg == "attach" || arg == "prune"));
+        for id in ["", "bad\nid", "bad\0id"] {
+            assert!(create_terminal_verb(id).is_err());
+        }
+        assert!(create_terminal_verb(&"x".repeat(257)).is_err());
+        assert!(create_terminal_verb(&"x".repeat(256)).is_ok());
+    }
+
+    #[test]
+    fn parses_registered_workspace_list_shape() {
+        let value = json!({
+            "items": [
+                {"id":"ws-1", "path":"C:/repo/one"},
+                {"id":"ws-2", "path":"/home/user/two"}
+            ]
+        });
+        let items = parse_registered_workspaces(&value).unwrap();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].id, "ws-1");
+        assert_eq!(items[0].path, PathBuf::from("C:/repo/one"));
+        assert_eq!(items[1].path, PathBuf::from("/home/user/two"));
+        assert!(parse_registered_workspaces(&json!({"items":[{"id":"ws-1"}]})).is_err());
+        assert!(parse_registered_workspaces(&json!({"items":[{"id":"ws-1","path":""}]})).is_err());
+        assert!(parse_registered_workspaces(&json!({"kind":"workspaces"})).is_err());
+        assert!(parse_registered_workspaces(&json!({"items":[
+            {"id":"ws-1","path":"/a"},{"id":"ws-1","path":"/b"}
+        ]}))
+        .is_err());
+        let oversized = json!({"items": (0..=MAX_HOST_WORKSPACES)
+            .map(|i| json!({"id":format!("ws-{i}"),"path":"/p"}))
+            .collect::<Vec<_>>()});
+        assert!(parse_registered_workspaces(&oversized).is_err());
+    }
+
+    #[test]
+    fn parses_created_terminal_and_rejects_workspace_mismatch() {
+        let value = json!({
+            "tab":{"id":"tab-1","workspaceId":"ws-1"},
+            "attachment":{"sessionId":"term-9","workspaceId":"ws-1","tabId":"tab-1"}
+        });
+        let created = parse_created_terminal(&value, "ws-1").unwrap();
+        assert_eq!(created.handle, "term-9");
+        assert_eq!(created.workspace_id, "ws-1");
+        assert_eq!(created.tab_id, "tab-1");
+        // A reply for a different requested workspace is malformed.
+        assert!(parse_created_terminal(&value, "ws-2").is_err());
+        let spoofed_workspace = json!({
+            "tab":{"id":"tab-1","workspaceId":"ws-2"},
+            "attachment":{"sessionId":"term-9","workspaceId":"ws-1","tabId":"tab-1"}
+        });
+        assert!(parse_created_terminal(&spoofed_workspace, "ws-1").is_err());
+        let mismatched_tab = json!({
+            "tab":{"id":"tab-1","workspaceId":"ws-1"},
+            "attachment":{"sessionId":"term-9","workspaceId":"ws-1","tabId":"tab-2"}
+        });
+        assert!(parse_created_terminal(&mismatched_tab, "ws-1").is_err());
+        assert!(parse_created_terminal(
+            &json!({"tab":{"id":"tab-1","workspaceId":"ws-1"}}),
+            "ws-1"
+        )
+        .is_err());
+        let bad_handle = json!({
+            "tab":{"id":"tab-1","workspaceId":"ws-1"},
+            "attachment":{"sessionId":"bad\nhandle","workspaceId":"ws-1","tabId":"tab-1"}
+        });
+        assert!(parse_created_terminal(&bad_handle, "ws-1").is_err());
+    }
+
+    #[test]
+    fn workspace_and_create_calls_fail_before_spawn_without_host() {
+        let runtime = tempfile::tempdir().unwrap();
+        let bridge = RuntimeCliBridge::new(runtime.path().join("missing-cli"), runtime.path());
+        assert_eq!(
+            bridge.create_terminal("bad\nid").unwrap_err().kind(),
+            io::ErrorKind::InvalidInput,
+        );
+        assert_eq!(
+            bridge.create_terminal("ws-1").unwrap_err().kind(),
+            io::ErrorKind::NotConnected,
+        );
+        assert_eq!(
+            bridge.list_registered_workspaces().unwrap_err().kind(),
+            io::ErrorKind::NotConnected,
+        );
+        assert!(!runtime.path().join("host.json").exists());
+        assert!(!runtime.path().join("runtime-host.json").exists());
     }
 
     #[test]

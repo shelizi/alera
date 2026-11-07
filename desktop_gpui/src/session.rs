@@ -13,6 +13,7 @@ const MAX_STATE_BYTES: u64 = 64 * 1024;
 const MAX_RESTORED_TABS: usize = 24;
 const MAX_RECENT_WORKSPACES: usize = 12;
 const MAX_SAVED_PROJECTS: usize = 32;
+const MAX_TERMINAL_LAYOUT_TABS: usize = 8;
 
 #[derive(Debug, Clone)]
 pub struct PreviewSessionStore {
@@ -48,7 +49,116 @@ struct SavedProjects {
     roots: Vec<PathBuf>,
 }
 
+/// Only public Host session identities, never PTY text or credentials.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalLayoutTab {
+    pub handle: String,
+    pub workspace_id: String,
+    pub tab_id: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalLayout {
+    pub tabs: Vec<TerminalLayoutTab>,
+    pub active_handle: Option<String>,
+    pub transcript_view: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct SavedTerminalLayout {
+    version: u32,
+    root: PathBuf,
+    layout: TerminalLayout,
+}
+
+fn valid_terminal_layout_id(id: &str, max_bytes: usize) -> bool {
+    !id.is_empty()
+        && id.len() <= max_bytes
+        && id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':'))
+}
+
+fn validate_terminal_layout(layout: &TerminalLayout) -> io::Result<()> {
+    if layout.tabs.len() > MAX_TERMINAL_LAYOUT_TABS
+        || layout.tabs.iter().any(|tab| {
+            !valid_terminal_layout_id(&tab.handle, 128)
+                || !valid_terminal_layout_id(&tab.workspace_id, 256)
+                || !valid_terminal_layout_id(&tab.tab_id, 256)
+        })
+        || layout.tabs.iter().enumerate().any(|(index, tab)| {
+            layout.tabs[..index]
+                .iter()
+                .any(|prior| prior.handle == tab.handle)
+        })
+        || layout
+            .active_handle
+            .as_ref()
+            .is_some_and(|handle| !layout.tabs.iter().any(|tab| tab.handle == *handle))
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Terminal layout has invalid or duplicate Host session references",
+        ));
+    }
+    Ok(())
+}
+
 impl PreviewSessionStore {
+    /// A separate, bounded view-only layout scoped to one canonical root.
+    /// Never writes Alera's RuntimeStore or creates/attaches a Host session.
+    pub fn save_terminal_layout(&self, root: &Path, layout: &TerminalLayout) -> io::Result<()> {
+        let canonical = dunce::canonicalize(root)?;
+        if canonical != root || !canonical.is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Terminal layout root is not a canonical existing directory",
+            ));
+        }
+        validate_terminal_layout(layout)?;
+        self.write_json(
+            &self.terminal_layout_path(root),
+            &SavedTerminalLayout {
+                version: VERSION,
+                root: root.to_path_buf(),
+                layout: layout.clone(),
+            },
+        )
+    }
+
+    pub fn load_terminal_layout(&self, root: &Path) -> io::Result<Option<TerminalLayout>> {
+        let canonical = dunce::canonicalize(root)?;
+        if canonical != root || !canonical.is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Terminal layout root is not a canonical existing directory",
+            ));
+        }
+        let Some(saved) =
+            self.read_json::<SavedTerminalLayout>(&self.terminal_layout_path(root))?
+        else {
+            return Ok(None);
+        };
+        if saved.version != VERSION {
+            return Ok(None);
+        }
+        if saved.root != root {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Terminal layout belongs to a different workspace",
+            ));
+        }
+        validate_terminal_layout(&saved.layout)?;
+        Ok(Some(saved.layout))
+    }
+
+    fn terminal_layout_path(&self, root: &Path) -> PathBuf {
+        let file = self.session_path(root);
+        let name = file.file_name().unwrap_or_default().to_string_lossy();
+        self.state_dir
+            .join(name.replacen("workspace-", "terminal-layout-", 1))
+    }
+
     pub fn new(state_dir: impl Into<PathBuf>) -> Self {
         Self {
             state_dir: state_dir.into(),
@@ -902,5 +1012,96 @@ mod tests {
         assert_eq!(store.restore(&mut restored_b).unwrap(), 1);
         assert_eq!(restored_b.content(), "B");
         assert!(last_path.is_dir());
+    }
+
+    #[test]
+    fn terminal_layout_roundtrip_is_workspace_scoped_and_metadata_only() {
+        let state = tempfile::tempdir().unwrap();
+        let root_a = tempfile::tempdir().unwrap();
+        let root_b = tempfile::tempdir().unwrap();
+        let root_a = dunce::canonicalize(root_a.path()).unwrap();
+        let root_b = dunce::canonicalize(root_b.path()).unwrap();
+        let store = PreviewSessionStore::new(state.path());
+        let layout = TerminalLayout {
+            tabs: vec![
+                TerminalLayoutTab {
+                    handle: "handle-a".into(),
+                    workspace_id: "workspace-1".into(),
+                    tab_id: "tab-1".into(),
+                },
+                TerminalLayoutTab {
+                    handle: "handle-b".into(),
+                    workspace_id: "workspace-1".into(),
+                    tab_id: "tab-2".into(),
+                },
+            ],
+            active_handle: Some("handle-a".into()),
+            transcript_view: true,
+        };
+        store.save_terminal_layout(&root_a, &layout).unwrap();
+        assert_eq!(store.load_terminal_layout(&root_a).unwrap(), Some(layout));
+        assert_eq!(store.load_terminal_layout(&root_b).unwrap(), None);
+        let bytes = fs::read(store.terminal_layout_path(&root_a)).unwrap();
+        let serialized = String::from_utf8(bytes).unwrap();
+        assert!(!serialized.contains("output"));
+        assert!(!serialized.contains("command"));
+        assert!(!serialized.contains("token"));
+    }
+
+    #[test]
+    fn terminal_layout_rejects_duplicate_handles_bad_ids_and_corrupted_storage() {
+        let state = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let root = dunce::canonicalize(root.path()).unwrap();
+        let store = PreviewSessionStore::new(state.path());
+        let tab = TerminalLayoutTab {
+            handle: "handle-1".into(),
+            workspace_id: "workspace-1".into(),
+            tab_id: "tab-1".into(),
+        };
+        let mut layout = TerminalLayout {
+            tabs: vec![tab.clone(), tab],
+            active_handle: Some("handle-1".into()),
+            transcript_view: false,
+        };
+        assert!(store.save_terminal_layout(&root, &layout).is_err());
+        layout.tabs.pop();
+        layout.tabs[0].handle = "bad\nhandle".into();
+        assert!(store.save_terminal_layout(&root, &layout).is_err());
+        layout.tabs[0].handle = "handle-1".into();
+        layout.active_handle = Some("unknown".into());
+        assert!(store.save_terminal_layout(&root, &layout).is_err());
+        layout.active_handle = Some("handle-1".into());
+        store.save_terminal_layout(&root, &layout).unwrap();
+        fs::write(store.terminal_layout_path(&root), "{invalid json").unwrap();
+        assert!(store.load_terminal_layout(&root).is_err());
+    }
+
+    #[test]
+    fn terminal_layout_must_not_accept_tampered_workspace_root_or_excess_tabs() {
+        let state = tempfile::tempdir().unwrap();
+        let a = tempfile::tempdir().unwrap();
+        let b = tempfile::tempdir().unwrap();
+        let a = dunce::canonicalize(a.path()).unwrap();
+        let b = dunce::canonicalize(b.path()).unwrap();
+        let store = PreviewSessionStore::new(state.path());
+        let layout = TerminalLayout {
+            tabs: (0..9)
+                .map(|i| TerminalLayoutTab {
+                    handle: format!("term-{i}"),
+                    workspace_id: "workspace".into(),
+                    tab_id: format!("tab-{i}"),
+                })
+                .collect(),
+            active_handle: None,
+            transcript_view: false,
+        };
+        assert!(store.save_terminal_layout(&a, &layout).is_err());
+        let valid = TerminalLayout::default();
+        store.save_terminal_layout(&a, &valid).unwrap();
+        let file_a = store.terminal_layout_path(&a);
+        let file_b = store.terminal_layout_path(&b);
+        fs::copy(&file_a, &file_b).unwrap();
+        assert!(store.load_terminal_layout(&b).is_err());
     }
 }

@@ -11,9 +11,9 @@ use alera_gpui_desktop::model::WorkbenchModel;
 use alera_gpui_desktop::project_search::{ContentMatch, ProjectSearch};
 use alera_gpui_desktop::project_tree::{collect_project_tree, ProjectTreeGroup};
 use alera_gpui_desktop::runtime_bridge::RuntimeCliBridge;
-use alera_gpui_desktop::session::PreviewSessionStore;
+use alera_gpui_desktop::session::{PreviewSessionStore, TerminalLayout, TerminalLayoutTab};
 use alera_gpui_desktop::terminal::{
-    TerminalDock, TerminalPollGate, TerminalViewMode, HOST_SESSION_LIST_SCOPE,
+    CreatedHostTerminal, TerminalDock, TerminalPollGate, TerminalViewMode, HOST_SESSION_LIST_SCOPE,
 };
 use alera_gpui_desktop::workspace_tree::WorkspaceTree;
 use alera_gpui_desktop::worktree_manager::{WorktreeEntry, WorktreeManager};
@@ -121,6 +121,9 @@ struct Workbench {
     terminals: TerminalDock,
     terminal_input: Entity<QuickOpenInput>,
     show_terminal_attach_picker: bool,
+    terminal_create_busy: bool,
+    pending_created_terminal: Option<CreatedHostTerminal>,
+    terminal_layout_restore: Option<TerminalLayout>,
     terminal_send_loading: bool,
     terminal_list_loading: bool,
     terminal_read_loading: Option<String>,
@@ -921,9 +924,10 @@ impl Workbench {
     }
 
     fn switch_workspace(&mut self, root: PathBuf, cx: &mut Context<Self>) {
-        if self.worktree_busy {
-            self.model
-                .set_status("Finish the current Worktree operation before switching projects");
+        if self.worktree_busy || self.terminal_create_busy {
+            self.model.set_status(
+                "Finish the current Worktree or Host terminal create before switching projects",
+            );
             cx.notify();
             return;
         }
@@ -963,6 +967,9 @@ impl Workbench {
                 return;
             }
         };
+        // Preserve only tab identities/display mode, never PTY output or
+        // credentials. Other workspaces never inherit this local layout.
+        self.save_terminal_layout();
         self.model = next;
         self.center_view = CenterView::Terminal;
         self.tree = WorkspaceTree::new(&canonical).ok();
@@ -999,6 +1006,9 @@ impl Workbench {
         // them on workspace changes to prevent cross-project output leakage.
         // Existing Host sessions remain alive and under Host ownership.
         self.terminals = TerminalDock::for_workspace(self.workspace_generation);
+        self.terminal_create_busy = false;
+        self.pending_created_terminal = None;
+        self.load_terminal_layout();
         self.terminal_send_loading = false;
         self.terminal_input.update(cx, |input, cx| input.clear(cx));
         self.show_terminal_attach_picker = false;
@@ -1090,6 +1100,152 @@ impl Workbench {
         .detach();
     }
 
+    fn save_terminal_layout(&mut self) {
+        // Do not overwrite a previously saved layout with an empty view
+        // while waiting for the first successful Host session listing.
+        if self.terminal_layout_restore.is_some() && self.terminals.tabs.is_empty() {
+            return;
+        }
+        // An explicit tab action supersedes deferred startup restoration.
+        self.terminal_layout_restore = None;
+        let Some(store) = &self.session_store else {
+            return;
+        };
+        let layout = TerminalLayout {
+            tabs: self
+                .terminals
+                .tabs
+                .iter()
+                .map(|tab| TerminalLayoutTab {
+                    handle: tab.handle.clone(),
+                    workspace_id: tab.workspace_id.clone(),
+                    tab_id: tab.tab_id.clone(),
+                })
+                .collect(),
+            active_handle: self.terminals.active().map(|tab| tab.handle.clone()),
+            transcript_view: self.terminals.view_mode == TerminalViewMode::Transcript,
+        };
+        if let Err(error) = store.save_terminal_layout(self.model.root(), &layout) {
+            self.terminals.status = format!("Terminal tab layout not saved: {error}");
+        }
+    }
+
+    fn load_terminal_layout(&mut self) {
+        self.terminal_layout_restore = self.session_store.as_ref().and_then(|store| {
+            match store.load_terminal_layout(self.model.root()) {
+                Ok(value) => value,
+                Err(error) => {
+                    eprintln!("Alera GPUI terminal layout recovery refused: {error}");
+                    None
+                }
+            }
+        });
+    }
+
+    /// Restore display-only tabs only after an authenticated Host session
+    /// list matches every opaque session/workspace/tab identity. A stale
+    /// handle is never treated as a request to start or attach a new PTY.
+    fn restore_terminal_layout_from_host(&mut self, cx: &mut Context<Self>) {
+        if self.terminals.sessions.is_empty() {
+            return;
+        }
+        let Some(layout) = self.terminal_layout_restore.take() else {
+            return;
+        };
+        let mut recovered = Vec::new();
+        for saved in &layout.tabs {
+            if self.terminals.sessions.iter().any(|live| {
+                live.handle == saved.handle
+                    && live.tab_id == saved.tab_id
+                    && live.workspace_id == saved.workspace_id
+            }) && self.terminals.open(&saved.handle)
+            {
+                recovered.push(saved.handle.clone());
+            }
+        }
+        if let Some(handle) = layout.active_handle {
+            if recovered.iter().any(|saved| saved == &handle) {
+                self.terminals.open(&handle);
+            }
+        }
+        self.terminals.view_mode = if layout.transcript_view {
+            TerminalViewMode::Transcript
+        } else {
+            TerminalViewMode::Screen
+        };
+        if !recovered.is_empty() {
+            self.refresh_terminal_output(cx);
+        }
+    }
+
+    fn create_host_terminal(&mut self, cx: &mut Context<Self>) {
+        if self.terminal_create_busy {
+            return;
+        }
+        if self.runtime_bridge.is_none() {
+            self.runtime_bridge = RuntimeCliBridge::discover().ok();
+        }
+        let Some(bridge) = self.runtime_bridge.clone() else {
+            self.terminals.status = "Alera CLI missing; cannot create Host terminal".into();
+            cx.notify();
+            return;
+        };
+        let root = self.model.root().to_path_buf();
+        let generation = self.workspace_generation;
+        self.terminal_create_busy = true;
+        self.terminals.status =
+            "Checking registered Host workspaces before creating terminal…".into();
+        cx.notify();
+        cx.spawn(async move |view, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    let registered = bridge.list_registered_workspaces()?;
+                    let mut matching = registered
+                        .into_iter()
+                        .filter(|workspace| {
+                            dunce::canonicalize(&workspace.path)
+                                .is_ok_and(|canonical| canonical == root)
+                        })
+                        .map(|workspace| workspace.id);
+                    let Some(host_workspace_id) = matching.next() else {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::NotFound,
+                            "Current project is not registered with the running Alera Host",
+                        ));
+                    };
+                    if matching.next().is_some() {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            "Multiple Host workspaces match this project; terminal create refused",
+                        ));
+                    }
+                    bridge.create_terminal(&host_workspace_id)
+                })
+                .await;
+            view.update(cx, |view, cx| {
+                if view.workspace_generation != generation {
+                    return;
+                }
+                view.terminal_create_busy = false;
+                match result {
+                    Ok(created) => {
+                        view.pending_created_terminal = Some(created);
+                        view.center_view = CenterView::Terminal;
+                        view.terminals.status =
+                            "Host terminal created; waiting for session list…".into();
+                        view.refresh_terminals(cx);
+                    }
+                    Err(error) => {
+                        view.terminals.status = format!("Cannot create Host terminal: {error}");
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     fn refresh_terminals(&mut self, cx: &mut Context<Self>) {
         if self.terminal_list_loading {
             return;
@@ -1119,11 +1275,26 @@ impl Workbench {
                 match result {
                     Ok(sessions) => {
                         let was_disconnected = view.terminals.sessions.is_empty();
-                        if view.terminals.apply_session_list(generation, sessions)
-                            && was_disconnected
-                            && !view.terminals.sessions.is_empty()
-                        {
-                            view.terminal_poll.reset();
+                        if view.terminals.apply_session_list(generation, sessions) {
+                            if was_disconnected && !view.terminals.sessions.is_empty() {
+                                view.terminal_poll.reset();
+                            }
+                            view.restore_terminal_layout_from_host(cx);
+                            let confirmed =
+                                view.pending_created_terminal
+                                    .as_ref()
+                                    .is_some_and(|created| {
+                                        view.terminals.sessions.iter().any(|live| {
+                                            live.handle == created.handle
+                                                && live.workspace_id == created.workspace_id
+                                                && live.tab_id == created.tab_id
+                                        })
+                                    });
+                            if confirmed {
+                                if let Some(created) = view.pending_created_terminal.take() {
+                                    view.select_terminal(created.handle, cx);
+                                }
+                            }
                         }
                     }
                     Err(error) => {
@@ -1143,6 +1314,7 @@ impl Workbench {
             self.center_view = CenterView::Terminal;
             self.terminal_send_loading = false;
             self.terminal_input.update(cx, |input, cx| input.clear(cx));
+            self.save_terminal_layout();
             self.refresh_terminal_output(cx);
         } else {
             cx.notify();
@@ -1423,6 +1595,7 @@ impl Render for Workbench {
             .collect();
         let terminal_active = self.terminals.active_tab;
         let show_terminal_attach_picker = self.show_terminal_attach_picker;
+        let terminal_create_busy = self.terminal_create_busy;
         let terminal_output = self
             .terminals
             .active()
@@ -2051,6 +2224,17 @@ impl Render for Workbench {
                                     )
                                     .child(
                                         div()
+                                            .id("terminal-create-new")
+                                            .cursor_pointer()
+                                            .text_sm()
+                                            .text_color(rgb(if terminal_create_busy { MUTED } else { TEXT }))
+                                            .child(if terminal_create_busy { "Creating…" } else { "+ New Terminal" })
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.create_host_terminal(cx);
+                                            })),
+                                    )
+                                    .child(
+                                        div()
                                             .id("terminal-attach-existing")
                                             .cursor_pointer()
                                             .text_sm()
@@ -2351,6 +2535,7 @@ impl Render for Workbench {
                                                                         ))
                                                                         .on_click(cx.listener(move |this, _, _, cx| {
                                                                             if this.terminals.activate(index) {
+                                                                                this.save_terminal_layout();
                                                                                 this.refresh_terminal_output(cx);
                                                                             }
                                                                             cx.notify();
@@ -2365,6 +2550,7 @@ impl Render for Workbench {
                                                                         .child("×")
                                                                         .on_click(cx.listener(move |this, _, _, cx| {
                                                                             this.terminals.close(index);
+                                                                            this.save_terminal_layout();
                                                                             cx.notify();
                                                                         })),
                                                                 )
@@ -2381,6 +2567,7 @@ impl Render for Workbench {
                                                     .child(if terminal_is_vt { "VT screen" } else { "Text log" })
                                                     .on_click(cx.listener(|this, _, _, cx| {
                                                         this.terminals.toggle_view_mode();
+                                                        this.save_terminal_layout();
                                                         cx.notify();
                                                     })),
                                             )
@@ -2427,6 +2614,7 @@ impl Render for Workbench {
                                                     .child("◀ Previous")
                                                     .on_click(cx.listener(|this, _, _, cx| {
                                                         if this.terminals.activate_previous() {
+                                                            this.save_terminal_layout();
                                                             this.refresh_terminal_output(cx);
                                                         }
                                                         cx.notify();
@@ -2439,6 +2627,7 @@ impl Render for Workbench {
                                                     .child("Next ▶")
                                                     .on_click(cx.listener(|this, _, _, cx| {
                                                         if this.terminals.activate_next() {
+                                                            this.save_terminal_layout();
                                                             this.refresh_terminal_output(cx);
                                                         }
                                                         cx.notify();
@@ -2453,6 +2642,7 @@ impl Render for Workbench {
                                                         if let Some(index) = this.terminals.active_tab {
                                                             if index > 0 {
                                                                 this.terminals.move_tab(index, index - 1);
+                                                                this.save_terminal_layout();
                                                             }
                                                         }
                                                         cx.notify();
@@ -2467,6 +2657,7 @@ impl Render for Workbench {
                                                         if let Some(index) = this.terminals.active_tab {
                                                             if index + 1 < this.terminals.tabs.len() {
                                                                 this.terminals.move_tab(index, index + 1);
+                                                                this.save_terminal_layout();
                                                             }
                                                         }
                                                         cx.notify();
@@ -2480,6 +2671,7 @@ impl Render for Workbench {
                                                     .on_click(cx.listener(|this, _, _, cx| {
                                                         if let Some(index) = this.terminals.active_tab {
                                                             this.terminals.close_others(index);
+                                                            this.save_terminal_layout();
                                                         }
                                                         cx.notify();
                                                     })),
@@ -2492,6 +2684,7 @@ impl Render for Workbench {
                                                     .on_click(cx.listener(|this, _, _, cx| {
                                                         if let Some(index) = this.terminals.active_tab {
                                                             this.terminals.close_to_right(index);
+                                                            this.save_terminal_layout();
                                                         }
                                                         cx.notify();
                                                     })),
@@ -3200,6 +3393,9 @@ fn main() {
                         terminals: TerminalDock::for_workspace(0),
                         terminal_input,
                         show_terminal_attach_picker: false,
+                        terminal_create_busy: false,
+                        pending_created_terminal: None,
+                        terminal_layout_restore: None,
                         terminal_send_loading: false,
                         terminal_list_loading: false,
                         terminal_read_loading: None,
@@ -3207,6 +3403,7 @@ fn main() {
                         terminal_tick: 0,
                     };
                     workbench.restore_scratch_tabs(cx);
+                    workbench.load_terminal_layout();
                     workbench
                 });
                 view.update(cx, |view, cx| {

@@ -91,7 +91,11 @@ pub async fn run(
             }
             Err(error) => print_error(error),
         },
-        TerminalAction::Read(_) | TerminalAction::Write(_) | TerminalAction::Attach(_) => {
+        TerminalAction::Read(_)
+        | TerminalAction::Write(_)
+        | TerminalAction::Attach(_)
+        | TerminalAction::Workspaces
+        | TerminalAction::Create(_) => {
             unreachable!()
         }
     }

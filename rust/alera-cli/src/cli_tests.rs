@@ -48,6 +48,39 @@ fn terminal_no_start_requires_explicit_opt_in_and_parses_for_read_and_list() {
 }
 
 #[test]
+fn terminal_workspaces_and_create_parse_only_explicit_host_id() {
+    let workspaces =
+        Cli::try_parse_from(["alera", "terminal", "--no-start", "--json", "workspaces"]).unwrap();
+    assert!(matches!(
+        workspaces.command,
+        Command::Terminal(crate::cli::TerminalCommand {
+            no_start: true,
+            action: crate::cli::TerminalAction::Workspaces,
+            ..
+        })
+    ));
+    let create = Cli::try_parse_from([
+        "alera",
+        "terminal",
+        "--no-start",
+        "--json",
+        "create",
+        "--workspace-id",
+        "workspace-1",
+    ])
+    .unwrap();
+    match create.command {
+        Command::Terminal(crate::cli::TerminalCommand {
+            no_start: true,
+            action: crate::cli::TerminalAction::Create(args),
+            ..
+        }) => assert_eq!(args.workspace_id, "workspace-1"),
+        other => panic!("unexpected CLI parse: {other:?}"),
+    }
+    assert!(Cli::try_parse_from(["alera", "terminal", "--no-start", "create"]).is_err());
+}
+
+#[test]
 fn runtime_clear_parses_force_as_an_explicit_live_host_override() {
     let cli = Cli::try_parse_from([
         "alera",

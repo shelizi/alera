@@ -170,6 +170,14 @@ async fn run(cli: Cli) -> i32 {
 }
 
 async fn run_terminal_command(command: TerminalCommand) -> i32 {
+    if matches!(
+        &command.action,
+        TerminalAction::Workspaces | TerminalAction::Create(_)
+    ) && !command.no_start
+    {
+        eprintln!("terminal workspaces/create requires --no-start (existing authenticated Host)");
+        return USAGE_EXIT_CODE;
+    }
     let required_capability = terminal_alias_commands::required_capability(&command.action);
     let runtime_path = runtime_dir(&command.runtime);
     let client = if command.no_start {
@@ -204,6 +212,45 @@ async fn run_terminal_command(command: TerminalCommand) -> i32 {
         Err(error) => return print_error(error),
     };
     match command.action {
+        TerminalAction::Workspaces => match client
+            .request_value("workspace.listAll", &json!({}))
+            .await
+        {
+            Ok(serde_json::Value::Array(items)) if items.len() <= 256 => {
+                print_value(
+                    &json!({"items": items}),
+                    command.output.json,
+                    "Host workspaces listed",
+                );
+                0
+            }
+            Ok(_) => print_error(anyhow::anyhow!(
+                "Host workspace list is malformed or exceeds the 256 item limit"
+            )),
+            Err(error) => print_error(error),
+        },
+        TerminalAction::Create(args) => {
+            let id = args.workspace_id;
+            if id.is_empty()
+                || id.len() > 256
+                || !id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':'))
+            {
+                eprintln!("Invalid registered Host Workspace ID");
+                return USAGE_EXIT_CODE;
+            }
+            match client
+                .request_value("terminal.create", &json!({"workspaceId": id}))
+                .await
+            {
+                Ok(value) => {
+                    print_value(&value, command.output.json, "Runtime Host terminal created");
+                    0
+                }
+                Err(error) => print_error(error),
+            }
+        }
         action @ (TerminalAction::List(_)
         | TerminalAction::Show(_)
         | TerminalAction::Wait(_)

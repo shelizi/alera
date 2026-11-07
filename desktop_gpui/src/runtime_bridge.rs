@@ -89,9 +89,10 @@ impl RuntimeCliBridge {
         }
     }
 
-    /// Only allow listing, reading and explicit input to an existing Host.
-    /// --no-start is mandatory; older CLI builds fail closed, rather than
-    /// silently starting a new runtime host or owning a PTY.
+    /// Only allow listing, reading, workspace listing, explicit creation and
+    /// input to an existing Host. --no-start is mandatory; older CLI builds
+    /// fail closed, rather than silently starting a new runtime host or
+    /// owning a PTY.
     pub(crate) fn terminal_json(&self, args: &[OsString]) -> io::Result<Value> {
         self.terminal_json_io(args, None)
     }
@@ -107,13 +108,19 @@ impl RuntimeCliBridge {
     }
 
     fn terminal_json_io(&self, args: &[OsString], input: Option<&[u8]>) -> io::Result<Value> {
-        if !matches!(
-            (args.first().and_then(|arg| arg.to_str()), input.is_some()),
-            (Some("list" | "read"), false) | (Some("write"), true)
-        ) {
+        let verb = args.first().and_then(|arg| arg.to_str());
+        let allowed = match (verb, input.is_some()) {
+            (Some("list" | "read"), false) | (Some("write"), true) => true,
+            // Workspace listing and terminal creation are Host requests with
+            // no stdin payload; both still require --no-start below.
+            (Some("workspaces"), false) => args.len() == 1,
+            (Some("create"), false) => is_create_terminal_args(args),
+            _ => false,
+        };
+        if !allowed {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
-                "GPUI supports terminal list/read/explicit write only",
+                "GPUI supports terminal list/read/workspaces/create/explicit write only",
             ));
         }
         if !self.runtime_dir.join("host.json").is_file()
@@ -241,6 +248,17 @@ impl RuntimeCliBridge {
     }
 }
 
+/// `create` reaches the CLI only in the exact two-argument form produced by
+/// `terminal::create_terminal_verb`; every other shape is rejected before a
+/// process is spawned.
+fn is_create_terminal_args(args: &[OsString]) -> bool {
+    const FLAG: &str = "--workspace-id=";
+    args.len() == 2
+        && args[1]
+            .to_str()
+            .is_some_and(|arg| arg.len() > FLAG.len() && arg.starts_with(FLAG))
+}
+
 fn wait_with_timeout(child: &mut Child, timeout: Duration) -> io::Result<std::process::ExitStatus> {
     let started = Instant::now();
     loop {
@@ -339,6 +357,8 @@ mod tests {
     fn terminal_bridge_rejects_unapproved_verbs_or_wrong_input_channel() {
         let dir = tempfile::tempdir().unwrap();
         let bridge = RuntimeCliBridge::new(dir.path().join("missing-cli"), dir.path());
+        // A bare 'workspaces' is a valid read-only Host query. Its rejection
+        // for missing Host control files is verified in the separate test.
         for verb in ["attach", "create", "prune", "write"] {
             let err = bridge.terminal_json(&[OsString::from(verb)]).unwrap_err();
             assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
@@ -349,5 +369,52 @@ mod tests {
                 .unwrap_err();
             assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
         }
+    }
+
+    #[test]
+    fn terminal_bridge_allows_only_exact_workspace_and_create_shapes() {
+        let dir = tempfile::tempdir().unwrap();
+        let bridge = RuntimeCliBridge::new(dir.path().join("missing-cli"), dir.path());
+        // Malformed create/workspaces shapes never reach the missing-CLI
+        // spawn path: they are denied by the allowlist itself.
+        let malformed: &[&[&str]] = &[
+            &["create"],
+            &["create", "--workspace-id="],
+            &["create", "--workspace-id", "ws-1"],
+            &["create", "--workspace-id=ws-1", "extra"],
+            &["workspaces", "extra"],
+        ];
+        for args in malformed {
+            let args: Vec<OsString> = args.iter().map(|arg| OsString::from(*arg)).collect();
+            let err = bridge.terminal_json(&args).unwrap_err();
+            assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+        }
+        // Neither new verb accepts a stdin payload.
+        for args in [
+            vec![OsString::from("workspaces")],
+            vec![
+                OsString::from("create"),
+                OsString::from("--workspace-id=ws-1"),
+            ],
+        ] {
+            let err = bridge
+                .terminal_json_with_input(&args, b"private input")
+                .unwrap_err();
+            assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+        }
+        // Well-formed verbs pass the allowlist and stop at the missing Host
+        // control file, proving no process was spawned.
+        for args in [
+            vec![OsString::from("workspaces")],
+            vec![
+                OsString::from("create"),
+                OsString::from("--workspace-id=ws-1"),
+            ],
+        ] {
+            let err = bridge.terminal_json(&args).unwrap_err();
+            assert_eq!(err.kind(), io::ErrorKind::NotConnected);
+        }
+        assert!(!dir.path().join("host.json").exists());
+        assert!(!dir.path().join("runtime-host.json").exists());
     }
 }
