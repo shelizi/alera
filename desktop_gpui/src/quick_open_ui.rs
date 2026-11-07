@@ -3,10 +3,10 @@
 //! existing canonical-path-checked WorkbenchModel.
 use alera_gpui_desktop::editor::{byte_to_utf16, utf16_to_byte};
 use gpui::{
-    actions, div, prelude::*, px, relative, rgb, App, Bounds, Context, Element,
-    ElementId, ElementInputHandler, Entity, EntityInputHandler, FocusHandle, Focusable,
-    GlobalElementId, InspectorElementId, KeyBinding, LayoutId, MouseButton, Pixels, Point, Style,
-    UTF16Selection, Window,
+    actions, div, prelude::*, px, relative, rgb, App, Bounds, Context, Element, ElementId,
+    ElementInputHandler, Entity, EntityInputHandler, FocusHandle, Focusable, GlobalElementId,
+    InspectorElementId, KeyBinding, LayoutId, MouseButton, Pixels, Point, Style, UTF16Selection,
+    Window,
 };
 use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation;
