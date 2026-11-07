@@ -2,6 +2,7 @@
 
 ticket: G1a library gate for current-viewport pointer hits. Live GUI cases stay blocked.
 start_head: e40ae5393f5e82e8000ce0abcbcd8960e2e2b8e1
+end_head: c8ccc79c1ec4003ac15259463195caf68b3f56a5
 branch: feat/gpui-desktop-20261107
 os: Windows
 scope: `VisibleLineHitSet` decides pointer hits from the current visible rows only. The GPUI window forwards that decision. No second host, PTY, Git writer, or protocol change.
