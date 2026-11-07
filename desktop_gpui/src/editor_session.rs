@@ -145,6 +145,14 @@ impl EditorSession {
         self.document.as_mut()
     }
 
+    pub(crate) fn recovered_scratch(document: EditorDocument, drafts: EditorDraftStore) -> Self {
+        Self {
+            document: Some(document),
+            drafts: Some(drafts),
+            discard_armed: false,
+        }
+    }
+
     pub fn discard_armed(&self) -> bool {
         self.discard_armed
     }
@@ -264,11 +272,11 @@ impl EditorSession {
                 self.discard_armed = true;
                 return CloseEffect::Armed;
             }
-            if let Some(document) = &self.document {
-                if let Some(store) = &self.drafts {
-                    if let Err(error) = store.remove(document) {
-                        return CloseEffect::DraftClearFailed(error);
-                    }
+        }
+        if let Some(document) = &self.document {
+            if let Some(store) = &self.drafts {
+                if let Err(error) = store.remove(document) {
+                    return CloseEffect::DraftClearFailed(error);
                 }
             }
         }

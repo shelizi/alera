@@ -13,6 +13,9 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use unicode_segmentation::UnicodeSegmentation;
 
+#[path = "editor_scratch.rs"]
+mod scratch_recovery;
+
 pub const MAX_EDITOR_BYTES: usize = 256 * 1024;
 
 /// Byte-oriented line offsets used by the native virtualized viewport.
@@ -90,13 +93,10 @@ impl EditorDraftStore {
     }
 
     fn draft_path(&self, doc: &EditorDocument) -> io::Result<PathBuf> {
-        let path = doc.path.as_ref().ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "Scratch drafts are not enabled yet",
-            )
-        })?;
-        Ok(self.identity_path(&doc.root, path))
+        match &doc.path {
+            Some(path) => Ok(self.identity_path(&doc.root, path)),
+            None => self.scratch_path(doc),
+        }
     }
 
     fn identity_path(&self, root: &Path, path: &Path) -> PathBuf {
@@ -131,6 +131,9 @@ impl EditorDraftStore {
         if !doc.is_dirty() {
             return self.remove(doc);
         }
+        if doc.path.is_none() {
+            return self.persist_scratch(doc);
+        }
         let (Some(path), Some(original)) = (doc.path.as_ref(), doc.original.as_ref()) else {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -152,8 +155,14 @@ impl EditorDraftStore {
                 "Draft too large",
             ));
         }
-        fs::create_dir_all(&self.directory)?;
         let destination = self.draft_path(doc)?;
+        self.write_draft_bytes(&destination, &bytes)
+    }
+
+    fn write_draft_bytes(&self, destination: &Path, bytes: &[u8]) -> io::Result<()> {
+        fs::create_dir_all(destination.parent().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidInput, "Missing draft directory")
+        })?)?;
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
@@ -172,6 +181,9 @@ impl EditorDraftStore {
     }
 
     pub fn restore(&self, doc: &mut EditorDocument) -> io::Result<bool> {
+        if doc.path.is_none() {
+            return self.restore_scratch_document(doc);
+        }
         let path = self.draft_path(doc)?;
         let file = match fs::File::open(path) {
             Ok(file) => file,
@@ -223,6 +235,10 @@ impl EditorDraftStore {
     }
 
     pub fn remove(&self, doc: &EditorDocument) -> io::Result<()> {
+        self.remove_scratch(doc)?;
+        if doc.path.is_none() {
+            return Ok(());
+        }
         let path = self.draft_path(doc)?;
         match fs::remove_file(path) {
             Ok(()) => Ok(()),
@@ -236,6 +252,7 @@ impl EditorDraftStore {
 pub struct EditorDocument {
     root: PathBuf,
     path: Option<PathBuf>,
+    scratch_id: Option<String>,
     content: String,
     original: Option<String>,
     selection: Range<usize>,
@@ -268,6 +285,7 @@ impl EditorDocument {
         Ok(Self {
             root,
             path: Some(path),
+            scratch_id: None,
             original: Some(content.clone()),
             content,
             selection: cursor..cursor,
@@ -285,6 +303,7 @@ impl EditorDocument {
         Ok(Self {
             root: checked_root(root.as_ref())?,
             path: None,
+            scratch_id: Some(scratch_recovery::new_identity()),
             content: String::new(),
             original: None,
             selection: 0..0,
@@ -299,6 +318,10 @@ impl EditorDocument {
 
     pub fn path(&self) -> Option<&Path> {
         self.path.as_deref()
+    }
+    /// Stable local recovery identity, retained after Save As for cleanup retries.
+    pub fn scratch_id(&self) -> Option<&str> {
+        self.scratch_id.as_deref()
     }
     pub fn root(&self) -> &Path {
         &self.root

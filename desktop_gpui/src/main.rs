@@ -12,6 +12,7 @@ use alera_gpui_desktop::session::PreviewSessionStore;
 use alera_gpui_desktop::terminal::{
     TerminalDock, TerminalPollGate, TerminalViewMode, HOST_SESSION_LIST_SCOPE,
 };
+use alera_gpui_desktop::workspace_tree::WorkspaceTree;
 use editor_ui::{bind_editor_keys, NativeEditor};
 use gpui::{
     actions, div, prelude::*, px, rgb, size, App, Application, Bounds, Context, Entity, Focusable,
@@ -34,6 +35,8 @@ actions!(alera_gpui_workbench, [ToggleFileSearch]);
 
 struct Workbench {
     model: WorkbenchModel,
+    tree: Option<WorkspaceTree>,
+    tree_mode: bool,
     editor: Option<Entity<NativeEditor>>,
     session_store: Option<PreviewSessionStore>,
     recent_workspaces: Vec<PathBuf>,
@@ -201,6 +204,27 @@ impl Workbench {
         self.session_store
             .as_ref()
             .map(|store| EditorDraftStore::new(store.state_dir()))
+    }
+
+    /// Restore only this workspace's unsaved scratch buffers. Corrupt draft
+    /// records remain untouched on error; no workspace file is ever written.
+    fn restore_scratch_tabs(&mut self, cx: &mut Context<Self>) {
+        let Some(store) = self.draft_store() else {
+            return;
+        };
+        let mut tabs = EditorTabs::new(Some(store));
+        match tabs.restore_scratch_drafts(self.model.root()) {
+            Ok(0) => {}
+            Ok(count) => {
+                self.install_editor(tabs, cx);
+                self.model.set_status(format!(
+                    "Recovered {count} unsaved scratch tab(s) from local state; review before saving"
+                ));
+            }
+            Err(error) => self.model.set_status(format!(
+                "Scratch recovery blocked: {error}. Local recovery files were kept."
+            )),
+        }
     }
 
     fn open_editor(&mut self, cx: &mut Context<Self>) {
@@ -399,7 +423,9 @@ impl Workbench {
             }
         };
         self.model = next;
+        self.tree = WorkspaceTree::new(&canonical).ok();
         self.editor = None;
+        self.restore_scratch_tabs(cx);
         self.quick_open = None;
         self.file_index = None;
         self.file_index_loading = false;
@@ -652,6 +678,13 @@ impl Render for Workbench {
             "Select a text file from Explorer to preview it.\n\nAlera GPUI runs without Flutter or WebView.\nTerminal, editable documents, Diff and Agent surfaces are not migrated yet.".into()
         };
         let entries = self.model.entries().to_vec();
+        let tree_rows = self
+            .tree
+            .as_ref()
+            .map(|tree| tree.rows().to_vec())
+            .unwrap_or_default();
+        let tree_mode = self.tree_mode && self.tree.is_some();
+        let tree_truncated = self.tree.as_ref().is_some_and(WorkspaceTree::truncated);
         let tabs: Vec<_> = self
             .model
             .tabs()
@@ -835,6 +868,17 @@ impl Render for Workbench {
                                             .gap_2()
                                             .child(
                                                 div()
+                                                    .id("explorer-tree-toggle")
+                                                    .cursor_pointer()
+                                                    .text_color(rgb(if tree_mode { TEXT } else { MUTED }))
+                                                    .child(if tree_mode { "Tree ✓" } else { "Tree" })
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.tree_mode = !this.tree_mode;
+                                                        cx.notify();
+                                                    })),
+                                            )
+                                            .child(
+                                                div()
                                                     .id("up")
                                                     .cursor_pointer()
                                                     .text_color(rgb(MUTED))
@@ -853,6 +897,11 @@ impl Render for Workbench {
                                                     .child("↻")
                                                     .on_click(cx.listener(|this, _, _, cx| {
                                                         this.model.refresh_directory();
+                                                        if let Some(tree) = &mut this.tree {
+                                                            if let Err(error) = tree.refresh() {
+                                                                this.model.set_status(format!("Tree refresh failed: {error}"));
+                                                            }
+                                                        }
                                                         cx.notify();
                                                     })),
                                             ),
@@ -1019,24 +1068,57 @@ impl Render for Workbench {
                                     .min_h_0()
                                     .id("explorer-scroll")
                                     .overflow_y_scroll()
-                                    .children(entries.into_iter().enumerate().map(|(i, item)| {
-                                        div()
-                                            .id(i)
-                                            .px_3()
-                                            .py_1()
-                                            .cursor_pointer()
-                                            .hover(|style| style.bg(rgb(ACTIVE)))
-                                            .child(format!(
-                                                "{} {}",
-                                                if item.is_directory { "▸" } else { "·" },
-                                                item.name
-                                            ))
-                                            .on_click(cx.listener(move |this, _, _, cx| {
-                                                this.model.open_entry(i);
-                                                this.persist_session();
-                                                cx.notify();
-                                            }))
-                                    })),
+                                    .children(if tree_mode {
+                                        tree_rows.into_iter().enumerate().map(|(i, item)| {
+                                            let relative = item.relative_path.clone();
+                                            let is_directory = item.is_directory;
+                                            let prefix = if !is_directory { "·" } else if item.expanded { "▾" } else { "▸" };
+                                            div()
+                                                .id(("explorer-tree-row", i))
+                                                .pl(px(12.0 + item.depth as f32 * 14.0))
+                                                .pr_2()
+                                                .py_1()
+                                                .cursor_pointer()
+                                                .hover(|style| style.bg(rgb(ACTIVE)))
+                                                .child(format!("{prefix} {}", item.name))
+                                                .on_click(cx.listener(move |this, _, _, cx| {
+                                                    if is_directory {
+                                                        if let Some(tree) = &mut this.tree {
+                                                            if let Err(error) = tree.toggle(&relative) {
+                                                                this.model.set_status(format!("Cannot expand folder: {error}"));
+                                                            }
+                                                        }
+                                                    } else {
+                                                        let path = this.model.root().join(&relative);
+                                                        this.model.open_path(&path);
+                                                        this.persist_session();
+                                                    }
+                                                    cx.notify();
+                                                }))
+                                        }).collect::<Vec<_>>()
+                                    } else {
+                                        entries.into_iter().enumerate().map(|(i, item)| {
+                                            div()
+                                                .id(i)
+                                                .px_3()
+                                                .py_1()
+                                                .cursor_pointer()
+                                                .hover(|style| style.bg(rgb(ACTIVE)))
+                                                .child(format!(
+                                                    "{} {}",
+                                                    if item.is_directory { "▸" } else { "·" },
+                                                    item.name
+                                                ))
+                                                .on_click(cx.listener(move |this, _, _, cx| {
+                                                    this.model.open_entry(i);
+                                                    this.persist_session();
+                                                    cx.notify();
+                                                }))
+                                        }).collect::<Vec<_>>()
+                                    })
+                                    .when(tree_mode && tree_truncated, |view| {
+                                        view.child(div().text_color(rgb(MUTED)).child("Tree limited to 4,000 visible items"))
+                                    }),
                             ),
                     )
                     .child(
@@ -1636,32 +1718,38 @@ fn main() {
                 ..Default::default()
             },
             |_, cx| {
-                let view = cx.new(|_| Workbench {
-                    model,
-                    editor: None,
-                    session_store,
-                    recent_workspaces,
-                    show_recent_workspaces: false,
-                    picking_workspace: false,
-                    picking_save_as: false,
-                    quick_open: None,
-                    file_index: None,
-                    file_index_loading: false,
-                    git_snapshot: None,
-                    git_loading: false,
-                    git_error: None,
-                    git_diff: None,
-                    git_diff_loading: false,
-                    git_diff_request: 0,
-                    workspace_generation: 0,
-                    runtime_bridge,
-                    runtime_status,
-                    runtime_loading: false,
-                    terminals: TerminalDock::for_workspace(0),
-                    terminal_list_loading: false,
-                    terminal_read_loading: None,
-                    terminal_poll: TerminalPollGate::default(),
-                    terminal_tick: 0,
+                let view = cx.new(|cx| {
+                    let mut workbench = Workbench {
+                        tree: WorkspaceTree::new(model.root()).ok(),
+                        tree_mode: false,
+                        model,
+                        editor: None,
+                        session_store,
+                        recent_workspaces,
+                        show_recent_workspaces: false,
+                        picking_workspace: false,
+                        picking_save_as: false,
+                        quick_open: None,
+                        file_index: None,
+                        file_index_loading: false,
+                        git_snapshot: None,
+                        git_loading: false,
+                        git_error: None,
+                        git_diff: None,
+                        git_diff_loading: false,
+                        git_diff_request: 0,
+                        workspace_generation: 0,
+                        runtime_bridge,
+                        runtime_status,
+                        runtime_loading: false,
+                        terminals: TerminalDock::for_workspace(0),
+                        terminal_list_loading: false,
+                        terminal_read_loading: None,
+                        terminal_poll: TerminalPollGate::default(),
+                        terminal_tick: 0,
+                    };
+                    workbench.restore_scratch_tabs(cx);
+                    workbench
                 });
                 view.update(cx, |view, cx| {
                     view.start_terminal_polling(cx);

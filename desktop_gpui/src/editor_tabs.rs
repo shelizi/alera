@@ -92,6 +92,40 @@ impl EditorTabs {
         self.push_session(|session| session.open_scratch(root))
     }
 
+    /// Startup hook after selecting a workspace and constructing its draft store.
+    /// Idempotent; invalid records or insufficient capacity leave all tabs intact.
+    pub fn restore_scratch_drafts(&mut self, root: &Path) -> io::Result<usize> {
+        let Some(store) = &self.drafts else {
+            return Ok(0);
+        };
+        let documents: Vec<_> = store
+            .restore_scratch(root)?
+            .into_iter()
+            .filter(|doc| {
+                !self
+                    .tabs
+                    .iter()
+                    .filter_map(EditorSession::document)
+                    .any(|open| open.root() == doc.root() && open.scratch_id() == doc.scratch_id())
+            })
+            .collect();
+        if self.tabs.len() + documents.len() > MAX_EDITOR_TABS {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                EDITOR_TAB_LIMIT,
+            ));
+        }
+        let count = documents.len();
+        for document in documents {
+            self.tabs
+                .push(EditorSession::recovered_scratch(document, store.clone()));
+        }
+        if self.active.is_none() && count > 0 {
+            self.active = Some(0);
+        }
+        Ok(count)
+    }
+
     pub fn activate(&mut self, index: usize) -> bool {
         if index >= self.tabs.len() || self.active == Some(index) {
             return false;
@@ -121,10 +155,13 @@ impl EditorTabs {
     }
 
     pub fn persist_draft(&self) -> io::Result<()> {
+        let mut first_error = None;
         for tab in &self.tabs {
-            tab.persist_draft()?;
+            if let Err(error) = tab.persist_draft() {
+                first_error.get_or_insert(error);
+            }
         }
-        Ok(())
+        first_error.map_or(Ok(()), Err)
     }
 
     pub fn close_active(&mut self, discard: bool) -> CloseEffect {
@@ -217,6 +254,101 @@ mod tests {
     use crate::editor::EditorDraftStore;
     use crate::editor_session::OpenEffect;
     use std::fs;
+
+    #[test]
+    fn one_failed_scratch_flush_does_not_block_other_tabs() {
+        let workspace = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let store = EditorDraftStore::new(state.path());
+        let mut tabs = EditorTabs::new(Some(store.clone()));
+        tabs.open_scratch(workspace.path()).unwrap();
+        tabs.document_mut()
+            .unwrap()
+            .replace(None, &"\u{1}".repeat(crate::editor::MAX_EDITOR_BYTES))
+            .unwrap();
+        tabs.open_scratch(workspace.path()).unwrap();
+        tabs.document_mut()
+            .unwrap()
+            .replace(None, "survives")
+            .unwrap();
+        assert!(tabs.persist_draft().is_err());
+        assert_eq!(
+            store.restore_scratch(workspace.path()).unwrap()[0].content(),
+            "survives"
+        );
+        tabs.activate(0);
+        assert_eq!(
+            tabs.document().unwrap().content().len(),
+            crate::editor::MAX_EDITOR_BYTES
+        );
+    }
+
+    #[test]
+    fn scratch_restart_is_independent_idempotent_and_workspace_scoped() {
+        let workspace = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let store = EditorDraftStore::new(state.path());
+        let mut tabs = EditorTabs::new(Some(store.clone()));
+        for text in ["first 中文", "second"] {
+            tabs.open_scratch(workspace.path()).unwrap();
+            tabs.document_mut().unwrap().replace(None, text).unwrap();
+        }
+        tabs.persist_draft().unwrap();
+        tabs.activate(0);
+        tabs.document_mut().unwrap().replace(None, "!").unwrap();
+        tabs.persist_draft().unwrap();
+        drop(tabs);
+        let mut tabs = EditorTabs::new(Some(store));
+        assert_eq!(tabs.restore_scratch_drafts(other.path()).unwrap(), 0);
+        assert_eq!(tabs.restore_scratch_drafts(workspace.path()).unwrap(), 2);
+        assert_eq!(tabs.restore_scratch_drafts(workspace.path()).unwrap(), 0);
+        let mut contents = Vec::new();
+        for index in 0..2 {
+            tabs.activate(index);
+            let doc = tabs.document().unwrap();
+            assert!(doc.path().is_none() && doc.is_dirty());
+            contents.push(doc.content().to_owned());
+        }
+        contents.sort();
+        assert_eq!(contents, ["first 中文!", "second"]);
+        assert_eq!(fs::read_dir(workspace.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn scratch_cancel_discard_and_save_as_preserve_or_clear_recovery() {
+        let workspace = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let store = EditorDraftStore::new(state.path());
+        let mut tabs = EditorTabs::new(Some(store.clone()));
+        tabs.open_scratch(workspace.path()).unwrap();
+        tabs.document_mut().unwrap().replace(None, "keep").unwrap();
+        tabs.persist_draft().unwrap();
+        assert!(!tabs.close_active(true).closed());
+        assert!(!tabs.close_active(false).closed());
+        let mut restarted = EditorTabs::new(Some(store.clone()));
+        assert_eq!(
+            restarted.restore_scratch_drafts(workspace.path()).unwrap(),
+            1
+        );
+        let occupied = workspace.path().join("occupied.txt");
+        fs::write(&occupied, "original").unwrap();
+        assert!(tabs.save_as(&occupied, false).blocked());
+        assert_eq!(store.restore_scratch(workspace.path()).unwrap().len(), 1);
+        let saved = workspace.path().join("saved.txt");
+        assert!(tabs.save_as(&saved, false).wrote_file());
+        assert_eq!(fs::read_to_string(saved).unwrap(), "keep");
+        assert!(store.restore_scratch(workspace.path()).unwrap().is_empty());
+        tabs.open_scratch(workspace.path()).unwrap();
+        tabs.document_mut()
+            .unwrap()
+            .replace(None, "discard")
+            .unwrap();
+        tabs.persist_draft().unwrap();
+        assert!(!tabs.close_active(true).closed());
+        assert!(tabs.close_active(true).closed());
+        assert!(store.restore_scratch(workspace.path()).unwrap().is_empty());
+    }
 
     #[test]
     fn tabs_keep_separate_buffers_and_save_only_the_active_file() {
