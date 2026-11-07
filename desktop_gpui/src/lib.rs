@@ -1,6 +1,7 @@
 //! UI-agnostic workbench state and native desktop application services.
 //! Tests can build this library without the heavyweight GPUI renderer.
 pub mod editor;
+pub mod editor_search;
 pub mod editor_session;
 pub mod editor_tabs;
 pub mod file_search;
