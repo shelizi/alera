@@ -9,6 +9,7 @@ pub mod file_search;
 pub mod git_inspect;
 pub mod model;
 pub mod project_search;
+pub mod project_tree;
 pub mod runtime_bridge;
 pub mod session;
 pub mod terminal;

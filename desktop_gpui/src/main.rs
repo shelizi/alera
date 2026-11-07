@@ -9,6 +9,7 @@ use alera_gpui_desktop::file_search::WorkspaceFileIndex;
 use alera_gpui_desktop::git_inspect::{read_file_diff, GitSnapshot};
 use alera_gpui_desktop::model::WorkbenchModel;
 use alera_gpui_desktop::project_search::{ContentMatch, ProjectSearch};
+use alera_gpui_desktop::project_tree::{collect_project_tree, ProjectTreeGroup};
 use alera_gpui_desktop::runtime_bridge::RuntimeCliBridge;
 use alera_gpui_desktop::session::PreviewSessionStore;
 use alera_gpui_desktop::terminal::{
@@ -53,6 +54,8 @@ enum ExplorerAction {
     NewFolder,
     Rename,
     Move,
+    Copy,
+    Duplicate,
     Delete,
 }
 
@@ -63,6 +66,8 @@ impl ExplorerAction {
             Self::NewFolder => "New folder",
             Self::Rename => "Rename",
             Self::Move => "Move into folder",
+            Self::Copy => "Copy into folder",
+            Self::Duplicate => "Duplicate",
             Self::Delete => "Delete",
         }
     }
@@ -81,6 +86,9 @@ struct Workbench {
     session_store: Option<PreviewSessionStore>,
     recent_workspaces: Vec<PathBuf>,
     saved_projects: Vec<PathBuf>,
+    project_tree_groups: Vec<ProjectTreeGroup>,
+    project_tree_loading: bool,
+    project_tree_request: u64,
     show_recent_workspaces: bool,
     worktrees: Vec<WorktreeEntry>,
     worktree_error: Option<String>,
@@ -112,6 +120,7 @@ struct Workbench {
     runtime_loading: bool,
     terminals: TerminalDock,
     terminal_input: Entity<QuickOpenInput>,
+    show_terminal_attach_picker: bool,
     terminal_send_loading: bool,
     terminal_list_loading: bool,
     terminal_read_loading: Option<String>,
@@ -120,6 +129,31 @@ struct Workbench {
 }
 
 impl Workbench {
+    fn refresh_project_tree(&mut self, cx: &mut Context<Self>) {
+        let saved = self.saved_projects.clone();
+        let recent = self.recent_workspaces.clone();
+        let active = self.model.root().to_path_buf();
+        let generation = self.workspace_generation;
+        self.project_tree_request = self.project_tree_request.wrapping_add(1);
+        let request = self.project_tree_request;
+        self.project_tree_loading = true;
+        cx.spawn(async move |view, cx| {
+            let groups = cx
+                .background_spawn(async move { collect_project_tree(&saved, &recent, &active) })
+                .await;
+            view.update(cx, |view, cx| {
+                if view.workspace_generation != generation || view.project_tree_request != request {
+                    return;
+                }
+                view.project_tree_groups = groups;
+                view.project_tree_loading = false;
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     fn begin_explorer_action(
         &mut self,
         action: ExplorerAction,
@@ -128,7 +162,11 @@ impl Workbench {
     ) {
         if matches!(
             action,
-            ExplorerAction::Rename | ExplorerAction::Move | ExplorerAction::Delete
+            ExplorerAction::Rename
+                | ExplorerAction::Move
+                | ExplorerAction::Copy
+                | ExplorerAction::Duplicate
+                | ExplorerAction::Delete
         ) && self.explorer_selection.is_none()
         {
             self.model
@@ -138,20 +176,22 @@ impl Workbench {
         }
         self.explorer_action = Some(action);
         self.explorer_delete_confirmed = false;
-        self.explorer_action_input = if action == ExplorerAction::Delete {
-            None
-        } else {
-            let placeholder = match action {
-                ExplorerAction::NewFile => "New file name",
-                ExplorerAction::NewFolder => "New folder name",
-                ExplorerAction::Rename => "New name",
-                ExplorerAction::Move => "Destination folder inside workspace",
-                ExplorerAction::Delete => unreachable!(),
+        self.explorer_action_input =
+            if matches!(action, ExplorerAction::Delete | ExplorerAction::Duplicate) {
+                None
+            } else {
+                let placeholder = match action {
+                    ExplorerAction::NewFile => "New file name",
+                    ExplorerAction::NewFolder => "New folder name",
+                    ExplorerAction::Rename => "New name",
+                    ExplorerAction::Move => "Destination folder inside workspace",
+                    ExplorerAction::Copy => "Copy into destination folder inside workspace",
+                    ExplorerAction::Duplicate | ExplorerAction::Delete => unreachable!(),
+                };
+                let input = cx.new(|cx| QuickOpenInput::with_placeholder(placeholder, cx));
+                window.focus(&input.read(cx).focus_handle(cx));
+                Some(input)
             };
-            let input = cx.new(|cx| QuickOpenInput::with_placeholder(placeholder, cx));
-            window.focus(&input.read(cx).focus_handle(cx));
-            Some(input)
-        };
         cx.notify();
     }
 
@@ -176,15 +216,18 @@ impl Workbench {
 
         if matches!(
             action,
-            ExplorerAction::Rename | ExplorerAction::Move | ExplorerAction::Delete
+            ExplorerAction::Rename
+                | ExplorerAction::Move
+                | ExplorerAction::Copy
+                | ExplorerAction::Duplicate
+                | ExplorerAction::Delete
         ) && self
             .editor
             .as_ref()
             .is_some_and(|editor| editor.read(cx).switch_allowed().is_err())
         {
-            self.model.set_status(
-                "Save or discard editor changes before renaming, moving or deleting Explorer paths",
-            );
+            self.model
+                .set_status("Save or discard editor changes before file operations");
             cx.notify();
             return;
         }
@@ -213,6 +256,11 @@ impl Workbench {
                 let destination = root.join(&input);
                 files.move_into(&source, &destination).map(Some)
             }
+            ExplorerAction::Copy => {
+                let destination = root.join(&input);
+                files.copy_into(&source, &destination).map(Some)
+            }
+            ExplorerAction::Duplicate => files.duplicate(&source).map(Some),
             ExplorerAction::Delete => files.delete(&source, true).map(|_| None),
         });
         match result {
@@ -693,6 +741,7 @@ impl Workbench {
             Ok(projects) => {
                 self.saved_projects = projects;
                 self.model.set_status("Project added to saved projects");
+                self.refresh_project_tree(cx);
             }
             Err(error) => self
                 .model
@@ -713,6 +762,7 @@ impl Workbench {
                 self.saved_projects = projects;
                 self.model
                     .set_status("Project removed from saved list (files kept)");
+                self.refresh_project_tree(cx);
             }
             Err(error) => self
                 .model
@@ -855,6 +905,7 @@ impl Workbench {
                         view.model
                             .set_status("Clean managed Worktree removed (Git branch kept)");
                         view.refresh_worktrees(cx);
+                        view.refresh_project_tree(cx);
                     }
                     Err(error) => {
                         view.worktree_error = Some(error.to_string());
@@ -935,6 +986,9 @@ impl Workbench {
         self.git_diff_loading = false;
         self.git_diff_request = self.git_diff_request.wrapping_add(1);
         self.workspace_generation = self.workspace_generation.wrapping_add(1);
+        self.project_tree_loading = false;
+        self.project_tree_groups.clear();
+        self.project_tree_request = self.project_tree_request.wrapping_add(1);
         self.worktrees.clear();
         self.worktree_error = None;
         self.worktree_loading = false;
@@ -947,6 +1001,7 @@ impl Workbench {
         self.terminals = TerminalDock::for_workspace(self.workspace_generation);
         self.terminal_send_loading = false;
         self.terminal_input.update(cx, |input, cx| input.clear(cx));
+        self.show_terminal_attach_picker = false;
         self.terminal_poll = TerminalPollGate::default();
         self.terminal_list_loading = false;
         self.terminal_read_loading = None;
@@ -963,6 +1018,7 @@ impl Workbench {
             self.recent_workspaces = vec![canonical];
         }
         self.refresh_terminals(cx);
+        self.refresh_project_tree(cx);
         self.refresh_worktrees(cx);
         self.refresh_git(cx);
         cx.notify();
@@ -1321,6 +1377,14 @@ impl Render for Workbench {
             .enumerate()
             .collect();
         let saved_projects: Vec<_> = self.saved_projects.iter().cloned().enumerate().collect();
+        let project_tree_rows: Vec<_> = self
+            .project_tree_groups
+            .iter()
+            .take(45)
+            .cloned()
+            .enumerate()
+            .collect();
+        let project_tree_loading = self.project_tree_loading;
         let worktree_rows: Vec<_> = self
             .worktrees
             .iter()
@@ -1349,6 +1413,7 @@ impl Render for Workbench {
                 )
             })
             .collect();
+        let terminal_attach_sessions = terminal_sessions.clone();
         let terminal_tabs: Vec<_> = self
             .terminals
             .tabs
@@ -1357,6 +1422,7 @@ impl Render for Workbench {
             .map(|(i, tab)| (i, tab.title.clone(), tab.running))
             .collect();
         let terminal_active = self.terminals.active_tab;
+        let show_terminal_attach_picker = self.show_terminal_attach_picker;
         let terminal_output = self
             .terminals
             .active()
@@ -1579,6 +1645,8 @@ impl Render for Workbench {
                                                 ("+ Folder", ExplorerAction::NewFolder),
                                                 ("Rename", ExplorerAction::Rename),
                                                 ("Move", ExplorerAction::Move),
+                                                ("Copy", ExplorerAction::Copy),
+                                                ("Duplicate", ExplorerAction::Duplicate),
                                                 ("Delete", ExplorerAction::Delete),
                                             ].into_iter().enumerate().map(|(i, (label, action))| {
                                                 div()
@@ -1983,6 +2051,22 @@ impl Render for Workbench {
                                     )
                                     .child(
                                         div()
+                                            .id("terminal-attach-existing")
+                                            .cursor_pointer()
+                                            .text_sm()
+                                            .text_color(rgb(if center_is_editor { MUTED } else { TEXT }))
+                                            .child("+ Attach existing")
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.center_view = CenterView::Terminal;
+                                                this.show_terminal_attach_picker = !this.show_terminal_attach_picker;
+                                                if this.show_terminal_attach_picker {
+                                                    this.refresh_terminals(cx);
+                                                }
+                                                cx.notify();
+                                            })),
+                                    )
+                                    .child(
+                                        div()
                                             .id("center-editor-tab")
                                             .cursor_pointer()
                                             .text_color(rgb(if center_is_editor { TEXT } else { MUTED }))
@@ -1993,6 +2077,38 @@ impl Render for Workbench {
                                             })),
                                     ),
                             )
+                            .child(if !center_is_editor && show_terminal_attach_picker {
+                                div()
+                                    .id("terminal-existing-session-picker")
+                                    .max_h(px(135.0))
+                                    .overflow_y_scroll()
+                                    .bg(rgb(PANEL))
+                                    .px_3()
+                                    .py_1()
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(rgb(MUTED))
+                                            .child("Attach to an existing Host session; does not create a PTY"),
+                                    )
+                                    .children(terminal_attach_sessions.into_iter().enumerate().map(|(index, (handle, label, workspace_id))| {
+                                        div()
+                                            .id(("terminal-attach-session", index))
+                                            .cursor_pointer()
+                                            .py_1()
+                                            .text_xs()
+                                            .text_color(rgb(TEXT))
+                                            .child(format!("{label} · Host workspace: {workspace_id}"))
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                this.select_terminal(handle.clone(), cx);
+                                                this.show_terminal_attach_picker = false;
+                                                cx.notify();
+                                            }))
+                                    }))
+                                    .into_any_element()
+                            } else {
+                                div().h(px(0.0)).into_any_element()
+                            })
                             .child(
                                 div()
                                     .h(px(38.0))
@@ -2295,6 +2411,94 @@ impl Render for Workbench {
                                     )
                                     .child(
                                         div()
+                                            .id("terminal-tab-actions")
+                                            .h(px(26.0))
+                                            .px_3()
+                                            .flex()
+                                            .items_center()
+                                            .gap_3()
+                                            .bg(rgb(PANEL))
+                                            .text_xs()
+                                            .text_color(rgb(MUTED))
+                                            .child(
+                                                div()
+                                                    .id("terminal-previous-tab")
+                                                    .cursor_pointer()
+                                                    .child("◀ Previous")
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        if this.terminals.activate_previous() {
+                                                            this.refresh_terminal_output(cx);
+                                                        }
+                                                        cx.notify();
+                                                    })),
+                                            )
+                                            .child(
+                                                div()
+                                                    .id("terminal-next-tab")
+                                                    .cursor_pointer()
+                                                    .child("Next ▶")
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        if this.terminals.activate_next() {
+                                                            this.refresh_terminal_output(cx);
+                                                        }
+                                                        cx.notify();
+                                                    })),
+                                            )
+                                            .child(
+                                                div()
+                                                    .id("terminal-move-tab-left")
+                                                    .cursor_pointer()
+                                                    .child("Move ←")
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        if let Some(index) = this.terminals.active_tab {
+                                                            if index > 0 {
+                                                                this.terminals.move_tab(index, index - 1);
+                                                            }
+                                                        }
+                                                        cx.notify();
+                                                    })),
+                                            )
+                                            .child(
+                                                div()
+                                                    .id("terminal-move-tab-right")
+                                                    .cursor_pointer()
+                                                    .child("Move →")
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        if let Some(index) = this.terminals.active_tab {
+                                                            if index + 1 < this.terminals.tabs.len() {
+                                                                this.terminals.move_tab(index, index + 1);
+                                                            }
+                                                        }
+                                                        cx.notify();
+                                                    })),
+                                            )
+                                            .child(
+                                                div()
+                                                    .id("terminal-close-other-tabs")
+                                                    .cursor_pointer()
+                                                    .child("Close others")
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        if let Some(index) = this.terminals.active_tab {
+                                                            this.terminals.close_others(index);
+                                                        }
+                                                        cx.notify();
+                                                    })),
+                                            )
+                                            .child(
+                                                div()
+                                                    .id("terminal-close-right-tabs")
+                                                    .cursor_pointer()
+                                                    .child("Close right")
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        if let Some(index) = this.terminals.active_tab {
+                                                            this.terminals.close_to_right(index);
+                                                        }
+                                                        cx.notify();
+                                                    })),
+                                            ),
+                                    )
+                                    .child(
+                                        div()
                                             .h(px(22.0))
                                             .px_3()
                                             .text_sm()
@@ -2457,6 +2661,101 @@ impl Render for Workbench {
                             )
                             .child(
                                 div()
+                                    .id("project-tree-panel")
+                                    .flex()
+                                    .flex_col()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .justify_between()
+                                            .child(
+                                                div()
+                                                    .font_weight(gpui::FontWeight::BOLD)
+                                                    .text_sm()
+                                                    .child("Projects / Worktrees"),
+                                            )
+                                            .child(
+                                                div()
+                                                    .id("project-tree-refresh")
+                                                    .cursor_pointer()
+                                                    .text_xs()
+                                                    .text_color(rgb(MUTED))
+                                                    .child(if project_tree_loading { "Loading…" } else { "↻" })
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.refresh_project_tree(cx);
+                                                    })),
+                                            ),
+                                    )
+                                    .child(
+                                        div()
+                                            .id("project-tree-scroll")
+                                            .max_h(px(225.0))
+                                            .overflow_y_scroll()
+                                            .children(project_tree_rows.into_iter().map(|(index, group)| {
+                                                let root = group.root.clone();
+                                                let current = group.is_active;
+                                                let pinned = group.is_saved;
+                                                let title = group.label;
+                                                let error = group.error;
+                                                div()
+                                                    .id(("project-tree-group", index))
+                                                    .flex()
+                                                    .flex_col()
+                                                    .gap_1()
+                                                    .py_1()
+                                                    .child(
+                                                        div()
+                                                            .id(("project-tree-open", index))
+                                                            .cursor_pointer()
+                                                            .text_sm()
+                                                            .text_color(rgb(if current { TEXT } else { MUTED }))
+                                                            .child(format!(
+                                                                "{} {} {}",
+                                                                if current { "●" } else { "▸" },
+                                                                if pinned { "★" } else { " " },
+                                                                title
+                                                            ))
+                                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                                this.switch_workspace(root.clone(), cx);
+                                                            })),
+                                                    )
+                                                    .children(group.worktrees.into_iter().take(14).enumerate().map(|(child_index, entry)| {
+                                                        let target = entry.path.clone();
+                                                        let active = workspace_root.starts_with(&target);
+                                                        let label = entry.branch.unwrap_or_else(|| {
+                                                            if entry.detached { "Detached HEAD".into() } else { "Unnamed".into() }
+                                                        });
+                                                        div()
+                                                            .id(("project-tree-worktree", index * 16 + child_index))
+                                                            .pl_4()
+                                                            .py_1()
+                                                            .cursor_pointer()
+                                                            .text_xs()
+                                                            .text_color(rgb(if active { TEXT } else { MUTED }))
+                                                            .child(format!(
+                                                                "{} {} {}",
+                                                                if active { "●" } else { "○" },
+                                                                if entry.is_primary { "main:" } else { "worktree:" },
+                                                                label
+                                                            ))
+                                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                                this.switch_workspace(target.clone(), cx);
+                                                            }))
+                                                    }))
+                                                    .child(if let Some(error) = error {
+                                                        div().text_xs().text_color(rgb(MUTED))
+                                                            .child(format!("Git unavailable: {error}"))
+                                                            .into_any_element()
+                                                    } else {
+                                                        div().h(px(0.0)).into_any_element()
+                                                    })
+                                            })),
+                                    ),
+                            )
+                            .child(
+                                div()
                                     .flex()
                                     .justify_between()
                                     .items_center()
@@ -2481,7 +2780,7 @@ impl Render for Workbench {
                             .child(
                                 div()
                                     .id("saved-projects-scroll")
-                                    .max_h(px(142.0))
+                                    .max_h(px(72.0))
                                     .overflow_y_scroll()
                                     .children(saved_projects.into_iter().map(|(index, path)| {
                                         let open_path = path.clone();
@@ -2525,7 +2824,7 @@ impl Render for Workbench {
                             .child(if show_recent_workspaces {
                                 div()
                                     .id("project-workspaces-scroll")
-                                    .max_h(px(235.0))
+                                    .max_h(px(82.0))
                                     .overflow_y_scroll()
                                     .children(recent_workspaces.into_iter().map(|(index, path)| {
                                         let active = workspace_root == path;
@@ -2618,7 +2917,7 @@ impl Render for Workbench {
                             .child(
                                 div()
                                     .id("worktree-list-scroll")
-                                    .max_h(px(198.0))
+                                    .max_h(px(90.0))
                                     .overflow_y_scroll()
                                     .children(worktree_rows.into_iter().map(|(index, entry)| {
                                         let target = entry.path.clone();
@@ -2866,6 +3165,9 @@ fn main() {
                         session_store,
                         recent_workspaces,
                         saved_projects,
+                        project_tree_groups: Vec::new(),
+                        project_tree_loading: false,
+                        project_tree_request: 0,
                         show_recent_workspaces: true,
                         worktrees: Vec::new(),
                         worktree_error: None,
@@ -2897,6 +3199,7 @@ fn main() {
                         runtime_loading: false,
                         terminals: TerminalDock::for_workspace(0),
                         terminal_input,
+                        show_terminal_attach_picker: false,
                         terminal_send_loading: false,
                         terminal_list_loading: false,
                         terminal_read_loading: None,
@@ -2908,6 +3211,7 @@ fn main() {
                 });
                 view.update(cx, |view, cx| {
                     view.start_terminal_polling(cx);
+                    view.refresh_project_tree(cx);
                     view.refresh_worktrees(cx);
                     view.refresh_git(cx);
                 });

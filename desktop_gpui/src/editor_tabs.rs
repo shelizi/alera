@@ -29,6 +29,15 @@ pub struct EditorTabLabel {
     pub armed: bool,
 }
 
+/// Outcome of a bulk clean-tab close. `blocked` counts tabs that stayed open
+/// because they hold unsaved changes or could not be closed; their buffers
+/// and recovery drafts are never touched.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CleanCloseReport {
+    pub closed: usize,
+    pub blocked: usize,
+}
+
 impl EditorTabs {
     pub fn new(drafts: Option<EditorDraftStore>) -> Self {
         Self {
@@ -134,6 +143,38 @@ impl EditorTabs {
         true
     }
 
+    /// Focus the next tab, wrapping from last to first.
+    pub fn activate_next(&mut self) -> bool {
+        self.activate_wrapped(1)
+    }
+
+    /// Focus the previous tab, wrapping from first to last.
+    pub fn activate_previous(&mut self) -> bool {
+        self.activate_wrapped(-1)
+    }
+
+    /// Move the tab at `from` so it lands at `to` in the tab bar. The active
+    /// document keeps focus no matter which slot it occupies afterwards.
+    pub fn move_tab(&mut self, from: usize, to: usize) -> bool {
+        if from >= self.tabs.len() || to >= self.tabs.len() || from == to {
+            return false;
+        }
+        let tab = self.tabs.remove(from);
+        self.tabs.insert(to, tab);
+        self.active = self.active.map(|current| {
+            if current == from {
+                to
+            } else if to > from && current > from && current <= to {
+                current - 1
+            } else if to < from && current >= to && current < from {
+                current + 1
+            } else {
+                current
+            }
+        });
+        true
+    }
+
     pub fn save(&mut self) -> SaveCommit {
         match self.active_session_mut() {
             Some(session) => session.save(),
@@ -190,6 +231,38 @@ impl EditorTabs {
         effect
     }
 
+    /// Close every clean tab except `keep`. Dirty file and scratch tabs are
+    /// never discarded: they stay open and are counted in `blocked`.
+    pub fn close_clean_others(&mut self, keep: usize) -> CleanCloseReport {
+        let mut report = CleanCloseReport::default();
+        if keep >= self.tabs.len() {
+            return report;
+        }
+        let mut index = self.tabs.len();
+        while index > 0 {
+            index -= 1;
+            if index != keep {
+                self.close_clean_at(index, &mut report);
+            }
+        }
+        report
+    }
+
+    /// Close every clean tab to the right of `keep`. Dirty tabs stay open and
+    /// are counted in `blocked`; nothing is force-discarded.
+    pub fn close_clean_to_right(&mut self, keep: usize) -> CleanCloseReport {
+        let mut report = CleanCloseReport::default();
+        if keep >= self.tabs.len() {
+            return report;
+        }
+        let mut index = self.tabs.len();
+        while index > keep + 1 {
+            index -= 1;
+            self.close_clean_at(index, &mut report);
+        }
+        report
+    }
+
     pub fn can_switch_workspace(&self) -> Result<(), &'static str> {
         if self
             .tabs
@@ -199,6 +272,24 @@ impl EditorTabs {
             Err(DIRTY_SWITCH_REFUSED)
         } else {
             Ok(())
+        }
+    }
+
+    /// Close one tab only when it holds no unsaved changes. A dirty tab is
+    /// left completely untouched (no arming, no draft removal) and reported
+    /// as blocked.
+    fn close_clean_at(&mut self, index: usize, report: &mut CleanCloseReport) {
+        if self.tabs[index]
+            .document()
+            .is_some_and(EditorDocument::is_dirty)
+        {
+            report.blocked += 1;
+            return;
+        }
+        if self.close_tab(index, false).closed() {
+            report.closed += 1;
+        } else {
+            report.blocked += 1;
         }
     }
 
@@ -236,6 +327,19 @@ impl EditorTabs {
         self.tabs.push(session);
         self.active = Some(self.tabs.len() - 1);
         Ok(effect)
+    }
+
+    fn activate_wrapped(&mut self, delta: isize) -> bool {
+        let len = self.tabs.len();
+        if len < 2 {
+            return false;
+        }
+        let next = match self.active {
+            Some(index) => (index as isize + delta).rem_euclid(len as isize) as usize,
+            None if delta > 0 => 0,
+            None => len - 1,
+        };
+        self.activate(next)
     }
 
     fn active_session(&self) -> Option<&EditorSession> {
@@ -433,5 +537,65 @@ mod tests {
         assert_eq!(fs::read(&file_b).unwrap(), b"B");
         assert!(matches!(tabs.close_active(true), CloseEffect::Closed));
         assert!(tabs.is_empty());
+    }
+
+    #[test]
+    fn tab_reorder_and_wrap_keep_same_active_document() {
+        let workspace = tempfile::tempdir().unwrap();
+        let root = workspace.path();
+        let paths: Vec<_> = ["a.txt", "b.txt", "c.txt"]
+            .iter()
+            .map(|name| root.join(name))
+            .collect();
+        let mut tabs = EditorTabs::new(None);
+        assert!(!tabs.activate_next());
+        assert!(!tabs.activate_previous());
+        for (index, path) in paths.iter().enumerate() {
+            fs::write(path, format!("{index}")).unwrap();
+            tabs.open_file(root, path).unwrap();
+        }
+        assert_eq!(tabs.document().unwrap().path(), Some(paths[2].as_path()));
+        assert!(tabs.move_tab(0, 2));
+        assert_eq!(tabs.active_index(), Some(1));
+        assert_eq!(tabs.document().unwrap().path(), Some(paths[2].as_path()));
+        assert!(tabs.activate_next());
+        assert_eq!(tabs.document().unwrap().path(), Some(paths[0].as_path()));
+        assert!(tabs.activate_next());
+        assert_eq!(tabs.document().unwrap().path(), Some(paths[1].as_path()));
+        assert!(tabs.activate_previous());
+        assert_eq!(tabs.document().unwrap().path(), Some(paths[0].as_path()));
+        assert!(!tabs.move_tab(5, 0));
+    }
+
+    #[test]
+    fn bulk_close_skips_unsaved_documents_and_preserves_active() {
+        let workspace = tempfile::tempdir().unwrap();
+        let root = workspace.path();
+        let paths: Vec<_> = ["a.txt", "b.txt", "c.txt", "d.txt"]
+            .iter()
+            .map(|name| root.join(name))
+            .collect();
+        let mut tabs = EditorTabs::new(None);
+        for path in &paths {
+            fs::write(path, path.file_name().unwrap().to_string_lossy().as_bytes()).unwrap();
+            tabs.open_file(root, path).unwrap();
+        }
+        assert!(tabs.activate(1));
+        tabs.document_mut().unwrap().replace(None, "!").unwrap();
+        assert!(tabs.activate(2));
+        let result = tabs.close_clean_others(2);
+        assert_eq!(result.closed, 2);
+        assert_eq!(result.blocked, 1);
+        assert_eq!(tabs.tab_labels().len(), 2);
+        assert_eq!(tabs.active_index(), Some(1));
+        assert_eq!(tabs.document().unwrap().path(), Some(paths[2].as_path()));
+        assert!(tabs.activate(0));
+        assert!(tabs.document().unwrap().is_dirty());
+        let result = tabs.close_clean_to_right(0);
+        assert_eq!(result.closed, 1);
+        assert_eq!(result.blocked, 0);
+        assert_eq!(tabs.tab_labels().len(), 1);
+        assert!(tabs.document().unwrap().is_dirty());
+        assert_eq!(fs::read(&paths[1]).unwrap(), b"b.txt");
     }
 }

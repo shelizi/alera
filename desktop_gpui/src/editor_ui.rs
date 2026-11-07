@@ -66,7 +66,9 @@ actions!(
         SaveFile,
         Paste,
         Copy,
-        Cut
+        Cut,
+        NextEditorTab,
+        PreviousEditorTab
     ]
 );
 
@@ -115,6 +117,10 @@ pub fn bind_editor_keys(cx: &mut App) {
         KeyBinding::new("cmd-c", Copy, Some("AleraGpuiEditor")),
         KeyBinding::new("ctrl-x", Cut, Some("AleraGpuiEditor")),
         KeyBinding::new("cmd-x", Cut, Some("AleraGpuiEditor")),
+        KeyBinding::new("ctrl-tab", NextEditorTab, Some("AleraGpuiEditor")),
+        KeyBinding::new("ctrl-shift-tab", PreviousEditorTab, Some("AleraGpuiEditor")),
+        KeyBinding::new("cmd-alt-right", NextEditorTab, Some("AleraGpuiEditor")),
+        KeyBinding::new("cmd-alt-left", PreviousEditorTab, Some("AleraGpuiEditor")),
     ]);
 }
 
@@ -245,6 +251,57 @@ impl NativeEditor {
             self.line_geometry.clear();
             self.mouse_selecting = false;
             self.status = "Switched editor file".into();
+            self.reveal_caret();
+            cx.notify();
+        }
+    }
+
+    fn next_editor_tab(&mut self, _: &NextEditorTab, _: &mut Window, cx: &mut Context<Self>) {
+        if self.tabs.activate_next() {
+            self.on_tab_navigation(cx);
+        }
+    }
+
+    fn previous_editor_tab(
+        &mut self,
+        _: &PreviousEditorTab,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.tabs.activate_previous() {
+            self.on_tab_navigation(cx);
+        }
+    }
+
+    fn on_tab_navigation(&mut self, cx: &mut Context<Self>) {
+        self.line_geometry.clear();
+        self.mouse_selecting = false;
+        self.status = "Switched editor tab".into();
+        self.reveal_caret();
+        cx.notify();
+    }
+
+    fn close_other_clean_tabs(&mut self, cx: &mut Context<Self>) {
+        if let Some(keep) = self.tabs.active_index() {
+            let outcome = self.tabs.close_clean_others(keep);
+            self.status = format!(
+                "Closed {} other tab(s); {} unsaved tab(s) kept",
+                outcome.closed, outcome.blocked
+            );
+            self.line_geometry.clear();
+            self.reveal_caret();
+            cx.notify();
+        }
+    }
+
+    fn close_clean_tabs_to_right(&mut self, cx: &mut Context<Self>) {
+        if let Some(keep) = self.tabs.active_index() {
+            let outcome = self.tabs.close_clean_to_right(keep);
+            self.status = format!(
+                "Closed {} tab(s) to right; {} unsaved tab(s) kept",
+                outcome.closed, outcome.blocked
+            );
+            self.line_geometry.clear();
             self.reveal_caret();
             cx.notify();
         }
@@ -1039,6 +1096,8 @@ impl Render for NativeEditor {
             .on_action(cx.listener(Self::paste))
             .on_action(cx.listener(Self::copy))
             .on_action(cx.listener(Self::cut))
+            .on_action(cx.listener(Self::next_editor_tab))
+            .on_action(cx.listener(Self::previous_editor_tab))
             .child(div().flex().gap_2().px_3().py_1().children(
                 tab_labels.into_iter().enumerate().map(|(index, label)| {
                     let active = active_tab == Some(index);
@@ -1075,6 +1134,55 @@ impl Render for NativeEditor {
                         )
                 }),
             ))
+            .child(
+                div()
+                    .flex()
+                    .gap_3()
+                    .px_3()
+                    .py_1()
+                    .text_sm()
+                    .text_color(rgb(MUTED_TEXT))
+                    .child(
+                        div()
+                            .id("editor-tab-previous")
+                            .cursor_pointer()
+                            .child("◀ Tab")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                if this.tabs.activate_previous() {
+                                    this.on_tab_navigation(cx);
+                                }
+                            })),
+                    )
+                    .child(
+                        div()
+                            .id("editor-tab-next")
+                            .cursor_pointer()
+                            .child("Tab ▶")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                if this.tabs.activate_next() {
+                                    this.on_tab_navigation(cx);
+                                }
+                            })),
+                    )
+                    .child(
+                        div()
+                            .id("editor-tab-close-others")
+                            .cursor_pointer()
+                            .child("Close others")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.close_other_clean_tabs(cx);
+                            })),
+                    )
+                    .child(
+                        div()
+                            .id("editor-tab-close-right")
+                            .cursor_pointer()
+                            .child("Close right")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.close_clean_tabs_to_right(cx);
+                            })),
+                    ),
+            )
             .child(find_toolbar)
             .on_mouse_move(cx.listener(|this, event, _, cx| {
                 this.pointer_move(event, cx);

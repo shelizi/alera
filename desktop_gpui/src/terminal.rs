@@ -627,6 +627,91 @@ impl TerminalDock {
             Some(active) => Some(active),
         };
     }
+
+    /// Reorder a local preview tab. The tab keeps its transcript, cursor and
+    /// VT screen state, and the active selection follows the same terminal
+    /// tab rather than the numeric slot. Returns false for out-of-range
+    /// indexes. This never touches Host PTYs.
+    pub fn move_tab(&mut self, from: usize, to: usize) -> bool {
+        if from >= self.tabs.len() || to >= self.tabs.len() {
+            return false;
+        }
+        if from == to {
+            return true;
+        }
+        let tab = self.tabs.remove(from);
+        self.tabs.insert(to, tab);
+        if let Some(active) = self.active_tab {
+            let shifted = if active == from {
+                to
+            } else if from < active && active <= to {
+                active - 1
+            } else if to <= active && active < from {
+                active + 1
+            } else {
+                active
+            };
+            self.active_tab = Some(shifted);
+        }
+        true
+    }
+
+    /// Activate the next local preview tab, wrapping around. Returns false
+    /// when no tabs are open.
+    pub fn activate_next(&mut self) -> bool {
+        let len = self.tabs.len();
+        if len == 0 {
+            return false;
+        }
+        let next = self.active_tab.map_or(0, |active| (active + 1) % len);
+        self.active_tab = Some(next);
+        true
+    }
+
+    /// Activate the previous local preview tab, wrapping around. Returns
+    /// false when no tabs are open.
+    pub fn activate_previous(&mut self) -> bool {
+        let len = self.tabs.len();
+        if len == 0 {
+            return false;
+        }
+        let previous = self
+            .active_tab
+            .map_or(len - 1, |active| (active + len - 1) % len);
+        self.active_tab = Some(previous);
+        true
+    }
+
+    /// Close every local preview tab except `keep`. Returns the number of
+    /// tabs closed. Host sessions and PTYs are never terminated.
+    pub fn close_others(&mut self, keep: usize) -> usize {
+        if keep >= self.tabs.len() {
+            return 0;
+        }
+        let closed = self.tabs.len() - 1;
+        let kept = self.tabs.remove(keep);
+        self.tabs.clear();
+        self.tabs.push(kept);
+        self.active_tab = Some(0);
+        closed
+    }
+
+    /// Close local preview tabs to the right of `keep` (higher indexes).
+    /// Returns the number of tabs closed. Host sessions and PTYs are never
+    /// terminated.
+    pub fn close_to_right(&mut self, keep: usize) -> usize {
+        if keep >= self.tabs.len() {
+            return 0;
+        }
+        let closed = self.tabs.len() - keep - 1;
+        self.tabs.truncate(keep + 1);
+        if let Some(active) = self.active_tab {
+            if active > keep {
+                self.active_tab = Some(keep);
+            }
+        }
+        closed
+    }
 }
 
 #[cfg(test)]
@@ -929,5 +1014,140 @@ mod tests {
         assert!(dock.active().unwrap().output.is_empty());
         assert!(dock.apply_ticket_chunk(&next, chunk("term-1", 0, 4, "new!")));
         assert_eq!(dock.active().unwrap().output, "new!");
+    }
+
+    #[test]
+    fn move_tab_reorders_tabs_and_keeps_active_identity_and_state() {
+        let mut dock = TerminalDock::default();
+        dock.update_sessions(vec![
+            session("term-1"),
+            session("term-2"),
+            session("term-3"),
+        ]);
+        dock.open("term-1");
+        dock.open("term-2");
+        dock.open("term-3");
+        dock.apply_chunk(chunk("term-1", 0, 3, "one"));
+        dock.apply_chunk(chunk("term-3", 0, 5, "three\x1b[31m!"));
+        assert_eq!(dock.active_tab, Some(2));
+
+        // Drag the active tab to the front: the index follows the terminal.
+        assert!(dock.move_tab(2, 0));
+        assert_eq!(dock.tabs[0].handle, "term-3");
+        assert_eq!(dock.active_tab, Some(0));
+        let active = dock.active().unwrap();
+        assert_eq!(active.handle, "term-3");
+        assert_eq!(active.output, "three!");
+        assert_eq!(active.next_cursor, Some(5));
+        assert!(active.screen.contents().contains('!'));
+
+        // Drag another tab across the active one; selection still tracks
+        // the same terminal tab rather than the numeric slot.
+        assert!(dock.move_tab(2, 1));
+        assert_eq!(dock.active_tab, Some(0));
+        assert_eq!(dock.active().unwrap().handle, "term-3");
+
+        assert!(dock.move_tab(0, 2));
+        assert_eq!(dock.active_tab, Some(2));
+        assert_eq!(dock.active().unwrap().handle, "term-3");
+        assert_eq!(dock.active().unwrap().output, "three!");
+        assert!(!dock.move_tab(3, 0));
+        assert!(!dock.move_tab(0, 3));
+    }
+
+    #[test]
+    fn activate_next_and_previous_wrap_around_and_tolerate_empty_dock() {
+        let mut dock = TerminalDock::default();
+        assert!(!dock.activate_next());
+        assert!(!dock.activate_previous());
+
+        dock.update_sessions(vec![session("term-1"), session("term-2")]);
+        dock.open("term-1");
+        dock.open("term-2");
+        assert_eq!(dock.active_tab, Some(1));
+        assert!(dock.activate_previous());
+        assert_eq!(dock.active_tab, Some(0));
+        assert!(dock.activate_previous());
+        assert_eq!(dock.active_tab, Some(1));
+        assert!(dock.activate_next());
+        assert_eq!(dock.active_tab, Some(0));
+        assert!(dock.activate_next());
+        assert_eq!(dock.active_tab, Some(1));
+
+        // A single remaining tab wraps onto itself without error.
+        dock.close(0);
+        assert_eq!(dock.tabs.len(), 1);
+        assert!(dock.activate_next());
+        assert_eq!(dock.active_tab, Some(0));
+        assert!(dock.activate_previous());
+        assert_eq!(dock.active_tab, Some(0));
+
+        dock.close(0);
+        assert!(!dock.activate_next());
+        assert!(!dock.activate_previous());
+    }
+
+    #[test]
+    fn close_others_and_close_to_right_drop_only_local_preview_tabs() {
+        let mut dock = TerminalDock::default();
+        dock.update_sessions(vec![
+            session("term-1"),
+            session("term-2"),
+            session("term-3"),
+        ]);
+        dock.open("term-1");
+        dock.open("term-2");
+        dock.open("term-3");
+        dock.activate(0);
+
+        assert_eq!(dock.close_others(1), 2);
+        assert_eq!(dock.tabs.len(), 1);
+        assert_eq!(dock.tabs[0].handle, "term-2");
+        assert_eq!(dock.active_tab, Some(0));
+        // Closing previews never removes Host sessions or terminates PTYs.
+        assert_eq!(dock.sessions.len(), 3);
+
+        dock.open("term-1");
+        dock.open("term-3");
+        assert_eq!(dock.tabs.len(), 3);
+        assert_eq!(dock.active_tab, Some(2));
+        assert_eq!(dock.close_to_right(0), 2);
+        assert_eq!(dock.tabs.len(), 1);
+        assert_eq!(dock.tabs[0].handle, "term-2");
+        assert_eq!(dock.active_tab, Some(0));
+        assert_eq!(dock.sessions.len(), 3);
+
+        assert_eq!(dock.close_others(9), 0);
+        assert_eq!(dock.close_to_right(9), 0);
+        assert_eq!(dock.tabs.len(), 1);
+    }
+
+    #[test]
+    fn moved_tab_keeps_ticket_valid_but_bulk_close_makes_it_stale() {
+        let mut dock = TerminalDock::default();
+        dock.update_sessions(vec![
+            session("term-1"),
+            session("term-2"),
+            session("term-3"),
+        ]);
+        dock.open("term-1");
+        dock.open("term-2");
+        dock.open("term-3");
+        dock.activate(1);
+        let moved = dock.active_ticket().unwrap();
+
+        // Reordering preserves generation and cursor, so an in-flight read
+        // for the moved tab still applies to the same terminal.
+        assert!(dock.move_tab(1, 0));
+        assert!(dock.apply_ticket_chunk(&moved, chunk("term-2", 0, 4, "fine")));
+        assert_eq!(dock.tabs[0].output, "fine");
+
+        dock.activate(2);
+        let dropped = dock.active_ticket().unwrap();
+        assert_eq!(dropped.handle, "term-3");
+        assert_eq!(dock.close_others(0), 2);
+        assert!(!dock.apply_ticket_chunk(&dropped, chunk("term-3", 0, 3, "stale")));
+        assert_eq!(dock.tabs.len(), 1);
+        assert_eq!(dock.tabs[0].output, "fine");
     }
 }

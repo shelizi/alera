@@ -2,11 +2,13 @@
 //! The caller must provide an action and confirmation; merely browsing or
 //! indexing must never reach this module. No symlinks or Git metadata writes.
 use std::fs::{self, OpenOptions};
-use std::io::{self, ErrorKind};
+use std::io::{self, ErrorKind, Read};
 use std::path::{Component, Path, PathBuf};
 
 const MAX_NAME_BYTES: usize = 255;
 const MAX_RECURSIVE_ENTRIES: usize = 4_096;
+const MAX_COPY_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_SINGLE_FILE_BYTES: u64 = 32 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct ExplorerFiles {
@@ -112,6 +114,124 @@ impl ExplorerFiles {
         let dest = self.destination(&folder, name)?;
         fs::rename(&source, &dest)?;
         Ok(dest)
+    }
+
+    /// Copy a normal file or directory into an existing workspace folder.
+    /// Every destination is new: no overwrite, no symlink following, and
+    /// copying into one's own subtree is prohibited.
+    pub fn copy_into(&self, original: &Path, dest_folder: &Path) -> io::Result<PathBuf> {
+        let source = self.existing(original)?;
+        let folder = self.folder(dest_folder)?;
+        if folder == source || folder.starts_with(&source) {
+            return Err(forbidden("Cannot copy a folder into itself"));
+        }
+        let name = source
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| invalid("Invalid source filename"))?;
+        let destination = self.destination(&folder, name)?;
+        self.copy_to_exact(&source, &destination)?;
+        Ok(destination)
+    }
+
+    /// Make a sibling copy with a collision-free name, preserving source.
+    pub fn duplicate(&self, original: &Path) -> io::Result<PathBuf> {
+        let source = self.existing(original)?;
+        let parent = source.parent().ok_or_else(|| forbidden("Missing parent"))?;
+        let stem = source
+            .file_stem()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| invalid("Invalid filename stem"))?;
+        let extension = if source.is_file() {
+            source.extension().and_then(|ext| ext.to_str())
+        } else {
+            None
+        };
+        for index in 1..=99 {
+            let suffix = if index == 1 {
+                " (copy)".to_owned()
+            } else {
+                format!(" (copy {index})")
+            };
+            let name = if let Some(extension) = extension {
+                format!("{stem}{suffix}.{extension}")
+            } else {
+                format!("{stem}{suffix}")
+            };
+            match self.destination(parent, &name) {
+                Ok(destination) => {
+                    self.copy_to_exact(&source, &destination)?;
+                    return Ok(destination);
+                }
+                Err(error) if error.kind() == ErrorKind::AlreadyExists => continue,
+                Err(error) => return Err(error),
+            }
+        }
+        Err(io::Error::new(
+            ErrorKind::AlreadyExists,
+            "No available duplicate filename",
+        ))
+    }
+
+    fn copy_to_exact(&self, source: &Path, destination: &Path) -> io::Result<()> {
+        let mut pending = vec![(source.to_path_buf(), destination.to_path_buf())];
+        let mut remaining_entries = MAX_RECURSIVE_ENTRIES;
+        let mut remaining_bytes = MAX_COPY_BYTES;
+        let mut created_destination = false;
+        let result = (|| -> io::Result<()> {
+            while let Some((from, to)) = pending.pop() {
+                if remaining_entries == 0 {
+                    return Err(forbidden("Copy exceeds the entry limit"));
+                }
+                remaining_entries -= 1;
+                let from = self.existing(&from)?;
+                let kind = fs::symlink_metadata(&from)?.file_type();
+                if kind.is_dir() {
+                    fs::create_dir(&to)?;
+                    if to == destination {
+                        created_destination = true;
+                    }
+                    for entry in fs::read_dir(&from)? {
+                        let entry = entry?;
+                        let name = entry.file_name();
+                        check_name(
+                            name.to_str()
+                                .ok_or_else(|| invalid("Invalid child filename"))?,
+                        )?;
+                        pending.push((entry.path(), to.join(name)));
+                    }
+                } else if kind.is_file() {
+                    let size = fs::metadata(&from)?.len();
+                    if size > MAX_SINGLE_FILE_BYTES || size > remaining_bytes {
+                        return Err(forbidden("Copy exceeds 32 MiB per file or 64 MiB total"));
+                    }
+                    let reader = fs::File::open(&from)?;
+                    let mut writer = OpenOptions::new().write(true).create_new(true).open(&to)?;
+                    if to == destination {
+                        created_destination = true;
+                    }
+                    let copied = io::copy(&mut reader.take(size.saturating_add(1)), &mut writer)?;
+                    if copied != size || copied > remaining_bytes {
+                        return Err(forbidden("Source changed or copy exceeded byte limit"));
+                    }
+                    remaining_bytes -= copied;
+                } else {
+                    return Err(forbidden("Cannot copy special filesystem entries"));
+                }
+            }
+            Ok(())
+        })();
+        if result.is_err() && created_destination {
+            // Clean only the newly created destination, never source.
+            if let Ok(meta) = fs::symlink_metadata(destination) {
+                if meta.file_type().is_dir() {
+                    let _ = fs::remove_dir_all(destination);
+                } else if meta.file_type().is_file() {
+                    let _ = fs::remove_file(destination);
+                }
+            }
+        }
+        result
     }
 
     /// Permanent deletion. The caller must obtain distinct, visible user
@@ -368,5 +488,89 @@ mod tests {
         assert!(ops.delete(&folder, true).is_err());
         assert!(fs::symlink_metadata(&inner).is_ok());
         assert!(folder.is_dir());
+    }
+
+    #[test]
+    fn copy_and_duplicate_preserve_original_without_overwrite() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = dunce::canonicalize(temp.path()).unwrap();
+        let ops = ExplorerFiles::new(&root).unwrap();
+        let original = ops.create_file(&root, "note.txt").unwrap();
+        fs::write(&original, "original").unwrap();
+        let target_dir = ops.create_folder(&root, "target").unwrap();
+        let copied = ops.copy_into(&original, &target_dir).unwrap();
+        assert_eq!(fs::read_to_string(&copied).unwrap(), "original");
+        assert!(ops.copy_into(&original, &target_dir).is_err());
+        let duplicated = ops.duplicate(&original).unwrap();
+        assert_eq!(duplicated.file_name().unwrap(), "note (copy).txt");
+        let second = ops.duplicate(&original).unwrap();
+        assert_eq!(second.file_name().unwrap(), "note (copy 2).txt");
+        assert_eq!(fs::read_to_string(&original).unwrap(), "original");
+        assert_eq!(fs::read_to_string(&second).unwrap(), "original");
+    }
+
+    #[test]
+    fn copy_folder_refuses_descendant_and_protected_git_paths() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = dunce::canonicalize(temp.path()).unwrap();
+        let ops = ExplorerFiles::new(&root).unwrap();
+        let source = ops.create_folder(&root, "source").unwrap();
+        let nested = ops.create_folder(&source, "nested").unwrap();
+        fs::write(nested.join("note"), "contents").unwrap();
+        let target_dir = ops.create_folder(&root, "target").unwrap();
+        assert!(ops.copy_into(&source, &nested).is_err());
+        let copy = ops.copy_into(&source, &target_dir).unwrap();
+        assert_eq!(
+            fs::read_to_string(copy.join("nested").join("note")).unwrap(),
+            "contents"
+        );
+        fs::create_dir(source.join(".git")).unwrap();
+        let duplicated = root.join("source (copy)");
+        assert!(ops.duplicate(&source).is_err());
+        assert!(!duplicated.exists(), "failed copy cleans new destination");
+        assert!(source.join(".git").is_dir(), "source remains untouched");
+    }
+
+    #[test]
+    fn oversized_copy_is_refused_before_writing_target() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = dunce::canonicalize(temp.path()).unwrap();
+        let ops = ExplorerFiles::new(&root).unwrap();
+        let source = ops.create_file(&root, "big.bin").unwrap();
+        let file = OpenOptions::new().write(true).open(&source).unwrap();
+        file.set_len(MAX_SINGLE_FILE_BYTES + 1).unwrap();
+        let target_dir = ops.create_folder(&root, "dest").unwrap();
+        assert!(ops.copy_into(&source, &target_dir).is_err());
+        assert!(!target_dir.join("big.bin").exists());
+        assert_eq!(
+            fs::metadata(&source).unwrap().len(),
+            MAX_SINGLE_FILE_BYTES + 1
+        );
+    }
+
+    #[test]
+    fn failed_destination_create_does_not_remove_existing_file_or_folder() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = dunce::canonicalize(temp.path()).unwrap();
+        let ops = ExplorerFiles::new(&root).unwrap();
+        let source = ops.create_file(&root, "source.txt").unwrap();
+        fs::write(&source, "copy me").unwrap();
+        let existing = ops.create_file(&root, "existing.txt").unwrap();
+        fs::write(&existing, "keep me").unwrap();
+        assert!(ops.copy_to_exact(&source, &existing).is_err());
+        assert_eq!(fs::read_to_string(&existing).unwrap(), "keep me");
+        assert_eq!(fs::read_to_string(&source).unwrap(), "copy me");
+
+        let source_folder = ops.create_folder(&root, "source-folder").unwrap();
+        fs::write(source_folder.join("child.txt"), "source").unwrap();
+        let destination_folder = ops.create_folder(&root, "existing-folder").unwrap();
+        fs::write(destination_folder.join("preserve.txt"), "keep this").unwrap();
+        assert!(ops
+            .copy_to_exact(&source_folder, &destination_folder)
+            .is_err());
+        assert_eq!(
+            fs::read_to_string(destination_folder.join("preserve.txt")).unwrap(),
+            "keep this"
+        );
     }
 }
