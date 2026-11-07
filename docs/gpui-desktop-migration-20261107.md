@@ -67,6 +67,14 @@ without reproducible measurements.
   was then stopped. No automated visual inspection or input UX test yet.
 - `cargo check --all-targets` passed and 14 headless model tests passed
   after adding local preview-state persistence and CLI status parsing.
+- GPUI Phase 3 first slice: terminal session list and manual reconnect using
+  the existing Alera CLI, bounded incremental terminal text read with
+  cursor/restart detection, eight local terminal preview tabs and ANSI/OSC/DCS
+  filtering; 22 headless tests passed and Windows GPUI check succeeded.
+  Output is a **read-only transcript**, not a VT emulator or writable PTY.
+- The experimental Rust CLI has an opt-in `terminal --no-start` flag; GPUI
+  always passes it, so listing or reading a session cannot start the Host
+  when it is missing. Older CLIs reject the flag; this fails closed.
 - Native workspace UI now has bounded read-only file tabs (open/reuse,
   activate/close/reload), folder navigation and Explorer refresh.
 - Split the UI-independent model into a `lib.rs` test target with GPUI
@@ -81,12 +89,14 @@ without reproducible measurements.
   using the existing Alera CLI and its authenticated runtime client. This
   does **not** establish an interactive PTY view or a full Runtime RPC client.
 - Experimental CI added for Windows native compile and cross-platform model
-  tests; CI jobs have not run remotely and macOS/Linux are **unverified**.
+  tests, plus the CLI no-start parser regression; CI jobs have not run
+  remotely and macOS/Linux are **unverified**.
 - Open issues: model performs small bounded disk reads and tiny state-file
   saves on the UI thread; Explorer is limited to 400 entries per directory.
   GPUI has no interactive runtime-host session client yet, no persisted
-  terminal/editor buffers, and no performance parity results. The CLI status
-  button has no live-host integration smoke test yet.
+  terminal/editor buffers, automatic polling, PTY input/resize, or
+  performance parity results. The CLI terminal list/read path has no
+  live-host integration smoke test yet.
 
 The GPUI prototype remains **unsupported**. Terminal, editor editing/IME,
 Diff, Agent and release behavior still depend on Flutter until the respective

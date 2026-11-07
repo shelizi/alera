@@ -40,6 +40,20 @@ the absolute path of the installed CLI. `ALERA_RUNTIME_DIR` is honored in
 the same way as the CLI. The probe is asynchronous, bounded to 5 seconds,
 and never starts a host or handles RPC tokens itself.
 
+The terminal sidebar now lists **existing** Runtime Host sessions via the
+experimental Rust CLI's `terminal --no-start --json list`. Click a session
+to open a local preview tab and retrieve the latest 8 KiB of output, or click
+`Read more` to read the next chunk. `Reconnect` refreshes the list while
+preserving local preview tabs. Output is rendered as a bounded plain-text
+transcript (48 KiB), with ANSI, OSC and DCS escape sequences removed. It
+is not a VT terminal emulator and does not provide keyboard input, resizing,
+TUI cursor painting, automatic polling or a PTY attach lease.
+
+**Important:** For terminal list/read you must use the Alera CLI built from
+this experimental branch, which adds the fail-closed `--no-start` option.
+An older CLI lacking that flag will return an error and GPUI will not
+start the Host as a fallback. The usual CLI default remains unchanged.
+
 ## Current scope
 
 - Native GPUI window with dark workbench layout.
@@ -49,12 +63,15 @@ and never starts a host or handles RPC tokens itself.
 - Explorer refresh button and folder-up navigation.
 - Persistent read-only preview navigation and last-workspace recovery.
 - Background, read-only Runtime Host status probe through the shared CLI.
+- Host-owned terminal session list, eight local transcript preview tabs,
+  cursor-based incremental reads and explicit manual reconnection.
 - Reuses `alera-core::git::current_branch` for Git branch metadata.
 - No Flutter, Dart VM or WebView in this executable.
 - No writes to workspace files from this preview.
 
-**Not implemented yet:** editable code editor/IME, file watches, runtime-owned
-terminal/PTY display and tab state, multi-workspace selection UI, Git
+**Not implemented yet:** editable code editor/IME, file watches, full
+interactive terminal/PTY rendering and input, persistent terminal tabs,
+multi-workspace selection UI, Git
 Graph/diff/merge, Agent profiles, desktop tray, settings, debugging, plugins,
 MCP and parity with Alera desktop. The preview state is *not* terminal or
 unsaved-editor state. Future features should use existing Alera Rust
@@ -63,8 +80,8 @@ sidecar/runtime contracts, not be reimplemented directly in GPUI views.
 ## Verification
 
 - Windows: `cargo check --all-targets` and debug `cargo build` passed with GPUI 0.2.2.
-- Headless tests: 14/14 passed (navigation, persistence, path containment,
-  file limits, tabs, reload and CLI status parsing) with
+- Headless tests: 22/22 passed (navigation, persistence, path containment,
+  file limits, tabs, reload, terminal cursor, ANSI filtering and CLI parsing) with
   `--no-default-features --lib`.
 - A two-launch smoke run using an isolated `ALERA_GPUI_STATE_DIR`
   confirmed valid native Windows window handles, empty stderr, last-workspace
@@ -72,6 +89,8 @@ sidecar/runtime contracts, not be reimplemented directly in GPUI views.
   working directory. Both test-owned processes were terminated afterward.
 - This is **not** a visual/UI-automation pass, a release artifact or cross-platform binary parity claim.
 - `.github/workflows/gpui-desktop.yml` defines separate experimental model and Windows build checks. It does not change Flutter release jobs.
+- The experimental CI adds a Windows CLI parser check for `terminal --no-start`.
+  This is not yet a live-Host integration test and CI jobs are not verified remotely.
 
 ## Architecture
 

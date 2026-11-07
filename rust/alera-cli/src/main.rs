@@ -171,15 +171,33 @@ async fn run(cli: Cli) -> i32 {
 
 async fn run_terminal_command(command: TerminalCommand) -> i32 {
     let required_capability = terminal_alias_commands::required_capability(&command.action);
-    let client = match required_capability {
-        Some(capability) => {
-            RuntimeHostRpcClient::connect_or_start_with_required_capability(
-                &runtime_dir(&command.runtime),
-                capability,
-            )
-            .await
+    let runtime_path = runtime_dir(&command.runtime);
+    let client = if command.no_start {
+        let existing = match required_capability {
+            Some(capability) => {
+                RuntimeHostRpcClient::connect_with_required_capability(&runtime_path, capability)
+                    .await
+            }
+            None => RuntimeHostRpcClient::connect(&runtime_path).await,
+        };
+        match existing {
+            Ok(Some(client)) => Ok(client),
+            Ok(None) => Err(anyhow::anyhow!(
+                "no running compatible Alera runtime host; --no-start prevents auto-start"
+            )),
+            Err(error) => Err(error),
         }
-        None => runtime_host_required(&command.runtime).await,
+    } else {
+        match required_capability {
+            Some(capability) => {
+                RuntimeHostRpcClient::connect_or_start_with_required_capability(
+                    &runtime_path,
+                    capability,
+                )
+                .await
+            }
+            None => runtime_host_required(&command.runtime).await,
+        }
     };
     let mut client = match client {
         Ok(client) => client,

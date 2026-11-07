@@ -6,6 +6,48 @@ use crate::cli::{
 use crate::cli_orchestration::{OrchestrationAction, OrchestrationCommand};
 
 #[test]
+fn terminal_no_start_requires_explicit_opt_in_and_parses_for_read_and_list() {
+    let explicit = Cli::try_parse_from([
+        "alera",
+        "terminal",
+        "--no-start",
+        "--json",
+        "read",
+        "--handle",
+        "term-1",
+        "--max-bytes",
+        "8192",
+    ])
+    .unwrap();
+    assert!(matches!(
+        explicit.command,
+        Command::Terminal(crate::cli::TerminalCommand {
+            no_start: true,
+            action: crate::cli::TerminalAction::Read(_),
+            ..
+        })
+    ));
+    let legacy = Cli::try_parse_from(["alera", "terminal", "list"]).unwrap();
+    assert!(matches!(
+        legacy.command,
+        Command::Terminal(crate::cli::TerminalCommand {
+            no_start: false,
+            action: crate::cli::TerminalAction::List(_),
+            ..
+        })
+    ));
+    let read_only_list = Cli::try_parse_from(["alera", "terminal", "--no-start", "list"]).unwrap();
+    assert!(matches!(
+        read_only_list.command,
+        Command::Terminal(crate::cli::TerminalCommand {
+            no_start: true,
+            action: crate::cli::TerminalAction::List(_),
+            ..
+        })
+    ));
+}
+
+#[test]
 fn runtime_clear_parses_force_as_an_explicit_live_host_override() {
     let cli = Cli::try_parse_from([
         "alera",

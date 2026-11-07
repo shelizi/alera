@@ -77,6 +77,68 @@ impl RuntimeCliBridge {
         }
     }
 
+    /// Read-only terminal verb using the existing CLI authentication.
+    /// --no-start is mandatory; older CLI builds fail closed, rather than
+    /// silently starting a new runtime host or owning a PTY.
+    pub(crate) fn terminal_json(&self, args: &[OsString]) -> io::Result<Value> {
+        if !self.runtime_dir.join("host.json").is_file()
+            && !self.runtime_dir.join("runtime-host.json").is_file()
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::NotConnected,
+                "No existing runtime host control file",
+            ));
+        }
+        let mut command = windowless_command(&self.executable);
+        command
+            .arg("terminal")
+            .arg("--no-start")
+            .arg("--json")
+            .arg("--runtime-dir")
+            .arg(&self.runtime_dir)
+            .args(args)
+            .env_remove("ALERA_WORKSPACE_ID")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        let mut child = command.spawn()?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| io::Error::other("CLI stdout pipe unavailable"))?;
+        const TERMINAL_OUTPUT_LIMIT: u64 = 512 * 1024;
+        let reader = thread::spawn(move || -> io::Result<Vec<u8>> {
+            let mut bytes = Vec::new();
+            stdout
+                .take(TERMINAL_OUTPUT_LIMIT + 1)
+                .read_to_end(&mut bytes)?;
+            Ok(bytes)
+        });
+        let status = match wait_with_timeout(&mut child, PROBE_TIMEOUT) {
+            Ok(status) => status,
+            Err(error) => {
+                let _ = reader.join();
+                return Err(error);
+            }
+        };
+        let bytes = reader
+            .join()
+            .map_err(|_| io::Error::other("CLI response reader panicked"))??;
+        if !status.success() {
+            return Err(io::Error::other(format!(
+                "Alera CLI failed ({status}): Host may be offline, incompatible, or CLI lacks --no-start"
+            )));
+        }
+        if bytes.len() as u64 > TERMINAL_OUTPUT_LIMIT {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Terminal CLI output exceeded 512 KiB",
+            ));
+        }
+        serde_json::from_slice(&bytes)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+    }
+
     /// Never start a host on behalf of the GPUI preview, and never read its
     /// control file's token. The CLI itself performs authenticated requests.
     pub fn probe(&self) -> io::Result<RuntimeStatus> {

@@ -111,6 +111,9 @@ pub struct TerminalCommand {
     pub runtime: RuntimeDirArgs,
     #[command(flatten)]
     pub output: OutputArgs,
+    /// Only connect to an already-running runtime host; never auto-start one.
+    #[arg(long = "no-start", default_value_t = false)]
+    pub no_start: bool,
     #[command(subcommand)]
     pub action: TerminalAction,
 }

@@ -3,3 +3,4 @@
 pub mod model;
 pub mod runtime_bridge;
 pub mod session;
+pub mod terminal;

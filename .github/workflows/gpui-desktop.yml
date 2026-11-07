@@ -6,6 +6,9 @@ on:
     paths:
       - 'desktop_gpui/**'
       - 'rust/alera-core/**'
+      - 'rust/alera-cli/src/cli.rs'
+      - 'rust/alera-cli/src/main.rs'
+      - 'rust/alera-cli/src/cli_tests.rs'
       - '.github/workflows/gpui-desktop.yml'
 
 permissions:
@@ -63,3 +66,19 @@ jobs:
           if (-not (Test-Path 'desktop_gpui/target/debug/alera-gpui-desktop.exe')) {
             throw 'Missing native GPUI executable'
           }
+
+  cli-no-start:
+    name: Verify terminal --no-start CLI guard (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          submodules: false
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.98.0'
+      - name: Verify terminal CLI no-start parser
+        run: cargo test --manifest-path rust/Cargo.toml -p alera-cli terminal_no_start_requires_explicit_opt_in_and_parses_for_read_and_list --locked
