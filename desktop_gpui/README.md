@@ -193,6 +193,12 @@ on the GPUI thread, which requires profiling before full-scale adoption.
 
 ## Current scope
 
+- Native **Quick Open** (Ctrl/Cmd+P or Explorer button): asynchronous
+  read-only workspace-wide bounded file indexing, case-insensitive Unicode
+  fuzzy filename/path search and click-to-open with canonical path recheck.
+  Generated directories and symlinks are excluded; long-running scans and
+  replaced-workspace results cannot cross workspace boundaries. Live IME
+  candidate placement and keyboard-first result navigation remain unverified.
 - Native GPUI window with dark workbench layout.
 - Bounded, read-only file browsing with explicit root containment; no shell spawning.
 - Read-only UTF-8 file preview, limited to 256 KiB / 600 lines.

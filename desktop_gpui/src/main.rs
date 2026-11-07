@@ -1,8 +1,10 @@
 //! Experimental Alera desktop shell powered by native GPUI (no Flutter/WebView).
 mod editor_ui;
+mod quick_open_ui;
 
 use alera_gpui_desktop::editor::EditorDraftStore;
 use alera_gpui_desktop::editor_tabs::EditorTabs;
+use alera_gpui_desktop::file_search::WorkspaceFileIndex;
 use alera_gpui_desktop::model::WorkbenchModel;
 use alera_gpui_desktop::runtime_bridge::RuntimeCliBridge;
 use alera_gpui_desktop::session::PreviewSessionStore;
@@ -11,10 +13,12 @@ use alera_gpui_desktop::terminal::{
 };
 use editor_ui::{bind_editor_keys, NativeEditor};
 use gpui::{
-    div, prelude::*, px, rgb, size, App, Application, Bounds, Context, Entity, PathPromptOptions,
-    Window, WindowBounds, WindowOptions,
+    actions, div, prelude::*, px, rgb, size, App, Application, Bounds, Context, Entity, KeyBinding,
+    Focusable, PathPromptOptions, Window, WindowBounds, WindowOptions,
 };
+use quick_open_ui::{bind_quick_open_keys, QuickOpenInput};
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 const BG: u32 = 0x15171b;
@@ -25,6 +29,8 @@ const TEXT: u32 = 0xe1e4e8;
 const MUTED: u32 = 0xa6adb7;
 const ACTIVE: u32 = 0x303741;
 
+actions!(alera_gpui_workbench, [ToggleFileSearch]);
+
 struct Workbench {
     model: WorkbenchModel,
     editor: Option<Entity<NativeEditor>>,
@@ -33,6 +39,9 @@ struct Workbench {
     show_recent_workspaces: bool,
     picking_workspace: bool,
     picking_save_as: bool,
+    quick_open: Option<Entity<QuickOpenInput>>,
+    file_index: Option<Arc<WorkspaceFileIndex>>,
+    file_index_loading: bool,
     workspace_generation: u64,
     runtime_bridge: Option<RuntimeCliBridge>,
     runtime_status: String,
@@ -45,6 +54,57 @@ struct Workbench {
 }
 
 impl Workbench {
+    fn toggle_file_search_action(
+        &mut self,
+        _: &ToggleFileSearch,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.toggle_file_search(window, cx);
+    }
+    fn toggle_file_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.quick_open.is_some() {
+            self.quick_open = None;
+            cx.notify();
+            return;
+        }
+        let input = cx.new(QuickOpenInput::new);
+        cx.observe(&input, |_, _, cx| cx.notify()).detach();
+        window.focus(&input.read(cx).focus_handle(cx));
+        self.quick_open = Some(input);
+        if self
+            .file_index
+            .as_ref()
+            .is_none_or(|index| index.root() != self.model.root())
+            && !self.file_index_loading
+        {
+            let root = self.model.root().to_path_buf();
+            let generation = self.workspace_generation;
+            self.file_index_loading = true;
+            cx.spawn(async move |view, cx| {
+                let result = cx
+                    .background_spawn(async move { WorkspaceFileIndex::scan(&root) })
+                    .await;
+                view.update(cx, |view, cx| {
+                    if view.workspace_generation != generation {
+                        return;
+                    }
+                    view.file_index_loading = false;
+                    match result {
+                        Ok(index) => view.file_index = Some(Arc::new(index)),
+                        Err(error) => view
+                            .model
+                            .set_status(format!("Quick Open scan failed: {error}")),
+                    }
+                    cx.notify();
+                })
+                .ok();
+            })
+            .detach();
+        }
+        cx.notify();
+    }
+
     fn editor_dirty(&self, cx: &mut Context<Self>) -> bool {
         self.editor
             .as_ref()
@@ -254,6 +314,9 @@ impl Workbench {
         };
         self.model = next;
         self.editor = None;
+        self.quick_open = None;
+        self.file_index = None;
+        self.file_index_loading = false;
         self.workspace_generation = self.workspace_generation.wrapping_add(1);
         // Terminal preview tabs are local UI state, never PTY owners. Drop
         // them on workspace changes to prevent cross-project output leakage.
@@ -593,9 +656,19 @@ impl Render for Workbench {
         } else {
             terminal_status
         };
+        let quick_open = self.quick_open.clone();
+        let indexed_total = self.file_index.as_ref().map(|index| index.total());
+        let index_loading = self.file_index_loading;
+        let quick_results = self
+            .quick_open
+            .as_ref()
+            .zip(self.file_index.as_ref())
+            .map(|(input, index)| index.search(input.read(cx).query(), 18))
+            .unwrap_or_default();
 
         div()
             .size_full()
+            .on_action(cx.listener(Self::toggle_file_search_action))
             .flex()
             .flex_col()
             .bg(rgb(BG))
@@ -746,6 +819,80 @@ impl Render for Workbench {
                                             }))
                                     } else {
                                         div().id("recent-workspaces-collapsed").h(px(0.0))
+                                    }),
+                            )
+                            .child(
+                                div()
+                                    .px_3()
+                                    .py_2()
+                                    .border_b_1()
+                                    .border_color(rgb(BORDER))
+                                    .child(
+                                        div()
+                                            .id("quick-open-toggle")
+                                            .cursor_pointer()
+                                            .text_sm()
+                                            .text_color(rgb(TEXT))
+                                            .child(if quick_open.is_some() {
+                                                "⌕ Quick Open  ×"
+                                            } else {
+                                                "⌕ Quick Open  Ctrl+P"
+                                            })
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.toggle_file_search(window, cx);
+                                            })),
+                                    )
+                                    .child(if let Some(input) = quick_open {
+                                        div()
+                                            .mt_2()
+                                            .flex()
+                                            .flex_col()
+                                            .gap_1()
+                                            .child(input)
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(rgb(MUTED))
+                                                    .child(if index_loading {
+                                                        "Indexing workspace files…".into()
+                                                    } else {
+                                                        format!(
+                                                            "{} files indexed · {} matches",
+                                                            indexed_total.unwrap_or(0),
+                                                            quick_results.len()
+                                                        )
+                                                    }),
+                                            )
+                                            .child(
+                                                div()
+                                                    .id("quick-open-results")
+                                                    .max_h(px(260.0))
+                                                    .overflow_y_scroll()
+                                                    .children(quick_results.into_iter().enumerate().map(
+                                                        |(index, path)| {
+                                                            let label = path
+                                                                .strip_prefix(&workspace_root)
+                                                                .unwrap_or(&path)
+                                                                .display()
+                                                                .to_string();
+                                                            div()
+                                                                .id(("quick-open-result", index))
+                                                                .cursor_pointer()
+                                                                .text_sm()
+                                                                .py_1()
+                                                                .hover(|style| style.bg(rgb(ACTIVE)))
+                                                                .child(label)
+                                                                .on_click(cx.listener(move |this, _, _, cx| {
+                                                                    this.model.open_path(&path);
+                                                                    this.quick_open = None;
+                                                                    this.persist_session();
+                                                                    cx.notify();
+                                                                }))
+                                                        }
+                                                    )),
+                                            )
+                                    } else {
+                                        div().h(px(0.0))
                                     }),
                             )
                             .child(
@@ -1307,6 +1454,11 @@ fn main() {
 
     Application::new().run(move |cx: &mut App| {
         bind_editor_keys(cx);
+        bind_quick_open_keys(cx);
+        cx.bind_keys([
+            KeyBinding::new("ctrl-p", ToggleFileSearch, None),
+            KeyBinding::new("cmd-p", ToggleFileSearch, None),
+        ]);
         let bounds = Bounds::centered(None, size(px(1200.0), px(800.0)), cx);
         cx.open_window(
             WindowOptions {
@@ -1322,6 +1474,9 @@ fn main() {
                     show_recent_workspaces: false,
                     picking_workspace: false,
                     picking_save_as: false,
+                    quick_open: None,
+                    file_index: None,
+                    file_index_loading: false,
                     workspace_generation: 0,
                     runtime_bridge,
                     runtime_status,
