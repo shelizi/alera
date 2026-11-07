@@ -57,6 +57,34 @@ impl TerminalPaneLayout {
         })
     }
 
+    /// Assign another attached, still-live Host tab to the second preview.
+    /// Dragging the focused tab swaps the current and secondary panes.
+    pub fn drop_tab_on_secondary(&mut self, dock: &mut TerminalDock, handle: &str) -> bool {
+        let Some(active) = dock.active() else {
+            return false;
+        };
+        if active.handle == handle {
+            return self.switch_focus(dock);
+        }
+        let Some(tab) = dock.tabs.iter().find(|tab| {
+            tab.handle == handle
+                && tab.running
+                && dock.sessions.iter().any(|live| {
+                    live.handle == tab.handle
+                        && live.workspace_id == tab.workspace_id
+                        && live.tab_id == tab.tab_id
+                })
+        }) else {
+            return false;
+        };
+        self.secondary = Some(TerminalPaneIdentity {
+            handle: tab.handle.clone(),
+            workspace_id: tab.workspace_id.clone(),
+            tab_id: tab.tab_id.clone(),
+        });
+        true
+    }
+
     pub fn switch_focus(&mut self, dock: &mut TerminalDock) -> bool {
         let Some(second) = self.secondary_index(dock) else {
             self.secondary = None;
@@ -131,6 +159,31 @@ mod tests {
             dock.sessions.len(),
             2,
             "closing split never terminates PTYs"
+        );
+    }
+
+    #[test]
+    fn drag_to_secondary_reassigns_and_swaps_without_duplicate_pty() {
+        let mut dock = TerminalDock::default();
+        dock.update_sessions(vec![session("one"), session("two"), session("three")]);
+        dock.open("one");
+        dock.open("two");
+        dock.open("three");
+        dock.open("one");
+        let mut panes = TerminalPaneLayout::default();
+        assert!(panes.split(&dock));
+        assert_eq!(panes.secondary.as_ref().unwrap().handle, "two");
+        assert!(panes.drop_tab_on_secondary(&mut dock, "three"));
+        assert_eq!(panes.secondary.as_ref().unwrap().handle, "three");
+        assert_eq!(dock.active().unwrap().handle, "one");
+        assert!(panes.drop_tab_on_secondary(&mut dock, "one"));
+        assert_eq!(dock.active().unwrap().handle, "three");
+        assert_eq!(panes.secondary.as_ref().unwrap().handle, "one");
+        assert!(!panes.drop_tab_on_secondary(&mut dock, "absent"));
+        assert_eq!(
+            dock.sessions.len(),
+            3,
+            "dragging tabs never kills Host PTYs"
         );
     }
 

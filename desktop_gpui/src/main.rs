@@ -4,8 +4,9 @@ mod quick_open_ui;
 
 use alera_gpui_desktop::editor::EditorDraftStore;
 use alera_gpui_desktop::editor_tabs::EditorTabs;
-use alera_gpui_desktop::explorer_ops::ExplorerFiles;
+use alera_gpui_desktop::explorer_ops::{ExplorerClipboard, ExplorerClipboardMode, ExplorerFiles};
 use alera_gpui_desktop::file_search::WorkspaceFileIndex;
+use alera_gpui_desktop::git_actions::GitActions;
 use alera_gpui_desktop::git_inspect::{read_file_diff, GitSnapshot};
 use alera_gpui_desktop::model::WorkbenchModel;
 use alera_gpui_desktop::project_search::{ContentMatch, ProjectSearch};
@@ -13,9 +14,10 @@ use alera_gpui_desktop::project_tree::{collect_project_tree, ProjectTreeGroup};
 use alera_gpui_desktop::runtime_bridge::RuntimeCliBridge;
 use alera_gpui_desktop::session::{PreviewSessionStore, TerminalLayout, TerminalLayoutTab};
 use alera_gpui_desktop::terminal::{
-    select_registered_host_workspace, TerminalCreateFlow, TerminalCreateTick, TerminalDock,
-    TerminalPollGate, TerminalViewMode, HOST_SESSION_LIST_SCOPE,
+    encode_terminal_key, select_registered_host_workspace, TerminalCreateFlow, TerminalCreateTick,
+    TerminalDock, TerminalPollGate, TerminalViewMode, HOST_SESSION_LIST_SCOPE,
 };
+use alera_gpui_desktop::terminal_panes::{TerminalPaneLayout, TerminalSplitDirection};
 use alera_gpui_desktop::workspace_tree::WorkspaceTree;
 use alera_gpui_desktop::worktree_manager::{WorktreeEntry, WorktreeManager};
 use editor_ui::{bind_editor_keys, NativeEditor};
@@ -24,6 +26,7 @@ use gpui::{
     KeyBinding, PathPromptOptions, Window, WindowBounds, WindowOptions,
 };
 use quick_open_ui::{bind_quick_open_keys, QuickOpenInput};
+use std::collections::{HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -47,6 +50,38 @@ enum CenterView {
     #[default]
     Terminal,
     Editor,
+}
+
+#[derive(Clone)]
+struct TerminalTabDrag {
+    handle: String,
+    workspace_generation: u64,
+}
+
+struct TerminalTabDragPreview {
+    label: String,
+}
+
+impl gpui::Render for TerminalTabDragPreview {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl gpui::IntoElement {
+        div()
+            .bg(rgb(PANEL))
+            .border_1()
+            .border_color(rgb(BORDER))
+            .px_3()
+            .py_1()
+            .text_sm()
+            .child(self.label.clone())
+    }
+}
+
+#[derive(Clone, Debug)]
+enum GitUiAction {
+    Stage(PathBuf),
+    Unstage(PathBuf),
+    Commit(String),
+    SwitchBranch(String),
+    Fetch,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -80,6 +115,9 @@ struct Workbench {
     tree: Option<WorkspaceTree>,
     tree_mode: bool,
     explorer_selection: Option<PathBuf>,
+    explorer_clipboard: Option<ExplorerClipboard>,
+    explorer_drop_busy: bool,
+    explorer_drop_request: u64,
     explorer_action: Option<ExplorerAction>,
     explorer_action_input: Option<Entity<QuickOpenInput>>,
     explorer_delete_confirmed: bool,
@@ -88,6 +126,7 @@ struct Workbench {
     recent_workspaces: Vec<PathBuf>,
     saved_projects: Vec<PathBuf>,
     project_tree_groups: Vec<ProjectTreeGroup>,
+    collapsed_project_roots: HashSet<PathBuf>,
     project_tree_loading: bool,
     project_tree_request: u64,
     show_recent_workspaces: bool,
@@ -110,6 +149,11 @@ struct Workbench {
     content_searched_query: String,
     content_request: u64,
     git_snapshot: Option<GitSnapshot>,
+    git_commit_input: Entity<QuickOpenInput>,
+    git_branch_input: Entity<QuickOpenInput>,
+    git_action_busy: bool,
+    git_action_request: u64,
+    git_action_status: String,
     git_loading: bool,
     git_error: Option<String>,
     git_diff: Option<String>,
@@ -120,13 +164,19 @@ struct Workbench {
     runtime_status: String,
     runtime_loading: bool,
     terminals: TerminalDock,
+    terminal_panes: TerminalPaneLayout,
     terminal_input: Entity<QuickOpenInput>,
+    terminal_keyboard_focus: gpui::FocusHandle,
+    terminal_key_queue: VecDeque<String>,
+    terminal_key_queue_handle: Option<String>,
+    terminal_key_sending: bool,
     show_terminal_attach_picker: bool,
     terminal_create_flow: TerminalCreateFlow,
     terminal_layout_restore: Option<TerminalLayout>,
     terminal_send_loading: bool,
     terminal_list_loading: bool,
     terminal_read_loading: Option<String>,
+    terminal_split_read_loading: bool,
     terminal_poll: TerminalPollGate,
     terminal_tick: u64,
 }
@@ -155,6 +205,159 @@ impl Workbench {
             .ok();
         })
         .detach();
+    }
+
+    fn set_explorer_clipboard(&mut self, mode: ExplorerClipboardMode, cx: &mut Context<Self>) {
+        let Some(selected) = self.explorer_selection.clone() else {
+            self.model
+                .set_status("Select a file or folder to Copy or Cut");
+            cx.notify();
+            return;
+        };
+        let result = ExplorerFiles::new(self.model.root())
+            .and_then(|files| ExplorerClipboard::capture(&files, &selected, mode));
+        match result {
+            Ok(clipboard) => {
+                self.explorer_clipboard = Some(clipboard);
+                self.model.set_status(match mode {
+                    ExplorerClipboardMode::Copy => {
+                        "Explorer copied selection; choose destination and Paste"
+                    }
+                    ExplorerClipboardMode::Cut => {
+                        "Explorer cut selection; choose destination and Paste"
+                    }
+                });
+            }
+            Err(error) => self
+                .model
+                .set_status(format!("Explorer Copy/Cut refused: {error}")),
+        }
+        cx.notify();
+    }
+
+    fn paste_explorer_clipboard(&mut self, cx: &mut Context<Self>) {
+        if self.editor_dirty(cx) {
+            self.model
+                .set_status("Save unsaved editor changes before Explorer Paste");
+            cx.notify();
+            return;
+        }
+        let Some(clipboard) = self.explorer_clipboard.as_mut() else {
+            self.model
+                .set_status("Explorer clipboard is empty; Copy or Cut a file first");
+            cx.notify();
+            return;
+        };
+        let root = self.model.root().to_path_buf();
+        let folder = self
+            .explorer_selection
+            .as_ref()
+            .map(|path| {
+                if path.is_dir() {
+                    path.clone()
+                } else {
+                    path.parent().unwrap_or(&root).to_path_buf()
+                }
+            })
+            .unwrap_or_else(|| root.clone());
+        let result =
+            ExplorerFiles::new(&root).and_then(|files| clipboard.paste_into(&files, &folder));
+        let consumed = clipboard.consumed();
+        if consumed {
+            self.explorer_clipboard = None;
+        }
+        match result {
+            Ok(path) => {
+                self.explorer_selection = Some(path.clone());
+                self.model.refresh_directory();
+                if let Some(tree) = &mut self.tree {
+                    let _ = tree.refresh();
+                }
+                self.file_index = None;
+                self.content_matches.clear();
+                self.persist_session();
+                self.model
+                    .set_status(format!("Explorer Paste succeeded: {}", path.display()));
+            }
+            Err(error) => self
+                .model
+                .set_status(format!("Explorer Paste refused: {error}")),
+        }
+        cx.notify();
+    }
+
+    fn import_explorer_drop(&mut self, sources: Vec<PathBuf>, cx: &mut Context<Self>) {
+        if self.explorer_drop_busy {
+            self.model
+                .set_status("Finish the previous external file import first");
+            cx.notify();
+            return;
+        }
+        if self.editor_dirty(cx) {
+            self.model
+                .set_status("Save unsaved editor changes before importing files");
+            cx.notify();
+            return;
+        }
+        if sources.is_empty() || sources.len() > 8 {
+            self.model
+                .set_status("Drop between one and eight files/folders at a time");
+            cx.notify();
+            return;
+        }
+        let root = self.model.root().to_path_buf();
+        let destination = self
+            .explorer_selection
+            .as_ref()
+            .map(|path| {
+                if path.is_dir() {
+                    path.clone()
+                } else {
+                    path.parent().unwrap_or(&root).to_path_buf()
+                }
+            })
+            .unwrap_or_else(|| root.clone());
+        let generation = self.workspace_generation;
+        self.explorer_drop_request = self.explorer_drop_request.wrapping_add(1);
+        let request = self.explorer_drop_request;
+        self.explorer_drop_busy = true;
+        self.model
+            .set_status(format!("Importing {} dropped item(s)…", sources.len()));
+        cx.notify();
+        cx.spawn(async move |view, cx| {
+            let result = cx.background_spawn(async move {
+                let files = ExplorerFiles::new(&root)?;
+                let mut imported = Vec::new();
+                for path in sources {
+                    imported.push(files.import_external(&path, &destination)?);
+                }
+                Ok::<_, std::io::Error>(imported)
+            }).await;
+            view.update(cx, |view, cx| {
+                if view.workspace_generation != generation || view.explorer_drop_request != request {
+                    return;
+                }
+                view.explorer_drop_busy = false;
+                match result {
+                    Ok(imported) => {
+                        view.model.refresh_directory();
+                        if let Some(tree) = &mut view.tree { let _ = tree.refresh(); }
+                        view.file_index = None;
+                        view.explorer_selection = imported.last().cloned();
+                        view.model.set_status(format!("Imported {} external file/folder item(s)", imported.len()));
+                        view.persist_session();
+                    }
+                    Err(error) => {
+                        view.model.set_status(format!(
+                            "External import stopped: {error}. Earlier completed items remain; original files were not moved"
+                        ));
+                        view.model.refresh_directory();
+                        if let Some(tree) = &mut view.tree { let _ = tree.refresh(); }
+                    }
+                }
+                cx.notify();
+            }).ok();
+        }).detach();
     }
 
     fn begin_explorer_action(
@@ -368,6 +571,74 @@ impl Workbench {
         })
         .detach();
         cx.notify();
+    }
+
+    fn run_git_action(&mut self, action: GitUiAction, cx: &mut Context<Self>) {
+        if self.git_action_busy {
+            self.git_action_status = "Finish the current Git operation first".into();
+            cx.notify();
+            return;
+        }
+        if self.editor_dirty(cx) {
+            self.git_action_status = "Save unsaved editor buffers before changing Git".into();
+            cx.notify();
+            return;
+        }
+        let root = self.model.root().to_path_buf();
+        let generation = self.workspace_generation;
+        self.git_action_request = self.git_action_request.wrapping_add(1);
+        let ticket = self.git_action_request;
+        self.git_action_busy = true;
+        self.git_action_status = "Running explicit Git operation…".into();
+        cx.notify();
+        cx.spawn(async move |view, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    let git = GitActions::open(&root)?;
+                    match action {
+                        GitUiAction::Stage(path) => {
+                            git.stage_file(&path)?;
+                            Ok("Staged selected file".to_string())
+                        }
+                        GitUiAction::Unstage(path) => {
+                            git.unstage_file(&path)?;
+                            Ok("Unstaged selected file".to_string())
+                        }
+                        GitUiAction::Commit(message) => {
+                            git.commit(&message).map(|id| format!("Committed {id}"))
+                        }
+                        GitUiAction::SwitchBranch(branch) => {
+                            git.switch_branch(&branch)?;
+                            Ok(format!("Switched to branch {branch}"))
+                        }
+                        GitUiAction::Fetch => {
+                            git.fetch_current_remote()?;
+                            Ok("Fetched remote refs; working tree unchanged".to_string())
+                        }
+                    }
+                })
+                .await;
+            view.update(cx, |view, cx| {
+                if view.workspace_generation != generation || view.git_action_request != ticket {
+                    return;
+                }
+                view.git_action_busy = false;
+                match result {
+                    Ok(message) => {
+                        view.git_action_status = message;
+                        view.git_snapshot = None;
+                        view.refresh_git(cx);
+                        view.refresh_worktrees(cx);
+                    }
+                    Err(error) => {
+                        view.git_action_status = format!("Git operation refused: {error}")
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn preview_git_change(&mut self, relative: PathBuf, cx: &mut Context<Self>) {
@@ -924,9 +1195,9 @@ impl Workbench {
     }
 
     fn switch_workspace(&mut self, root: PathBuf, cx: &mut Context<Self>) {
-        if self.worktree_busy || self.terminal_create_flow.is_creating() {
+        if self.worktree_busy || self.terminal_create_flow.is_creating() || self.git_action_busy {
             self.model.set_status(
-                "Finish the current Worktree or Host terminal create before switching projects",
+                "Finish current Git, Worktree or Host terminal create before switching projects",
             );
             cx.notify();
             return;
@@ -974,6 +1245,9 @@ impl Workbench {
         self.center_view = CenterView::Terminal;
         self.tree = WorkspaceTree::new(&canonical).ok();
         self.explorer_selection = None;
+        self.explorer_clipboard = None;
+        self.explorer_drop_request = self.explorer_drop_request.wrapping_add(1);
+        self.explorer_drop_busy = false;
         self.cancel_explorer_action(cx);
         self.editor = None;
         self.restore_scratch_tabs(cx);
@@ -989,6 +1263,12 @@ impl Workbench {
         self.content_request = self.content_request.wrapping_add(1);
         self.git_snapshot = None;
         self.git_loading = false;
+        self.git_action_request = self.git_action_request.wrapping_add(1);
+        self.git_action_status.clear();
+        self.git_commit_input
+            .update(cx, |input, cx| input.clear(cx));
+        self.git_branch_input
+            .update(cx, |input, cx| input.clear(cx));
         self.git_diff = None;
         self.git_diff_loading = false;
         self.git_diff_request = self.git_diff_request.wrapping_add(1);
@@ -1006,14 +1286,19 @@ impl Workbench {
         // them on workspace changes to prevent cross-project output leakage.
         // Existing Host sessions remain alive and under Host ownership.
         self.terminals = TerminalDock::for_workspace(self.workspace_generation);
+        self.terminal_panes.reset();
         self.terminal_create_flow.cancel();
         self.load_terminal_layout();
         self.terminal_send_loading = false;
+        self.terminal_key_queue.clear();
+        self.terminal_key_queue_handle = None;
+        self.terminal_key_sending = false;
         self.terminal_input.update(cx, |input, cx| input.clear(cx));
         self.show_terminal_attach_picker = false;
         self.terminal_poll = TerminalPollGate::default();
         self.terminal_list_loading = false;
         self.terminal_read_loading = None;
+        self.terminal_split_read_loading = false;
         self.terminal_tick = 0;
         self.show_recent_workspaces = true;
         if let Some(store) = &self.session_store {
@@ -1306,8 +1591,172 @@ impl Workbench {
         }
     }
 
+    /// Native terminal output focus routes key events directly to Host PTY.
+    /// The command input bar remains available for full IME composition.
+    fn resize_terminal(&mut self, cols: u16, rows: u16, cx: &mut Context<Self>) {
+        let Some(bridge) = self.runtime_bridge.clone() else {
+            self.terminals.status = "Host CLI unavailable for Resize".into();
+            cx.notify();
+            return;
+        };
+        let Some(tab) = self.terminals.active() else {
+            self.terminals.status = "Choose a running Host terminal before Resize".into();
+            cx.notify();
+            return;
+        };
+        if !tab.running {
+            self.terminals.status = "Cannot resize a stopped Host terminal".into();
+            cx.notify();
+            return;
+        }
+        let handle = tab.handle.clone();
+        let tab_id = tab.tab_id.clone();
+        let generation = self.workspace_generation;
+        self.terminals.status = format!("Requesting Host viewport {cols}×{rows}…");
+        cx.notify();
+        cx.spawn(async move |view, cx| {
+            let request_handle = handle.clone();
+            let result = cx.background_spawn(async move {
+                bridge.resize_terminal(&request_handle, cols, rows)
+            }).await;
+            view.update(cx, |view, cx| {
+                if view.workspace_generation != generation || !view.terminals.active().is_some_and(|tab| {
+                    tab.handle == handle && tab.tab_id == tab_id
+                }) {
+                    return;
+                }
+                view.terminals.status = match result {
+                    Ok(()) => format!(
+                        "Requested {cols}×{rows}; Host may defer while a mobile client holds viewport control"
+                    ),
+                    Err(error) => format!("Host Resize refused: {error}"),
+                };
+                cx.notify();
+            }).ok();
+        }).detach();
+    }
+
+    fn send_terminal_key(&mut self, event: &gpui::KeyDownEvent, cx: &mut Context<Self>) -> bool {
+        if self.center_view != CenterView::Terminal {
+            return false;
+        }
+        let Some(tab) = self.terminals.active() else {
+            return false;
+        };
+        if !tab.running {
+            return false;
+        }
+        let Some(encoded) = encode_terminal_key(
+            &event.keystroke.key,
+            event.keystroke.key_char.as_deref(),
+            event.keystroke.modifiers.control,
+            event.keystroke.modifiers.alt,
+            event.keystroke.modifiers.platform,
+        ) else {
+            return false;
+        };
+        if self.terminal_key_queue.len() >= 512
+            || self
+                .terminal_key_queue
+                .iter()
+                .map(String::len)
+                .sum::<usize>()
+                + encoded.len()
+                > 4096
+        {
+            self.terminals.status = "Terminal key queue full; stopped accepting input".into();
+            cx.notify();
+            return true;
+        }
+        let handle = tab.handle.clone();
+        if self.terminal_key_queue_handle.as_deref() != Some(handle.as_str()) {
+            self.terminal_key_queue.clear();
+            self.terminal_key_queue_handle = Some(handle);
+        }
+        self.terminal_key_queue.push_back(encoded);
+        self.flush_terminal_key_queue(cx);
+        true
+    }
+
+    fn flush_terminal_key_queue(&mut self, cx: &mut Context<Self>) {
+        if self.terminal_key_sending
+            || self.terminal_send_loading
+            || self.terminal_key_queue.is_empty()
+        {
+            return;
+        }
+        let Some(bridge) = self.runtime_bridge.clone() else {
+            self.terminals.status = "Cannot send raw terminal keys without CLI".into();
+            self.terminal_key_queue.clear();
+            cx.notify();
+            return;
+        };
+        let Some(tab) = self.terminals.active() else {
+            self.terminal_key_queue.clear();
+            return;
+        };
+        if !tab.running || self.terminal_key_queue_handle.as_deref() != Some(tab.handle.as_str()) {
+            self.terminal_key_queue.clear();
+            return;
+        }
+        let handle = tab.handle.clone();
+        let tab_id = tab.tab_id.clone();
+        let generation = self.workspace_generation;
+        let mut text = String::new();
+        for _ in 0..self.terminal_key_queue.len().min(64) {
+            let Some(next) = self.terminal_key_queue.front() else {
+                break;
+            };
+            if text.len() + next.len() > 4096 {
+                break;
+            }
+            text.push_str(&self.terminal_key_queue.pop_front().unwrap());
+        }
+        if text.is_empty() {
+            return;
+        }
+        self.terminal_key_sending = true;
+        cx.spawn(async move |view, cx| {
+            let send_handle = handle.clone();
+            let result = cx
+                .background_spawn(async move { bridge.write_terminal(&send_handle, &text, false) })
+                .await;
+            view.update(cx, |view, cx| {
+                if view.workspace_generation != generation {
+                    return;
+                }
+                view.terminal_key_sending = false;
+                if !view
+                    .terminals
+                    .active()
+                    .is_some_and(|tab| tab.handle == handle && tab.tab_id == tab_id && tab.running)
+                {
+                    view.terminal_key_queue.clear();
+                    view.terminal_key_queue_handle = None;
+                    return;
+                }
+                match result {
+                    Ok(()) => view.flush_terminal_key_queue(cx),
+                    Err(error) => {
+                        view.terminal_key_queue.clear();
+                        view.terminals.status = format!("Raw terminal key send failed: {error}");
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     fn send_terminal_input(&mut self, enter: bool, cx: &mut Context<Self>) {
-        if self.terminal_send_loading {
+        if self.terminal_send_loading
+            || self.terminal_key_sending
+            || !self.terminal_key_queue.is_empty()
+        {
+            self.terminals.status =
+                "Finish pending terminal keystrokes before sending a command".into();
+            cx.notify();
             return;
         }
         let Some(bridge) = self.runtime_bridge.clone() else {
@@ -1436,6 +1885,77 @@ impl Workbench {
         .detach();
     }
 
+    fn toggle_terminal_split(&mut self, cx: &mut Context<Self>) {
+        if self.terminal_panes.secondary.is_some() {
+            self.terminal_panes.close_secondary();
+            self.terminals.status =
+                "Second terminal preview pane closed; Host sessions remain alive".into();
+        } else if self.terminal_panes.split(&self.terminals) {
+            self.terminals.status =
+                "Split Terminal opened with an existing attached session".into();
+            self.refresh_terminal_split_output(cx);
+        } else {
+            self.terminals.status =
+                "Attach a second running Host session before splitting Terminal".into();
+        }
+        cx.notify();
+    }
+
+    fn switch_terminal_split_focus(&mut self, cx: &mut Context<Self>) {
+        if self.terminal_panes.switch_focus(&mut self.terminals) {
+            self.terminal_key_queue.clear();
+            self.terminal_key_queue_handle = None;
+            self.save_terminal_layout();
+            self.refresh_terminal_output(cx);
+            self.refresh_terminal_split_output(cx);
+        }
+        cx.notify();
+    }
+
+    fn refresh_terminal_split_output(&mut self, cx: &mut Context<Self>) {
+        if self.terminal_split_read_loading {
+            return;
+        }
+        let Some(index) = self.terminal_panes.secondary_index(&self.terminals) else {
+            return;
+        };
+        let Some(ticket) = self.terminals.ticket_at(index) else {
+            return;
+        };
+        let Some(bridge) = self.runtime_bridge.clone() else {
+            return;
+        };
+        let generation = self.workspace_generation;
+        self.terminal_split_read_loading = true;
+        cx.spawn(async move |view, cx| {
+            let handle = ticket.handle.clone();
+            let cursor = ticket.cursor;
+            let result = cx
+                .background_spawn(async move { bridge.read_terminal(&handle, cursor) })
+                .await;
+            view.update(cx, |view, cx| {
+                if view.workspace_generation != generation {
+                    return;
+                }
+                view.terminal_split_read_loading = false;
+                if view
+                    .terminal_panes
+                    .secondary_index(&view.terminals)
+                    .is_none()
+                {
+                    return;
+                }
+                if let Ok(chunk) = result {
+                    view.terminals
+                        .apply_workspace_read(generation, &ticket, chunk);
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     fn start_terminal_polling(&mut self, cx: &mut Context<Self>) {
         // A single lifecycle-bound timer: no timer per tab, no stale callback
         // after the Workbench entity/window has been destroyed.
@@ -1461,11 +1981,15 @@ impl Workbench {
                     if view.terminal_tick % 10 == 1 {
                         view.refresh_terminals(cx);
                     }
-                    if view.terminal_poll.tick()
-                        && view.terminal_read_loading.is_none()
-                        && view.terminals.active_ticket().is_some()
-                    {
-                        view.refresh_terminal_output(cx);
+                    if view.terminal_poll.tick() {
+                        if view.terminal_read_loading.is_none()
+                            && view.terminals.active_ticket().is_some()
+                        {
+                            view.refresh_terminal_output(cx);
+                        }
+                        if !view.terminal_split_read_loading {
+                            view.refresh_terminal_split_output(cx);
+                        }
                     }
                 })
                 .is_err()
@@ -1554,6 +2078,10 @@ impl Render for Workbench {
             .take(45)
             .cloned()
             .enumerate()
+            .map(|(index, group)| {
+                let collapsed = self.collapsed_project_roots.contains(&group.root);
+                (index, group, collapsed)
+            })
             .collect();
         let project_tree_loading = self.project_tree_loading;
         let worktree_rows: Vec<_> = self
@@ -1590,8 +2118,9 @@ impl Render for Workbench {
             .tabs
             .iter()
             .enumerate()
-            .map(|(i, tab)| (i, tab.title.clone(), tab.running))
+            .map(|(i, tab)| (i, tab.title.clone(), tab.running, tab.handle.clone()))
             .collect();
+        let terminal_drag_generation = self.workspace_generation;
         let terminal_active = self.terminals.active_tab;
         let show_terminal_attach_picker = self.show_terminal_attach_picker;
         let terminal_create_busy = self.terminal_create_flow.is_active();
@@ -1606,9 +2135,26 @@ impl Render for Workbench {
                 TerminalViewMode::Transcript => tab.output.clone(),
             })
             .unwrap_or_default();
+        let terminal_secondary_output = self
+            .terminal_panes
+            .secondary_index(&self.terminals)
+            .and_then(|index| self.terminals.tabs.get(index))
+            .map(|tab| {
+                (
+                    tab.title.clone(),
+                    match self.terminals.view_mode {
+                        TerminalViewMode::Screen => tab.screen.contents(),
+                        TerminalViewMode::Transcript => tab.output.clone(),
+                    },
+                )
+            });
+        let terminal_split_exists = terminal_secondary_output.is_some();
+        let terminal_split_horizontal =
+            self.terminal_panes.direction == TerminalSplitDirection::Horizontal;
         let terminal_status = self.terminals.status.clone();
         let has_terminal_preview = self.terminals.active().is_some();
         let terminal_input = self.terminal_input.clone();
+        let terminal_keyboard_focus = self.terminal_keyboard_focus.clone();
         let terminal_send_loading = self.terminal_send_loading;
         let terminal_auto = self.terminal_poll.enabled();
         let terminal_is_vt = self.terminals.view_mode == TerminalViewMode::Screen;
@@ -1686,6 +2232,10 @@ impl Render for Workbench {
             .as_ref()
             .map(|snapshot| snapshot.changed_files.clone())
             .unwrap_or_default();
+        let git_action_busy = self.git_action_busy;
+        let git_action_status = self.git_action_status.clone();
+        let git_commit_input = self.git_commit_input.clone();
+        let git_branch_input = self.git_branch_input.clone();
         let git_summary = if self.git_loading {
             "Reading Git status…".to_string()
         } else if let Some(snapshot) = &self.git_snapshot {
@@ -1842,6 +2392,28 @@ impl Render for Workbench {
                                             .child(explorer_selection.as_ref().map(|path| {
                                                 format!("Selected: {}", path.strip_prefix(&workspace_root).unwrap_or(path).display())
                                             }).unwrap_or_else(|| "Select a file/folder to rename, move or delete".into())),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .gap_3()
+                                            .text_xs()
+                                            .child(div().id("explorer-clipboard-copy").cursor_pointer()
+                                                .text_color(rgb(TEXT)).child("Copy selection")
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.set_explorer_clipboard(ExplorerClipboardMode::Copy, cx);
+                                                })))
+                                            .child(div().id("explorer-clipboard-cut").cursor_pointer()
+                                                .text_color(rgb(TEXT)).child("Cut selection")
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.set_explorer_clipboard(ExplorerClipboardMode::Cut, cx);
+                                                })))
+                                            .child(div().id("explorer-clipboard-paste").cursor_pointer()
+                                                .text_color(rgb(TEXT)).child("Paste here")
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.paste_explorer_clipboard(cx);
+                                                }))),
                                     )
                                     .child(if let Some(action) = explorer_action {
                                         div()
@@ -2069,6 +2641,9 @@ impl Render for Workbench {
                                     .flex_1()
                                     .min_h_0()
                                     .id("explorer-scroll")
+                                    .on_drop(cx.listener(|this, paths: &gpui::ExternalPaths, _, cx| {
+                                        this.import_explorer_drop(paths.paths().to_vec(), cx);
+                                    }))
                                     .overflow_y_scroll()
                                     .children(if tree_mode {
                                         tree_rows.into_iter().enumerate().map(|(i, item)| {
@@ -2146,7 +2721,7 @@ impl Render for Workbench {
                                     .child(
                                         div()
                                             .font_weight(gpui::FontWeight::BOLD)
-                                            .child("Git changes · read-only"),
+                                            .child("Git changes"),
                                     )
                                     .child(
                                         div()
@@ -2168,22 +2743,94 @@ impl Render for Workbench {
                             )
                             .child(
                                 div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .child(git_commit_input)
+                                    .child(div()
+                                        .id("git-commit-submit")
+                                        .cursor_pointer()
+                                        .text_xs()
+                                        .text_color(rgb(if git_action_busy { MUTED } else { TEXT }))
+                                        .child("Commit")
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            let message = this.git_commit_input.read(cx).query().trim().to_owned();
+                                            this.run_git_action(GitUiAction::Commit(message), cx);
+                                        }))),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(git_branch_input)
+                                    .child(div()
+                                        .id("git-switch-branch")
+                                        .cursor_pointer()
+                                        .text_xs()
+                                        .text_color(rgb(if git_action_busy { MUTED } else { TEXT }))
+                                        .child("Switch")
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            let branch = this.git_branch_input.read(cx).query().trim().to_owned();
+                                            this.run_git_action(GitUiAction::SwitchBranch(branch), cx);
+                                        })))
+                                    .child(div()
+                                        .id("git-fetch-remote")
+                                        .cursor_pointer()
+                                        .text_xs()
+                                        .text_color(rgb(if git_action_busy { MUTED } else { TEXT }))
+                                        .child("Fetch")
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.run_git_action(GitUiAction::Fetch, cx);
+                                        }))),
+                            )
+                            .child(div()
+                                .text_xs()
+                                .text_color(rgb(MUTED))
+                                .child(if git_action_busy { "Git operation running…".to_owned() } else { git_action_status }))
+                            .child(
+                                div()
                                     .id("git-change-list")
                                     .max_h(px(135.0))
                                     .overflow_y_scroll()
                                     .children(git_changes.into_iter().enumerate().map(|(i, change)| {
                                         let label = format!("{} {}", change.label, change.relative.display());
                                         let relative = change.relative;
+                                        let stage_path = relative.clone();
+                                        let unstage_path = relative.clone();
                                         div()
                                             .id(("git-change-file", i))
-                                            .cursor_pointer()
+                                            .flex()
+                                            .items_center()
+                                            .gap_2()
                                             .py_1()
                                             .text_xs()
                                             .hover(|style| style.bg(rgb(ACTIVE)))
-                                            .child(label)
-                                            .on_click(cx.listener(move |this, _, _, cx| {
-                                                this.preview_git_change(relative.clone(), cx);
-                                            }))
+                                            .child(div()
+                                                .id(("git-change-preview", i))
+                                                .flex_1()
+                                                .min_w_0()
+                                                .cursor_pointer()
+                                                .child(label)
+                                                .on_click(cx.listener(move |this, _, _, cx| {
+                                                    this.preview_git_change(relative.clone(), cx);
+                                                })))
+                                            .child(div()
+                                                .id(("git-stage-file", i))
+                                                .cursor_pointer()
+                                                .text_color(rgb(TEXT))
+                                                .child("+")
+                                                .on_click(cx.listener(move |this, _, _, cx| {
+                                                    this.run_git_action(GitUiAction::Stage(stage_path.clone()), cx);
+                                                })))
+                                            .child(div()
+                                                .id(("git-unstage-file", i))
+                                                .cursor_pointer()
+                                                .text_color(rgb(MUTED))
+                                                .child("−")
+                                                .on_click(cx.listener(move |this, _, _, cx| {
+                                                    this.run_git_action(GitUiAction::Unstage(unstage_path.clone()), cx);
+                                                })))
                                     })),
                             )
                             .child(
@@ -2549,7 +3196,7 @@ impl Render for Workbench {
                                                     .flex()
                                                     .overflow_x_scroll()
                                                     .children(terminal_tabs.into_iter().map(
-                                                        |(index, title, running)| {
+                                                        |(index, title, running, handle)| {
                                                             div()
                                                                 .flex()
                                                                 .items_center()
@@ -2577,6 +3224,29 @@ impl Render for Workbench {
                                                                                 this.refresh_terminal_output(cx);
                                                                             }
                                                                             cx.notify();
+                                                                        }))
+                                                                        .on_drag(
+                                                                            TerminalTabDrag {
+                                                                                handle: handle.clone(),
+                                                                                workspace_generation: terminal_drag_generation,
+                                                                            },
+                                                                            |drag, _, _, cx| {
+                                                                                cx.new(|_| TerminalTabDragPreview {
+                                                                                    label: drag.handle.clone(),
+                                                                                })
+                                                                            },
+                                                                        )
+                                                                        .on_drop(cx.listener(move |this, payload: &TerminalTabDrag, _, cx| {
+                                                                            if payload.workspace_generation != this.workspace_generation {
+                                                                                return;
+                                                                            }
+                                                                            let Some(from) = this.terminals.tabs.iter().position(|tab| tab.handle == payload.handle) else {
+                                                                                return;
+                                                                            };
+                                                                            if this.terminals.move_tab(from, index) {
+                                                                                this.save_terminal_layout();
+                                                                                cx.notify();
+                                                                            }
                                                                         })),
                                                                 )
                                                                 .child(
@@ -2631,6 +3301,30 @@ impl Render for Workbench {
                                                     .child(if terminal_read_loading { "Reading…" } else { "Read more ↻" })
                                                     .on_click(cx.listener(|this, _, _, cx| {
                                                         this.refresh_terminal_output(cx);
+                                                    })),
+                                            )
+                                            .child(
+                                                div()
+                                                    .id("terminal-resize-80x24")
+                                                    .px_2()
+                                                    .cursor_pointer()
+                                                    .text_xs()
+                                                    .text_color(rgb(TEXT))
+                                                    .child("80×24")
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.resize_terminal(80, 24, cx);
+                                                    })),
+                                            )
+                                            .child(
+                                                div()
+                                                    .id("terminal-resize-120x36")
+                                                    .px_2()
+                                                    .cursor_pointer()
+                                                    .text_xs()
+                                                    .text_color(rgb(TEXT))
+                                                    .child("120×36")
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.resize_terminal(120, 36, cx);
                                                     })),
                                             ),
                                     )
@@ -2726,7 +3420,41 @@ impl Render for Workbench {
                                                         }
                                                         cx.notify();
                                                     })),
-                                            ),
+                                            )
+                                            .child(
+                                                div()
+                                                    .id("terminal-split-toggle")
+                                                    .cursor_pointer()
+                                                    .child(if terminal_split_exists { "Close split" } else { "Split Terminal" })
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.toggle_terminal_split(cx);
+                                                    })),
+                                            )
+                                            .child(if terminal_split_exists {
+                                                div()
+                                                    .id("terminal-split-swap")
+                                                    .cursor_pointer()
+                                                    .child("Swap panes")
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.switch_terminal_split_focus(cx);
+                                                    }))
+                                                    .into_any_element()
+                                            } else {
+                                                div().h(px(0.0)).into_any_element()
+                                            })
+                                            .child(if terminal_split_exists {
+                                                div()
+                                                    .id("terminal-split-direction")
+                                                    .cursor_pointer()
+                                                    .child(if terminal_split_horizontal { "Side by side" } else { "Stacked" })
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.terminal_panes.toggle_direction();
+                                                        cx.notify();
+                                                    }))
+                                                    .into_any_element()
+                                            } else {
+                                                div().h(px(0.0)).into_any_element()
+                                            }),
                                     )
                                     .child(
                                         div()
@@ -2736,9 +3464,24 @@ impl Render for Workbench {
                                             .text_color(rgb(MUTED))
                                             .child(terminal_status),
                                     )
-                                    .child(if terminal_is_vt {
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_h_0()
+                                            .flex()
+                                            .when(terminal_split_horizontal, |layout| layout.flex_row())
+                                            .when(!terminal_split_horizontal, |layout| layout.flex_col())
+                                            .child(if terminal_is_vt {
                                         div()
                                             .id("terminal-colored-grid")
+                                            .key_context("AleraGpuiTerminalRaw")
+                                            .track_focus(&terminal_keyboard_focus)
+                                            .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, window, _| {
+                                                window.focus(&this.terminal_keyboard_focus);
+                                            }))
+                                            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+                                                if this.send_terminal_key(event, cx) { cx.stop_propagation(); }
+                                            }))
                                             .flex_1()
                                             .min_h_0()
                                             .overflow_x_scroll()
@@ -2780,6 +3523,14 @@ impl Render for Workbench {
                                     } else {
                                         div()
                                             .id("terminal-output-scroll")
+                                            .key_context("AleraGpuiTerminalRaw")
+                                            .track_focus(&terminal_keyboard_focus)
+                                            .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, window, _| {
+                                                window.focus(&this.terminal_keyboard_focus);
+                                            }))
+                                            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+                                                if this.send_terminal_key(event, cx) { cx.stop_propagation(); }
+                                            }))
                                             .flex_1()
                                             .min_h_0()
                                             .overflow_y_scroll()
@@ -2792,7 +3543,57 @@ impl Render for Workbench {
                                             } else {
                                                 terminal_output
                                             })
-                                    })
+                                            })
+                                            .child(if let Some((title, output)) = terminal_secondary_output {
+                                                div()
+                                                    .id("terminal-secondary-preview")
+                                                    .flex_1()
+                                                    .min_h_0()
+                                                    .min_w_0()
+                                                    .flex()
+                                                    .flex_col()
+                                                    .border_t_1()
+                                                    .border_color(rgb(BORDER))
+                                                    .child(div()
+                                                        .id("terminal-secondary-focus")
+                                                        .h(px(28.0))
+                                                        .px_2()
+                                                        .bg(rgb(PANEL))
+                                                        .text_sm()
+                                                        .cursor_pointer()
+                                                        .child(format!("Second pane: {title} · click to focus"))
+                                                        .on_click(cx.listener(|this, _, _, cx| {
+                                                            this.switch_terminal_split_focus(cx);
+                                                        }))
+                                                        .on_drop(cx.listener(|this, drag: &TerminalTabDrag, _, cx| {
+                                                            if drag.workspace_generation != this.workspace_generation {
+                                                                return;
+                                                            }
+                                                            if this.terminal_panes.drop_tab_on_secondary(&mut this.terminals, &drag.handle) {
+                                                                this.terminal_key_queue.clear();
+                                                                this.terminal_key_queue_handle = None;
+                                                                this.save_terminal_layout();
+                                                                this.refresh_terminal_output(cx);
+                                                                this.refresh_terminal_split_output(cx);
+                                                                cx.notify();
+                                                            }
+                                                        })))
+                                                    .child(div()
+                                                        .id("terminal-secondary-scroll")
+                                                        .flex_1()
+                                                        .min_h_0()
+                                                        .overflow_x_scroll()
+                                                        .overflow_y_scroll()
+                                                        .px_3()
+                                                        .py_2()
+                                                        .font_family("JetBrains Mono")
+                                                        .text_sm()
+                                                        .child(output))
+                                                    .into_any_element()
+                                            } else {
+                                                div().h(px(0.0)).into_any_element()
+                                            }),
+                                    )
                                     .child(
                                         div()
                                             .id("terminal-command-bar")
@@ -2924,8 +3725,9 @@ impl Render for Workbench {
                                             .id("project-tree-scroll")
                                             .max_h(px(225.0))
                                             .overflow_y_scroll()
-                                            .children(project_tree_rows.into_iter().map(|(index, group)| {
+                                            .children(project_tree_rows.into_iter().map(|(index, group, collapsed)| {
                                                 let root = group.root.clone();
+                                                let fold_root = group.root.clone();
                                                 let current = group.is_active;
                                                 let pinned = group.is_saved;
                                                 let title = group.label;
@@ -2936,6 +3738,20 @@ impl Render for Workbench {
                                                     .flex_col()
                                                     .gap_1()
                                                     .py_1()
+                                                    .child(
+                                                        div()
+                                                            .id(("project-tree-toggle", index))
+                                                            .cursor_pointer()
+                                                            .text_xs()
+                                                            .text_color(rgb(MUTED))
+                                                            .child(if collapsed { "▸ Expand" } else { "▾ Collapse" })
+                                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                                if !this.collapsed_project_roots.insert(fold_root.clone()) {
+                                                                    this.collapsed_project_roots.remove(&fold_root);
+                                                                }
+                                                                cx.notify();
+                                                            })),
+                                                    )
                                                     .child(
                                                         div()
                                                             .id(("project-tree-open", index))
@@ -2952,7 +3768,7 @@ impl Render for Workbench {
                                                                 this.switch_workspace(root.clone(), cx);
                                                             })),
                                                     )
-                                                    .children(group.worktrees.into_iter().take(14).enumerate().map(|(child_index, entry)| {
+                                                    .children(group.worktrees.into_iter().take(if collapsed { 0 } else { 14 }).enumerate().map(|(child_index, entry)| {
                                                         let target = entry.path.clone();
                                                         let active = workspace_root.starts_with(&target);
                                                         let label = entry.branch.unwrap_or_else(|| {
@@ -3387,6 +4203,9 @@ fn main() {
                         tree: WorkspaceTree::new(model.root()).ok(),
                         tree_mode: true,
                         explorer_selection: None,
+                        explorer_clipboard: None,
+                        explorer_drop_busy: false,
+                        explorer_drop_request: 0,
                         explorer_action: None,
                         explorer_action_input: None,
                         explorer_delete_confirmed: false,
@@ -3399,6 +4218,7 @@ fn main() {
                         project_tree_groups: Vec::new(),
                         project_tree_loading: false,
                         project_tree_request: 0,
+                        collapsed_project_roots: HashSet::new(),
                         show_recent_workspaces: true,
                         worktrees: Vec::new(),
                         worktree_error: None,
@@ -3419,6 +4239,13 @@ fn main() {
                         content_searched_query: String::new(),
                         content_request: 0,
                         git_snapshot: None,
+                        git_commit_input: cx
+                            .new(|cx| QuickOpenInput::with_placeholder("Commit message", cx)),
+                        git_branch_input: cx
+                            .new(|cx| QuickOpenInput::with_placeholder("Existing branch", cx)),
+                        git_action_busy: false,
+                        git_action_request: 0,
+                        git_action_status: String::new(),
                         git_loading: false,
                         git_error: None,
                         git_diff: None,
@@ -3429,13 +4256,19 @@ fn main() {
                         runtime_status,
                         runtime_loading: false,
                         terminals: TerminalDock::for_workspace(0),
+                        terminal_panes: TerminalPaneLayout::default(),
                         terminal_input,
+                        terminal_keyboard_focus: cx.focus_handle(),
+                        terminal_key_queue: VecDeque::new(),
+                        terminal_key_queue_handle: None,
+                        terminal_key_sending: false,
                         show_terminal_attach_picker: false,
                         terminal_create_flow: TerminalCreateFlow::default(),
                         terminal_layout_restore: None,
                         terminal_send_loading: false,
                         terminal_list_loading: false,
                         terminal_read_loading: None,
+                        terminal_split_read_loading: false,
                         terminal_poll: TerminalPollGate::default(),
                         terminal_tick: 0,
                     };
