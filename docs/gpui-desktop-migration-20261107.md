@@ -65,16 +65,28 @@ without reproducible measurements.
 - Standalone GPUI Windows executable built and smoke-launched successfully
   with a nonzero native window handle and empty stderr; the smoke process
   was then stopped. No automated visual inspection or input UX test yet.
-- `cargo check --all-targets` passed and 6 headless model tests passed.
+- `cargo check --all-targets` passed and 14 headless model tests passed
+  after adding local preview-state persistence and CLI status parsing.
 - Native workspace UI now has bounded read-only file tabs (open/reuse,
   activate/close/reload), folder navigation and Explorer refresh.
 - Split the UI-independent model into a `lib.rs` test target with GPUI
   behind the default `native-ui` feature, so CI can test without GPU libs.
+- Local read-only preview tabs, active file and Explorer directory are
+  restored after restart, per workspace. Stored paths are relative and
+  re-canonicalized; no file text, token, or terminal state is persisted.
+- Two-launch Windows smoke test confirmed a native window on each launch and
+  recovery of the same workspace even when the second process started from
+  a different working directory, using an isolated app-state directory.
+- The GPUI sidebar has a background, bounded, read-only Check Host action
+  using the existing Alera CLI and its authenticated runtime client. This
+  does **not** establish an interactive PTY view or a full Runtime RPC client.
 - Experimental CI added for Windows native compile and cross-platform model
   tests; CI jobs have not run remotely and macOS/Linux are **unverified**.
-- Open issues: model performs small bounded disk reads on the UI thread,
-  file explorer is limited to 400 entries per directory, and there is no
-  runtime-host client or saved tab state yet. Those are not production parity.
+- Open issues: model performs small bounded disk reads and tiny state-file
+  saves on the UI thread; Explorer is limited to 400 entries per directory.
+  GPUI has no interactive runtime-host session client yet, no persisted
+  terminal/editor buffers, and no performance parity results. The CLI status
+  button has no live-host integration smoke test yet.
 
 The GPUI prototype remains **unsupported**. Terminal, editor editing/IME,
 Diff, Agent and release behavior still depend on Flutter until the respective

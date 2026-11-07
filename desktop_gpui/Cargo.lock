@@ -67,6 +67,8 @@ dependencies = [
  "alera-core",
  "dunce",
  "gpui",
+ "serde",
+ "serde_json",
  "tempfile",
 ]
 

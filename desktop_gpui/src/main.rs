@@ -1,5 +1,7 @@
 //! Experimental Alera desktop shell powered by native GPUI (no Flutter/WebView).
 use alera_gpui_desktop::model::WorkbenchModel;
+use alera_gpui_desktop::runtime_bridge::RuntimeCliBridge;
+use alera_gpui_desktop::session::PreviewSessionStore;
 use gpui::{
     div, prelude::*, px, rgb, size, App, Application, Bounds, Context, Window, WindowBounds,
     WindowOptions,
@@ -15,6 +17,52 @@ const ACTIVE: u32 = 0x303741;
 
 struct Workbench {
     model: WorkbenchModel,
+    session_store: Option<PreviewSessionStore>,
+    runtime_bridge: Option<RuntimeCliBridge>,
+    runtime_status: String,
+    runtime_loading: bool,
+}
+
+impl Workbench {
+    fn persist_session(&mut self) {
+        if let Some(store) = &self.session_store {
+            if let Err(error) = store.save(&self.model) {
+                eprintln!("Alera GPUI: unable to persist preview session: {error}");
+                self.model
+                    .set_status(format!("Preview state not saved: {error}"));
+            }
+        }
+    }
+
+    fn refresh_runtime(&mut self, cx: &mut Context<Self>) {
+        if self.runtime_loading {
+            return;
+        }
+        let Some(bridge) = self.runtime_bridge.clone() else {
+            self.runtime_status =
+                "CLI unavailable. Set ALERA_CLI_PATH to the existing Alera CLI.".into();
+            cx.notify();
+            return;
+        };
+        self.runtime_loading = true;
+        self.runtime_status = "Checking existing Runtime Host…".into();
+        cx.notify();
+        // CLI handles authentication and the bounded probe runs off the UI
+        // thread. The experimental frontend never starts or owns a PTY.
+        cx.spawn(async move |view, cx| {
+            let result = cx.background_spawn(async move { bridge.probe() }).await;
+            view.update(cx, |view, cx| {
+                view.runtime_loading = false;
+                view.runtime_status = match result {
+                    Ok(status) => status.label(),
+                    Err(error) => format!("Runtime check failed: {error}"),
+                };
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
 }
 
 impl Render for Workbench {
@@ -48,6 +96,8 @@ impl Render for Workbench {
         let status = self.model.status().to_owned();
         let branch = self.model.branch().to_owned();
         let can_up = self.model.can_go_up();
+        let runtime_status = self.runtime_status.clone();
+        let runtime_loading = self.runtime_loading;
 
         div()
             .size_full()
@@ -105,6 +155,7 @@ impl Render for Workbench {
                                                     .child(if can_up { "↑ Up" } else { "Root" })
                                                     .on_click(cx.listener(|this, _, _, cx| {
                                                         this.model.go_up();
+                                                        this.persist_session();
                                                         cx.notify();
                                                     })),
                                             )
@@ -141,6 +192,7 @@ impl Render for Workbench {
                                             ))
                                             .on_click(cx.listener(move |this, _, _, cx| {
                                                 this.model.open_entry(i);
+                                                this.persist_session();
                                                 cx.notify();
                                             }))
                                     })),
@@ -199,6 +251,7 @@ impl Render for Workbench {
                                                             .on_click(cx.listener(
                                                                 move |this, _, _, cx| {
                                                                     this.model.activate_tab(index);
+                                                                    this.persist_session();
                                                                     cx.notify();
                                                                 },
                                                             )),
@@ -213,6 +266,7 @@ impl Render for Workbench {
                                                             .on_click(cx.listener(
                                                                 move |this, _, _, cx| {
                                                                     this.model.close_tab(index);
+                                                                    this.persist_session();
                                                                     cx.notify();
                                                                 },
                                                             )),
@@ -266,6 +320,27 @@ impl Render for Workbench {
                             .child(div().font_weight(gpui::FontWeight::BOLD).child("Workspace"))
                             .child(
                                 div()
+                                    .font_weight(gpui::FontWeight::BOLD)
+                                    .child("Runtime Host"),
+                            )
+                            .child(div().text_sm().text_color(rgb(MUTED)).child(runtime_status))
+                            .child(
+                                div()
+                                    .id("runtime-status-refresh")
+                                    .cursor_pointer()
+                                    .text_sm()
+                                    .text_color(rgb(TEXT))
+                                    .child(if runtime_loading {
+                                        "Checking…"
+                                    } else {
+                                        "Check Host"
+                                    })
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.refresh_runtime(cx);
+                                    })),
+                            )
+                            .child(
+                                div()
                                     .text_sm()
                                     .text_color(rgb(MUTED))
                                     .child("Terminal · pending"),
@@ -301,17 +376,46 @@ impl Render for Workbench {
 }
 
 fn main() {
-    let root = std::env::args_os().nth(1).unwrap_or_else(|| {
-        std::env::current_dir()
-            .expect("current working directory")
-            .into_os_string()
-    });
-    let model = match WorkbenchModel::new(root) {
+    let session_store = PreviewSessionStore::platform_default();
+    let root = std::env::args_os()
+        .nth(1)
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            session_store.as_ref().and_then(|store| {
+                store.last_workspace().unwrap_or_else(|error| {
+                    eprintln!("Alera GPUI: cannot load last workspace: {error}");
+                    None
+                })
+            })
+        })
+        .unwrap_or_else(|| std::env::current_dir().expect("current working directory"));
+    let mut model = match WorkbenchModel::new(root) {
         Ok(model) => model,
         Err(error) => {
             eprintln!("Alera GPUI: unable to open workspace: {error}");
             std::process::exit(1);
         }
+    };
+    if let Some(store) = &session_store {
+        // Preserve a malformed snapshot for possible recovery instead of
+        // overwriting it with an empty workspace at startup.
+        match store.restore(&mut model) {
+            Ok(_) => {
+                if let Err(error) = store.save(&model) {
+                    eprintln!("Alera GPUI: cannot save preview session: {error}");
+                }
+            }
+            Err(error) => {
+                eprintln!("Alera GPUI: cannot restore preview session: {error}");
+                model.set_status(format!("Previous preview session unavailable: {error}"));
+            }
+        }
+    }
+    let runtime_bridge = RuntimeCliBridge::discover().ok();
+    let runtime_status = if runtime_bridge.is_some() {
+        "Not checked · use existing Alera CLI".into()
+    } else {
+        "CLI not found · set ALERA_CLI_PATH".into()
     };
 
     Application::new().run(move |cx: &mut App| {
@@ -321,7 +425,15 @@ fn main() {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 ..Default::default()
             },
-            |_, cx| cx.new(|_| Workbench { model }),
+            |_, cx| {
+                cx.new(|_| Workbench {
+                    model,
+                    session_store,
+                    runtime_bridge,
+                    runtime_status,
+                    runtime_loading: false,
+                })
+            },
         )
         .expect("create native GPUI desktop window");
         cx.activate(true);

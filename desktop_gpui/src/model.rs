@@ -89,6 +89,9 @@ impl WorkbenchModel {
     pub fn status(&self) -> &str {
         &self.status
     }
+    pub fn set_status(&mut self, status: impl Into<String>) {
+        self.status = status.into();
+    }
     pub fn can_go_up(&self) -> bool {
         self.directory.as_path() != self.root()
     }
@@ -137,30 +140,42 @@ impl WorkbenchModel {
         let Some(entry) = self.entries.get(index).cloned() else {
             return;
         };
+        self.open_path(&entry.path);
+    }
+
+    /// Open only files and directories contained by the current workspace.
+    /// The same validation is used for clicks and persisted session restores.
+    pub fn open_path(&mut self, candidate: impl AsRef<Path>) -> bool {
         // All children are revalidated at click-time, not merely at scan time.
-        let path = match dunce::canonicalize(&entry.path) {
+        let path = match dunce::canonicalize(candidate) {
             Ok(path) if path.starts_with(&self.root) => path,
             Ok(_) => {
                 self.status = "Blocked path outside workspace".into();
-                return;
+                return false;
             }
             Err(error) => {
                 self.status = format!("Unable to open: {error}");
-                return;
+                return false;
             }
         };
-        if entry.is_directory {
-            if !path.is_dir() {
-                self.status = "Folder no longer exists".into();
-                return;
-            }
+        if path.is_dir() {
             self.directory = path;
             match self.refresh() {
                 Ok(()) => self.status = "Folder opened".into(),
                 Err(error) => self.status = format!("Cannot browse folder: {error}"),
             }
+            true
+        } else if path.is_file() {
+            let title = path
+                .file_name()
+                .map(|name| name.to_string_lossy().to_string())
+                .unwrap_or_else(|| "Untitled".into());
+            let target = path.clone();
+            self.open_file(path, title);
+            self.tabs.iter().any(|tab| tab.path == target)
         } else {
-            self.open_file(path, entry.name);
+            self.status = "Only regular files and folders can be opened".into();
+            false
         }
     }
 
