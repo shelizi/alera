@@ -124,6 +124,8 @@ pub enum TerminalAction {
     Workspaces,
     /// Create a new Runtime Host terminal in an existing Workspace.
     Create(TerminalCreateArgs),
+    /// Resize an existing Host terminal without claiming mobile driver lease.
+    Resize(TerminalResizeArgs),
     /// List live terminal sessions.
     List(crate::cli_orchestration::OrchestrationTerminalListArgs),
     /// Show one terminal session.
@@ -145,6 +147,16 @@ pub struct TerminalCreateArgs {
     /// Host Workspace ID only; a filesystem path is not accepted.
     #[arg(long = "workspace-id")]
     pub workspace_id: String,
+}
+
+#[derive(Debug, Args)]
+pub struct TerminalResizeArgs {
+    #[arg(long)]
+    pub handle: String,
+    #[arg(long)]
+    pub cols: u16,
+    #[arg(long)]
+    pub rows: u16,
 }
 
 #[derive(Debug, Args)]

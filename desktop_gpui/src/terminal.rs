@@ -133,6 +133,14 @@ impl RuntimeCliBridge {
         let response = self.terminal_json(&args)?;
         parse_created_terminal(&response, workspace_id)
     }
+
+    /// Request only explicit dimensions for an already known Host terminal.
+    /// Host mobile-driver lease semantics may defer actual PTY resizing.
+    pub fn resize_terminal(&self, handle: &str, cols: u16, rows: u16) -> io::Result<()> {
+        let args = resize_terminal_verb(handle, cols, rows)?;
+        self.terminal_json(&args)?;
+        Ok(())
+    }
 }
 
 /// Construct an explicit write to an already-selected Host terminal.
@@ -172,6 +180,71 @@ pub fn workspaces_verb() -> Vec<OsString> {
 /// Explicit terminal creation inside an existing Host workspace. The CLI
 /// still requires --no-start and an already-running Host; this bridge never
 /// starts a runtime, reads a token, or spawns a shell itself.
+/// Encode native key-down as raw Host PTY input. Terminal typing and
+/// command-bar submit are intentionally distinct; no implicit Enter here.
+pub fn encode_terminal_key(
+    key: &str,
+    key_char: Option<&str>,
+    control: bool,
+    alt: bool,
+    platform: bool,
+) -> Option<String> {
+    if platform || alt {
+        return None;
+    }
+    let lower = key.to_ascii_lowercase();
+    if control {
+        if lower.len() == 1 {
+            let byte = lower.as_bytes()[0];
+            if byte.is_ascii_lowercase() {
+                return Some(String::from(char::from(byte - b'a' + 1)));
+            }
+        }
+        return None;
+    }
+    let sequence = match lower.as_str() {
+        "enter" | "return" => "\r",
+        "backspace" => "\u{7f}",
+        "tab" => "\t",
+        "escape" | "esc" => "\u{1b}",
+        "up" | "arrowup" => "\u{1b}[A",
+        "down" | "arrowdown" => "\u{1b}[B",
+        "right" | "arrowright" => "\u{1b}[C",
+        "left" | "arrowleft" => "\u{1b}[D",
+        "home" => "\u{1b}[H",
+        "end" => "\u{1b}[F",
+        "delete" => "\u{1b}[3~",
+        "pageup" => "\u{1b}[5~",
+        "pagedown" => "\u{1b}[6~",
+        _ => {
+            let printable = key_char.or_else(|| (key.chars().count() == 1).then_some(key))?;
+            if printable.is_empty()
+                || printable.len() > 128
+                || printable.chars().any(char::is_control)
+            {
+                return None;
+            }
+            return Some(printable.to_owned());
+        }
+    };
+    Some(sequence.to_owned())
+}
+
+pub fn resize_terminal_verb(handle: &str, cols: u16, rows: u16) -> io::Result<Vec<OsString>> {
+    if !valid_handle(handle) || !(20..=512).contains(&cols) || !(5..=200).contains(&rows) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Invalid Host terminal viewport",
+        ));
+    }
+    Ok(vec![
+        OsString::from("resize"),
+        OsString::from(format!("--handle={handle}")),
+        OsString::from(format!("--cols={cols}")),
+        OsString::from(format!("--rows={rows}")),
+    ])
+}
+
 pub fn create_terminal_verb(workspace_id: &str) -> io::Result<Vec<OsString>> {
     if !valid_host_id(workspace_id) {
         return Err(io::Error::new(
@@ -958,7 +1031,13 @@ impl TerminalDock {
     }
 
     pub fn active_ticket(&self) -> Option<TerminalReadTicket> {
-        let tab = self.active()?;
+        self.ticket_at(self.active_tab?)
+    }
+
+    /// A second split viewport can poll a different tab without changing
+    /// focus, while retaining the exact stale-response identity checks.
+    pub fn ticket_at(&self, index: usize) -> Option<TerminalReadTicket> {
+        let tab = self.tabs.get(index)?;
         if !self.sessions.iter().any(|session| {
             session.handle == tab.handle
                 && session.tab_id == tab.tab_id
@@ -1117,6 +1196,51 @@ impl TerminalDock {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn bounded_resize_verb_never_starts_host_and_rejects_unsafe_geometry() {
+        use crate::runtime_bridge::terminal_cli_arguments;
+        let args = resize_terminal_verb("term-1", 120, 36).unwrap();
+        assert_eq!(args[0], "resize");
+        assert_eq!(args[1], "--handle=term-1");
+        let routed = terminal_cli_arguments(Path::new("C:/runtime"), &args);
+        assert!(routed.iter().any(|arg| arg == "--no-start"));
+        for dims in [(0, 24), (19, 24), (80, 4), (513, 24), (80, 201)] {
+            assert!(resize_terminal_verb("term-1", dims.0, dims.1).is_err());
+        }
+        assert!(resize_terminal_verb("bad\nhandle", 80, 24).is_err());
+    }
+
+    #[test]
+    fn raw_native_terminal_key_encoding_preserves_pty_control_and_unicode() {
+        assert_eq!(
+            encode_terminal_key("up", None, false, false, false),
+            Some("\u{1b}[A".into())
+        );
+        assert_eq!(
+            encode_terminal_key("backspace", None, false, false, false),
+            Some("\u{7f}".into())
+        );
+        assert_eq!(
+            encode_terminal_key("enter", None, false, false, false),
+            Some("\r".into())
+        );
+        assert_eq!(
+            encode_terminal_key("c", None, true, false, false),
+            Some("\u{3}".into())
+        );
+        assert_eq!(
+            encode_terminal_key("d", None, true, false, false),
+            Some("\u{4}".into())
+        );
+        assert_eq!(
+            encode_terminal_key("a", Some("中"), false, false, false),
+            Some("中".into())
+        );
+        assert!(encode_terminal_key("v", Some("v"), false, false, true).is_none());
+        assert!(encode_terminal_key("a", Some("a"), false, true, false).is_none());
+        assert!(encode_terminal_key("key", Some("\0"), false, false, false).is_none());
+    }
 
     #[test]
     fn terminal_writes_are_explicit_bounded_and_never_start_host() {

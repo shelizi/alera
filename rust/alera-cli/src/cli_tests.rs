@@ -81,6 +81,45 @@ fn terminal_workspaces_and_create_parse_only_explicit_host_id() {
 }
 
 #[test]
+fn terminal_resize_is_explicit_and_requires_full_viewport() {
+    let parsed = Cli::try_parse_from([
+        "alera",
+        "terminal",
+        "--no-start",
+        "--json",
+        "resize",
+        "--handle",
+        "term-123",
+        "--cols",
+        "120",
+        "--rows",
+        "36",
+    ])
+    .unwrap();
+    match parsed.command {
+        Command::Terminal(crate::cli::TerminalCommand {
+            no_start: true,
+            action: crate::cli::TerminalAction::Resize(args),
+            ..
+        }) => {
+            assert_eq!(args.handle, "term-123");
+            assert_eq!(args.cols, 120);
+            assert_eq!(args.rows, 36);
+        }
+        other => panic!("unexpected Resize CLI parse: {other:?}"),
+    }
+    assert!(Cli::try_parse_from([
+        "alera",
+        "terminal",
+        "--no-start",
+        "resize",
+        "--handle",
+        "term-123",
+    ])
+    .is_err());
+}
+
+#[test]
 fn runtime_clear_parses_force_as_an_explicit_live_host_override() {
     let cli = Cli::try_parse_from([
         "alera",

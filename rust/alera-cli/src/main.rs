@@ -172,7 +172,7 @@ async fn run(cli: Cli) -> i32 {
 async fn run_terminal_command(command: TerminalCommand) -> i32 {
     if matches!(
         &command.action,
-        TerminalAction::Workspaces | TerminalAction::Create(_)
+        TerminalAction::Workspaces | TerminalAction::Create(_) | TerminalAction::Resize(_)
     ) && !command.no_start
     {
         eprintln!("terminal workspaces/create requires --no-start (existing authenticated Host)");
@@ -246,6 +246,31 @@ async fn run_terminal_command(command: TerminalCommand) -> i32 {
             {
                 Ok(value) => {
                     print_value(&value, command.output.json, "Runtime Host terminal created");
+                    0
+                }
+                Err(error) => print_error(error),
+            }
+        }
+        TerminalAction::Resize(args) => {
+            let valid_handle = !args.handle.is_empty()
+                && args.handle.len() <= 128
+                && args.handle.bytes().all(|byte| {
+                    byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':')
+                });
+            if !valid_handle || !(20..=512).contains(&args.cols) || !(5..=200).contains(&args.rows) {
+                eprintln!("Invalid existing terminal handle or viewport; cols 20–512, rows 5–200");
+                return USAGE_EXIT_CODE;
+            }
+            match client
+                .request_value("resize", &json!({
+                    "sessionId": args.handle,
+                    "cols": args.cols,
+                    "rows": args.rows,
+                }))
+                .await
+            {
+                Ok(value) => {
+                    print_value(&value, command.output.json, "Host resize requested");
                     0
                 }
                 Err(error) => print_error(error),

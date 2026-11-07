@@ -95,7 +95,8 @@ pub async fn run(
         | TerminalAction::Write(_)
         | TerminalAction::Attach(_)
         | TerminalAction::Workspaces
-        | TerminalAction::Create(_) => {
+        | TerminalAction::Create(_)
+        | TerminalAction::Resize(_) => {
             unreachable!()
         }
     }

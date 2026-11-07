@@ -115,6 +115,7 @@ impl RuntimeCliBridge {
             // no stdin payload; both still require --no-start below.
             (Some("workspaces"), false) => args.len() == 1,
             (Some("create"), false) => is_create_terminal_args(args),
+            (Some("resize"), false) => is_resize_terminal_args(args),
             _ => false,
         };
         if !allowed {
@@ -257,6 +258,28 @@ fn is_create_terminal_args(args: &[OsString]) -> bool {
         && args[1]
             .to_str()
             .is_some_and(|arg| arg.len() > FLAG.len() && arg.starts_with(FLAG))
+}
+
+fn is_resize_terminal_args(args: &[OsString]) -> bool {
+    if args.len() != 4 {
+        return false;
+    }
+    let Some(handle) = args[1].to_str().and_then(|s| s.strip_prefix("--handle=")) else {
+        return false;
+    };
+    let Some(cols) = args[2].to_str().and_then(|s| s.strip_prefix("--cols=")) else {
+        return false;
+    };
+    let Some(rows) = args[3].to_str().and_then(|s| s.strip_prefix("--rows=")) else {
+        return false;
+    };
+    !handle.is_empty()
+        && handle.len() <= 128
+        && handle
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b':'))
+        && cols.parse::<u16>().is_ok_and(|n| (20..=512).contains(&n))
+        && rows.parse::<u16>().is_ok_and(|n| (5..=200).contains(&n))
 }
 
 fn wait_with_timeout(child: &mut Child, timeout: Duration) -> io::Result<std::process::ExitStatus> {
