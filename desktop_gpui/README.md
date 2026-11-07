@@ -182,7 +182,9 @@ Headless `cargo test --manifest-path desktop_gpui/Cargo.toml --no-default-featur
 covers the P0 library decisions: fixture indexing through 5,000 lines,
 grapheme-bounded copy, IME cancel versus one undo step, fail-closed save,
 plaintext draft recovery across two workspace roots, dirty open and
-workspace-switch refusal, and stale terminal replies. The GPUI window only
+workspace-switch refusal, stale terminal replies, and pointer hits that
+use only the current visible-line geometry. A hit outside that range does
+not move the caret, the selection, or document bytes. The GPUI window only
 presents those decisions. Dragging
 across the editor window boundary, variable-height/soft-wrapped rows,
 BiDi layout, syntax highlighting, completion, and verified Traditional Chinese IME

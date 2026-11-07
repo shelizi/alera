@@ -6,6 +6,7 @@ pub mod model;
 pub mod runtime_bridge;
 pub mod session;
 pub mod terminal;
+pub mod visible_line_hit;
 pub mod vt_screen;
 
 #[cfg(test)]

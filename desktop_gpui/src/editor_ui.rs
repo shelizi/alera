@@ -5,10 +5,12 @@
 //! virtualizes displayed rows beyond line 600; this still is NOT a full IDE
 //! editor. Mouse and Traditional Chinese IME need independent GUI acceptance.
 use alera_gpui_desktop::editor::{
-    byte_to_utf16, edge_scroll_offset, nearest_grapheme_edge, utf16_to_byte, EditorDocument,
-    EditorLineIndex,
+    byte_to_utf16, edge_scroll_offset, utf16_to_byte, EditorDocument, EditorLineIndex,
 };
 use alera_gpui_desktop::editor_session::{EditorSession, OpenEffect, RECOVERY_PLAINTEXT_NOTICE};
+use alera_gpui_desktop::visible_line_hit::{
+    apply_pointer_hit, VisibleLineGeometry, VisibleLineHitSet,
+};
 use gpui::{
     actions, div, fill, point, prelude::*, px, relative, rgb, size, uniform_list, App, Bounds,
     ClipboardItem, Context, CursorStyle, Element, ElementId, ElementInputHandler, Entity,
@@ -280,64 +282,64 @@ impl NativeEditor {
         let offset = self.scroll.offset();
         self.scroll.set_offset(point(offset.x, px(offset_y)));
         if let Some(position) = self.last_drag_position {
-            if let Some(offset) = self.pointer_index_at(position) {
-                let _ = self.doc_mut().extend_pointer_selection(offset);
-            }
+            let offset = self.pointer_index_at(position);
+            let _ = apply_pointer_hit(self.doc_mut(), offset, true);
         }
         cx.notify();
         true
     }
 
     fn pointer_index_at(&self, position: Point<Pixels>) -> Option<usize> {
-        let y = f32::from(position.y);
-        let geometry = self
-            .line_geometry
-            .values()
-            // Skip off-screen rows. They may still have layout geometry
-            // because the experimental renderer isn't virtualized yet.
-            .filter(|row| {
-                row.bounds.bottom() > row.clip.top()
-                    && row.bounds.top() < row.clip.bottom()
-                    && row.start <= row.end
-            })
-            .min_by(|a, b| {
-                let distance = |row: &EditorLineGeometry| {
-                    let top = f32::from(row.bounds.top().max(row.clip.top()));
-                    let bottom = f32::from(row.bounds.bottom().min(row.clip.bottom()));
-                    if y < top {
-                        top - y
-                    } else if y > bottom {
-                        y - bottom
-                    } else {
-                        0.0
-                    }
-                };
-                distance(a).total_cmp(&distance(b))
-            })?;
         let document = self.session.document()?;
-        let text = document.content().get(geometry.start..geometry.end)?;
-        let x = position.x - geometry.bounds.left();
-        let guessed = geometry.shaped.closest_index_for_x(x).min(text.len());
-        let grapheme = nearest_grapheme_edge(text, guessed, f32::from(x), |index| {
-            f32::from(geometry.shaped.x_for_index(index))
-        });
-        Some(geometry.start + grapheme)
+        let stored: Vec<&EditorLineGeometry> = self.line_geometry.values().collect();
+        let frames: Vec<VisibleLineGeometry> = stored
+            .iter()
+            .map(|row| VisibleLineGeometry {
+                start: row.start,
+                end: row.end,
+                top: f32::from(row.bounds.top()),
+                bottom: f32::from(row.bounds.bottom()),
+                left: f32::from(row.bounds.left()),
+                clip_top: f32::from(row.clip.top()),
+                clip_bottom: f32::from(row.clip.bottom()),
+            })
+            .collect();
+        let mut hits = VisibleLineHitSet::default();
+        hits.replace(frames);
+        let shaped = |frame: &VisibleLineGeometry| {
+            stored.iter().find(|row| {
+                row.start == frame.start
+                    && row.end == frame.end
+                    && f32::from(row.bounds.top()) == frame.top
+                    && f32::from(row.bounds.left()) == frame.left
+            })
+        };
+        hits.pointer_offset(
+            document.content(),
+            f32::from(position.x),
+            f32::from(position.y),
+            |frame, index| {
+                shaped(frame)
+                    .map(|row| f32::from(row.shaped.x_for_index(index)))
+                    .unwrap_or(0.0)
+            },
+            |frame, local_x| {
+                shaped(frame)
+                    .map(|row| row.shaped.closest_index_for_x(px(local_x)))
+                    .unwrap_or(0)
+            },
+        )
     }
 
     fn pointer_down(&mut self, event: &gpui::MouseDownEvent, cx: &mut Context<Self>) {
-        let Some(offset) = self.pointer_index_at(event.position) else {
-            return;
-        };
-        let result = if event.modifiers.shift {
-            self.doc_mut().extend_pointer_selection(offset)
-        } else {
-            self.doc_mut().set_pointer_caret(offset)
-        };
-        if result.is_ok() {
-            self.mouse_selecting = true;
-            self.last_drag_position = Some(event.position);
-        } else if let Err(error) = result {
-            self.status = format!("Pointer input blocked: {error}");
+        let offset = self.pointer_index_at(event.position);
+        match apply_pointer_hit(self.doc_mut(), offset, event.modifiers.shift) {
+            Ok(true) => {
+                self.mouse_selecting = true;
+                self.last_drag_position = Some(event.position);
+            }
+            Ok(false) => {}
+            Err(error) => self.status = format!("Pointer input blocked: {error}"),
         }
         cx.notify();
     }
@@ -351,10 +353,9 @@ impl NativeEditor {
             return;
         }
         self.last_drag_position = Some(event.position);
-        if let Some(offset) = self.pointer_index_at(event.position) {
-            if self.doc_mut().extend_pointer_selection(offset).is_ok() {
-                cx.notify();
-            }
+        let offset = self.pointer_index_at(event.position);
+        if apply_pointer_hit(self.doc_mut(), offset, true).unwrap_or(false) {
+            cx.notify();
         }
         self.ensure_drag_autoscroll(cx);
     }
