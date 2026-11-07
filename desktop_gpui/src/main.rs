@@ -5,6 +5,7 @@ mod quick_open_ui;
 use alera_gpui_desktop::editor::EditorDraftStore;
 use alera_gpui_desktop::editor_tabs::EditorTabs;
 use alera_gpui_desktop::file_search::WorkspaceFileIndex;
+use alera_gpui_desktop::git_inspect::{read_file_diff, GitSnapshot};
 use alera_gpui_desktop::model::WorkbenchModel;
 use alera_gpui_desktop::runtime_bridge::RuntimeCliBridge;
 use alera_gpui_desktop::session::PreviewSessionStore;
@@ -13,8 +14,8 @@ use alera_gpui_desktop::terminal::{
 };
 use editor_ui::{bind_editor_keys, NativeEditor};
 use gpui::{
-    actions, div, prelude::*, px, rgb, size, App, Application, Bounds, Context, Entity, KeyBinding,
-    Focusable, PathPromptOptions, Window, WindowBounds, WindowOptions,
+    actions, div, prelude::*, px, rgb, size, App, Application, Bounds, Context, Entity, Focusable,
+    KeyBinding, PathPromptOptions, Window, WindowBounds, WindowOptions,
 };
 use quick_open_ui::{bind_quick_open_keys, QuickOpenInput};
 use std::path::PathBuf;
@@ -42,6 +43,12 @@ struct Workbench {
     quick_open: Option<Entity<QuickOpenInput>>,
     file_index: Option<Arc<WorkspaceFileIndex>>,
     file_index_loading: bool,
+    git_snapshot: Option<GitSnapshot>,
+    git_loading: bool,
+    git_error: Option<String>,
+    git_diff: Option<String>,
+    git_diff_loading: bool,
+    git_diff_request: u64,
     workspace_generation: u64,
     runtime_bridge: Option<RuntimeCliBridge>,
     runtime_status: String,
@@ -54,6 +61,67 @@ struct Workbench {
 }
 
 impl Workbench {
+    fn refresh_git(&mut self, cx: &mut Context<Self>) {
+        if self.git_loading {
+            return;
+        }
+        let root = self.model.root().to_path_buf();
+        let generation = self.workspace_generation;
+        self.git_loading = true;
+        self.git_error = None;
+        cx.spawn(async move |view, cx| {
+            let result = cx
+                .background_spawn(async move { GitSnapshot::load(&root) })
+                .await;
+            view.update(cx, |view, cx| {
+                if view.workspace_generation != generation {
+                    return;
+                }
+                view.git_loading = false;
+                match result {
+                    Ok(snapshot) => {
+                        view.git_snapshot = Some(snapshot);
+                        view.git_error = None;
+                    }
+                    Err(error) => {
+                        view.git_snapshot = None;
+                        view.git_error = Some(error);
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn preview_git_change(&mut self, relative: PathBuf, cx: &mut Context<Self>) {
+        self.git_diff_request = self.git_diff_request.wrapping_add(1);
+        let ticket = self.git_diff_request;
+        let generation = self.workspace_generation;
+        let root = self.model.root().to_path_buf();
+        self.git_diff = None;
+        self.git_diff_loading = true;
+        cx.spawn(async move |view, cx| {
+            let result = cx
+                .background_spawn(async move { read_file_diff(&root, &relative) })
+                .await;
+            view.update(cx, |view, cx| {
+                if view.workspace_generation != generation || view.git_diff_request != ticket {
+                    return;
+                }
+                view.git_diff_loading = false;
+                view.git_diff =
+                    Some(result.unwrap_or_else(|error| format!("Diff unavailable: {error}")));
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
     fn toggle_file_search_action(
         &mut self,
         _: &ToggleFileSearch,
@@ -317,6 +385,11 @@ impl Workbench {
         self.quick_open = None;
         self.file_index = None;
         self.file_index_loading = false;
+        self.git_snapshot = None;
+        self.git_loading = false;
+        self.git_diff = None;
+        self.git_diff_loading = false;
+        self.git_diff_request = self.git_diff_request.wrapping_add(1);
         self.workspace_generation = self.workspace_generation.wrapping_add(1);
         // Terminal preview tabs are local UI state, never PTY owners. Drop
         // them on workspace changes to prevent cross-project output leakage.
@@ -338,6 +411,7 @@ impl Workbench {
             self.recent_workspaces = vec![canonical];
         }
         self.refresh_terminals(cx);
+        self.refresh_git(cx);
         cx.notify();
     }
 
@@ -665,6 +739,32 @@ impl Render for Workbench {
             .zip(self.file_index.as_ref())
             .map(|(input, index)| index.search(input.read(cx).query(), 18))
             .unwrap_or_default();
+        let git_changes = self
+            .git_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.changed_files.clone())
+            .unwrap_or_default();
+        let git_summary = if self.git_loading {
+            "Reading Git status…".to_string()
+        } else if let Some(snapshot) = &self.git_snapshot {
+            format!(
+                "{} · {} change(s){}",
+                snapshot.branch,
+                snapshot.changed_files.len(),
+                if snapshot.truncated { " (limited)" } else { "" }
+            )
+        } else {
+            self.git_error
+                .clone()
+                .unwrap_or_else(|| "Git status not loaded".into())
+        };
+        let git_diff = self.git_diff.clone().unwrap_or_else(|| {
+            if self.git_diff_loading {
+                "Reading read-only diff…".to_string()
+            } else {
+                "Select a changed file to preview its patch".to_string()
+            }
+        });
 
         div()
             .size_full()
@@ -1376,9 +1476,61 @@ impl Render for Workbench {
                             )
                             .child(
                                 div()
-                                    .text_sm()
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .child(
+                                        div()
+                                            .font_weight(gpui::FontWeight::BOLD)
+                                            .child("Git changes · read-only"),
+                                    )
+                                    .child(
+                                        div()
+                                            .id("git-refresh")
+                                            .cursor_pointer()
+                                            .text_sm()
+                                            .text_color(rgb(TEXT))
+                                            .child("↻")
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.refresh_git(cx);
+                                            })),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
                                     .text_color(rgb(MUTED))
-                                    .child("Diff · pending"),
+                                    .child(git_summary),
+                            )
+                            .child(
+                                div()
+                                    .id("git-change-list")
+                                    .max_h(px(135.0))
+                                    .overflow_y_scroll()
+                                    .children(git_changes.into_iter().enumerate().map(|(i, change)| {
+                                        let label = format!("{} {}", change.label, change.relative.display());
+                                        let relative = change.relative;
+                                        div()
+                                            .id(("git-change-file", i))
+                                            .cursor_pointer()
+                                            .py_1()
+                                            .text_xs()
+                                            .hover(|style| style.bg(rgb(ACTIVE)))
+                                            .child(label)
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                this.preview_git_change(relative.clone(), cx);
+                                            }))
+                                    })),
+                            )
+                            .child(
+                                div()
+                                    .id("git-diff-scroll")
+                                    .max_h(px(170.0))
+                                    .overflow_y_scroll()
+                                    .text_xs()
+                                    .font_family("JetBrains Mono")
+                                    .text_color(rgb(MUTED))
+                                    .child(git_diff),
                             )
                             .child(
                                 div()
@@ -1477,6 +1629,12 @@ fn main() {
                     quick_open: None,
                     file_index: None,
                     file_index_loading: false,
+                    git_snapshot: None,
+                    git_loading: false,
+                    git_error: None,
+                    git_diff: None,
+                    git_diff_loading: false,
+                    git_diff_request: 0,
                     workspace_generation: 0,
                     runtime_bridge,
                     runtime_status,
@@ -1487,7 +1645,10 @@ fn main() {
                     terminal_poll: TerminalPollGate::default(),
                     terminal_tick: 0,
                 });
-                view.update(cx, |view, cx| view.start_terminal_polling(cx));
+                view.update(cx, |view, cx| {
+                    view.start_terminal_polling(cx);
+                    view.refresh_git(cx);
+                });
                 view
             },
         )

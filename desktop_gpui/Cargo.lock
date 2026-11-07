@@ -66,6 +66,7 @@ version = "0.1.0"
 dependencies = [
  "alera-core",
  "dunce",
+ "git2",
  "gpui",
  "serde",
  "serde_json",

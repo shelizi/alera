@@ -1,0 +1,187 @@
+//! Read-only, bounded Git inspection. No Git index/refs/worktree writes.
+//! Background-only caller: Git status and patch calculation may touch many files.
+
+use std::fs;
+use std::path::{Component, Path, PathBuf};
+
+const MAX_CHANGES: usize = 120;
+const MAX_PATCH_BYTES: usize = 32 * 1024;
+
+#[derive(Debug, Clone)]
+pub struct GitChange {
+    pub relative: PathBuf,
+    pub label: &'static str,
+}
+
+#[derive(Debug, Clone)]
+pub struct GitSnapshot {
+    pub branch: String,
+    pub changed_files: Vec<GitChange>,
+    pub truncated: bool,
+    pub repository_root: PathBuf,
+}
+
+impl GitSnapshot {
+    pub fn load(workspace: &Path) -> Result<Self, String> {
+        let repo = git2::Repository::discover(workspace).map_err(|e| e.to_string())?;
+        let workdir = repo
+            .workdir()
+            .ok_or("A bare repository has no editable working tree")?;
+        let root = dunce::canonicalize(workdir).map_err(|e| e.to_string())?;
+        let mut opts = git2::StatusOptions::new();
+        opts.include_untracked(true)
+            .recurse_untracked_dirs(true)
+            .include_ignored(false);
+        let statuses = repo.statuses(Some(&mut opts)).map_err(|e| e.to_string())?;
+        let mut changed_files = Vec::new();
+        let mut truncated = false;
+        for item in statuses.iter() {
+            let Ok(path) = item.path() else { continue };
+            let relative = PathBuf::from(path);
+            if !safe_relative(&relative) {
+                continue;
+            }
+            changed_files.push(GitChange {
+                relative,
+                label: classify(item.status()),
+            });
+            if changed_files.len() >= MAX_CHANGES {
+                truncated = true;
+                break;
+            }
+        }
+        changed_files.sort_by(|a, b| a.relative.cmp(&b.relative));
+        let branch = repo
+            .head()
+            .ok()
+            .and_then(|head| head.shorthand().ok().map(str::to_string))
+            .unwrap_or_else(|| "(detached or unborn HEAD)".to_string());
+        Ok(Self {
+            branch,
+            changed_files,
+            truncated,
+            repository_root: root,
+        })
+    }
+}
+
+fn safe_relative(path: &Path) -> bool {
+    path.components().all(|c| matches!(c, Component::Normal(_))) && !path.as_os_str().is_empty()
+}
+
+fn classify(status: git2::Status) -> &'static str {
+    use git2::Status;
+    if status.contains(Status::CONFLICTED) {
+        "CONFLICT"
+    } else if status.intersects(Status::INDEX_DELETED | Status::WT_DELETED) {
+        "D"
+    } else if status.intersects(Status::INDEX_NEW | Status::WT_NEW) {
+        "?"
+    } else if status.intersects(Status::INDEX_RENAMED | Status::WT_RENAMED) {
+        "R"
+    } else if status.intersects(Status::INDEX_MODIFIED | Status::WT_MODIFIED) {
+        "M"
+    } else if status.intersects(Status::INDEX_TYPECHANGE | Status::WT_TYPECHANGE) {
+        "T"
+    } else {
+        "·"
+    }
+}
+
+pub fn read_file_diff(workspace: &Path, relative: &Path) -> Result<String, String> {
+    if !safe_relative(relative) {
+        return Err("Unsafe Git path".into());
+    }
+    let repo = git2::Repository::discover(workspace).map_err(|e| e.to_string())?;
+    let repo_root = repo.workdir().ok_or("No Git working tree")?;
+    let mut options = git2::DiffOptions::new();
+    options.pathspec(relative).context_lines(3);
+    let diff = repo
+        .diff_index_to_workdir(None, Some(&mut options))
+        .map_err(|e| e.to_string())?;
+    let mut output = String::new();
+    append_diff(&diff, &mut output)?;
+    if output.is_empty() {
+        let tree = repo.head().ok().and_then(|head| head.peel_to_tree().ok());
+        let staged = repo
+            .diff_tree_to_index(tree.as_ref(), None, Some(&mut options))
+            .map_err(|e| e.to_string())?;
+        append_diff(&staged, &mut output)?;
+    }
+    if output.is_empty() {
+        // Untracked files don't participate in Git's index-to-workdir diff.
+        let file = repo_root.join(relative);
+        let canonical = dunce::canonicalize(&file).map_err(|e| e.to_string())?;
+        let root = dunce::canonicalize(repo_root).map_err(|e| e.to_string())?;
+        if !canonical.starts_with(root) || !canonical.is_file() {
+            return Err("Git preview target is not a regular workspace file".into());
+        }
+        let metadata = fs::metadata(&canonical).map_err(|e| e.to_string())?;
+        if metadata.len() > MAX_PATCH_BYTES as u64 {
+            return Ok("Untracked file · too large for native diff preview".into());
+        }
+        let text = fs::read_to_string(&canonical)
+            .map_err(|_| "Binary or non-UTF-8 file; preview unavailable".to_string())?;
+        output = format!("Untracked (read-only): {}\n{}", relative.display(), text);
+    }
+    if output.len() > MAX_PATCH_BYTES {
+        output.truncate(output.floor_char_boundary(MAX_PATCH_BYTES));
+        output.push_str("\n… diff preview truncated");
+    }
+    Ok(output)
+}
+
+fn append_diff(diff: &git2::Diff<'_>, out: &mut String) -> Result<(), String> {
+    diff.print(git2::DiffFormat::Patch, |_, _, line| {
+        if out.len() < MAX_PATCH_BYTES {
+            if matches!(line.origin(), '+' | '-' | ' ') {
+                out.push(line.origin());
+            }
+            let available = MAX_PATCH_BYTES.saturating_sub(out.len());
+            let bytes = line.content();
+            let raw = String::from_utf8_lossy(&bytes[..bytes.len().min(available)]);
+            out.push_str(&raw);
+        }
+        true
+    })
+    .map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn read_only_git_status_and_unified_diff_support_unicode_paths() {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(temp.path()).unwrap();
+        fs::write(temp.path().join("existing.rs"), "before\n").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new("existing.rs")).unwrap();
+        let tree_oid = index.write_tree().unwrap();
+        index.write().unwrap();
+        drop(index);
+        let tree = repo.find_tree(tree_oid).unwrap();
+        let signature = git2::Signature::now("Alera Test", "test@local.invalid").unwrap();
+        repo.commit(Some("HEAD"), &signature, &signature, "fixture", &tree, &[])
+            .unwrap();
+        drop(tree);
+        fs::write(temp.path().join("existing.rs"), "after\n").unwrap();
+        fs::write(temp.path().join("中文檔案.txt"), "測試文字").unwrap();
+        let snapshot = GitSnapshot::load(temp.path()).unwrap();
+        assert_eq!(snapshot.changed_files.len(), 2);
+        assert!(snapshot
+            .changed_files
+            .iter()
+            .any(|x| x.relative == Path::new("中文檔案.txt")));
+        let patch = read_file_diff(temp.path(), Path::new("existing.rs")).unwrap();
+        assert!(
+            patch.contains("+after"),
+            "expected Git unified addition, got: {patch}"
+        );
+        assert!(read_file_diff(temp.path(), Path::new("中文檔案.txt"))
+            .unwrap()
+            .contains("測試文字"));
+        assert!(read_file_diff(temp.path(), Path::new("../escape")).is_err());
+    }
+}

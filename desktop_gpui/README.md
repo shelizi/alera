@@ -199,6 +199,12 @@ on the GPUI thread, which requires profiling before full-scale adoption.
   Generated directories and symlinks are excluded; long-running scans and
   replaced-workspace results cannot cross workspace boundaries. Live IME
   candidate placement and keyboard-first result navigation remain unverified.
+- Native **Git changes / patch preview (read-only)**: background Git2 status
+  per repository, up to 120 changed paths, manual refresh and a 32 KiB
+  per-file unified patch/untracked text preview. Workspace switches and
+  older click responses are rejected; there is no stage/unstage, checkout,
+  merge, reset, fetch or Git mutation in this surface. Actual Windows GUI
+  click and rendering acceptance remains pending.
 - Native GPUI window with dark workbench layout.
 - Bounded, read-only file browsing with explicit root containment; no shell spawning.
 - Read-only UTF-8 file preview, limited to 256 KiB / 600 lines.
