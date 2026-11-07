@@ -89,14 +89,28 @@ without reproducible measurements.
   using the existing Alera CLI and its authenticated runtime client. This
   does **not** establish an interactive PTY view or a full Runtime RPC client.
 - Experimental CI added for Windows native compile and cross-platform model
-  tests, plus the CLI no-start parser regression; CI jobs have not run
+  tests, plus the CLI no-start parser and isolated Windows live-Host
+  integration regressions; CI jobs have not run
   remotely and macOS/Linux are **unverified**.
+- Phase 3 follow-up: one GPUI-window-owned timer enables 1.5-second
+  automatic cursor polling for the active preview and 15-second Session
+  discovery, pause/resume, bounded failure backoff and stale asynchronous
+  reply rejection by tab generation/cursor/session identity. 26 headless
+  model tests passed.
+- Real Windows Runtime Host/CLI/PTY end-to-end regression passed using a
+  separate temporary runtime/profile and test-only credential; verified
+  session creation, CLI no-start safety, list/read and incremental cursors.
+  A concurrent native GPUI process stayed alive while using that existing
+  Host; a separate Win32 smoke test confirmed a valid window handle and
+  empty stderr. Test Host, PTY and UI processes were terminated. This is
+  not a VT/input UI or visual-automation test.
 - Open issues: model performs small bounded disk reads and tiny state-file
   saves on the UI thread; Explorer is limited to 400 entries per directory.
-  GPUI has no interactive runtime-host session client yet, no persisted
-  terminal/editor buffers, automatic polling, PTY input/resize, or
-  performance parity results. The CLI terminal list/read path has no
-  live-host integration smoke test yet.
+  GPUI has no persistent direct runtime-host socket client yet, no persisted
+  terminal/editor buffers, PTY input/resize, or performance parity results.
+  Automatic reads currently invoke the existing CLI subprocess, and are
+  intentionally experimental until a persistent authenticated client and
+  input/VT rendering are implemented.
 
 The GPUI prototype remains **unsupported**. Terminal, editor editing/IME,
 Diff, Agent and release behavior still depend on Flutter until the respective

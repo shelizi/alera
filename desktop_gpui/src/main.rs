@@ -2,11 +2,12 @@
 use alera_gpui_desktop::model::WorkbenchModel;
 use alera_gpui_desktop::runtime_bridge::RuntimeCliBridge;
 use alera_gpui_desktop::session::PreviewSessionStore;
-use alera_gpui_desktop::terminal::TerminalDock;
+use alera_gpui_desktop::terminal::{TerminalDock, TerminalPollGate};
 use gpui::{
     div, prelude::*, px, rgb, size, App, Application, Bounds, Context, Window, WindowBounds,
     WindowOptions,
 };
+use std::time::Duration;
 
 const BG: u32 = 0x15171b;
 const PANEL: u32 = 0x1c1f24;
@@ -25,6 +26,8 @@ struct Workbench {
     terminals: TerminalDock,
     terminal_list_loading: bool,
     terminal_read_loading: Option<String>,
+    terminal_poll: TerminalPollGate,
+    terminal_tick: u64,
 }
 
 impl Workbench {
@@ -72,7 +75,11 @@ impl Workbench {
         if self.terminal_list_loading {
             return;
         }
+        if self.runtime_bridge.is_none() {
+            self.runtime_bridge = RuntimeCliBridge::discover().ok();
+        }
         let Some(bridge) = self.runtime_bridge.clone() else {
+            self.terminals.update_sessions(Vec::new());
             self.terminals.status = "Cannot list sessions: install experimental Alera CLI".into();
             cx.notify();
             return;
@@ -87,8 +94,15 @@ impl Workbench {
             view.update(cx, |view, cx| {
                 view.terminal_list_loading = false;
                 match result {
-                    Ok(sessions) => view.terminals.update_sessions(sessions),
+                    Ok(sessions) => {
+                        let was_disconnected = view.terminals.sessions.is_empty();
+                        view.terminals.update_sessions(sessions);
+                        if was_disconnected && !view.terminals.sessions.is_empty() {
+                            view.terminal_poll.reset();
+                        }
+                    }
                     Err(error) => {
+                        view.terminals.update_sessions(Vec::new());
                         view.terminals.status = format!("Session refresh failed: {error}");
                     }
                 }
@@ -116,9 +130,11 @@ impl Workbench {
             cx.notify();
             return;
         };
-        let Some((handle, cursor)) = self.terminals.read_request() else {
+        let Some(ticket) = self.terminals.active_ticket() else {
             return;
         };
+        let handle = ticket.handle.clone();
+        let cursor = ticket.cursor;
         self.terminal_read_loading = Some(handle.clone());
         cx.notify();
         cx.spawn(async move |view, cx| {
@@ -129,15 +145,49 @@ impl Workbench {
                 view.terminal_read_loading = None;
                 match result {
                     Ok(chunk) => {
-                        view.terminals.apply_chunk(chunk);
+                        if view.terminals.active_ticket().as_ref() == Some(&ticket) {
+                            // Successful reads with no new output still
+                            // reset previous failure backoff.
+                            view.terminal_poll.reset();
+                        }
+                        view.terminals.apply_ticket_chunk(&ticket, chunk);
                     }
                     Err(error) => {
-                        view.terminals.status = format!("Terminal read failed: {error}");
+                        if view.terminals.active_ticket().as_ref() == Some(&ticket) {
+                            view.terminal_poll.failed();
+                            view.terminals.status = format!("Terminal read failed: {error}");
+                        }
                     }
                 }
                 cx.notify();
             })
             .ok();
+        })
+        .detach();
+    }
+
+    fn start_terminal_polling(&mut self, cx: &mut Context<Self>) {
+        // A single lifecycle-bound timer: no timer per tab, no stale callback
+        // after the Workbench entity/window has been destroyed.
+        cx.spawn(async move |view, cx| loop {
+            gpui::Timer::after(Duration::from_millis(1500)).await;
+            if view
+                .update(cx, |view, cx| {
+                    view.terminal_tick = view.terminal_tick.wrapping_add(1);
+                    if view.terminal_tick % 10 == 1 {
+                        view.refresh_terminals(cx);
+                    }
+                    if view.terminal_poll.tick()
+                        && view.terminal_read_loading.is_none()
+                        && view.terminals.active_ticket().is_some()
+                    {
+                        view.refresh_terminal_output(cx);
+                    }
+                })
+                .is_err()
+            {
+                break;
+            }
         })
         .detach();
     }
@@ -199,6 +249,7 @@ impl Render for Workbench {
             .unwrap_or_default();
         let terminal_status = self.terminals.status.clone();
         let has_terminal_preview = self.terminals.active().is_some();
+        let terminal_auto = self.terminal_poll.enabled();
 
         div()
             .size_full()
@@ -475,6 +526,19 @@ impl Render for Workbench {
                                             )
                                             .child(
                                                 div()
+                                                    .id("terminal-preview-autopoll")
+                                                    .px_2()
+                                                    .cursor_pointer()
+                                                    .text_sm()
+                                                    .text_color(rgb(if terminal_auto { TEXT } else { MUTED }))
+                                                    .child(if terminal_auto { "Auto: On" } else { "Auto: Off" })
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.terminal_poll.toggle();
+                                                        cx.notify();
+                                                    })),
+                                            )
+                                            .child(
+                                                div()
                                                     .id("terminal-preview-refresh")
                                                     .px_3()
                                                     .cursor_pointer()
@@ -504,7 +568,7 @@ impl Render for Workbench {
                                             .font_family("JetBrains Mono")
                                             .text_sm()
                                             .child(if terminal_output.is_empty() {
-                                                "No output available. Select Read more to retry.".into()
+                                                "No output available. Auto updates are enabled by default.".into()
                                             } else {
                                                 terminal_output
                                             }),
@@ -678,7 +742,7 @@ fn main() {
                 ..Default::default()
             },
             |_, cx| {
-                cx.new(|_| Workbench {
+                let view = cx.new(|_| Workbench {
                     model,
                     session_store,
                     runtime_bridge,
@@ -687,7 +751,11 @@ fn main() {
                     terminals: TerminalDock::default(),
                     terminal_list_loading: false,
                     terminal_read_loading: None,
-                })
+                    terminal_poll: TerminalPollGate::default(),
+                    terminal_tick: 0,
+                });
+                view.update(cx, |view, cx| view.start_terminal_polling(cx));
+                view
             },
         )
         .expect("create native GPUI desktop window");

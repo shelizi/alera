@@ -47,7 +47,33 @@ to open a local preview tab and retrieve the latest 8 KiB of output, or click
 preserving local preview tabs. Output is rendered as a bounded plain-text
 transcript (48 KiB), with ANSI, OSC and DCS escape sequences removed. It
 is not a VT terminal emulator and does not provide keyboard input, resizing,
-TUI cursor painting, automatic polling or a PTY attach lease.
+TUI cursor painting or a PTY attach lease.
+
+An active terminal preview automatically checks for new output every 1.5
+seconds by default. The sidebar also refreshes the Session list every 15
+seconds. Only a single polling timer runs per GPUI window. Click `Auto: Off`
+to pause automatic transcript updates without closing the existing
+terminal; `Read more` remains available manually. Transient read failures
+use capped exponential backoff, and responses from closed/reopened tabs or
+replaced Host session identities are discarded.
+
+For the live-host Windows integration regression, build the CLI from this
+branch and run:
+
+```powershell
+$env:ALERA_GPUI_TEST_CLI = (Resolve-Path 'rust/target/debug/alera.exe').Path
+# Optional: also smoke-run the GPUI .exe against the isolated test Host.
+# $env:ALERA_GPUI_TEST_APP = (Resolve-Path 'desktop_gpui/target/debug/alera-gpui-desktop.exe').Path
+cargo test --manifest-path desktop_gpui/Cargo.toml --no-default-features --test live_runtime_host -- --ignored --nocapture
+```
+
+This test creates its **own** temporary Runtime Host and short-lived PTY
+fixture. It does not use your Alera production Runtime directory or
+credentials. It verifies the authenticated CLI list/read/cursor behavior
+and the `--no-start` safety guard before and after Host termination.
+When `ALERA_GPUI_TEST_APP` is set, it additionally launches the real native
+GPUI executable against that isolated Host for a process-survival smoke test;
+this is not a GUI click, terminal input or pixel-level rendering validation.
 
 **Important:** For terminal list/read you must use the Alera CLI built from
 this experimental branch, which adds the fail-closed `--no-start` option.
@@ -80,17 +106,26 @@ sidecar/runtime contracts, not be reimplemented directly in GPUI views.
 ## Verification
 
 - Windows: `cargo check --all-targets` and debug `cargo build` passed with GPUI 0.2.2.
-- Headless tests: 22/22 passed (navigation, persistence, path containment,
-  file limits, tabs, reload, terminal cursor, ANSI filtering and CLI parsing) with
+- Headless tests: 26/26 passed (navigation, persistence, path containment,
+  file limits, tabs, reload, terminal cursor, auto-poll backoff, stale
+  response handling, ANSI filtering and CLI parsing) with
   `--no-default-features --lib`.
+- An opt-in Windows test passed against a real isolated Host and CLI: Host
+  startup, session creation, authenticated list, incremental cursor reads,
+  and fail-closed `--no-start` when the Host is absent or terminated.
+- The same isolated Host regression passed with the freshly built GPUI
+  executable running concurrently, without unexpected process exit or Host
+  replacement; both test-owned processes were stopped after verification.
+- The updated GPUI executable was also smoke-launched independently:
+  nonzero Win32 window handle, empty stderr, test process cleaned up.
 - A two-launch smoke run using an isolated `ALERA_GPUI_STATE_DIR`
   confirmed valid native Windows window handles, empty stderr, last-workspace
   persistence and correct workspace restoration when restarted from another
   working directory. Both test-owned processes were terminated afterward.
 - This is **not** a visual/UI-automation pass, a release artifact or cross-platform binary parity claim.
 - `.github/workflows/gpui-desktop.yml` defines separate experimental model and Windows build checks. It does not change Flutter release jobs.
-- The experimental CI adds a Windows CLI parser check for `terminal --no-start`.
-  This is not yet a live-Host integration test and CI jobs are not verified remotely.
+- The experimental CI includes a Windows CLI parser check and isolated
+  live-Host integration regression. CI jobs have not run remotely.
 
 ## Architecture
 

@@ -262,17 +262,22 @@ impl TextDecoder {
 #[derive(Clone, Debug)]
 pub struct TerminalTab {
     pub handle: String,
+    pub tab_id: String,
+    pub workspace_id: String,
     pub title: String,
     pub running: bool,
     pub output: String,
     pub next_cursor: Option<u64>,
+    generation: u64,
     decoder: TextDecoder,
 }
 
 impl TerminalTab {
-    fn new(session: &TerminalSession) -> Self {
+    fn new(session: &TerminalSession, generation: u64) -> Self {
         Self {
             handle: session.handle.clone(),
+            tab_id: session.tab_id.clone(),
+            workspace_id: session.workspace_id.clone(),
             title: session
                 .agent_type
                 .clone()
@@ -280,6 +285,7 @@ impl TerminalTab {
             running: session.running,
             output: String::new(),
             next_cursor: None,
+            generation,
             decoder: TextDecoder::default(),
         }
     }
@@ -315,19 +321,81 @@ impl TerminalTab {
     }
 }
 
+/// Correlates a read with exactly one local preview tab and cursor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TerminalReadTicket {
+    pub handle: String,
+    pub cursor: Option<u64>,
+    generation: u64,
+}
+
+/// One tick per 1500 ms; errors back off to avoid spawning busy-loop CLI reads.
+#[derive(Debug, Clone)]
+pub struct TerminalPollGate {
+    enabled: bool,
+    failures: u32,
+    ticks_to_retry: u32,
+}
+
+impl Default for TerminalPollGate {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            failures: 0,
+            ticks_to_retry: 0,
+        }
+    }
+}
+
+impl TerminalPollGate {
+    pub fn enabled(&self) -> bool {
+        self.enabled
+    }
+    pub fn toggle(&mut self) -> bool {
+        self.enabled = !self.enabled;
+        self.reset();
+        self.enabled
+    }
+    pub fn tick(&mut self) -> bool {
+        if !self.enabled {
+            return false;
+        }
+        if self.ticks_to_retry > 0 {
+            self.ticks_to_retry -= 1;
+            return false;
+        }
+        true
+    }
+    pub fn reset(&mut self) {
+        self.failures = 0;
+        self.ticks_to_retry = 0;
+    }
+    pub fn failed(&mut self) {
+        self.failures = self.failures.saturating_add(1);
+        self.ticks_to_retry = 1u32 << self.failures.saturating_sub(1).min(4);
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct TerminalDock {
     pub sessions: Vec<TerminalSession>,
     pub tabs: Vec<TerminalTab>,
     pub active_tab: Option<usize>,
     pub status: String,
+    next_generation: u64,
 }
 
 impl TerminalDock {
     pub fn update_sessions(&mut self, sessions: Vec<TerminalSession>) {
         for tab in &mut self.tabs {
-            if let Some(session) = sessions.iter().find(|item| item.handle == tab.handle) {
+            if let Some(session) = sessions.iter().find(|item| {
+                item.handle == tab.handle
+                    && item.tab_id == tab.tab_id
+                    && item.workspace_id == tab.workspace_id
+            }) {
                 tab.running = session.running;
+            } else {
+                tab.running = false;
             }
         }
         self.sessions = sessions;
@@ -335,10 +403,6 @@ impl TerminalDock {
     }
 
     pub fn open(&mut self, handle: &str) -> bool {
-        if let Some(index) = self.tabs.iter().position(|tab| tab.handle == handle) {
-            self.active_tab = Some(index);
-            return true;
-        }
         let Some(session) = self
             .sessions
             .iter()
@@ -346,11 +410,25 @@ impl TerminalDock {
         else {
             return false;
         };
+        if let Some(index) = self.tabs.iter().position(|tab| tab.handle == handle) {
+            if self.tabs[index].tab_id != session.tab_id
+                || self.tabs[index].workspace_id != session.workspace_id
+            {
+                // Explicitly selecting a new session with a reused handle
+                // must not silently attach an old transcript.
+                self.next_generation = self.next_generation.wrapping_add(1);
+                self.tabs[index] = TerminalTab::new(session, self.next_generation);
+            }
+            self.active_tab = Some(index);
+            return true;
+        }
         if self.tabs.len() >= MAX_OPEN_TABS {
             self.status = format!("Terminal preview limit reached ({MAX_OPEN_TABS})");
             return false;
         }
-        self.tabs.push(TerminalTab::new(session));
+        self.next_generation = self.next_generation.wrapping_add(1);
+        self.tabs
+            .push(TerminalTab::new(session, self.next_generation));
         self.active_tab = Some(self.tabs.len() - 1);
         true
     }
@@ -370,6 +448,50 @@ impl TerminalDock {
     pub fn read_request(&self) -> Option<(String, Option<u64>)> {
         self.active()
             .map(|tab| (tab.handle.clone(), tab.next_cursor))
+    }
+
+    pub fn active_ticket(&self) -> Option<TerminalReadTicket> {
+        let tab = self.active()?;
+        if !self.sessions.iter().any(|session| {
+            session.handle == tab.handle
+                && session.tab_id == tab.tab_id
+                && session.workspace_id == tab.workspace_id
+        }) {
+            return None;
+        }
+        Some(TerminalReadTicket {
+            handle: tab.handle.clone(),
+            cursor: tab.next_cursor,
+            generation: tab.generation,
+        })
+    }
+
+    pub fn apply_ticket_chunk(
+        &mut self,
+        ticket: &TerminalReadTicket,
+        chunk: TerminalChunk,
+    ) -> bool {
+        if ticket.handle != chunk.handle {
+            return false;
+        }
+        if !self.sessions.iter().any(|session| {
+            session.handle == ticket.handle
+                && self.tabs.iter().any(|tab| {
+                    tab.handle == ticket.handle
+                        && tab.tab_id == session.tab_id
+                        && tab.workspace_id == session.workspace_id
+                })
+        }) {
+            // Session was lost on Host disconnect; reject queued output.
+            return false;
+        }
+        let Some(tab) = self.tabs.iter().find(|tab| tab.handle == ticket.handle) else {
+            return false;
+        };
+        if ticket.generation != tab.generation || ticket.cursor != tab.next_cursor {
+            return false;
+        }
+        self.apply_chunk(chunk)
     }
 
     pub fn apply_chunk(&mut self, chunk: TerminalChunk) -> bool {
@@ -549,5 +671,97 @@ mod tests {
         );
         assert!(!runtime.path().join("host.json").exists());
         assert!(!runtime.path().join("runtime-host.json").exists());
+    }
+
+    #[test]
+    fn auto_poll_gate_backs_off_and_can_be_disabled_or_reset() {
+        let mut gate = TerminalPollGate::default();
+        assert!(gate.enabled());
+        assert!(gate.tick());
+        gate.failed();
+        assert!(!gate.tick());
+        assert!(gate.tick());
+        gate.failed();
+        assert!(!gate.tick());
+        assert!(!gate.tick());
+        assert!(gate.tick());
+        for _ in 0..8 {
+            gate.failed();
+        }
+        for _ in 0..16 {
+            assert!(!gate.tick());
+        }
+        assert!(gate.tick());
+        assert!(!gate.toggle());
+        for _ in 0..20 {
+            assert!(!gate.tick());
+        }
+        assert!(gate.toggle());
+        assert!(gate.tick());
+        gate.failed();
+        gate.reset();
+        assert!(gate.tick());
+    }
+
+    #[test]
+    fn stale_async_response_never_populates_reopened_same_handle() {
+        let mut dock = TerminalDock::default();
+        dock.update_sessions(vec![session("term-1")]);
+        assert!(dock.open("term-1"));
+        let old = dock.active_ticket().unwrap();
+        dock.close(0);
+        assert!(dock.open("term-1"));
+        let new = dock.active_ticket().unwrap();
+        assert_ne!(new, old);
+        assert!(!dock.apply_ticket_chunk(&old, chunk("term-1", 0, 5, "stale")));
+        assert!(dock.active().unwrap().output.is_empty());
+        assert!(dock.apply_ticket_chunk(&new, chunk("term-1", 0, 5, "fresh")));
+        assert_eq!(dock.active().unwrap().output, "fresh");
+        assert!(!dock.apply_ticket_chunk(&new, chunk("term-1", 0, 10, "duplicate")));
+        assert_eq!(dock.active().unwrap().output, "fresh");
+    }
+
+    #[test]
+    fn disconnected_host_preserves_transcript_and_cancels_new_reads() {
+        let mut dock = TerminalDock::default();
+        dock.update_sessions(vec![session("term-1")]);
+        assert!(dock.open("term-1"));
+        assert!(dock.apply_chunk(chunk("term-1", 0, 4, "keep")));
+        let ticket = dock.active_ticket().unwrap();
+        dock.update_sessions(Vec::new());
+        assert!(dock.active_ticket().is_none());
+        assert!(!dock.apply_ticket_chunk(&ticket, chunk("term-1", 4, 8, "stale")));
+        assert_eq!(dock.active().unwrap().output, "keep");
+        assert!(!dock.active().unwrap().running);
+        // Reconnecting with the same Host session lets the existing tab
+        // advance from its previous cursor.
+        dock.update_sessions(vec![session("term-1")]);
+        let new = dock.active_ticket().unwrap();
+        assert_eq!(new.cursor, Some(4));
+        assert_eq!(new, ticket);
+        assert!(dock.apply_ticket_chunk(&new, chunk("term-1", 4, 8, "more")));
+        assert_eq!(dock.active().unwrap().output, "keepmore");
+    }
+
+    #[test]
+    fn reused_handle_with_different_tab_requires_explicit_new_selection() {
+        let mut dock = TerminalDock::default();
+        dock.update_sessions(vec![session("term-1")]);
+        dock.open("term-1");
+        let prior = dock.active_ticket().unwrap();
+        assert!(dock.apply_chunk(chunk("term-1", 0, 4, "old!")));
+        let mut replacement = session("term-1");
+        replacement.tab_id = "completely-new-tab".into();
+        dock.update_sessions(vec![replacement]);
+        assert!(dock.active_ticket().is_none());
+        assert!(!dock.active().unwrap().running);
+        assert_eq!(dock.active().unwrap().output, "old!");
+        assert!(!dock.apply_ticket_chunk(&prior, chunk("term-1", 4, 8, "bad!")));
+        assert!(dock.open("term-1"));
+        let next = dock.active_ticket().unwrap();
+        assert_ne!(prior, next);
+        assert!(dock.active().unwrap().output.is_empty());
+        assert!(dock.apply_ticket_chunk(&next, chunk("term-1", 0, 4, "new!")));
+        assert_eq!(dock.active().unwrap().output, "new!");
     }
 }

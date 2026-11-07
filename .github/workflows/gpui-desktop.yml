@@ -68,7 +68,7 @@ jobs:
           }
 
   cli-no-start:
-    name: Verify terminal --no-start CLI guard (Windows)
+    name: Verify terminal CLI guard and isolated live Host (Windows)
     runs-on: windows-latest
     timeout-minutes: 60
     steps:
@@ -82,3 +82,10 @@ jobs:
           toolchain: '1.98.0'
       - name: Verify terminal CLI no-start parser
         run: cargo test --manifest-path rust/Cargo.toml -p alera-cli terminal_no_start_requires_explicit_opt_in_and_parses_for_read_and_list --locked
+      - name: Build experimental Alera CLI
+        run: cargo build --manifest-path rust/Cargo.toml -p alera-cli --bin alera --locked
+      - name: Run isolated live Runtime Host / terminal cursor regression
+        shell: pwsh
+        run: |
+          $env:ALERA_GPUI_TEST_CLI = (Resolve-Path 'rust/target/debug/alera.exe').Path
+          cargo test --manifest-path desktop_gpui/Cargo.toml --no-default-features --test live_runtime_host --locked -- --ignored --nocapture
