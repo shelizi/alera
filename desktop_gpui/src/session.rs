@@ -148,7 +148,7 @@ impl PreviewSessionStore {
             return Ok(Vec::new());
         }
         let mut roots = Vec::new();
-        for path in saved.roots.into_iter().take(MAX_SAVED_PROJECTS * 2) {
+        for path in saved.roots {
             if roots.len() == MAX_SAVED_PROJECTS {
                 break;
             }
@@ -189,13 +189,23 @@ impl PreviewSessionStore {
     }
 
     /// Unpin only; never deletes on-disk projects, preview sessions, or Git.
+    /// Missing or non-directory aliases are a no-op rather than an error.
     pub fn unsave_project(&self, path: impl AsRef<Path>) -> io::Result<()> {
         let path = path.as_ref();
+        let canonical = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        let mut removed = false;
         let roots = self
             .saved_projects()?
             .into_iter()
-            .filter(|root| root != path)
-            .collect();
+            .filter(|root| {
+                let matches = root == &canonical || root.as_path() == path;
+                removed |= matches;
+                !matches
+            })
+            .collect::<Vec<_>>();
+        if !removed {
+            return Ok(());
+        }
         self.write_json(
             &self.state_dir.join("projects.json"),
             &SavedProjects {
@@ -247,22 +257,7 @@ impl PreviewSessionStore {
         // Load MRU before overwriting last.json: older versions without an
         // index rely on last.json to recover the departing workspace.
         let recent = self.recent_workspaces()?;
-        let to_relative = |path: &Path| path.strip_prefix(root).ok().map(Path::to_path_buf);
-        let session = SavedSession {
-            version: VERSION,
-            root: root.to_path_buf(),
-            directory: to_relative(model.directory()).unwrap_or_default(),
-            tabs: model
-                .tabs()
-                .iter()
-                .filter_map(|tab| to_relative(&tab.path))
-                .take(MAX_RESTORED_TABS)
-                .collect(),
-            active: model
-                .active_document()
-                .and_then(|tab| to_relative(&tab.path)),
-        };
-        self.write_json(&self.session_path(root), &session)?;
+        self.write_json(&self.session_path(root), &session_snapshot(model))?;
         if !recent.first().is_some_and(|path| path == root) {
             let roots = std::iter::once(root.to_path_buf())
                 .chain(recent.into_iter().filter(|path| path != root))
@@ -288,7 +283,7 @@ impl PreviewSessionStore {
     }
 
     /// Switch transaction: validate destination + restore its snapshot first,
-    /// then save the departing workspace and update the active workspace hint.
+    /// then atomically persist both workspace snapshots and the active hints.
     /// Caller replaces its WorkbenchModel only when the entire operation works.
     pub fn switch_workspace(
         &self,
@@ -297,8 +292,53 @@ impl PreviewSessionStore {
     ) -> io::Result<WorkbenchModel> {
         let mut next = WorkbenchModel::new(destination)?;
         self.restore(&mut next)?;
-        self.save(departing)?;
-        self.save(&next)?;
+
+        // Reproduce save(departing) followed by save(next) for the MRU index.
+        // The index is only rewritten when one of those saves would rewrite it.
+        let mut recent = self.recent_workspaces()?;
+        let mut recent_dirty = false;
+        for root in [departing.root().to_path_buf(), next.root().to_path_buf()] {
+            if recent.first().is_some_and(|path| path == &root) {
+                continue;
+            }
+            let previous = std::mem::take(&mut recent);
+            recent = std::iter::once(root.clone())
+                .chain(previous.into_iter().filter(|path| path != &root))
+                .take(MAX_RECENT_WORKSPACES)
+                .collect();
+            recent_dirty = true;
+        }
+
+        let mut writes = Vec::new();
+        push_write(
+            &mut writes,
+            self.session_path(departing.root()),
+            encode_json(&session_snapshot(departing))?,
+        );
+        push_write(
+            &mut writes,
+            self.session_path(next.root()),
+            encode_json(&session_snapshot(&next))?,
+        );
+        if recent_dirty {
+            push_write(
+                &mut writes,
+                self.state_dir.join("recent.json"),
+                encode_json(&RecentWorkspaces {
+                    version: VERSION,
+                    roots: recent,
+                })?,
+            );
+        }
+        push_write(
+            &mut writes,
+            self.state_dir.join("last.json"),
+            encode_json(&LastWorkspace {
+                version: VERSION,
+                root: next.root().to_path_buf(),
+            })?,
+        );
+        self.write_transaction(writes)?;
         Ok(next)
     }
 
@@ -339,16 +379,78 @@ impl PreviewSessionStore {
     }
 
     fn write_json<T: Serialize>(&self, path: &Path, value: &T) -> io::Result<()> {
-        let bytes = serde_json::to_vec(value)
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-        if bytes.len() as u64 > MAX_STATE_BYTES {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "State file exceeds 64 KiB",
-            ));
+        let bytes = encode_json(value)?;
+        fs::create_dir_all(&self.state_dir)?;
+        self.write_bytes_atomic(path, &bytes)
+    }
+
+    /// Persist a small set of state files as one rollback-able transaction.
+    /// All target paths are backed up before the first rename so a failed
+    /// switch cannot leave a half-written MRU/session state behind.
+    fn write_transaction(&self, writes: Vec<(PathBuf, Vec<u8>)>) -> io::Result<()> {
+        if writes.is_empty() {
+            return Ok(());
         }
         fs::create_dir_all(&self.state_dir)?;
+        let mut backups: Vec<(PathBuf, Option<Vec<u8>>)> = Vec::with_capacity(writes.len());
+        for (path, _) in &writes {
+            let contents = match fs::File::open(path) {
+                Ok(file) => {
+                    if file.metadata()?.len() > MAX_STATE_BYTES {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "Existing session state exceeds 64 KiB",
+                        ));
+                    }
+                    let mut bytes = Vec::new();
+                    file.take(MAX_STATE_BYTES + 1).read_to_end(&mut bytes)?;
+                    if bytes.len() as u64 > MAX_STATE_BYTES {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "Existing session state exceeds 64 KiB",
+                        ));
+                    }
+                    Some(bytes)
+                }
+                Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+                Err(error) => return Err(error),
+            };
+            backups.push((path.to_path_buf(), contents));
+        }
 
+        let mut written = Vec::with_capacity(writes.len());
+        for (path, bytes) in &writes {
+            if let Err(error) = self.write_bytes_atomic(path, bytes) {
+                self.rollback_transaction(&backups, &written);
+                return Err(error);
+            }
+            written.push(path.to_path_buf());
+        }
+        Ok(())
+    }
+
+    fn rollback_transaction(&self, backups: &[(PathBuf, Option<Vec<u8>>)], written: &[PathBuf]) {
+        let mut restored: Vec<PathBuf> = Vec::new();
+        for path in written.iter().rev() {
+            if restored.contains(path) {
+                continue;
+            }
+            restored.push(path.to_path_buf());
+            for (backup_path, contents) in backups {
+                if backup_path != path {
+                    continue;
+                }
+                if let Some(bytes) = contents {
+                    let _ = self.write_bytes_atomic(path, bytes);
+                } else {
+                    let _ = fs::remove_file(path);
+                }
+                break;
+            }
+        }
+    }
+
+    fn write_bytes_atomic(&self, path: &Path, bytes: &[u8]) -> io::Result<()> {
         // Same-directory rename preserves the previous complete snapshot
         // if the process terminates while writing the replacement.
         let suffix = SystemTime::now()
@@ -358,7 +460,7 @@ impl PreviewSessionStore {
         let tmp = path.with_extension(format!("tmp-{}-{suffix}", std::process::id()));
         let write_result = (|| -> io::Result<()> {
             let mut file = OpenOptions::new().write(true).create_new(true).open(&tmp)?;
-            file.write_all(&bytes)?;
+            file.write_all(bytes)?;
             file.sync_all()?;
             fs::rename(&tmp, path)?;
             Ok(())
@@ -367,6 +469,45 @@ impl PreviewSessionStore {
             let _ = fs::remove_file(&tmp);
         }
         write_result
+    }
+}
+
+fn session_snapshot(model: &WorkbenchModel) -> SavedSession {
+    let root = model.root();
+    let to_relative = |path: &Path| path.strip_prefix(root).ok().map(Path::to_path_buf);
+    SavedSession {
+        version: VERSION,
+        root: root.to_path_buf(),
+        directory: to_relative(model.directory()).unwrap_or_default(),
+        tabs: model
+            .tabs()
+            .iter()
+            .filter_map(|tab| to_relative(&tab.path))
+            .take(MAX_RESTORED_TABS)
+            .collect(),
+        active: model
+            .active_document()
+            .and_then(|tab| to_relative(&tab.path)),
+    }
+}
+
+fn encode_json<T: Serialize>(value: &T) -> io::Result<Vec<u8>> {
+    let bytes = serde_json::to_vec(value)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    if bytes.len() as u64 > MAX_STATE_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "State file exceeds 64 KiB",
+        ));
+    }
+    Ok(bytes)
+}
+
+fn push_write(writes: &mut Vec<(PathBuf, Vec<u8>)>, path: PathBuf, bytes: Vec<u8>) {
+    if let Some(index) = writes.iter().position(|(candidate, _)| candidate == &path) {
+        writes[index].1 = bytes;
+    } else {
+        writes.push((path, bytes));
     }
 }
 
@@ -664,5 +805,102 @@ mod tests {
         assert!(store
             .switch_workspace(&active, state.path().join("missing"))
             .is_err());
+    }
+
+    #[test]
+    fn saved_projects_are_capped_unique_and_independent_from_mru() {
+        let state = tempfile::tempdir().unwrap();
+        let workspaces = tempfile::tempdir().unwrap();
+        let store = PreviewSessionStore::new(state.path());
+        let total = MAX_SAVED_PROJECTS + 2;
+        let mut paths = Vec::new();
+        let mut canonical = Vec::new();
+        for index in 0..total {
+            let path = workspaces.path().join(format!("project-{index:02}"));
+            fs::create_dir(&path).unwrap();
+            store.save_project(&path).unwrap();
+            paths.push(path.clone());
+            canonical.push(dunce::canonicalize(&path).unwrap());
+        }
+        let dropped = canonical.len() - MAX_SAVED_PROJECTS;
+        let expected: Vec<PathBuf> = canonical[dropped..].iter().rev().cloned().collect();
+        assert_eq!(store.saved_projects().unwrap(), expected);
+        assert!(!store.saved_projects().unwrap().contains(&canonical[0]));
+
+        // Re-saving through a `.` alias keeps the same canonical pin set.
+        store.save_project(paths.last().unwrap().join(".")).unwrap();
+        assert_eq!(store.saved_projects().unwrap(), expected);
+
+        assert!(store.recent_workspaces().unwrap().is_empty());
+        assert!(store.last_workspace().unwrap().is_none());
+    }
+
+    #[test]
+    fn unpin_preserves_project_files_workspace_preview_and_open_tabs() {
+        let state = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        let store = PreviewSessionStore::new(state.path());
+        fs::write(project.path().join("note.txt"), "draft source").unwrap();
+        let mut model = WorkbenchModel::new(project.path()).unwrap();
+        assert!(model.open_path(project.path().join("note.txt")));
+        store.save(&model).unwrap();
+        let session_path = store.session_path(model.root());
+        assert!(session_path.exists());
+        let recent = store.recent_workspaces().unwrap();
+        let last = store.last_workspace().unwrap();
+
+        store.save_project(project.path()).unwrap();
+        assert_eq!(
+            store.saved_projects().unwrap(),
+            vec![dunce::canonicalize(project.path()).unwrap()]
+        );
+        store.unsave_project(project.path().join(".")).unwrap();
+        assert!(store.saved_projects().unwrap().is_empty());
+        assert!(session_path.exists());
+        assert_eq!(
+            fs::read_to_string(project.path().join("note.txt")).unwrap(),
+            "draft source"
+        );
+        assert_eq!(store.recent_workspaces().unwrap(), recent);
+        assert_eq!(store.last_workspace().unwrap(), last);
+
+        let mut restored = WorkbenchModel::new(project.path()).unwrap();
+        assert_eq!(store.restore(&mut restored).unwrap(), 1);
+        assert_eq!(restored.content(), "draft source");
+    }
+
+    #[test]
+    fn failed_switch_leaves_workspace_snapshot_and_mru_untouched() {
+        let state = tempfile::tempdir().unwrap();
+        let root_a = tempfile::tempdir().unwrap();
+        let root_b = tempfile::tempdir().unwrap();
+        fs::write(root_a.path().join("a.txt"), "A").unwrap();
+        fs::write(root_a.path().join("a2.txt"), "A2").unwrap();
+        fs::write(root_b.path().join("b.txt"), "B").unwrap();
+        let store = PreviewSessionStore::new(state.path());
+        let mut a = WorkbenchModel::new(root_a.path()).unwrap();
+        assert!(a.open_path(root_a.path().join("a.txt")));
+        let mut b = WorkbenchModel::new(root_b.path()).unwrap();
+        assert!(b.open_path(root_b.path().join("b.txt")));
+        store.save(&b).unwrap();
+        store.save(&a).unwrap();
+        assert!(a.open_path(root_a.path().join("a2.txt")));
+
+        let last_path = state.path().join("last.json");
+        fs::remove_file(&last_path).unwrap();
+        fs::create_dir(&last_path).unwrap();
+
+        assert!(store.switch_workspace(&a, root_b.path()).is_err());
+        assert_eq!(
+            store.recent_workspaces().unwrap(),
+            vec![a.root().to_path_buf(), b.root().to_path_buf()]
+        );
+        let mut restored_a = WorkbenchModel::new(root_a.path()).unwrap();
+        assert_eq!(store.restore(&mut restored_a).unwrap(), 1);
+        assert_eq!(restored_a.content(), "A");
+        let mut restored_b = WorkbenchModel::new(root_b.path()).unwrap();
+        assert_eq!(store.restore(&mut restored_b).unwrap(), 1);
+        assert_eq!(restored_b.content(), "B");
+        assert!(last_path.is_dir());
     }
 }

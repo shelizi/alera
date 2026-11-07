@@ -228,11 +228,16 @@ impl WorkbenchModel {
     /// retaining unrelated open previews. A real editor must first be checked
     /// for dirty changes by the UI before any filesystem mutation.
     pub fn forget_path_and_children(&mut self, path: &Path) {
+        let active_path = self.active_document().map(|tab| tab.path.clone());
+        let prior_active_index = self.active_tab;
         self.tabs.retain(|tab| !tab.path.starts_with(path));
-        self.active_tab = self
-            .active_tab
-            .filter(|index| *index < self.tabs.len())
-            .or_else(|| (!self.tabs.is_empty()).then_some(self.tabs.len() - 1));
+        self.active_tab = active_path
+            .and_then(|active| self.tabs.iter().position(|tab| tab.path == active))
+            .or_else(|| {
+                prior_active_index.and_then(|index| {
+                    (!self.tabs.is_empty()).then(|| index.min(self.tabs.len() - 1))
+                })
+            });
         if self.directory.starts_with(path) {
             self.directory = self.root.clone();
         }
@@ -315,6 +320,45 @@ fn read_preview(path: &Path) -> io::Result<String> {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn forgetting_previous_or_active_file_keeps_correct_preview_selected() {
+        let temporary = tempfile::tempdir().unwrap();
+        for (name, content) in [("a.txt", "A"), ("b.txt", "B"), ("c.txt", "C")] {
+            fs::write(temporary.path().join(name), content).unwrap();
+        }
+        let mut model = WorkbenchModel::new(temporary.path()).unwrap();
+        let root = model.root().to_path_buf();
+        for name in ["a.txt", "b.txt", "c.txt"] {
+            assert!(model.open_path(root.join(name)));
+        }
+        assert_eq!(model.content(), "C");
+        model.forget_path_and_children(&root.join("a.txt"));
+        assert_eq!(model.active_tab(), Some(1));
+        assert_eq!(model.content(), "C");
+        model.forget_path_and_children(&root.join("c.txt"));
+        assert_eq!(model.active_tab(), Some(0));
+        assert_eq!(model.content(), "B");
+        model.forget_path_and_children(&root.join("b.txt"));
+        assert_eq!(model.active_tab(), None);
+        assert!(model.tabs().is_empty());
+    }
+
+    #[test]
+    fn forgetting_directory_closes_only_descendant_previews() {
+        let temporary = tempfile::tempdir().unwrap();
+        fs::create_dir(temporary.path().join("sub")).unwrap();
+        fs::write(temporary.path().join("outside.txt"), "outside").unwrap();
+        fs::write(temporary.path().join("sub").join("inside.txt"), "inside").unwrap();
+        let mut model = WorkbenchModel::new(temporary.path()).unwrap();
+        let root = model.root().to_path_buf();
+        assert!(model.open_path(root.join("outside.txt")));
+        assert!(model.open_path(root.join("sub").join("inside.txt")));
+        model.forget_path_and_children(&root.join("sub"));
+        assert_eq!(model.tabs().len(), 1);
+        assert_eq!(model.content(), "outside");
+        assert_eq!(model.directory(), root.as_path());
+    }
 
     #[test]
     fn sorts_directories_before_files_and_skips_generated() {

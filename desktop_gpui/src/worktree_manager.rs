@@ -1,14 +1,21 @@
 //! Guarded Git worktree discovery/create/remove for native GPUI Projects.
-//! Git is invoked directly (never through a shell), and only an explicitly
-//! managed checkout below the repository's own .worktrees/ may be removed.
+//! Git is invoked directly (never through a shell), prompts are disabled, and
+//! every invocation is bounded by a timeout. Only an explicitly managed
+//! checkout directly below the repository's own .worktrees/ may be removed.
 use std::ffi::OsStr;
 use std::fs;
-use std::io::{self, ErrorKind};
+use std::io::{self, ErrorKind, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::mpsc;
+use std::thread;
+use std::time::{Duration, Instant};
 
 const MAX_WORKTREES: usize = 96;
 const MAX_GIT_OUTPUT_BYTES: usize = 256 * 1024;
+const GIT_TIMEOUT: Duration = Duration::from_secs(60);
+const GIT_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
+const GIT_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorktreeEntry {
@@ -47,15 +54,14 @@ impl WorktreeManager {
         let mut entry: Option<WorktreeEntry> = None;
         for line in raw.lines().chain(std::iter::once("")) {
             if line.is_empty() {
-                if let Some(mut found) = entry.take() {
-                    found.is_primary = entries.is_empty();
+                if let Some(found) = entry.take() {
                     if entries.len() == MAX_WORKTREES {
                         return Err(invalid("Too many Git worktrees for this preview"));
                     }
                     entries.push(found);
                 }
             } else if let Some(value) = line.strip_prefix("worktree ") {
-                let path = PathBuf::from(value);
+                let path = PathBuf::from(unquote_git_path(value));
                 entry = Some(WorktreeEntry {
                     path: dunce::canonicalize(&path).unwrap_or(path),
                     branch: None,
@@ -79,13 +85,24 @@ impl WorktreeManager {
         if entries.is_empty() {
             return Err(invalid("Git returned no worktrees"));
         }
+        // The main worktree keeps a real .git directory while every linked
+        // worktree has a .git file. Prefer that filesystem evidence and fall
+        // back to git's documented ordering (main worktree listed first).
+        if let Some(index) = entries
+            .iter()
+            .position(|entry| is_main_worktree(&entry.path))
+        {
+            entries[index].is_primary = true;
+        } else if let Some(first) = entries.first_mut() {
+            first.is_primary = true;
+        }
         Ok(entries)
     }
 
     pub fn create(&self, branch: &str) -> io::Result<PathBuf> {
         validate_branch(branch)?;
         let entries = self.list()?;
-        let primary = &entries[0].path;
+        let primary = primary_worktree(&entries)?;
         if entries
             .iter()
             .any(|item| item.branch.as_deref() == Some(branch))
@@ -94,6 +111,10 @@ impl WorktreeManager {
                 ErrorKind::AlreadyExists,
                 "Branch already checked out in a worktree",
             ));
+        }
+        let folder = worktree_folder_name(branch);
+        if is_windows_device_name(&folder) {
+            return Err(invalid("Branch name is reserved on Windows"));
         }
         let directory = primary.join(".worktrees");
         match fs::symlink_metadata(&directory) {
@@ -104,19 +125,20 @@ impl WorktreeManager {
             Err(error) if error.kind() == ErrorKind::NotFound => fs::create_dir(&directory)?,
             Err(error) => return Err(error),
         }
-        if dunce::canonicalize(&directory)? != directory {
+        let directory = dunce::canonicalize(&directory)?;
+        if directory.parent() != Some(primary) {
             return Err(forbidden("Worktree storage resolves to another directory"));
         }
-        // Full branch name -> unique one-segment folder name, no traversal.
-        let folder = branch.replace('/', "--");
+        // The encoding is injective, so this path can only collide with a
+        // leftover directory or an already-registered worktree.
         let path = directory.join(folder);
-        if fs::symlink_metadata(&path).is_ok() {
+        if fs::symlink_metadata(&path).is_ok() || entries.iter().any(|item| item.path == path) {
             return Err(io::Error::new(
                 ErrorKind::AlreadyExists,
                 "Managed worktree folder already exists",
             ));
         }
-        let output = self.git_args(&[
+        self.git_args(&[
             OsStr::new("worktree"),
             OsStr::new("add"),
             OsStr::new("-b"),
@@ -124,38 +146,66 @@ impl WorktreeManager {
             path.as_os_str(),
             OsStr::new("HEAD"),
         ])?;
-        let _ = output;
         dunce::canonicalize(path)
     }
 
     /// Delete only a managed checkout after a deliberate UI confirmation.
-    /// Does not force-remove dirty/locked/untracked worktrees or delete branch.
+    /// Never uses --force, never deletes the branch, and refuses anything
+    /// active, primary, dirty, untracked, locked, unregistered, or outside the
+    /// managed .worktrees folder.
     pub fn remove(&self, target: &Path, confirmed: bool) -> io::Result<()> {
         if !confirmed {
             return Err(forbidden("Worktree removal requires confirmation"));
         }
         let target = dunce::canonicalize(target)?;
         let entries = self.list()?;
-        let primary = &entries[0].path;
-        let managed = primary.join(".worktrees");
-        if target.parent() != Some(managed.as_path()) {
-            return Err(forbidden(
-                "Only worktrees in the managed .worktrees folder may be removed",
-            ));
-        }
+        let primary = primary_worktree(&entries)?;
         let entry = entries
             .iter()
             .find(|entry| entry.path == target)
             .ok_or_else(|| invalid("Worktree is not registered with Git"))?;
-        if entry.is_primary || entry.locked || entry.prunable || self.repo_root == target {
+        if entry.is_primary
+            || entry.locked
+            || entry.prunable
+            || target.as_path() == primary
+            || target == self.repo_root
+            || self.repo_root.starts_with(&target)
+        {
             return Err(forbidden(
                 "Cannot remove primary, active, locked or stale worktree",
+            ));
+        }
+        if let Ok(cwd) = std::env::current_dir() {
+            let cwd = dunce::canonicalize(&cwd).unwrap_or(cwd);
+            if cwd.starts_with(&target) {
+                return Err(forbidden(
+                    "Cannot remove the worktree this process is running inside",
+                ));
+            }
+        }
+        let managed_raw = primary.join(".worktrees");
+        match fs::symlink_metadata(&managed_raw) {
+            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+                return Err(forbidden("Worktree storage must be a real directory"));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == ErrorKind::NotFound => {
+                return Err(forbidden("No managed worktree storage exists"));
+            }
+            Err(error) => return Err(error),
+        }
+        let managed = dunce::canonicalize(&managed_raw)?;
+        if managed.parent() != Some(primary) || target.parent() != Some(managed.as_path()) {
+            return Err(forbidden(
+                "Only worktrees in the managed .worktrees folder may be removed",
             ));
         }
         let clean = self.git_in(&target, &["status", "--porcelain", "--untracked-files=all"])?;
         if !clean.trim().is_empty() {
             return Err(forbidden("Worktree has uncommitted or untracked files"));
         }
+        // No --force: git itself also refuses dirty or locked worktrees, and
+        // the branch is intentionally left behind.
         self.git_args(&[
             OsStr::new("worktree"),
             OsStr::new("remove"),
@@ -182,42 +232,197 @@ impl WorktreeManager {
 
     fn git_command(&self) -> Command {
         let mut command = alera_core::child_process::windowless_command("git");
-        command.stdin(Stdio::null()).stderr(Stdio::piped());
+        command.stdin(Stdio::null()).env("GIT_TERMINAL_PROMPT", "0");
         command
     }
 }
 
 fn capture(mut command: Command) -> io::Result<String> {
-    let output = command.output()?;
-    if output.stdout.len() > MAX_GIT_OUTPUT_BYTES {
+    let mut child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let stdout = child.stdout.take().expect("stdout is piped");
+    let stderr = child.stderr.take().expect("stderr is piped");
+    let (stdout_tx, stdout_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let _ = stdout_tx.send(read_capped(stdout));
+    });
+    let (stderr_tx, stderr_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let _ = stderr_tx.send(read_capped(stderr));
+    });
+    let deadline = Instant::now() + GIT_TIMEOUT;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                // Give the readers a moment to observe EOF; a grandchild that
+                // inherited the pipe may keep them blocked, so this is bounded.
+                let _ = stdout_rx.recv_timeout(GIT_DRAIN_TIMEOUT);
+                let _ = stderr_rx.recv_timeout(GIT_DRAIN_TIMEOUT);
+                return Err(io::Error::new(ErrorKind::TimedOut, "Git command timed out"));
+            }
+            Ok(None) => thread::sleep(GIT_POLL_INTERVAL),
+            Err(error) => {
+                let _ = child.kill();
+                return Err(error);
+            }
+        }
+    };
+    let stdout = stdout_rx
+        .recv_timeout(GIT_DRAIN_TIMEOUT)
+        .map_err(|_| io::Error::new(ErrorKind::TimedOut, "Git stdout did not close"))??;
+    let stderr = stderr_rx
+        .recv_timeout(GIT_DRAIN_TIMEOUT)
+        .map_err(|_| io::Error::new(ErrorKind::TimedOut, "Git stderr did not close"))??;
+    if stdout.len() > MAX_GIT_OUTPUT_BYTES {
         return Err(invalid("Git output exceeded 256 KiB"));
     }
-    if !output.status.success() {
-        let reason = String::from_utf8_lossy(&output.stderr);
+    if !status.success() {
+        let reason = String::from_utf8_lossy(&stderr);
         return Err(io::Error::other(format!(
             "Git command failed ({}): {}",
-            output.status,
+            status,
             reason.trim().chars().take(500).collect::<String>()
         )));
     }
-    String::from_utf8(output.stdout).map_err(|error| io::Error::new(ErrorKind::InvalidData, error))
+    String::from_utf8(stdout).map_err(|error| io::Error::new(ErrorKind::InvalidData, error))
+}
+
+/// Read at most MAX_GIT_OUTPUT_BYTES + 1 into memory, then drain the rest so
+/// the child never stalls on a full pipe. Oversized output is reported by the
+/// caller once the child has exited.
+fn read_capped<R: Read>(mut reader: R) -> io::Result<Vec<u8>> {
+    let mut buffer = Vec::new();
+    (&mut reader)
+        .take(MAX_GIT_OUTPUT_BYTES as u64 + 1)
+        .read_to_end(&mut buffer)?;
+    io::copy(&mut reader, &mut io::sink())?;
+    Ok(buffer)
+}
+
+fn primary_worktree(entries: &[WorktreeEntry]) -> io::Result<&Path> {
+    entries
+        .iter()
+        .find(|entry| entry.is_primary)
+        .map(|entry| entry.path.as_path())
+        .ok_or_else(|| invalid("Git returned no primary worktree"))
+}
+
+fn is_main_worktree(path: &Path) -> bool {
+    fs::metadata(path.join(".git"))
+        .map(|metadata| metadata.is_dir())
+        .unwrap_or(false)
+}
+
+/// `git worktree list --porcelain` C-quotes paths containing special bytes.
+fn unquote_git_path(value: &str) -> String {
+    let bytes = value.as_bytes();
+    if bytes.len() < 2 || bytes[0] != b'"' || bytes[bytes.len() - 1] != b'"' {
+        return value.to_string();
+    }
+    let inner = &bytes[1..bytes.len() - 1];
+    let mut out = Vec::with_capacity(inner.len());
+    let mut index = 0;
+    while index < inner.len() {
+        let byte = inner[index];
+        index += 1;
+        if byte != b'\\' {
+            out.push(byte);
+            continue;
+        }
+        if index >= inner.len() {
+            out.push(b'\\');
+            break;
+        }
+        let escape = inner[index];
+        index += 1;
+        match escape {
+            b'a' => out.push(0x07),
+            b'b' => out.push(0x08),
+            b'f' => out.push(0x0C),
+            b'n' => out.push(b'\n'),
+            b'r' => out.push(b'\r'),
+            b't' => out.push(b'\t'),
+            b'v' => out.push(0x0B),
+            b'\\' => out.push(b'\\'),
+            b'"' => out.push(b'"'),
+            b'0'..=b'7' => {
+                let mut value = (escape - b'0') as u32;
+                for _ in 0..2 {
+                    if index < inner.len() && inner[index].is_ascii_digit() {
+                        value = value * 8 + (inner[index] - b'0') as u32;
+                        index += 1;
+                    }
+                }
+                out.push(u8::try_from(value).unwrap_or(b'?'));
+            }
+            other => {
+                out.push(b'\\');
+                out.push(other);
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Map a validated branch name to a single path segment. `+` can never appear
+/// in a validated branch name, so the encoding is injective: `a/b` and `a--b`
+/// or `a+b` can never claim the same folder.
+fn worktree_folder_name(branch: &str) -> String {
+    branch.replace('/', "+")
+}
+
+fn is_windows_device_name(name: &str) -> bool {
+    let stem = name.split('.').next().unwrap_or(name);
+    matches!(
+        stem.to_ascii_uppercase().as_str(),
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
+    )
 }
 
 fn validate_branch(name: &str) -> io::Result<()> {
-    if name.is_empty()
-        || name.len() > 80
-        || name.starts_with('-')
-        || name.starts_with('/')
-        || name.ends_with('/')
-        || name.ends_with('.')
-        || name.contains("..")
-        || name.contains("//")
-        || name.contains("@{")
-        || name.contains(".lock")
-        || name
+    let valid = !name.is_empty()
+        && name.len() <= 80
+        && name != "@"
+        && !name.starts_with('-')
+        && !name.starts_with('/')
+        && !name.ends_with('/')
+        && !name.ends_with('.')
+        && !name.contains("..")
+        && !name.contains("//")
+        && !name.contains("@{")
+        && name
             .chars()
-            .any(|c| !(c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '/')))
-    {
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '/'))
+        && name.split('/').all(|segment| {
+            !segment.is_empty() && !segment.starts_with('.') && !segment.ends_with(".lock")
+        });
+    if !valid {
         return Err(invalid(
             "Use a simple branch name, e.g. feature/native-editor",
         ));
@@ -271,17 +476,100 @@ mod tests {
         fs::remove_file(created.join("dirty.txt")).unwrap();
         manager.remove(&created, true).unwrap();
         assert!(!created.exists());
+        // Removal never deletes the branch.
+        let branches = manager
+            .git(&["branch", "--list", "feature/new-native"])
+            .unwrap();
+        assert!(branches.contains("feature/new-native"));
         assert_eq!(manager.list().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn discovers_linked_worktree_and_keeps_primary_protected() {
+        let (_dir, manager) = initialized_repo();
+        let created = manager.create("feature/linked").unwrap();
+        let canonical = dunce::canonicalize(&created).unwrap();
+        // Discovering from inside a linked worktree must still identify the
+        // main checkout as primary.
+        let linked = WorktreeManager::discover(&created).unwrap();
+        assert_eq!(linked.root(), canonical.as_path());
+        let entries = linked.list().unwrap();
+        assert_eq!(entries.len(), 2);
+        let primaries: Vec<&WorktreeEntry> =
+            entries.iter().filter(|entry| entry.is_primary).collect();
+        assert_eq!(primaries.len(), 1);
+        assert_eq!(primaries[0].path.as_path(), manager.root());
+        // The primary checkout is never removable, even via the linked view.
+        assert!(linked.remove(manager.root(), true).is_err());
+        // A manager obtained from a linked checkout must not delete itself.
+        assert!(linked.remove(&created, true).is_err());
+        manager.remove(&created, true).unwrap();
+        assert!(!canonical.exists());
+        assert_eq!(manager.list().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn refuses_locked_worktree_until_unlocked() {
+        let (_dir, manager) = initialized_repo();
+        let created = manager.create("feature/locked").unwrap();
+        let target = created.to_string_lossy().into_owned();
+        manager.git(&["worktree", "lock", target.as_str()]).unwrap();
+        let entries = manager.list().unwrap();
+        assert!(
+            entries
+                .iter()
+                .find(|entry| entry.path == created)
+                .unwrap()
+                .locked
+        );
+        assert!(manager.remove(&created, true).is_err());
+        manager
+            .git(&["worktree", "unlock", target.as_str()])
+            .unwrap();
+        manager.remove(&created, true).unwrap();
+    }
+
+    #[test]
+    fn managed_folder_names_never_collide() {
+        let (_dir, manager) = initialized_repo();
+        let nested = manager.create("feature/shared").unwrap();
+        let dashed = manager.create("feature--shared").unwrap();
+        assert_ne!(nested, dashed);
+        assert_eq!(manager.list().unwrap().len(), 3);
     }
 
     #[test]
     fn rejects_bad_branches_and_unmanaged_or_main_deletion() {
         let (_dir, manager) = initialized_repo();
-        for branch in ["", "../escape", "--force", "bad name", "foo//bar", "a.lock"] {
-            assert!(manager.create(branch).is_err());
+        for branch in [
+            "",
+            "../escape",
+            "--force",
+            "bad name",
+            "foo//bar",
+            "a.lock",
+            "a@{b}",
+            "feature..x",
+            ".hidden/x",
+            "con",
+            "lpt1.dat",
+        ] {
+            assert!(manager.create(branch).is_err(), "branch: {branch}");
         }
         assert!(manager.remove(manager.root(), true).is_err());
         let external = tempfile::tempdir().unwrap();
         assert!(manager.remove(external.path(), true).is_err());
+        // A plain directory inside .worktrees that Git never registered.
+        let stray = manager.root().join(".worktrees").join("stray");
+        fs::create_dir_all(&stray).unwrap();
+        assert!(manager.remove(&stray, true).is_err());
+        // A Git-registered worktree outside the managed folder.
+        let outside_dir = tempfile::tempdir().unwrap();
+        let outside = outside_dir.path().join("outside");
+        let outside_arg = outside.to_string_lossy().into_owned();
+        manager
+            .git(&["worktree", "add", "--detach", outside_arg.as_str(), "HEAD"])
+            .unwrap();
+        assert!(manager.remove(&outside, true).is_err());
     }
 }

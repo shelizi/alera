@@ -120,7 +120,12 @@ struct Workbench {
 }
 
 impl Workbench {
-    fn begin_explorer_action(&mut self, action: ExplorerAction, cx: &mut Context<Self>) {
+    fn begin_explorer_action(
+        &mut self,
+        action: ExplorerAction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if matches!(
             action,
             ExplorerAction::Rename | ExplorerAction::Move | ExplorerAction::Delete
@@ -136,9 +141,16 @@ impl Workbench {
         self.explorer_action_input = if action == ExplorerAction::Delete {
             None
         } else {
-            Some(cx.new(|cx| {
-                QuickOpenInput::with_placeholder("Name (or workspace-relative destination)", cx)
-            }))
+            let placeholder = match action {
+                ExplorerAction::NewFile => "New file name",
+                ExplorerAction::NewFolder => "New folder name",
+                ExplorerAction::Rename => "New name",
+                ExplorerAction::Move => "Destination folder inside workspace",
+                ExplorerAction::Delete => unreachable!(),
+            };
+            let input = cx.new(|cx| QuickOpenInput::with_placeholder(placeholder, cx));
+            window.focus(&input.read(cx).focus_handle(cx));
+            Some(input)
         };
         cx.notify();
     }
@@ -165,7 +177,10 @@ impl Workbench {
         if matches!(
             action,
             ExplorerAction::Rename | ExplorerAction::Move | ExplorerAction::Delete
-        ) && self.editor_dirty(cx)
+        ) && self
+            .editor
+            .as_ref()
+            .is_some_and(|editor| editor.read(cx).switch_allowed().is_err())
         {
             self.model.set_status(
                 "Save or discard editor changes before renaming, moving or deleting Explorer paths",
@@ -206,9 +221,9 @@ impl Workbench {
                     action,
                     ExplorerAction::Rename | ExplorerAction::Move | ExplorerAction::Delete
                 ) {
-                    // Any open editor is clean here; drop its stale file handle
-                    // rather than editing an old/deleted inode or destination.
-                    self.editor = None;
+                    // Preserve all unrelated editor tabs. Any document whose
+                    // original file moved was clean above; its disk-identity
+                    // guard will refuse a stale-path save until reopened.
                     self.model.forget_path_and_children(&source);
                 }
                 self.model.refresh_directory();
@@ -809,7 +824,12 @@ impl Workbench {
             return;
         }
         self.worktree_delete_pending = None;
-        if self.editor_dirty(cx) || target == self.model.root() {
+        if self
+            .editor
+            .as_ref()
+            .is_some_and(|editor| editor.read(cx).switch_allowed().is_err())
+            || self.model.root().starts_with(&target)
+        {
             self.model
                 .set_status("Cannot remove active Worktree or leave unsaved editor changes");
             cx.notify();
@@ -850,6 +870,12 @@ impl Workbench {
     }
 
     fn switch_workspace(&mut self, root: PathBuf, cx: &mut Context<Self>) {
+        if self.worktree_busy {
+            self.model
+                .set_status("Finish the current Worktree operation before switching projects");
+            cx.notify();
+            return;
+        }
         if let Some(editor) = &self.editor {
             if let Err(status) = editor.read(cx).switch_allowed() {
                 self.model.set_status(status);
@@ -1561,8 +1587,8 @@ impl Render for Workbench {
                                                     .text_xs()
                                                     .text_color(rgb(if action == ExplorerAction::Delete { MUTED } else { TEXT }))
                                                     .child(label)
-                                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                                        this.begin_explorer_action(action, cx);
+                                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                                        this.begin_explorer_action(action, window, cx);
                                                     }))
                                             })),
                                     )

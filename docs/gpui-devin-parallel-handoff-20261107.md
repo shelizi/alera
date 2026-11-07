@@ -76,3 +76,19 @@ Required work:
 3. Run combined 118+ headless model tests, Windows `cargo check --all-targets`, `cargo fmt --check`, `git diff --check`. Fix all failures before proceeding.
 4. Perform isolated GPUI GUI smoke if available. Never call this supported or production-ready from headless checks alone.
 5. Fast-forward only experimental `feat/gpui-desktop-20261107` when validation passes; never merge official `main`, push, tag or release without explicit further instruction.
+
+## Actual implementation results (2026-11-07)
+
+These are **completed source edits**, not merely agent plans:
+
+| Lane | Model and outcome | Verified evidence |
+| --- | --- | --- |
+| A Explorer | Devin CLI `swe-2-flash-high` improved protected names, Windows trailing dots and invalid characters, symlink-safe type checks, bounded iterative recursive-delete audit; source commit `73d2e1160` | **7/7** focused Explorer Rust tests, scoped rustfmt, Git diff check |
+| B Git Worktrees | Devin CLI `swe-2-flash-high` improved primary/linked detection, create-path collisions, branch validation, clean-only removal, bounded Git command execution; coordinator fixed one Rust ownership error and corrected linked self-deletion regression; source commit `cd76e8d41` | **5/5** focused Worktree Rust tests, scoped rustfmt, Git diff check |
+| C Saved Projects | Devin CLI `swe-2-flash-high` added independent capped canonical project list, safe unpin, rollback-able workspace-switch state updates and regression tests; coordinator bounded backup reads; source commit `5b445848` | **14/14** focused session tests, scoped rustfmt, Git diff check |
+| D GPUI UI | Devin CLI `swe-2-flash-high` first pass timed out after inspection; `swe-2-flash-medium` added action-specific IME placeholders and focus, then noninteractive permission refused a tool. Coordinator completed the call-site, checked all dirty editor tabs before mutation, retained unrelated editor tabs, blocked removing a worktree containing the active workspace and blocked switching during a worktree operation. | Windows `cargo check --all-targets` PASS, GPUI source formatting PASS |
+| Coordinator model | Fixed the active preview tab becoming incorrect after rename/move/delete, including empty-last-tab underflow; preserved unaffected previews | **2/2** new targeted tests |
+
+**Combined isolated integration:** Windows headless `cargo test --manifest-path desktop_gpui/Cargo.toml --no-default-features --lib --locked --offline` **129 passed / 0 failed**, Windows `cargo check --manifest-path desktop_gpui/Cargo.toml --all-targets --locked --offline` PASS, `rustfmt --edition 2021 --config skip_children=true --check` for touched Rust files PASS, `git diff --check` PASS. No new dependencies.
+
+**Acceptance/release boundary:** These tests verify native compilation and model behavior, **not** Microsoft Zhuyin GUI composition, mouse/menu flow or real Runtime Host PTY end-to-end operation. GPUI remains `experimental/unsupported`. No changes to official `main`, no push, tag, release or actual user Worktree removal. Devin's noninteractive permission refusals were not bypassed with unrestricted `dangerous` mode.

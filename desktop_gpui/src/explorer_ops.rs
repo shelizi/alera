@@ -119,9 +119,10 @@ impl ExplorerFiles {
     /// For explicit recursive deletion, perform a bounded, symlink-free audit.
     pub fn delete(&self, original: &Path, recursive: bool) -> io::Result<()> {
         let path = self.existing(original)?;
-        if path.is_file() {
+        let file_type = fs::symlink_metadata(&path)?.file_type();
+        if file_type.is_file() {
             fs::remove_file(path)
-        } else if path.is_dir() {
+        } else if file_type.is_dir() {
             if recursive {
                 let mut remaining = MAX_RECURSIVE_ENTRIES;
                 self.audit_tree(&path, &mut remaining)?;
@@ -134,18 +135,27 @@ impl ExplorerFiles {
         }
     }
 
+    /// Bounded, iterative audit run before recursive deletion. Every entry is
+    /// revalidated through `existing`, so symlinks, junctions, path escapes,
+    /// and protected `.git`/`.worktrees` components refuse the whole delete.
+    /// An explicit stack keeps arbitrarily deep trees from overflowing the
+    /// call stack; `remaining` still caps the total entry count.
     fn audit_tree(&self, folder: &Path, remaining: &mut usize) -> io::Result<()> {
-        for child in fs::read_dir(folder)? {
-            let child = child?;
-            if *remaining == 0 {
-                return Err(forbidden("Folder is too large for safe recursive deletion"));
-            }
-            *remaining -= 1;
-            let path = self.existing(&child.path())?;
-            if path.is_dir() {
-                self.audit_tree(&path, remaining)?;
-            } else if !path.is_file() {
-                return Err(forbidden("Special filesystem entry refused"));
+        let mut pending = vec![folder.to_path_buf()];
+        while let Some(dir) = pending.pop() {
+            for child in fs::read_dir(&dir)? {
+                let child = child?;
+                if *remaining == 0 {
+                    return Err(forbidden("Folder is too large for safe recursive deletion"));
+                }
+                *remaining -= 1;
+                let path = self.existing(&child.path())?;
+                let file_type = fs::symlink_metadata(&path)?.file_type();
+                if file_type.is_dir() {
+                    pending.push(path);
+                } else if !file_type.is_file() {
+                    return Err(forbidden("Special filesystem entry refused"));
+                }
             }
         }
         Ok(())
@@ -157,6 +167,7 @@ fn check_name(name: &str) -> io::Result<()> {
         || name == "."
         || name == ".."
         || name.trim() != name
+        || name.ends_with('.')
         || name.len() > MAX_NAME_BYTES
         || name.chars().any(|c| matches!(c, '/' | '\\' | ':' | '\0'))
         || name.chars().any(char::is_control)
@@ -166,6 +177,12 @@ fn check_name(name: &str) -> io::Result<()> {
     }
     #[cfg(windows)]
     {
+        if name
+            .chars()
+            .any(|c| matches!(c, '<' | '>' | '"' | '|' | '?' | '*'))
+        {
+            return Err(forbidden("Invalid Windows filename"));
+        }
         let base = name.split('.').next().unwrap_or("").to_ascii_uppercase();
         if matches!(base.as_str(), "CON" | "PRN" | "AUX" | "NUL")
             || ["COM", "LPT"].iter().any(|prefix| {
@@ -250,5 +267,106 @@ mod tests {
         assert!(ops.move_into(&a, &nested).is_err());
         ops.create_folder(&root, "existing").unwrap();
         assert!(ops.rename(&a, "existing").is_err());
+    }
+
+    #[test]
+    fn rejects_trailing_dots_whitespace_protected_and_escape_names() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = dunce::canonicalize(temp.path()).unwrap();
+        let ops = ExplorerFiles::new(&root).unwrap();
+        for name in [
+            ".",
+            "..",
+            "...",
+            "foo.",
+            "foo..",
+            "name ",
+            " name",
+            ".git",
+            ".Git",
+            ".worktrees",
+            ".WORKTREES",
+        ] {
+            assert!(ops.create_file(&root, name).is_err(), "file {name:?}");
+            assert!(ops.create_folder(&root, name).is_err(), "folder {name:?}");
+        }
+        #[cfg(windows)]
+        for name in [
+            "CON",
+            "con.txt",
+            "aux.",
+            "lpt3.dat",
+            "COM1",
+            "com9.ini",
+            "file?.txt",
+            "a|b",
+        ] {
+            assert!(ops.create_file(&root, name).is_err(), "file {name:?}");
+            assert!(ops.create_folder(&root, name).is_err(), "folder {name:?}");
+        }
+        // Parent paths must not escape through `..` or reach protected dirs.
+        assert!(ops
+            .create_file(&root.join("a").join("..").join("b"), "x")
+            .is_err());
+        assert!(ops.create_file(&root.join(".git"), "config").is_err());
+        let parent = ops.create_folder(&root, "parent").unwrap();
+        assert!(ops.create_file(&parent, ".git").is_err());
+        assert!(ops.create_folder(&parent, ".worktrees").is_err());
+    }
+
+    #[test]
+    fn recursive_delete_is_iterative_and_refuses_nested_protected_dirs() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = dunce::canonicalize(temp.path()).unwrap();
+        let ops = ExplorerFiles::new(&root).unwrap();
+        // A deep chain must not overflow the call stack during the audit.
+        let mut dir = root.clone();
+        for _ in 0..80 {
+            dir = dir.join("d");
+            fs::create_dir(&dir).unwrap();
+        }
+        let leaf = ops.create_file(&dir, "leaf").unwrap();
+        assert!(leaf.starts_with(&root));
+        ops.delete(&root.join("d"), true).unwrap();
+        assert!(!root.join("d").exists());
+        // A `.git` dir nested arbitrarily deep still blocks recursive delete.
+        let tree = ops.create_folder(&root, "tree").unwrap();
+        let deep = tree.join("a").join("b").join("c");
+        fs::create_dir_all(&deep).unwrap();
+        fs::create_dir(deep.join(".git")).unwrap();
+        assert!(ops.delete(&tree, true).is_err());
+        assert!(deep.join(".git").exists());
+        // The same protection applies to `.worktrees`.
+        fs::remove_dir_all(deep.join(".git")).unwrap();
+        fs::create_dir(deep.join(".worktrees")).unwrap();
+        assert!(ops.delete(&tree, true).is_err());
+        assert!(deep.join(".worktrees").exists());
+    }
+
+    #[test]
+    fn refuses_symlinked_entries_when_supported() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = dunce::canonicalize(temp.path()).unwrap();
+        let ops = ExplorerFiles::new(&root).unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let folder = ops.create_folder(&root, "folder").unwrap();
+        let inner = folder.join("inner");
+        #[cfg(unix)]
+        let made = std::os::unix::fs::symlink(outside.path(), &inner).is_ok();
+        #[cfg(windows)]
+        let made = std::os::windows::fs::symlink_dir(outside.path(), &inner).is_ok();
+        #[cfg(not(any(unix, windows)))]
+        let made = false;
+        if !made {
+            return;
+        }
+        // Paths through the link and destinations that are links are refused.
+        assert!(ops.create_file(&inner, "escaped.txt").is_err());
+        assert!(ops.move_into(&folder, &inner).is_err());
+        assert!(ops.delete(&inner, true).is_err());
+        // Recursive deletion audits every child, so the link blocks the tree.
+        assert!(ops.delete(&folder, true).is_err());
+        assert!(fs::symlink_metadata(&inner).is_ok());
+        assert!(folder.is_dir());
     }
 }
