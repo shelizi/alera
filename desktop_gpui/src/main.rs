@@ -120,6 +120,27 @@ impl Workbench {
             .map(|store| EditorDraftStore::new(store.state_dir()))
     }
 
+    /// Restore only this workspace's unsaved scratch buffers. Corrupt draft
+    /// records remain untouched on error; no workspace file is ever written.
+    fn restore_scratch_tabs(&mut self, cx: &mut Context<Self>) {
+        let Some(store) = self.draft_store() else {
+            return;
+        };
+        let mut tabs = EditorTabs::new(Some(store));
+        match tabs.restore_scratch_drafts(self.model.root()) {
+            Ok(0) => {}
+            Ok(count) => {
+                self.editor = Some(cx.new(|cx| NativeEditor::new(tabs, cx)));
+                self.model.set_status(format!(
+                    "Recovered {count} unsaved scratch tab(s) from local state; review before saving"
+                ));
+            }
+            Err(error) => self.model.set_status(format!(
+                "Scratch recovery blocked: {error}. Local recovery files were kept."
+            )),
+        }
+    }
+
     fn open_editor(&mut self, cx: &mut Context<Self>) {
         let Some(path) = self.model.selected_path().map(PathBuf::from) else {
             self.model.set_status("Choose a text file before editing");
@@ -318,6 +339,7 @@ impl Workbench {
         self.model = next;
         self.tree = WorkspaceTree::new(&canonical).ok();
         self.editor = None;
+        self.restore_scratch_tabs(cx);
         self.quick_open = None;
         self.file_index = None;
         self.file_index_loading = false;
@@ -1526,28 +1548,32 @@ fn main() {
                 ..Default::default()
             },
             |_, cx| {
-                let view = cx.new(|_| Workbench {
-                    tree: WorkspaceTree::new(model.root()).ok(),
-                    tree_mode: false,
-                    model,
-                    editor: None,
-                    session_store,
-                    recent_workspaces,
-                    show_recent_workspaces: false,
-                    picking_workspace: false,
-                    picking_save_as: false,
-                    quick_open: None,
-                    file_index: None,
-                    file_index_loading: false,
-                    workspace_generation: 0,
-                    runtime_bridge,
-                    runtime_status,
-                    runtime_loading: false,
-                    terminals: TerminalDock::for_workspace(0),
-                    terminal_list_loading: false,
-                    terminal_read_loading: None,
-                    terminal_poll: TerminalPollGate::default(),
-                    terminal_tick: 0,
+                let view = cx.new(|cx| {
+                    let mut workbench = Workbench {
+                        tree: WorkspaceTree::new(model.root()).ok(),
+                        tree_mode: false,
+                        model,
+                        editor: None,
+                        session_store,
+                        recent_workspaces,
+                        show_recent_workspaces: false,
+                        picking_workspace: false,
+                        picking_save_as: false,
+                        quick_open: None,
+                        file_index: None,
+                        file_index_loading: false,
+                        workspace_generation: 0,
+                        runtime_bridge,
+                        runtime_status,
+                        runtime_loading: false,
+                        terminals: TerminalDock::for_workspace(0),
+                        terminal_list_loading: false,
+                        terminal_read_loading: None,
+                        terminal_poll: TerminalPollGate::default(),
+                        terminal_tick: 0,
+                    };
+                    workbench.restore_scratch_tabs(cx);
+                    workbench
                 });
                 view.update(cx, |view, cx| view.start_terminal_polling(cx));
                 view
