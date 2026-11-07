@@ -55,12 +55,22 @@ state is kept independently per preview tab, with a bounded 240-row
 scrollback. Terminal control strings are interpreted locally instead of
 being sent to the GPUI text widget.
 
-This remains a **read-only, monochrome VT screen preview**, not yet a full
-native terminal renderer: colored cell attributes, clickable selections,
-copy/paste, Chinese IME input, keyboard control, accessibility and Host PTY
-resizing/attach leases have not been migrated. Local VT preview dimensions
-are not advertised to the existing Host, so programs should not assume
-the displayed panel matches their allocated PTY size.
+The default VT screen now renders **ANSI 16-color, 256-color, and 24-bit RGB
+foreground/background** attributes through native GPUI styled text ranges.
+It also renders reverse video, bold, italic, underline, and an explicit
+visible cursor cell. Bounded adjacent runs are merged to avoid allocating
+an individual GPUI view for each character. Wide Unicode glyphs do not
+duplicate their terminal continuation cells. The dark-theme default
+foreground/background and xterm-indexed palette are used for unset colors.
+
+This is still a **read-only native VT screen**, not yet feature-complete:
+clickable selections, copy/paste, Chinese IME input, keyboard control,
+accessibility, and Host PTY resizing/attach leases have not been migrated.
+Local VT preview dimensions are not advertised to the existing Host, so
+programs should not assume the displayed panel matches their allocated
+PTY size. Colored cells passed 37 model tests, Windows native check/build
+and isolated Host + GUI process smoke tests; native pixel-level color and
+glyph placement parity still needs visual UI testing.
 
 An active terminal preview automatically checks for new output every 1.5
 seconds by default. The sidebar also refreshes the Session list every 15
@@ -104,7 +114,8 @@ start the Host as a fallback. The usual CLI default remains unchanged.
 - Background, read-only Runtime Host status probe through the shared CLI.
 - Host-owned terminal session list, eight local transcript preview tabs,
   cursor-based incremental reads, VT screen with ANSI cursor/erase/alternate
-  screen handling, Text log fallback and explicit manual reconnection.
+  screen handling, ANSI RGB/indexed colored cells, cursor highlight,
+  Text log fallback and explicit manual reconnection.
 - Reuses `alera-core::git::current_branch` for Git branch metadata.
 - No Flutter, Dart VM or WebView in this executable.
 - No writes to workspace files from this preview.
@@ -120,9 +131,10 @@ sidecar/runtime contracts, not be reimplemented directly in GPUI views.
 ## Verification
 
 - Windows: `cargo check --all-targets` and debug `cargo build` passed with GPUI 0.2.2.
-- Headless tests: 33/33 passed (navigation, persistence, path containment,
+- Headless tests: 37/37 passed (navigation, persistence, path containment,
   file limits, tabs, reload, terminal cursor, auto-poll backoff, stale
-  response handling, VT100 screen, alternate screen, Unicode, ANSI filtering
+  response handling, VT100 screen, ANSI 16/256/RGB colors and inverse,
+  wide Unicode, alternate screen, ANSI filtering
   and CLI parsing) with
   `--no-default-features --lib`.
 - An opt-in Windows test passed against a real isolated Host and CLI: Host

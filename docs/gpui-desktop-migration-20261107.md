@@ -100,8 +100,8 @@ without reproducible measurements.
 - Phase 3 VT screen slice: added independent Rust `vt100` parser state for
   each Host-owned terminal preview, supporting cursor motion, erase, scrolling,
   alternate screen and Unicode, with a toggle back to the sanitized transcript.
-  The screen currently renders in monochrome at a fixed local 80x24 grid.
-  33 headless tests passed; this does not yet support keyboard/IME, Host resize
+  The initial screen rendered in monochrome at a fixed local 80x24 grid.
+  33 initial headless tests passed; this does not yet support keyboard/IME, Host resize
   or an input-authorized terminal attachment lease. The isolated Host
   integration test additionally passes actual PTY output through this parser.
   Do not enable GPUI writes merely by calling the CLI's `terminal write`
@@ -109,6 +109,14 @@ without reproducible measurements.
   a read-only view. First implement explicit user-scoped input consent,
   attachment/session identity verification, session lease and IME composition
   with controlled handoff to the existing Host.
+- Phase 3 color follow-up: native GPUI StyledText runs now render vt100
+  per-cell indexed ANSI 16/256 and RGB true-color foreground/background,
+  reverse-video, bold, italic, underline, and visible cursor. The pure Rust
+  snapshot is bounded to 100x240 cells and coalesces equal adjacent styles;
+  wide Unicode continuation cells are suppressed. 37 headless tests pass.
+  Windows native check/build/window smoke and isolated Host/PTY/CLI+GUI
+  process integration passed. Visual color/glyph alignment automation is
+  still required before parity.
 - Real Windows Runtime Host/CLI/PTY end-to-end regression passed using a
   separate temporary runtime/profile and test-only credential; verified
   session creation, CLI no-start safety, list/read and incremental cursors.

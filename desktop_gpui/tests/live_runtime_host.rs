@@ -207,6 +207,16 @@ fn real_host_terminal_list_and_incremental_read_never_autostart() {
         screen.contents().contains(&marker),
         "VT screen did not render marker from actual Host PTY output"
     );
+    let styled = screen.styled_rows();
+    assert!(
+        styled.iter().any(|row| row.text.contains(&marker)),
+        "Styled GPUI VT rows lost actual Host PTY output"
+    );
+    assert!(styled.iter().all(|row| {
+        row.spans.iter().all(|span| {
+            row.text.is_char_boundary(span.range.start) && row.text.is_char_boundary(span.range.end)
+        })
+    }));
 
     // Optional native GUI process smoke against the SAME isolated Host.
     // It observes the existing test session through its window-owned

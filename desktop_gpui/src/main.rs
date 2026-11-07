@@ -254,6 +254,34 @@ impl Render for Workbench {
         let has_terminal_preview = self.terminals.active().is_some();
         let terminal_auto = self.terminal_poll.enabled();
         let terminal_is_vt = self.terminals.view_mode == TerminalViewMode::Screen;
+        let terminal_screen_rows = if terminal_is_vt {
+            self.terminals
+                .active()
+                .map(|tab| tab.screen.styled_rows())
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        let terminal_status = if terminal_is_vt {
+            if let Some(tab) = self.terminals.active() {
+                let (rows, cols) = tab.screen.dimensions();
+                let (cursor_row, cursor_col) = tab.screen.cursor();
+                format!(
+                    "{terminal_status} · {cols}×{rows} · Cursor {}:{}{}",
+                    cursor_row + 1,
+                    cursor_col + 1,
+                    if tab.screen.alternate_screen() {
+                        " · Alt"
+                    } else {
+                        ""
+                    }
+                )
+            } else {
+                terminal_status
+            }
+        } else {
+            terminal_status
+        };
 
         div()
             .size_full()
@@ -574,7 +602,48 @@ impl Render for Workbench {
                                             .text_color(rgb(MUTED))
                                             .child(terminal_status),
                                     )
-                                    .child(
+                                    .child(if terminal_is_vt {
+                                        div()
+                                            .id("terminal-colored-grid")
+                                            .flex_1()
+                                            .min_h_0()
+                                            .overflow_x_scroll()
+                                            .overflow_y_scroll()
+                                            .px_3()
+                                            .py_2()
+                                            .font_family("JetBrains Mono")
+                                            .text_sm()
+                                            .whitespace_nowrap()
+                                            .children(terminal_screen_rows.into_iter().enumerate().map(
+                                                |(row_index, row)| {
+                                                    div()
+                                                        .id(("terminal-colored-row", row_index))
+                                                        .whitespace_nowrap()
+                                                        .line_height(px(17.0))
+                                                        .child(
+                                                            gpui::StyledText::new(row.text)
+                                                                .with_highlights(row.spans.into_iter().map(|span| {
+                                                                    let style = span.style;
+                                                                    (
+                                                                        span.range,
+                                                                        gpui::HighlightStyle {
+                                                                            color: Some(rgb(style.fg).into()),
+                                                                            background_color: Some(rgb(style.bg).into()),
+                                                                            font_weight: style.bold.then_some(gpui::FontWeight::BOLD),
+                                                                            font_style: style.italic.then_some(gpui::FontStyle::Italic),
+                                                                            underline: style.underline.then_some(gpui::UnderlineStyle {
+                                                                                thickness: px(1.0),
+                                                                                color: Some(rgb(style.fg).into()),
+                                                                                wavy: false,
+                                                                            }),
+                                                                            ..Default::default()
+                                                                        },
+                                                                    )
+                                                                })),
+                                                        )
+                                                },
+                                            ))
+                                    } else {
                                         div()
                                             .id("terminal-output-scroll")
                                             .flex_1()
@@ -588,8 +657,8 @@ impl Render for Workbench {
                                                 "No terminal content yet. Auto updates are enabled by default.".into()
                                             } else {
                                                 terminal_output
-                                            }),
-                                    )
+                                            })
+                                    })
                             } else {
                                 div().h(px(0.0))
                             }),
