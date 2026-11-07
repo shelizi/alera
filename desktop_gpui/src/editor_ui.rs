@@ -5,7 +5,7 @@
 //! a virtualized production code editor: only the first 600 lines are drawn,
 //! click places the caret at line end, and IME candidate rectangle/selection
 //! geometry need independent visual and real Chinese IME tests.
-use alera_gpui_desktop::editor::{EditorDocument, EditorDraftStore};
+use alera_gpui_desktop::editor::{byte_to_utf16, EditorDocument, EditorDraftStore};
 use gpui::{
     actions, div, prelude::*, px, relative, rgb, App, Bounds, ClipboardItem, Context, CursorStyle,
     Element, ElementId, ElementInputHandler, Entity, EntityInputHandler, FocusHandle, Focusable,
@@ -18,16 +18,57 @@ const MAX_RENDER_LINES: usize = 600;
 const PANEL_BG: u32 = 0x15171b;
 const EDITOR_TEXT: u32 = 0xe1e4e8;
 const MUTED_TEXT: u32 = 0x9fa7b3;
+const SELECTED_BG: u32 = 0x345477;
+const COMPOSITION_COLOR: u32 = 0x74d9d2;
+const CURSOR_COLOR: u32 = 0x8bc5ff;
 
 actions!(
     alera_gpui_native_editor,
-    [MoveLeft, MoveRight, Backspace, Delete, Newline, SelectAll, SaveFile, Paste, Copy, Cut]
+    [
+        MoveLeft,
+        MoveRight,
+        MoveUp,
+        MoveDown,
+        SelectLeft,
+        SelectRight,
+        SelectUp,
+        SelectDown,
+        MoveHome,
+        MoveEnd,
+        SelectHome,
+        SelectEnd,
+        UndoEdit,
+        RedoEdit,
+        Backspace,
+        Delete,
+        Newline,
+        SelectAll,
+        SaveFile,
+        Paste,
+        Copy,
+        Cut
+    ]
 );
 
 pub fn bind_editor_keys(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("left", MoveLeft, Some("AleraGpuiEditor")),
         KeyBinding::new("right", MoveRight, Some("AleraGpuiEditor")),
+        KeyBinding::new("up", MoveUp, Some("AleraGpuiEditor")),
+        KeyBinding::new("down", MoveDown, Some("AleraGpuiEditor")),
+        KeyBinding::new("shift-left", SelectLeft, Some("AleraGpuiEditor")),
+        KeyBinding::new("shift-right", SelectRight, Some("AleraGpuiEditor")),
+        KeyBinding::new("shift-up", SelectUp, Some("AleraGpuiEditor")),
+        KeyBinding::new("shift-down", SelectDown, Some("AleraGpuiEditor")),
+        KeyBinding::new("home", MoveHome, Some("AleraGpuiEditor")),
+        KeyBinding::new("end", MoveEnd, Some("AleraGpuiEditor")),
+        KeyBinding::new("shift-home", SelectHome, Some("AleraGpuiEditor")),
+        KeyBinding::new("shift-end", SelectEnd, Some("AleraGpuiEditor")),
+        KeyBinding::new("ctrl-z", UndoEdit, Some("AleraGpuiEditor")),
+        KeyBinding::new("cmd-z", UndoEdit, Some("AleraGpuiEditor")),
+        KeyBinding::new("ctrl-y", RedoEdit, Some("AleraGpuiEditor")),
+        KeyBinding::new("ctrl-shift-z", RedoEdit, Some("AleraGpuiEditor")),
+        KeyBinding::new("cmd-shift-z", RedoEdit, Some("AleraGpuiEditor")),
         KeyBinding::new("backspace", Backspace, Some("AleraGpuiEditor")),
         KeyBinding::new("delete", Delete, Some("AleraGpuiEditor")),
         KeyBinding::new("enter", Newline, Some("AleraGpuiEditor")),
@@ -109,6 +150,56 @@ impl NativeEditor {
         self.document.move_right();
         cx.notify();
     }
+    fn move_up(&mut self, _: &MoveUp, _: &mut Window, cx: &mut Context<Self>) {
+        self.document.move_up(false);
+        cx.notify();
+    }
+    fn move_down(&mut self, _: &MoveDown, _: &mut Window, cx: &mut Context<Self>) {
+        self.document.move_down(false);
+        cx.notify();
+    }
+    fn select_left(&mut self, _: &SelectLeft, _: &mut Window, cx: &mut Context<Self>) {
+        self.document.select_left();
+        cx.notify();
+    }
+    fn select_right(&mut self, _: &SelectRight, _: &mut Window, cx: &mut Context<Self>) {
+        self.document.select_right();
+        cx.notify();
+    }
+    fn select_up(&mut self, _: &SelectUp, _: &mut Window, cx: &mut Context<Self>) {
+        self.document.move_up(true);
+        cx.notify();
+    }
+    fn select_down(&mut self, _: &SelectDown, _: &mut Window, cx: &mut Context<Self>) {
+        self.document.move_down(true);
+        cx.notify();
+    }
+    fn move_home(&mut self, _: &MoveHome, _: &mut Window, cx: &mut Context<Self>) {
+        self.document.move_home(false);
+        cx.notify();
+    }
+    fn move_end(&mut self, _: &MoveEnd, _: &mut Window, cx: &mut Context<Self>) {
+        self.document.move_end(false);
+        cx.notify();
+    }
+    fn select_home(&mut self, _: &SelectHome, _: &mut Window, cx: &mut Context<Self>) {
+        self.document.move_home(true);
+        cx.notify();
+    }
+    fn select_end(&mut self, _: &SelectEnd, _: &mut Window, cx: &mut Context<Self>) {
+        self.document.move_end(true);
+        cx.notify();
+    }
+    fn undo_edit(&mut self, _: &UndoEdit, _: &mut Window, cx: &mut Context<Self>) {
+        if self.document.undo() {
+            self.edit_result(Ok(()), cx);
+        }
+    }
+    fn redo_edit(&mut self, _: &RedoEdit, _: &mut Window, cx: &mut Context<Self>) {
+        if self.document.redo() {
+            self.edit_result(Ok(()), cx);
+        }
+    }
     fn backspace(&mut self, _: &Backspace, _: &mut Window, cx: &mut Context<Self>) {
         let result = self.document.backspace();
         self.edit_result(result, cx);
@@ -118,13 +209,22 @@ impl NativeEditor {
         self.edit_result(result, cx);
     }
     fn newline(&mut self, _: &Newline, _: &mut Window, cx: &mut Context<Self>) {
+        if self.document.marked().is_some() {
+            return;
+        }
         let result = self.document.replace(None, "\n");
         self.edit_result(result, cx);
     }
     fn select_all(&mut self, _: &SelectAll, _: &mut Window, cx: &mut Context<Self>) {
+        if self.document.marked().is_some() {
+            return;
+        }
         let size = self.document.content().len();
         let result = self.document.set_selection(0..size);
-        self.edit_result(result, cx);
+        if let Err(error) = result {
+            self.status = format!("Selection rejected: {error}");
+        }
+        cx.notify();
     }
     fn save_file(&mut self, _: &SaveFile, _: &mut Window, cx: &mut Context<Self>) {
         self.save(cx);
@@ -194,7 +294,7 @@ impl EntityInputHandler for NativeEditor {
     ) -> Option<UTF16Selection> {
         Some(UTF16Selection {
             range: self.document.utf16_selection(),
-            reversed: false,
+            reversed: self.document.selection_reversed(),
         })
     }
     fn marked_text_range(&self, _: &mut Window, _: &mut Context<Self>) -> Option<Range<usize>> {
@@ -202,7 +302,7 @@ impl EntityInputHandler for NativeEditor {
     }
     fn unmark_text(&mut self, _: &mut Window, cx: &mut Context<Self>) {
         self.document.unmark();
-        cx.notify();
+        self.edit_result(Ok(()), cx);
     }
     fn replace_text_in_range(
         &mut self,
@@ -246,7 +346,12 @@ impl EntityInputHandler for NativeEditor {
         _: &mut Window,
         _: &mut Context<Self>,
     ) -> Option<usize> {
-        Some(self.document.utf16_selection().end)
+        // Return the active caret (which may be at the start of a reversed
+        // selection), never blindly the forward selection end.
+        Some(byte_to_utf16(
+            self.document.content(),
+            self.document.cursor(),
+        ))
     }
 }
 
@@ -318,6 +423,10 @@ impl Render for NativeEditor {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let text = self.document.content();
         let caret = self.document.cursor();
+        let selection = self.document.selection();
+        let marked = self.document.marked();
+        let (line_index, column_index) = self.document.line_column();
+        let (undo_count, redo_count) = self.document.history_depth();
         let mut offset = 0;
         let lines: Vec<_> = text
             .split('\n')
@@ -327,17 +436,76 @@ impl Render for NativeEditor {
                 let start = offset;
                 let end = start + line.len();
                 let mut display = line.to_owned();
-                if caret >= start && caret <= end && display.is_char_boundary(caret - start) {
-                    display.insert(caret - start, '│');
+                let mut highlights = Vec::new();
+                if let Some(composition) = &marked {
+                    let from = composition.start.max(start);
+                    let to = composition.end.min(end);
+                    if from < to {
+                        highlights.push((
+                            from - start..to - start,
+                            gpui::HighlightStyle {
+                                underline: Some(gpui::UnderlineStyle {
+                                    thickness: px(1.0),
+                                    color: Some(rgb(COMPOSITION_COLOR).into()),
+                                    wavy: false,
+                                }),
+                                ..Default::default()
+                            },
+                        ));
+                    }
+                } else if !selection.is_empty() {
+                    let from = selection.start.max(start);
+                    let to = selection.end.min(end);
+                    if from < to {
+                        highlights.push((
+                            from - start..to - start,
+                            gpui::HighlightStyle {
+                                background_color: Some(rgb(SELECTED_BG).into()),
+                                ..Default::default()
+                            },
+                        ));
+                    }
+                    // Make selected newline characters visible, including
+                    // empty lines and multi-line selection boundaries.
+                    if end < text.len() && selection.start <= end && selection.end > end {
+                        let from = display.len();
+                        display.push('↵');
+                        highlights.push((
+                            from..display.len(),
+                            gpui::HighlightStyle {
+                                background_color: Some(rgb(SELECTED_BG).into()),
+                                ..Default::default()
+                            },
+                        ));
+                    }
+                } else if caret >= start && caret <= end && display.is_char_boundary(caret - start)
+                {
+                    let cursor_at = caret - start;
+                    display.insert(cursor_at, '│');
+                    highlights.push((
+                        cursor_at..cursor_at + '│'.len_utf8(),
+                        gpui::HighlightStyle {
+                            color: Some(rgb(CURSOR_COLOR).into()),
+                            ..Default::default()
+                        },
+                    ));
                 }
                 offset = end + 1;
-                (i, end, display)
+                (
+                    i,
+                    end,
+                    gpui::StyledText::new(display).with_highlights(highlights),
+                )
             })
             .collect();
         let more = text.split('\n').count() > MAX_RENDER_LINES;
         let status = format!(
-            "{} · {}{}",
+            "{} · Ln {} Col {} · Undo {} / Redo {} · {}{}",
             self.status,
+            line_index + 1,
+            column_index + 1,
+            undo_count,
+            redo_count,
             if self.document.is_dirty() {
                 "Modified"
             } else {
@@ -360,6 +528,18 @@ impl Render for NativeEditor {
             .cursor(CursorStyle::IBeam)
             .on_action(cx.listener(Self::move_left))
             .on_action(cx.listener(Self::move_right))
+            .on_action(cx.listener(Self::move_up))
+            .on_action(cx.listener(Self::move_down))
+            .on_action(cx.listener(Self::select_left))
+            .on_action(cx.listener(Self::select_right))
+            .on_action(cx.listener(Self::select_up))
+            .on_action(cx.listener(Self::select_down))
+            .on_action(cx.listener(Self::move_home))
+            .on_action(cx.listener(Self::move_end))
+            .on_action(cx.listener(Self::select_home))
+            .on_action(cx.listener(Self::select_end))
+            .on_action(cx.listener(Self::undo_edit))
+            .on_action(cx.listener(Self::redo_edit))
             .on_action(cx.listener(Self::backspace))
             .on_action(cx.listener(Self::delete))
             .on_action(cx.listener(Self::newline))
@@ -376,9 +556,50 @@ impl Render for NativeEditor {
                 div()
                     .px_3()
                     .py_1()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_2()
                     .text_sm()
                     .text_color(rgb(MUTED_TEXT))
-                    .child(status),
+                    .child(div().flex_1().min_w_0().overflow_hidden().child(status))
+                    .child(
+                        div()
+                            .flex()
+                            .gap_3()
+                            .child(
+                                div()
+                                    .id("editor-undo-click")
+                                    .cursor_pointer()
+                                    .text_color(rgb(if undo_count > 0 {
+                                        EDITOR_TEXT
+                                    } else {
+                                        MUTED_TEXT
+                                    }))
+                                    .child("↶ Undo")
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        if this.document.undo() {
+                                            this.edit_result(Ok(()), cx);
+                                        }
+                                    })),
+                            )
+                            .child(
+                                div()
+                                    .id("editor-redo-click")
+                                    .cursor_pointer()
+                                    .text_color(rgb(if redo_count > 0 {
+                                        EDITOR_TEXT
+                                    } else {
+                                        MUTED_TEXT
+                                    }))
+                                    .child("↷ Redo")
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        if this.document.redo() {
+                                            this.edit_result(Ok(()), cx);
+                                        }
+                                    })),
+                            ),
+                    ),
             )
             .child(
                 div()
@@ -402,13 +623,19 @@ impl Render for NativeEditor {
                             .cursor_pointer()
                             .on_mouse_down(
                                 MouseButton::Left,
-                                cx.listener(move |this, _, window, cx| {
-                                    window.focus(&this.focus);
-                                    let _ = this.document.set_selection(end..end);
-                                    cx.notify();
-                                }),
+                                cx.listener(
+                                    move |this, event: &gpui::MouseDownEvent, window, cx| {
+                                        window.focus(&this.focus);
+                                        let _ = if event.modifiers.shift {
+                                            this.document.select_offset(end)
+                                        } else {
+                                            this.document.set_selection(end..end)
+                                        };
+                                        cx.notify();
+                                    },
+                                ),
                             )
-                            .child(if line.is_empty() { " ".into() } else { line })
+                            .child(line)
                     }))
                     .when(more, |surface| {
                         surface.child("… Rendering limited to first 600 lines in this prototype")

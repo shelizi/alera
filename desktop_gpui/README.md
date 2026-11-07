@@ -122,6 +122,16 @@ The GPUI editor accepts native keyboard input through GPUI's
 `EntityInputHandler`, including UTF-16 IME marked text and committed text.
 It supports Unicode-grapheme Left/Right and Backspace/Delete, Enter,
 Select All, clipboard copy/cut/paste, and explicit **Save** or Ctrl/Cmd+S.
+Native editing now also supports **Undo** (Ctrl/Cmd+Z) and **Redo**
+(Ctrl+Y / Ctrl+Shift+Z / Cmd+Shift+Z), with clickable status-bar actions.
+Up/Down preserve a preferred Unicode-grapheme column across shorter lines;
+Shift+arrows and Shift+Home/End extend selections in either direction.
+Selected text and selected newline boundaries have visual highlighting,
+and active IME composition is underlined. Click and Shift+click at a
+displayed line's end set or extend selection. Undo history is in-memory,
+limited to 64 steps and 4 MiB, and is not recovered after a restart.
+IME composition changes count as **one** undo transaction, not separate
+changes for each candidate/preedit update.
 Only `Save` writes back to the original source file. It validates workspace
 containment and compares the current disk contents to the original snapshot;
 external edits cause a conflict instead of silently being overwritten.
@@ -139,10 +149,11 @@ or explicitly discarded. IME preedit is not written to drafts.
 This is a **limited editor surface**, not the shipping IDE editor:
 documents are capped at 256 KiB and only the first 600 lines are drawn.
 Click places the caret at the end of a line, not at an arbitrary glyph;
-multiline selection, syntax highlighting, undo/redo, completion, line
-virtualization, scroll-aware IME candidate position, and proven Traditional
-Chinese IME UX are still pending. Editing and draft persistence currently
-run on the GPUI thread, which requires profiling before full-scale adoption.
+multi-line selection is keyboard-driven and lacks pixel-accurate dragging;
+syntax highlighting, syntax services, completion, line virtualization,
+scroll-aware IME candidate position, and proven Traditional Chinese IME UX
+are still pending. Editing and draft persistence currently run on the GPUI
+thread, which requires profiling before full-scale adoption.
 
 ## Current scope
 
@@ -177,8 +188,9 @@ sidecar/runtime contracts, not be reimplemented directly in GPUI views.
 ## Verification
 
 - Windows: `cargo check --all-targets` and debug `cargo build` passed with GPUI 0.2.2.
-- Headless tests: 52/52 passed (navigation, workspace switching and recent
-  workspace history, UTF-16 and Unicode grapheme edits, draft recovery and
+- Headless tests: 62/62 passed (navigation, workspace switching and recent
+  workspace history, UTF-16 and Unicode grapheme edits, bounded undo/redo,
+  multi-line selection, IME composition transaction handling, draft recovery and
   conflict-safe file saves, persistence, path containment,
   file limits, tabs, reload, terminal cursor, auto-poll backoff, stale
   response handling, VT100 screen, ANSI 16/256/RGB colors and inverse,

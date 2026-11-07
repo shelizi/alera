@@ -101,6 +101,17 @@ without reproducible measurements.
   parity: render limited to 600 lines, file size 256 KiB, line-end mouse
   caret, no virtualized buffer, selection geometry/IME candidate rectangles,
   syntax services, undo, or real Traditional Chinese IME UI acceptance tests.
+- Phase 2 editing follow-up: added bounded pure-Rust Undo/Redo snapshots
+  (64 transactions, 4 MiB), with IME marked-text updates grouped into a
+  single undo and final unmark committed to the local recovery draft. Added
+  directional UTF-16 selection, grapheme-safe left/right and multiline
+  up/down with retained column, shift-selection, Home/End and keyboard
+  shortcuts. The GPUI editor highlights selections/newline markers and
+  composition, shows line/column plus clickable Undo/Redo status actions,
+  and accepts shift-click selection to a line end. 62 headless Rust tests
+  pass, including Unicode/IME/draft/selection regressions. This remains
+  experimental: no pixel-accurate mouse caret, scroll-aware IME candidate
+  placement, virtualized text viewport, or verified Windows Bopomofo UX.
 - Two-launch Windows smoke test confirmed a native window on each launch and
   recovery of the same workspace even when the second process started from
   a different working directory, using an isolated app-state directory.

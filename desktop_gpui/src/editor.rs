@@ -5,6 +5,7 @@
 //! overwrites. IME uses UTF-16 offsets at the GPUI boundary and byte offsets
 //! internally, with grapheme-aware cursor movements.
 use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Read, Write};
 use std::ops::Range;
@@ -13,6 +14,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use unicode_segmentation::UnicodeSegmentation;
 
 pub const MAX_EDITOR_BYTES: usize = 256 * 1024;
+const MAX_HISTORY_ENTRIES: usize = 64;
+const MAX_HISTORY_BYTES: usize = 4 * 1024 * 1024;
 const MAX_DRAFT_BYTES: u64 = MAX_EDITOR_BYTES as u64 * 2 + 32 * 1024;
 const DRAFT_VERSION: u32 = 1;
 
@@ -149,7 +152,12 @@ impl EditorDraftStore {
         doc.content = saved.unsaved;
         let cursor = doc.content.len();
         doc.selection = cursor..cursor;
+        doc.anchor = None;
+        doc.desired_column = None;
         doc.marked = None;
+        doc.undo_stack.clear();
+        doc.redo_stack.clear();
+        doc.composition_start = None;
         Ok(true)
     }
 
@@ -170,7 +178,24 @@ pub struct EditorDocument {
     content: String,
     original: Option<String>,
     selection: Range<usize>,
+    /// Anchor is set only while extending a selection. The caret may be at
+    /// either end (Windows TSF needs this orientation in UTF-16 units).
+    anchor: Option<usize>,
+    /// Sticky visual grapheme column for consecutive Up/Down movements.
+    desired_column: Option<usize>,
     marked: Option<Range<usize>>,
+    undo_stack: VecDeque<EditorSnapshot>,
+    redo_stack: VecDeque<EditorSnapshot>,
+    /// Captured only at the beginning of an IME preedit, so all updates
+    /// and the final committed text form one undoable transaction.
+    composition_start: Option<EditorSnapshot>,
+}
+
+#[derive(Clone, Debug)]
+struct EditorSnapshot {
+    text: String,
+    selection: Range<usize>,
+    anchor: Option<usize>,
 }
 
 impl EditorDocument {
@@ -185,7 +210,12 @@ impl EditorDocument {
             original: Some(content.clone()),
             content,
             selection: cursor..cursor,
+            anchor: None,
+            desired_column: None,
             marked: None,
+            undo_stack: VecDeque::new(),
+            redo_stack: VecDeque::new(),
+            composition_start: None,
         })
     }
 
@@ -197,7 +227,12 @@ impl EditorDocument {
             content: String::new(),
             original: None,
             selection: 0..0,
+            anchor: None,
+            desired_column: None,
             marked: None,
+            undo_stack: VecDeque::new(),
+            redo_stack: VecDeque::new(),
+            composition_start: None,
         })
     }
 
@@ -217,7 +252,90 @@ impl EditorDocument {
         self.original.as_ref() != Some(&self.content)
     }
     pub fn cursor(&self) -> usize {
-        self.selection.end
+        match self.anchor {
+            Some(anchor) if anchor == self.selection.end => self.selection.start,
+            _ => self.selection.end,
+        }
+    }
+
+    pub fn selection_reversed(&self) -> bool {
+        !self.selection.is_empty() && self.anchor == Some(self.selection.end)
+    }
+
+    pub fn history_depth(&self) -> (usize, usize) {
+        (self.undo_stack.len(), self.redo_stack.len())
+    }
+
+    pub fn history_bytes(&self) -> usize {
+        self.undo_stack
+            .iter()
+            .chain(self.redo_stack.iter())
+            .map(|entry| entry.text.len())
+            .sum()
+    }
+
+    fn snapshot(&self) -> EditorSnapshot {
+        EditorSnapshot {
+            text: self.content.clone(),
+            selection: self.selection.clone(),
+            anchor: self.anchor,
+        }
+    }
+
+    fn restore_snapshot(&mut self, snapshot: EditorSnapshot) {
+        self.content = snapshot.text;
+        self.selection = snapshot.selection;
+        self.anchor = snapshot.anchor;
+        self.desired_column = None;
+        self.marked = None;
+        self.composition_start = None;
+    }
+
+    fn trim_history(&mut self) {
+        while self.undo_stack.len() + self.redo_stack.len() > MAX_HISTORY_ENTRIES
+            || self.history_bytes() > MAX_HISTORY_BYTES
+        {
+            if self.undo_stack.pop_front().is_none() {
+                self.redo_stack.pop_front();
+            }
+        }
+    }
+
+    fn record_edit(&mut self, before: EditorSnapshot) {
+        if before.text != self.content {
+            self.undo_stack.push_back(before);
+            self.redo_stack.clear();
+            self.trim_history();
+        }
+    }
+
+    pub fn undo(&mut self) -> bool {
+        if self.marked.is_some() {
+            if let Some(original) = self.composition_start.take() {
+                self.restore_snapshot(original);
+                return true;
+            }
+        }
+        let Some(before) = self.undo_stack.pop_back() else {
+            return false;
+        };
+        self.redo_stack.push_back(self.snapshot());
+        self.restore_snapshot(before);
+        self.trim_history();
+        true
+    }
+
+    pub fn redo(&mut self) -> bool {
+        if self.marked.is_some() {
+            return false;
+        }
+        let Some(after) = self.redo_stack.pop_back() else {
+            return false;
+        };
+        self.undo_stack.push_back(self.snapshot());
+        self.restore_snapshot(after);
+        self.trim_history();
+        true
     }
 
     pub fn utf16_selection(&self) -> Range<usize> {
@@ -249,28 +367,169 @@ impl EditorDocument {
             ));
         }
         self.selection = range;
+        self.anchor = None;
+        self.desired_column = None;
         Ok(())
     }
 
-    pub fn move_left(&mut self) {
-        let caret = self.selection.start;
-        let previous = self.content[..caret]
+    pub fn select_offset(&mut self, offset: usize) -> io::Result<()> {
+        if offset > self.content.len() || !self.content.is_char_boundary(offset) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Cannot select invalid character offset",
+            ));
+        }
+        if self.marked.is_none() {
+            self.move_to(offset, true, true);
+        }
+        Ok(())
+    }
+
+    fn move_to(&mut self, offset: usize, extend: bool, clear_column: bool) {
+        if extend {
+            let caret = self.cursor();
+            let anchor = *self.anchor.get_or_insert(caret);
+            self.selection = anchor.min(offset)..anchor.max(offset);
+        } else {
+            self.selection = offset..offset;
+            self.anchor = None;
+        }
+        if clear_column {
+            self.desired_column = None;
+        }
+    }
+
+    fn previous_grapheme(&self, offset: usize) -> usize {
+        self.content
             .grapheme_indices(true)
-            .last()
-            .map(|(index, _)| index)
-            .unwrap_or(0);
-        self.selection = previous..previous;
+            .rev()
+            .find_map(|(i, _)| (i < offset).then_some(i))
+            .unwrap_or(0)
+    }
+
+    fn next_grapheme(&self, offset: usize) -> usize {
+        self.content
+            .grapheme_indices(true)
+            .find_map(|(i, _)| (i > offset).then_some(i))
+            .unwrap_or(self.content.len())
+    }
+
+    pub fn move_left(&mut self) {
+        if self.marked.is_some() {
+            return;
+        }
+        let position = if self.selection.is_empty() {
+            self.previous_grapheme(self.cursor())
+        } else {
+            self.selection.start
+        };
+        self.move_to(position, false, true);
     }
     pub fn move_right(&mut self) {
-        let caret = self.selection.end;
-        let next = self.content[caret..]
-            .graphemes(true)
-            .next()
-            .map(|grapheme| caret + grapheme.len())
-            .unwrap_or(caret);
-        self.selection = next..next;
+        if self.marked.is_some() {
+            return;
+        }
+        let position = if self.selection.is_empty() {
+            self.next_grapheme(self.cursor())
+        } else {
+            self.selection.end
+        };
+        self.move_to(position, false, true);
+    }
+
+    pub fn select_left(&mut self) {
+        if self.marked.is_none() {
+            let position = self.previous_grapheme(self.cursor());
+            self.move_to(position, true, true);
+        }
+    }
+
+    pub fn select_right(&mut self) {
+        if self.marked.is_none() {
+            let position = self.next_grapheme(self.cursor());
+            self.move_to(position, true, true);
+        }
+    }
+
+    fn line_bounds(&self, offset: usize) -> (usize, usize) {
+        let start = self.content[..offset].rfind('\n').map_or(0, |i| i + 1);
+        let end = self.content[offset..]
+            .find('\n')
+            .map_or(self.content.len(), |i| offset + i);
+        (start, end)
+    }
+
+    pub fn line_column(&self) -> (usize, usize) {
+        let offset = self.cursor();
+        let line = self.content[..offset]
+            .bytes()
+            .filter(|byte| *byte == b'\n')
+            .count();
+        let start = self.line_bounds(offset).0;
+        let column = self.content[start..offset].graphemes(true).count();
+        (line, column)
+    }
+
+    fn offset_at_column(&self, line_start: usize, line_end: usize, col: usize) -> usize {
+        line_start
+            + self.content[line_start..line_end]
+                .graphemes(true)
+                .take(col)
+                .map(str::len)
+                .sum::<usize>()
+    }
+
+    pub fn move_up(&mut self, extend: bool) {
+        if self.marked.is_some() {
+            return;
+        }
+        let caret = self.cursor();
+        let (start, _) = self.line_bounds(caret);
+        if start == 0 {
+            return;
+        }
+        let column = self.desired_column.unwrap_or_else(|| self.line_column().1);
+        let previous_end = start - 1;
+        let previous_start = self.line_bounds(previous_end).0;
+        let target = self.offset_at_column(previous_start, previous_end, column);
+        self.move_to(target, extend, false);
+        self.desired_column = Some(column);
+    }
+
+    pub fn move_down(&mut self, extend: bool) {
+        if self.marked.is_some() {
+            return;
+        }
+        let caret = self.cursor();
+        let (_, end) = self.line_bounds(caret);
+        if end == self.content.len() {
+            return;
+        }
+        let column = self.desired_column.unwrap_or_else(|| self.line_column().1);
+        let next_start = end + 1;
+        let next_end = self.line_bounds(next_start).1;
+        let target = self.offset_at_column(next_start, next_end, column);
+        self.move_to(target, extend, false);
+        self.desired_column = Some(column);
+    }
+
+    pub fn move_home(&mut self, extend: bool) {
+        if self.marked.is_none() {
+            let start = self.line_bounds(self.cursor()).0;
+            self.move_to(start, extend, true);
+        }
+    }
+
+    pub fn move_end(&mut self, extend: bool) {
+        if self.marked.is_none() {
+            let end = self.line_bounds(self.cursor()).1;
+            self.move_to(end, extend, true);
+        }
     }
     pub fn backspace(&mut self) -> io::Result<()> {
+        if self.marked.is_some() {
+            return Ok(());
+        }
         if self.selection.is_empty() {
             let end = self.selection.end;
             self.move_left();
@@ -279,6 +538,9 @@ impl EditorDocument {
         self.replace(None, "")
     }
     pub fn delete_forward(&mut self) -> io::Result<()> {
+        if self.marked.is_some() {
+            return Ok(());
+        }
         if self.selection.is_empty() {
             let start = self.selection.start;
             self.move_right();
@@ -289,12 +551,18 @@ impl EditorDocument {
 
     /// Replace selected text (or a UTF-16 range supplied by the platform).
     pub fn replace(&mut self, utf16: Option<Range<usize>>, text: &str) -> io::Result<()> {
+        let before = self
+            .composition_start
+            .clone()
+            .unwrap_or_else(|| self.snapshot());
         let range = utf16
             .map(|range| self.from_utf16_range(range))
             .or_else(|| self.marked.clone())
             .unwrap_or_else(|| self.selection.clone());
         self.apply_replace(range, text)?;
         self.marked = None;
+        self.composition_start = None;
+        self.record_edit(before);
         Ok(())
     }
 
@@ -306,6 +574,19 @@ impl EditorDocument {
         text: &str,
         selected_utf16: Option<Range<usize>>,
     ) -> io::Result<()> {
+        if selected_utf16
+            .as_ref()
+            .is_some_and(|range| range.start > range.end)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "IME selection range is reversed",
+            ));
+        }
+        let before = self
+            .composition_start
+            .clone()
+            .unwrap_or_else(|| self.snapshot());
         let range = utf16
             .map(|range| self.from_utf16_range(range))
             .or_else(|| self.marked.clone())
@@ -318,11 +599,20 @@ impl EditorDocument {
             let range_end = utf16_to_byte(text, selected.end);
             self.set_selection(start + range_start..start + range_end)?;
         }
+        if self.marked.is_some() {
+            self.composition_start = Some(before);
+        } else {
+            self.composition_start = None;
+            self.record_edit(before);
+        }
         Ok(())
     }
 
     pub fn unmark(&mut self) {
         self.marked = None;
+        if let Some(before) = self.composition_start.take() {
+            self.record_edit(before);
+        }
     }
 
     fn from_utf16_range(&self, range: Range<usize>) -> Range<usize> {
@@ -348,6 +638,8 @@ impl EditorDocument {
         self.content.replace_range(range.clone(), text);
         let cursor = range.start + text.len();
         self.selection = cursor..cursor;
+        self.anchor = None;
+        self.desired_column = None;
         Ok(())
     }
 
@@ -684,5 +976,206 @@ mod tests {
             io::ErrorKind::InvalidData
         );
         assert_eq!(doc.content(), "safe");
+    }
+
+    #[test]
+    fn undo_redo_restore_exact_unicode_content_selection_and_dirty_status() {
+        let root = tempfile::tempdir().unwrap();
+        let file = root.path().join("note.txt");
+        fs::write(&file, "基礎").unwrap();
+        let mut doc = EditorDocument::open(root.path(), &file).unwrap();
+        doc.replace(None, "🧑‍💻").unwrap();
+        assert!(doc.is_dirty());
+        assert!(doc.undo());
+        assert_eq!(doc.content(), "基礎");
+        assert!(!doc.is_dirty());
+        assert_eq!(doc.cursor(), "基礎".len());
+        assert!(doc.redo());
+        assert_eq!(doc.content(), "基礎🧑‍💻");
+        assert!(doc.is_dirty());
+        assert!(!doc.redo());
+        assert!(doc.undo());
+        doc.replace(None, "新").unwrap();
+        assert!(!doc.redo(), "new edit must invalidate redo");
+        assert_eq!(doc.content(), "基礎新");
+    }
+
+    #[test]
+    fn ime_preedit_and_commit_are_one_undo_step_and_cancellation_is_noop() {
+        let root = tempfile::tempdir().unwrap();
+        let mut doc = EditorDocument::scratch(root.path()).unwrap();
+        doc.replace(None, "hello").unwrap();
+        let before = doc.history_depth();
+        doc.replace_and_mark(None, "ㄓ", Some(1..1)).unwrap();
+        doc.replace_and_mark(None, "中", Some(1..1)).unwrap();
+        doc.replace(None, "中文").unwrap();
+        assert_eq!(doc.history_depth().0, before.0 + 1);
+        assert_eq!(doc.content(), "hello中文");
+        assert!(doc.undo());
+        assert_eq!(doc.content(), "hello");
+        assert!(doc.redo());
+        assert_eq!(doc.content(), "hello中文");
+        let prior = doc.history_depth();
+        doc.replace_and_mark(None, "ㄅ", Some(1..1)).unwrap();
+        doc.replace(None, "").unwrap();
+        assert_eq!(doc.content(), "hello中文");
+        assert_eq!(
+            doc.history_depth(),
+            prior,
+            "canceled composition cannot add history"
+        );
+    }
+
+    #[test]
+    fn reversed_shift_selection_across_graphemes_has_native_utf16_range() {
+        let root = tempfile::tempdir().unwrap();
+        let mut doc = EditorDocument::scratch(root.path()).unwrap();
+        doc.replace(None, "a🧑‍💻中文").unwrap();
+        doc.set_selection(doc.content().len()..doc.content().len())
+            .unwrap();
+        doc.select_left();
+        doc.select_left();
+        assert_eq!(&doc.content()[doc.selection()], "中文");
+        assert!(doc.selection_reversed());
+        assert_eq!(doc.utf16_selection(), 6..8);
+        doc.select_right();
+        assert_eq!(&doc.content()[doc.selection()], "文");
+        doc.move_left();
+        assert_eq!(doc.selection().start, "a🧑‍💻中".len());
+        assert!(doc.selection().is_empty());
+    }
+
+    #[test]
+    fn vertical_navigation_retains_grapheme_column_through_short_lines() {
+        let root = tempfile::tempdir().unwrap();
+        let mut doc = EditorDocument::scratch(root.path()).unwrap();
+        doc.replace(None, "a🧑‍💻c\n中\n12345").unwrap();
+        doc.set_selection("a🧑‍💻c".len().."a🧑‍💻c".len()).unwrap();
+        assert_eq!(doc.line_column(), (0, 3));
+        doc.move_down(false);
+        assert_eq!(doc.line_column(), (1, 1));
+        doc.move_down(false);
+        assert_eq!(doc.line_column(), (2, 3));
+        doc.move_up(false);
+        assert_eq!(doc.line_column(), (1, 1));
+        doc.move_up(false);
+        assert_eq!(doc.line_column(), (0, 3));
+        doc.move_home(false);
+        assert_eq!(doc.line_column(), (0, 0));
+        doc.move_end(false);
+        assert_eq!(doc.line_column(), (0, 3));
+    }
+
+    #[test]
+    fn shift_up_down_extends_multiline_selection_and_replaces_selected_text() {
+        let root = tempfile::tempdir().unwrap();
+        let mut doc = EditorDocument::scratch(root.path()).unwrap();
+        doc.replace(None, "one\n二\nthree").unwrap();
+        doc.set_selection(0..0).unwrap();
+        doc.move_down(true);
+        assert_eq!(&doc.content()[doc.selection()], "one\n");
+        doc.move_down(true);
+        assert_eq!(&doc.content()[doc.selection()], "one\n二\n");
+        doc.replace(None, "new\n").unwrap();
+        assert_eq!(doc.content(), "new\nthree");
+        assert!(doc.undo());
+        assert_eq!(doc.content(), "one\n二\nthree");
+    }
+
+    #[test]
+    fn bounded_history_evicts_old_snapshots_without_exceeding_budget() {
+        let root = tempfile::tempdir().unwrap();
+        let mut doc = EditorDocument::scratch(root.path()).unwrap();
+        for _ in 0..100 {
+            doc.replace(None, "x").unwrap();
+        }
+        let (undos, redos) = doc.history_depth();
+        assert!(undos <= 64 && undos > 0);
+        assert_eq!(redos, 0);
+        assert!(doc.history_bytes() <= 4 * 1024 * 1024);
+        for _ in 0..undos {
+            assert!(doc.undo());
+        }
+        assert!(!doc.undo());
+        assert_eq!(doc.history_depth().0, 0);
+    }
+
+    #[test]
+    fn failed_paste_does_not_erase_selection_or_undo_history() {
+        let root = tempfile::tempdir().unwrap();
+        let mut doc = EditorDocument::scratch(root.path()).unwrap();
+        doc.replace(None, "🥐").unwrap();
+        let baseline = doc.history_depth();
+        doc.set_selection(0..doc.content().len()).unwrap();
+        assert!(doc
+            .replace(None, &"x".repeat(MAX_EDITOR_BYTES + 1))
+            .is_err());
+        assert_eq!(doc.content(), "🥐");
+        assert_eq!(doc.selection(), 0.."🥐".len());
+        assert_eq!(doc.history_depth(), baseline);
+    }
+
+    #[test]
+    fn replacing_reversed_selection_resets_anchor_before_next_shift_select() {
+        let root = tempfile::tempdir().unwrap();
+        let mut doc = EditorDocument::scratch(root.path()).unwrap();
+        doc.replace(None, "abcde").unwrap();
+        doc.select_left();
+        doc.select_left();
+        assert!(doc.selection_reversed());
+        assert_eq!(&doc.content()[doc.selection()], "de");
+        doc.replace(None, "🧪").unwrap();
+        assert_eq!(doc.content(), "abc🧪");
+        assert_eq!(doc.cursor(), doc.content().len());
+        doc.select_left();
+        assert_eq!(&doc.content()[doc.selection()], "🧪");
+        assert!(doc.selection_reversed());
+        assert!(doc.undo());
+        assert_eq!(doc.content(), "abcde");
+        assert_eq!(&doc.content()[doc.selection()], "de");
+    }
+
+    #[test]
+    fn ime_unmark_commits_one_undo_step_and_recovery_draft() {
+        let root = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let file = root.path().join("ime.txt");
+        fs::write(&file, "").unwrap();
+        let store = EditorDraftStore::new(state.path());
+        let mut doc = EditorDocument::open(root.path(), &file).unwrap();
+        doc.replace_and_mark(None, "ㄅ", Some(1..1)).unwrap();
+        doc.replace_and_mark(None, "不", Some(1..1)).unwrap();
+        store.persist(&doc).unwrap();
+        let mut fresh = EditorDocument::open(root.path(), &file).unwrap();
+        assert!(!store.restore(&mut fresh).unwrap());
+        doc.unmark();
+        assert_eq!(doc.history_depth(), (1, 0));
+        store.persist(&doc).unwrap();
+        assert!(store.restore(&mut fresh).unwrap());
+        assert_eq!(fresh.content(), "不");
+        assert!(doc.undo());
+        assert_eq!(doc.content(), "");
+        assert!(doc.redo());
+        assert_eq!(doc.content(), "不");
+    }
+
+    #[test]
+    fn select_offset_can_extend_multiline_selection_without_splitting_unicode() {
+        let root = tempfile::tempdir().unwrap();
+        let mut doc = EditorDocument::scratch(root.path()).unwrap();
+        doc.replace(None, "甲\n🧑‍💻乙").unwrap();
+        doc.set_selection(0..0).unwrap();
+        doc.select_offset("甲\n🧑‍💻".len()).unwrap();
+        assert_eq!(&doc.content()[doc.selection()], "甲\n🧑‍💻");
+        assert!(!doc.selection_reversed());
+        assert_eq!(doc.cursor(), "甲\n🧑‍💻".len());
+        let previous = doc.selection();
+        assert!(
+            doc.select_offset(5).is_err(),
+            "mid-emoji UTF-8 offset must fail"
+        );
+        assert_eq!(doc.selection(), previous);
+        doc.select_offset(0).unwrap();
+        assert!(doc.selection().is_empty());
     }
 }
