@@ -21,6 +21,10 @@ Base: `feat/gpui-desktop-20261107` at `6e730623e645478839507125396a0775a823959d`
 
 Scope: unit/model tests and Windows native compile only; no actual GUI/IME/PTY E2E test, Host account changes, production push/tag/release.
 
+Completed static validation: GPUI `cargo check --all-targets --locked --offline` passed; GPUI headless `cargo test --no-default-features --lib --locked --offline` **152 passed, 0 failed** (includes Terminal state validation and session layout tests); Alera CLI `cargo check --bin alera --locked --offline` passed on Windows. Scoped `rustfmt --check` and `git diff --check` passed. No live Host RPC requests were made as part of validation.
+
+Isolated source commits: CLI `6ef660c92`; GPUI bridge `8ffbf07de`; view-only local state `88a3278ad`. The combined experimental integration commit is `c67c0b743`.
+
 Real `terminal create` still depends on the matching new `alera` CLI being installed at the location discovered by GPUI and on the Host already having the workspace registered. Incompatible or missing versions fail with an error; no alternate process-start fallback.
 
 Important limitation: this restores the *preview tabs* only, not full terminal buffer history; the Runtime Host retains the real scrollback and process lifetime. Newly created terminals are Host-owned, and closing GPUI tabs only detaches the preview.
