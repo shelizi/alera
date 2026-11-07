@@ -224,6 +224,21 @@ impl WorkbenchModel {
         self.status = format!("Closed {}", closed.title);
     }
 
+    /// Drop previews of a renamed, moved or deleted path (and descendants),
+    /// retaining unrelated open previews. A real editor must first be checked
+    /// for dirty changes by the UI before any filesystem mutation.
+    pub fn forget_path_and_children(&mut self, path: &Path) {
+        self.tabs.retain(|tab| !tab.path.starts_with(path));
+        self.active_tab = self
+            .active_tab
+            .filter(|index| *index < self.tabs.len())
+            .or_else(|| (!self.tabs.is_empty()).then_some(self.tabs.len() - 1));
+        if self.directory.starts_with(path) {
+            self.directory = self.root.clone();
+        }
+        self.refresh_directory();
+    }
+
     pub fn reload_active(&mut self) {
         let Some(index) = self.active_tab else {
             self.status = "No preview to reload".into();

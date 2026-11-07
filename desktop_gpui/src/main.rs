@@ -4,6 +4,7 @@ mod quick_open_ui;
 
 use alera_gpui_desktop::editor::EditorDraftStore;
 use alera_gpui_desktop::editor_tabs::EditorTabs;
+use alera_gpui_desktop::explorer_ops::ExplorerFiles;
 use alera_gpui_desktop::file_search::WorkspaceFileIndex;
 use alera_gpui_desktop::git_inspect::{read_file_diff, GitSnapshot};
 use alera_gpui_desktop::model::WorkbenchModel;
@@ -14,6 +15,7 @@ use alera_gpui_desktop::terminal::{
     TerminalDock, TerminalPollGate, TerminalViewMode, HOST_SESSION_LIST_SCOPE,
 };
 use alera_gpui_desktop::workspace_tree::WorkspaceTree;
+use alera_gpui_desktop::worktree_manager::{WorktreeEntry, WorktreeManager};
 use editor_ui::{bind_editor_keys, NativeEditor};
 use gpui::{
     actions, div, prelude::*, px, rgb, size, App, Application, Bounds, Context, Entity, Focusable,
@@ -45,15 +47,47 @@ enum CenterView {
     Editor,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ExplorerAction {
+    NewFile,
+    NewFolder,
+    Rename,
+    Move,
+    Delete,
+}
+
+impl ExplorerAction {
+    fn label(self) -> &'static str {
+        match self {
+            Self::NewFile => "New file",
+            Self::NewFolder => "New folder",
+            Self::Rename => "Rename",
+            Self::Move => "Move into folder",
+            Self::Delete => "Delete",
+        }
+    }
+}
+
 struct Workbench {
     model: WorkbenchModel,
     center_view: CenterView,
     tree: Option<WorkspaceTree>,
     tree_mode: bool,
+    explorer_selection: Option<PathBuf>,
+    explorer_action: Option<ExplorerAction>,
+    explorer_action_input: Option<Entity<QuickOpenInput>>,
+    explorer_delete_confirmed: bool,
     editor: Option<Entity<NativeEditor>>,
     session_store: Option<PreviewSessionStore>,
     recent_workspaces: Vec<PathBuf>,
+    saved_projects: Vec<PathBuf>,
     show_recent_workspaces: bool,
+    worktrees: Vec<WorktreeEntry>,
+    worktree_error: Option<String>,
+    worktree_loading: bool,
+    worktree_busy: bool,
+    worktree_create_input: Option<Entity<QuickOpenInput>>,
+    worktree_delete_pending: Option<PathBuf>,
     picking_workspace: bool,
     picking_save_as: bool,
     quick_open: Option<Entity<QuickOpenInput>>,
@@ -86,6 +120,137 @@ struct Workbench {
 }
 
 impl Workbench {
+    fn begin_explorer_action(&mut self, action: ExplorerAction, cx: &mut Context<Self>) {
+        if matches!(
+            action,
+            ExplorerAction::Rename | ExplorerAction::Move | ExplorerAction::Delete
+        ) && self.explorer_selection.is_none()
+        {
+            self.model
+                .set_status("Select a file or folder in Explorer first");
+            cx.notify();
+            return;
+        }
+        self.explorer_action = Some(action);
+        self.explorer_delete_confirmed = false;
+        self.explorer_action_input = if action == ExplorerAction::Delete {
+            None
+        } else {
+            Some(cx.new(|cx| {
+                QuickOpenInput::with_placeholder("Name (or workspace-relative destination)", cx)
+            }))
+        };
+        cx.notify();
+    }
+
+    fn cancel_explorer_action(&mut self, cx: &mut Context<Self>) {
+        self.explorer_action = None;
+        self.explorer_action_input = None;
+        self.explorer_delete_confirmed = false;
+        cx.notify();
+    }
+
+    fn apply_explorer_action(&mut self, cx: &mut Context<Self>) {
+        let Some(action) = self.explorer_action else {
+            return;
+        };
+        let selected = self.explorer_selection.clone();
+        let root = self.model.root().to_path_buf();
+        let input = self
+            .explorer_action_input
+            .as_ref()
+            .map(|input| input.read(cx).query().trim().to_owned())
+            .unwrap_or_default();
+
+        if matches!(
+            action,
+            ExplorerAction::Rename | ExplorerAction::Move | ExplorerAction::Delete
+        ) && self.editor_dirty(cx)
+        {
+            self.model.set_status(
+                "Save or discard editor changes before renaming, moving or deleting Explorer paths",
+            );
+            cx.notify();
+            return;
+        }
+        if action == ExplorerAction::Delete && !self.explorer_delete_confirmed {
+            self.explorer_delete_confirmed = true;
+            self.model.set_status(
+                "Confirm permanent deletion. Nonempty folders and their contents will be removed.",
+            );
+            cx.notify();
+            return;
+        }
+        let source = selected.unwrap_or_else(|| self.model.directory().to_path_buf());
+        let parent = if source.is_dir() {
+            source.clone()
+        } else {
+            source
+                .parent()
+                .map(PathBuf::from)
+                .unwrap_or_else(|| root.clone())
+        };
+        let result = ExplorerFiles::new(&root).and_then(|files| match action {
+            ExplorerAction::NewFile => files.create_file(&parent, &input).map(Some),
+            ExplorerAction::NewFolder => files.create_folder(&parent, &input).map(Some),
+            ExplorerAction::Rename => files.rename(&source, &input).map(Some),
+            ExplorerAction::Move => {
+                let destination = root.join(&input);
+                files.move_into(&source, &destination).map(Some)
+            }
+            ExplorerAction::Delete => files.delete(&source, true).map(|_| None),
+        });
+        match result {
+            Ok(target) => {
+                if matches!(
+                    action,
+                    ExplorerAction::Rename | ExplorerAction::Move | ExplorerAction::Delete
+                ) {
+                    // Any open editor is clean here; drop its stale file handle
+                    // rather than editing an old/deleted inode or destination.
+                    self.editor = None;
+                    self.model.forget_path_and_children(&source);
+                }
+                self.model.refresh_directory();
+                if let Some(tree) = &mut self.tree {
+                    if let Err(error) = tree.refresh() {
+                        self.model
+                            .set_status(format!("Tree refresh failed: {error}"));
+                    }
+                }
+                self.file_index = None;
+                self.content_matches.clear();
+                self.content_searched_query.clear();
+                self.explorer_selection = target.clone();
+                self.cancel_explorer_action(cx);
+                self.persist_session();
+                self.model.set_status(format!(
+                    "{} succeeded{}",
+                    action.label(),
+                    target
+                        .as_ref()
+                        .map(|target| format!(": {}", target.display()))
+                        .unwrap_or_default()
+                ));
+                if action == ExplorerAction::NewFile {
+                    if let Some(path) = target {
+                        if self.model.open_path(&path) {
+                            self.open_editor(cx);
+                        }
+                    }
+                }
+                self.refresh_git(cx);
+            }
+            Err(error) => {
+                self.model
+                    .set_status(format!("{} refused: {error}", action.label()));
+                // A failed attempt must never retain an armed delete.
+                self.explorer_delete_confirmed = false;
+            }
+        }
+        cx.notify();
+    }
+
     // Clear the parent editor after closing its last inline tab.
     fn install_editor(&mut self, tabs: EditorTabs, cx: &mut Context<Self>) {
         let editor = cx.new(|cx| NativeEditor::new(tabs, cx));
@@ -499,6 +664,191 @@ impl Workbench {
         }
     }
 
+    fn pin_current_project(&mut self, cx: &mut Context<Self>) {
+        let Some(store) = &self.session_store else {
+            self.model
+                .set_status("Local project registry is unavailable");
+            cx.notify();
+            return;
+        };
+        match store
+            .save_project(self.model.root())
+            .and_then(|_| store.saved_projects())
+        {
+            Ok(projects) => {
+                self.saved_projects = projects;
+                self.model.set_status("Project added to saved projects");
+            }
+            Err(error) => self
+                .model
+                .set_status(format!("Cannot save project: {error}")),
+        }
+        cx.notify();
+    }
+
+    fn unpin_project(&mut self, path: &std::path::Path, cx: &mut Context<Self>) {
+        let Some(store) = &self.session_store else {
+            return;
+        };
+        match store
+            .unsave_project(path)
+            .and_then(|_| store.saved_projects())
+        {
+            Ok(projects) => {
+                self.saved_projects = projects;
+                self.model
+                    .set_status("Project removed from saved list (files kept)");
+            }
+            Err(error) => self
+                .model
+                .set_status(format!("Cannot unpin project: {error}")),
+        }
+        cx.notify();
+    }
+
+    fn refresh_worktrees(&mut self, cx: &mut Context<Self>) {
+        if self.worktree_loading || self.worktree_busy {
+            return;
+        }
+        let root = self.model.root().to_path_buf();
+        let generation = self.workspace_generation;
+        self.worktree_loading = true;
+        self.worktree_error = None;
+        cx.spawn(async move |view, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    WorktreeManager::discover(&root).and_then(|manager| manager.list())
+                })
+                .await;
+            view.update(cx, |view, cx| {
+                if view.workspace_generation != generation {
+                    return;
+                }
+                view.worktree_loading = false;
+                match result {
+                    Ok(entries) => {
+                        view.worktrees = entries;
+                        view.worktree_error = None;
+                    }
+                    Err(error) => {
+                        view.worktrees.clear();
+                        view.worktree_error = Some(error.to_string());
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn toggle_worktree_creator(&mut self, cx: &mut Context<Self>) {
+        self.worktree_create_input = if self.worktree_create_input.is_some() {
+            None
+        } else {
+            Some(cx.new(|cx| QuickOpenInput::with_placeholder("feature/new-branch", cx)))
+        };
+        self.worktree_delete_pending = None;
+        cx.notify();
+    }
+
+    fn create_worktree(&mut self, cx: &mut Context<Self>) {
+        if self.worktree_busy || self.editor_dirty(cx) {
+            self.model
+                .set_status("Save editor changes and finish other worktree operations first");
+            cx.notify();
+            return;
+        }
+        let Some(input) = &self.worktree_create_input else {
+            return;
+        };
+        let branch = input.read(cx).query().trim().to_owned();
+        let root = self.model.root().to_path_buf();
+        let generation = self.workspace_generation;
+        self.worktree_busy = true;
+        cx.spawn(async move |view, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    WorktreeManager::discover(&root).and_then(|manager| manager.create(&branch))
+                })
+                .await;
+            view.update(cx, |view, cx| {
+                if view.workspace_generation != generation {
+                    return;
+                }
+                view.worktree_busy = false;
+                match result {
+                    Ok(path) => {
+                        view.worktree_create_input = None;
+                        view.switch_workspace(path, cx);
+                        view.refresh_worktrees(cx);
+                    }
+                    Err(error) => {
+                        view.worktree_error = Some(error.to_string());
+                        view.model
+                            .set_status(format!("Cannot create Worktree: {error}"));
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn remove_worktree(&mut self, target: PathBuf, cx: &mut Context<Self>) {
+        if self.worktree_busy {
+            return;
+        }
+        if self.worktree_delete_pending.as_deref() != Some(target.as_path()) {
+            self.worktree_delete_pending = Some(target);
+            self.model.set_status(
+                "Click Remove again to confirm. Only a clean, managed worktree may be removed.",
+            );
+            cx.notify();
+            return;
+        }
+        self.worktree_delete_pending = None;
+        if self.editor_dirty(cx) || target == self.model.root() {
+            self.model
+                .set_status("Cannot remove active Worktree or leave unsaved editor changes");
+            cx.notify();
+            return;
+        }
+        let root = self.model.root().to_path_buf();
+        let generation = self.workspace_generation;
+        self.worktree_busy = true;
+        cx.spawn(async move |view, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    WorktreeManager::discover(&root)
+                        .and_then(|manager| manager.remove(&target, true))
+                })
+                .await;
+            view.update(cx, |view, cx| {
+                if view.workspace_generation != generation {
+                    return;
+                }
+                view.worktree_busy = false;
+                match result {
+                    Ok(()) => {
+                        view.model
+                            .set_status("Clean managed Worktree removed (Git branch kept)");
+                        view.refresh_worktrees(cx);
+                    }
+                    Err(error) => {
+                        view.worktree_error = Some(error.to_string());
+                        view.model
+                            .set_status(format!("Worktree removal refused: {error}"));
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     fn switch_workspace(&mut self, root: PathBuf, cx: &mut Context<Self>) {
         if let Some(editor) = &self.editor {
             if let Err(status) = editor.read(cx).switch_allowed() {
@@ -539,6 +889,8 @@ impl Workbench {
         self.model = next;
         self.center_view = CenterView::Terminal;
         self.tree = WorkspaceTree::new(&canonical).ok();
+        self.explorer_selection = None;
+        self.cancel_explorer_action(cx);
         self.editor = None;
         self.restore_scratch_tabs(cx);
         self.quick_open = None;
@@ -557,6 +909,12 @@ impl Workbench {
         self.git_diff_loading = false;
         self.git_diff_request = self.git_diff_request.wrapping_add(1);
         self.workspace_generation = self.workspace_generation.wrapping_add(1);
+        self.worktrees.clear();
+        self.worktree_error = None;
+        self.worktree_loading = false;
+        self.worktree_busy = false;
+        self.worktree_create_input = None;
+        self.worktree_delete_pending = None;
         // Terminal preview tabs are local UI state, never PTY owners. Drop
         // them on workspace changes to prevent cross-project output leakage.
         // Existing Host sessions remain alive and under Host ownership.
@@ -579,6 +937,7 @@ impl Workbench {
             self.recent_workspaces = vec![canonical];
         }
         self.refresh_terminals(cx);
+        self.refresh_worktrees(cx);
         self.refresh_git(cx);
         cx.notify();
     }
@@ -892,6 +1251,10 @@ impl Render for Workbench {
             .unwrap_or_default();
         let tree_mode = self.tree_mode && self.tree.is_some();
         let tree_truncated = self.tree.as_ref().is_some_and(WorkspaceTree::truncated);
+        let explorer_selection = self.explorer_selection.clone();
+        let explorer_action = self.explorer_action;
+        let explorer_action_input = self.explorer_action_input.clone();
+        let explorer_delete_confirmed = self.explorer_delete_confirmed;
         let tabs: Vec<_> = self
             .model
             .tabs()
@@ -931,6 +1294,19 @@ impl Render for Workbench {
             .cloned()
             .enumerate()
             .collect();
+        let saved_projects: Vec<_> = self.saved_projects.iter().cloned().enumerate().collect();
+        let worktree_rows: Vec<_> = self
+            .worktrees
+            .iter()
+            .take(24)
+            .cloned()
+            .enumerate()
+            .collect();
+        let worktree_error = self.worktree_error.clone();
+        let worktree_loading = self.worktree_loading;
+        let worktree_busy = self.worktree_busy;
+        let worktree_create_input = self.worktree_create_input.clone();
+        let worktree_delete_pending = self.worktree_delete_pending.clone();
         let runtime_status = self.runtime_status.clone();
         let runtime_loading = self.runtime_loading;
         let terminal_list_loading = self.terminal_list_loading;
@@ -1159,6 +1535,103 @@ impl Render for Workbench {
                             )
                             .child(
                                 div()
+                                    .id("explorer-file-actions")
+                                    .px_2()
+                                    .py_2()
+                                    .border_b_1()
+                                    .border_color(rgb(BORDER))
+                                    .flex()
+                                    .flex_col()
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .flex_wrap()
+                                            .gap_2()
+                                            .children([
+                                                ("+ File", ExplorerAction::NewFile),
+                                                ("+ Folder", ExplorerAction::NewFolder),
+                                                ("Rename", ExplorerAction::Rename),
+                                                ("Move", ExplorerAction::Move),
+                                                ("Delete", ExplorerAction::Delete),
+                                            ].into_iter().enumerate().map(|(i, (label, action))| {
+                                                div()
+                                                    .id(("explorer-file-action", i))
+                                                    .cursor_pointer()
+                                                    .text_xs()
+                                                    .text_color(rgb(if action == ExplorerAction::Delete { MUTED } else { TEXT }))
+                                                    .child(label)
+                                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                                        this.begin_explorer_action(action, cx);
+                                                    }))
+                                            })),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(rgb(MUTED))
+                                            .child(explorer_selection.as_ref().map(|path| {
+                                                format!("Selected: {}", path.strip_prefix(&workspace_root).unwrap_or(path).display())
+                                            }).unwrap_or_else(|| "Select a file/folder to rename, move or delete".into())),
+                                    )
+                                    .child(if let Some(action) = explorer_action {
+                                        div()
+                                            .id("explorer-action-editor")
+                                            .flex()
+                                            .flex_col()
+                                            .gap_1()
+                                            .child(div().text_xs().text_color(rgb(TEXT)).child(
+                                                if action == ExplorerAction::Delete {
+                                                    "Delete selection permanently? Folder contents will be deleted.".into()
+                                                } else {
+                                                    action.label().to_string()
+                                                }
+                                            ))
+                                            .child(if let Some(input) = explorer_action_input {
+                                                div().child(input).into_any_element()
+                                            } else {
+                                                div().h(px(0.0)).into_any_element()
+                                            })
+                                            .child(
+                                                div()
+                                                    .flex()
+                                                    .gap_3()
+                                                    .child(
+                                                        div()
+                                                            .id("explorer-apply")
+                                                            .cursor_pointer()
+                                                            .text_sm()
+                                                            .text_color(rgb(TEXT))
+                                                            .child(if explorer_delete_confirmed {
+                                                                "CONFIRM DELETE"
+                                                            } else if action == ExplorerAction::Delete {
+                                                                "Delete…"
+                                                            } else {
+                                                                "Apply"
+                                                            })
+                                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                                this.apply_explorer_action(cx);
+                                                            })),
+                                                    )
+                                                    .child(
+                                                        div()
+                                                            .id("explorer-action-cancel")
+                                                            .cursor_pointer()
+                                                            .text_sm()
+                                                            .text_color(rgb(MUTED))
+                                                            .child("Cancel")
+                                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                                this.cancel_explorer_action(cx);
+                                                            })),
+                                                    ),
+                                            )
+                                            .into_any_element()
+                                    } else {
+                                        div().h(px(0.0)).into_any_element()
+                                    }),
+                            )
+                            .child(
+                                div()
                                     .px_3()
                                     .py_2()
                                     .border_b_1()
@@ -1331,6 +1804,8 @@ impl Render for Workbench {
                                     .children(if tree_mode {
                                         tree_rows.into_iter().enumerate().map(|(i, item)| {
                                             let relative = item.relative_path.clone();
+                                            let row_path = workspace_root.join(&relative);
+                                            let selected = explorer_selection.as_ref() == Some(&row_path);
                                             let is_directory = item.is_directory;
                                             let prefix = if !is_directory { "·" } else if item.expanded { "▾" } else { "▸" };
                                             div()
@@ -1339,9 +1814,12 @@ impl Render for Workbench {
                                                 .pr_2()
                                                 .py_1()
                                                 .cursor_pointer()
+                                                .bg(rgb(if selected { ACTIVE } else { PANEL }))
                                                 .hover(|style| style.bg(rgb(ACTIVE)))
                                                 .child(format!("{prefix} {}", item.name))
                                                 .on_click(cx.listener(move |this, _, _, cx| {
+                                                    this.explorer_selection = Some(this.model.root().join(&relative));
+                                                    this.explorer_delete_confirmed = false;
                                                     if is_directory {
                                                         if let Some(tree) = &mut this.tree {
                                                             if let Err(error) = tree.toggle(&relative) {
@@ -1362,11 +1840,13 @@ impl Render for Workbench {
                                         entries.into_iter().enumerate().map(|(i, item)| {
                                             let is_directory = item.is_directory;
                                             let file_path = item.path.clone();
+                                            let selected = explorer_selection.as_ref() == Some(&file_path);
                                             div()
                                                 .id(i)
                                                 .px_3()
                                                 .py_1()
                                                 .cursor_pointer()
+                                                .bg(rgb(if selected { ACTIVE } else { PANEL }))
                                                 .hover(|style| style.bg(rgb(ACTIVE)))
                                                 .child(format!(
                                                     "{} {}",
@@ -1374,6 +1854,8 @@ impl Render for Workbench {
                                                     item.name
                                                 ))
                                                 .on_click(cx.listener(move |this, _, _, cx| {
+                                                    this.explorer_selection = Some(file_path.clone());
+                                                    this.explorer_delete_confirmed = false;
                                                     this.model.open_entry(i);
                                                     if !is_directory && this.model.selected_path() == Some(file_path.as_path()) {
                                                         this.open_editor(cx);
@@ -1947,6 +2429,73 @@ impl Render for Workbench {
                                     .text_color(rgb(MUTED))
                                     .child(format!("Active: {}", workspace_root.display())),
                             )
+                            .child(
+                                div()
+                                    .flex()
+                                    .justify_between()
+                                    .items_center()
+                                    .child(
+                                        div()
+                                            .font_weight(gpui::FontWeight::BOLD)
+                                            .text_sm()
+                                            .child("Saved projects"),
+                                    )
+                                    .child(
+                                        div()
+                                            .id("project-pin-current")
+                                            .cursor_pointer()
+                                            .text_sm()
+                                            .text_color(rgb(TEXT))
+                                            .child("☆ Save current")
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.pin_current_project(cx);
+                                            })),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .id("saved-projects-scroll")
+                                    .max_h(px(142.0))
+                                    .overflow_y_scroll()
+                                    .children(saved_projects.into_iter().map(|(index, path)| {
+                                        let open_path = path.clone();
+                                        let unpin_path = path.clone();
+                                        let title = path.file_name()
+                                            .map(|name| name.to_string_lossy().to_string())
+                                            .unwrap_or_else(|| path.display().to_string());
+                                        let active = workspace_root == path;
+                                        div()
+                                            .id(("saved-project-row", index))
+                                            .flex()
+                                            .items_center()
+                                            .justify_between()
+                                            .gap_1()
+                                            .child(
+                                                div()
+                                                    .id(("saved-project-open", index))
+                                                    .flex_1()
+                                                    .min_w_0()
+                                                    .cursor_pointer()
+                                                    .text_sm()
+                                                    .text_color(rgb(if active { TEXT } else { MUTED }))
+                                                    .child(format!("{} {title}", if active { "●" } else { "○" }))
+                                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                                        this.switch_workspace(open_path.clone(), cx);
+                                                    })),
+                                            )
+                                            .child(
+                                                div()
+                                                    .id(("saved-project-unpin", index))
+                                                    .cursor_pointer()
+                                                    .text_xs()
+                                                    .text_color(rgb(MUTED))
+                                                    .child("×")
+                                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                                        this.unpin_project(&unpin_path, cx);
+                                                    })),
+                                            )
+                                    })),
+                            )
                             .child(if show_recent_workspaces {
                                 div()
                                     .id("project-workspaces-scroll")
@@ -1979,6 +2528,131 @@ impl Render for Workbench {
                                                 this.switch_workspace(path.clone(), cx);
                                             }))
                                     }))
+                                    .into_any_element()
+                            } else {
+                                div().h(px(0.0)).into_any_element()
+                            })
+                            .child(
+                                div()
+                                    .id("project-worktree-heading")
+                                    .flex()
+                                    .justify_between()
+                                    .items_center()
+                                    .child(div().font_weight(gpui::FontWeight::BOLD).text_sm().child("Git Worktrees"))
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .gap_2()
+                                            .child(
+                                                div()
+                                                    .id("worktree-refresh")
+                                                    .cursor_pointer()
+                                                    .text_sm()
+                                                    .text_color(rgb(MUTED))
+                                                    .child(if worktree_loading { "Loading…" } else { "↻" })
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.refresh_worktrees(cx);
+                                                    })),
+                                            )
+                                            .child(
+                                                div()
+                                                    .id("worktree-add-toggle")
+                                                    .cursor_pointer()
+                                                    .text_sm()
+                                                    .text_color(rgb(TEXT))
+                                                    .child("+ New")
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.toggle_worktree_creator(cx);
+                                                    })),
+                                            ),
+                                    ),
+                            )
+                            .child(if let Some(input) = worktree_create_input {
+                                div()
+                                    .id("worktree-create-form")
+                                    .flex()
+                                    .flex_col()
+                                    .gap_1()
+                                    .child(input)
+                                    .child(
+                                        div()
+                                            .id("worktree-create-confirm")
+                                            .cursor_pointer()
+                                            .text_sm()
+                                            .text_color(rgb(TEXT))
+                                            .child(if worktree_busy { "Creating…" } else { "Create branch + worktree" })
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.create_worktree(cx);
+                                            })),
+                                    )
+                                    .into_any_element()
+                            } else {
+                                div().h(px(0.0)).into_any_element()
+                            })
+                            .child(
+                                div()
+                                    .id("worktree-list-scroll")
+                                    .max_h(px(198.0))
+                                    .overflow_y_scroll()
+                                    .children(worktree_rows.into_iter().map(|(index, entry)| {
+                                        let target = entry.path.clone();
+                                        let open_path = target.clone();
+                                        let remove_path = target.clone();
+                                        let is_active = workspace_root == target;
+                                        let removable = !entry.is_primary && !entry.locked && !entry.prunable && !is_active;
+                                        let is_confirm = worktree_delete_pending.as_deref() == Some(target.as_path());
+                                        let label = entry.branch.unwrap_or_else(|| {
+                                            if entry.detached { "Detached HEAD".into() } else { "(unnamed)".into() }
+                                        });
+                                        div()
+                                            .id(("worktree-row", index))
+                                            .flex()
+                                            .flex_col()
+                                            .py_1()
+                                            .gap_1()
+                                            .child(
+                                                div()
+                                                    .flex()
+                                                    .justify_between()
+                                                    .items_center()
+                                                    .child(
+                                                        div()
+                                                            .id(("worktree-open", index))
+                                                            .flex_1()
+                                                            .min_w_0()
+                                                            .cursor_pointer()
+                                                            .text_sm()
+                                                            .text_color(rgb(if is_active { TEXT } else { MUTED }))
+                                                            .child(format!("{} {label}", if is_active { "●" } else { "○" }))
+                                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                                this.switch_workspace(open_path.clone(), cx);
+                                                            })),
+                                                    )
+                                                    .child(if removable {
+                                                        div()
+                                                            .id(("worktree-remove", index))
+                                                            .cursor_pointer()
+                                                            .text_xs()
+                                                            .text_color(rgb(if is_confirm { TEXT } else { MUTED }))
+                                                            .child(if is_confirm { "Confirm" } else { "Remove" })
+                                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                                this.remove_worktree(remove_path.clone(), cx);
+                                                            }))
+                                                            .into_any_element()
+                                                    } else {
+                                                        div().text_xs().text_color(rgb(MUTED))
+                                                            .child(if entry.is_primary { "Main" } else if is_active { "Active" } else { "Locked" })
+                                                            .into_any_element()
+                                                    }),
+                                            )
+                                            .child(div().text_xs().text_color(rgb(MUTED)).child(target.display().to_string()))
+                                    })),
+                            )
+                            .child(if let Some(error) = worktree_error {
+                                div()
+                                    .text_xs()
+                                    .text_color(rgb(MUTED))
+                                    .child(format!("Worktrees: {error}"))
                                     .into_any_element()
                             } else {
                                 div().h(px(0.0)).into_any_element()
@@ -2127,6 +2801,10 @@ fn main() {
         .and_then(|store| store.recent_workspaces().ok())
         .filter(|roots| !roots.is_empty())
         .unwrap_or_else(|| vec![model.root().to_path_buf()]);
+    let saved_projects = session_store
+        .as_ref()
+        .and_then(|store| store.saved_projects().ok())
+        .unwrap_or_default();
 
     Application::new().run(move |cx: &mut App| {
         bind_editor_keys(cx);
@@ -2151,13 +2829,24 @@ fn main() {
                     let terminal_input = cx.new(QuickOpenInput::terminal);
                     let mut workbench = Workbench {
                         tree: WorkspaceTree::new(model.root()).ok(),
-                        tree_mode: false,
+                        tree_mode: true,
+                        explorer_selection: None,
+                        explorer_action: None,
+                        explorer_action_input: None,
+                        explorer_delete_confirmed: false,
                         model,
                         center_view: CenterView::Terminal,
                         editor: None,
                         session_store,
                         recent_workspaces,
+                        saved_projects,
                         show_recent_workspaces: true,
+                        worktrees: Vec::new(),
+                        worktree_error: None,
+                        worktree_loading: false,
+                        worktree_busy: false,
+                        worktree_create_input: None,
+                        worktree_delete_pending: None,
                         picking_workspace: false,
                         picking_save_as: false,
                         quick_open: None,
@@ -2193,6 +2882,7 @@ fn main() {
                 });
                 view.update(cx, |view, cx| {
                     view.start_terminal_polling(cx);
+                    view.refresh_worktrees(cx);
                     view.refresh_git(cx);
                 });
                 view
