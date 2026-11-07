@@ -6,16 +6,18 @@
 //! click places the caret at line end, and IME candidate rectangle/selection
 //! geometry need independent visual and real Chinese IME tests.
 use alera_gpui_desktop::editor::{
-    byte_to_utf16, nearest_grapheme_edge, utf16_to_byte, EditorDocument, EditorDraftStore,
+    byte_to_utf16, edge_scroll_offset, nearest_grapheme_edge, utf16_to_byte, EditorDocument,
+    EditorDraftStore,
 };
 use gpui::{
     actions, div, fill, point, prelude::*, px, relative, rgb, size, App, Bounds, ClipboardItem,
     Context, CursorStyle, Element, ElementId, ElementInputHandler, Entity, EntityInputHandler,
     FocusHandle, Focusable, GlobalElementId, InspectorElementId, KeyBinding, LayoutId, MouseButton,
-    Pixels, Point, ShapedLine, Style, TextRun, UTF16Selection, Window,
+    Pixels, Point, ScrollHandle, ShapedLine, Style, TextRun, UTF16Selection, Window,
 };
 use std::collections::BTreeMap;
 use std::ops::Range;
+use std::time::Duration;
 
 const MAX_RENDER_LINES: usize = 600;
 const PANEL_BG: u32 = 0x15171b;
@@ -94,7 +96,11 @@ pub struct NativeEditor {
     focus: FocusHandle,
     status: String,
     line_geometry: BTreeMap<usize, EditorLineGeometry>,
+    scroll: ScrollHandle,
     mouse_selecting: bool,
+    last_drag_position: Option<Point<Pixels>>,
+    edge_scroll_running: bool,
+    edge_scroll_ticks: u16,
 }
 
 /// Geometry is produced by GPUI's actual native font shaper during paint.
@@ -125,12 +131,85 @@ impl NativeEditor {
                 "Native UTF-8 text editor (experimental)".into()
             },
             line_geometry: BTreeMap::new(),
+            scroll: ScrollHandle::new(),
             mouse_selecting: false,
+            last_drag_position: None,
+            edge_scroll_running: false,
+            edge_scroll_ticks: 0,
         }
     }
 
     pub fn has_unsaved_changes(&self) -> bool {
         self.document.is_dirty()
+    }
+
+    /// The first scroll child is the 1px input capture. All visible source
+    /// lines therefore have scroll child indices line_number + 1.
+    fn reveal_caret(&self) {
+        let line = self.document.line_column().0;
+        if line < MAX_RENDER_LINES {
+            self.scroll.scroll_to_item(line + 1);
+        }
+    }
+
+    fn next_edge_scroll(&self) -> Option<f32> {
+        let pointer = self.last_drag_position?;
+        let viewport = self.scroll.bounds();
+        edge_scroll_offset(
+            f32::from(pointer.y),
+            f32::from(viewport.top()),
+            f32::from(viewport.bottom()),
+            f32::from(self.scroll.offset().y),
+            f32::from(self.scroll.max_offset().height),
+        )
+    }
+
+    fn stop_drag(&mut self) {
+        self.mouse_selecting = false;
+        self.last_drag_position = None;
+        self.edge_scroll_ticks = 0;
+        // An active timer will observe !mouse_selecting and end itself.
+    }
+
+    fn ensure_drag_autoscroll(&mut self, cx: &mut Context<Self>) {
+        if self.edge_scroll_running || self.next_edge_scroll().is_none() {
+            return;
+        }
+        self.edge_scroll_running = true;
+        self.edge_scroll_ticks = 0;
+        // Only one 40ms timer per active pointer drag. It terminates after
+        // release, at scroll bounds, on entity destruction or after a bounded
+        // 10s fallback in case the OS loses the release event.
+        cx.spawn(async move |editor, cx| loop {
+            gpui::Timer::after(Duration::from_millis(40)).await;
+            match editor.update(cx, |editor, cx| editor.tick_drag_autoscroll(cx)) {
+                Ok(true) => {}
+                Ok(false) | Err(_) => break,
+            }
+        })
+        .detach();
+    }
+
+    fn tick_drag_autoscroll(&mut self, cx: &mut Context<Self>) -> bool {
+        const MAX_TICKS: u16 = 250;
+        if !self.mouse_selecting || self.edge_scroll_ticks >= MAX_TICKS {
+            self.edge_scroll_running = false;
+            return false;
+        }
+        let Some(offset_y) = self.next_edge_scroll() else {
+            self.edge_scroll_running = false;
+            return false;
+        };
+        self.edge_scroll_ticks += 1;
+        let offset = self.scroll.offset();
+        self.scroll.set_offset(point(offset.x, px(offset_y)));
+        if let Some(position) = self.last_drag_position {
+            if let Some(offset) = self.pointer_index_at(position) {
+                let _ = self.document.extend_pointer_selection(offset);
+            }
+        }
+        cx.notify();
+        true
     }
 
     fn pointer_index_at(&self, position: Point<Pixels>) -> Option<usize> {
@@ -179,6 +258,7 @@ impl NativeEditor {
         };
         if result.is_ok() {
             self.mouse_selecting = true;
+            self.last_drag_position = Some(event.position);
         } else if let Err(error) = result {
             self.status = format!("Pointer input blocked: {error}");
         }
@@ -189,11 +269,17 @@ impl NativeEditor {
         if !self.mouse_selecting {
             return;
         }
+        if !event.dragging() {
+            self.stop_drag();
+            return;
+        }
+        self.last_drag_position = Some(event.position);
         if let Some(offset) = self.pointer_index_at(event.position) {
             if self.document.extend_pointer_selection(offset).is_ok() {
                 cx.notify();
             }
         }
+        self.ensure_drag_autoscroll(cx);
     }
 
     pub fn save(&mut self, cx: &mut Context<Self>) -> bool {
@@ -223,53 +309,58 @@ impl NativeEditor {
         }
     }
 
+    fn navigated(&self, cx: &mut Context<Self>) {
+        self.reveal_caret();
+        cx.notify();
+    }
+
     fn move_left(&mut self, _: &MoveLeft, _: &mut Window, cx: &mut Context<Self>) {
         self.document.move_left();
-        cx.notify();
+        self.navigated(cx);
     }
     fn move_right(&mut self, _: &MoveRight, _: &mut Window, cx: &mut Context<Self>) {
         self.document.move_right();
-        cx.notify();
+        self.navigated(cx);
     }
     fn move_up(&mut self, _: &MoveUp, _: &mut Window, cx: &mut Context<Self>) {
         self.document.move_up(false);
-        cx.notify();
+        self.navigated(cx);
     }
     fn move_down(&mut self, _: &MoveDown, _: &mut Window, cx: &mut Context<Self>) {
         self.document.move_down(false);
-        cx.notify();
+        self.navigated(cx);
     }
     fn select_left(&mut self, _: &SelectLeft, _: &mut Window, cx: &mut Context<Self>) {
         self.document.select_left();
-        cx.notify();
+        self.navigated(cx);
     }
     fn select_right(&mut self, _: &SelectRight, _: &mut Window, cx: &mut Context<Self>) {
         self.document.select_right();
-        cx.notify();
+        self.navigated(cx);
     }
     fn select_up(&mut self, _: &SelectUp, _: &mut Window, cx: &mut Context<Self>) {
         self.document.move_up(true);
-        cx.notify();
+        self.navigated(cx);
     }
     fn select_down(&mut self, _: &SelectDown, _: &mut Window, cx: &mut Context<Self>) {
         self.document.move_down(true);
-        cx.notify();
+        self.navigated(cx);
     }
     fn move_home(&mut self, _: &MoveHome, _: &mut Window, cx: &mut Context<Self>) {
         self.document.move_home(false);
-        cx.notify();
+        self.navigated(cx);
     }
     fn move_end(&mut self, _: &MoveEnd, _: &mut Window, cx: &mut Context<Self>) {
         self.document.move_end(false);
-        cx.notify();
+        self.navigated(cx);
     }
     fn select_home(&mut self, _: &SelectHome, _: &mut Window, cx: &mut Context<Self>) {
         self.document.move_home(true);
-        cx.notify();
+        self.navigated(cx);
     }
     fn select_end(&mut self, _: &SelectEnd, _: &mut Window, cx: &mut Context<Self>) {
         self.document.move_end(true);
-        cx.notify();
+        self.navigated(cx);
     }
     fn undo_edit(&mut self, _: &UndoEdit, _: &mut Window, cx: &mut Context<Self>) {
         if self.document.undo() {
@@ -305,7 +396,7 @@ impl NativeEditor {
         if let Err(error) = result {
             self.status = format!("Selection rejected: {error}");
         }
-        cx.notify();
+        self.navigated(cx);
     }
     fn save_file(&mut self, _: &SaveFile, _: &mut Window, cx: &mut Context<Self>) {
         self.save(cx);
@@ -343,6 +434,7 @@ impl NativeEditor {
                         self.status = format!("Local recovery save failed: {error}");
                     }
                 }
+                self.reveal_caret();
             }
         }
         cx.notify();
@@ -753,11 +845,11 @@ impl Render for NativeEditor {
             }))
             .on_mouse_up(
                 MouseButton::Left,
-                cx.listener(|this, _, _, _| this.mouse_selecting = false),
+                cx.listener(|this, _, _, _| this.stop_drag()),
             )
             .on_mouse_up_out(
                 MouseButton::Left,
-                cx.listener(|this, _, _, _| this.mouse_selecting = false),
+                cx.listener(|this, _, _, _| this.stop_drag()),
             )
             .child(
                 div()
@@ -814,6 +906,7 @@ impl Render for NativeEditor {
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()
+                    .track_scroll(&self.scroll)
                     .px_3()
                     .py_2()
                     .font_family("JetBrains Mono")

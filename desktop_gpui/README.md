@@ -132,8 +132,14 @@ GPUI's native font shaping to set or extend a selection at the nearest
 displayed grapheme boundary, and dragging within the editor selects
 across lines (including backwards). The caret is painted as a narrow
 overlay rather than inserted into the text, so later glyphs do not jump.
-Undo history is in-memory,
-limited to 64 steps and 4 MiB, and is not recovered after a restart.
+Keyboard navigation, editing, and Undo/Redo now request minimal
+vertical scrolling to keep the active caret line in the viewport.
+While the left mouse button is held, dragging at the scroll region's
+upper/lower edge continuously scrolls by at most one 19px row per 40ms
+tick. The scroll loop stops on mouse release, at the file's scroll
+boundaries, or after a 10-second fail-safe if the OS loses mouse-up.
+Undo history is in-memory, limited to 64 steps and 4 MiB, and is not
+recovered after a restart.
 IME composition changes count as **one** undo transaction, not separate
 changes for each candidate/preedit update.
 Only `Save` writes back to the original source file. It validates workspace
@@ -155,9 +161,11 @@ documents are capped at 256 KiB and only the first 600 lines are drawn.
 GPUI now derives pointer hit-tests and IME candidate rectangles from the
 same font shaper and scroll clipping bounds used to paint each line. An
 offscreen caret does **not** yield a fabricated candidate rectangle.
-**This geometry has passed compile checks, not real mouse/IME acceptance
-tests.** Drag autoscroll, line wrapping, BiDi layout, syntax highlighting,
-completion, line virtualization, and verified Traditional Chinese IME
+**This geometry and the new auto-scroll have passed compile/unit checks,
+not real mouse/IME acceptance tests.** Dragging across the editor window
+boundary, keyboard navigation beyond the first 600 rendered lines,
+line wrapping, BiDi layout, syntax highlighting, completion, line
+virtualization, and verified Traditional Chinese IME
 candidate behavior are still pending. Editing and draft persistence run
 on the GPUI thread, which requires profiling before full-scale adoption.
 
@@ -194,9 +202,10 @@ sidecar/runtime contracts, not be reimplemented directly in GPUI views.
 ## Verification
 
 - Windows: `cargo check --all-targets` and debug `cargo build` passed with GPUI 0.2.2.
-- Headless tests: 65/65 passed (navigation, workspace switching and recent
+- Headless tests: 67/67 passed (navigation, workspace switching and recent
   workspace history, UTF-16 and Unicode grapheme edits, bounded undo/redo,
   shaped pointer grapheme snapping, cross-line reverse drag selection,
+  clamped mouse-edge auto-scroll and invalid scroll viewport rejection,
   multi-line selection, IME composition transaction handling, draft recovery and
   conflict-safe file saves, persistence, path containment,
   file limits, tabs, reload, terminal cursor, auto-poll backoff, stale

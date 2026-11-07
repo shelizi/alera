@@ -845,6 +845,37 @@ pub fn nearest_grapheme_edge(
     }
 }
 
+/// Next vertical GPUI ScrollHandle offset while dragging near the viewport
+/// edge. Negative offsets mean scrolling down. This helper has no timer or
+/// global input state: the UI owns a cancellable 40ms tick only during drag.
+pub fn edge_scroll_offset(
+    pointer_y: f32,
+    view_top: f32,
+    view_bottom: f32,
+    current_offset: f32,
+    max_scroll: f32,
+) -> Option<f32> {
+    const EDGE_MARGIN: f32 = 24.0;
+    const STEP: f32 = 19.0;
+    if ![pointer_y, view_top, view_bottom, current_offset, max_scroll]
+        .into_iter()
+        .all(f32::is_finite)
+        || view_bottom - view_top <= EDGE_MARGIN * 2.0
+        || max_scroll <= 0.0
+    {
+        return None;
+    }
+    let offset = current_offset.clamp(-max_scroll, 0.0);
+    let next = if pointer_y <= view_top + EDGE_MARGIN {
+        (offset + STEP).min(0.0)
+    } else if pointer_y >= view_bottom - EDGE_MARGIN {
+        (offset - STEP).max(-max_scroll)
+    } else {
+        return None;
+    };
+    (next - offset).abs().gt(&0.5).then_some(next)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1323,5 +1354,47 @@ mod tests {
         assert_eq!(&doc.content()[doc.selection()], "字\nend");
         assert!(!doc.selection_reversed());
         assert_eq!(doc.history_depth(), before);
+    }
+
+    #[test]
+    fn pointer_edge_scroll_is_clamped_and_stops_at_both_ends() {
+        assert_eq!(
+            edge_scroll_offset(101.0, 100.0, 400.0, -50.0, 200.0),
+            Some(-31.0)
+        );
+        assert_eq!(
+            edge_scroll_offset(399.0, 100.0, 400.0, -50.0, 200.0),
+            Some(-69.0)
+        );
+        assert_eq!(
+            edge_scroll_offset(115.0, 100.0, 400.0, -2.0, 200.0),
+            Some(0.0)
+        );
+        assert_eq!(
+            edge_scroll_offset(390.0, 100.0, 400.0, -195.0, 200.0),
+            Some(-200.0)
+        );
+        assert_eq!(edge_scroll_offset(110.0, 100.0, 400.0, 0.0, 200.0), None);
+        assert_eq!(edge_scroll_offset(390.0, 100.0, 400.0, -200.0, 200.0), None);
+        assert_eq!(edge_scroll_offset(250.0, 100.0, 400.0, -50.0, 200.0), None);
+    }
+
+    #[test]
+    fn pointer_edge_scroll_ignores_invalid_viewports_and_non_scrollable_content() {
+        assert_eq!(edge_scroll_offset(5.0, 0.0, 40.0, -20.0, 100.0), None);
+        assert_eq!(edge_scroll_offset(200.0, 100.0, 400.0, 0.0, 0.0), None);
+        assert_eq!(
+            edge_scroll_offset(f32::NAN, 100.0, 400.0, -40.0, 200.0),
+            None
+        );
+        assert_eq!(edge_scroll_offset(200.0, 500.0, 100.0, -40.0, 200.0), None);
+        assert_eq!(
+            edge_scroll_offset(200.0, 100.0, 400.0, f32::NAN, 200.0),
+            None
+        );
+        assert_eq!(
+            edge_scroll_offset(200.0, 100.0, 400.0, -20.0, f32::INFINITY),
+            None
+        );
     }
 }

@@ -123,6 +123,16 @@ without reproducible measurements.
   total 65 headless tests passed. Native Windows type check succeeded.
   Actual pointer event routing, drag autoscroll and real Bopomofo
   candidate window placement still need visual Windows acceptance testing.
+- Phase 2 viewport follow-up: bound native editor scroll region to GPUI
+  ScrollHandle. Keyboard navigation, edits and undo/redo request minimal
+  vertical caret reveal for the first 600 rendered lines.
+  While actually dragging with the left mouse button, a single 40ms timer
+  applies a pure bounded scroll step (19px per tick) at the viewport's
+  upper/lower 24px; mouse-up, release detected by move, scroll limits,
+  and a ten-second lost-event fail-safe stop the loop. Two new pure Rust
+  regressions cover clamping and bad viewports; 67 headless tests pass.
+  Actual mouse/IME GUI behavior and navigation beyond the 600-line
+  prototype render cap remain unverified.
 - Two-launch Windows smoke test confirmed a native window on each launch and
   recovery of the same workspace even when the second process started from
   a different working directory, using an isolated app-state directory.
