@@ -4,6 +4,7 @@ pub mod editor;
 pub mod editor_search;
 pub mod editor_session;
 pub mod editor_tabs;
+pub mod explorer_ops;
 pub mod file_search;
 pub mod git_inspect;
 pub mod model;
