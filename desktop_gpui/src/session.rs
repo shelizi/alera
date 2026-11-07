@@ -11,6 +11,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const VERSION: u32 = 1;
 const MAX_STATE_BYTES: u64 = 64 * 1024;
 const MAX_RESTORED_TABS: usize = 24;
+const MAX_RECENT_WORKSPACES: usize = 12;
 
 #[derive(Debug, Clone)]
 pub struct PreviewSessionStore {
@@ -30,6 +31,12 @@ struct SavedSession {
 struct LastWorkspace {
     version: u32,
     root: PathBuf,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct RecentWorkspaces {
+    version: u32,
+    roots: Vec<PathBuf>,
 }
 
 impl PreviewSessionStore {
@@ -89,6 +96,33 @@ impl PreviewSessionStore {
         Ok(Some(root))
     }
 
+    /// Return a bounded, newest-first list of existing canonical workspaces.
+    /// Older preview installs only have last.json, which is still supported.
+    /// The persisted list is never trusted to contain valid paths.
+    pub fn recent_workspaces(&self) -> io::Result<Vec<PathBuf>> {
+        let saved = self.read_json::<RecentWorkspaces>(&self.state_dir.join("recent.json"))?;
+        let roots = match saved {
+            Some(index) if index.version == VERSION => index.roots,
+            Some(_) => return Ok(Vec::new()),
+            None => return Ok(self.last_workspace()?.into_iter().collect()),
+        };
+        let mut recent = Vec::new();
+        for path in roots {
+            if recent.len() == MAX_RECENT_WORKSPACES {
+                break;
+            }
+            let Ok(canonical) = dunce::canonicalize(&path) else {
+                continue;
+            };
+            // The canonical-path equality check prevents redirects through
+            // replaced symlinks and stale directory aliases.
+            if canonical.is_dir() && canonical == path && !recent.contains(&canonical) {
+                recent.push(canonical);
+            }
+        }
+        Ok(recent)
+    }
+
     /// Restore directory and tabs in their saved order. All file paths are
     /// canonicalized at restore time; missing, symlink-escaped and unsupported
     /// preview files are skipped without aborting the entire workspace.
@@ -128,6 +162,9 @@ impl PreviewSessionStore {
 
     pub fn save(&self, model: &WorkbenchModel) -> io::Result<()> {
         let root = model.root();
+        // Load MRU before overwriting last.json: older versions without an
+        // index rely on last.json to recover the departing workspace.
+        let recent = self.recent_workspaces()?;
         let to_relative = |path: &Path| path.strip_prefix(root).ok().map(Path::to_path_buf);
         let session = SavedSession {
             version: VERSION,
@@ -144,6 +181,21 @@ impl PreviewSessionStore {
                 .and_then(|tab| to_relative(&tab.path)),
         };
         self.write_json(&self.session_path(root), &session)?;
+        if !recent.first().is_some_and(|path| path == root) {
+            let roots = std::iter::once(root.to_path_buf())
+                .chain(recent.into_iter().filter(|path| path != root))
+                .take(MAX_RECENT_WORKSPACES)
+                .collect();
+            self.write_json(
+                &self.state_dir.join("recent.json"),
+                &RecentWorkspaces {
+                    version: VERSION,
+                    roots,
+                },
+            )?;
+        }
+        // Write the active hint last. If the index update fails, reopening
+        // must still target the previously active workspace.
         self.write_json(
             &self.state_dir.join("last.json"),
             &LastWorkspace {
@@ -151,6 +203,21 @@ impl PreviewSessionStore {
                 root: root.to_path_buf(),
             },
         )
+    }
+
+    /// Switch transaction: validate destination + restore its snapshot first,
+    /// then save the departing workspace and update the active workspace hint.
+    /// Caller replaces its WorkbenchModel only when the entire operation works.
+    pub fn switch_workspace(
+        &self,
+        departing: &WorkbenchModel,
+        destination: impl AsRef<Path>,
+    ) -> io::Result<WorkbenchModel> {
+        let mut next = WorkbenchModel::new(destination)?;
+        self.restore(&mut next)?;
+        self.save(departing)?;
+        self.save(&next)?;
+        Ok(next)
     }
 
     fn session_path(&self, root: &Path) -> PathBuf {
@@ -363,5 +430,108 @@ mod tests {
         let mut restored = WorkbenchModel::new(workspace.path()).unwrap();
         assert_eq!(store.restore(&mut restored).unwrap(), 1);
         assert_eq!(restored.content(), "x");
+    }
+
+    #[test]
+    fn recent_workspace_history_deduplicates_and_caps_entries() {
+        let workspaces = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let store = PreviewSessionStore::new(state.path());
+        let mut roots = Vec::new();
+        for i in 0..MAX_RECENT_WORKSPACES + 2 {
+            let path = workspaces.path().join(format!("project-{i:02}"));
+            fs::create_dir(&path).unwrap();
+            let model = WorkbenchModel::new(&path).unwrap();
+            store.save(&model).unwrap();
+            roots.push(model.root().to_path_buf());
+        }
+        let recent = store.recent_workspaces().unwrap();
+        assert_eq!(recent.len(), MAX_RECENT_WORKSPACES);
+        assert_eq!(recent[0], *roots.last().unwrap());
+        assert!(!recent.contains(&roots[0]));
+        let moved = WorkbenchModel::new(&roots[4]).unwrap();
+        store.save(&moved).unwrap();
+        let recent = store.recent_workspaces().unwrap();
+        assert_eq!(recent[0], roots[4]);
+        assert_eq!(recent.len(), MAX_RECENT_WORKSPACES);
+        assert_eq!(recent.iter().filter(|root| **root == roots[4]).count(), 1);
+        fs::remove_dir(&roots[4]).unwrap();
+        assert!(!store.recent_workspaces().unwrap().contains(&roots[4]));
+    }
+
+    #[test]
+    fn recent_workspace_skips_tampered_and_alias_paths() {
+        let root = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let store = PreviewSessionStore::new(state.path());
+        let canonical = dunce::canonicalize(root.path()).unwrap();
+        store
+            .write_json(
+                &state.path().join("recent.json"),
+                &RecentWorkspaces {
+                    version: VERSION,
+                    roots: vec![
+                        root.path().join(".."),
+                        PathBuf::from("not-an-absolute-workspace"),
+                        canonical.clone(),
+                        canonical.clone(),
+                    ],
+                },
+            )
+            .unwrap();
+        assert_eq!(store.recent_workspaces().unwrap(), vec![canonical]);
+    }
+
+    #[test]
+    fn switching_workspaces_restores_tabs_and_keeps_previous_state_independent() {
+        let state = tempfile::tempdir().unwrap();
+        let root_a = tempfile::tempdir().unwrap();
+        let root_b = tempfile::tempdir().unwrap();
+        fs::write(root_a.path().join("a.txt"), "A").unwrap();
+        fs::write(root_b.path().join("b.txt"), "B").unwrap();
+        let store = PreviewSessionStore::new(state.path());
+        let mut previous = WorkbenchModel::new(root_a.path()).unwrap();
+        previous.open_entry(0);
+        let mut b = WorkbenchModel::new(root_b.path()).unwrap();
+        b.open_entry(0);
+        store.save(&b).unwrap();
+        store.save(&previous).unwrap();
+        let switched = store.switch_workspace(&previous, root_b.path()).unwrap();
+        assert_eq!(switched.root(), b.root());
+        assert_eq!(switched.content(), "B");
+        assert_eq!(previous.content(), "A", "old workspace is untouched");
+        assert_eq!(
+            store.last_workspace().unwrap(),
+            Some(b.root().to_path_buf())
+        );
+        assert_eq!(
+            store.recent_workspaces().unwrap()[..2],
+            [b.root(), previous.root()]
+        );
+        let restored_a = store.switch_workspace(&switched, root_a.path()).unwrap();
+        assert_eq!(restored_a.content(), "A");
+    }
+
+    #[test]
+    fn failed_switch_does_not_overwrite_current_workspace_or_last_hint() {
+        let state = tempfile::tempdir().unwrap();
+        let root_a = tempfile::tempdir().unwrap();
+        let root_b = tempfile::tempdir().unwrap();
+        fs::write(root_a.path().join("note.txt"), "stay").unwrap();
+        let store = PreviewSessionStore::new(state.path());
+        let mut active = WorkbenchModel::new(root_a.path()).unwrap();
+        active.open_entry(0);
+        store.save(&active).unwrap();
+        let other = WorkbenchModel::new(root_b.path()).unwrap();
+        fs::write(store.session_path(other.root()), "corrupted session").unwrap();
+        assert!(store.switch_workspace(&active, other.root()).is_err());
+        assert_eq!(active.content(), "stay");
+        assert_eq!(
+            store.last_workspace().unwrap(),
+            Some(active.root().to_path_buf())
+        );
+        assert!(store
+            .switch_workspace(&active, state.path().join("missing"))
+            .is_err());
     }
 }

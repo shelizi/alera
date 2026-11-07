@@ -82,6 +82,13 @@ without reproducible measurements.
 - Local read-only preview tabs, active file and Explorer directory are
   restored after restart, per workspace. Stored paths are relative and
   re-canonicalized; no file text, token, or terminal state is persisted.
+- Phase 1 workspace-switch follow-up: GPUI native folder picker and a bounded
+  recent-workspace list; destination previews are restored only after
+  validation, and switching leaves the current workspace intact on failure.
+  Old async terminal read/list results are rejected after a switch. The
+  Host session list remains explicitly global, not project-filtered. The
+  headless Rust suite expanded to 41 passing tests, including MRU bounds,
+  tampered/stale paths, cross-workspace session restore and failure rollback.
 - Two-launch Windows smoke test confirmed a native window on each launch and
   recovery of the same workspace even when the second process started from
   a different working directory, using an isolated app-state directory.

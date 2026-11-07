@@ -4,9 +4,10 @@ use alera_gpui_desktop::runtime_bridge::RuntimeCliBridge;
 use alera_gpui_desktop::session::PreviewSessionStore;
 use alera_gpui_desktop::terminal::{TerminalDock, TerminalPollGate, TerminalViewMode};
 use gpui::{
-    div, prelude::*, px, rgb, size, App, Application, Bounds, Context, Window, WindowBounds,
-    WindowOptions,
+    div, prelude::*, px, rgb, size, App, Application, Bounds, Context, PathPromptOptions, Window,
+    WindowBounds, WindowOptions,
 };
+use std::path::PathBuf;
 use std::time::Duration;
 
 const BG: u32 = 0x15171b;
@@ -20,6 +21,10 @@ const ACTIVE: u32 = 0x303741;
 struct Workbench {
     model: WorkbenchModel,
     session_store: Option<PreviewSessionStore>,
+    recent_workspaces: Vec<PathBuf>,
+    show_recent_workspaces: bool,
+    picking_workspace: bool,
+    workspace_generation: u64,
     runtime_bridge: Option<RuntimeCliBridge>,
     runtime_status: String,
     runtime_loading: bool,
@@ -37,8 +42,101 @@ impl Workbench {
                 eprintln!("Alera GPUI: unable to persist preview session: {error}");
                 self.model
                     .set_status(format!("Preview state not saved: {error}"));
+            } else if let Ok(recent) = store.recent_workspaces() {
+                self.recent_workspaces = recent;
             }
         }
+    }
+
+    fn switch_workspace(&mut self, root: PathBuf, cx: &mut Context<Self>) {
+        let canonical = match dunce::canonicalize(&root) {
+            Ok(root) => root,
+            Err(error) => {
+                self.model
+                    .set_status(format!("Cannot open workspace {}: {error}", root.display()));
+                cx.notify();
+                return;
+            }
+        };
+        if canonical == self.model.root() {
+            self.show_recent_workspaces = false;
+            self.model.set_status("Workspace already open");
+            cx.notify();
+            return;
+        }
+        let result = if let Some(store) = &self.session_store {
+            store.switch_workspace(&self.model, &canonical)
+        } else {
+            WorkbenchModel::new(&canonical)
+        };
+        let next = match result {
+            Ok(next) => next,
+            Err(error) => {
+                self.model
+                    .set_status(format!("Workspace switch failed: {error}"));
+                cx.notify();
+                return;
+            }
+        };
+        self.model = next;
+        self.workspace_generation = self.workspace_generation.wrapping_add(1);
+        // Terminal preview tabs are local UI state, never PTY owners. Drop
+        // them on workspace changes to prevent cross-project output leakage.
+        // Existing Host sessions remain alive and under Host ownership.
+        self.terminals = TerminalDock::default();
+        self.terminal_poll = TerminalPollGate::default();
+        self.terminal_list_loading = false;
+        self.terminal_read_loading = None;
+        self.terminal_tick = 0;
+        self.show_recent_workspaces = false;
+        if let Some(store) = &self.session_store {
+            match store.recent_workspaces() {
+                Ok(recent) => self.recent_workspaces = recent,
+                Err(error) => self
+                    .model
+                    .set_status(format!("Recent workspace list: {error}")),
+            }
+        } else {
+            self.recent_workspaces = vec![canonical];
+        }
+        self.refresh_terminals(cx);
+        cx.notify();
+    }
+
+    fn pick_workspace(&mut self, cx: &mut Context<Self>) {
+        if self.picking_workspace {
+            return;
+        }
+        self.picking_workspace = true;
+        let selection = cx.prompt_for_paths(PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: false,
+            prompt: Some("Open Alera workspace".into()),
+        });
+        cx.spawn(async move |view, cx| {
+            let result = selection.await;
+            view.update(cx, |view, cx| {
+                view.picking_workspace = false;
+                match result {
+                    Ok(Ok(Some(paths))) => {
+                        if let Some(path) = paths.into_iter().next() {
+                            view.switch_workspace(path, cx);
+                        }
+                    }
+                    Ok(Ok(None)) => {}
+                    Ok(Err(error)) => view
+                        .model
+                        .set_status(format!("Workspace picker failed: {error}")),
+                    Err(error) => view
+                        .model
+                        .set_status(format!("Workspace picker canceled: {error}")),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn refresh_runtime(&mut self, cx: &mut Context<Self>) {
@@ -85,6 +183,7 @@ impl Workbench {
             return;
         };
         self.terminal_list_loading = true;
+        let generation = self.workspace_generation;
         self.terminals.status = "Listing existing Host sessions…".into();
         cx.notify();
         cx.spawn(async move |view, cx| {
@@ -92,6 +191,9 @@ impl Workbench {
                 .background_spawn(async move { bridge.list_terminals() })
                 .await;
             view.update(cx, |view, cx| {
+                if view.workspace_generation != generation {
+                    return;
+                }
                 view.terminal_list_loading = false;
                 match result {
                     Ok(sessions) => {
@@ -135,6 +237,7 @@ impl Workbench {
         };
         let handle = ticket.handle.clone();
         let cursor = ticket.cursor;
+        let generation = self.workspace_generation;
         self.terminal_read_loading = Some(handle.clone());
         cx.notify();
         cx.spawn(async move |view, cx| {
@@ -142,6 +245,9 @@ impl Workbench {
                 .background_spawn(async move { bridge.read_terminal(&handle, cursor) })
                 .await;
             view.update(cx, |view, cx| {
+                if view.workspace_generation != generation {
+                    return;
+                }
                 view.terminal_read_loading = None;
                 match result {
                     Ok(chunk) => {
@@ -224,6 +330,16 @@ impl Render for Workbench {
         let status = self.model.status().to_owned();
         let branch = self.model.branch().to_owned();
         let can_up = self.model.can_go_up();
+        let show_recent_workspaces = self.show_recent_workspaces;
+        let picking_workspace = self.picking_workspace;
+        let workspace_root = self.model.root().to_path_buf();
+        let recent_workspaces: Vec<_> = self
+            .recent_workspaces
+            .iter()
+            .take(12)
+            .cloned()
+            .enumerate()
+            .collect();
         let runtime_status = self.runtime_status.clone();
         let runtime_loading = self.runtime_loading;
         let terminal_list_loading = self.terminal_list_loading;
@@ -355,6 +471,87 @@ impl Render for Workbench {
                                                     })),
                                             ),
                                     ),
+                            )
+                            .child(
+                                div()
+                                    .px_3()
+                                    .py_2()
+                                    .border_b_1()
+                                    .border_color(rgb(BORDER))
+                                    .flex()
+                                    .flex_col()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .justify_between()
+                                            .items_center()
+                                            .child(
+                                                div()
+                                                    .id("recent-workspaces-toggle")
+                                                    .cursor_pointer()
+                                                    .text_sm()
+                                                    .child(if show_recent_workspaces {
+                                                        "Recent workspaces ▾"
+                                                    } else {
+                                                        "Recent workspaces ▸"
+                                                    })
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.show_recent_workspaces =
+                                                            !this.show_recent_workspaces;
+                                                        cx.notify();
+                                                    })),
+                                            )
+                                            .child(
+                                                div()
+                                                    .id("open-workspace-folder")
+                                                    .cursor_pointer()
+                                                    .text_sm()
+                                                    .text_color(rgb(MUTED))
+                                                    .child(if picking_workspace { "Opening…" } else { "+ Open" })
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.pick_workspace(cx);
+                                                    })),
+                                            ),
+                                    )
+                                    .child(if show_recent_workspaces {
+                                        div()
+                                            .id("recent-workspaces-scroll")
+                                            .max_h(px(158.0))
+                                            .overflow_y_scroll()
+                                            .children(recent_workspaces.into_iter().map(|(index, path)| {
+                                                let active = workspace_root == path;
+                                                let name = path
+                                                    .file_name()
+                                                    .map(|name| name.to_string_lossy().to_string())
+                                                    .unwrap_or_else(|| path.display().to_string());
+                                                let detail = path.display().to_string();
+                                                div()
+                                                    .id(("recent-workspace", index))
+                                                    .cursor_pointer()
+                                                    .py_1()
+                                                    .px_1()
+                                                    .overflow_hidden()
+                                                    .hover(|style| style.bg(rgb(ACTIVE)))
+                                                    .child(
+                                                        div()
+                                                            .text_sm()
+                                                            .text_color(rgb(if active { TEXT } else { MUTED }))
+                                                            .child(format!("{} {name}", if active { "●" } else { "○" })),
+                                                    )
+                                                    .child(
+                                                        div()
+                                                            .text_xs()
+                                                            .text_color(rgb(MUTED))
+                                                            .child(detail),
+                                                    )
+                                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                                        this.switch_workspace(path.clone(), cx);
+                                                    }))
+                                            }))
+                                    } else {
+                                        div().id("recent-workspaces-collapsed").h(px(0.0))
+                                    }),
                             )
                             .child(
                                 div()
@@ -725,7 +922,7 @@ impl Render for Workbench {
                                 div()
                                     .text_sm()
                                     .text_color(rgb(MUTED))
-                                    .child("Read-only · existing Host only"),
+                                    .child("Read-only · existing Host · all workspaces"),
                             )
                             .child(
                                 div()
@@ -819,6 +1016,11 @@ fn main() {
     } else {
         "CLI not found · set ALERA_CLI_PATH".into()
     };
+    let recent_workspaces = session_store
+        .as_ref()
+        .and_then(|store| store.recent_workspaces().ok())
+        .filter(|roots| !roots.is_empty())
+        .unwrap_or_else(|| vec![model.root().to_path_buf()]);
 
     Application::new().run(move |cx: &mut App| {
         let bounds = Bounds::centered(None, size(px(1200.0), px(800.0)), cx);
@@ -831,6 +1033,10 @@ fn main() {
                 let view = cx.new(|_| Workbench {
                     model,
                     session_store,
+                    recent_workspaces,
+                    show_recent_workspaces: false,
+                    picking_workspace: false,
+                    workspace_generation: 0,
                     runtime_bridge,
                     runtime_status,
                     runtime_loading: false,

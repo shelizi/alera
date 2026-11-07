@@ -26,6 +26,18 @@ The startup argument is optional. Without a path, the frontend restores the
 most recently opened workspace when possible, otherwise uses the current
 directory. Preview tab order, active file and the Explorer directory survive
 restart, but file contents are always re-read from disk and remain read-only.
+The Explorer sidebar also has **Recent workspaces** and **+ Open**. The latter
+uses GPUI's native operating-system folder picker, without installing an
+additional dialog dependency. Up to 12 existing canonical workspaces are
+remembered, newest first. Switching restores the destination's own preview
+tabs and Explorer directory, and does not change the source project.
+
+On workspace changes, the GPUI frontend discards its read-only local terminal
+preview tabs (not Host-owned PTYs) and ignores outstanding read/list results
+from the previous workspace. The Runtime Host session list remains global
+and is explicitly marked **all workspaces**: this is not a workspace-scoped
+Host session-ownership or permission migration.
+
 State lives in `%APPDATA%\Alera\gpui-preview` on Windows, the
 Application Support directory on macOS, or XDG State on Linux. It does not
 modify the project or the production RuntimeStore.
@@ -68,7 +80,7 @@ clickable selections, copy/paste, Chinese IME input, keyboard control,
 accessibility, and Host PTY resizing/attach leases have not been migrated.
 Local VT preview dimensions are not advertised to the existing Host, so
 programs should not assume the displayed panel matches their allocated
-PTY size. Colored cells passed 37 model tests, Windows native check/build
+PTY size. Colored cells and workspace switching passed 41 model tests, Windows native check/build
 and isolated Host + GUI process smoke tests; native pixel-level color and
 glyph placement parity still needs visual UI testing.
 
@@ -111,6 +123,8 @@ start the Host as a fallback. The usual CLI default remains unchanged.
 - Up to 24 read-only file preview tabs: reuse, activate, close and reload without writing the source.
 - Explorer refresh button and folder-up navigation.
 - Persistent read-only preview navigation and last-workspace recovery.
+- Native folder selection and a bounded recent-workspace picker, with
+  per-workspace read-only tab restoration and stale terminal reply rejection.
 - Background, read-only Runtime Host status probe through the shared CLI.
 - Host-owned terminal session list, eight local transcript preview tabs,
   cursor-based incremental reads, VT screen with ANSI cursor/erase/alternate
@@ -131,7 +145,8 @@ sidecar/runtime contracts, not be reimplemented directly in GPUI views.
 ## Verification
 
 - Windows: `cargo check --all-targets` and debug `cargo build` passed with GPUI 0.2.2.
-- Headless tests: 37/37 passed (navigation, persistence, path containment,
+- Headless tests: 41/41 passed (navigation, workspace switching and recent
+  workspace history, persistence, path containment,
   file limits, tabs, reload, terminal cursor, auto-poll backoff, stale
   response handling, VT100 screen, ANSI 16/256/RGB colors and inverse,
   wide Unicode, alternate screen, ANSI filtering
