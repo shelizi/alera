@@ -324,7 +324,7 @@ P0 的目標是「原生編輯器在單一 Windows 測試視窗**真的可用且
 | CI | 實驗性 GitHub Actions 各 job 真正執行 | **NOT RUN**（本機 cargo 不是遠端 Actions） |
 | 發行預設 | 把 GPUI 當成正式桌面產品 | **NOT RUN**。此前端仍是 experimental、unsupported。 |
 
-本輪只把 P0 編輯器安全與單一工作階段生命週期放進 `desktop_gpui` 函式庫（`EditorSession`）。GPUI 視窗只呈現、取得焦點並轉送事件，不另開 Runtime Host、PTY、Git 寫入、憑證庫或 SQLite。覆蓋指令是 `cargo test --manifest-path desktop_gpui/Cargo.toml --no-default-features --lib --locked`。真實滑鼠、注音候選窗、多 DPI、macOS／Linux GUI、遠端 CI，以及把 GPUI 設成預設產品，都仍是 **NOT RUN**。存檔仍是比對後 `rename`，不能當成惡意 TOCTOU 已證明安全。
+本輪只把 P0 編輯器安全與單一工作階段生命週期放進 `desktop_gpui` 函式庫（`EditorSession`）。GPUI 視窗只呈現、取得焦點並轉送事件，不另開 Runtime Host、PTY、Git 寫入、憑證庫或 SQLite。覆蓋指令是 `cargo test --manifest-path desktop_gpui/Cargo.toml --no-default-features --lib --locked`。HEAD `4b0e0e2c2` 該套件是 84 passed。隔離啟動留下 fixture 位元組不變，但沒有操作視窗，所以 Edit、鍵盤、滑鼠、複製、Undo 與 Save 是 **BLOCKED**。真實滑鼠、注音候選窗、多 DPI、macOS／Linux GUI、遠端 CI，以及把 GPUI 設成預設產品，都仍不是 PASS。存檔仍是比對後 `rename`，不能當成惡意 TOCTOU 已證明安全。
 
 ### 8.3 正式功能預設切換之前不可略過的條件
 

@@ -406,8 +406,8 @@ cargo test --manifest-path desktop_gpui/Cargo.toml --no-default-features --test 
 
 | Gate | 入口條件 | 必要證據／出口 | 現在狀態 |
 | --- | --- | --- | --- |
-| G0：基線 | 乾淨 worktree，可取得 Rust toolchain | 83/83 基線＋Windows full build＋CI run 來源 | **PARTIAL** |
-| G1a：長檔案 | G0 可重現 | 601/5,000 行真實 GUI、選取、修改、Undo/Save、frame 指標 | **NOT RUN（GUI）**。Headless 只證明可見行命中；真實滑鼠、捲動與存檔操作未做。 |
+| G0：基線 | 乾淨 worktree，可取得 Rust toolchain | 當次 HEAD 的 headless lib suite、Windows full build、CI run 來源 | **PARTIAL**。HEAD `4b0e0e2c2` 的 headless 是 84 passed，check 與 build exit 0。遠端 Actions 仍是 **NOT RUN**。不要沿用較早的 83 passed。 |
+| G1a：長檔案 | G0 可重現 | 601/5,000 行真實 GUI、選取、修改、Undo/Save、frame 指標 | **BLOCKED（GUI）**。隔離程序啟動兩次且 fixture 位元組未變，但沒有 Edit、Ctrl+Home、Ctrl+End、點擊、拖曳、複製、Undo 或 Save。Headless 可見行命中不是 GUI 驗收。 |
 | G1b：繁中 IME | G1a 文字幾何正常 | IME-01～08 的 TSF/候選窗、DPI 實際證據 | **NOT RUN（GUI）** |
 | G1c：Save/Draft | G1a 最小 Save 可操作 | Windows 替換競態／ACL／外部變更／Crash、hash 對照 | **NOT RUN（OS E2E）** |
 | G1d：Session | G1c 明確失敗策略 | 雙 Workspace／三檔／關閉重啟／old reply 零誤寫 | **PARTIAL（headless）** |
