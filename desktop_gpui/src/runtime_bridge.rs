@@ -5,13 +5,25 @@ use alera_core::child_process::windowless_command;
 use serde_json::Value;
 use std::ffi::OsString;
 use std::io::{self, Read};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
 const MAX_RESPONSE_BYTES: u64 = 128 * 1024;
 const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Read-only `alera terminal` invocation. There is no write, input, or resize verb.
+pub fn terminal_cli_arguments(runtime_dir: &Path, args: &[OsString]) -> Vec<OsString> {
+    let mut command = Vec::with_capacity(5 + args.len());
+    command.push(OsString::from("terminal"));
+    command.push(OsString::from("--no-start"));
+    command.push(OsString::from("--json"));
+    command.push(OsString::from("--runtime-dir"));
+    command.push(runtime_dir.as_os_str().to_os_string());
+    command.extend(args.iter().cloned());
+    command
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeStatus {
@@ -91,12 +103,7 @@ impl RuntimeCliBridge {
         }
         let mut command = windowless_command(&self.executable);
         command
-            .arg("terminal")
-            .arg("--no-start")
-            .arg("--json")
-            .arg("--runtime-dir")
-            .arg(&self.runtime_dir)
-            .args(args)
+            .args(terminal_cli_arguments(&self.runtime_dir, args))
             .env_remove("ALERA_WORKSPACE_ID")
             .stdin(Stdio::null())
             .stdout(Stdio::piped())

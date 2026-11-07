@@ -9,6 +9,8 @@ use std::io;
 
 pub const TERMINAL_READ_BYTES: u64 = 8 * 1024;
 pub const MAX_TERMINALS: usize = 128;
+/// The Host session list is global. It is not a view of the open workspace.
+pub const HOST_SESSION_LIST_SCOPE: &str = "Read-only · existing Host · all workspaces";
 const MAX_OPEN_TABS: usize = 8;
 const MAX_TRANSCRIPT_BYTES: usize = 48 * 1024;
 
@@ -39,29 +41,38 @@ pub struct TerminalChunk {
     pub text: String,
 }
 
+pub fn list_terminal_verb() -> Vec<OsString> {
+    vec![OsString::from("list")]
+}
+
+pub fn read_terminal_verb(handle: &str, cursor: Option<u64>) -> io::Result<Vec<OsString>> {
+    if !valid_handle(handle) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Invalid terminal handle",
+        ));
+    }
+    let mut args = vec![
+        OsString::from("read"),
+        OsString::from(format!("--handle={handle}")),
+        OsString::from("--max-bytes"),
+        OsString::from(TERMINAL_READ_BYTES.to_string()),
+    ];
+    if let Some(cursor) = cursor {
+        args.push(OsString::from("--cursor"));
+        args.push(OsString::from(cursor.to_string()));
+    }
+    Ok(args)
+}
+
 impl RuntimeCliBridge {
     pub fn list_terminals(&self) -> io::Result<Vec<TerminalSession>> {
-        let response = self.terminal_json(&[OsString::from("list")])?;
+        let response = self.terminal_json(&list_terminal_verb())?;
         parse_terminal_list(&response)
     }
 
     pub fn read_terminal(&self, handle: &str, cursor: Option<u64>) -> io::Result<TerminalChunk> {
-        if !valid_handle(handle) {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "Invalid terminal handle",
-            ));
-        }
-        let mut args = vec![
-            OsString::from("read"),
-            OsString::from(format!("--handle={handle}")),
-            OsString::from("--max-bytes"),
-            OsString::from(TERMINAL_READ_BYTES.to_string()),
-        ];
-        if let Some(cursor) = cursor {
-            args.push(OsString::from("--cursor"));
-            args.push(OsString::from(cursor.to_string()));
-        }
+        let args = read_terminal_verb(handle, cursor)?;
         let response = self.terminal_json(&args)?;
         parse_terminal_chunk(&response, handle)
     }
@@ -399,9 +410,43 @@ pub struct TerminalDock {
     pub status: String,
     pub view_mode: TerminalViewMode,
     next_generation: u64,
+    workspace_generation: u64,
 }
 
 impl TerminalDock {
+    pub fn for_workspace(generation: u64) -> Self {
+        Self {
+            workspace_generation: generation,
+            ..Self::default()
+        }
+    }
+
+    pub fn workspace_generation(&self) -> u64 {
+        self.workspace_generation
+    }
+
+    /// Drop a list reply captured for a workspace this dock no longer shows.
+    pub fn apply_session_list(&mut self, generation: u64, sessions: Vec<TerminalSession>) -> bool {
+        if generation != self.workspace_generation {
+            return false;
+        }
+        self.update_sessions(sessions);
+        true
+    }
+
+    /// Drop a read reply from an older workspace generation or a replaced session.
+    pub fn apply_workspace_read(
+        &mut self,
+        generation: u64,
+        ticket: &TerminalReadTicket,
+        chunk: TerminalChunk,
+    ) -> bool {
+        if generation != self.workspace_generation {
+            return false;
+        }
+        self.apply_ticket_chunk(ticket, chunk)
+    }
+
     pub fn toggle_view_mode(&mut self) {
         self.view_mode = match self.view_mode {
             TerminalViewMode::Screen => TerminalViewMode::Transcript,
@@ -422,7 +467,10 @@ impl TerminalDock {
             }
         }
         self.sessions = sessions;
-        self.status = format!("{} existing terminal(s)", self.sessions.len());
+        self.status = format!(
+            "{} existing terminal(s) · all workspaces",
+            self.sessions.len()
+        );
     }
 
     pub fn open(&mut self, handle: &str) -> bool {

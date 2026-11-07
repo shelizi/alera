@@ -6,8 +6,9 @@
 //! editor. Mouse and Traditional Chinese IME need independent GUI acceptance.
 use alera_gpui_desktop::editor::{
     byte_to_utf16, edge_scroll_offset, nearest_grapheme_edge, utf16_to_byte, EditorDocument,
-    EditorDraftStore, EditorLineIndex,
+    EditorLineIndex,
 };
+use alera_gpui_desktop::editor_session::{EditorSession, OpenEffect, RECOVERY_PLAINTEXT_NOTICE};
 use gpui::{
     actions, div, fill, point, prelude::*, px, relative, rgb, size, uniform_list, App, Bounds,
     ClipboardItem, Context, CursorStyle, Element, ElementId, ElementInputHandler, Entity,
@@ -16,7 +17,9 @@ use gpui::{
     UTF16Selection, UniformListScrollHandle, Window,
 };
 use std::collections::BTreeMap;
+use std::io;
 use std::ops::Range;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -108,8 +111,7 @@ pub fn bind_editor_keys(cx: &mut App) {
 }
 
 pub struct NativeEditor {
-    pub document: EditorDocument,
-    draft_store: Option<EditorDraftStore>,
+    session: EditorSession,
     focus: FocusHandle,
     status: String,
     line_geometry: BTreeMap<usize, EditorLineGeometry>,
@@ -133,21 +135,19 @@ struct EditorLineGeometry {
 }
 
 impl NativeEditor {
-    pub fn new(
-        document: EditorDocument,
-        draft_store: Option<EditorDraftStore>,
-        cx: &mut Context<Self>,
-    ) -> Self {
-        let recovered = document.is_dirty();
-        let initial_line = document.line_column().0;
+    pub fn new(session: EditorSession, cx: &mut Context<Self>) -> Self {
+        let recovered = session.document().is_some_and(EditorDocument::is_dirty);
+        let initial_line = session
+            .document()
+            .map(|document| document.line_column().0)
+            .unwrap_or(0);
         let list_scroll = UniformListScrollHandle::new();
         let scroll = list_scroll.0.borrow().base_handle.clone();
         // File-backed documents currently open with the caret at EOF.
         // A long-file editor must reveal that actual position on first paint.
         list_scroll.scroll_to_item(initial_line, ScrollStrategy::Center);
         Self {
-            document,
-            draft_store,
+            session,
             focus: cx.focus_handle(),
             status: if recovered {
                 "Recovered local unsaved edit; review before saving".into()
@@ -164,14 +164,66 @@ impl NativeEditor {
         }
     }
 
+    pub fn document(&self) -> &EditorDocument {
+        self.doc()
+    }
+
+    pub fn status_text(&self) -> &str {
+        &self.status
+    }
+
+    pub fn discard_armed(&self) -> bool {
+        self.session.discard_armed()
+    }
+
+    pub fn open_in_place(
+        &mut self,
+        root: &Path,
+        path: &Path,
+        cx: &mut Context<Self>,
+    ) -> io::Result<OpenEffect> {
+        let effect = self.session.open_file(root, path)?;
+        if matches!(effect, OpenEffect::Opened { .. }) {
+            self.status = if self.doc().is_dirty() {
+                "Recovered local unsaved edit; review before saving".into()
+            } else {
+                "Native UTF-8 text editor (experimental)".into()
+            };
+            self.reveal_caret();
+            cx.notify();
+        }
+        Ok(effect)
+    }
+
+    pub fn close_editor(
+        &mut self,
+        discard: bool,
+    ) -> alera_gpui_desktop::editor_session::CloseEffect {
+        self.session.close(discard)
+    }
+
+    pub fn switch_allowed(&self) -> Result<(), &'static str> {
+        self.session.can_switch_workspace()
+    }
+
+    fn doc(&self) -> &EditorDocument {
+        self.session.document().expect("native editor is installed")
+    }
+
+    fn doc_mut(&mut self) -> &mut EditorDocument {
+        self.session
+            .document_mut()
+            .expect("native editor is installed")
+    }
+
     pub fn has_unsaved_changes(&self) -> bool {
-        self.document.is_dirty()
+        self.doc().is_dirty()
     }
 
     /// GPUI's native uniform list uses absolute source line indices and only
     /// constructs visible rows, so navigation works beyond line 600.
     fn reveal_caret(&self) {
-        let line = self.document.line_column().0;
+        let line = self.doc().line_column().0;
         self.list_scroll
             .scroll_to_item(line, ScrollStrategy::Center);
     }
@@ -229,7 +281,7 @@ impl NativeEditor {
         self.scroll.set_offset(point(offset.x, px(offset_y)));
         if let Some(position) = self.last_drag_position {
             if let Some(offset) = self.pointer_index_at(position) {
-                let _ = self.document.extend_pointer_selection(offset);
+                let _ = self.doc_mut().extend_pointer_selection(offset);
             }
         }
         cx.notify();
@@ -262,7 +314,8 @@ impl NativeEditor {
                 };
                 distance(a).total_cmp(&distance(b))
             })?;
-        let text = self.document.content().get(geometry.start..geometry.end)?;
+        let document = self.session.document()?;
+        let text = document.content().get(geometry.start..geometry.end)?;
         let x = position.x - geometry.bounds.left();
         let guessed = geometry.shaped.closest_index_for_x(x).min(text.len());
         let grapheme = nearest_grapheme_edge(text, guessed, f32::from(x), |index| {
@@ -276,9 +329,9 @@ impl NativeEditor {
             return;
         };
         let result = if event.modifiers.shift {
-            self.document.extend_pointer_selection(offset)
+            self.doc_mut().extend_pointer_selection(offset)
         } else {
-            self.document.set_pointer_caret(offset)
+            self.doc_mut().set_pointer_caret(offset)
         };
         if result.is_ok() {
             self.mouse_selecting = true;
@@ -299,7 +352,7 @@ impl NativeEditor {
         }
         self.last_drag_position = Some(event.position);
         if let Some(offset) = self.pointer_index_at(event.position) {
-            if self.document.extend_pointer_selection(offset).is_ok() {
+            if self.doc_mut().extend_pointer_selection(offset).is_ok() {
                 cx.notify();
             }
         }
@@ -307,30 +360,11 @@ impl NativeEditor {
     }
 
     pub fn save(&mut self, cx: &mut Context<Self>) -> bool {
-        match self.document.save() {
-            Ok(()) => {
-                self.status = "File saved; reopen preview to see latest bytes".into();
-                if let Some(store) = &self.draft_store {
-                    if let Err(error) = store.remove(&self.document) {
-                        self.status = format!("File saved; draft cleanup failed: {error}");
-                    }
-                }
-                cx.notify();
-                true
-            }
-            Err(error) => {
-                self.status = format!("Save blocked: {error}");
-                cx.notify();
-                false
-            }
-        }
-    }
-
-    pub fn discard_recovery(&self) -> std::io::Result<()> {
-        match &self.draft_store {
-            Some(store) => store.remove(&self.document),
-            None => Ok(()),
-        }
+        let commit = self.session.save();
+        let wrote = commit.wrote_file();
+        self.status = commit.status();
+        cx.notify();
+        wrote
     }
 
     fn navigated(&self, cx: &mut Context<Self>) {
@@ -339,59 +373,59 @@ impl NativeEditor {
     }
 
     fn move_left(&mut self, _: &MoveLeft, _: &mut Window, cx: &mut Context<Self>) {
-        self.document.move_left();
+        self.doc_mut().move_left();
         self.navigated(cx);
     }
     fn move_right(&mut self, _: &MoveRight, _: &mut Window, cx: &mut Context<Self>) {
-        self.document.move_right();
+        self.doc_mut().move_right();
         self.navigated(cx);
     }
     fn move_up(&mut self, _: &MoveUp, _: &mut Window, cx: &mut Context<Self>) {
-        self.document.move_up(false);
+        self.doc_mut().move_up(false);
         self.navigated(cx);
     }
     fn move_down(&mut self, _: &MoveDown, _: &mut Window, cx: &mut Context<Self>) {
-        self.document.move_down(false);
+        self.doc_mut().move_down(false);
         self.navigated(cx);
     }
     fn select_left(&mut self, _: &SelectLeft, _: &mut Window, cx: &mut Context<Self>) {
-        self.document.select_left();
+        self.doc_mut().select_left();
         self.navigated(cx);
     }
     fn select_right(&mut self, _: &SelectRight, _: &mut Window, cx: &mut Context<Self>) {
-        self.document.select_right();
+        self.doc_mut().select_right();
         self.navigated(cx);
     }
     fn select_up(&mut self, _: &SelectUp, _: &mut Window, cx: &mut Context<Self>) {
-        self.document.move_up(true);
+        self.doc_mut().move_up(true);
         self.navigated(cx);
     }
     fn select_down(&mut self, _: &SelectDown, _: &mut Window, cx: &mut Context<Self>) {
-        self.document.move_down(true);
+        self.doc_mut().move_down(true);
         self.navigated(cx);
     }
     fn move_home(&mut self, _: &MoveHome, _: &mut Window, cx: &mut Context<Self>) {
-        self.document.move_home(false);
+        self.doc_mut().move_home(false);
         self.navigated(cx);
     }
     fn move_end(&mut self, _: &MoveEnd, _: &mut Window, cx: &mut Context<Self>) {
-        self.document.move_end(false);
+        self.doc_mut().move_end(false);
         self.navigated(cx);
     }
     fn select_home(&mut self, _: &SelectHome, _: &mut Window, cx: &mut Context<Self>) {
-        self.document.move_home(true);
+        self.doc_mut().move_home(true);
         self.navigated(cx);
     }
     fn select_end(&mut self, _: &SelectEnd, _: &mut Window, cx: &mut Context<Self>) {
-        self.document.move_end(true);
+        self.doc_mut().move_end(true);
         self.navigated(cx);
     }
     fn document_start(&mut self, _: &DocumentStart, _: &mut Window, cx: &mut Context<Self>) {
-        self.document.move_document_start(false);
+        self.doc_mut().move_document_start(false);
         self.navigated(cx);
     }
     fn document_end(&mut self, _: &DocumentEnd, _: &mut Window, cx: &mut Context<Self>) {
-        self.document.move_document_end(false);
+        self.doc_mut().move_document_end(false);
         self.navigated(cx);
     }
     fn select_document_start(
@@ -400,7 +434,7 @@ impl NativeEditor {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.document.move_document_start(true);
+        self.doc_mut().move_document_start(true);
         self.navigated(cx);
     }
     fn select_document_end(
@@ -409,40 +443,40 @@ impl NativeEditor {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.document.move_document_end(true);
+        self.doc_mut().move_document_end(true);
         self.navigated(cx);
     }
     fn undo_edit(&mut self, _: &UndoEdit, _: &mut Window, cx: &mut Context<Self>) {
-        if self.document.undo() {
+        if self.doc_mut().undo() {
             self.edit_result(Ok(()), cx);
         }
     }
     fn redo_edit(&mut self, _: &RedoEdit, _: &mut Window, cx: &mut Context<Self>) {
-        if self.document.redo() {
+        if self.doc_mut().redo() {
             self.edit_result(Ok(()), cx);
         }
     }
     fn backspace(&mut self, _: &Backspace, _: &mut Window, cx: &mut Context<Self>) {
-        let result = self.document.backspace();
+        let result = self.doc_mut().backspace();
         self.edit_result(result, cx);
     }
     fn delete(&mut self, _: &Delete, _: &mut Window, cx: &mut Context<Self>) {
-        let result = self.document.delete_forward();
+        let result = self.doc_mut().delete_forward();
         self.edit_result(result, cx);
     }
     fn newline(&mut self, _: &Newline, _: &mut Window, cx: &mut Context<Self>) {
-        if self.document.marked().is_some() {
+        if self.doc_mut().marked().is_some() {
             return;
         }
-        let result = self.document.replace(None, "\n");
+        let result = self.doc_mut().replace(None, "\n");
         self.edit_result(result, cx);
     }
     fn select_all(&mut self, _: &SelectAll, _: &mut Window, cx: &mut Context<Self>) {
-        if self.document.marked().is_some() {
+        if self.doc_mut().marked().is_some() {
             return;
         }
-        let size = self.document.content().len();
-        let result = self.document.set_selection(0..size);
+        let size = self.doc_mut().content().len();
+        let result = self.doc_mut().set_selection(0..size);
         if let Err(error) = result {
             self.status = format!("Selection rejected: {error}");
         }
@@ -453,25 +487,21 @@ impl NativeEditor {
     }
     fn paste(&mut self, _: &Paste, _: &mut Window, cx: &mut Context<Self>) {
         if let Some(value) = cx.read_from_clipboard().and_then(|item| item.text()) {
-            let result = self.document.replace(None, &value);
+            let result = self.doc_mut().replace(None, &value);
             self.edit_result(result, cx);
         }
     }
     fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
-        let range = self.document.selection();
-        if !range.is_empty() {
-            cx.write_to_clipboard(ClipboardItem::new_string(
-                self.document.content()[range].to_string(),
-            ));
+        let copied = self.doc().copied_text().to_owned();
+        if !copied.is_empty() {
+            cx.write_to_clipboard(ClipboardItem::new_string(copied));
         }
     }
     fn cut(&mut self, _: &Cut, _: &mut Window, cx: &mut Context<Self>) {
-        let range = self.document.selection();
-        if !range.is_empty() {
-            cx.write_to_clipboard(ClipboardItem::new_string(
-                self.document.content()[range].to_string(),
-            ));
-            let result = self.document.replace(None, "");
+        let copied = self.doc().copied_text().to_owned();
+        if !copied.is_empty() {
+            cx.write_to_clipboard(ClipboardItem::new_string(copied));
+            let result = self.doc_mut().replace(None, "");
             self.edit_result(result, cx);
         }
     }
@@ -479,10 +509,8 @@ impl NativeEditor {
         match result {
             Err(error) => self.status = format!("Edit rejected: {error}"),
             Ok(()) => {
-                if let Some(store) = &self.draft_store {
-                    if let Err(error) = store.persist(&self.document) {
-                        self.status = format!("Local recovery save failed: {error}");
-                    }
+                if let Err(error) = self.session.persist_draft() {
+                    self.status = format!("Local recovery save failed: {error}");
                 }
                 self.reveal_caret();
             }
@@ -505,7 +533,7 @@ impl EntityInputHandler for NativeEditor {
         _: &mut Window,
         _: &mut Context<Self>,
     ) -> Option<String> {
-        let (content, actual) = self.document.text_for_utf16_range(range_utf16);
+        let (content, actual) = self.doc_mut().text_for_utf16_range(range_utf16);
         *actual_range = Some(actual);
         Some(content)
     }
@@ -516,15 +544,15 @@ impl EntityInputHandler for NativeEditor {
         _: &mut Context<Self>,
     ) -> Option<UTF16Selection> {
         Some(UTF16Selection {
-            range: self.document.utf16_selection(),
-            reversed: self.document.selection_reversed(),
+            range: self.doc_mut().utf16_selection(),
+            reversed: self.doc_mut().selection_reversed(),
         })
     }
     fn marked_text_range(&self, _: &mut Window, _: &mut Context<Self>) -> Option<Range<usize>> {
-        self.document.utf16_marked()
+        self.doc().utf16_marked()
     }
     fn unmark_text(&mut self, _: &mut Window, cx: &mut Context<Self>) {
-        self.document.unmark();
+        self.doc_mut().unmark();
         self.edit_result(Ok(()), cx);
     }
     fn replace_text_in_range(
@@ -534,7 +562,7 @@ impl EntityInputHandler for NativeEditor {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let result = self.document.replace(range_utf16, text);
+        let result = self.doc_mut().replace(range_utf16, text);
         self.edit_result(result, cx);
     }
     fn replace_and_mark_text_in_range(
@@ -546,7 +574,7 @@ impl EntityInputHandler for NativeEditor {
         cx: &mut Context<Self>,
     ) {
         let result = self
-            .document
+            .doc_mut()
             .replace_and_mark(range_utf16, text, selected_utf16);
         self.edit_result(result, cx);
     }
@@ -557,7 +585,7 @@ impl EntityInputHandler for NativeEditor {
         _: &mut Window,
         _: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
-        let byte = utf16_to_byte(self.document.content(), range_utf16.start);
+        let byte = utf16_to_byte(self.doc_mut().content(), range_utf16.start);
         let geometry = self.line_geometry.values().find(|row| {
             row.start <= byte
                 && byte <= row.end
@@ -580,7 +608,7 @@ impl EntityInputHandler for NativeEditor {
         _: &mut Context<Self>,
     ) -> Option<usize> {
         self.pointer_index_at(point)
-            .map(|byte| byte_to_utf16(self.document.content(), byte))
+            .map(|byte| byte_to_utf16(self.doc_mut().content(), byte))
     }
 }
 
@@ -735,7 +763,7 @@ impl Element for EditorLineMetrics {
         // the visible text, which previously shifted all later glyphs.
         if self.caret >= self.start
             && self.caret <= self.end
-            && self.editor.read(cx).document.selection().is_empty()
+            && self.editor.read(cx).document().selection().is_empty()
             && self.editor.read(cx).focus_handle(cx).is_focused(window)
         {
             let local = self.caret - self.start;
@@ -775,13 +803,21 @@ impl NativeEditor {
         span: Range<usize>,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let text = self.document.content();
+        let (raw, text_len, marked, selection, caret) = {
+            let document = self.doc();
+            (
+                document.content()[span.clone()].to_owned(),
+                document.content().len(),
+                document.marked(),
+                document.selection(),
+                document.cursor(),
+            )
+        };
         let start = span.start;
         let end = span.end;
-        let raw = &text[span];
-        let mut display = raw.to_owned();
+        let mut display = raw.clone();
         let mut highlights = Vec::new();
-        if let Some(composition) = self.document.marked() {
+        if let Some(composition) = marked {
             let from = composition.start.max(start);
             let to = composition.end.min(end);
             if from < to {
@@ -797,31 +833,28 @@ impl NativeEditor {
                     },
                 ));
             }
-        } else {
-            let selection = self.document.selection();
-            if !selection.is_empty() {
-                let from = selection.start.max(start);
-                let to = selection.end.min(end);
-                if from < to {
-                    highlights.push((
-                        from - start..to - start,
-                        gpui::HighlightStyle {
-                            background_color: Some(rgb(SELECTED_BG).into()),
-                            ..Default::default()
-                        },
-                    ));
-                }
-                if end < text.len() && selection.start <= end && selection.end > end {
-                    let from = display.len();
-                    display.push('↵');
-                    highlights.push((
-                        from..display.len(),
-                        gpui::HighlightStyle {
-                            background_color: Some(rgb(SELECTED_BG).into()),
-                            ..Default::default()
-                        },
-                    ));
-                }
+        } else if !selection.is_empty() {
+            let from = selection.start.max(start);
+            let to = selection.end.min(end);
+            if from < to {
+                highlights.push((
+                    from - start..to - start,
+                    gpui::HighlightStyle {
+                        background_color: Some(rgb(SELECTED_BG).into()),
+                        ..Default::default()
+                    },
+                ));
+            }
+            if end < text_len && selection.start <= end && selection.end > end {
+                let from = display.len();
+                display.push('↵');
+                highlights.push((
+                    from..display.len(),
+                    gpui::HighlightStyle {
+                        background_color: Some(rgb(SELECTED_BG).into()),
+                        ..Default::default()
+                    },
+                ));
             }
         }
         let styled = gpui::StyledText::new(display).with_highlights(highlights);
@@ -845,8 +878,8 @@ impl NativeEditor {
                 index,
                 start,
                 end,
-                text: raw.to_owned(),
-                caret: self.document.cursor(),
+                text: raw,
+                caret,
             }))
     }
 }
@@ -854,28 +887,29 @@ impl NativeEditor {
 impl Render for NativeEditor {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.line_geometry.clear();
-        let line_offsets = Arc::new(EditorLineIndex::new(self.document.content()));
+        let line_offsets = Arc::new(EditorLineIndex::new(self.doc().content()));
         let line_count = line_offsets.line_count();
-        let (line_index, column_index) = self.document.line_column();
-        let (undo_count, redo_count) = self.document.history_depth();
+        let (line_index, column_index) = self.doc().line_column();
+        let (undo_count, redo_count) = self.doc().history_depth();
+        let dirty = self.doc().is_dirty();
+        let composing = self.doc().marked().is_some();
+        let recovery =
+            if self.session.has_draft_store() && !self.status.contains(RECOVERY_PLAINTEXT_NOTICE) {
+                format!(" · {RECOVERY_PLAINTEXT_NOTICE}")
+            } else {
+                String::new()
+            };
         let status = format!(
-            "{} · Ln {} / {} Col {} · Undo {} / Redo {} · {}{}",
+            "{} · Ln {} / {} Col {} · Undo {} / Redo {} · {}{}{}",
             self.status,
             line_index + 1,
             line_count,
             column_index + 1,
             undo_count,
             redo_count,
-            if self.document.is_dirty() {
-                "Modified"
-            } else {
-                "Saved"
-            },
-            if self.document.marked().is_some() {
-                " · composing"
-            } else {
-                ""
-            }
+            if dirty { "Modified" } else { "Saved" },
+            if composing { " · composing" } else { "" },
+            recovery
         );
         div()
             .size_full()
@@ -953,7 +987,7 @@ impl Render for NativeEditor {
                                     }))
                                     .child("↶ Undo")
                                     .on_click(cx.listener(|this, _, _, cx| {
-                                        if this.document.undo() {
+                                        if this.doc_mut().undo() {
                                             this.edit_result(Ok(()), cx);
                                         }
                                     })),
@@ -969,7 +1003,7 @@ impl Render for NativeEditor {
                                     }))
                                     .child("↷ Redo")
                                     .on_click(cx.listener(|this, _, _, cx| {
-                                        if this.document.redo() {
+                                        if this.doc_mut().redo() {
                                             this.edit_result(Ok(()), cx);
                                         }
                                     })),
@@ -999,7 +1033,7 @@ impl Render for NativeEditor {
                                 let mut rows = Vec::with_capacity(range.len());
                                 for index in range {
                                     if let Some(span) =
-                                        line_offsets.line_range(this.document.content(), index)
+                                        line_offsets.line_range(this.doc_mut().content(), index)
                                     {
                                         rows.push(this.render_row(index, span, cx));
                                     }

@@ -82,9 +82,12 @@ clickable selections, copy/paste, Chinese IME input, keyboard control,
 accessibility, and Host PTY resizing/attach leases have not been migrated.
 Local VT preview dimensions are not advertised to the existing Host, so
 programs should not assume the displayed panel matches their allocated
-PTY size. Colored cells and workspace switching passed 41 model tests, Windows native check/build
-and isolated Host + GUI process smoke tests; native pixel-level color and
-glyph placement parity still needs visual UI testing.
+PTY size. Colored cells and workspace switching passed earlier model tests, a Windows
+native check/build, and an isolated Host plus process-alive smoke. That
+earlier smoke is not acceptance for the P0 editor safety slice below.
+Native pixel-level color and glyph placement parity still needs visual UI
+testing. Live mouse, Zhuyin IME, multi-DPI, macOS or Linux GUI, remote
+Actions, and a default-product switch remain **NOT RUN**.
 
 An active terminal preview automatically checks for new output every 1.5
 seconds by default. The sidebar also refreshes the Session list every 15
@@ -172,7 +175,13 @@ GPUI now derives pointer hit-tests and IME candidate rectangles from the
 same font shaper and scroll clipping bounds used to paint each line. An
 offscreen caret does **not** yield a fabricated candidate rectangle.
 **The virtualized viewport, geometry and auto-scroll have passed
-compile/unit checks, not real mouse/IME acceptance tests.** Dragging
+compile/unit checks, not real mouse/IME acceptance tests.**
+Headless `cargo test --manifest-path desktop_gpui/Cargo.toml --no-default-features --lib --locked`
+covers the P0 library decisions: fixture indexing through 5,000 lines,
+grapheme-bounded copy, IME cancel versus one undo step, fail-closed save,
+plaintext draft recovery across two workspace roots, dirty open and
+workspace-switch refusal, and stale terminal replies. The GPUI window only
+presents those decisions. Dragging
 across the editor window boundary, variable-height/soft-wrapped rows,
 BiDi layout, syntax highlighting, completion, and verified Traditional Chinese IME
 candidate behavior are still pending. Editing and draft persistence run

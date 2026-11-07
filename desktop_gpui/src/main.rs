@@ -1,11 +1,14 @@
 //! Experimental Alera desktop shell powered by native GPUI (no Flutter/WebView).
 mod editor_ui;
 
-use alera_gpui_desktop::editor::{EditorDocument, EditorDraftStore};
+use alera_gpui_desktop::editor::EditorDraftStore;
+use alera_gpui_desktop::editor_session::EditorSession;
 use alera_gpui_desktop::model::WorkbenchModel;
 use alera_gpui_desktop::runtime_bridge::RuntimeCliBridge;
 use alera_gpui_desktop::session::PreviewSessionStore;
-use alera_gpui_desktop::terminal::{TerminalDock, TerminalPollGate, TerminalViewMode};
+use alera_gpui_desktop::terminal::{
+    TerminalDock, TerminalPollGate, TerminalViewMode, HOST_SESSION_LIST_SCOPE,
+};
 use editor_ui::{bind_editor_keys, NativeEditor};
 use gpui::{
     div, prelude::*, px, rgb, size, App, Application, Bounds, Context, Entity, PathPromptOptions,
@@ -25,7 +28,6 @@ const ACTIVE: u32 = 0x303741;
 struct Workbench {
     model: WorkbenchModel,
     editor: Option<Entity<NativeEditor>>,
-    editor_discard_pending: bool,
     session_store: Option<PreviewSessionStore>,
     recent_workspaces: Vec<PathBuf>,
     show_recent_workspaces: bool,
@@ -48,54 +50,45 @@ impl Workbench {
             .is_some_and(|editor| editor.read(cx).has_unsaved_changes())
     }
 
+    fn draft_store(&self) -> Option<EditorDraftStore> {
+        self.session_store
+            .as_ref()
+            .map(|store| EditorDraftStore::new(store.state_dir()))
+    }
+
     fn open_editor(&mut self, cx: &mut Context<Self>) {
         let Some(path) = self.model.selected_path().map(PathBuf::from) else {
             self.model.set_status("Choose a text file before editing");
             cx.notify();
             return;
         };
-        if let Some(existing) = &self.editor {
-            if existing.read(cx).document.path() == Some(path.as_path()) {
-                self.model
-                    .set_status("The selected file is already in the native editor");
-                cx.notify();
-                return;
+        let root = self.model.root().to_path_buf();
+        if self.editor.is_none() {
+            let mut session = EditorSession::new(self.draft_store());
+            match session.open_file(&root, &path) {
+                Ok(effect) => {
+                    self.model.set_status(effect.status());
+                    self.editor = Some(cx.new(|cx| NativeEditor::new(session, cx)));
+                }
+                Err(error) => self.model.set_status(format!(
+                    "Cannot edit {}: {error}. Recovery draft kept for investigation when one exists.",
+                    path.display()
+                )),
             }
-        }
-        if self.editor_dirty(cx) {
-            self.model
-                .set_status("Save or explicitly discard current edits before opening another file");
             cx.notify();
             return;
         }
-        match EditorDocument::open(self.model.root(), &path) {
-            Ok(mut document) => {
-                let drafts = self
-                    .session_store
-                    .as_ref()
-                    .map(|store| EditorDraftStore::new(store.state_dir()));
-                if let Some(store) = &drafts {
-                    if let Err(error) = store.restore(&mut document) {
-                        self.model.set_status(format!(
-                            "Recovery draft invalid for {}: {error}. Preserved for investigation.",
-                            path.display()
-                        ));
-                        cx.notify();
-                        return;
-                    }
-                }
-                let recovered = document.is_dirty();
-                self.editor = Some(cx.new(|cx| NativeEditor::new(document, drafts, cx)));
-                self.editor_discard_pending = false;
-                self.model.set_status(if recovered {
-                    "Recovered unsaved editor changes; disk file was not changed"
-                } else {
-                    "Native text editor opened. Click a line to focus and type"
-                });
-            }
-            Err(error) => self
-                .model
-                .set_status(format!("Cannot edit {}: {error}", path.display())),
+        let result = self
+            .editor
+            .as_ref()
+            .unwrap()
+            .update(cx, |editor, cx| editor.open_in_place(&root, &path, cx));
+        match result {
+            Ok(effect) => self.model.set_status(effect.status()),
+            Err(error) => self.model.set_status(format!(
+                "Cannot edit {}: {error}. Recovery draft kept for investigation when one exists.",
+                path.display()
+            )),
         }
         cx.notify();
     }
@@ -104,56 +97,31 @@ impl Workbench {
         let Some(editor) = &self.editor else {
             return;
         };
-        let path = editor.read(cx).document.path().map(PathBuf::from);
+        let path = editor.read(cx).document().path().map(PathBuf::from);
         let saved = editor.update(cx, |editor, cx| editor.save(cx));
         if saved {
             if self.model.selected_path() == path.as_deref() {
                 self.model.reload_active();
             }
-            self.editor_discard_pending = false;
-            self.model
-                .set_status("Native editor saved the selected document");
-        } else {
-            self.model
-                .set_status("Save blocked; see native editor status");
         }
+        let status = editor.read(cx).status_text().to_owned();
+        self.model.set_status(status);
         cx.notify();
     }
 
     fn close_editor(&mut self, discard: bool, cx: &mut Context<Self>) {
-        if self.editor_dirty(cx) {
-            if !discard {
-                self.editor_discard_pending = false;
-                self.model
-                    .set_status("Unsaved editor changes: Save or use Discard twice");
-                cx.notify();
-                return;
-            }
-            if !self.editor_discard_pending {
-                self.editor_discard_pending = true;
-                self.model
-                    .set_status("Click Confirm discard to lose unsaved editor content");
-                cx.notify();
-                return;
-            }
-        }
-        if let Some(editor) = &self.editor {
-            if discard {
-                if let Err(error) = editor.read(cx).discard_recovery() {
-                    self.model
-                        .set_status(format!("Cannot clear local draft: {error}"));
-                    cx.notify();
-                    return;
-                }
-            }
-            if self.model.selected_path() == editor.read(cx).document.path() {
+        let Some(editor) = &self.editor else {
+            return;
+        };
+        let path = editor.read(cx).document().path().map(PathBuf::from);
+        let effect = editor.update(cx, |editor, _| editor.close_editor(discard));
+        if effect.closed() {
+            if self.model.selected_path() == path.as_deref() {
                 self.model.reload_active();
             }
+            self.editor = None;
         }
-        self.editor = None;
-        self.editor_discard_pending = false;
-        self.model
-            .set_status("Native editor closed; read-only preview remains available");
+        self.model.set_status(effect.status());
         cx.notify();
     }
 
@@ -170,12 +138,12 @@ impl Workbench {
     }
 
     fn switch_workspace(&mut self, root: PathBuf, cx: &mut Context<Self>) {
-        if self.editor_dirty(cx) {
-            self.model.set_status(
-                "Save or explicitly discard native editor changes before switching workspace",
-            );
-            cx.notify();
-            return;
+        if let Some(editor) = &self.editor {
+            if let Err(status) = editor.read(cx).switch_allowed() {
+                self.model.set_status(status);
+                cx.notify();
+                return;
+            }
         }
         let canonical = match dunce::canonicalize(&root) {
             Ok(root) => root,
@@ -208,12 +176,11 @@ impl Workbench {
         };
         self.model = next;
         self.editor = None;
-        self.editor_discard_pending = false;
         self.workspace_generation = self.workspace_generation.wrapping_add(1);
         // Terminal preview tabs are local UI state, never PTY owners. Drop
         // them on workspace changes to prevent cross-project output leakage.
         // Existing Host sessions remain alive and under Host ownership.
-        self.terminals = TerminalDock::default();
+        self.terminals = TerminalDock::for_workspace(self.workspace_generation);
         self.terminal_poll = TerminalPollGate::default();
         self.terminal_list_loading = false;
         self.terminal_read_loading = None;
@@ -321,20 +288,22 @@ impl Workbench {
                 .background_spawn(async move { bridge.list_terminals() })
                 .await;
             view.update(cx, |view, cx| {
-                if view.workspace_generation != generation {
+                if view.terminals.workspace_generation() != generation {
                     return;
                 }
                 view.terminal_list_loading = false;
                 match result {
                     Ok(sessions) => {
                         let was_disconnected = view.terminals.sessions.is_empty();
-                        view.terminals.update_sessions(sessions);
-                        if was_disconnected && !view.terminals.sessions.is_empty() {
+                        if view.terminals.apply_session_list(generation, sessions)
+                            && was_disconnected
+                            && !view.terminals.sessions.is_empty()
+                        {
                             view.terminal_poll.reset();
                         }
                     }
                     Err(error) => {
-                        view.terminals.update_sessions(Vec::new());
+                        view.terminals.apply_session_list(generation, Vec::new());
                         view.terminals.status = format!("Session refresh failed: {error}");
                     }
                 }
@@ -375,7 +344,7 @@ impl Workbench {
                 .background_spawn(async move { bridge.read_terminal(&handle, cursor) })
                 .await;
             view.update(cx, |view, cx| {
-                if view.workspace_generation != generation {
+                if view.terminals.workspace_generation() != generation {
                     return;
                 }
                 view.terminal_read_loading = None;
@@ -386,7 +355,8 @@ impl Workbench {
                             // reset previous failure backoff.
                             view.terminal_poll.reset();
                         }
-                        view.terminals.apply_ticket_chunk(&ticket, chunk);
+                        view.terminals
+                            .apply_workspace_read(generation, &ticket, chunk);
                     }
                     Err(error) => {
                         if view.terminals.active_ticket().as_ref() == Some(&ticket) {
@@ -459,14 +429,17 @@ impl Render for Workbench {
         let active_tab = self.model.active_tab();
         let editor = self.editor.clone();
         let editor_dirty = self.editor_dirty(cx);
-        let discard_pending = self.editor_discard_pending;
+        let discard_pending = self
+            .editor
+            .as_ref()
+            .is_some_and(|editor| editor.read(cx).discard_armed());
         let editor_title = self
             .editor
             .as_ref()
             .and_then(|editor| {
                 editor
                     .read(cx)
-                    .document
+                    .document()
                     .path()
                     .map(|path| path.display().to_string())
             })
@@ -1134,7 +1107,7 @@ impl Render for Workbench {
                                 div()
                                     .text_sm()
                                     .text_color(rgb(MUTED))
-                                    .child("Read-only · existing Host · all workspaces"),
+                                    .child(HOST_SESSION_LIST_SCOPE),
                             )
                             .child(
                                 div()
@@ -1246,7 +1219,6 @@ fn main() {
                 let view = cx.new(|_| Workbench {
                     model,
                     editor: None,
-                    editor_discard_pending: false,
                     session_store,
                     recent_workspaces,
                     show_recent_workspaces: false,
@@ -1255,7 +1227,7 @@ fn main() {
                     runtime_bridge,
                     runtime_status,
                     runtime_loading: false,
-                    terminals: TerminalDock::default(),
+                    terminals: TerminalDock::for_workspace(0),
                     terminal_list_loading: false,
                     terminal_read_loading: None,
                     terminal_poll: TerminalPollGate::default(),

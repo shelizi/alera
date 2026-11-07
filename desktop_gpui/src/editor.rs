@@ -288,11 +288,23 @@ impl EditorDocument {
     pub fn path(&self) -> Option<&Path> {
         self.path.as_deref()
     }
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
     pub fn content(&self) -> &str {
         &self.content
     }
     pub fn selection(&self) -> Range<usize> {
         self.selection.clone()
+    }
+
+    /// Bytes a copy command would place on the clipboard.
+    /// The range stays on the selection the document already normalized,
+    /// which callers keep on grapheme boundaries.
+    pub fn copied_text(&self) -> &str {
+        self.content
+            .get(self.selection.start..self.selection.end)
+            .unwrap_or("")
     }
     pub fn marked(&self) -> Option<Range<usize>> {
         self.marked.clone()

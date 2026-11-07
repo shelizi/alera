@@ -311,15 +311,18 @@ P0 的目標是「原生編輯器在單一 Windows 測試視窗**真的可用且
 
 ### 8.2 P0 驗收矩陣（每一格都要明確 PASS / FAIL / NOT RUN）
 
-| 類別 | 代表案例 | 是否已有**最新** UI 證據 |
+| 類別 | 代表案例 | 最新證據（GUI 與 headless 分開） |
 | --- | --- | --- |
-| 虛擬列表 | 0／1／600／601／5,000 行、空白行、最後換行、編輯、Undo、長行 | **NOT RUN**；僅模型和編譯 |
-| 輸入 | Unicode、emoji ZWJ、按鍵、貼上、跨行選取、反向拖曳 | **NOT RUN**；部分 pure Rust |
-| 繁中 IME | 微軟注音候選窗、取消、提交、選取、DPI／捲動、異常退出 | **NOT RUN**；TSF 尚待實機 |
-| 資料安全 | Save 外部衝突、只讀、失敗清理、crash 後 draft、跨工作樹 | **NOT RUN**（最新 GUI）；原模型有測試 |
-| Terminal | 唯讀畫面 VT ANSI、Host absent no-start、session stale/restart | **PARTIAL**：先前隔離 Host E2E 與模型通過，沒有最新 GUI 操作 |
+| 虛擬列表 | 0／1／600／601／5,000 行、空白行、最後換行、編輯、Undo、長行 | **NOT RUN**（真實視窗、滑鼠、捲動）。Headless library 已覆蓋空檔、601 行、5,000 行、連續空白行、結尾換行與 CRLF 的行界，且不切在 UTF-8 或 grapheme 中間。 |
+| 輸入 | Unicode、emoji ZWJ、按鍵、貼上、跨行選取、反向拖曳 | **NOT RUN**（真實按鍵、貼上與滑鼠拖曳）。Headless library 已覆蓋 CJK、emoji ZWJ、組合字元，以及反向與跨行複製停在 grapheme 邊界。 |
+| 繁中 IME | 微軟注音候選窗、取消、提交、選取、DPI／捲動、異常退出 | **NOT RUN**（候選窗、DPI、捲動、TSF）。Headless library：取消不改 undo；候選更新加提交是一步；未提交 preedit 不寫入 draft。 |
+| 資料安全 | Save 外部衝突、只讀、失敗清理、crash 後 draft、跨工作樹 | **NOT RUN**（最新 GUI 操作）。Headless library：外部修改、唯讀、路徑消失或改名、解析到工作區外、取代失敗都留下原檔與未存緩衝或 draft；成功存檔與明確丟棄才清 draft；兩個工作區根的相同相對路徑不互通；恢復儲存的狀態字串寫明是本機明文，不是安全儲存。 |
+| Terminal | 唯讀畫面 VT ANSI、Host absent no-start、session stale/restart | **NOT RUN**（最新 GUI）。Headless library：list/read 使用 `--no-start`，沒有 write、input 或 resize；較舊的 workspace generation 與被換掉的 Host session 不會套用。本輪沒有重跑隔離 Host E2E。 |
 | macOS／Linux | 正式編譯、視窗、IME、檔案系統、PTY | **NOT RUN** |
-| CI | 實驗性 GitHub Actions 各 job 真正執行 | **NOT VERIFIED** |
+| CI | 實驗性 GitHub Actions 各 job 真正執行 | **NOT RUN**（本機 cargo 不是遠端 Actions） |
+| 發行預設 | 把 GPUI 當成正式桌面產品 | **NOT RUN**。此前端仍是 experimental、unsupported。 |
+
+本輪只把 P0 編輯器安全與單一工作階段生命週期放進 `desktop_gpui` 函式庫（`EditorSession`）。GPUI 視窗只呈現、取得焦點並轉送事件，不另開 Runtime Host、PTY、Git 寫入、憑證庫或 SQLite。覆蓋指令是 `cargo test --manifest-path desktop_gpui/Cargo.toml --no-default-features --lib --locked`。真實滑鼠、注音候選窗、多 DPI、macOS／Linux GUI、遠端 CI，以及把 GPUI 設成預設產品，都仍是 **NOT RUN**。存檔仍是比對後 `rename`，不能當成惡意 TOCTOU 已證明安全。
 
 ### 8.3 正式功能預設切換之前不可略過的條件
 
