@@ -4,6 +4,8 @@ This is an **experimental, independent Rust UI frontend**, not a replacement of 
 
 **Engineering handoff / detailed next steps:** [GPUI native desktop successor handoff](../docs/gpui-desktop-successor-handoff-20261107.md). Read this before extending the prototype: it records the verified code baseline, open safety issues, P0 Windows GUI/IME acceptance, prioritized tasks through release, and the required test evidence.
 
+**Step-by-step engineering execution plan:** [GPUI detailed execution and acceptance plan](../docs/gpui-desktop-detailed-execution-plan-20261107.md). This is the current ordered task checklist (G0–G6), with commands, test cases, source touchpoints, stop conditions, dependencies and release gates. Do not treat it as evidence that the planned GUI/IME work has been completed.
+
 ## Run
 
 Use the Rust 1.98 toolchain and platform graphics development tools; for Windows, native GPUI builds may additionally require the Windows SDK `fxc.exe` shader compiler.
