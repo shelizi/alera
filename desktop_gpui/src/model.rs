@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 const MAX_ENTRIES: usize = 400;
 const MAX_FILE_BYTES: u64 = 256 * 1024;
 const MAX_PREVIEW_LINES: usize = 600;
+const MAX_TABS: usize = 24;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExplorerEntry {
@@ -14,14 +15,21 @@ pub struct ExplorerEntry {
     pub is_directory: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreviewTab {
+    pub path: PathBuf,
+    pub title: String,
+    pub content: String,
+}
+
 #[derive(Debug)]
 pub struct WorkbenchModel {
     root: PathBuf,
     directory: PathBuf,
     branch: String,
     entries: Vec<ExplorerEntry>,
-    selected_path: Option<PathBuf>,
-    selected_content: String,
+    tabs: Vec<PreviewTab>,
+    active_tab: Option<usize>,
     status: String,
 }
 
@@ -41,8 +49,8 @@ impl WorkbenchModel {
             root,
             branch,
             entries: Vec::new(),
-            selected_path: None,
-            selected_content: String::new(),
+            tabs: Vec::new(),
+            active_tab: None,
             status: "Native GPUI preview: file browsing is read-only".into(),
         };
         model.refresh()?;
@@ -61,11 +69,22 @@ impl WorkbenchModel {
     pub fn entries(&self) -> &[ExplorerEntry] {
         &self.entries
     }
+    pub fn tabs(&self) -> &[PreviewTab] {
+        &self.tabs
+    }
+    pub fn active_tab(&self) -> Option<usize> {
+        self.active_tab
+    }
+    pub fn active_document(&self) -> Option<&PreviewTab> {
+        self.active_tab.and_then(|index| self.tabs.get(index))
+    }
     pub fn selected_path(&self) -> Option<&Path> {
-        self.selected_path.as_deref()
+        self.active_document().map(|tab| tab.path.as_path())
     }
     pub fn content(&self) -> &str {
-        &self.selected_content
+        self.active_document()
+            .map(|tab| tab.content.as_str())
+            .unwrap_or("")
     }
     pub fn status(&self) -> &str {
         &self.status
@@ -107,6 +126,13 @@ impl WorkbenchModel {
         Ok(())
     }
 
+    pub fn refresh_directory(&mut self) {
+        self.status = match self.refresh() {
+            Ok(()) => "Explorer refreshed".into(),
+            Err(error) => format!("Cannot refresh Explorer: {error}"),
+        };
+    }
+
     pub fn open_entry(&mut self, index: usize) {
         let Some(entry) = self.entries.get(index).cloned() else {
             return;
@@ -134,14 +160,74 @@ impl WorkbenchModel {
                 Err(error) => self.status = format!("Cannot browse folder: {error}"),
             }
         } else {
-            match read_preview(&path) {
-                Ok(content) => {
-                    self.selected_content = content;
-                    self.selected_path = Some(path);
-                    self.status = format!("Opened {} (read-only)", entry.name);
-                }
-                Err(error) => self.status = format!("Cannot preview {}: {error}", entry.name),
+            self.open_file(path, entry.name);
+        }
+    }
+
+    fn open_file(&mut self, path: PathBuf, title: String) {
+        if let Some(index) = self.tabs.iter().position(|tab| tab.path == path) {
+            self.activate_tab(index);
+            return;
+        }
+        if self.tabs.len() >= MAX_TABS {
+            self.status = format!("Preview limit reached ({MAX_TABS}). Close a tab first");
+            return;
+        }
+        match read_preview(&path) {
+            Ok(content) => {
+                self.tabs.push(PreviewTab {
+                    path,
+                    title: title.clone(),
+                    content,
+                });
+                self.active_tab = Some(self.tabs.len() - 1);
+                self.status = format!("Opened {title} (read-only)");
             }
+            Err(error) => self.status = format!("Cannot preview {title}: {error}"),
+        }
+    }
+
+    pub fn activate_tab(&mut self, index: usize) {
+        if let Some(tab) = self.tabs.get(index) {
+            self.active_tab = Some(index);
+            self.status = format!("Viewing {} (read-only)", tab.title);
+        }
+    }
+
+    pub fn close_tab(&mut self, index: usize) {
+        if index >= self.tabs.len() {
+            return;
+        }
+        let closed = self.tabs.remove(index);
+        self.active_tab = match self.active_tab {
+            None => None,
+            Some(_) if self.tabs.is_empty() => None,
+            Some(active) if active == index => Some(index.min(self.tabs.len() - 1)),
+            Some(active) if active > index => Some(active - 1),
+            Some(active) => Some(active),
+        };
+        self.status = format!("Closed {}", closed.title);
+    }
+
+    pub fn reload_active(&mut self) {
+        let Some(index) = self.active_tab else {
+            self.status = "No preview to reload".into();
+            return;
+        };
+        let path = self.tabs[index].path.clone();
+        // Revalidate containment after file moves or replacements.
+        match dunce::canonicalize(&path) {
+            Ok(canonical) if canonical.starts_with(&self.root) && canonical == path => {
+                match read_preview(&canonical) {
+                    Ok(content) => {
+                        self.tabs[index].content = content;
+                        self.status = format!("Reloaded {}", self.tabs[index].title);
+                    }
+                    Err(error) => self.status = format!("Cannot reload preview: {error}"),
+                }
+            }
+            Ok(_) => self.status = "Preview no longer belongs to this workspace".into(),
+            Err(error) => self.status = format!("Cannot reload preview: {error}"),
         }
     }
 
@@ -236,5 +322,64 @@ mod tests {
         fs::write(&file, vec![b'x'; MAX_FILE_BYTES as usize + 1]).unwrap();
         let err = read_preview(&file).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn tab_activation_closing_and_reopen_have_stable_indices() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::write(temp.path().join("a.txt"), "A").unwrap();
+        fs::write(temp.path().join("b.txt"), "B").unwrap();
+        fs::write(temp.path().join("c.txt"), "C").unwrap();
+        let mut model = WorkbenchModel::new(temp.path()).unwrap();
+        model.open_entry(0);
+        model.open_entry(1);
+        model.open_entry(2);
+        assert_eq!(model.tabs().len(), 3);
+        assert_eq!(model.active_tab(), Some(2));
+        model.open_entry(1);
+        assert_eq!(model.tabs().len(), 3, "already-open file reuses its tab");
+        assert_eq!(model.active_tab(), Some(1));
+        model.close_tab(0);
+        assert_eq!(model.active_tab(), Some(0));
+        assert_eq!(model.content(), "B");
+        model.close_tab(0);
+        assert_eq!(model.active_tab(), Some(0));
+        assert_eq!(model.content(), "C");
+        model.close_tab(0);
+        assert_eq!(model.active_tab(), None);
+        assert_eq!(model.content(), "");
+    }
+
+    #[test]
+    fn reload_updates_preview_without_discarding_last_good_content_on_failure() {
+        let temp = tempfile::tempdir().unwrap();
+        let file = temp.path().join("note.txt");
+        fs::write(&file, "before").unwrap();
+        let mut model = WorkbenchModel::new(temp.path()).unwrap();
+        model.open_entry(0);
+        fs::write(&file, "after").unwrap();
+        model.reload_active();
+        assert_eq!(model.content(), "after");
+        fs::write(&file, vec![b'x'; MAX_FILE_BYTES as usize + 1]).unwrap();
+        model.reload_active();
+        assert_eq!(model.content(), "after", "keep last good preview");
+        assert!(model.status().contains("Cannot reload"));
+    }
+
+    #[test]
+    fn caps_open_tabs_and_rejects_out_of_range_controls() {
+        let temp = tempfile::tempdir().unwrap();
+        for index in 0..MAX_TABS + 1 {
+            fs::write(temp.path().join(format!("{index:02}.txt")), "preview").unwrap();
+        }
+        let mut model = WorkbenchModel::new(temp.path()).unwrap();
+        for index in 0..MAX_TABS + 1 {
+            model.open_entry(index);
+        }
+        assert_eq!(model.tabs().len(), MAX_TABS);
+        assert!(model.status().contains("Preview limit reached"));
+        model.close_tab(MAX_TABS);
+        model.activate_tab(MAX_TABS);
+        assert_eq!(model.tabs().len(), MAX_TABS);
     }
 }

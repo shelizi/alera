@@ -1,11 +1,9 @@
 //! Experimental Alera desktop shell powered by native GPUI (no Flutter/WebView).
-mod model;
-
+use alera_gpui_desktop::model::WorkbenchModel;
 use gpui::{
     div, prelude::*, px, rgb, size, App, Application, Bounds, Context, Window, WindowBounds,
     WindowOptions,
 };
-use model::WorkbenchModel;
 
 const BG: u32 = 0x15171b;
 const PANEL: u32 = 0x1c1f24;
@@ -39,6 +37,14 @@ impl Render for Workbench {
             "Select a text file from Explorer to preview it.\n\nAlera GPUI runs without Flutter or WebView.\nTerminal, editable documents, Diff and Agent surfaces are not migrated yet.".into()
         };
         let entries = self.model.entries().to_vec();
+        let tabs: Vec<_> = self
+            .model
+            .tabs()
+            .iter()
+            .enumerate()
+            .map(|(index, tab)| (index, tab.title.clone()))
+            .collect();
+        let active_tab = self.model.active_tab();
         let status = self.model.status().to_owned();
         let branch = self.model.branch().to_owned();
         let can_up = self.model.can_go_up();
@@ -89,14 +95,30 @@ impl Render for Workbench {
                                     .child(div().text_sm().child(folder_name))
                                     .child(
                                         div()
-                                            .id("up")
-                                            .cursor_pointer()
-                                            .text_color(rgb(MUTED))
-                                            .child(if can_up { "↑ Up" } else { "Root" })
-                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                this.model.go_up();
-                                                cx.notify();
-                                            })),
+                                            .flex()
+                                            .gap_2()
+                                            .child(
+                                                div()
+                                                    .id("up")
+                                                    .cursor_pointer()
+                                                    .text_color(rgb(MUTED))
+                                                    .child(if can_up { "↑ Up" } else { "Root" })
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.model.go_up();
+                                                        cx.notify();
+                                                    })),
+                                            )
+                                            .child(
+                                                div()
+                                                    .id("explorer-refresh")
+                                                    .cursor_pointer()
+                                                    .text_color(rgb(MUTED))
+                                                    .child("↻")
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.model.refresh_directory();
+                                                        cx.notify();
+                                                    })),
+                                            ),
                                     ),
                             )
                             .child(
@@ -132,14 +154,92 @@ impl Render for Workbench {
                             .flex_col()
                             .child(
                                 div()
-                                    .h(px(37.0))
-                                    .px_4()
+                                    .h(px(38.0))
                                     .flex()
                                     .items_center()
                                     .bg(rgb(PANEL))
                                     .border_b_1()
                                     .border_color(rgb(BORDER))
-                                    .child(filename),
+                                    .child(
+                                        div()
+                                            .id("file-tabs")
+                                            .flex_1()
+                                            .min_w_0()
+                                            .flex()
+                                            .overflow_x_scroll()
+                                            .children(tabs.into_iter().map(|(index, title)| {
+                                                div()
+                                                    .flex()
+                                                    .items_center()
+                                                    .w(px(165.0))
+                                                    .h(px(37.0))
+                                                    .bg(rgb(if active_tab == Some(index) {
+                                                        ACTIVE
+                                                    } else {
+                                                        PANEL
+                                                    }))
+                                                    .border_r_1()
+                                                    .border_color(rgb(BORDER))
+                                                    .child(
+                                                        div()
+                                                            .id(("file-tab", index))
+                                                            .flex_1()
+                                                            .min_w_0()
+                                                            .px_2()
+                                                            .cursor_pointer()
+                                                            .text_sm()
+                                                            .text_color(rgb(
+                                                                if active_tab == Some(index) {
+                                                                    TEXT
+                                                                } else {
+                                                                    MUTED
+                                                                },
+                                                            ))
+                                                            .child(title)
+                                                            .on_click(cx.listener(
+                                                                move |this, _, _, cx| {
+                                                                    this.model.activate_tab(index);
+                                                                    cx.notify();
+                                                                },
+                                                            )),
+                                                    )
+                                                    .child(
+                                                        div()
+                                                            .id(("close-tab", index))
+                                                            .px_2()
+                                                            .cursor_pointer()
+                                                            .text_color(rgb(MUTED))
+                                                            .child("×")
+                                                            .on_click(cx.listener(
+                                                                move |this, _, _, cx| {
+                                                                    this.model.close_tab(index);
+                                                                    cx.notify();
+                                                                },
+                                                            )),
+                                                    )
+                                            })),
+                                    )
+                                    .child(
+                                        div()
+                                            .id("reload-preview")
+                                            .px_3()
+                                            .cursor_pointer()
+                                            .text_color(rgb(MUTED))
+                                            .child("↻")
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.model.reload_active();
+                                                cx.notify();
+                                            })),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .h(px(24.0))
+                                    .px_4()
+                                    .bg(rgb(BG))
+                                    .text_sm()
+                                    .text_color(rgb(MUTED))
+                                    .child(format!("{} · read-only preview", filename)),
                             )
                             .child(
                                 div()

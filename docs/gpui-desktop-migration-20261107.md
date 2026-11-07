@@ -60,10 +60,23 @@ latency on Windows and macOS first, then Linux. Compare after warm caches,
 and repeat enough runs to distinguish noise. Do not assert superiority
 without reproducible measurements.
 
-## Status on creation
+## Verified progress (2026-11-07, Windows)
 
-A native GPUI prototype has been authored with a read-only explorer and
-preview. It is **not** a replacement for the desktop edition yet. Terminal,
-editor editing/IME, Diff, Agent and release behavior still depend on Flutter
-until the respective gates pass. Do not merge this feature branch into
-`main` or publish it as supported desktop builds before verification.
+- Standalone GPUI Windows executable built and smoke-launched successfully
+  with a nonzero native window handle and empty stderr; the smoke process
+  was then stopped. No automated visual inspection or input UX test yet.
+- `cargo check --all-targets` passed and 6 headless model tests passed.
+- Native workspace UI now has bounded read-only file tabs (open/reuse,
+  activate/close/reload), folder navigation and Explorer refresh.
+- Split the UI-independent model into a `lib.rs` test target with GPUI
+  behind the default `native-ui` feature, so CI can test without GPU libs.
+- Experimental CI added for Windows native compile and cross-platform model
+  tests; CI jobs have not run remotely and macOS/Linux are **unverified**.
+- Open issues: model performs small bounded disk reads on the UI thread,
+  file explorer is limited to 400 entries per directory, and there is no
+  runtime-host client or saved tab state yet. Those are not production parity.
+
+The GPUI prototype remains **unsupported**. Terminal, editor editing/IME,
+Diff, Agent and release behavior still depend on Flutter until the respective
+gates pass. Do not merge this feature branch into `main` or publish it as
+supported desktop builds before verification.
