@@ -134,6 +134,90 @@ impl ExplorerFiles {
         Ok(destination)
     }
 
+    /// Explicit OS file-manager drop/import. Unlike ordinary Copy/Cut this
+    /// accepts an outside source, but never follows a symlink, overwrites a
+    /// destination, or imports Git metadata. Limits apply to directories too.
+    pub fn import_external(&self, source: &Path, dest_folder: &Path) -> io::Result<PathBuf> {
+        let folder = self.folder(dest_folder)?;
+        let file_type = fs::symlink_metadata(source)?.file_type();
+        if !file_type.is_file() && !file_type.is_dir() {
+            return Err(forbidden(
+                "External import refuses symlinks and special files",
+            ));
+        }
+        let source = dunce::canonicalize(source)?;
+        if source.starts_with(&self.root) {
+            return self.copy_into(&source, &folder);
+        }
+        let name = source
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| invalid("External file has no valid name"))?;
+        let destination = self.destination(&folder, name)?;
+        let mut pending = vec![(source.clone(), destination.clone())];
+        let mut entries_left = MAX_RECURSIVE_ENTRIES;
+        let mut bytes_left = MAX_COPY_BYTES;
+        let mut created_root = false;
+        let result = (|| -> io::Result<()> {
+            while let Some((from, to)) = pending.pop() {
+                if entries_left == 0 {
+                    return Err(forbidden("External import exceeds entry limit"));
+                }
+                entries_left -= 1;
+                let file_type = fs::symlink_metadata(&from)?.file_type();
+                if !file_type.is_dir() && !file_type.is_file() {
+                    return Err(forbidden("External import refuses symlink/special files"));
+                }
+                let canonical = dunce::canonicalize(&from)?;
+                if !canonical.starts_with(&source) {
+                    return Err(forbidden("External source escaped its selected root"));
+                }
+                if file_type.is_dir() {
+                    fs::create_dir(&to)?;
+                    if to == destination {
+                        created_root = true;
+                    }
+                    for entry in fs::read_dir(&canonical)? {
+                        let entry = entry?;
+                        let name = entry.file_name();
+                        check_name(
+                            name.to_str()
+                                .ok_or_else(|| invalid("Invalid imported filename"))?,
+                        )?;
+                        pending.push((entry.path(), to.join(name)));
+                    }
+                } else {
+                    let size = fs::metadata(&canonical)?.len();
+                    if size > MAX_SINGLE_FILE_BYTES || size > bytes_left {
+                        return Err(forbidden("External import exceeded size budget"));
+                    }
+                    let reader = fs::File::open(&canonical)?;
+                    let mut writer = OpenOptions::new().write(true).create_new(true).open(&to)?;
+                    if to == destination {
+                        created_root = true;
+                    }
+                    let transferred = io::copy(&mut reader.take(size + 1), &mut writer)?;
+                    if transferred != size || transferred > bytes_left {
+                        return Err(forbidden("External source changed while copying"));
+                    }
+                    bytes_left -= transferred;
+                }
+            }
+            Ok(())
+        })();
+        if result.is_err() && created_root {
+            // Only undo our newly created destination, never external source.
+            if let Ok(meta) = fs::symlink_metadata(&destination) {
+                if meta.file_type().is_dir() {
+                    let _ = fs::remove_dir_all(&destination);
+                } else if meta.file_type().is_file() {
+                    let _ = fs::remove_file(&destination);
+                }
+            }
+        }
+        result.map(|()| destination)
+    }
+
     /// Make a sibling copy with a collision-free name, preserving source.
     pub fn duplicate(&self, original: &Path) -> io::Result<PathBuf> {
         let source = self.existing(original)?;
@@ -320,6 +404,75 @@ fn check_name(name: &str) -> io::Result<()> {
 fn invalid(message: &str) -> io::Error {
     io::Error::new(ErrorKind::InvalidInput, message)
 }
+/// Local Explorer clipboard; never trusts OS clipboard text as a path to
+/// overwrite and never moves a file across different Git worktrees.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExplorerClipboardMode {
+    Copy,
+    Cut,
+}
+
+#[derive(Debug, Clone)]
+pub struct ExplorerClipboard {
+    workspace_root: PathBuf,
+    selected: PathBuf,
+    mode: ExplorerClipboardMode,
+}
+
+impl ExplorerClipboard {
+    pub fn capture(
+        files: &ExplorerFiles,
+        selected: &Path,
+        mode: ExplorerClipboardMode,
+    ) -> io::Result<Self> {
+        let selected = files.existing(selected)?;
+        if selected
+            .components()
+            .any(|part| matches!(part, Component::Normal(name) if name == ".git" || name == ".worktrees"))
+        {
+            return Err(forbidden("Git metadata may not enter the Explorer clipboard"));
+        }
+        Ok(Self {
+            workspace_root: files.root().to_path_buf(),
+            selected,
+            mode,
+        })
+    }
+
+    pub fn source(&self) -> &Path {
+        &self.selected
+    }
+
+    pub fn mode(&self) -> ExplorerClipboardMode {
+        self.mode
+    }
+
+    /// Successful Cut clears clipboard; failure keeps source and clipboard.
+    pub fn paste_into(
+        &mut self,
+        files: &ExplorerFiles,
+        destination_folder: &Path,
+    ) -> io::Result<PathBuf> {
+        if files.root() != self.workspace_root {
+            return Err(forbidden(
+                "Paste across workspaces requires explicit import",
+            ));
+        }
+        let result = match self.mode {
+            ExplorerClipboardMode::Copy => files.copy_into(&self.selected, destination_folder),
+            ExplorerClipboardMode::Cut => files.move_into(&self.selected, destination_folder),
+        }?;
+        if self.mode == ExplorerClipboardMode::Cut {
+            self.selected.clear();
+        }
+        Ok(result)
+    }
+
+    pub fn consumed(&self) -> bool {
+        self.selected.as_os_str().is_empty()
+    }
+}
+
 fn forbidden(message: &str) -> io::Error {
     io::Error::new(ErrorKind::PermissionDenied, message)
 }
@@ -327,6 +480,104 @@ fn forbidden(message: &str) -> io::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn external_drop_imports_bounded_file_and_directory_without_overwrite() {
+        let workspace = tempfile::tempdir().unwrap();
+        let external = tempfile::tempdir().unwrap();
+        let root = dunce::canonicalize(workspace.path()).unwrap();
+        let files = ExplorerFiles::new(&root).unwrap();
+        let source = external.path().join("outside.txt");
+        fs::write(&source, "external payload").unwrap();
+        let imported = files.import_external(&source, &root).unwrap();
+        assert_eq!(fs::read_to_string(&imported).unwrap(), "external payload");
+        assert!(
+            files.import_external(&source, &root).is_err(),
+            "no overwrite"
+        );
+        let tree = external.path().join("folder");
+        fs::create_dir(&tree).unwrap();
+        fs::write(tree.join("nested.txt"), "nested").unwrap();
+        let imported_tree = files.import_external(&tree, &root).unwrap();
+        assert_eq!(
+            fs::read_to_string(imported_tree.join("nested.txt")).unwrap(),
+            "nested"
+        );
+        assert_eq!(
+            fs::read_to_string(tree.join("nested.txt")).unwrap(),
+            "nested"
+        );
+    }
+
+    #[test]
+    fn external_drop_rejects_git_metadata_and_excessive_content() {
+        let workspace = tempfile::tempdir().unwrap();
+        let external = tempfile::tempdir().unwrap();
+        let root = dunce::canonicalize(workspace.path()).unwrap();
+        let files = ExplorerFiles::new(&root).unwrap();
+        let git_dir = external.path().join(".git");
+        fs::create_dir(&git_dir).unwrap();
+        assert!(files.import_external(&git_dir, &root).is_err());
+        let large = external.path().join("huge.bin");
+        let writer = fs::File::create(&large).unwrap();
+        writer.set_len(32 * 1024 * 1024 + 1).unwrap();
+        assert!(files.import_external(&large, &root).is_err());
+        assert!(!root.join("huge.bin").exists());
+    }
+
+    #[test]
+    fn clipboard_copy_then_cut_paste_works_without_overwriting_other_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = dunce::canonicalize(temp.path()).unwrap();
+        let files = ExplorerFiles::new(&root).unwrap();
+        let one = files.create_folder(&root, "one").unwrap();
+        let two = files.create_folder(&root, "two").unwrap();
+        let source = files.create_file(&one, "item.txt").unwrap();
+        fs::write(&source, "original").unwrap();
+        let mut copy =
+            ExplorerClipboard::capture(&files, &source, ExplorerClipboardMode::Copy).unwrap();
+        assert_eq!(copy.paste_into(&files, &two).unwrap(), two.join("item.txt"));
+        assert_eq!(fs::read_to_string(&source).unwrap(), "original");
+        assert!(
+            copy.paste_into(&files, &two).is_err(),
+            "must never overwrite target"
+        );
+        let mut cut =
+            ExplorerClipboard::capture(&files, &source, ExplorerClipboardMode::Cut).unwrap();
+        assert!(
+            cut.paste_into(&files, &two).is_err(),
+            "collision must preserve source"
+        );
+        assert_eq!(fs::read_to_string(&source).unwrap(), "original");
+        fs::remove_file(two.join("item.txt")).unwrap();
+        assert_eq!(cut.paste_into(&files, &two).unwrap(), two.join("item.txt"));
+        assert!(!source.exists());
+        assert!(cut.consumed());
+    }
+
+    #[test]
+    fn clipboard_refuses_cross_workspace_and_git_metadata() {
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        let first_root = dunce::canonicalize(first.path()).unwrap();
+        let second_root = dunce::canonicalize(second.path()).unwrap();
+        let files = ExplorerFiles::new(&first_root).unwrap();
+        let different = ExplorerFiles::new(&second_root).unwrap();
+        let source = files.create_file(&first_root, "safe.txt").unwrap();
+        fs::write(&source, "keep").unwrap();
+        let mut copy =
+            ExplorerClipboard::capture(&files, &source, ExplorerClipboardMode::Copy).unwrap();
+        assert_eq!(
+            copy.paste_into(&different, &second_root)
+                .unwrap_err()
+                .kind(),
+            ErrorKind::PermissionDenied
+        );
+        assert_eq!(fs::read_to_string(&source).unwrap(), "keep");
+        assert!(
+            ExplorerClipboard::capture(&files, &first_root, ExplorerClipboardMode::Copy).is_err()
+        );
+    }
 
     #[test]
     fn create_rename_move_delete_without_touching_unrelated_files() {

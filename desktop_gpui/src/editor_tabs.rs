@@ -9,7 +9,7 @@ use crate::editor_session::{
     CloseEffect, EditorSession, OpenEffect, SaveCommit, DIRTY_SWITCH_REFUSED,
 };
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub const MAX_EDITOR_TABS: usize = 24;
 pub const EDITOR_TAB_LIMIT: &str = "Editor tab limit reached";
@@ -29,6 +29,15 @@ pub struct EditorTabLabel {
     pub armed: bool,
 }
 
+/// Stable tab identity for mouse-drag reorder. A source tab cannot be
+/// mistaken for a different tab that later reuses its numerical index.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EditorTabDragIdentity {
+    root: PathBuf,
+    path: Option<PathBuf>,
+    scratch_id: Option<String>,
+}
+
 /// Outcome of a bulk clean-tab close. `blocked` counts tabs that stayed open
 /// because they hold unsaved changes or could not be closed; their buffers
 /// and recovery drafts are never touched.
@@ -39,6 +48,28 @@ pub struct CleanCloseReport {
 }
 
 impl EditorTabs {
+    pub fn drag_identity_at(&self, index: usize) -> Option<EditorTabDragIdentity> {
+        let doc = self.tabs.get(index)?.document()?;
+        Some(EditorTabDragIdentity {
+            root: doc.root().to_path_buf(),
+            path: doc.path().map(Path::to_path_buf),
+            scratch_id: doc.scratch_id().map(ToString::to_string),
+        })
+    }
+
+    pub fn move_tab_identity(&mut self, identity: &EditorTabDragIdentity, to: usize) -> bool {
+        let Some(from) = self.tabs.iter().position(|tab| {
+            tab.document().is_some_and(|doc| {
+                doc.root() == identity.root
+                    && doc.path() == identity.path.as_deref()
+                    && doc.scratch_id() == identity.scratch_id.as_deref()
+            })
+        }) else {
+            return false;
+        };
+        self.move_tab(from, to)
+    }
+
     pub fn new(drafts: Option<EditorDraftStore>) -> Self {
         Self {
             drafts,
@@ -537,6 +568,41 @@ mod tests {
         assert_eq!(fs::read(&file_b).unwrap(), b"B");
         assert!(matches!(tabs.close_active(true), CloseEffect::Closed));
         assert!(tabs.is_empty());
+    }
+
+    #[test]
+    fn drag_identity_reorders_only_original_scratch_and_keeps_dirty_content() {
+        let workspace = tempfile::tempdir().unwrap();
+        let root = workspace.path();
+        let mut tabs = EditorTabs::new(None);
+        tabs.open_scratch(root).unwrap();
+        tabs.document_mut()
+            .unwrap()
+            .replace(None, "unsaved 中文")
+            .unwrap();
+        let scratch = tabs.drag_identity_at(0).unwrap();
+        let file = root.join("existing.txt");
+        fs::write(&file, "on disk").unwrap();
+        tabs.open_file(root, &file).unwrap();
+        let file_identity = tabs.drag_identity_at(1).unwrap();
+        assert!(tabs.move_tab_identity(&scratch, 1));
+        assert_eq!(tabs.active_index(), Some(0));
+        assert_eq!(tabs.document().unwrap().path(), Some(file.as_path()));
+        assert!(!tabs.move_tab_identity(&file_identity, 0), "already first");
+        assert!(tabs.activate(1));
+        assert_eq!(tabs.document().unwrap().content(), "unsaved 中文");
+        assert!(tabs.document().unwrap().is_dirty());
+        assert!(!tabs.move_tab_identity(&scratch, 99));
+        tabs.close_tab(1, true);
+        assert!(
+            tabs.drag_identity_at(1).is_some(),
+            "dirty scratch must survive first close until confirmation"
+        );
+        tabs.close_tab(1, true);
+        assert!(
+            !tabs.move_tab_identity(&scratch, 0),
+            "closed identity must be stale"
+        );
     }
 
     #[test]

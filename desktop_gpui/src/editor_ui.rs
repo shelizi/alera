@@ -8,7 +8,7 @@ use alera_gpui_desktop::editor::{
     byte_to_utf16, edge_scroll_offset, utf16_to_byte, EditorDocument, EditorLineIndex,
 };
 use alera_gpui_desktop::editor_session::{OpenEffect, RECOVERY_PLAINTEXT_NOTICE};
-use alera_gpui_desktop::editor_tabs::EditorTabs;
+use alera_gpui_desktop::editor_tabs::{EditorTabDragIdentity, EditorTabs};
 use alera_gpui_desktop::visible_line_hit::{
     apply_pointer_hit, VisibleLineGeometry, VisibleLineHitSet,
 };
@@ -122,6 +122,26 @@ pub fn bind_editor_keys(cx: &mut App) {
         KeyBinding::new("cmd-alt-right", NextEditorTab, Some("AleraGpuiEditor")),
         KeyBinding::new("cmd-alt-left", PreviousEditorTab, Some("AleraGpuiEditor")),
     ]);
+}
+
+#[derive(Clone)]
+struct EditorTabDrag {
+    identity: Option<EditorTabDragIdentity>,
+}
+
+struct EditorTabDragPreview {
+    title: String,
+}
+
+impl gpui::Render for EditorTabDragPreview {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl gpui::IntoElement {
+        div()
+            .bg(rgb(PANEL_BG))
+            .px_2()
+            .py_1()
+            .text_sm()
+            .child(self.title.clone())
+    }
 }
 
 pub struct NativeEditor {
@@ -1043,6 +1063,9 @@ impl Render for NativeEditor {
                 String::new()
             };
         let tab_labels = self.tabs.tab_labels();
+        let drag_identities: Vec<_> = (0..tab_labels.len())
+            .map(|index| self.tabs.drag_identity_at(index))
+            .collect();
         let active_tab = self.tabs.active_index();
         let status = format!(
             "{} · Ln {} / {} Col {} · Undo {} / Redo {} · {}{}{}",
@@ -1099,40 +1122,63 @@ impl Render for NativeEditor {
             .on_action(cx.listener(Self::next_editor_tab))
             .on_action(cx.listener(Self::previous_editor_tab))
             .child(div().flex().gap_2().px_3().py_1().children(
-                tab_labels.into_iter().enumerate().map(|(index, label)| {
-                    let active = active_tab == Some(index);
-                    div()
-                        .id(("editor-file-tab", index))
-                        .flex()
-                        .items_center()
-                        .gap_1()
-                        .child(
-                            div()
-                                .id(("editor-file-tab-select", index))
-                                .cursor_pointer()
-                                .text_sm()
-                                .text_color(rgb(if active { EDITOR_TEXT } else { MUTED_TEXT }))
-                                .child(format!(
-                                    "{}{}",
-                                    label.title,
-                                    if label.dirty { " ●" } else { "" }
-                                ))
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.activate_tab(index, cx);
-                                })),
-                        )
-                        .child(
-                            div()
-                                .id(("editor-file-tab-close", index))
-                                .cursor_pointer()
-                                .text_sm()
-                                .text_color(rgb(MUTED_TEXT))
-                                .child(if label.armed { "Confirm" } else { "Close" })
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.close_editor_tab(index, true, cx);
-                                })),
-                        )
-                }),
+                tab_labels.into_iter().zip(drag_identities).enumerate().map(
+                    |(index, (label, drag_identity))| {
+                        let active = active_tab == Some(index);
+                        let drag_title = label.title.clone();
+                        div()
+                            .id(("editor-file-tab", index))
+                            .flex()
+                            .items_center()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .id(("editor-file-tab-select", index))
+                                    .cursor_pointer()
+                                    .text_sm()
+                                    .text_color(rgb(if active { EDITOR_TEXT } else { MUTED_TEXT }))
+                                    .child(format!(
+                                        "{}{}",
+                                        label.title,
+                                        if label.dirty { " ●" } else { "" }
+                                    ))
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.activate_tab(index, cx);
+                                    }))
+                                    .on_drag(
+                                        EditorTabDrag {
+                                            identity: drag_identity,
+                                        },
+                                        move |_, _, _, cx| {
+                                            cx.new(|_| EditorTabDragPreview {
+                                                title: drag_title.clone(),
+                                            })
+                                        },
+                                    )
+                                    .on_drop(cx.listener(
+                                        move |this, payload: &EditorTabDrag, _, cx| {
+                                            if let Some(identity) = &payload.identity {
+                                                if this.tabs.move_tab_identity(identity, index) {
+                                                    this.status = "Editor tab reordered".into();
+                                                    this.on_tab_navigation(cx);
+                                                }
+                                            }
+                                        },
+                                    )),
+                            )
+                            .child(
+                                div()
+                                    .id(("editor-file-tab-close", index))
+                                    .cursor_pointer()
+                                    .text_sm()
+                                    .text_color(rgb(MUTED_TEXT))
+                                    .child(if label.armed { "Confirm" } else { "Close" })
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.close_editor_tab(index, true, cx);
+                                    })),
+                            )
+                    },
+                ),
             ))
             .child(
                 div()
@@ -1161,6 +1207,34 @@ impl Render for NativeEditor {
                             .on_click(cx.listener(|this, _, _, cx| {
                                 if this.tabs.activate_next() {
                                     this.on_tab_navigation(cx);
+                                }
+                            })),
+                    )
+                    .child(
+                        div()
+                            .id("editor-tab-move-left")
+                            .cursor_pointer()
+                            .child("Move ←")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                if let Some(index) = this.tabs.active_index() {
+                                    if index > 0 && this.tabs.move_tab(index, index - 1) {
+                                        this.status = "Editor tab moved left".into();
+                                        this.on_tab_navigation(cx);
+                                    }
+                                }
+                            })),
+                    )
+                    .child(
+                        div()
+                            .id("editor-tab-move-right")
+                            .cursor_pointer()
+                            .child("Move →")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                if let Some(index) = this.tabs.active_index() {
+                                    if this.tabs.move_tab(index, index + 1) {
+                                        this.status = "Editor tab moved right".into();
+                                        this.on_tab_navigation(cx);
+                                    }
                                 }
                             })),
                     )
