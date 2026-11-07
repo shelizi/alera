@@ -1,25 +1,26 @@
 //! First experimental native GPUI file editor surface.
 //!
 //! The OS IME enters through EntityInputHandler; the pure EditorDocument
-//! owns Unicode indexing and conflict-safe writes. This deliberately is NOT
-//! a virtualized production code editor: only the first 600 lines are drawn,
-//! click places the caret at line end, and IME candidate rectangle/selection
-//! geometry need independent visual and real Chinese IME tests.
+//! owns Unicode indexing and conflict-safe writes. A native uniform_list
+//! virtualizes displayed rows beyond line 600; this still is NOT a full IDE
+//! editor. Mouse and Traditional Chinese IME need independent GUI acceptance.
 use alera_gpui_desktop::editor::{
     byte_to_utf16, edge_scroll_offset, nearest_grapheme_edge, utf16_to_byte, EditorDocument,
-    EditorDraftStore,
+    EditorDraftStore, EditorLineIndex,
 };
 use gpui::{
-    actions, div, fill, point, prelude::*, px, relative, rgb, size, App, Bounds, ClipboardItem,
-    Context, CursorStyle, Element, ElementId, ElementInputHandler, Entity, EntityInputHandler,
-    FocusHandle, Focusable, GlobalElementId, InspectorElementId, KeyBinding, LayoutId, MouseButton,
-    Pixels, Point, ScrollHandle, ShapedLine, Style, TextRun, UTF16Selection, Window,
+    actions, div, fill, point, prelude::*, px, relative, rgb, size, uniform_list, App, Bounds,
+    ClipboardItem, Context, CursorStyle, Element, ElementId, ElementInputHandler, Entity,
+    EntityInputHandler, FocusHandle, Focusable, GlobalElementId, InspectorElementId, KeyBinding,
+    LayoutId, MouseButton, Pixels, Point, ScrollHandle, ScrollStrategy, ShapedLine, Style, TextRun,
+    UTF16Selection, UniformListScrollHandle, Window,
 };
 use std::collections::BTreeMap;
 use std::ops::Range;
+use std::sync::Arc;
 use std::time::Duration;
 
-const MAX_RENDER_LINES: usize = 600;
+const EDITOR_LINE_HEIGHT: f32 = 19.0;
 const PANEL_BG: u32 = 0x15171b;
 const EDITOR_TEXT: u32 = 0xe1e4e8;
 const MUTED_TEXT: u32 = 0x9fa7b3;
@@ -42,6 +43,10 @@ actions!(
         MoveEnd,
         SelectHome,
         SelectEnd,
+        DocumentStart,
+        DocumentEnd,
+        SelectDocumentStart,
+        SelectDocumentEnd,
         UndoEdit,
         RedoEdit,
         Backspace,
@@ -69,6 +74,18 @@ pub fn bind_editor_keys(cx: &mut App) {
         KeyBinding::new("end", MoveEnd, Some("AleraGpuiEditor")),
         KeyBinding::new("shift-home", SelectHome, Some("AleraGpuiEditor")),
         KeyBinding::new("shift-end", SelectEnd, Some("AleraGpuiEditor")),
+        KeyBinding::new("ctrl-home", DocumentStart, Some("AleraGpuiEditor")),
+        KeyBinding::new("ctrl-end", DocumentEnd, Some("AleraGpuiEditor")),
+        KeyBinding::new(
+            "ctrl-shift-home",
+            SelectDocumentStart,
+            Some("AleraGpuiEditor"),
+        ),
+        KeyBinding::new("ctrl-shift-end", SelectDocumentEnd, Some("AleraGpuiEditor")),
+        KeyBinding::new("cmd-up", DocumentStart, Some("AleraGpuiEditor")),
+        KeyBinding::new("cmd-down", DocumentEnd, Some("AleraGpuiEditor")),
+        KeyBinding::new("cmd-shift-up", SelectDocumentStart, Some("AleraGpuiEditor")),
+        KeyBinding::new("cmd-shift-down", SelectDocumentEnd, Some("AleraGpuiEditor")),
         KeyBinding::new("ctrl-z", UndoEdit, Some("AleraGpuiEditor")),
         KeyBinding::new("cmd-z", UndoEdit, Some("AleraGpuiEditor")),
         KeyBinding::new("ctrl-y", RedoEdit, Some("AleraGpuiEditor")),
@@ -97,6 +114,7 @@ pub struct NativeEditor {
     status: String,
     line_geometry: BTreeMap<usize, EditorLineGeometry>,
     scroll: ScrollHandle,
+    list_scroll: UniformListScrollHandle,
     mouse_selecting: bool,
     last_drag_position: Option<Point<Pixels>>,
     edge_scroll_running: bool,
@@ -121,6 +139,12 @@ impl NativeEditor {
         cx: &mut Context<Self>,
     ) -> Self {
         let recovered = document.is_dirty();
+        let initial_line = document.line_column().0;
+        let list_scroll = UniformListScrollHandle::new();
+        let scroll = list_scroll.0.borrow().base_handle.clone();
+        // File-backed documents currently open with the caret at EOF.
+        // A long-file editor must reveal that actual position on first paint.
+        list_scroll.scroll_to_item(initial_line, ScrollStrategy::Center);
         Self {
             document,
             draft_store,
@@ -131,7 +155,8 @@ impl NativeEditor {
                 "Native UTF-8 text editor (experimental)".into()
             },
             line_geometry: BTreeMap::new(),
-            scroll: ScrollHandle::new(),
+            scroll,
+            list_scroll,
             mouse_selecting: false,
             last_drag_position: None,
             edge_scroll_running: false,
@@ -143,13 +168,12 @@ impl NativeEditor {
         self.document.is_dirty()
     }
 
-    /// The first scroll child is the 1px input capture. All visible source
-    /// lines therefore have scroll child indices line_number + 1.
+    /// GPUI's native uniform list uses absolute source line indices and only
+    /// constructs visible rows, so navigation works beyond line 600.
     fn reveal_caret(&self) {
         let line = self.document.line_column().0;
-        if line < MAX_RENDER_LINES {
-            self.scroll.scroll_to_item(line + 1);
-        }
+        self.list_scroll
+            .scroll_to_item(line, ScrollStrategy::Center);
     }
 
     fn next_edge_scroll(&self) -> Option<f32> {
@@ -360,6 +384,32 @@ impl NativeEditor {
     }
     fn select_end(&mut self, _: &SelectEnd, _: &mut Window, cx: &mut Context<Self>) {
         self.document.move_end(true);
+        self.navigated(cx);
+    }
+    fn document_start(&mut self, _: &DocumentStart, _: &mut Window, cx: &mut Context<Self>) {
+        self.document.move_document_start(false);
+        self.navigated(cx);
+    }
+    fn document_end(&mut self, _: &DocumentEnd, _: &mut Window, cx: &mut Context<Self>) {
+        self.document.move_document_end(false);
+        self.navigated(cx);
+    }
+    fn select_document_start(
+        &mut self,
+        _: &SelectDocumentStart,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.document.move_document_start(true);
+        self.navigated(cx);
+    }
+    fn select_document_end(
+        &mut self,
+        _: &SelectDocumentEnd,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.document.move_document_end(true);
         self.navigated(cx);
     }
     fn undo_edit(&mut self, _: &UndoEdit, _: &mut Window, cx: &mut Context<Self>) {
@@ -715,82 +765,104 @@ impl Element for EditorLineMetrics {
     }
 }
 
+impl NativeEditor {
+    /// Construct exactly one source row requested by GPUI's uniform list.
+    /// The list never calls this for offscreen rows; selection and IME
+    /// highlighting continue to use document-global byte ranges.
+    fn render_row(
+        &self,
+        index: usize,
+        span: Range<usize>,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let text = self.document.content();
+        let start = span.start;
+        let end = span.end;
+        let raw = &text[span];
+        let mut display = raw.to_owned();
+        let mut highlights = Vec::new();
+        if let Some(composition) = self.document.marked() {
+            let from = composition.start.max(start);
+            let to = composition.end.min(end);
+            if from < to {
+                highlights.push((
+                    from - start..to - start,
+                    gpui::HighlightStyle {
+                        underline: Some(gpui::UnderlineStyle {
+                            thickness: px(1.0),
+                            color: Some(rgb(COMPOSITION_COLOR).into()),
+                            wavy: false,
+                        }),
+                        ..Default::default()
+                    },
+                ));
+            }
+        } else {
+            let selection = self.document.selection();
+            if !selection.is_empty() {
+                let from = selection.start.max(start);
+                let to = selection.end.min(end);
+                if from < to {
+                    highlights.push((
+                        from - start..to - start,
+                        gpui::HighlightStyle {
+                            background_color: Some(rgb(SELECTED_BG).into()),
+                            ..Default::default()
+                        },
+                    ));
+                }
+                if end < text.len() && selection.start <= end && selection.end > end {
+                    let from = display.len();
+                    display.push('↵');
+                    highlights.push((
+                        from..display.len(),
+                        gpui::HighlightStyle {
+                            background_color: Some(rgb(SELECTED_BG).into()),
+                            ..Default::default()
+                        },
+                    ));
+                }
+            }
+        }
+        let styled = gpui::StyledText::new(display).with_highlights(highlights);
+        div()
+            .id(("editable-line", index))
+            .relative()
+            .h(px(EDITOR_LINE_HEIGHT))
+            .line_height(px(EDITOR_LINE_HEIGHT))
+            .whitespace_nowrap()
+            .cursor(CursorStyle::IBeam)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, event: &gpui::MouseDownEvent, window, cx| {
+                    window.focus(&this.focus);
+                    this.pointer_down(event, cx);
+                }),
+            )
+            .child(styled)
+            .child(div().absolute().inset_0().child(EditorLineMetrics {
+                editor: cx.entity(),
+                index,
+                start,
+                end,
+                text: raw.to_owned(),
+                caret: self.document.cursor(),
+            }))
+    }
+}
+
 impl Render for NativeEditor {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.line_geometry.clear();
-        let text = self.document.content();
-        let caret = self.document.cursor();
-        let selection = self.document.selection();
-        let marked = self.document.marked();
+        let line_offsets = Arc::new(EditorLineIndex::new(self.document.content()));
+        let line_count = line_offsets.line_count();
         let (line_index, column_index) = self.document.line_column();
         let (undo_count, redo_count) = self.document.history_depth();
-        let mut offset = 0;
-        let lines: Vec<_> = text
-            .split('\n')
-            .take(MAX_RENDER_LINES)
-            .enumerate()
-            .map(|(i, line)| {
-                let start = offset;
-                let end = start + line.len();
-                let mut display = line.to_owned();
-                let mut highlights = Vec::new();
-                if let Some(composition) = &marked {
-                    let from = composition.start.max(start);
-                    let to = composition.end.min(end);
-                    if from < to {
-                        highlights.push((
-                            from - start..to - start,
-                            gpui::HighlightStyle {
-                                underline: Some(gpui::UnderlineStyle {
-                                    thickness: px(1.0),
-                                    color: Some(rgb(COMPOSITION_COLOR).into()),
-                                    wavy: false,
-                                }),
-                                ..Default::default()
-                            },
-                        ));
-                    }
-                } else if !selection.is_empty() {
-                    let from = selection.start.max(start);
-                    let to = selection.end.min(end);
-                    if from < to {
-                        highlights.push((
-                            from - start..to - start,
-                            gpui::HighlightStyle {
-                                background_color: Some(rgb(SELECTED_BG).into()),
-                                ..Default::default()
-                            },
-                        ));
-                    }
-                    // Make selected newline characters visible, including
-                    // empty lines and multi-line selection boundaries.
-                    if end < text.len() && selection.start <= end && selection.end > end {
-                        let from = display.len();
-                        display.push('↵');
-                        highlights.push((
-                            from..display.len(),
-                            gpui::HighlightStyle {
-                                background_color: Some(rgb(SELECTED_BG).into()),
-                                ..Default::default()
-                            },
-                        ));
-                    }
-                }
-                offset = end + 1;
-                (
-                    i,
-                    start,
-                    end,
-                    line.to_owned(),
-                    gpui::StyledText::new(display).with_highlights(highlights),
-                )
-            })
-            .collect();
-        let more = text.split('\n').count() > MAX_RENDER_LINES;
         let status = format!(
-            "{} · Ln {} Col {} · Undo {} / Redo {} · {}{}",
+            "{} · Ln {} / {} Col {} · Undo {} / Redo {} · {}{}",
             self.status,
             line_index + 1,
+            line_count,
             column_index + 1,
             undo_count,
             redo_count,
@@ -826,6 +898,10 @@ impl Render for NativeEditor {
             .on_action(cx.listener(Self::move_end))
             .on_action(cx.listener(Self::select_home))
             .on_action(cx.listener(Self::select_end))
+            .on_action(cx.listener(Self::document_start))
+            .on_action(cx.listener(Self::document_end))
+            .on_action(cx.listener(Self::select_document_start))
+            .on_action(cx.listener(Self::select_document_end))
             .on_action(cx.listener(Self::undo_edit))
             .on_action(cx.listener(Self::redo_edit))
             .on_action(cx.listener(Self::backspace))
@@ -902,46 +978,42 @@ impl Render for NativeEditor {
             )
             .child(
                 div()
-                    .id("gpui-editor-text-scroll")
                     .flex_1()
                     .min_h_0()
-                    .overflow_y_scroll()
-                    .track_scroll(&self.scroll)
-                    .px_3()
-                    .py_2()
+                    .flex()
+                    .flex_col()
                     .font_family("JetBrains Mono")
                     .text_sm()
                     .child(NativeInputCapture {
                         editor: cx.entity(),
                     })
-                    .children(lines.into_iter().map(|(index, start, end, raw, line)| {
-                        div()
-                            .id(("editable-line", index))
-                            .relative()
-                            .min_h(px(19.0))
-                            .line_height(px(19.0))
-                            .whitespace_nowrap()
-                            .cursor_pointer()
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|this, event: &gpui::MouseDownEvent, window, cx| {
-                                    window.focus(&this.focus);
-                                    this.pointer_down(event, cx);
-                                }),
-                            )
-                            .child(line)
-                            .child(div().absolute().inset_0().child(EditorLineMetrics {
-                                editor: cx.entity(),
-                                index,
-                                start,
-                                end,
-                                text: raw,
-                                caret,
-                            }))
-                    }))
-                    .when(more, |surface| {
-                        surface.child("… Rendering limited to first 600 lines in this prototype")
-                    }),
+                    .child(
+                        uniform_list(
+                            "gpui-editor-text-scroll",
+                            line_count,
+                            cx.processor(move |this, range: Range<usize>, _, cx| {
+                                // Unlike a normal Div scroll, uniform_list
+                                // re-renders only the visible rows even when
+                                // the parent entity is not re-rendered.
+                                this.line_geometry.clear();
+                                let mut rows = Vec::with_capacity(range.len());
+                                for index in range {
+                                    if let Some(span) =
+                                        line_offsets.line_range(this.document.content(), index)
+                                    {
+                                        rows.push(this.render_row(index, span, cx));
+                                    }
+                                }
+                                rows
+                            }),
+                        )
+                        .flex_1()
+                        .min_h_0()
+                        .w_full()
+                        .px_3()
+                        .py_2()
+                        .track_scroll(self.list_scroll.clone()),
+                    ),
             )
     }
 }

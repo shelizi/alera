@@ -14,6 +14,55 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use unicode_segmentation::UnicodeSegmentation;
 
 pub const MAX_EDITOR_BYTES: usize = 256 * 1024;
+
+/// Byte-oriented line offsets used by the native virtualized viewport.
+///
+/// Count is always at least one. A trailing newline has its own empty line.
+/// Rebuild after an edit/undo/IME update; the 256 KiB document cap keeps this
+/// index bounded without storing full text or decoding every rendered row.
+#[derive(Clone, Debug)]
+pub struct EditorLineIndex {
+    starts: Vec<usize>,
+}
+
+impl EditorLineIndex {
+    pub fn new(text: &str) -> Self {
+        let mut starts = Vec::with_capacity(text.bytes().filter(|byte| *byte == b'\n').count() + 1);
+        starts.push(0);
+        for (offset, byte) in text.bytes().enumerate() {
+            if byte == b'\n' {
+                starts.push(offset + 1);
+            }
+        }
+        Self { starts }
+    }
+
+    pub fn line_count(&self) -> usize {
+        self.starts.len()
+    }
+
+    /// Returns the UTF-8 byte range for a line, excluding its newline.
+    pub fn line_range(&self, text: &str, line: usize) -> Option<Range<usize>> {
+        let start = *self.starts.get(line)?;
+        let end = match self.starts.get(line + 1) {
+            Some(next) => next - 1,
+            None => text.len(),
+        };
+        (start <= end
+            && end <= text.len()
+            && text.is_char_boundary(start)
+            && text.is_char_boundary(end))
+        .then_some(start..end)
+    }
+
+    pub fn line_for_offset(&self, text: &str, offset: usize) -> Option<usize> {
+        (offset <= text.len() && text.is_char_boundary(offset)).then(|| {
+            self.starts
+                .partition_point(|start| *start <= offset)
+                .saturating_sub(1)
+        })
+    }
+}
 const MAX_HISTORY_ENTRIES: usize = 64;
 const MAX_HISTORY_BYTES: usize = 4 * 1024 * 1024;
 const MAX_DRAFT_BYTES: u64 = MAX_EDITOR_BYTES as u64 * 2 + 32 * 1024;
@@ -561,6 +610,21 @@ impl EditorDocument {
             self.move_to(end, extend, true);
         }
     }
+
+    /// Go to a document boundary without converting the entire document to
+    /// UTF-16. Ctrl/Cmd+Home/End remains usable with thousands of rows.
+    pub fn move_document_start(&mut self, extend: bool) {
+        if self.marked.is_none() {
+            self.move_to(0, extend, true);
+        }
+    }
+
+    pub fn move_document_end(&mut self, extend: bool) {
+        if self.marked.is_none() {
+            self.move_to(self.content.len(), extend, true);
+        }
+    }
+
     pub fn backspace(&mut self) -> io::Result<()> {
         if self.marked.is_some() {
             return Ok(());
@@ -1396,5 +1460,88 @@ mod tests {
             edge_scroll_offset(200.0, 100.0, 400.0, -20.0, f32::INFINITY),
             None
         );
+    }
+
+    #[test]
+    fn editor_line_index_preserves_trailing_empty_and_unicode_byte_offsets() {
+        let text = "甲🧑‍💻\n\n中文\n";
+        let lines = EditorLineIndex::new(text);
+        assert_eq!(lines.line_count(), 4);
+        assert_eq!(&text[lines.line_range(text, 0).unwrap()], "甲🧑‍💻");
+        assert_eq!(&text[lines.line_range(text, 1).unwrap()], "");
+        assert_eq!(&text[lines.line_range(text, 2).unwrap()], "中文");
+        assert_eq!(lines.line_range(text, 3), Some(text.len()..text.len()));
+        assert_eq!(lines.line_for_offset(text, 0), Some(0));
+        assert_eq!(lines.line_for_offset(text, "甲🧑‍💻".len()), Some(0));
+        assert_eq!(lines.line_for_offset(text, "甲🧑‍💻\n".len()), Some(1));
+        assert_eq!(lines.line_for_offset(text, text.len()), Some(3));
+        assert_eq!(lines.line_for_offset(text, 1), None, "mid-CJK is invalid");
+        assert_eq!(lines.line_range(text, 4), None);
+        assert_eq!(lines.line_for_offset(text, text.len() + 1), None);
+    }
+
+    #[test]
+    fn virtual_line_index_resolves_far_past_600_without_copying_or_truncating_text() {
+        let rows: Vec<_> = (0..5000).map(|i| format!("line {i:05} 中文🧑‍💻")).collect();
+        let text = rows.join("\n");
+        assert!(text.len() < MAX_EDITOR_BYTES);
+        let lines = EditorLineIndex::new(&text);
+        assert_eq!(lines.line_count(), 5000);
+        for index in [0, 1, 599, 600, 601, 2345, 4998, 4999] {
+            let range = lines.line_range(&text, index).unwrap();
+            assert_eq!(&text[range.clone()], rows[index]);
+            assert_eq!(lines.line_for_offset(&text, range.start), Some(index));
+            assert_eq!(lines.line_for_offset(&text, range.end), Some(index));
+        }
+        assert_eq!(lines.line_range(&text, 5000), None);
+    }
+
+    #[test]
+    fn line_index_rebuilt_after_multiline_edits_and_undo_has_no_stale_offsets() {
+        let root = tempfile::tempdir().unwrap();
+        let mut doc = EditorDocument::scratch(root.path()).unwrap();
+        doc.replace(None, "第一行\n\n末尾").unwrap();
+        let original = EditorLineIndex::new(doc.content());
+        assert_eq!(original.line_count(), 3);
+        doc.set_selection(0..0).unwrap();
+        doc.replace(None, "新增\n").unwrap();
+        let current = EditorLineIndex::new(doc.content());
+        assert_eq!(current.line_count(), 4);
+        assert_eq!(
+            &doc.content()[current.line_range(doc.content(), 2).unwrap()],
+            ""
+        );
+        assert!(doc.undo());
+        let restored = EditorLineIndex::new(doc.content());
+        assert_eq!(restored.line_count(), 3);
+        assert_eq!(
+            &doc.content()[restored.line_range(doc.content(), 2).unwrap()],
+            "末尾"
+        );
+    }
+
+    #[test]
+    fn document_boundary_navigation_selects_across_long_unicode_file() {
+        let root = tempfile::tempdir().unwrap();
+        let mut doc = EditorDocument::scratch(root.path()).unwrap();
+        doc.replace(None, &(0..900).map(|_| "中🧑‍💻\n").collect::<String>())
+            .unwrap();
+        let total = doc.content().len();
+        assert_eq!(EditorLineIndex::new(doc.content()).line_count(), 901);
+        doc.move_document_start(false);
+        assert_eq!(doc.cursor(), 0);
+        doc.move_document_end(true);
+        assert_eq!(doc.selection(), 0..total);
+        assert!(!doc.selection_reversed());
+        doc.move_document_end(false);
+        assert_eq!(doc.cursor(), total);
+        doc.move_document_start(true);
+        assert_eq!(doc.selection(), 0..total);
+        assert!(doc.selection_reversed());
+        assert_eq!(doc.cursor(), 0);
+        doc.replace(None, "更新").unwrap();
+        assert_eq!(doc.content(), "更新");
+        assert!(doc.undo());
+        assert_eq!(EditorLineIndex::new(doc.content()).line_count(), 901);
     }
 }

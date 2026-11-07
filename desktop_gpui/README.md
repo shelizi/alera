@@ -138,6 +138,12 @@ While the left mouse button is held, dragging at the scroll region's
 upper/lower edge continuously scrolls by at most one 19px row per 40ms
 tick. The scroll loop stops on mouse release, at the file's scroll
 boundaries, or after a 10-second fail-safe if the OS loses mouse-up.
+The editor now uses GPUI's native uniform-height virtualized list: only
+the on-screen rows are constructed and shaped, rather than truncating
+the document at 600 lines or creating every row in the GPU tree.
+Ctrl+Home / Ctrl+End (Cmd+Up / Cmd+Down on macOS) navigate to document
+start/end; adding Shift extends selection to either boundary.
+An initial file-backed EOF caret is revealed on the first paint.
 Undo history is in-memory, limited to 64 steps and 4 MiB, and is not
 recovered after a restart.
 IME composition changes count as **one** undo transaction, not separate
@@ -157,15 +163,16 @@ editor blocks switching workspace or opening a different file until saved
 or explicitly discarded. IME preedit is not written to drafts.
 
 This is a **limited editor surface**, not the shipping IDE editor:
-documents are capped at 256 KiB and only the first 600 lines are drawn.
+documents are still capped at 256 KiB. The native editor can now
+scroll and navigate **all** lines within that file-size limit;
+the separate read-only *preview* still has its earlier 600-line limit.
 GPUI now derives pointer hit-tests and IME candidate rectangles from the
 same font shaper and scroll clipping bounds used to paint each line. An
 offscreen caret does **not** yield a fabricated candidate rectangle.
-**This geometry and the new auto-scroll have passed compile/unit checks,
-not real mouse/IME acceptance tests.** Dragging across the editor window
-boundary, keyboard navigation beyond the first 600 rendered lines,
-line wrapping, BiDi layout, syntax highlighting, completion, line
-virtualization, and verified Traditional Chinese IME
+**The virtualized viewport, geometry and auto-scroll have passed
+compile/unit checks, not real mouse/IME acceptance tests.** Dragging
+across the editor window boundary, variable-height/soft-wrapped rows,
+BiDi layout, syntax highlighting, completion, and verified Traditional Chinese IME
 candidate behavior are still pending. Editing and draft persistence run
 on the GPUI thread, which requires profiling before full-scale adoption.
 
@@ -174,8 +181,9 @@ on the GPUI thread, which requires profiling before full-scale adoption.
 - Native GPUI window with dark workbench layout.
 - Bounded, read-only file browsing with explicit root containment; no shell spawning.
 - Read-only UTF-8 file preview, limited to 256 KiB / 600 lines.
-- Opt-in native GPUI file editor with guarded disk saves, Unicode/IME input
-  interface and local crash-recovery drafts (experimental, not production).
+- Opt-in native GPUI file editor with all-lines virtualized display,
+  guarded disk saves, Unicode/IME input and local crash-recovery drafts
+  (experimental, not production).
 - Up to 24 read-only file preview tabs: reuse, activate, close and reload without writing the source.
 - Explorer refresh button and folder-up navigation.
 - Persistent read-only preview navigation and last-workspace recovery.
@@ -202,10 +210,12 @@ sidecar/runtime contracts, not be reimplemented directly in GPUI views.
 ## Verification
 
 - Windows: `cargo check --all-targets` and debug `cargo build` passed with GPUI 0.2.2.
-- Headless tests: 67/67 passed (navigation, workspace switching and recent
+- Headless tests: 71/71 passed (navigation, workspace switching and recent
   workspace history, UTF-16 and Unicode grapheme edits, bounded undo/redo,
   shaped pointer grapheme snapping, cross-line reverse drag selection,
   clamped mouse-edge auto-scroll and invalid scroll viewport rejection,
+  UTF-8 indexed rows beyond line 600, document-boundary navigation/selection,
+  trailing newlines and regenerated indices after Undo,
   multi-line selection, IME composition transaction handling, draft recovery and
   conflict-safe file saves, persistence, path containment,
   file limits, tabs, reload, terminal cursor, auto-poll backoff, stale

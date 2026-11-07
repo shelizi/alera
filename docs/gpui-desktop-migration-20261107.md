@@ -133,6 +133,19 @@ without reproducible measurements.
   regressions cover clamping and bad viewports; 67 headless tests pass.
   Actual mouse/IME GUI behavior and navigation beyond the 600-line
   prototype render cap remain unverified.
+- Phase 2 virtualized long-file follow-up: replaced the native editor's
+  600-line render cap with GPUI 0.2.2 uniform_list. It only instantiates
+  visible rows, reuses the same native glyph shaping/caret/IME bounds and
+  per-row selection highlighting, and retains the ScrollHandle-based
+  edge-drag behavior. A bounded UTF-8 byte-offset line index maps rows
+  (including empty/trailing lines) without copying offscreen text.
+  New Ctrl/Cmd document Home/End bindings and Shift variants reveal any
+  caret row; file-backed EOF caret is revealed on first opening.
+  71 headless tests passed, including 5,000 Unicode rows well beyond 600
+  and long-document navigation with Undo. The editable document size cap
+  remains 256 KiB; the separate read-only preview still renders 600 lines.
+  Real GPU/window event routing, scroll/IME candidate positions and
+  variable-height/bidirectional text need Windows GUI acceptance testing.
 - Two-launch Windows smoke test confirmed a native window on each launch and
   recovery of the same workspace even when the second process started from
   a different working directory, using an isolated app-state directory.
