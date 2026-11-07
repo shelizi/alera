@@ -62,6 +62,9 @@ class const LocalAgentDetection({
     );
   }
 
+  // Both Windows batch wrappers and native executables are probed through
+  // ProcessRunner, whose production implementation applies the single Rust
+  // windowless background-process policy. Never spawn AGY directly here.
   Future<bool> _hasHealthyVersionCommand(
     String executable,
     Map<String, String> environment,

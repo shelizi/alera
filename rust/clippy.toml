@@ -10,8 +10,8 @@
 # whenever it is representable and is `std` on other platforms, so every
 # canonical path in the workspace comes out spelled the same way.
 disallowed-methods = [
-    { path = "std::process::Command::new", reason = "build the command, then call alera_core::child_process::suppress_console_window" },
-    { path = "tokio::process::Command::new", reason = "build the command, then call alera_core::child_process::suppress_console_window_async" },
+    { path = "std::process::Command::new", reason = "use alera_core::child_process::windowless_command for background commands; interactive PTY bootstraps are separate" },
+    { path = "tokio::process::Command::new", reason = "use alera_core::child_process::windowless_async_command for background commands; interactive PTY bootstraps are separate" },
     { path = "std::fs::canonicalize", reason = "use dunce::canonicalize so Windows paths never come out in the verbatim form" },
     { path = "std::path::Path::canonicalize", reason = "use dunce::canonicalize so Windows paths never come out in the verbatim form" },
     { path = "tokio::fs::canonicalize", reason = "use dunce::canonicalize (inside spawn_blocking if needed) so Windows paths never come out in the verbatim form" },

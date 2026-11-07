@@ -223,6 +223,29 @@ pub(super) fn kill(id: i64) -> bool {
     true
 }
 
+/// Only background subprocesses use this lookup. The Windows environment uses
+/// case-insensitive variable names, even though Rust's HashMap does not.
+pub(super) fn background_command_environment_path(
+    environment: Option<&HashMap<String, String>>,
+) -> Option<&str> {
+    environment.and_then(|env| {
+        env.get("PATH")
+            .or_else(|| {
+                #[cfg(windows)]
+                {
+                    env.iter()
+                        .find(|(key, _)| key.eq_ignore_ascii_case("PATH"))
+                        .map(|(_, value)| value)
+                }
+                #[cfg(not(windows))]
+                {
+                    None
+                }
+            })
+            .map(String::as_str)
+    })
+}
+
 fn build_command(
     executable: &str,
     arguments: &[String],
@@ -230,9 +253,7 @@ fn build_command(
     environment: Option<HashMap<String, String>>,
     include_parent_environment: bool,
 ) -> Command {
-    let path = environment
-        .as_ref()
-        .and_then(|env| env.get("PATH").map(String::as_str));
+    let path = background_command_environment_path(environment.as_ref());
     let mut command = alera_core::process_shell::windowless_async_shell_command(
         executable,
         arguments,

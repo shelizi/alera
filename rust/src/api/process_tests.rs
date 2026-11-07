@@ -6,6 +6,31 @@ fn args(values: &[&str]) -> Vec<String> {
 }
 
 #[test]
+fn background_process_uses_exact_path_environment() {
+    let environment = std::collections::HashMap::from([(
+        "PATH".to_string(),
+        "selected-background-path".to_string(),
+    )]);
+    assert_eq!(
+        super::process_session::background_command_environment_path(Some(&environment)),
+        Some("selected-background-path"),
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_background_process_accepts_mixed_case_path_environment() {
+    let environment = std::collections::HashMap::from([(
+        "Path".to_string(),
+        "selected-background-path".to_string(),
+    )]);
+    assert_eq!(
+        super::process_session::background_command_environment_path(Some(&environment)),
+        Some("selected-background-path"),
+    );
+}
+
+#[test]
 fn posix_shell_quotes_every_token() {
     let invocation = posix_shell_invocation("gh", &args(&["pr", "list", "--json", "number"]));
 

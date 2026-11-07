@@ -129,42 +129,48 @@ void main() {
         final detection = _detection(
           environment: environment,
           isWindows: true,
-          existing: <String>{r'C:\tools\agy.cmd'},
+          existing: <String>{r'C:\tools\agy.exe'},
           processRunner: runner,
         );
 
         expect(await detection.detectInstalled(), contains(AgentType.agy));
         expect(runner.calls, hasLength(1));
-        expect(runner.calls.single.executable, r'C:\tools\agy.cmd');
+        expect(runner.calls.single.executable, r'C:\tools\agy.exe');
         expect(runner.calls.single.arguments, const <String>['--version']);
         expect(runner.calls.single.environment, environment);
       },
     );
 
-    test('does not expose AGY when its silent version probe fails', () async {
-      final runner = FakeRecordingProcessRunner(<Object>[
-        const ProcessRunOutput(
-          exitCode: 2,
-          stdout: '',
-          stderr: 'unexpected argument "version"',
-        ),
-      ]);
-      final detection = _detection(
-        environment: <String, String>{
-          'Path': r'C:\tools',
-          'PATHEXT': '.COM;.EXE;.BAT;.CMD',
-        },
-        isWindows: true,
-        existing: <String>{r'C:\tools\agy.cmd'},
-        processRunner: runner,
-      );
+    test(
+      'does not expose AGY when its executable version probe fails',
+      () async {
+        final runner = FakeRecordingProcessRunner(<Object>[
+          const ProcessRunOutput(
+            exitCode: 2,
+            stdout: '',
+            stderr: 'unexpected argument "version"',
+          ),
+        ]);
+        final detection = _detection(
+          environment: <String, String>{
+            'Path': r'C:\tools',
+            'PATHEXT': '.COM;.EXE;.BAT;.CMD',
+          },
+          isWindows: true,
+          existing: <String>{r'C:\tools\agy.exe'},
+          processRunner: runner,
+        );
 
-      expect(await detection.detectInstalled(), isNot(contains(AgentType.agy)));
-      expect(runner.calls.single.arguments, const <String>['--version']);
-    });
+        expect(
+          await detection.detectInstalled(),
+          isNot(contains(AgentType.agy)),
+        );
+        expect(runner.calls.single.arguments, const <String>['--version']);
+      },
+    );
 
     test(
-      'does not expose AGY when its silent version probe cannot start',
+      'does not expose AGY when its executable version probe cannot start',
       () async {
         final runner = FakeRecordingProcessRunner(<Object>[
           StateError('broken shim'),
@@ -175,7 +181,7 @@ void main() {
             'PATHEXT': '.COM;.EXE;.BAT;.CMD',
           },
           isWindows: true,
-          existing: <String>{r'C:\tools\agy.cmd'},
+          existing: <String>{r'C:\tools\agy.exe'},
           processRunner: runner,
         );
 
@@ -185,6 +191,38 @@ void main() {
         );
       },
     );
+
+    test('Windows AGY batch shim uses the shared version probe', () async {
+      final runner = FakeRecordingProcessRunner(<Object>[
+        const ProcessRunOutput(exitCode: 0, stdout: '1.2.16', stderr: ''),
+      ]);
+      final path = 'C:' + String.fromCharCode(92) + 'tools';
+      final detection = _detection(
+        environment: <String, String>{'Path': path, 'PATHEXT': '.CMD'},
+        isWindows: true,
+        existing: <String>{'$path' + String.fromCharCode(92) + 'agy.cmd'},
+        processRunner: runner,
+      );
+      expect(await detection.detectInstalled(), contains(AgentType.agy));
+      expect(runner.calls, hasLength(1));
+      expect(runner.calls.single.arguments, const <String>['--version']);
+    });
+
+    test('Windows AGY broken batch shim is unavailable', () async {
+      final runner = FakeRecordingProcessRunner(<Object>[
+        const ProcessRunOutput(exitCode: 1, stdout: '', stderr: ''),
+      ]);
+      final path = 'C:' + String.fromCharCode(92) + 'tools';
+      final detection = _detection(
+        environment: <String, String>{'Path': path, 'PATHEXT': '.CMD'},
+        isWindows: true,
+        existing: <String>{'$path' + String.fromCharCode(92) + 'agy.cmd'},
+        processRunner: runner,
+      );
+      expect(await detection.detectInstalled(), isNot(contains(AgentType.agy)));
+      expect(runner.calls, hasLength(1));
+      expect(runner.calls.single.arguments, const <String>['--version']);
+    });
 
     test('reports nothing when PATH is missing', () async {
       final detection = _detection(
