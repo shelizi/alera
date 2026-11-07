@@ -61,6 +61,24 @@ struct Workbench {
 }
 
 impl Workbench {
+    // Clear the parent editor after closing its last inline tab.
+    fn install_editor(&mut self, tabs: EditorTabs, cx: &mut Context<Self>) {
+        let editor = cx.new(|cx| NativeEditor::new(tabs, cx));
+        cx.observe(&editor, |workbench, _, cx| {
+            if workbench
+                .editor
+                .as_ref()
+                .is_some_and(|current| current.read(cx).tabs_empty())
+            {
+                workbench.editor = None;
+                workbench.model.set_status("Native editor closed");
+                cx.notify();
+            }
+        })
+        .detach();
+        self.editor = Some(editor);
+    }
+
     fn refresh_git(&mut self, cx: &mut Context<Self>) {
         if self.git_loading {
             return;
@@ -197,7 +215,7 @@ impl Workbench {
             match tabs.open_file(&root, &path) {
                 Ok(effect) => {
                     self.model.set_status(effect.status());
-                    self.editor = Some(cx.new(|cx| NativeEditor::new(tabs, cx)));
+                    self.install_editor(tabs, cx);
                 }
                 Err(error) => self.model.set_status(format!(
                     "Cannot edit {}: {error}. Recovery draft kept for investigation when one exists.",
@@ -245,7 +263,7 @@ impl Workbench {
             match tabs.open_scratch(&root) {
                 Ok(effect) => {
                     self.model.set_status(effect.status());
-                    self.editor = Some(cx.new(|cx| NativeEditor::new(tabs, cx)));
+                    self.install_editor(tabs, cx);
                 }
                 Err(error) => self
                     .model

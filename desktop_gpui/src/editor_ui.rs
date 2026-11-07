@@ -247,6 +247,19 @@ impl NativeEditor {
         self.tabs.is_empty()
     }
 
+    pub fn close_editor_tab(&mut self, index: usize, discard: bool, cx: &mut Context<Self>) {
+        let effect = self.tabs.close_tab(index, discard);
+        self.status = effect.status();
+        if effect.closed() {
+            self.line_geometry.clear();
+            self.mouse_selecting = false;
+            if !self.tabs.is_empty() {
+                self.reveal_caret();
+            }
+        }
+        cx.notify();
+    }
+
     pub fn save_as(&mut self, destination: &Path, overwrite: bool, cx: &mut Context<Self>) -> bool {
         let commit = self.tabs.save_as(destination, overwrite);
         let wrote = commit.wrote_file();
@@ -944,6 +957,14 @@ impl NativeEditor {
 
 impl Render for NativeEditor {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.tabs.is_empty() {
+            return div()
+                .p_4()
+                .text_sm()
+                .text_color(rgb(MUTED_TEXT))
+                .child(self.status.clone())
+                .into_any_element();
+        }
         self.line_geometry.clear();
         let line_offsets = Arc::new(EditorLineIndex::new(self.doc().content()));
         let line_count = line_offsets.line_count();
@@ -1011,17 +1032,35 @@ impl Render for NativeEditor {
                     let active = active_tab == Some(index);
                     div()
                         .id(("editor-file-tab", index))
-                        .cursor_pointer()
-                        .text_sm()
-                        .text_color(rgb(if active { EDITOR_TEXT } else { MUTED_TEXT }))
-                        .child(format!(
-                            "{}{}",
-                            label.title,
-                            if label.dirty { " ●" } else { "" }
-                        ))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.activate_tab(index, cx);
-                        }))
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .child(
+                            div()
+                                .id(("editor-file-tab-select", index))
+                                .cursor_pointer()
+                                .text_sm()
+                                .text_color(rgb(if active { EDITOR_TEXT } else { MUTED_TEXT }))
+                                .child(format!(
+                                    "{}{}",
+                                    label.title,
+                                    if label.dirty { " ●" } else { "" }
+                                ))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.activate_tab(index, cx);
+                                })),
+                        )
+                        .child(
+                            div()
+                                .id(("editor-file-tab-close", index))
+                                .cursor_pointer()
+                                .text_sm()
+                                .text_color(rgb(MUTED_TEXT))
+                                .child(if label.armed { "Confirm" } else { "Close" })
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.close_editor_tab(index, true, cx);
+                                })),
+                        )
                 }),
             ))
             .on_mouse_down(
@@ -1127,5 +1166,6 @@ impl Render for NativeEditor {
                         .track_scroll(self.list_scroll.clone()),
                     ),
             )
+            .into_any_element()
     }
 }

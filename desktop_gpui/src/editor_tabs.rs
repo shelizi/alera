@@ -26,6 +26,7 @@ pub struct EditorTabs {
 pub struct EditorTabLabel {
     pub title: String,
     pub dirty: bool,
+    pub armed: bool,
 }
 
 impl EditorTabs {
@@ -73,6 +74,7 @@ impl EditorTabs {
                     .map(|name| name.to_string_lossy().into_owned())
                     .unwrap_or_else(|| "Untitled".to_string()),
                 dirty: tab.document().is_some_and(EditorDocument::is_dirty),
+                armed: tab.discard_armed(),
             })
             .collect()
     }
@@ -129,13 +131,23 @@ impl EditorTabs {
         let Some(index) = self.active else {
             return CloseEffect::Closed;
         };
+        self.close_tab(index, discard)
+    }
+
+    /// Close one tab. `discard` follows that tab's own arming, not the active tab's.
+    pub fn close_tab(&mut self, index: usize, discard: bool) -> CloseEffect {
+        if index >= self.tabs.len() {
+            return CloseEffect::RefusedUnsaved;
+        }
         let effect = self.tabs[index].close(discard);
         if effect.closed() {
+            let active = self.active;
             self.tabs.remove(index);
-            self.active = if self.tabs.is_empty() {
-                None
-            } else {
-                Some(index.min(self.tabs.len() - 1))
+            self.active = match active {
+                _ if self.tabs.is_empty() => None,
+                Some(current) if current > index => Some(current - 1),
+                Some(current) if current == index => Some(index.min(self.tabs.len() - 1)),
+                other => other,
             };
         }
         effect
@@ -251,5 +263,43 @@ mod tests {
             OpenEffect::AlreadyOpen
         ));
         assert_eq!(tabs.document().unwrap().content(), "A!");
+    }
+
+    #[test]
+    fn closing_one_tab_leaves_the_other_buffer_and_file_unchanged() {
+        use crate::editor_session::CloseEffect;
+
+        let workspace = tempfile::tempdir().unwrap();
+        let root = workspace.path();
+        let file_a = root.join("a.txt");
+        let file_b = root.join("b.txt");
+        fs::write(&file_a, "A").unwrap();
+        fs::write(&file_b, "B").unwrap();
+        let mut tabs = EditorTabs::new(None);
+        tabs.open_file(root, &file_a).unwrap();
+        tabs.document_mut().unwrap().replace(None, "!").unwrap();
+        tabs.open_file(root, &file_b).unwrap();
+        tabs.document_mut().unwrap().replace(None, "?").unwrap();
+
+        let refused = tabs.close_tab(0, false);
+        assert!(matches!(refused, CloseEffect::RefusedUnsaved));
+        assert_eq!(tabs.tab_labels().len(), 2);
+        assert_eq!(tabs.document().unwrap().content(), "B?");
+        assert_eq!(fs::read(&file_a).unwrap(), b"A");
+
+        assert!(matches!(tabs.close_tab(0, true), CloseEffect::Armed));
+        assert!(!tabs.discard_armed());
+        assert!(matches!(tabs.close_tab(1, true), CloseEffect::Armed));
+        assert!(tabs.discard_armed());
+        assert_eq!(tabs.tab_labels().len(), 2);
+
+        assert!(matches!(tabs.close_tab(0, true), CloseEffect::Closed));
+        assert_eq!(tabs.tab_labels().len(), 1);
+        assert_eq!(tabs.document().unwrap().path(), Some(file_b.as_path()));
+        assert_eq!(tabs.document().unwrap().content(), "B?");
+        assert_eq!(fs::read(&file_a).unwrap(), b"A");
+        assert_eq!(fs::read(&file_b).unwrap(), b"B");
+        assert!(matches!(tabs.close_active(true), CloseEffect::Closed));
+        assert!(tabs.is_empty());
     }
 }
