@@ -7,7 +7,8 @@
 use alera_gpui_desktop::editor::{
     byte_to_utf16, edge_scroll_offset, utf16_to_byte, EditorDocument, EditorLineIndex,
 };
-use alera_gpui_desktop::editor_session::{EditorSession, OpenEffect, RECOVERY_PLAINTEXT_NOTICE};
+use alera_gpui_desktop::editor_session::{OpenEffect, RECOVERY_PLAINTEXT_NOTICE};
+use alera_gpui_desktop::editor_tabs::EditorTabs;
 use alera_gpui_desktop::visible_line_hit::{
     apply_pointer_hit, VisibleLineGeometry, VisibleLineHitSet,
 };
@@ -113,7 +114,7 @@ pub fn bind_editor_keys(cx: &mut App) {
 }
 
 pub struct NativeEditor {
-    session: EditorSession,
+    tabs: EditorTabs,
     focus: FocusHandle,
     status: String,
     line_geometry: BTreeMap<usize, EditorLineGeometry>,
@@ -158,9 +159,9 @@ struct EditorLineGeometry {
 }
 
 impl NativeEditor {
-    pub fn new(session: EditorSession, cx: &mut Context<Self>) -> Self {
-        let recovered = session.document().is_some_and(EditorDocument::is_dirty);
-        let initial_line = session
+    pub fn new(tabs: EditorTabs, cx: &mut Context<Self>) -> Self {
+        let recovered = tabs.document().is_some_and(EditorDocument::is_dirty);
+        let initial_line = tabs
             .document()
             .map(|document| document.line_column().0)
             .unwrap_or(0);
@@ -170,7 +171,7 @@ impl NativeEditor {
         // A long-file editor must reveal that actual position on first paint.
         list_scroll.scroll_to_item(initial_line, ScrollStrategy::Center);
         Self {
-            session,
+            tabs,
             focus: cx.focus_handle(),
             status: if recovered {
                 "Recovered local unsaved edit; review before saving".into()
@@ -196,7 +197,7 @@ impl NativeEditor {
     }
 
     pub fn discard_armed(&self) -> bool {
-        self.session.discard_armed()
+        self.tabs.discard_armed()
     }
 
     pub fn open_in_place(
@@ -205,9 +206,13 @@ impl NativeEditor {
         path: &Path,
         cx: &mut Context<Self>,
     ) -> io::Result<OpenEffect> {
-        let effect = self.session.open_file(root, path)?;
-        if matches!(effect, OpenEffect::Opened { .. }) {
-            self.status = if self.doc().is_dirty() {
+        let effect = self.tabs.open_file(root, path)?;
+        if !matches!(effect, OpenEffect::AlreadyOpen) {
+            self.line_geometry.clear();
+            self.mouse_selecting = false;
+            self.status = if matches!(effect, OpenEffect::Focused) {
+                effect.status()
+            } else if self.doc().is_dirty() {
                 "Recovered local unsaved edit; review before saving".into()
             } else {
                 "Native UTF-8 text editor (experimental)".into()
@@ -218,23 +223,63 @@ impl NativeEditor {
         Ok(effect)
     }
 
+    pub fn open_scratch(&mut self, root: &Path, cx: &mut Context<Self>) -> io::Result<OpenEffect> {
+        let effect = self.tabs.open_scratch(root)?;
+        self.line_geometry.clear();
+        self.mouse_selecting = false;
+        self.status = effect.status();
+        self.reveal_caret();
+        cx.notify();
+        Ok(effect)
+    }
+
+    pub fn activate_tab(&mut self, index: usize, cx: &mut Context<Self>) {
+        if self.tabs.activate(index) {
+            self.line_geometry.clear();
+            self.mouse_selecting = false;
+            self.status = "Switched editor file".into();
+            self.reveal_caret();
+            cx.notify();
+        }
+    }
+
+    pub fn tabs_empty(&self) -> bool {
+        self.tabs.is_empty()
+    }
+
+    pub fn save_as(&mut self, destination: &Path, overwrite: bool, cx: &mut Context<Self>) -> bool {
+        let commit = self.tabs.save_as(destination, overwrite);
+        let wrote = commit.wrote_file();
+        self.status = commit.status();
+        if wrote {
+            self.line_geometry.clear();
+        }
+        cx.notify();
+        wrote
+    }
+
     pub fn close_editor(
         &mut self,
         discard: bool,
     ) -> alera_gpui_desktop::editor_session::CloseEffect {
-        self.session.close(discard)
+        let effect = self.tabs.close_active(discard);
+        if effect.closed() {
+            self.line_geometry.clear();
+            self.mouse_selecting = false;
+        }
+        effect
     }
 
     pub fn switch_allowed(&self) -> Result<(), &'static str> {
-        self.session.can_switch_workspace()
+        self.tabs.can_switch_workspace()
     }
 
     fn doc(&self) -> &EditorDocument {
-        self.session.document().expect("native editor is installed")
+        self.tabs.document().expect("native editor is installed")
     }
 
     fn doc_mut(&mut self) -> &mut EditorDocument {
-        self.session
+        self.tabs
             .document_mut()
             .expect("native editor is installed")
     }
@@ -311,7 +356,7 @@ impl NativeEditor {
     }
 
     fn pointer_index_at(&self, position: Point<Pixels>) -> Option<usize> {
-        let document = self.session.document()?;
+        let document = self.tabs.document()?;
         let stored: Vec<&EditorLineGeometry> = self.line_geometry.values().collect();
         let frames: Vec<VisibleLineGeometry> = stored.iter().copied().map(painted_frame).collect();
         let mut hits = VisibleLineHitSet::default();
@@ -371,7 +416,7 @@ impl NativeEditor {
     }
 
     pub fn save(&mut self, cx: &mut Context<Self>) -> bool {
-        let commit = self.session.save();
+        let commit = self.tabs.save();
         let wrote = commit.wrote_file();
         self.status = commit.status();
         cx.notify();
@@ -520,7 +565,7 @@ impl NativeEditor {
         match result {
             Err(error) => self.status = format!("Edit rejected: {error}"),
             Ok(()) => {
-                if let Err(error) = self.session.persist_draft() {
+                if let Err(error) = self.tabs.persist_draft() {
                     self.status = format!("Local recovery save failed: {error}");
                 }
                 self.reveal_caret();
@@ -597,7 +642,7 @@ impl EntityInputHandler for NativeEditor {
         _: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
         let line_geometry = &self.line_geometry;
-        let document = self.session.document()?;
+        let document = self.tabs.document()?;
         let content = document.content();
         let byte = utf16_to_byte(content, range_utf16.start);
         let mut hits = VisibleLineHitSet::default();
@@ -907,11 +952,13 @@ impl Render for NativeEditor {
         let dirty = self.doc().is_dirty();
         let composing = self.doc().marked().is_some();
         let recovery =
-            if self.session.has_draft_store() && !self.status.contains(RECOVERY_PLAINTEXT_NOTICE) {
+            if self.tabs.has_draft_store() && !self.status.contains(RECOVERY_PLAINTEXT_NOTICE) {
                 format!(" · {RECOVERY_PLAINTEXT_NOTICE}")
             } else {
                 String::new()
             };
+        let tab_labels = self.tabs.tab_labels();
+        let active_tab = self.tabs.active_index();
         let status = format!(
             "{} · Ln {} / {} Col {} · Undo {} / Redo {} · {}{}{}",
             self.status,
@@ -959,6 +1006,24 @@ impl Render for NativeEditor {
             .on_action(cx.listener(Self::paste))
             .on_action(cx.listener(Self::copy))
             .on_action(cx.listener(Self::cut))
+            .child(div().flex().gap_2().px_3().py_1().children(
+                tab_labels.into_iter().enumerate().map(|(index, label)| {
+                    let active = active_tab == Some(index);
+                    div()
+                        .id(("editor-file-tab", index))
+                        .cursor_pointer()
+                        .text_sm()
+                        .text_color(rgb(if active { EDITOR_TEXT } else { MUTED_TEXT }))
+                        .child(format!(
+                            "{}{}",
+                            label.title,
+                            if label.dirty { " ●" } else { "" }
+                        ))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.activate_tab(index, cx);
+                        }))
+                }),
+            ))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, window, _cx| window.focus(&this.focus)),

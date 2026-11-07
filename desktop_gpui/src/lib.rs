@@ -2,6 +2,7 @@
 //! Tests can build this library without the heavyweight GPUI renderer.
 pub mod editor;
 pub mod editor_session;
+pub mod editor_tabs;
 pub mod model;
 pub mod runtime_bridge;
 pub mod session;

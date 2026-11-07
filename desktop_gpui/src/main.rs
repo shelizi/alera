@@ -2,7 +2,7 @@
 mod editor_ui;
 
 use alera_gpui_desktop::editor::EditorDraftStore;
-use alera_gpui_desktop::editor_session::EditorSession;
+use alera_gpui_desktop::editor_tabs::EditorTabs;
 use alera_gpui_desktop::model::WorkbenchModel;
 use alera_gpui_desktop::runtime_bridge::RuntimeCliBridge;
 use alera_gpui_desktop::session::PreviewSessionStore;
@@ -32,6 +32,7 @@ struct Workbench {
     recent_workspaces: Vec<PathBuf>,
     show_recent_workspaces: bool,
     picking_workspace: bool,
+    picking_save_as: bool,
     workspace_generation: u64,
     runtime_bridge: Option<RuntimeCliBridge>,
     runtime_status: String,
@@ -64,11 +65,11 @@ impl Workbench {
         };
         let root = self.model.root().to_path_buf();
         if self.editor.is_none() {
-            let mut session = EditorSession::new(self.draft_store());
-            match session.open_file(&root, &path) {
+            let mut tabs = EditorTabs::new(self.draft_store());
+            match tabs.open_file(&root, &path) {
                 Ok(effect) => {
                     self.model.set_status(effect.status());
-                    self.editor = Some(cx.new(|cx| NativeEditor::new(session, cx)));
+                    self.editor = Some(cx.new(|cx| NativeEditor::new(tabs, cx)));
                 }
                 Err(error) => self.model.set_status(format!(
                     "Cannot edit {}: {error}. Recovery draft kept for investigation when one exists.",
@@ -109,6 +110,81 @@ impl Workbench {
         cx.notify();
     }
 
+    fn new_editor(&mut self, cx: &mut Context<Self>) {
+        let root = self.model.root().to_path_buf();
+        if self.editor.is_none() {
+            let mut tabs = EditorTabs::new(self.draft_store());
+            match tabs.open_scratch(&root) {
+                Ok(effect) => {
+                    self.model.set_status(effect.status());
+                    self.editor = Some(cx.new(|cx| NativeEditor::new(tabs, cx)));
+                }
+                Err(error) => self
+                    .model
+                    .set_status(format!("Cannot create an editor: {error}")),
+            }
+            cx.notify();
+            return;
+        }
+        let result = self
+            .editor
+            .as_ref()
+            .unwrap()
+            .update(cx, |editor, cx| editor.open_scratch(&root, cx));
+        match result {
+            Ok(effect) => self.model.set_status(effect.status()),
+            Err(error) => self
+                .model
+                .set_status(format!("Cannot create an editor: {error}")),
+        }
+        cx.notify();
+    }
+
+    fn pick_save_as(&mut self, cx: &mut Context<Self>) {
+        if self.editor.is_none() || self.picking_save_as {
+            return;
+        }
+        self.picking_save_as = true;
+        let selection = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some("Save As".into()),
+        });
+        cx.spawn(async move |view, cx| {
+            let result = selection.await;
+            view.update(cx, |view, cx| {
+                view.picking_save_as = false;
+                match result {
+                    Ok(Ok(Some(paths))) => {
+                        if let Some(path) = paths.into_iter().next() {
+                            view.save_editor_as(path, cx);
+                        }
+                    }
+                    Ok(Ok(None)) => {}
+                    Ok(Err(error)) => view.model.set_status(format!("Save As failed: {error}")),
+                    Err(error) => view.model.set_status(format!("Save As canceled: {error}")),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn save_editor_as(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        let Some(editor) = &self.editor else {
+            return;
+        };
+        let saved = editor.update(cx, |editor, cx| editor.save_as(&path, false, cx));
+        if saved && self.model.selected_path() == Some(path.as_path()) {
+            self.model.reload_active();
+        }
+        let status = editor.read(cx).status_text().to_owned();
+        self.model.set_status(status);
+        cx.notify();
+    }
+
     fn close_editor(&mut self, discard: bool, cx: &mut Context<Self>) {
         let Some(editor) = &self.editor else {
             return;
@@ -119,7 +195,9 @@ impl Workbench {
             if self.model.selected_path() == path.as_deref() {
                 self.model.reload_active();
             }
-            self.editor = None;
+            if editor.read(cx).tabs_empty() {
+                self.editor = None;
+            }
         }
         self.model.set_status(effect.status());
         cx.notify();
@@ -806,6 +884,16 @@ impl Render for Workbench {
                                             .gap_3()
                                             .child(
                                                 div()
+                                                    .id("native-editor-new")
+                                                    .cursor_pointer()
+                                                    .text_color(rgb(TEXT))
+                                                    .child("New")
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.new_editor(cx);
+                                                    })),
+                                            )
+                                            .child(
+                                                div()
                                                     .id("native-editor-edit")
                                                     .cursor_pointer()
                                                     .text_color(rgb(TEXT))
@@ -824,6 +912,16 @@ impl Render for Workbench {
                                                             .child("Save")
                                                             .on_click(cx.listener(|this, _, _, cx| {
                                                                 this.save_editor(cx);
+                                                            })),
+                                                    )
+                                                    .child(
+                                                        div()
+                                                            .id("native-editor-save-as")
+                                                            .cursor_pointer()
+                                                            .text_color(rgb(TEXT))
+                                                            .child("Save As")
+                                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                                this.pick_save_as(cx);
                                                             })),
                                                     )
                                                     .child(
@@ -1223,6 +1321,7 @@ fn main() {
                     recent_workspaces,
                     show_recent_workspaces: false,
                     picking_workspace: false,
+                    picking_save_as: false,
                     workspace_generation: 0,
                     runtime_bridge,
                     runtime_status,

@@ -26,6 +26,7 @@ pub enum OpenEffect {
     AlreadyOpen,
     RefusedDirty,
     Opened { recovered: bool },
+    Focused,
 }
 
 impl OpenEffect {
@@ -37,6 +38,7 @@ impl OpenEffect {
                 "Recovered unsaved editor changes; disk file was not changed. {RECOVERY_PLAINTEXT_NOTICE}"
             ),
             OpenEffect::Opened { recovered: false } => EDITOR_OPENED.to_string(),
+            OpenEffect::Focused => "Switched to the editor already open for this file".to_string(),
         }
     }
 }
@@ -85,7 +87,7 @@ impl SaveCommit {
         }
     }
 
-    fn blocked_by(error: io::Error) -> Self {
+    pub(crate) fn blocked_by(error: io::Error) -> Self {
         Self {
             kind: SaveKind::Blocked(error),
         }
@@ -177,6 +179,16 @@ impl EditorSession {
         self.document = Some(document);
         self.discard_armed = false;
         Ok(OpenEffect::Opened { recovered })
+    }
+
+    /// Install an untitled buffer. A dirty editor stays in place.
+    pub fn open_scratch(&mut self, root: &Path) -> io::Result<OpenEffect> {
+        if self.document.as_ref().is_some_and(EditorDocument::is_dirty) {
+            return Ok(OpenEffect::RefusedDirty);
+        }
+        self.document = Some(EditorDocument::scratch(root)?);
+        self.discard_armed = false;
+        Ok(OpenEffect::Opened { recovered: false })
     }
 
     pub fn save(&mut self) -> SaveCommit {
