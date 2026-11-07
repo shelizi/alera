@@ -1,4 +1,4 @@
-//! Optional read-only bridge to the *existing* Alera CLI Runtime Host.
+//! Optional bridge to the *existing* Alera CLI Runtime Host.
 //! No RPC token parsing, direct SQLite access, host startup, or PTY spawning.
 //! The CLI owns authentication, version negotiation and request semantics.
 use alera_core::child_process::windowless_command;
@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 const MAX_RESPONSE_BYTES: u64 = 128 * 1024;
 const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Read-only `alera terminal` invocation. There is no write, input, or resize verb.
+/// `alera terminal` invocation that never auto-starts an unknown Host.
 pub fn terminal_cli_arguments(runtime_dir: &Path, args: &[OsString]) -> Vec<OsString> {
     let mut command = Vec::with_capacity(5 + args.len());
     command.push(OsString::from("terminal"));
@@ -89,10 +89,19 @@ impl RuntimeCliBridge {
         }
     }
 
-    /// Read-only terminal verb using the existing CLI authentication.
+    /// Only allow listing, reading and explicit input to an existing Host.
     /// --no-start is mandatory; older CLI builds fail closed, rather than
     /// silently starting a new runtime host or owning a PTY.
     pub(crate) fn terminal_json(&self, args: &[OsString]) -> io::Result<Value> {
+        if !matches!(
+            args.first().and_then(|arg| arg.to_str()),
+            Some("list" | "read" | "write")
+        ) {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "GPUI supports terminal list/read/explicit write only",
+            ));
+        }
         if !self.runtime_dir.join("host.json").is_file()
             && !self.runtime_dir.join("runtime-host.json").is_file()
         {

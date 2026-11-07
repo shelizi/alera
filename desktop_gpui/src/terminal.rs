@@ -1,6 +1,6 @@
-//! Read-only native GPUI terminal session explorer.
+//! Native GPUI terminal session explorer and explicitly requested input.
 //! Terminal process, PTY, authentication and session lifetime remain owned by
-//! the existing Alera Runtime Host; this frontend uses the CLI --no-start mode.
+//! the existing Alera Runtime Host; this frontend uses CLI --no-start only.
 use crate::runtime_bridge::RuntimeCliBridge;
 use crate::vt_screen::VtScreen;
 use serde_json::Value;
@@ -76,6 +76,42 @@ impl RuntimeCliBridge {
         let response = self.terminal_json(&args)?;
         parse_terminal_chunk(&response, handle)
     }
+
+    /// Write to one explicitly selected Host session using the existing CLI.
+    /// This never creates, attaches, owns or terminates a PTY.
+    pub fn write_terminal(&self, handle: &str, text: &str, enter: bool) -> io::Result<()> {
+        let args = write_terminal_verb(handle, text, enter)?;
+        self.terminal_json(&args)?;
+        Ok(())
+    }
+}
+
+/// Construct an explicit write to an already-selected Host terminal.
+/// No shell is involved; each argument is sent separately to the CLI.
+pub fn write_terminal_verb(handle: &str, text: &str, enter: bool) -> io::Result<Vec<OsString>> {
+    const MAX_INPUT_BYTES: usize = 4 * 1024;
+    if !valid_handle(handle) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Invalid terminal handle",
+        ));
+    }
+    if text.is_empty() || text.len() > MAX_INPUT_BYTES || text.contains('\0') {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Terminal input must be nonempty, NUL-free and at most 4 KiB",
+        ));
+    }
+    let mut args = vec![
+        OsString::from("write"),
+        OsString::from(format!("--handle={handle}")),
+        OsString::from("--text"),
+        OsString::from(text),
+    ];
+    if enter {
+        args.push(OsString::from("--enter"));
+    }
+    Ok(args)
 }
 
 pub fn parse_terminal_list(value: &Value) -> io::Result<Vec<TerminalSession>> {
@@ -596,6 +632,30 @@ impl TerminalDock {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn terminal_writes_are_explicit_bounded_and_never_start_host() {
+        use crate::runtime_bridge::terminal_cli_arguments;
+        use std::path::Path;
+        let args = write_terminal_verb("term-1", "echo 貓", true).unwrap();
+        assert_eq!(args[0], "write");
+        assert!(args.iter().any(|arg| arg == "--enter"));
+        assert!(args.iter().any(|arg| arg == "echo 貓"));
+        let routed = terminal_cli_arguments(Path::new("C:/runtime"), &args);
+        assert!(routed.iter().any(|arg| arg == "--no-start"));
+        assert!(!routed.iter().any(|arg| arg == "attach"));
+        assert!(!write_terminal_verb("term-1", "echo ok", false)
+            .unwrap()
+            .iter()
+            .any(|arg| arg == "--enter"));
+        for handle in ["", "evil\n--handle=other", "../bad"] {
+            assert!(write_terminal_verb(handle, "cmd", true).is_err());
+        }
+        for text in ["", "x\0y"] {
+            assert!(write_terminal_verb("term-1", text, true).is_err());
+        }
+        assert!(write_terminal_verb("term-1", &"a".repeat(4097), true).is_err());
+    }
 
     fn session(handle: &str) -> TerminalSession {
         TerminalSession {
