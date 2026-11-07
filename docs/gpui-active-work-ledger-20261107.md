@@ -2,6 +2,8 @@
 
 更新日期：2026-11-07。權威程式位置：`desktop_gpui/`，主開發工作樹 `.worktrees/feat-gpui-desktop-20261107`。
 
+> **最新收斂範圍**：`docs/gpui-three-pane-mvp-20261107.md`。暫以左 Projects／中央 Terminal（可切 Editor）／右 Explorer + Git 為核心，後續不任意擴增 IDE 需求。本檔其餘記錄為前一輪成果的歷史證據，勿將舊版 Terminal 唯讀狀態視為最新 UI 狀態。
+
 **狀態：實驗性 / UNSUPPORTED。** 此紀錄區分程式已提交、headless 編譯測試、實機 GUI 尚未驗收。勿將模型測試等同 Windows 注音、選取、存檔、終端或完整 IDE parity 的實機證據。
 
 ## 已整理並併回 GPUI 開發分支

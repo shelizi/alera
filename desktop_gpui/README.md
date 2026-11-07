@@ -1,5 +1,7 @@
 # Alera Native Desktop (GPUI)
 
+**Current MVP direction:** [GPUI three-pane workbench](../docs/gpui-three-pane-mvp-20261107.md) — **Projects on the left, Terminal (default) / basic Editor in the center, Explorer + read-only Git on the right.** Terminal input now goes through the existing Host CLI; this is not a new PTY owner or full TUI attach. The older architecture/history sections below describe earlier phases.
+
 **Latest active work and verified integration status (2026-11-07):** [GPUI active work ledger](../docs/gpui-active-work-ledger-20261107.md). It records the reconciled Git inspector, per-tab close, Explorer tree, native Find/Replace and project content-search panels, scratch recovery, verified Rust tests, and remaining real-GUI acceptance gates. Earlier test counts below are historical snapshots, not the latest merged baseline.
 
 This is an **experimental, independent Rust UI frontend**, not a replacement of the shipping Flutter desktop app. It is limited to Windows/macOS/Linux and does not affect the existing mobile application.
@@ -32,7 +34,7 @@ The startup argument is optional. Without a path, the frontend restores the
 most recently opened workspace when possible, otherwise uses the current
 directory. Preview tab order, active file and the Explorer directory survive
 restart, but file contents are always re-read from disk and remain read-only.
-The Explorer sidebar also has **Recent workspaces** and **+ Open**. The latter
+The left **Projects** sidebar has **Recent workspaces** and **+ Open**. The latter
 uses GPUI's native operating-system folder picker, without installing an
 additional dialog dependency. Up to 12 existing canonical workspaces are
 remembered, newest first. Switching restores the destination's own preview
@@ -58,7 +60,7 @@ the absolute path of the installed CLI. `ALERA_RUNTIME_DIR` is honored in
 the same way as the CLI. The probe is asynchronous, bounded to 5 seconds,
 and never starts a host or handles RPC tokens itself.
 
-The terminal sidebar now lists **existing** Runtime Host sessions via the
+The left Projects sidebar lists **existing** Runtime Host sessions via the
 experimental Rust CLI's `terminal --no-start --json list`. Click a session
 to open a local preview tab and retrieve the latest 8 KiB of output, or click
 `Read more` to read the next chunk. `Reconnect` refreshes the list while
@@ -81,8 +83,10 @@ an individual GPUI view for each character. Wide Unicode glyphs do not
 duplicate their terminal continuation cells. The dark-theme default
 foreground/background and xterm-indexed palette are used for unset colors.
 
-This is still a **read-only native VT screen**, not yet feature-complete:
-clickable selections, copy/paste, Chinese IME input, keyboard control,
+The **VT screen itself remains output-only**; a separate native command input
+can explicitly send text/Enter to a selected Host session through the CLI.
+The terminal is still not feature-complete: clickable selections, selection copying,
+full raw keyboard/TUI input, verified Chinese IME behavior,
 accessibility, and Host PTY resizing/attach leases have not been migrated.
 Local VT preview dimensions are not advertised to the existing Host, so
 programs should not assume the displayed panel matches their allocated
@@ -119,7 +123,7 @@ When `ALERA_GPUI_TEST_APP` is set, it additionally launches the real native
 GPUI executable against that isolated Host for a process-survival smoke test;
 this is not a GUI click, terminal input or pixel-level rendering validation.
 
-**Important:** For terminal list/read you must use the Alera CLI built from
+**Important:** For terminal list/read/write you must use an Alera CLI with
 this experimental branch, which adds the fail-closed `--no-start` option.
 An older CLI lacking that flag will return an error and GPUI will not
 start the Host as a fallback. The usual CLI default remains unchanged.

@@ -4,7 +4,7 @@
 use alera_core::child_process::windowless_command;
 use serde_json::Value;
 use std::ffi::OsString;
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Stdio};
 use std::thread;
@@ -93,9 +93,23 @@ impl RuntimeCliBridge {
     /// --no-start is mandatory; older CLI builds fail closed, rather than
     /// silently starting a new runtime host or owning a PTY.
     pub(crate) fn terminal_json(&self, args: &[OsString]) -> io::Result<Value> {
+        self.terminal_json_io(args, None)
+    }
+
+    /// Explicit user input takes the child process's stdin pipe so command
+    /// text cannot leak through the operating system process argument list.
+    pub(crate) fn terminal_json_with_input(
+        &self,
+        args: &[OsString],
+        input: &[u8],
+    ) -> io::Result<Value> {
+        self.terminal_json_io(args, Some(input))
+    }
+
+    fn terminal_json_io(&self, args: &[OsString], input: Option<&[u8]>) -> io::Result<Value> {
         if !matches!(
-            args.first().and_then(|arg| arg.to_str()),
-            Some("list" | "read" | "write")
+            (args.first().and_then(|arg| arg.to_str()), input.is_some()),
+            (Some("list" | "read"), false) | (Some("write"), true)
         ) {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
@@ -114,10 +128,26 @@ impl RuntimeCliBridge {
         command
             .args(terminal_cli_arguments(&self.runtime_dir, args))
             .env_remove("ALERA_WORKSPACE_ID")
-            .stdin(Stdio::null())
+            .stdin(if input.is_some() {
+                Stdio::piped()
+            } else {
+                Stdio::null()
+            })
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
         let mut child = command.spawn()?;
+        if let Some(bytes) = input {
+            let result = child
+                .stdin
+                .take()
+                .ok_or_else(|| io::Error::other("CLI stdin pipe unavailable"))
+                .and_then(|mut stdin| stdin.write_all(bytes));
+            if let Err(error) = result {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(error);
+            }
+        }
         let stdout = child
             .stdout
             .take()
@@ -303,5 +333,21 @@ mod tests {
         assert_eq!(bridge.probe().unwrap(), RuntimeStatus::Stopped);
         assert!(!runtime.path().join("runtime-host.json").exists());
         assert!(!runtime.path().join("host.json").exists());
+    }
+
+    #[test]
+    fn terminal_bridge_rejects_unapproved_verbs_or_wrong_input_channel() {
+        let dir = tempfile::tempdir().unwrap();
+        let bridge = RuntimeCliBridge::new(dir.path().join("missing-cli"), dir.path());
+        for verb in ["attach", "create", "prune", "write"] {
+            let err = bridge.terminal_json(&[OsString::from(verb)]).unwrap_err();
+            assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+        }
+        for verb in ["list", "read"] {
+            let err = bridge
+                .terminal_json_with_input(&[OsString::from(verb)], b"private input")
+                .unwrap_err();
+            assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+        }
     }
 }

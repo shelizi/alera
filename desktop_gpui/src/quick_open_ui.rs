@@ -23,28 +23,58 @@ pub fn bind_quick_open_keys(cx: &mut App) {
         KeyBinding::new("cmd-a", QuerySelectAll, Some("AleraGpuiQuickOpen")),
         KeyBinding::new("ctrl-v", QueryPaste, Some("AleraGpuiQuickOpen")),
         KeyBinding::new("cmd-v", QueryPaste, Some("AleraGpuiQuickOpen")),
+        KeyBinding::new("backspace", QueryBackspace, Some("AleraGpuiTerminalInput")),
+        KeyBinding::new("ctrl-a", QuerySelectAll, Some("AleraGpuiTerminalInput")),
+        KeyBinding::new("cmd-a", QuerySelectAll, Some("AleraGpuiTerminalInput")),
+        KeyBinding::new("ctrl-v", QueryPaste, Some("AleraGpuiTerminalInput")),
+        KeyBinding::new("cmd-v", QueryPaste, Some("AleraGpuiTerminalInput")),
     ]);
 }
 
 pub struct QuickOpenInput {
     focus: FocusHandle,
     text: String,
+    placeholder: &'static str,
+    terminal_mode: bool,
     selection: Range<usize>,
     marked: Option<Range<usize>>,
 }
 
 impl QuickOpenInput {
     pub fn new(cx: &mut Context<Self>) -> Self {
+        Self::with_placeholder("Type to filter files…", cx)
+    }
+
+    pub fn with_placeholder(placeholder: &'static str, cx: &mut Context<Self>) -> Self {
         Self {
             focus: cx.focus_handle(),
             text: String::new(),
+            placeholder,
+            terminal_mode: false,
             selection: 0..0,
             marked: None,
         }
     }
 
+    pub fn terminal(cx: &mut Context<Self>) -> Self {
+        let mut input = Self::with_placeholder("Command for selected Host session…", cx);
+        input.terminal_mode = true;
+        input
+    }
+
     pub fn query(&self) -> &str {
         &self.text
+    }
+
+    pub fn composing(&self) -> bool {
+        self.marked.is_some()
+    }
+
+    pub fn clear(&mut self, cx: &mut Context<Self>) {
+        self.text.clear();
+        self.selection = 0..0;
+        self.marked = None;
+        cx.notify();
     }
 
     fn replace(
@@ -256,7 +286,11 @@ impl Render for QuickOpenInput {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .id("quick-open-query")
-            .key_context("AleraGpuiQuickOpen")
+            .key_context(if self.terminal_mode {
+                "AleraGpuiTerminalInput"
+            } else {
+                "AleraGpuiQuickOpen"
+            })
             .track_focus(&self.focus)
             .on_action(cx.listener(Self::backspace))
             .on_action(cx.listener(Self::select_all))
@@ -274,7 +308,7 @@ impl Render for QuickOpenInput {
             .py_1()
             .text_sm()
             .child(if self.text.is_empty() {
-                "Type to filter files…".to_string()
+                self.placeholder.to_string()
             } else {
                 format!("⌕ {}", self.text)
             })

@@ -10,7 +10,8 @@ use std::io;
 pub const TERMINAL_READ_BYTES: u64 = 8 * 1024;
 pub const MAX_TERMINALS: usize = 128;
 /// The Host session list is global. It is not a view of the open workspace.
-pub const HOST_SESSION_LIST_SCOPE: &str = "Read-only · existing Host · all workspaces";
+pub const HOST_SESSION_LIST_SCOPE: &str =
+    "Existing Host sessions · all workspaces · input only to selected session";
 const MAX_OPEN_TABS: usize = 8;
 const MAX_TRANSCRIPT_BYTES: usize = 48 * 1024;
 
@@ -81,13 +82,14 @@ impl RuntimeCliBridge {
     /// This never creates, attaches, owns or terminates a PTY.
     pub fn write_terminal(&self, handle: &str, text: &str, enter: bool) -> io::Result<()> {
         let args = write_terminal_verb(handle, text, enter)?;
-        self.terminal_json(&args)?;
+        self.terminal_json_with_input(&args, text.as_bytes())?;
         Ok(())
     }
 }
 
 /// Construct an explicit write to an already-selected Host terminal.
-/// No shell is involved; each argument is sent separately to the CLI.
+/// No shell is involved. Text is sent via the child stdin pipe, never argv
+/// (which could be visible to unrelated process-list observers).
 pub fn write_terminal_verb(handle: &str, text: &str, enter: bool) -> io::Result<Vec<OsString>> {
     const MAX_INPUT_BYTES: usize = 4 * 1024;
     if !valid_handle(handle) {
@@ -105,8 +107,7 @@ pub fn write_terminal_verb(handle: &str, text: &str, enter: bool) -> io::Result<
     let mut args = vec![
         OsString::from("write"),
         OsString::from(format!("--handle={handle}")),
-        OsString::from("--text"),
-        OsString::from(text),
+        OsString::from("--stdin"),
     ];
     if enter {
         args.push(OsString::from("--enter"));
@@ -640,7 +641,8 @@ mod tests {
         let args = write_terminal_verb("term-1", "echo 貓", true).unwrap();
         assert_eq!(args[0], "write");
         assert!(args.iter().any(|arg| arg == "--enter"));
-        assert!(args.iter().any(|arg| arg == "echo 貓"));
+        assert!(args.iter().any(|arg| arg == "--stdin"));
+        assert!(!args.iter().any(|arg| arg == "echo 貓" || arg == "--text"));
         let routed = terminal_cli_arguments(Path::new("C:/runtime"), &args);
         assert!(routed.iter().any(|arg| arg == "--no-start"));
         assert!(!routed.iter().any(|arg| arg == "attach"));

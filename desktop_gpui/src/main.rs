@@ -32,10 +32,22 @@ const TEXT: u32 = 0xe1e4e8;
 const MUTED: u32 = 0xa6adb7;
 const ACTIVE: u32 = 0x303741;
 
-actions!(alera_gpui_workbench, [ToggleFileSearch]);
+actions!(
+    alera_gpui_workbench,
+    [ToggleFileSearch, SubmitTerminalCommand]
+);
+
+/// Deliberately small desktop shell: terminal first, basic editor on demand.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum CenterView {
+    #[default]
+    Terminal,
+    Editor,
+}
 
 struct Workbench {
     model: WorkbenchModel,
+    center_view: CenterView,
     tree: Option<WorkspaceTree>,
     tree_mode: bool,
     editor: Option<Entity<NativeEditor>>,
@@ -65,6 +77,8 @@ struct Workbench {
     runtime_status: String,
     runtime_loading: bool,
     terminals: TerminalDock,
+    terminal_input: Entity<QuickOpenInput>,
+    terminal_send_loading: bool,
     terminal_list_loading: bool,
     terminal_read_loading: Option<String>,
     terminal_poll: TerminalPollGate,
@@ -158,6 +172,15 @@ impl Workbench {
         cx: &mut Context<Self>,
     ) {
         self.toggle_file_search(window, cx);
+    }
+
+    fn submit_terminal_action(
+        &mut self,
+        _: &SubmitTerminalCommand,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.send_terminal_input(true, cx);
     }
     fn toggle_file_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.quick_open.is_some() {
@@ -323,6 +346,7 @@ impl Workbench {
                 Ok(effect) => {
                     self.model.set_status(effect.status());
                     self.install_editor(tabs, cx);
+                    self.center_view = CenterView::Editor;
                 }
                 Err(error) => self.model.set_status(format!(
                     "Cannot edit {}: {error}. Recovery draft kept for investigation when one exists.",
@@ -338,7 +362,10 @@ impl Workbench {
             .unwrap()
             .update(cx, |editor, cx| editor.open_in_place(&root, &path, cx));
         match result {
-            Ok(effect) => self.model.set_status(effect.status()),
+            Ok(effect) => {
+                self.model.set_status(effect.status());
+                self.center_view = CenterView::Editor;
+            }
             Err(error) => self.model.set_status(format!(
                 "Cannot edit {}: {error}. Recovery draft kept for investigation when one exists.",
                 path.display()
@@ -371,6 +398,7 @@ impl Workbench {
                 Ok(effect) => {
                     self.model.set_status(effect.status());
                     self.install_editor(tabs, cx);
+                    self.center_view = CenterView::Editor;
                 }
                 Err(error) => self
                     .model
@@ -385,7 +413,10 @@ impl Workbench {
             .unwrap()
             .update(cx, |editor, cx| editor.open_scratch(&root, cx));
         match result {
-            Ok(effect) => self.model.set_status(effect.status()),
+            Ok(effect) => {
+                self.model.set_status(effect.status());
+                self.center_view = CenterView::Editor;
+            }
             Err(error) => self
                 .model
                 .set_status(format!("Cannot create an editor: {error}")),
@@ -486,7 +517,7 @@ impl Workbench {
             }
         };
         if canonical == self.model.root() {
-            self.show_recent_workspaces = false;
+            self.show_recent_workspaces = true;
             self.model.set_status("Workspace already open");
             cx.notify();
             return;
@@ -506,6 +537,7 @@ impl Workbench {
             }
         };
         self.model = next;
+        self.center_view = CenterView::Terminal;
         self.tree = WorkspaceTree::new(&canonical).ok();
         self.editor = None;
         self.restore_scratch_tabs(cx);
@@ -529,11 +561,13 @@ impl Workbench {
         // them on workspace changes to prevent cross-project output leakage.
         // Existing Host sessions remain alive and under Host ownership.
         self.terminals = TerminalDock::for_workspace(self.workspace_generation);
+        self.terminal_send_loading = false;
+        self.terminal_input.update(cx, |input, cx| input.clear(cx));
         self.terminal_poll = TerminalPollGate::default();
         self.terminal_list_loading = false;
         self.terminal_read_loading = None;
         self.terminal_tick = 0;
-        self.show_recent_workspaces = false;
+        self.show_recent_workspaces = true;
         if let Some(store) = &self.session_store {
             match store.recent_workspaces() {
                 Ok(recent) => self.recent_workspaces = recent,
@@ -665,10 +699,93 @@ impl Workbench {
 
     fn select_terminal(&mut self, handle: String, cx: &mut Context<Self>) {
         if self.terminals.open(&handle) {
+            self.center_view = CenterView::Terminal;
+            self.terminal_send_loading = false;
+            self.terminal_input.update(cx, |input, cx| input.clear(cx));
             self.refresh_terminal_output(cx);
         } else {
             cx.notify();
         }
+    }
+
+    fn send_terminal_input(&mut self, enter: bool, cx: &mut Context<Self>) {
+        if self.terminal_send_loading {
+            return;
+        }
+        let Some(bridge) = self.runtime_bridge.clone() else {
+            self.terminals.status = "Host CLI is not available for terminal input".into();
+            cx.notify();
+            return;
+        };
+        let Some(tab) = self.terminals.active() else {
+            self.terminals.status = "Select a Host terminal session first".into();
+            cx.notify();
+            return;
+        };
+        if !tab.running {
+            self.terminals.status = "Stopped Host terminals cannot accept input".into();
+            cx.notify();
+            return;
+        }
+        if self.terminal_input.read(cx).composing() {
+            self.terminals.status = "Finish IME composition before sending terminal input".into();
+            cx.notify();
+            return;
+        }
+        let text = self.terminal_input.read(cx).query().to_owned();
+        if text.trim().is_empty() {
+            self.terminals.status = "Type terminal input before sending".into();
+            cx.notify();
+            return;
+        }
+        let handle = tab.handle.clone();
+        let tab_id = tab.tab_id.clone();
+        let generation = self.workspace_generation;
+        self.terminal_send_loading = true;
+        self.terminals.status = "Sending to existing Host terminal…".into();
+        cx.notify();
+        cx.spawn(async move |view, cx| {
+            let sent_handle = handle.clone();
+            let sent_text = text.clone();
+            let result = cx
+                .background_spawn(async move { bridge.write_terminal(&handle, &text, enter) })
+                .await;
+            view.update(cx, |view, cx| {
+                if view.workspace_generation != generation {
+                    return;
+                }
+                view.terminal_send_loading = false;
+                if !view
+                    .terminals
+                    .active()
+                    .is_some_and(|active| active.handle == sent_handle && active.tab_id == tab_id)
+                {
+                    cx.notify();
+                    return;
+                }
+                match result {
+                    Ok(()) => {
+                        view.terminal_input.update(cx, |input, cx| {
+                            if input.query() == sent_text {
+                                input.clear(cx);
+                            }
+                        });
+                        view.terminals.status = if enter {
+                            "Command submitted to Runtime Host".into()
+                        } else {
+                            "Input sent to Runtime Host without Enter".into()
+                        };
+                        view.refresh_terminal_output(cx);
+                    }
+                    Err(error) => {
+                        view.terminals.status = format!("Host terminal rejected input: {error}");
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn refresh_terminal_output(&mut self, cx: &mut Context<Self>) {
@@ -765,7 +882,7 @@ impl Render for Workbench {
         let content = if self.model.selected_path().is_some() {
             self.model.content().to_owned()
         } else {
-            "Select a text file from Explorer to preview it.\n\nAlera GPUI runs without Flutter or WebView.\nTerminal, editable documents, Diff and Agent surfaces are not migrated yet.".into()
+            "Select a text file from Explorer on the right to preview or edit it.\n\nThis GPUI preview keeps project management on the left, Terminal in the center, and Explorer/Git on the right. Full terminal PTY ownership stays with Alera Runtime Host.".into()
         };
         let entries = self.model.entries().to_vec();
         let tree_rows = self
@@ -783,6 +900,7 @@ impl Render for Workbench {
             .map(|(index, tab)| (index, tab.title.clone()))
             .collect();
         let active_tab = self.model.active_tab();
+        let center_is_editor = self.center_view == CenterView::Editor;
         let editor = self.editor.clone();
         let editor_dirty = self.editor_dirty(cx);
         let discard_pending = self
@@ -821,7 +939,13 @@ impl Render for Workbench {
             .terminals
             .sessions
             .iter()
-            .map(|session| (session.handle.clone(), session.label()))
+            .map(|session| {
+                (
+                    session.handle.clone(),
+                    session.label(),
+                    session.workspace_id.clone(),
+                )
+            })
             .collect();
         let terminal_tabs: Vec<_> = self
             .terminals
@@ -841,6 +965,8 @@ impl Render for Workbench {
             .unwrap_or_default();
         let terminal_status = self.terminals.status.clone();
         let has_terminal_preview = self.terminals.active().is_some();
+        let terminal_input = self.terminal_input.clone();
+        let terminal_send_loading = self.terminal_send_loading;
         let terminal_auto = self.terminal_poll.enabled();
         let terminal_is_vt = self.terminals.view_mode == TerminalViewMode::Screen;
         let terminal_screen_rows = if terminal_is_vt {
@@ -942,6 +1068,7 @@ impl Render for Workbench {
         div()
             .size_full()
             .on_action(cx.listener(Self::toggle_file_search_action))
+            .on_action(cx.listener(Self::submit_terminal_action))
             .flex()
             .flex_col()
             .bg(rgb(BG))
@@ -968,13 +1095,14 @@ impl Render for Workbench {
                     .flex_1()
                     .min_h_0()
                     .flex()
+                    .flex_row_reverse()
                     .child(
                         div()
-                            .w(px(265.0))
+                            .w(px(315.0))
                             .flex()
                             .flex_col()
                             .bg(rgb(PANEL))
-                            .border_r_1()
+                            .border_l_1()
                             .border_color(rgb(BORDER))
                             .child(
                                 div()
@@ -983,7 +1111,7 @@ impl Render for Workbench {
                                     .flex()
                                     .justify_between()
                                     .items_center()
-                                    .child(div().text_sm().child(folder_name))
+                                    .child(div().text_sm().child(format!("Explorer · {folder_name}")))
                                     .child(
                                         div()
                                             .flex()
@@ -1028,87 +1156,6 @@ impl Render for Workbench {
                                                     })),
                                             ),
                                     ),
-                            )
-                            .child(
-                                div()
-                                    .px_3()
-                                    .py_2()
-                                    .border_b_1()
-                                    .border_color(rgb(BORDER))
-                                    .flex()
-                                    .flex_col()
-                                    .gap_1()
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .justify_between()
-                                            .items_center()
-                                            .child(
-                                                div()
-                                                    .id("recent-workspaces-toggle")
-                                                    .cursor_pointer()
-                                                    .text_sm()
-                                                    .child(if show_recent_workspaces {
-                                                        "Recent workspaces ▾"
-                                                    } else {
-                                                        "Recent workspaces ▸"
-                                                    })
-                                                    .on_click(cx.listener(|this, _, _, cx| {
-                                                        this.show_recent_workspaces =
-                                                            !this.show_recent_workspaces;
-                                                        cx.notify();
-                                                    })),
-                                            )
-                                            .child(
-                                                div()
-                                                    .id("open-workspace-folder")
-                                                    .cursor_pointer()
-                                                    .text_sm()
-                                                    .text_color(rgb(MUTED))
-                                                    .child(if picking_workspace { "Opening…" } else { "+ Open" })
-                                                    .on_click(cx.listener(|this, _, _, cx| {
-                                                        this.pick_workspace(cx);
-                                                    })),
-                                            ),
-                                    )
-                                    .child(if show_recent_workspaces {
-                                        div()
-                                            .id("recent-workspaces-scroll")
-                                            .max_h(px(158.0))
-                                            .overflow_y_scroll()
-                                            .children(recent_workspaces.into_iter().map(|(index, path)| {
-                                                let active = workspace_root == path;
-                                                let name = path
-                                                    .file_name()
-                                                    .map(|name| name.to_string_lossy().to_string())
-                                                    .unwrap_or_else(|| path.display().to_string());
-                                                let detail = path.display().to_string();
-                                                div()
-                                                    .id(("recent-workspace", index))
-                                                    .cursor_pointer()
-                                                    .py_1()
-                                                    .px_1()
-                                                    .overflow_hidden()
-                                                    .hover(|style| style.bg(rgb(ACTIVE)))
-                                                    .child(
-                                                        div()
-                                                            .text_sm()
-                                                            .text_color(rgb(if active { TEXT } else { MUTED }))
-                                                            .child(format!("{} {name}", if active { "●" } else { "○" })),
-                                                    )
-                                                    .child(
-                                                        div()
-                                                            .text_xs()
-                                                            .text_color(rgb(MUTED))
-                                                            .child(detail),
-                                                    )
-                                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                                        this.switch_workspace(path.clone(), cx);
-                                                    }))
-                                            }))
-                                    } else {
-                                        div().id("recent-workspaces-collapsed").h(px(0.0))
-                                    }),
                             )
                             .child(
                                 div()
@@ -1172,7 +1219,9 @@ impl Render for Workbench {
                                                                 .hover(|style| style.bg(rgb(ACTIVE)))
                                                                 .child(label)
                                                                 .on_click(cx.listener(move |this, _, _, cx| {
-                                                                    this.model.open_path(&path);
+                                                                    if this.model.open_path(&path) {
+                                                                        this.open_editor(cx);
+                                                                    }
                                                                     this.quick_open = None;
                                                                     this.persist_session();
                                                                     cx.notify();
@@ -1262,6 +1311,7 @@ impl Render for Workbench {
                                                             .child(label)
                                                             .on_click(cx.listener(move |this, _, _, cx| {
                                                                 if this.model.open_path(&path) {
+                                                                    this.open_editor(cx);
                                                                     this.persist_session();
                                                                 }
                                                                 cx.notify();
@@ -1300,7 +1350,9 @@ impl Render for Workbench {
                                                         }
                                                     } else {
                                                         let path = this.model.root().join(&relative);
-                                                        this.model.open_path(&path);
+                                                        if this.model.open_path(&path) {
+                                                            this.open_editor(cx);
+                                                        }
                                                         this.persist_session();
                                                     }
                                                     cx.notify();
@@ -1308,6 +1360,8 @@ impl Render for Workbench {
                                         }).collect::<Vec<_>>()
                                     } else {
                                         entries.into_iter().enumerate().map(|(i, item)| {
+                                            let is_directory = item.is_directory;
+                                            let file_path = item.path.clone();
                                             div()
                                                 .id(i)
                                                 .px_3()
@@ -1321,6 +1375,9 @@ impl Render for Workbench {
                                                 ))
                                                 .on_click(cx.listener(move |this, _, _, cx| {
                                                     this.model.open_entry(i);
+                                                    if !is_directory && this.model.selected_path() == Some(file_path.as_path()) {
+                                                        this.open_editor(cx);
+                                                    }
                                                     this.persist_session();
                                                     cx.notify();
                                                 }))
@@ -1329,6 +1386,64 @@ impl Render for Workbench {
                                     .when(tree_mode && tree_truncated, |view| {
                                         view.child(div().text_color(rgb(MUTED)).child("Tree limited to 4,000 visible items"))
                                     }),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .child(
+                                        div()
+                                            .font_weight(gpui::FontWeight::BOLD)
+                                            .child("Git changes · read-only"),
+                                    )
+                                    .child(
+                                        div()
+                                            .id("git-refresh")
+                                            .cursor_pointer()
+                                            .text_sm()
+                                            .text_color(rgb(TEXT))
+                                            .child("↻")
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.refresh_git(cx);
+                                            })),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(rgb(MUTED))
+                                    .child(git_summary),
+                            )
+                            .child(
+                                div()
+                                    .id("git-change-list")
+                                    .max_h(px(135.0))
+                                    .overflow_y_scroll()
+                                    .children(git_changes.into_iter().enumerate().map(|(i, change)| {
+                                        let label = format!("{} {}", change.label, change.relative.display());
+                                        let relative = change.relative;
+                                        div()
+                                            .id(("git-change-file", i))
+                                            .cursor_pointer()
+                                            .py_1()
+                                            .text_xs()
+                                            .hover(|style| style.bg(rgb(ACTIVE)))
+                                            .child(label)
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                this.preview_git_change(relative.clone(), cx);
+                                            }))
+                                    })),
+                            )
+                            .child(
+                                div()
+                                    .id("git-diff-scroll")
+                                    .max_h(px(170.0))
+                                    .overflow_y_scroll()
+                                    .text_xs()
+                                    .font_family("JetBrains Mono")
+                                    .text_color(rgb(MUTED))
+                                    .child(git_diff),
                             ),
                     )
                     .child(
@@ -1339,7 +1454,41 @@ impl Render for Workbench {
                             .flex_col()
                             .child(
                                 div()
+                                    .id("center-mode-switch")
                                     .h(px(38.0))
+                                    .bg(rgb(TOOLBAR))
+                                    .flex()
+                                    .items_center()
+                                    .gap_3()
+                                    .px_3()
+                                    .child(
+                                        div()
+                                            .id("center-terminal-tab")
+                                            .cursor_pointer()
+                                            .text_color(rgb(if center_is_editor { MUTED } else { TEXT }))
+                                            .child(if center_is_editor { "Terminal" } else { "● Terminal" })
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.center_view = CenterView::Terminal;
+                                                this.refresh_terminals(cx);
+                                                cx.notify();
+                                            })),
+                                    )
+                                    .child(
+                                        div()
+                                            .id("center-editor-tab")
+                                            .cursor_pointer()
+                                            .text_color(rgb(if center_is_editor { TEXT } else { MUTED }))
+                                            .child(if center_is_editor { "● Editor" } else { "Editor" })
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.center_view = CenterView::Editor;
+                                                cx.notify();
+                                            })),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .h(px(38.0))
+                                    .when(!center_is_editor, |panel| panel.hidden())
                                     .flex()
                                     .items_center()
                                     .bg(rgb(PANEL))
@@ -1422,6 +1571,7 @@ impl Render for Workbench {
                             .child(
                                 div()
                                     .h(px(29.0))
+                                    .when(!center_is_editor, |panel| panel.hidden())
                                     .px_4()
                                     .bg(rgb(BG))
                                     .flex()
@@ -1512,12 +1662,14 @@ impl Render for Workbench {
                                     div()
                                         .flex_1()
                                         .min_h_0()
+                                        .when(!center_is_editor, |panel| panel.hidden())
                                         .child(editor)
                                         .into_any_element()
                                 } else {
                                     div()
                                         .flex_1()
                                         .min_h_0()
+                                        .when(!center_is_editor, |panel| panel.hidden())
                                         .id("preview-scroll")
                                         .overflow_y_scroll()
                                         .p_4()
@@ -1529,7 +1681,9 @@ impl Render for Workbench {
                             )
                             .child(if has_terminal_preview {
                                 div()
-                                    .h(px(245.0))
+                                    .flex_1()
+                                    .min_h_0()
+                                    .when(center_is_editor, |panel| panel.hidden())
                                     .flex()
                                     .flex_col()
                                     .border_t_1()
@@ -1696,21 +1850,139 @@ impl Render for Workbench {
                                                 terminal_output
                                             })
                                     })
+                                    .child(
+                                        div()
+                                            .id("terminal-command-bar")
+                                            .h(px(45.0))
+                                            .px_3()
+                                            .flex()
+                                            .items_center()
+                                            .gap_2()
+                                            .bg(rgb(PANEL))
+                                            .border_t_1()
+                                            .border_color(rgb(BORDER))
+                                            .child(
+                                                div()
+                                                    .flex_1()
+                                                    .min_w_0()
+                                                    .child(terminal_input),
+                                            )
+                                            .child(
+                                                div()
+                                                    .id("terminal-send-raw")
+                                                    .cursor_pointer()
+                                                    .text_sm()
+                                                    .text_color(rgb(MUTED))
+                                                    .child("Send")
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.send_terminal_input(false, cx);
+                                                    })),
+                                            )
+                                            .child(
+                                                div()
+                                                    .id("terminal-send-enter")
+                                                    .cursor_pointer()
+                                                    .text_sm()
+                                                    .text_color(rgb(TEXT))
+                                                    .child(if terminal_send_loading { "Sending…" } else { "Run ↵" })
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.send_terminal_input(true, cx);
+                                                    })),
+                                            ),
+                                    )
+                                    .into_any_element()
                             } else {
-                                div().h(px(0.0))
+                                div()
+                                    .flex_1()
+                                    .min_h_0()
+                                    .when(center_is_editor, |panel| panel.hidden())
+                                    .p_4()
+                                    .text_sm()
+                                    .text_color(rgb(MUTED))
+                                    .child("No Host terminal selected. Choose an existing session in Projects on the left.")
+                                    .into_any_element()
                             }),
                     )
                     .child(
                         div()
-                            .w(px(272.0))
+                            .w(px(248.0))
                             .flex()
                             .flex_col()
                             .bg(rgb(PANEL))
-                            .border_l_1()
+                            .border_r_1()
                             .border_color(rgb(BORDER))
                             .p_3()
                             .gap_3()
-                            .child(div().font_weight(gpui::FontWeight::BOLD).child("Workspace"))
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .child(
+                                        div()
+                                            .id("projects-toggle")
+                                            .cursor_pointer()
+                                            .font_weight(gpui::FontWeight::BOLD)
+                                            .child(if show_recent_workspaces { "Projects ▾" } else { "Projects ▸" })
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.show_recent_workspaces = !this.show_recent_workspaces;
+                                                cx.notify();
+                                            })),
+                                    )
+                                    .child(
+                                        div()
+                                            .id("projects-open-folder")
+                                            .cursor_pointer()
+                                            .text_sm()
+                                            .text_color(rgb(TEXT))
+                                            .child(if picking_workspace { "Opening…" } else { "+ Open" })
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.pick_workspace(cx);
+                                            })),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(rgb(MUTED))
+                                    .child(format!("Active: {}", workspace_root.display())),
+                            )
+                            .child(if show_recent_workspaces {
+                                div()
+                                    .id("project-workspaces-scroll")
+                                    .max_h(px(235.0))
+                                    .overflow_y_scroll()
+                                    .children(recent_workspaces.into_iter().map(|(index, path)| {
+                                        let active = workspace_root == path;
+                                        let title = path.file_name()
+                                            .map(|name| name.to_string_lossy().to_string())
+                                            .unwrap_or_else(|| path.display().to_string());
+                                        div()
+                                            .id(("project-workspace", index))
+                                            .cursor_pointer()
+                                            .px_1()
+                                            .py_1()
+                                            .hover(|style| style.bg(rgb(ACTIVE)))
+                                            .child(
+                                                div()
+                                                    .text_sm()
+                                                    .text_color(rgb(if active { TEXT } else { MUTED }))
+                                                    .child(format!("{} {title}", if active { "●" } else { "○" })),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(rgb(MUTED))
+                                                    .child(path.display().to_string()),
+                                            )
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                this.switch_workspace(path.clone(), cx);
+                                            }))
+                                    }))
+                                    .into_any_element()
+                            } else {
+                                div().h(px(0.0)).into_any_element()
+                            })
                             .child(
                                 div()
                                     .font_weight(gpui::FontWeight::BOLD)
@@ -1770,7 +2042,7 @@ impl Render for Workbench {
                                     .flex_1()
                                     .min_h_0()
                                     .overflow_y_scroll()
-                                    .children(terminal_sessions.into_iter().enumerate().map(|(index, (handle, label))| {
+                                    .children(terminal_sessions.into_iter().enumerate().map(|(index, (handle, label, workspace_id))| {
                                         div()
                                             .id(("terminal-session", index))
                                             .py_1()
@@ -1779,75 +2051,17 @@ impl Render for Workbench {
                                             .text_sm()
                                             .hover(|style| style.bg(rgb(ACTIVE)))
                                             .child(label)
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(rgb(MUTED))
+                                                    .child(format!("Host workspace: {workspace_id}")),
+                                            )
                                             .on_click(cx.listener(move |this, _, _, cx| {
                                                 this.select_terminal(handle.clone(), cx);
                                             }))
                                     })),
                             )
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .justify_between()
-                                    .child(
-                                        div()
-                                            .font_weight(gpui::FontWeight::BOLD)
-                                            .child("Git changes · read-only"),
-                                    )
-                                    .child(
-                                        div()
-                                            .id("git-refresh")
-                                            .cursor_pointer()
-                                            .text_sm()
-                                            .text_color(rgb(TEXT))
-                                            .child("↻")
-                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                this.refresh_git(cx);
-                                            })),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(rgb(MUTED))
-                                    .child(git_summary),
-                            )
-                            .child(
-                                div()
-                                    .id("git-change-list")
-                                    .max_h(px(135.0))
-                                    .overflow_y_scroll()
-                                    .children(git_changes.into_iter().enumerate().map(|(i, change)| {
-                                        let label = format!("{} {}", change.label, change.relative.display());
-                                        let relative = change.relative;
-                                        div()
-                                            .id(("git-change-file", i))
-                                            .cursor_pointer()
-                                            .py_1()
-                                            .text_xs()
-                                            .hover(|style| style.bg(rgb(ACTIVE)))
-                                            .child(label)
-                                            .on_click(cx.listener(move |this, _, _, cx| {
-                                                this.preview_git_change(relative.clone(), cx);
-                                            }))
-                                    })),
-                            )
-                            .child(
-                                div()
-                                    .id("git-diff-scroll")
-                                    .max_h(px(170.0))
-                                    .overflow_y_scroll()
-                                    .text_xs()
-                                    .font_family("JetBrains Mono")
-                                    .text_color(rgb(MUTED))
-                                    .child(git_diff),
-                            )
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(rgb(MUTED))
-                                    .child("Agents · pending"),
-                            ),
                     ),
             )
             .child(
@@ -1920,6 +2134,11 @@ fn main() {
         cx.bind_keys([
             KeyBinding::new("ctrl-p", ToggleFileSearch, None),
             KeyBinding::new("cmd-p", ToggleFileSearch, None),
+            KeyBinding::new(
+                "enter",
+                SubmitTerminalCommand,
+                Some("AleraGpuiTerminalInput"),
+            ),
         ]);
         let bounds = Bounds::centered(None, size(px(1200.0), px(800.0)), cx);
         cx.open_window(
@@ -1929,14 +2148,16 @@ fn main() {
             },
             |_, cx| {
                 let view = cx.new(|cx| {
+                    let terminal_input = cx.new(QuickOpenInput::terminal);
                     let mut workbench = Workbench {
                         tree: WorkspaceTree::new(model.root()).ok(),
                         tree_mode: false,
                         model,
+                        center_view: CenterView::Terminal,
                         editor: None,
                         session_store,
                         recent_workspaces,
-                        show_recent_workspaces: false,
+                        show_recent_workspaces: true,
                         picking_workspace: false,
                         picking_save_as: false,
                         quick_open: None,
@@ -1960,6 +2181,8 @@ fn main() {
                         runtime_status,
                         runtime_loading: false,
                         terminals: TerminalDock::for_workspace(0),
+                        terminal_input,
+                        terminal_send_loading: false,
                         terminal_list_loading: false,
                         terminal_read_loading: None,
                         terminal_poll: TerminalPollGate::default(),
