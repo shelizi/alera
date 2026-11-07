@@ -6,6 +6,7 @@ pub mod editor_session;
 pub mod editor_tabs;
 pub mod file_search;
 pub mod model;
+pub mod project_search;
 pub mod runtime_bridge;
 pub mod session;
 pub mod terminal;
