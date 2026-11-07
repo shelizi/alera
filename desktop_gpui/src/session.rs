@@ -87,9 +87,10 @@ fn validate_terminal_layout(layout: &TerminalLayout) -> io::Result<()> {
                 || !valid_terminal_layout_id(&tab.tab_id, 256)
         })
         || layout.tabs.iter().enumerate().any(|(index, tab)| {
-            layout.tabs[..index]
-                .iter()
-                .any(|prior| prior.handle == tab.handle)
+            layout.tabs[..index].iter().any(|prior| {
+                prior.handle == tab.handle
+                    || (prior.workspace_id == tab.workspace_id && prior.tab_id == tab.tab_id)
+            })
         })
         || layout
             .active_handle
@@ -1103,5 +1104,61 @@ mod tests {
         let file_b = store.terminal_layout_path(&b);
         fs::copy(&file_a, &file_b).unwrap();
         assert!(store.load_terminal_layout(&b).is_err());
+    }
+
+    #[test]
+    fn terminal_layout_rejects_same_host_tab_aliased_under_different_handles() {
+        let state = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let root = dunce::canonicalize(root.path()).unwrap();
+        let store = PreviewSessionStore::new(state.path());
+        let layout = TerminalLayout {
+            tabs: vec![
+                TerminalLayoutTab {
+                    handle: "one".into(),
+                    workspace_id: "ws-1".into(),
+                    tab_id: "same-tab".into(),
+                },
+                TerminalLayoutTab {
+                    handle: "two".into(),
+                    workspace_id: "ws-1".into(),
+                    tab_id: "same-tab".into(),
+                },
+            ],
+            active_handle: Some("one".into()),
+            transcript_view: false,
+        };
+        assert!(
+            store.save_terminal_layout(&root, &layout).is_err(),
+            "duplicate Host tab must not be saved under different handles"
+        );
+    }
+
+    #[test]
+    fn terminal_layout_can_be_updated_repeatedly_without_losing_prior_good_state() {
+        let state = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let root = dunce::canonicalize(root.path()).unwrap();
+        let store = PreviewSessionStore::new(state.path());
+        let mut layout = TerminalLayout {
+            tabs: vec![TerminalLayoutTab {
+                handle: "one".into(),
+                workspace_id: "ws-1".into(),
+                tab_id: "tab-1".into(),
+            }],
+            active_handle: Some("one".into()),
+            transcript_view: false,
+        };
+        store.save_terminal_layout(&root, &layout).unwrap();
+        layout.transcript_view = true;
+        store.save_terminal_layout(&root, &layout).unwrap();
+        assert_eq!(
+            store.load_terminal_layout(&root).unwrap(),
+            Some(layout.clone())
+        );
+        layout.active_handle = Some("nonexistent".into());
+        assert!(store.save_terminal_layout(&root, &layout).is_err());
+        layout.active_handle = Some("one".into());
+        assert_eq!(store.load_terminal_layout(&root).unwrap(), Some(layout));
     }
 }

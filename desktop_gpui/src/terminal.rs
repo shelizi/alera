@@ -2,11 +2,12 @@
 //! Terminal process, PTY, authentication and session lifetime remain owned by
 //! the existing Alera Runtime Host; this frontend uses CLI --no-start only.
 use crate::runtime_bridge::RuntimeCliBridge;
+use crate::session::TerminalLayout;
 use crate::vt_screen::VtScreen;
 use serde_json::Value;
 use std::ffi::OsString;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub const TERMINAL_READ_BYTES: u64 = 8 * 1024;
 pub const MAX_TERMINALS: usize = 128;
@@ -61,6 +62,16 @@ pub struct CreatedHostTerminal {
     pub handle: String,
     pub workspace_id: String,
     pub tab_id: String,
+}
+
+impl CreatedHostTerminal {
+    /// A Host creation reply is not sufficient to attach to a PTY: the next
+    /// authenticated session list must corroborate all three identities.
+    pub fn matches_live_session(&self, session: &TerminalSession) -> bool {
+        session.handle == self.handle
+            && session.workspace_id == self.workspace_id
+            && session.tab_id == self.tab_id
+    }
 }
 
 pub fn list_terminal_verb() -> Vec<OsString> {
@@ -192,12 +203,12 @@ pub fn parse_terminal_list(value: &Value) -> io::Result<Vec<TerminalSession>> {
         let workspace_id = item
             .get("workspaceId")
             .and_then(Value::as_str)
-            .filter(|id| id.len() <= 256)
+            .filter(|id| valid_host_id(id))
             .ok_or_else(|| invalid("Terminal session has no workspaceId"))?;
         let tab_id = item
             .get("tabId")
             .and_then(Value::as_str)
-            .filter(|id| id.len() <= 256)
+            .filter(|id| valid_host_id(id))
             .ok_or_else(|| invalid("Terminal session has no tabId"))?;
         let running = item
             .get("running")
@@ -298,6 +309,45 @@ pub fn parse_registered_workspaces(value: &Value) -> io::Result<Vec<RegisteredHo
         });
     }
     Ok(workspaces)
+}
+
+/// Resolve exactly one Host-registered workspace for this already-canonical
+/// project path. Never infer an ID from a repo name, Git branch or CLI argv.
+/// No Host mutation or process start occurs here.
+pub fn select_registered_host_workspace(
+    root: &Path,
+    registered: &[RegisteredHostWorkspace],
+) -> io::Result<String> {
+    let active = dunce::canonicalize(root)?;
+    if active != root || !active.is_dir() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Active workspace must be a canonical existing directory",
+        ));
+    }
+    let mut selected: Option<&str> = None;
+    for entry in registered {
+        // Workspace paths from an authenticated Host are still untrusted
+        // identity data. Relative paths must never resolve from GPUI's CWD.
+        if !entry.path.is_absolute() {
+            continue;
+        }
+        if dunce::canonicalize(&entry.path).ok().as_deref() != Some(active.as_path()) {
+            continue;
+        }
+        if selected.is_some() {
+            return Err(invalid(
+                "Multiple Host workspaces match this project; terminal create refused",
+            ));
+        }
+        selected = Some(&entry.id);
+    }
+    selected.map(ToString::to_string).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            "Current project is not registered with the running Alera Host",
+        )
+    })
 }
 
 /// Parse a `terminal create` reply of the form
@@ -677,6 +727,42 @@ impl TerminalDock {
         );
     }
 
+    /// Recreate only preview tabs whose three Host identities still match.
+    /// Keep their saved order and selected tab without touching Host PTYs.
+    /// Once the user has opened a tab explicitly, saved state cannot replace it.
+    pub fn restore_previews_from_host_layout(&mut self, layout: &TerminalLayout) -> usize {
+        if !self.tabs.is_empty() || self.sessions.is_empty() {
+            return 0;
+        }
+        self.view_mode = if layout.transcript_view {
+            TerminalViewMode::Transcript
+        } else {
+            TerminalViewMode::Screen
+        };
+        let mut recovered = Vec::new();
+        for saved in layout.tabs.iter().take(MAX_OPEN_TABS) {
+            let exact_identity_is_live = self.sessions.iter().any(|live| {
+                live.handle == saved.handle
+                    && live.tab_id == saved.tab_id
+                    && live.workspace_id == saved.workspace_id
+            });
+            if exact_identity_is_live
+                && !recovered
+                    .iter()
+                    .any(|handle: &String| handle == &saved.handle)
+                && self.open(&saved.handle)
+            {
+                recovered.push(saved.handle.clone());
+            }
+        }
+        if let Some(active) = &layout.active_handle {
+            if recovered.iter().any(|handle| handle == active) {
+                self.open(active);
+            }
+        }
+        recovered.len()
+    }
+
     pub fn open(&mut self, handle: &str) -> bool {
         let Some(session) = self
             .sessions
@@ -976,6 +1062,140 @@ mod tests {
             .map(|i| json!({"id":format!("ws-{i}"),"path":"/p"}))
             .collect::<Vec<_>>()});
         assert!(parse_registered_workspaces(&oversized).is_err());
+    }
+
+    #[test]
+    fn terminal_list_must_reject_empty_or_control_laden_host_identity() {
+        let valid = json!({"items":[{"handle":"term-1","workspaceId":"ws-1","tabId":"tab-1","running":true}]});
+        assert_eq!(parse_terminal_list(&valid).unwrap().len(), 1);
+        for bad_workspace in ["", "ws\nother", "ws\0other", "ws\\other"] {
+            let reply = json!({"items":[{"handle":"term-1","workspaceId":bad_workspace,"tabId":"tab-1","running":true}]});
+            assert!(
+                parse_terminal_list(&reply).is_err(),
+                "accepted workspace id {bad_workspace:?}"
+            );
+        }
+        for bad_tab in ["", "tab\rspoof", "tab/other"] {
+            let reply = json!({"items":[{"handle":"term-1","workspaceId":"ws-1","tabId":bad_tab,"running":true}]});
+            assert!(
+                parse_terminal_list(&reply).is_err(),
+                "accepted tab id {bad_tab:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn registered_workspace_selection_is_canonical_exact_and_unique() {
+        let project = tempfile::tempdir().unwrap();
+        let unrelated = tempfile::tempdir().unwrap();
+        let project_root = dunce::canonicalize(project.path()).unwrap();
+        let unrelated_root = dunce::canonicalize(unrelated.path()).unwrap();
+        let registered = vec![
+            RegisteredHostWorkspace {
+                id: "ws-unrelated".into(),
+                path: unrelated_root.clone(),
+            },
+            RegisteredHostWorkspace {
+                id: "ws-project".into(),
+                path: project_root.join("."),
+            },
+        ];
+        assert_eq!(
+            select_registered_host_workspace(&project_root, &registered).unwrap(),
+            "ws-project"
+        );
+        assert_eq!(
+            select_registered_host_workspace(&unrelated_root, &registered).unwrap(),
+            "ws-unrelated"
+        );
+        assert_eq!(
+            select_registered_host_workspace(&project_root, &registered[..1])
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::NotFound
+        );
+        let ambiguous = vec![
+            registered[1].clone(),
+            RegisteredHostWorkspace {
+                id: "ws-alias".into(),
+                path: project_root.clone(),
+            },
+        ];
+        assert_eq!(
+            select_registered_host_workspace(&project_root, &ambiguous)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidData
+        );
+    }
+
+    #[test]
+    fn restored_preview_requires_three_matching_ids_and_keeps_saved_order() {
+        use crate::session::{TerminalLayout, TerminalLayoutTab};
+        let mut dock = TerminalDock::for_workspace(4);
+        dock.apply_session_list(4, vec![session("one"), session("two"), session("reused")]);
+        let layout = TerminalLayout {
+            tabs: vec![
+                TerminalLayoutTab {
+                    handle: "two".into(),
+                    workspace_id: "workspace-1".into(),
+                    tab_id: "tab-two".into(),
+                },
+                TerminalLayoutTab {
+                    handle: "reused".into(),
+                    workspace_id: "workspace-1".into(),
+                    tab_id: "old-tab".into(),
+                },
+                TerminalLayoutTab {
+                    handle: "one".into(),
+                    workspace_id: "workspace-1".into(),
+                    tab_id: "tab-one".into(),
+                },
+                TerminalLayoutTab {
+                    handle: "wrong-ws".into(),
+                    workspace_id: "elsewhere".into(),
+                    tab_id: "tab-wrong-ws".into(),
+                },
+            ],
+            active_handle: Some("one".into()),
+            transcript_view: true,
+        };
+        assert_eq!(dock.restore_previews_from_host_layout(&layout), 2);
+        assert_eq!(dock.tabs.len(), 2);
+        assert_eq!(dock.tabs[0].handle, "two");
+        assert_eq!(dock.tabs[1].handle, "one");
+        assert_eq!(dock.active().unwrap().handle, "one");
+        assert_eq!(dock.view_mode, TerminalViewMode::Transcript);
+        assert_eq!(
+            dock.sessions.len(),
+            3,
+            "restore must not terminate Host sessions"
+        );
+        assert_eq!(
+            dock.restore_previews_from_host_layout(&layout),
+            0,
+            "do not replace user-opened tabs"
+        );
+    }
+
+    #[test]
+    fn created_terminal_confirmation_matches_workspace_tab_and_session() {
+        let created = CreatedHostTerminal {
+            handle: "term-1".into(),
+            workspace_id: "workspace-1".into(),
+            tab_id: "tab-term-1".into(),
+        };
+        let valid = session("term-1");
+        assert!(created.matches_live_session(&valid));
+        let mut wrong = valid.clone();
+        wrong.tab_id = "old-tab".into();
+        assert!(!created.matches_live_session(&wrong));
+        wrong = valid.clone();
+        wrong.workspace_id = "workspace-2".into();
+        assert!(!created.matches_live_session(&wrong));
+        wrong = valid;
+        wrong.handle = "term-2".into();
+        assert!(!created.matches_live_session(&wrong));
     }
 
     #[test]

@@ -13,7 +13,8 @@ use alera_gpui_desktop::project_tree::{collect_project_tree, ProjectTreeGroup};
 use alera_gpui_desktop::runtime_bridge::RuntimeCliBridge;
 use alera_gpui_desktop::session::{PreviewSessionStore, TerminalLayout, TerminalLayoutTab};
 use alera_gpui_desktop::terminal::{
-    CreatedHostTerminal, TerminalDock, TerminalPollGate, TerminalViewMode, HOST_SESSION_LIST_SCOPE,
+    select_registered_host_workspace, CreatedHostTerminal, TerminalDock, TerminalPollGate,
+    TerminalViewMode, HOST_SESSION_LIST_SCOPE,
 };
 use alera_gpui_desktop::workspace_tree::WorkspaceTree;
 use alera_gpui_desktop::worktree_manager::{WorktreeEntry, WorktreeManager};
@@ -1152,28 +1153,7 @@ impl Workbench {
         let Some(layout) = self.terminal_layout_restore.take() else {
             return;
         };
-        let mut recovered = Vec::new();
-        for saved in &layout.tabs {
-            if self.terminals.sessions.iter().any(|live| {
-                live.handle == saved.handle
-                    && live.tab_id == saved.tab_id
-                    && live.workspace_id == saved.workspace_id
-            }) && self.terminals.open(&saved.handle)
-            {
-                recovered.push(saved.handle.clone());
-            }
-        }
-        if let Some(handle) = layout.active_handle {
-            if recovered.iter().any(|saved| saved == &handle) {
-                self.terminals.open(&handle);
-            }
-        }
-        self.terminals.view_mode = if layout.transcript_view {
-            TerminalViewMode::Transcript
-        } else {
-            TerminalViewMode::Screen
-        };
-        if !recovered.is_empty() {
+        if self.terminals.restore_previews_from_host_layout(&layout) > 0 {
             self.refresh_terminal_output(cx);
         }
     }
@@ -1200,25 +1180,7 @@ impl Workbench {
             let result = cx
                 .background_spawn(async move {
                     let registered = bridge.list_registered_workspaces()?;
-                    let mut matching = registered
-                        .into_iter()
-                        .filter(|workspace| {
-                            dunce::canonicalize(&workspace.path)
-                                .is_ok_and(|canonical| canonical == root)
-                        })
-                        .map(|workspace| workspace.id);
-                    let Some(host_workspace_id) = matching.next() else {
-                        return Err(std::io::Error::new(
-                            std::io::ErrorKind::NotFound,
-                            "Current project is not registered with the running Alera Host",
-                        ));
-                    };
-                    if matching.next().is_some() {
-                        return Err(std::io::Error::new(
-                            std::io::ErrorKind::InvalidData,
-                            "Multiple Host workspaces match this project; terminal create refused",
-                        ));
-                    }
+                    let host_workspace_id = select_registered_host_workspace(&root, &registered)?;
                     bridge.create_terminal(&host_workspace_id)
                 })
                 .await;
@@ -1284,11 +1246,10 @@ impl Workbench {
                                 view.pending_created_terminal
                                     .as_ref()
                                     .is_some_and(|created| {
-                                        view.terminals.sessions.iter().any(|live| {
-                                            live.handle == created.handle
-                                                && live.workspace_id == created.workspace_id
-                                                && live.tab_id == created.tab_id
-                                        })
+                                        view.terminals
+                                            .sessions
+                                            .iter()
+                                            .any(|live| created.matches_live_session(live))
                                     });
                             if confirmed {
                                 if let Some(created) = view.pending_created_terminal.take() {
