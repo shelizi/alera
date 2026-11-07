@@ -1,5 +1,7 @@
 # Alera Native Desktop (GPUI)
 
+**Latest active work and verified integration status (2026-11-07):** [GPUI active work ledger](../docs/gpui-active-work-ledger-20261107.md). It records the reconciled Git inspector, per-tab close, Explorer tree, Find/Replace and content-search models, scratch recovery, current UI integration lanes, and remaining real-GUI acceptance gates. Earlier test counts below are historical snapshots, not the latest merged baseline.
+
 This is an **experimental, independent Rust UI frontend**, not a replacement of the shipping Flutter desktop app. It is limited to Windows/macOS/Linux and does not affect the existing mobile application.
 
 **Engineering handoff / detailed next steps:** [GPUI native desktop successor handoff](../docs/gpui-desktop-successor-handoff-20261107.md). Read this before extending the prototype: it records the verified code baseline, open safety issues, P0 Windows GUI/IME acceptance, prioritized tasks through release, and the required test evidence.

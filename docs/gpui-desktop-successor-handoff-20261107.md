@@ -1,5 +1,7 @@
 # Alera GPUI 原生桌面版：接手交接與後續實作計畫
 
+> **最新實作盤點（2026-11-07）**：`docs/gpui-active-work-ledger-20261107.md`。該檔記錄已合併的 GPUI 功能、108/108 Rust headless + Windows native check 證據，以及仍在獨立 worktree 施工的搜尋 UI。本文較舊的 71 項基線及未完成功能表為歷史截面；接手前請以現在的程式 HEAD 與 active ledger 核對。
+
 > **可直接照做的最新完整工作分解與驗收清單**：`docs/gpui-desktop-detailed-execution-plan-20261107.md`。本文件維持作為架構、風險登錄與歷史交接；請以新計畫的 G0–G6、83 項最新程式基線與分階段驗收規格安排後續實作。執行前一律重新核對 Git HEAD／工作樹；兩份文件都**不是**真實 GUI／注音／安全驗收已通過的證據。
 
 > 更新基準：2026-11-07；本文件整理時最後一筆**功能程式**提交 `155fbdcee7dda00b038eccc9e3fb2e0a54d2e925`。接手時請先 `git log -1` 與 `git status`，以現場狀態為準。
