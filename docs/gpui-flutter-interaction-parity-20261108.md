@@ -48,5 +48,27 @@ the total open tabs to 24 rather than allocating unbounded state.
 - Windows Traditional Chinese terminal IME experimental work remains **dirty
   and separate** in `fix/gpui-smoke-navigation-terminal-20261108`.
 
+## Follow-up: Untitled Save / Save As interaction
+
+- Ctrl+S / Cmd+S and the workbench Save action open the native Save As
+  picker when the active document is Untitled; named files still use ordinary
+  conflict-safe Save.
+- The workbench Save As control delegates to the same native editor dialog
+  rather than maintaining an independent asynchronous save callback.
+- A Save As request captures the active tab identity and structural revision.
+  Choosing a destination after switching, reordering, closing or reopening
+  tabs **does not save any file**, including when a reopened file has the
+  same pathname as the original requester.
+- Multiple concurrent Save As dialogs are blocked; Save As to an existing
+  file remains refused unless overwrite was explicitly authorized (the
+  current GPUI picker deliberately does not offer overwrite confirmation).
+- The GPUI native editor currently restricts Save As destinations to the
+  workspace via its existing checked-destination rules. Flutter's external
+  save location support still requires a separate security design.
+- TDD: two new tests check stale dialog responses, switch-back, reordering,
+  close/reopen same path and unchanged existing destination. The complete
+  headless Rust suite after this change passed **186/186**; Windows native
+  executable compiled successfully. Live OS-dialog acceptance remains open.
+
 Production `main`, existing Host sessions, and Flutter releases are not
 changed. Keep `supported=false`; no push/tag/release.

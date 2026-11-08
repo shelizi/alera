@@ -17,8 +17,8 @@ use gpui::{
     actions, div, fill, point, prelude::*, px, relative, rgb, size, uniform_list, App, Bounds,
     ClipboardItem, Context, CursorStyle, Element, ElementId, ElementInputHandler, Entity,
     EntityInputHandler, FocusHandle, Focusable, GlobalElementId, InspectorElementId, KeyBinding,
-    LayoutId, MouseButton, Pixels, Point, ScrollHandle, ScrollStrategy, ShapedLine, Style, TextRun,
-    UTF16Selection, UniformListScrollHandle, Window,
+    LayoutId, MouseButton, PathPromptOptions, Pixels, Point, ScrollHandle, ScrollStrategy,
+    ShapedLine, Style, TextRun, UTF16Selection, UniformListScrollHandle, Window,
 };
 use std::collections::BTreeMap;
 use std::io;
@@ -154,6 +154,7 @@ pub struct NativeEditor {
     find: EditorFindUi,
     tabs: EditorTabs,
     workspace_root: PathBuf,
+    picking_save_as: bool,
     focus: FocusHandle,
     status: String,
     line_geometry: BTreeMap<usize, EditorLineGeometry>,
@@ -219,6 +220,7 @@ impl NativeEditor {
             find: EditorFindUi::new(cx),
             tabs,
             workspace_root,
+            picking_save_as: false,
             focus: cx.focus_handle(),
             status: if recovered {
                 "Recovered local unsaved edit; review before saving".into()
@@ -417,17 +419,6 @@ impl NativeEditor {
         cx.notify();
     }
 
-    pub fn save_as(&mut self, destination: &Path, overwrite: bool, cx: &mut Context<Self>) -> bool {
-        let commit = self.tabs.save_as(destination, overwrite);
-        let wrote = commit.wrote_file();
-        self.status = commit.status();
-        if wrote {
-            self.line_geometry.clear();
-        }
-        cx.notify();
-        wrote
-    }
-
     pub fn close_editor(
         &mut self,
         discard: bool,
@@ -595,6 +586,62 @@ impl NativeEditor {
         wrote
     }
 
+    /// Flutter-like Save on an untitled tab opens the native Save As dialog.
+    /// The response is scoped to the original editor tab; switching tabs,
+    /// closing/reopening or reordering while the dialog is open cancels it.
+    pub fn prompt_save_as(&mut self, cx: &mut Context<Self>) {
+        if self.picking_save_as {
+            self.status = "A Save As dialog is already open".into();
+            cx.notify();
+            return;
+        }
+        let Some(guard) = self.tabs.active_save_guard() else {
+            self.status = "Open or create a file before saving".into();
+            cx.notify();
+            return;
+        };
+        self.picking_save_as = true;
+        self.status = "Choose a workspace path for Save As".into();
+        cx.notify();
+        let selection = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some("Save As".into()),
+        });
+        cx.spawn(async move |editor, cx| {
+            let response = selection.await;
+            editor
+                .update(cx, |editor, cx| {
+                    editor.picking_save_as = false;
+                    match response {
+                        Ok(Ok(Some(paths))) => {
+                            if let Some(path) = paths.into_iter().next() {
+                                match editor.tabs.save_as_if_current(&guard, &path, false) {
+                                    Some(commit) => {
+                                        if commit.wrote_file() {
+                                            editor.line_geometry.clear();
+                                        }
+                                        editor.status = commit.status();
+                                    }
+                                    None => {
+                                        editor.status =
+                                            "Save As canceled: editor tab changed while choosing path".into();
+                                    }
+                                }
+                            }
+                        }
+                        Ok(Ok(None)) => editor.status = "Save As canceled".into(),
+                        Ok(Err(error)) => editor.status = format!("Save As failed: {error}"),
+                        Err(error) => editor.status = format!("Save As canceled: {error}"),
+                    }
+                    cx.notify();
+                })
+                .ok();
+        })
+        .detach();
+    }
+
     fn navigated(&self, cx: &mut Context<Self>) {
         self.reveal_caret();
         cx.notify();
@@ -711,7 +758,14 @@ impl NativeEditor {
         self.navigated(cx);
     }
     fn save_file(&mut self, _: &SaveFile, _: &mut Window, cx: &mut Context<Self>) {
-        self.save(cx);
+        if self.tabs.is_empty() {
+            self.status = "Open or create a file before saving".into();
+            cx.notify();
+        } else if self.doc().path().is_none() {
+            self.prompt_save_as(cx);
+        } else {
+            self.save(cx);
+        }
     }
     fn paste(&mut self, _: &Paste, _: &mut Window, cx: &mut Context<Self>) {
         if let Some(value) = cx.read_from_clipboard().and_then(|item| item.text()) {

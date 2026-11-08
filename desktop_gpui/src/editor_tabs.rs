@@ -20,6 +20,9 @@ pub struct EditorTabs {
     drafts: Option<EditorDraftStore>,
     tabs: Vec<EditorSession>,
     active: Option<usize>,
+    /// Changes whenever a tab is opened, closed, selected or reordered.
+    /// Invalidates a Save As picker callback after close/reopen of the same path.
+    revision: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,6 +39,13 @@ pub struct EditorTabDragIdentity {
     root: PathBuf,
     path: Option<PathBuf>,
     scratch_id: Option<String>,
+}
+
+/// Snapshot of the editor tab that launched a native Save As dialog.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EditorSaveGuard {
+    identity: EditorTabDragIdentity,
+    revision: u64,
 }
 
 /// Outcome of a bulk clean-tab close. `blocked` counts tabs that stayed open
@@ -75,7 +85,29 @@ impl EditorTabs {
             drafts,
             tabs: Vec::new(),
             active: None,
+            revision: 0,
         }
+    }
+
+    pub fn active_save_guard(&self) -> Option<EditorSaveGuard> {
+        Some(EditorSaveGuard {
+            identity: self.drag_identity_at(self.active?)?,
+            revision: self.revision,
+        })
+    }
+
+    /// Ignore late OS-dialog responses if the user changed, closed, opened
+    /// or reordered tabs while choosing the destination.
+    pub fn save_as_if_current(
+        &mut self,
+        guard: &EditorSaveGuard,
+        destination: &Path,
+        overwrite: bool,
+    ) -> Option<SaveCommit> {
+        if self.revision != guard.revision || self.active_save_guard().as_ref() != Some(guard) {
+            return None;
+        }
+        Some(self.save_as(destination, overwrite))
     }
 
     pub fn is_empty(&self) -> bool {
@@ -160,6 +192,9 @@ impl EditorTabs {
             self.tabs
                 .push(EditorSession::recovered_scratch(document, store.clone()));
         }
+        if count > 0 {
+            self.revision = self.revision.wrapping_add(1);
+        }
         if self.active.is_none() && count > 0 {
             self.active = Some(0);
         }
@@ -171,6 +206,7 @@ impl EditorTabs {
             return false;
         }
         self.active = Some(index);
+        self.revision = self.revision.wrapping_add(1);
         true
     }
 
@@ -192,6 +228,7 @@ impl EditorTabs {
         }
         let tab = self.tabs.remove(from);
         self.tabs.insert(to, tab);
+        self.revision = self.revision.wrapping_add(1);
         self.active = self.active.map(|current| {
             if current == from {
                 to
@@ -252,6 +289,7 @@ impl EditorTabs {
         if effect.closed() {
             let active = self.active;
             self.tabs.remove(index);
+            self.revision = self.revision.wrapping_add(1);
             self.active = match active {
                 _ if self.tabs.is_empty() => None,
                 Some(current) if current > index => Some(current - 1),
@@ -329,6 +367,7 @@ impl EditorTabs {
             OpenEffect::AlreadyOpen
         } else {
             self.active = Some(index);
+            self.revision = self.revision.wrapping_add(1);
             OpenEffect::Focused
         }
     }
@@ -357,6 +396,7 @@ impl EditorTabs {
         }
         self.tabs.push(session);
         self.active = Some(self.tabs.len() - 1);
+        self.revision = self.revision.wrapping_add(1);
         Ok(effect)
     }
 
@@ -705,5 +745,82 @@ mod tests {
         assert_eq!(tabs.tab_labels().len(), 1);
         assert_eq!(tabs.document().unwrap().content(), "");
         assert_eq!(fs::read(&file).unwrap(), b"saved file");
+    }
+
+    #[test]
+    fn save_as_picker_cannot_write_another_tab_after_switch_or_reorder() {
+        let workspace = tempfile::tempdir().unwrap();
+        let root = workspace.path();
+        let destination = root.join("picked.txt");
+        let mut tabs = EditorTabs::new(None);
+        tabs.open_scratch(root).unwrap();
+        tabs.document_mut()
+            .unwrap()
+            .replace(None, "source draft")
+            .unwrap();
+        let first_request = tabs.active_save_guard().unwrap();
+
+        tabs.open_scratch(root).unwrap();
+        tabs.document_mut()
+            .unwrap()
+            .replace(None, "other draft")
+            .unwrap();
+        assert!(tabs
+            .save_as_if_current(&first_request, &destination, false)
+            .is_none());
+        assert!(!destination.exists());
+        assert_eq!(tabs.document().unwrap().content(), "other draft");
+
+        assert!(tabs.activate(0));
+        assert!(
+            tabs.save_as_if_current(&first_request, &destination, false)
+                .is_none(),
+            "switching back must not reactivate an obsolete dialog"
+        );
+        let active_request = tabs.active_save_guard().unwrap();
+        assert!(tabs.move_tab(0, 1));
+        assert!(
+            tabs.save_as_if_current(&active_request, &destination, false)
+                .is_none(),
+            "reordered tabs invalidate the pending request"
+        );
+        assert!(!destination.exists());
+
+        let fresh_request = tabs.active_save_guard().unwrap();
+        assert!(tabs
+            .save_as_if_current(&fresh_request, &destination, false)
+            .unwrap()
+            .wrote_file());
+        assert_eq!(fs::read_to_string(&destination).unwrap(), "source draft");
+        assert_eq!(tabs.tab_labels().len(), 2);
+    }
+
+    #[test]
+    fn save_as_picker_rejects_closed_and_reopened_same_path_and_unconfirmed_overwrite() {
+        let workspace = tempfile::tempdir().unwrap();
+        let root = workspace.path();
+        let named = root.join("named.txt");
+        let occupied = root.join("occupied.txt");
+        let new_path = root.join("new.txt");
+        fs::write(&named, "original").unwrap();
+        fs::write(&occupied, "untouched").unwrap();
+        let mut tabs = EditorTabs::new(None);
+        tabs.open_file(root, &named).unwrap();
+        let prior_session = tabs.active_save_guard().unwrap();
+        assert!(tabs.close_active(false).closed());
+        tabs.open_file(root, &named).unwrap();
+        assert!(
+            tabs.save_as_if_current(&prior_session, &new_path, false)
+                .is_none(),
+            "close/reopen the same file is not the same editor session"
+        );
+        let current_session = tabs.active_save_guard().unwrap();
+        let refused = tabs
+            .save_as_if_current(&current_session, &occupied, false)
+            .unwrap();
+        assert!(refused.blocked());
+        assert_eq!(fs::read_to_string(&occupied).unwrap(), "untouched");
+        assert_eq!(tabs.document().unwrap().path(), Some(named.as_path()));
+        assert!(!new_path.exists());
     }
 }

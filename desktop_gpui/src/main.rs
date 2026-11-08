@@ -134,7 +134,6 @@ struct Workbench {
     worktree_create_input: Option<Entity<QuickOpenInput>>,
     worktree_delete_pending: Option<PathBuf>,
     picking_workspace: bool,
-    picking_save_as: bool,
     quick_open: Option<Entity<QuickOpenInput>>,
     file_index: Option<Arc<WorkspaceFileIndex>>,
     file_index_loading: bool,
@@ -913,6 +912,15 @@ impl Workbench {
             return;
         }
         let path = editor.read(cx).document().path().map(PathBuf::from);
+        if path.is_none() {
+            // Align with Flutter: saving Untitled opens Save As instead of
+            // refusing with "Scratch document requires Save As".
+            editor.update(cx, |editor, cx| editor.prompt_save_as(cx));
+            self.model
+                .set_status("Choose a workspace path to save the untitled file");
+            cx.notify();
+            return;
+        }
         let saved = editor.update(cx, |editor, cx| editor.save(cx));
         if saved {
             if self.model.selected_path() == path.as_deref() {
@@ -959,57 +967,12 @@ impl Workbench {
     }
 
     fn pick_save_as(&mut self, cx: &mut Context<Self>) {
-        if self.editor.is_none() || self.picking_save_as {
-            return;
-        }
-        if self
-            .editor
-            .as_ref()
-            .is_some_and(|editor| editor.read(cx).tabs_empty())
-        {
-            self.model
-                .set_status("Open or create a file before Save As");
-            cx.notify();
-            return;
-        }
-        self.picking_save_as = true;
-        let selection = cx.prompt_for_paths(PathPromptOptions {
-            files: true,
-            directories: false,
-            multiple: false,
-            prompt: Some("Save As".into()),
-        });
-        cx.spawn(async move |view, cx| {
-            let result = selection.await;
-            view.update(cx, |view, cx| {
-                view.picking_save_as = false;
-                match result {
-                    Ok(Ok(Some(paths))) => {
-                        if let Some(path) = paths.into_iter().next() {
-                            view.save_editor_as(path, cx);
-                        }
-                    }
-                    Ok(Ok(None)) => {}
-                    Ok(Err(error)) => view.model.set_status(format!("Save As failed: {error}")),
-                    Err(error) => view.model.set_status(format!("Save As canceled: {error}")),
-                }
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
-    }
-
-    fn save_editor_as(&mut self, path: PathBuf, cx: &mut Context<Self>) {
-        let Some(editor) = &self.editor else {
+        let Some(editor) = self.editor.clone() else {
             return;
         };
-        let saved = editor.update(cx, |editor, cx| editor.save_as(&path, false, cx));
-        if saved && self.model.selected_path() == Some(path.as_path()) {
-            self.model.reload_active();
-        }
-        let status = editor.read(cx).status_text().to_owned();
-        self.model.set_status(status);
+        editor.update(cx, |editor, cx| editor.prompt_save_as(cx));
+        self.model
+            .set_status("Save As: choose a workspace filename");
         cx.notify();
     }
 
@@ -4339,7 +4302,6 @@ fn main() {
                         worktree_create_input: None,
                         worktree_delete_pending: None,
                         picking_workspace: false,
-                        picking_save_as: false,
                         quick_open: None,
                         file_index: None,
                         file_index_loading: false,
