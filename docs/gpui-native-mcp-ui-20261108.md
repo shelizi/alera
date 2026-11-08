@@ -52,8 +52,8 @@ independently from Classic. A selected ref must resolve to exactly one displayed
 local or remote branch; ambiguous or missing names fail closed. Remote favorites
 are namespaced as `refs/remotes/<name>` and persisted in a bounded Native-only
 per-workspace file. Native never changes repository configuration to keep a
-favorite. Native also accepts `open_git_graph.filePath` for a currently
-existing Workspace file and `gitDiffRoot` for a Workspace-contained
+favorite. Native also accepts `open_git_graph.filePath` for an existing
+or historically deleted Workspace-relative file and `gitDiffRoot` for a Workspace-contained
 source-control directory. Paths are resolved and canonicalized a second time
 inside Native, reject symlink traversal or files outside the requested scope,
 and do not reach shell commands or Git revspecs. File history shows commits
@@ -61,8 +61,19 @@ that modified the requested path, based on each commit's first parent.
 Directory history includes commits touching the subtree. Reads have a
 2048-commit scan ceiling and a 96-result display ceiling; truncated results
 are marked. A visible **Clear path filter** control returns to the full graph.
-This is a read-only, first-parent file-history filter rather than a rename
-tracking implementation; moved or deleted files are not yet followed.
+File history tracks first-parent Git renames backward from each displayed
+branch tip using libgit2 content similarity, with per-commit alias tracking
+so parallel branch histories cannot overwrite one another. A removed file
+can be looked up by its historical path even after deletion from disk:
+Native resolves and validates its nearest existing ancestor, refuses unsafe
+symlinks or a path outside the Workspace/Git scope, and requires evidence of
+the file within the bounded history rather than acknowledging an unknown path.
+At a new-file addition, tracing stops instead of combining with an older
+unrelated file of the same name. Rename detection uses a bounded diff limit
+(512 deltas, 200 rename candidates); very large rewrites, sub-threshold
+content similarity, cross-root moves, and changes on merge commits' second
+parents may remain unavailable. No Git refs, index or working files are
+changed during history reads.
 
 ## Native Settings ownership and behavior
 

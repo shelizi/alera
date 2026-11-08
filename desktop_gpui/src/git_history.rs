@@ -1,6 +1,8 @@
 //! Bounded read-only history, commit preview and local branch comparison.
 //! All repository I/O belongs on a background worker, never in GPUI render.
-use git2::{BranchType, DiffFormat, DiffOptions, Oid, Repository, Sort};
+use git2::{BranchType, Delta, DiffFindOptions, DiffFormat, DiffOptions, Oid, Repository, Sort};
+use std::collections::HashMap;
+use std::fs;
 use std::path::{Component, Path, PathBuf};
 
 const MAX_HISTORY: usize = 96;
@@ -9,6 +11,7 @@ const MAX_PATCH: usize = 24 * 1024;
 /// Path-limited graph reads are background jobs but may still traverse a
 /// large repository. Never run an unbounded full-history file scan.
 const MAX_FILTER_SCAN: usize = 2048;
+const MAX_RENAME_DIFF_DELTAS: usize = 512;
 
 #[derive(Debug, Clone)]
 pub struct GitBranchRow {
@@ -54,10 +57,17 @@ pub struct GitHistoryOptions {
 #[derive(Debug, Clone)]
 struct HistoryPathFilter {
     relative_to_repo: PathBuf,
+    scope_relative_to_repo: PathBuf,
     directory: bool,
+    missing_at_worktree: bool,
 }
 
 impl HistoryPathFilter {
+    fn in_scope(&self, path: &Path) -> bool {
+        self.scope_relative_to_repo.as_os_str().is_empty()
+            || path.starts_with(&self.scope_relative_to_repo)
+    }
+
     fn touches(&self, diff: &git2::Diff<'_>) -> bool {
         diff.deltas().any(|delta| {
             [delta.old_file().path(), delta.new_file().path()]
@@ -71,6 +81,57 @@ impl HistoryPathFilter {
                     }
                 })
         })
+    }
+
+    /// Trace each selected file identity from this commit to its first
+    /// parent. A new file stops at its addition, while a deleted file keeps
+    /// its previous name. A detected rename follows the old pathname.
+    fn trace_file(
+        &self,
+        diff: &mut git2::Diff<'_>,
+        tracked_paths: &[PathBuf],
+    ) -> Result<(bool, Vec<PathBuf>), String> {
+        if tracked_paths.is_empty() {
+            return Ok((false, Vec::new()));
+        }
+        // Similarity detection can be expensive for huge commits; beyond this
+        // limit, do not invent a previous name or inspect arbitrary content.
+        if diff.deltas().len() <= MAX_RENAME_DIFF_DELTAS {
+            let has_add = diff.deltas().any(|delta| delta.status() == Delta::Added);
+            let has_delete = diff.deltas().any(|delta| delta.status() == Delta::Deleted);
+            if has_add && has_delete {
+                let mut options = DiffFindOptions::new();
+                options.renames(true).rename_limit(200);
+                diff.find_similar(Some(&mut options))
+                    .map_err(|error| error.to_string())?;
+            }
+        }
+        let mut touched = false;
+        let mut previous = Vec::<PathBuf>::new();
+        for tracked in tracked_paths {
+            let changed = diff.deltas().find(|delta| {
+                delta.old_file().path() == Some(tracked.as_path())
+                    || delta.new_file().path() == Some(tracked.as_path())
+            });
+            let parent_path = if let Some(delta) = changed {
+                touched = true;
+                match delta.status() {
+                    Delta::Added if delta.new_file().path() == Some(tracked.as_path()) => None,
+                    Delta::Renamed if delta.new_file().path() == Some(tracked.as_path()) => {
+                        delta.old_file().path()
+                    }
+                    _ => Some(tracked.as_path()),
+                }
+            } else {
+                Some(tracked.as_path())
+            };
+            if let Some(path) = parent_path {
+                if self.in_scope(path) && !previous.iter().any(|candidate| candidate == path) {
+                    previous.push(path.to_path_buf());
+                }
+            }
+        }
+        Ok((touched, previous))
     }
 }
 
@@ -91,6 +152,48 @@ fn validated_relative_path(path: &str) -> Result<&Path, String> {
 
 /// Resolve scope from an actual current Workspace directory. Disallow
 /// symlink escapes even if the Host already validated its request.
+/// A previously committed file may no longer exist. Resolve its nearest
+/// existing ancestor and keep the missing suffix purely lexical. A symlinked
+/// parent must resolve safely within the chosen Workspace and Git root.
+fn resolve_current_or_deleted_file(
+    root: &Path,
+    relative: &Path,
+) -> Result<(PathBuf, bool), String> {
+    let requested = root.join(relative);
+    match fs::symlink_metadata(&requested) {
+        Ok(_) => {
+            let canonical = dunce::canonicalize(&requested)
+                .map_err(|_| "Git Graph file target cannot be resolved".to_string())?;
+            if !canonical.is_file() {
+                return Err("Git Graph file target is not a regular file".into());
+            }
+            return Ok((canonical, false));
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => return Err("Git Graph file target cannot be accessed".into()),
+    }
+    let mut ancestor = requested.as_path();
+    loop {
+        ancestor = ancestor
+            .parent()
+            .ok_or("Git Graph file has no valid ancestor")?;
+        match fs::symlink_metadata(ancestor) {
+            Ok(_) => break,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(_) => return Err("Git Graph file ancestor is inaccessible".into()),
+        }
+    }
+    let canonical = dunce::canonicalize(ancestor)
+        .map_err(|_| "Git Graph file ancestor cannot be resolved".to_string())?;
+    if !canonical.is_dir() {
+        return Err("Git Graph missing file has an invalid parent".into());
+    }
+    let suffix = requested
+        .strip_prefix(ancestor)
+        .map_err(|_| "Git Graph file suffix is invalid".to_string())?;
+    Ok((canonical.join(suffix), true))
+}
+
 fn history_repo_and_path_filter(
     workspace: &Path,
     options: &GitHistoryOptions,
@@ -116,23 +219,29 @@ fn history_repo_and_path_filter(
             .ok_or("Git Graph worktree has no working directory")?,
     )
     .map_err(|error| error.to_string())?;
-    let (selected, directory) = if let Some(file) = options.file_path.as_deref() {
-        let file = validated_relative_path(file)?;
-        let target = dunce::canonicalize(root.join(file))
-            .map_err(|_| "Git Graph file does not exist".to_string())?;
-        if !target.starts_with(&scope) || !target.is_file() {
-            return Err("Git Graph file must be inside the selected Workspace scope".into());
-        }
-        (target, false)
-    } else {
-        (scope, true)
-    };
+    let (selected, directory, missing_at_worktree) =
+        if let Some(file) = options.file_path.as_deref() {
+            let file = validated_relative_path(file)?;
+            let (target, missing) = resolve_current_or_deleted_file(&root, file)?;
+            if !target.starts_with(&scope) {
+                return Err("Git Graph file must be inside the selected Workspace scope".into());
+            }
+            (target, false, missing)
+        } else {
+            (scope.clone(), true, false)
+        };
     let relative = selected
         .strip_prefix(&repo_root)
         .map_err(|_| "Git Graph path is outside the repository".to_string())?;
+    let scope_relative_to_repo = scope
+        .strip_prefix(&repo_root)
+        .map_err(|_| "Git Graph root is outside repository".to_string())?
+        .to_path_buf();
     let filter = (!relative.as_os_str().is_empty()).then(|| HistoryPathFilter {
         relative_to_repo: relative.to_path_buf(),
+        scope_relative_to_repo,
         directory,
+        missing_at_worktree,
     });
     Ok((repo, filter))
 }
@@ -245,9 +354,26 @@ impl GitHistorySnapshot {
         for (oid, _, _) in &tips {
             walk.push(*oid).map_err(|e| e.to_string())?;
         }
+        let mut file_history_paths: HashMap<Oid, Vec<PathBuf>> = HashMap::new();
+        if let Some(filter) = &filter {
+            if !filter.directory {
+                for (oid, _, _) in &tips {
+                    file_history_paths
+                        .entry(*oid)
+                        .or_default()
+                        .push(filter.relative_to_repo.clone());
+                }
+            }
+        }
         if !options.favorites_only && options.selected_ref.is_none() {
             if let Ok(head) = repo.head().and_then(|head| head.peel_to_commit()) {
                 walk.push(head.id()).map_err(|e| e.to_string())?;
+                if filter.as_ref().is_some_and(|filter| !filter.directory) {
+                    file_history_paths
+                        .entry(head.id())
+                        .or_default()
+                        .push(filter.as_ref().unwrap().relative_to_repo.clone());
+                }
             }
         }
         let mut commits = Vec::new();
@@ -261,21 +387,35 @@ impl GitHistorySnapshot {
             let oid = oid.map_err(|e| e.to_string())?;
             let commit = repo.find_commit(oid).map_err(|e| e.to_string())?;
             if let Some(filter) = &filter {
-                let parent_tree = if commit.parent_count() > 0 {
-                    Some(
-                        commit
-                            .parent(0)
-                            .and_then(|parent| parent.tree())
-                            .map_err(|error| error.to_string())?,
-                    )
+                let first_parent = if commit.parent_count() > 0 {
+                    Some(commit.parent(0).map_err(|error| error.to_string())?)
                 } else {
                     None
                 };
+                let parent_tree = first_parent
+                    .as_ref()
+                    .map(|parent| parent.tree().map_err(|error| error.to_string()))
+                    .transpose()?;
                 let tree = commit.tree().map_err(|error| error.to_string())?;
-                let diff = repo
+                let mut diff = repo
                     .diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), None)
                     .map_err(|error| error.to_string())?;
-                if !filter.touches(&diff) {
+                let touched = if filter.directory {
+                    filter.touches(&diff)
+                } else {
+                    let aliases = file_history_paths.remove(&oid).unwrap_or_default();
+                    let (touched, previous) = filter.trace_file(&mut diff, &aliases)?;
+                    if let Some(parent) = first_parent {
+                        let next = file_history_paths.entry(parent.id()).or_default();
+                        for alias in previous {
+                            if !next.contains(&alias) && next.len() < MAX_BRANCHES {
+                                next.push(alias);
+                            }
+                        }
+                    }
+                    touched
+                };
+                if !touched {
                     continue;
                 }
             }
@@ -305,6 +445,14 @@ impl GitHistorySnapshot {
                     })
                     .collect(),
             });
+        }
+        if filter
+            .as_ref()
+            .is_some_and(|filter| filter.missing_at_worktree && commits.is_empty())
+        {
+            return Err(
+                "Git Graph deleted file has no matching history within the scan limit".into(),
+            );
         }
         Ok(Self {
             current,
@@ -732,6 +880,152 @@ mod tests {
         assert_eq!(
             fs::read_to_string(dir.path().join("src/entry.rs")).unwrap(),
             "second\n"
+        );
+    }
+
+    /// A file's Git identity can outlive both its pathname and the on-disk
+    /// file. No real user repository is touched by this test.
+    #[test]
+    fn file_history_follows_first_parent_renames_and_deleted_paths() {
+        fn commit_file(repo: &Repository, add: &[&str], remove: &[&str], message: &str) -> Oid {
+            let mut index = repo.index().unwrap();
+            for path in remove {
+                index.remove_path(Path::new(path)).unwrap();
+            }
+            for path in add {
+                index.add_path(Path::new(path)).unwrap();
+            }
+            let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+            let sig = git2::Signature::now("Native Rename Test", "rename@example.invalid").unwrap();
+            let parent = repo.head().ok().and_then(|head| head.peel_to_commit().ok());
+            if let Some(parent) = parent.as_ref() {
+                repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &[parent])
+                    .unwrap()
+            } else {
+                repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &[])
+                    .unwrap()
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        fs::create_dir_all(dir.path().join("docs")).unwrap();
+        fs::write(dir.path().join("src/old.txt"), "hello\n").unwrap();
+        commit_file(&repo, &["src/old.txt"], &[], "created old path");
+        fs::write(dir.path().join("src/old.txt"), "hello\nworld\n").unwrap();
+        commit_file(&repo, &["src/old.txt"], &[], "modified old path");
+        fs::rename(
+            dir.path().join("src/old.txt"),
+            dir.path().join("src/new.txt"),
+        )
+        .unwrap();
+        commit_file(
+            &repo,
+            &["src/new.txt"],
+            &["src/old.txt"],
+            "renamed old to new",
+        );
+        fs::write(dir.path().join("docs/readme.md"), "unrelated\n").unwrap();
+        commit_file(&repo, &["docs/readme.md"], &[], "unrelated documentation");
+        fs::write(dir.path().join("src/new.txt"), "hello\nworld\nthird\n").unwrap();
+        commit_file(&repo, &["src/new.txt"], &[], "modified new path");
+
+        let renamed = GitHistorySnapshot::load_filtered(
+            dir.path(),
+            &GitHistoryOptions {
+                file_path: Some("src/new.txt".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            renamed
+                .commits
+                .iter()
+                .map(|row| row.subject.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "modified new path",
+                "renamed old to new",
+                "modified old path",
+                "created old path",
+            ]
+        );
+
+        fs::remove_file(dir.path().join("src/new.txt")).unwrap();
+        commit_file(&repo, &[], &["src/new.txt"], "deleted renamed file");
+        fs::write(dir.path().join("docs/readme.md"), "unrelated newer\n").unwrap();
+        commit_file(&repo, &["docs/readme.md"], &[], "newest documentation");
+
+        let deleted = GitHistorySnapshot::load_filtered(
+            dir.path(),
+            &GitHistoryOptions {
+                file_path: Some("src/new.txt".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            deleted
+                .commits
+                .iter()
+                .map(|row| row.subject.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "deleted renamed file",
+                "modified new path",
+                "renamed old to new",
+                "modified old path",
+                "created old path",
+            ]
+        );
+        let old = GitHistorySnapshot::load_filtered(
+            dir.path(),
+            &GitHistoryOptions {
+                file_path: Some("src/old.txt".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(old
+            .commits
+            .iter()
+            .any(|row| row.subject == "modified old path"));
+        assert!(!old
+            .commits
+            .iter()
+            .any(|row| row.subject == "modified new path"));
+        assert!(
+            GitHistorySnapshot::load_filtered(
+                dir.path(),
+                &GitHistoryOptions {
+                    file_path: Some("src/never-existed.txt".into()),
+                    ..Default::default()
+                },
+            )
+            .is_err(),
+            "An unknown deleted path must fail rather than display empty success"
+        );
+        assert!(
+            GitHistorySnapshot::load_filtered(
+                dir.path(),
+                &GitHistoryOptions {
+                    git_diff_root: Some("docs".into()),
+                    file_path: Some("src/old.txt".into()),
+                    ..Default::default()
+                },
+            )
+            .is_err(),
+            "Historical file paths cannot escape the requested Git root"
+        );
+        assert_eq!(
+            repo.head()
+                .unwrap()
+                .peel_to_commit()
+                .unwrap()
+                .summary()
+                .unwrap(),
+            Some("newest documentation")
         );
     }
 }
