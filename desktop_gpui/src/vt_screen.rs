@@ -9,6 +9,7 @@ use std::ops::Range;
 const MAX_SCROLLBACK_LINES: usize = 240;
 const DEFAULT_ROWS: u16 = 24;
 const DEFAULT_COLS: u16 = 80;
+const MAX_RESIZE_CSI_BYTES: usize = 32;
 pub const TERMINAL_DEFAULT_FG: u32 = 0xe1e4e8;
 pub const TERMINAL_DEFAULT_BG: u32 = 0x15171b;
 const CURSOR_FOREGROUND: u32 = 0x15171b;
@@ -99,10 +100,74 @@ fn cell_style(cell: &vt100::Cell, cursor: bool) -> CellStyle {
     }
 }
 
+/// Tracks only the bounded ConPTY/xterm window resize report
+/// CSI 8;rows;cols t across incremental Host reads. Other control sequences
+/// stay the responsibility of the vt100 parser; this probe never consumes or
+/// rewrites them and cannot trigger a Host resize.
+#[derive(Default)]
+struct ConptyResizeProbe {
+    candidate: Vec<u8>,
+}
+
+impl ConptyResizeProbe {
+    fn observe(&mut self, byte: u8) -> Option<(u16, u16)> {
+        if byte == b'\x1b' {
+            self.candidate.clear();
+            self.candidate.push(byte);
+            return None;
+        }
+        if self.candidate.is_empty() {
+            return None;
+        }
+        self.candidate.push(byte);
+        let candidate = self.candidate.as_slice();
+        const PREFIX: &[u8] = b"\x1b[8;";
+        if candidate.len() > MAX_RESIZE_CSI_BYTES
+            || (candidate.len() <= PREFIX.len() && !PREFIX.starts_with(candidate))
+        {
+            self.candidate.clear();
+            return None;
+        }
+        if candidate.len() <= PREFIX.len() {
+            return None;
+        }
+        let args = &candidate[PREFIX.len()..];
+        if args.last() == Some(&b't') {
+            let payload = &args[..args.len() - 1];
+            let mut values = payload.split(|byte| *byte == b';');
+            let rows = values.next().and_then(parse_resize_number);
+            let cols = values.next().and_then(parse_resize_number);
+            let result = if values.next().is_none() {
+                rows.zip(cols)
+            } else {
+                None
+            };
+            self.candidate.clear();
+            return result;
+        }
+        if args
+            .iter()
+            .any(|byte| !byte.is_ascii_digit() && *byte != b';')
+            || args.iter().filter(|byte| **byte == b';').count() > 1
+        {
+            self.candidate.clear();
+        }
+        None
+    }
+}
+
+fn parse_resize_number(bytes: &[u8]) -> Option<u16> {
+    (!bytes.is_empty() && bytes.iter().all(u8::is_ascii_digit))
+        .then(|| std::str::from_utf8(bytes).ok()?.parse::<u16>().ok())
+        .flatten()
+        .filter(|value| *value > 0)
+}
+
 pub struct VtScreen {
     parser: vt100::Parser,
     rows: u16,
     cols: u16,
+    resize_probe: ConptyResizeProbe,
 }
 
 impl std::fmt::Debug for VtScreen {
@@ -129,11 +194,28 @@ impl VtScreen {
             NonZeroU16::new(cols).expect("clamped cols"),
             MAX_SCROLLBACK_LINES,
         );
-        Self { parser, rows, cols }
+        Self {
+            parser,
+            rows,
+            cols,
+            resize_probe: ConptyResizeProbe::default(),
+        }
     }
 
     pub fn feed(&mut self, text: &str) {
-        self.parser.process(text.as_bytes());
+        let bytes = text.as_bytes();
+        let mut start = 0;
+        for (offset, byte) in bytes.iter().copied().enumerate() {
+            if let Some((rows, cols)) = self.resize_probe.observe(byte) {
+                // Process the CSI itself at the old size, then adjust the
+                // bounded local preview BEFORE the following Host redraw.
+                // This also works when CSI starts in a previous read.
+                self.parser.process(&bytes[start..=offset]);
+                self.set_preview_size(rows, cols);
+                start = offset + 1;
+            }
+        }
+        self.parser.process(&bytes[start..]);
     }
 
     pub fn reset(&mut self) {
@@ -357,5 +439,44 @@ mod tests {
         screen.reset();
         assert!(!screen.contents().contains("hello"));
         assert_eq!(screen.dimensions(), (40, 120));
+    }
+
+    #[test]
+    fn conpty_resize_notification_updates_preview_before_redraw_across_reads() {
+        let mut screen = VtScreen::default();
+        screen.feed("old output");
+        // Windows ConPTY redraw begins with the host's actual viewport size,
+        // sometimes split between two incremental CLI reads. 80x24 must not
+        // scroll away a 36x120 redraw into an apparently blank GPUI screen.
+        screen.feed("\x1b[?25l\x1b[8;36;");
+        screen.feed("120t\x1b[HMicrosoft Windows [Version test]\x1b[K\r\n");
+        // Leave the last grid row available for the cursor; a CRLF on the
+        // bottom row would intentionally scroll the first line away.
+        for row in 1..35 {
+            screen.feed(&format!("row{row}\x1b[K\r\n"));
+        }
+        screen.feed("\x1b[12;2H\x1b[?25h");
+        assert_eq!(screen.dimensions(), (36, 120));
+        assert_eq!(screen.styled_rows().len(), 36);
+        assert!(
+            screen
+                .contents()
+                .contains("Microsoft Windows [Version test]"),
+            "ConPTY redraw disappeared after resize: {:?}",
+            screen.contents()
+        );
+    }
+
+    #[test]
+    fn conpty_resize_notification_rejects_invalid_dimensions_and_clamps_sizes() {
+        let mut screen = VtScreen::default();
+        screen.feed("\x1b[8;0;120t");
+        screen.feed("\x1b[8;not-a-number;120t");
+        screen.feed("\x1b[8;99999;99999t");
+        assert_eq!(screen.dimensions(), (24, 80));
+        screen.feed("\x1b[8;120;512t");
+        assert_eq!(screen.dimensions(), (100, 240));
+        screen.feed("\x1b[8;24;80t");
+        assert_eq!(screen.dimensions(), (24, 80));
     }
 }

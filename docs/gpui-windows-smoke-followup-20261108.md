@@ -80,10 +80,10 @@ Base: `5a8786644` from the clean P0-P2 integration branch. Production `main`, Fl
   by reading a file inside the temporary workspace, resize, create a second
   independent PTY, and test split/swap/close in `TerminalPaneLayout`.
   **1 test passed, 0 failed** with the experimental CLI.
-- The post-fix native GUI click test remained **blocked** by an unrelated
+- At this stage the post-fix native GUI click test remained **blocked** by an unrelated
   Windows Security firewall dialog for Coding Tools MCP. The dialog was not
-  accepted or rejected. No claim is made that the corrected `+ New Terminal`
-  path, GUI raw keystrokes or GUI split controls passed by clicking.
+  accepted or rejected. The subsequent independently isolated GUI re-test
+  below was performed only after this dialog was no longer present.
 - After testing, the dedicated GPUI and Host processes were terminated only
   after verifying their executable paths and test runtime arguments.
   **0 experimental GPUI/CLI processes remained**, and the corrected Windows
@@ -93,13 +93,49 @@ Base: `5a8786644` from the clean P0-P2 integration branch. Production `main`, Fl
   because the MCP `protect_repository_metadata` policy rejected recursive
   removal of its `.git` directory. We did not bypass that safeguard.
 
+## GUI re-test: real Terminal, VT resize and split (same day)
+
+- Launched an additional independent Host profile `runtime3` and an isolated
+  GPUI Windows instance, using only the nested disposable Git fixture and its
+  registered Host workspace. The firewall dialog no longer obscured input;
+  no firewall permission was changed by the test.
+- **New Terminal GUI click PASS:** a real Windows CMD prompt appeared, and
+  authenticated `alera terminal --no-start list` confirmed **exactly one**
+  new running session with the correct workspace ID, tab ID and handle.
+- **Command bar GUI click PASS:** typed
+  `echo GPUI_BAR_OK > gpui-bar.txt` into the native input and clicked Run.
+  The disposable test repository contained `gpui-bar.txt` with exactly
+  `GPUI_BAR_OK`, proving the PTY executed the command, not merely echoed it.
+- **Found a new VT resize defect:** clicking `120×36` caused the test Host
+  to emit ConPTY `CSI 8;36;120 t`, but the local GPUI VT renderer kept the
+  default `80×24` preview; after ConPTY's 36-row redraw the VT view appeared
+  empty except for its cursor. Switching to Text log proved output was intact.
+- **Fixed** `VtScreen::feed` to recognize the streamed ConPTY resize sequence
+  even across two CLI reads, update *only the bounded local VT preview*
+  before rendering the subsequent Host redraw, and reject malformed or
+  unbounded dimensions. The Host's PTY lifetime and resize RPC are unchanged.
+  Two regression tests failed before repair and **2/2 passed afterward**.
+- **VT GUI re-test PASS:** built the new Windows EXE, reopened the existing
+  Host session, switched Text log → VT screen, and verified the Windows CMD
+  output, prior command, cursor and reported **120×36** preview remained
+  visible rather than blank after rehydration.
+- **Two GUI Terminal sessions PASS:** clicked New Terminal again, confirmed
+  exactly two distinct running Host session identities, clicked Split Terminal,
+  swapped the two preview panes, toggled side-by-side → stacked, and closed
+  only the secondary preview. A final authenticated Host list still reported
+  both original sessions **running**, with no third session or forced shutdown.
+- Complete native Rust model suite: **181/181 passed**. Final Windows
+  `cargo build --manifest-path desktop_gpui/Cargo.toml --locked --offline`:
+  **PASS**.
+
 ## Still unverified
 
 This smoke is not a blanket release gate. The live-Host fixture verifies
-Host-backed PTY creation, write/resize/read, confirmation and the split model,
-**not** the corrected `+ New Terminal` GUI click path after the firewall
-dialog blocked input, nor GUI attach/raw keyboard, resize or split controls.
-Microsoft Zhuyin/TSF, OS Explorer drag/drop,
-macOS/Linux GUI and performance parity also remain separate checks.
-GPUI remains `supported=false`. No production deployment, push, tag
-or release is authorized.
+Host-backed PTY creation/write/resize/read, confirmation and actual GUI
+New Terminal, command Run, Resize-to-120×36 rendering, split/swap/stack/close.
+It does **not** establish reliable direct raw printable keyboard entry with
+Microsoft Zhuyin/TSF: the active IME displayed candidate popups during
+simulated keyboard input. Arrow-key controls, OS Explorer drag/drop,
+macOS/Linux GUI, mobile-driver viewport lease interaction and performance
+parity also remain separate checks. GPUI remains `supported=false`.
+No production deployment, push, tag or release is authorized.
