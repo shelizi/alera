@@ -72,7 +72,7 @@ impl GitHistorySnapshot {
         let mut tips = Vec::new();
         let mut truncated = false;
         for branch in repo
-            .branches(if options.all_branches {
+            .branches(if options.all_branches || options.favorites_only {
                 None
             } else {
                 Some(BranchType::Local)
@@ -470,6 +470,17 @@ mod tests {
         )
         .unwrap();
         assert_eq!(remote.commits[0].oid, second.to_string());
+        let favorite_remote = GitHistorySnapshot::load_filtered(
+            dir.path(),
+            &GitHistoryOptions {
+                favorites_only: true,
+                favorites: vec!["refs/remotes/origin/feature".into()],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(favorite_remote.branches.len(), 1);
+        assert!(favorite_remote.branches[0].remote);
         assert!(
             GitHistorySnapshot::load_filtered(
                 dir.path(),

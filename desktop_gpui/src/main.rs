@@ -794,7 +794,12 @@ impl Workbench {
                 if view.workspace_generation != generation || view.git_history_request != request {
                     if let Some(command) = mcp_command {
                         if let Some(bridge) = view.mcp_ui_bridge.as_mut() {
-                            let _ = bridge.complete(&command.request_id, false, None, Some("not_visible"));
+                            let _ = bridge.complete(
+                                &command.request_id,
+                                false,
+                                None,
+                                Some("not_visible"),
+                            );
                         }
                     }
                     return;
@@ -818,7 +823,11 @@ impl Workbench {
                             &command.request_id,
                             applied,
                             None,
-                            if applied { None } else { Some("ui_operation_failed") },
+                            if applied {
+                                None
+                            } else {
+                                Some("ui_operation_failed")
+                            },
                         );
                     }
                     view.mcp_ui_status = if applied {
@@ -855,7 +864,9 @@ impl Workbench {
         } else {
             next.push(branch);
         }
-        let result = self.session_store.as_ref()
+        let result = self
+            .session_store
+            .as_ref()
             .ok_or_else(|| std::io::Error::other("Native session storage unavailable"))
             .and_then(|store| store.save_git_favorites(self.model.root(), &next));
         match result {
@@ -863,8 +874,9 @@ impl Workbench {
                 self.git_history_options.favorites = next;
                 self.refresh_git_history(cx);
             }
-            Err(error) => self.git_history_error =
-                Some(format!("Cannot persist Git favorites: {error}")),
+            Err(error) => {
+                self.git_history_error = Some(format!("Cannot persist Git favorites: {error}"))
+            }
         }
         cx.notify();
     }
@@ -1677,8 +1689,10 @@ impl Workbench {
         if let Some(store) = &self.session_store {
             match store.load_git_favorites(&canonical) {
                 Ok(favorites) => self.git_history_options.favorites = favorites,
-                Err(error) => self.git_history_error =
-                    Some(format!("Native Git favorites cannot be loaded: {error}")),
+                Err(error) => {
+                    self.git_history_error =
+                        Some(format!("Native Git favorites cannot be loaded: {error}"))
+                }
             }
         }
         self.git_history_request = self.git_history_request.wrapping_add(1);
@@ -2118,44 +2132,58 @@ impl Workbench {
         }
     }
 
-    fn start_native_mcp_git_graph(
-        &mut self,
-        command: NativeMcpUiCommand,
-        cx: &mut Context<Self>,
-    ) {
+    fn start_native_mcp_git_graph(&mut self, command: NativeMcpUiCommand, cx: &mut Context<Self>) {
         let registered = self.mcp_host_workspaces.iter().any(|workspace| {
             workspace.id == command.workspace_id
                 && dunce::canonicalize(&workspace.path).ok().as_deref() == Some(self.model.root())
         });
         let args = command.arguments.as_object();
         let supported = args.is_some_and(|args| {
-            args.keys().all(|key| matches!(
-                key.as_str(), "allBranches" | "favoritesOnly" | "selectedRef"
-            ))
-                && ["allBranches", "favoritesOnly"].into_iter().all(|key|
-                    args.get(key).is_none_or(serde_json::Value::is_boolean)
+            args.keys().all(|key| {
+                matches!(
+                    key.as_str(),
+                    "allBranches" | "favoritesOnly" | "selectedRef"
                 )
-                && args.get("selectedRef")
-                    .is_none_or(|value| value.as_str().is_some_and(|name|
+            }) && ["allBranches", "favoritesOnly"]
+                .into_iter()
+                .all(|key| args.get(key).is_none_or(serde_json::Value::is_boolean))
+                && args.get("selectedRef").is_none_or(|value| {
+                    value.as_str().is_some_and(|name| {
                         !name.is_empty() && name.len() <= 128 && !name.chars().any(char::is_control)
-                    ))
+                    })
+                })
         });
         if !registered || !supported {
             if let Some(bridge) = self.mcp_ui_bridge.as_mut() {
-                let _ = bridge.complete(&command.request_id, false, None,
-                    Some(if !registered { "workspace_missing" } else { "ui_not_ready" }));
+                let _ = bridge.complete(
+                    &command.request_id,
+                    false,
+                    None,
+                    Some(if !registered {
+                        "workspace_missing"
+                    } else {
+                        "ui_not_ready"
+                    }),
+                );
             }
             return;
         }
         let args = args.expect("validated graph arguments");
-        self.git_history_options.all_branches = args.get("allBranches")
+        self.git_history_options.all_branches = args
+            .get("allBranches")
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(self.git_history_options.all_branches);
-        self.git_history_options.favorites_only = args.get("favoritesOnly")
+        self.git_history_options.favorites_only = args
+            .get("favoritesOnly")
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(self.git_history_options.favorites_only);
-        self.git_history_options.selected_ref =
-            args.get("selectedRef").and_then(serde_json::Value::as_str).map(str::to_owned);
+        if self.git_history_options.favorites_only {
+            self.git_history_options.all_branches = true;
+        }
+        self.git_history_options.selected_ref = args
+            .get("selectedRef")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned);
         self.git_history_open = true;
         self.load_git_history(Some(command), cx);
     }
@@ -2527,8 +2555,13 @@ impl Workbench {
                             .as_ref()
                             .is_some_and(|id| profiles.iter().any(|profile| profile.id == *id))
                         {
-                            view.agent_selected_profile =
-                                profiles.first().map(|profile| profile.id.clone());
+                            view.agent_selected_profile = view
+                                .native_settings
+                                .default_agent_profile_id
+                                .as_ref()
+                                .filter(|id| profiles.iter().any(|profile| &profile.id == *id))
+                                .cloned()
+                                .or_else(|| profiles.first().map(|profile| profile.id.clone()));
                         }
                         view.agent_profiles = profiles;
                     }
@@ -4985,6 +5018,9 @@ impl Render for Workbench {
                                             .child(if git_graph_all_branches { "Remote branches: On" } else { "Remote branches: Off" })
                                             .on_click(cx.listener(|this, _, _, cx| {
                                                 this.git_history_options.all_branches = !this.git_history_options.all_branches;
+                                                if !this.git_history_options.all_branches {
+                                                    this.git_history_options.favorites_only = false;
+                                                }
                                                 this.refresh_git_history(cx);
                                             })))
                                         .child(div()
@@ -4995,6 +5031,9 @@ impl Render for Workbench {
                                             .child(if git_graph_favorites_only { "★ Favorites only" } else { "☆ All branches" })
                                             .on_click(cx.listener(|this, _, _, cx| {
                                                 this.git_history_options.favorites_only = !this.git_history_options.favorites_only;
+                                                if this.git_history_options.favorites_only {
+                                                    this.git_history_options.all_branches = true;
+                                                }
                                                 this.refresh_git_history(cx);
                                             })))
                                         .child(div()
@@ -7171,7 +7210,9 @@ fn main() {
     {
         Some(Ok(saved)) => saved,
         Some(Err(error)) => {
-            model.set_status(format!("Native Git favorites could not be restored: {error}"));
+            model.set_status(format!(
+                "Native Git favorites could not be restored: {error}"
+            ));
             Vec::new()
         }
         None => Vec::new(),
