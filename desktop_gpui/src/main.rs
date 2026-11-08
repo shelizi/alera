@@ -267,6 +267,10 @@ struct Workbench {
     tree: Option<WorkspaceTree>,
     tree_mode: bool,
     explorer_selection: Option<PathBuf>,
+    /// A read-only Explorer preview can cover an editor viewport without
+    /// dropping its existing dirty buffer, tab identity, or undo history.
+    explorer_preview_active: bool,
+    explorer_keyboard_focus: gpui::FocusHandle,
     explorer_clipboard: Option<ExplorerClipboard>,
     explorer_drop_busy: bool,
     explorer_drop_request: u64,
@@ -387,6 +391,33 @@ struct Workbench {
 }
 
 impl Workbench {
+    fn click_explorer_file(
+        &mut self,
+        path: &Path,
+        permanent: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.explorer_context_menu = None;
+        self.explorer_selection = Some(path.to_path_buf());
+        self.explorer_delete_confirmed = false;
+        if permanent {
+            if self.model.open_path(path) {
+                self.explorer_preview_active = false;
+                self.open_editor(cx);
+                if let Some(editor) = self.focused_editor() {
+                    window.focus(&editor.read(cx).focus_handle(cx));
+                }
+                self.persist_session();
+            }
+        } else if self.model.preview_path(path) {
+            self.explorer_preview_active = true;
+            self.center_view = CenterView::Editor;
+            window.focus(&self.explorer_keyboard_focus);
+        }
+        cx.notify();
+    }
+
     fn refresh_project_tree(&mut self, cx: &mut Context<Self>) {
         let saved = self.saved_projects.clone();
         let recent = self.recent_workspaces.clone();
@@ -1664,6 +1695,7 @@ impl Workbench {
             cx.notify();
             return;
         };
+        self.explorer_preview_active = false;
         let root = self.model.root().to_path_buf();
         // Never open the same disk file as two independent mutable buffers.
         // If a pane already owns it, focus that exact existing document.
@@ -1756,6 +1788,7 @@ impl Workbench {
     }
 
     fn new_editor(&mut self, cx: &mut Context<Self>) {
+        self.explorer_preview_active = false;
         let root = self.model.root().to_path_buf();
         if self.editor.is_none() {
             let mut tabs = EditorTabs::new(self.draft_store());
@@ -2101,6 +2134,7 @@ impl Workbench {
         self.mixed_panes.reset();
         self.mixed_tab_context = None;
         self.tree = WorkspaceTree::new(&canonical).ok();
+        self.explorer_preview_active = false;
         self.explorer_filter_input
             .update(cx, |input, cx| input.clear(cx));
         self.explorer_selection = None;
@@ -3296,6 +3330,7 @@ impl Workbench {
     fn select_terminal(&mut self, handle: String, cx: &mut Context<Self>) {
         self.terminal_tab_context = None;
         if self.terminals.open(&handle) {
+            self.explorer_preview_active = false;
             self.terminal_line_selection = None;
             self.center_view = CenterView::Terminal;
             self.terminal_send_loading = false;
@@ -4257,6 +4292,7 @@ impl Workbench {
             return;
         }
         self.mixed_tab_context = None;
+        self.explorer_preview_active = false;
         self.mixed_panes.activate(id);
         match id {
             WorkbenchTabIdentity::Host(target) => {
@@ -4313,6 +4349,7 @@ impl Workbench {
             self.terminal_key_queue_target = None;
         }
         self.terminals.activate(index);
+        self.explorer_preview_active = false;
         self.center_view = CenterView::Terminal;
         self.refresh_terminal_output(cx);
         self.save_mixed_pane_layout(cx);
@@ -4825,7 +4862,7 @@ impl Render for Workbench {
             .tabs()
             .iter()
             .enumerate()
-            .map(|(index, tab)| (index, tab.title.clone()))
+            .map(|(index, tab)| (index, tab.title.clone(), tab.transient))
             .collect();
         let active_tab = self.model.active_tab();
         let primary_is_editor = matches!(
@@ -4839,16 +4876,21 @@ impl Render for Workbench {
                 self.mixed_panes.active_in(PaneSlot::Secondary),
                 Some(WorkbenchTabIdentity::Editor { .. })
             );
-        let center_is_editor = if mixed_has_secondary {
+        let showing_explorer_preview =
+            self.explorer_preview_active && self.model.active_document().is_some();
+        let center_is_editor = if showing_explorer_preview {
+            true
+        } else if mixed_has_secondary {
             primary_is_editor
         } else {
             self.center_view == CenterView::Editor
         };
-        let show_preview_tabs = center_is_editor && self.editor.is_none();
+        let show_preview_tabs =
+            center_is_editor && (self.editor.is_none() || showing_explorer_preview);
         let show_editor_toolbar = center_is_editor || mixed_editor_in_secondary;
         let editor = self.editor.clone();
         let toolbar_editor = self.focused_editor();
-        let has_native_editor = toolbar_editor.is_some();
+        let has_native_editor = toolbar_editor.is_some() && !showing_explorer_preview;
         let secondary_native_editor = if mixed_editor_in_secondary {
             self.secondary_editor.clone()
         } else {
@@ -5423,6 +5465,7 @@ impl Render for Workbench {
                                     .id("right-explorer-panel")
                                     .flex_1()
                                     .min_h_0()
+                                    .track_focus(&self.explorer_keyboard_focus)
                                     .relative()
                                     .flex()
                                     .flex_col()
@@ -5732,11 +5775,11 @@ impl Render for Workbench {
                                                     this.open_explorer_context_menu(Some(context_path.clone()), event, window, cx);
                                                     cx.stop_propagation();
                                                 }))
-                                                .on_click(cx.listener(move |this, _, _, cx| {
+                                                .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
                                                     this.explorer_context_menu = None;
-                                                    this.explorer_selection = Some(clicked_path.clone());
-                                                    this.explorer_delete_confirmed = false;
                                                     if hit.is_directory {
+                                                        this.explorer_selection = Some(clicked_path.clone());
+                                                        this.explorer_delete_confirmed = false;
                                                         this.tree_mode = true;
                                                         if let Some(tree) = &mut this.tree {
                                                             if let Err(error) = tree.reveal_directory(&relative) {
@@ -5744,9 +5787,8 @@ impl Render for Workbench {
                                                             }
                                                         }
                                                         this.explorer_filter_input.update(cx, |input, cx| input.clear(cx));
-                                                    } else if this.model.open_path(&clicked_path) {
-                                                        this.open_editor(cx);
-                                                        this.persist_session();
+                                                    } else {
+                                                        this.click_explorer_file(&clicked_path, event.click_count() >= 2, window, cx);
                                                     }
                                                     cx.notify();
                                                 }))
@@ -5801,11 +5843,11 @@ impl Render for Workbench {
                                                     this.open_explorer_context_menu(Some(context_path.clone()), event, window, cx);
                                                     cx.stop_propagation();
                                                 }))
-                                                .on_click(cx.listener(move |this, _, _, cx| {
+                                                .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
                                                     this.explorer_context_menu = None;
-                                                    this.explorer_selection = Some(this.model.root().join(&relative));
-                                                    this.explorer_delete_confirmed = false;
                                                     if is_directory {
+                                                        this.explorer_selection = Some(this.model.root().join(&relative));
+                                                        this.explorer_delete_confirmed = false;
                                                         if let Some(tree) = &mut this.tree {
                                                             if let Err(error) = tree.toggle(&relative) {
                                                                 this.model.set_status(format!("Cannot expand folder: {error}"));
@@ -5813,10 +5855,7 @@ impl Render for Workbench {
                                                         }
                                                     } else {
                                                         let path = this.model.root().join(&relative);
-                                                        if this.model.open_path(&path) {
-                                                            this.open_editor(cx);
-                                                        }
-                                                        this.persist_session();
+                                                        this.click_explorer_file(&path, event.click_count() >= 2, window, cx);
                                                     }
                                                     cx.notify();
                                                 }))
@@ -5845,15 +5884,16 @@ impl Render for Workbench {
                                                     this.open_explorer_context_menu(Some(context_path.clone()), event, window, cx);
                                                     cx.stop_propagation();
                                                 }))
-                                                .on_click(cx.listener(move |this, _, _, cx| {
+                                                .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
                                                     this.explorer_context_menu = None;
-                                                    this.explorer_selection = Some(file_path.clone());
-                                                    this.explorer_delete_confirmed = false;
-                                                    this.model.open_entry(i);
-                                                    if !is_directory && this.model.selected_path() == Some(file_path.as_path()) {
-                                                        this.open_editor(cx);
+                                                    if is_directory {
+                                                        this.explorer_selection = Some(file_path.clone());
+                                                        this.explorer_delete_confirmed = false;
+                                                        this.model.open_entry(i);
+                                                        this.persist_session();
+                                                    } else {
+                                                        this.click_explorer_file(&file_path, event.click_count() >= 2, window, cx);
                                                     }
-                                                    this.persist_session();
                                                     cx.notify();
                                                 }))
                                         }).collect::<Vec<_>>()
@@ -6407,6 +6447,7 @@ impl Render for Workbench {
                                             .child(icon(UiIcon::Terminal, 16.0, if center_is_editor { MUTED } else { TEXT }))
                                             .child("Terminal")
                                             .on_click(cx.listener(|this, _, _, cx| {
+                                                this.explorer_preview_active = false;
                                                 this.center_view = CenterView::Terminal;
                                                 this.refresh_terminals(cx);
                                                 cx.notify();
@@ -6455,6 +6496,7 @@ impl Render for Workbench {
                                     .child(
                                         icon_button("terminal-attach-existing", UiIcon::Open, "Attach existing Runtime Host Terminal session", self.show_terminal_attach_picker)
                                             .on_click(cx.listener(|this, _, _, cx| {
+                                                this.explorer_preview_active = false;
                                                 this.center_view = CenterView::Terminal;
                                                 this.show_terminal_attach_picker = !this.show_terminal_attach_picker;
                                                 if this.show_terminal_attach_picker {
@@ -6474,6 +6516,7 @@ impl Render for Workbench {
                                             .child(icon(UiIcon::File, 16.0, if center_is_editor { TEXT } else { MUTED }))
                                             .child("Editor")
                                             .on_click(cx.listener(|this, _, _, cx| {
+                                                this.explorer_preview_active = false;
                                                 this.center_view = CenterView::Editor;
                                                 cx.notify();
                                             })),
@@ -6676,7 +6719,7 @@ impl Render for Workbench {
                                             .min_w_0()
                                             .flex()
                                             .overflow_x_scroll()
-                                            .children(tabs.into_iter().map(|(index, title)| {
+                                            .children(tabs.into_iter().map(|(index, title, transient)| {
                                                 div()
                                                     .flex()
                                                     .items_center()
@@ -6704,10 +6747,19 @@ impl Render for Workbench {
                                                                     MUTED
                                                                 },
                                                             ))
-                                                            .child(title)
+                                                            .child(if transient { format!("{title} · preview") } else { title })
                                                             .on_click(cx.listener(
-                                                                move |this, _, _, cx| {
+                                                                move |this, event: &gpui::ClickEvent, window, cx| {
                                                                     this.model.activate_tab(index);
+                                                                    if event.click_count() >= 2 && transient {
+                                                                        if let Some(path) = this.model.selected_path().map(PathBuf::from) {
+                                                                            this.click_explorer_file(&path, true, window, cx);
+                                                                        }
+                                                                    } else {
+                                                                        this.explorer_preview_active = true;
+                                                                        this.center_view = CenterView::Editor;
+                                                                        window.focus(&this.explorer_keyboard_focus);
+                                                                    }
                                                                     this.persist_session();
                                                                     cx.notify();
                                                                 },
@@ -6796,7 +6848,7 @@ impl Render for Workbench {
                                                     }))
                                                     .when(has_native_editor, |button| button.hidden()),
                                             )
-                                            .when(editor.is_some(), |toolbar| {
+                                            .when(editor.is_some() && !showing_explorer_preview, |toolbar| {
                                                 toolbar
                                                     .child(
                                                         icon_button("native-editor-save", UiIcon::Save, "Save current editor file (Ctrl+S)", false)
@@ -6844,7 +6896,7 @@ impl Render for Workbench {
                                             .flex()
                                             .flex_col()
                             .child(
-                                if let Some(editor) = editor {
+                                if let Some(editor) = editor.clone().filter(|_| !showing_explorer_preview) {
                                     div()
                                         .flex_1()
                                         .min_h_0()
@@ -8432,6 +8484,8 @@ fn main() {
                         tree: WorkspaceTree::new(model.root()).ok(),
                         tree_mode: true,
                         explorer_selection: None,
+                        explorer_preview_active: false,
+                        explorer_keyboard_focus: cx.focus_handle(),
                         explorer_clipboard: None,
                         explorer_drop_busy: false,
                         explorer_drop_request: 0,

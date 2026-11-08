@@ -56,9 +56,12 @@ editors, Git comparisons or multi-file actions under misleading names.
   implementation; never add decorative buttons without a working handler.
 - Ctrl/Shift multiselection, copy/cut/paste on multiple selected items,
   drag-to-folder and drag into/out of the OS need targeted parity testing.
-- Classic file single-click preview versus second-click permanent tab
-  behavior, editor reveal, and file-search result context menu parity
-  remain separate work.
+- Single-click versus double-click now has an initial implementation in
+  the Native tree, flat list, and filtered search results: one replaceable
+  read-only preview, with a second click promoting into the editable Native
+  Editor tab. The preview is not saved as a permanent tab. Pointer-level
+  acceptance, exact Classic timing, large-file preview limits, editor reveal,
+  and file-search context-menu parity remain incomplete.
 - Full file context menu options (Open in Alera, Open with Default
   Application, external editor, reveal in system file manager, compare
   with latest revision/branch, nested Git source control root) are pending.
@@ -103,3 +106,21 @@ this experimental migration without explicit approval.
   and context menu is **not signed off** by the screenshot or Cargo checks.
   Remote mouse injection on this secondary monitor did not reliably
   activate basic GPUI controls in previous isolated attempts.
+
+## Follow-up: preview tab semantics
+
+- Explorer file single click now uses `WorkbenchModel::preview_path`: exactly
+  one transient read-only tab is replaced on the next file click. Existing
+  pinned preview tabs and the underlying Native Editor sessions are retained.
+- Double click explicitly promotes that path and opens or focuses the real
+  file-backed Native Editor. The workbench overlays read-only content while
+  retaining hidden dirty Native Editor buffers, then restores editor focus
+  when the user chooses an editable tab; preview never calls Save.
+- Transient previews are excluded from `PreviewSessionStore` persistence.
+  Regular saved tabs and scratch-draft recovery remain separate; a failed,
+  oversized or outside-workspace preview never replaces a previous good one.
+- Model and state regression tests cover transient replacement, promotion,
+  failed reads, workspace boundaries and no unintended startup restore.
+- This remains **source/test verified only**, not a Windows mouse/double-click
+  usability sign-off. Preview limits remain 256 KiB / 600 lines; completing
+  the Classic large-text-file behavior needs another slice.

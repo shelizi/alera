@@ -20,6 +20,8 @@ pub struct PreviewTab {
     pub path: PathBuf,
     pub title: String,
     pub content: String,
+    /// A single Explorer click opens a replaceable read-only preview.
+    pub transient: bool,
 }
 
 #[derive(Debug)]
@@ -143,6 +145,56 @@ impl WorkbenchModel {
         self.open_path(&entry.path);
     }
 
+    /// Open a replaceable read-only preview for an Explorer single click.
+    /// Pinned previews stay intact, and failed reads do not discard the last
+    /// good transient tab. This enforces the same workspace boundary as open.
+    pub fn preview_path(&mut self, candidate: impl AsRef<Path>) -> bool {
+        let path = match dunce::canonicalize(candidate) {
+            Ok(path) if path.starts_with(&self.root) && path.is_file() => path,
+            Ok(_) => {
+                self.status = "Preview must be a workspace file".into();
+                return false;
+            }
+            Err(error) => {
+                self.status = format!("Cannot preview: {error}");
+                return false;
+            }
+        };
+        if let Some(index) = self.tabs.iter().position(|tab| tab.path == path) {
+            self.activate_tab(index);
+            return true;
+        }
+        let title = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "Untitled".into());
+        let content = match read_preview(&path) {
+            Ok(content) => content,
+            Err(error) => {
+                self.status = format!("Cannot preview {title}: {error}");
+                return false;
+            }
+        };
+        let tab = PreviewTab {
+            path,
+            title: title.clone(),
+            content,
+            transient: true,
+        };
+        if let Some(index) = self.tabs.iter().position(|tab| tab.transient) {
+            self.tabs[index] = tab;
+            self.active_tab = Some(index);
+        } else if self.tabs.len() < MAX_TABS {
+            self.tabs.push(tab);
+            self.active_tab = Some(self.tabs.len() - 1);
+        } else {
+            self.status = format!("Preview limit reached ({MAX_TABS}). Close a tab first");
+            return false;
+        }
+        self.status = format!("Previewing {title} (read-only; double-click to edit)");
+        true
+    }
+
     /// Open only files and directories contained by the current workspace.
     /// The same validation is used for clicks and persisted session restores.
     pub fn open_path(&mut self, candidate: impl AsRef<Path>) -> bool {
@@ -181,6 +233,7 @@ impl WorkbenchModel {
 
     fn open_file(&mut self, path: PathBuf, title: String) {
         if let Some(index) = self.tabs.iter().position(|tab| tab.path == path) {
+            self.tabs[index].transient = false;
             self.activate_tab(index);
             return;
         }
@@ -194,6 +247,7 @@ impl WorkbenchModel {
                     path,
                     title: title.clone(),
                     content,
+                    transient: false,
                 });
                 self.active_tab = Some(self.tabs.len() - 1);
                 self.status = format!("Opened {title} (read-only)");
@@ -320,6 +374,41 @@ fn read_preview(path: &Path) -> io::Result<String> {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn single_click_reuses_one_transient_preview_while_explicit_open_pins_it() {
+        let temp = tempfile::tempdir().unwrap();
+        for file in ["one.txt", "two.txt", "three.txt", "four.txt"] {
+            fs::write(temp.path().join(file), file).unwrap();
+        }
+        let mut model = WorkbenchModel::new(temp.path()).unwrap();
+        let one = model.root().join("one.txt");
+        let two = model.root().join("two.txt");
+        let three = model.root().join("three.txt");
+        let four = model.root().join("four.txt");
+        assert!(model.preview_path(&one));
+        assert_eq!(model.tabs().len(), 1);
+        assert!(model.active_document().unwrap().transient);
+        assert!(model.preview_path(&two));
+        assert_eq!(model.tabs().len(), 1, "only one replaceable preview");
+        assert_eq!(model.selected_path(), Some(two.as_path()));
+        assert!(model.open_path(&two));
+        assert!(!model.active_document().unwrap().transient);
+        assert!(model.preview_path(&three));
+        assert_eq!(model.tabs().len(), 2);
+        assert!(model.preview_path(&four));
+        assert_eq!(model.tabs().len(), 2);
+        assert_eq!(model.tabs()[0].path, two);
+        assert_eq!(model.tabs()[1].path, four);
+        assert!(!model.tabs()[0].transient);
+        assert!(model.tabs()[1].transient);
+        assert!(!model.preview_path(temp.path().join("../outside.txt")));
+        assert_eq!(model.selected_path(), Some(four.as_path()));
+        let large = model.root().join("large.txt");
+        fs::write(&large, vec![b'x'; MAX_FILE_BYTES as usize + 1]).unwrap();
+        assert!(!model.preview_path(&large));
+        assert_eq!(model.selected_path(), Some(four.as_path()));
+    }
 
     #[test]
     fn forgetting_previous_or_active_file_keeps_correct_preview_selected() {

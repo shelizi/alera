@@ -700,11 +700,13 @@ fn session_snapshot(model: &WorkbenchModel) -> SavedSession {
         tabs: model
             .tabs()
             .iter()
+            .filter(|tab| !tab.transient)
             .filter_map(|tab| to_relative(&tab.path))
             .take(MAX_RESTORED_TABS)
             .collect(),
         active: model
             .active_document()
+            .filter(|tab| !tab.transient)
             .and_then(|tab| to_relative(&tab.path)),
     }
 }
@@ -739,6 +741,30 @@ fn is_safe_relative(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn transient_explorer_preview_is_not_restored_or_stored_as_file_tab() {
+        let workspace = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let pinned = workspace.path().join("pinned.txt");
+        let scratch = workspace.path().join("preview.txt");
+        fs::write(&pinned, "keep").unwrap();
+        fs::write(&scratch, "replaceable").unwrap();
+        let store = PreviewSessionStore::new(state.path());
+        let mut model = WorkbenchModel::new(workspace.path()).unwrap();
+        assert!(model.open_path(&pinned));
+        assert!(model.preview_path(&scratch));
+        assert!(model.active_document().unwrap().transient);
+        let snapshot = session_snapshot(&model);
+        assert_eq!(snapshot.tabs, vec![PathBuf::from("pinned.txt")]);
+        assert_eq!(snapshot.active, None);
+        store.save(&model).unwrap();
+        let mut reopened = WorkbenchModel::new(workspace.path()).unwrap();
+        assert_eq!(store.restore(&mut reopened).unwrap(), 1);
+        assert_eq!(reopened.tabs().len(), 1);
+        assert!(!reopened.tabs()[0].transient);
+        assert_eq!(reopened.tabs()[0].path, pinned);
+    }
 
     #[test]
     fn native_git_favorites_survive_restart_and_stay_scoped_to_canonical_workspace() {
