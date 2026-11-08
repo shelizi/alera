@@ -220,7 +220,18 @@ mod tests {
         .unwrap();
         assert_eq!(visible.search("file", 20).len(), 1);
         assert_eq!(visible.search_explorer("ignored", 20).len(), 2);
-        assert!(visible.search_explorer(".git", 200).is_empty());
+        // When hidden files are explicitly enabled, .gitignore is a valid
+        // searchable file. Only .git control metadata must stay excluded.
+        let git_hits = visible.search_explorer(".git", 200);
+        assert!(git_hits.iter().any(|entry| entry.path.ends_with(".gitignore")));
+        assert!(git_hits.iter().all(|entry| {
+            entry
+                .path
+                .strip_prefix(visible.root())
+                .unwrap()
+                .components()
+                .all(|component| component.as_os_str() != std::ffi::OsStr::new(".git"))
+        }));
     }
 
     #[test]
