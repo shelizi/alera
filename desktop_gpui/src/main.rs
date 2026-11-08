@@ -30,6 +30,7 @@ use gpui::{
     KeyBinding, PathPromptOptions, Window, WindowBounds, WindowOptions,
 };
 use quick_open_ui::{bind_quick_open_keys, QuickOpenInput};
+use std::borrow::Cow;
 use std::collections::{HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -3742,6 +3743,8 @@ impl Render for Workbench {
                             .child(
                                 div()
                                     .id("project-tree-panel")
+                                    .flex_1()
+                                    .min_h_0()
                                     .flex()
                                     .flex_col()
                                     .gap_1()
@@ -3771,7 +3774,8 @@ impl Render for Workbench {
                                     .child(
                                         div()
                                             .id("project-tree-scroll")
-                                            .max_h(px(225.0))
+                                            .flex_1()
+                                            .min_h_0()
                                             .overflow_y_scroll()
                                             .children(project_tree_rows.into_iter().map(|(index, group, collapsed)| {
                                                 let root = group.root.clone();
@@ -4139,8 +4143,7 @@ impl Render for Workbench {
                             .child(
                                 div()
                                     .id("terminal-sessions-scroll")
-                                    .flex_1()
-                                    .min_h_0()
+                                    .max_h(px(145.0))
                                     .overflow_y_scroll()
                                     .children(terminal_sessions.into_iter().enumerate().map(|(index, (handle, label, workspace_id))| {
                                         div()
@@ -4233,6 +4236,17 @@ fn main() {
         .unwrap_or_default();
 
     Application::new().run(move |cx: &mut App| {
+        // Flutter embeds these licensed typefaces. Without explicitly
+        // registering them GPUI silently falls back to a Windows font even
+        // if font_family("Inter") is set on the native workbench root.
+        if let Err(error) = cx.text_system().add_fonts(vec![
+            Cow::Borrowed(include_bytes!("../../assets/fonts/Inter-Variable.ttf").as_slice()),
+            Cow::Borrowed(
+                include_bytes!("../../assets/fonts/JetBrainsMono-Variable.ttf").as_slice(),
+            ),
+        ]) {
+            eprintln!("Alera GPUI: cannot load bundled desktop fonts: {error}");
+        }
         bind_editor_keys(cx);
         bind_quick_open_keys(cx);
         cx.bind_keys([
