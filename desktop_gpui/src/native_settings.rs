@@ -31,7 +31,9 @@ impl Default for NativeSettings {
     fn default() -> Self {
         Self {
             version: VERSION,
-            auto_git_fetch_enabled: false,
+            // Match Alera Classic's first-run default while keeping storage
+            // and scheduling completely independent between the editions.
+            auto_git_fetch_enabled: true,
             auto_git_fetch_interval_minutes: 5,
             terminal_font_size: 13.0,
             editor_autosave_enabled: false,
@@ -357,6 +359,10 @@ mod tests {
     #[test]
     fn complete_host_settings_allowlist_and_parallel_writer_guard() {
         let settings = NativeSettings::default();
+        assert!(
+            settings.auto_git_fetch_enabled,
+            "Native must match Classic's default-on Git fetch"
+        );
         let known = [
             ("general.autoGitFetchEnabled", false),
             ("general.autoGitFetchIntervalMinutes", true),

@@ -67,6 +67,8 @@ confirmation/archive controls remain MCP read-only. Native Settings are
 also accessible from the top bar. Agent/Agent Profiles settings sections
 are not implemented yet; their MCP navigation requests correctly return
 `applied=false` rather than showing a placeholder and claiming success.
+Native Git Auto Fetch defaults to enabled with a five-minute interval,
+matching Classic's first-run behavior without sharing its preferences.
 
 **Acceptance remains limited:** storage and bridge tests and successful
 Native compilation cannot replace a real Agent→Host→Native GUI settings
@@ -107,6 +109,7 @@ cargo build --manifest-path rust/Cargo.toml -p alera-cli --bin alera --locked
 cargo build --manifest-path desktop_gpui/Cargo.toml --locked
 $env:ALERA_GPUI_TEST_CLI='path\\to\\disposable-built-cli.exe'
 cargo test --manifest-path desktop_gpui/Cargo.toml --no-default-features --test live_runtime_host -- --ignored
+cargo test --manifest-path desktop_gpui/Cargo.toml --no-default-features --test native_mcp_settings_host --locked -- --ignored --nocapture
 ```
 
 The integration test starts **its own temporary Host and workspace**, proves
@@ -114,3 +117,14 @@ Native App registration and disconnection, **builds a disposable Git repository,
 then creates and reads back a real Host-managed linked worktree**, and never
 needs the user's real terminal, Agent or production Host. GUI-level MCP tool
 to Native receipt end-to-end remains a separate acceptance gate.
+
+The independent `native_mcp_settings_host` integration test uses the same
+branch-built CLI to launch a **real disposable Runtime Host and Host-owned
+Agent PTY**, then calls actual MCP stdio inside the Agent's Host-injected
+capability environment. The Native App relay is a real CLI subprocess;
+an isolated headless consumer uses the actual `NativeSettingsStore` to
+execute disk-backed operations and send typed receipts. On Windows
+2026-11-08: **1/1 PASS**, including seven cases for read, update, readback,
+stale CAS rejection, secret/range rejection, and explicit fail-closed
+`open_settings` without a GUI; the test restores original settings.
+**This is real Host/MCP/data-layer E2E, not Native GPUI GUI acceptance.**
