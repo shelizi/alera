@@ -8,8 +8,11 @@ use serde_json::Value;
 use std::ffi::OsString;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
-pub const TERMINAL_READ_BYTES: u64 = 8 * 1024;
+// A 1.5s / 8 KiB polling budget throttled busy terminals to roughly 5 KiB/s.
+// Stay within the existing Host 64 KiB read window and bounded local screen.
+pub const TERMINAL_READ_BYTES: u64 = 64 * 1024;
 pub const MAX_TERMINALS: usize = 128;
 /// The Host session list is global. It is not a view of the open workspace.
 pub const HOST_SESSION_LIST_SCOPE: &str =
@@ -982,8 +985,9 @@ pub struct TerminalReadTicket {
     generation: u64,
 }
 
-/// The native UI polls every 1.5 seconds. Never issue another create RPC just
-/// because Host list propagation is delayed: only re-list the existing Host.
+/// Host creation confirmation uses the slower 1.5s housekeeping timer.
+/// Never issue another create RPC because Host list propagation is delayed:
+/// only re-list the existing Host.
 pub const TERMINAL_CONFIRM_TIMEOUT_TICKS: u8 = 20;
 const TERMINAL_CONFIRM_REFRESH_INTERVAL_TICKS: u8 = 2;
 
@@ -1128,7 +1132,80 @@ impl TerminalCreateFlow {
     }
 }
 
-/// One tick per 1500 ms; errors back off to avoid spawning busy-loop CLI reads.
+/// Limits foreground read latency without polling the CLI at a high rate while
+/// idle or hidden. The caller drives this with one lifecycle-bound 50ms timer.
+#[derive(Debug, Clone)]
+pub struct TerminalPollCadence {
+    last_poll: Instant,
+    interactive_until: Instant,
+}
+
+impl Default for TerminalPollCadence {
+    fn default() -> Self {
+        Self::new(Instant::now())
+    }
+}
+
+impl TerminalPollCadence {
+    pub const WAKE_INTERVAL: Duration = Duration::from_millis(50);
+    const FAST_INTERVAL: Duration = Duration::from_millis(100);
+    const IDLE_INTERVAL: Duration = Duration::from_millis(350);
+    const HIDDEN_INTERVAL: Duration = Duration::from_millis(1500);
+    const ACTIVITY_WINDOW: Duration = Duration::from_secs(3);
+
+    pub fn new(now: Instant) -> Self {
+        Self {
+            last_poll: now.checked_sub(Self::HIDDEN_INTERVAL).unwrap_or(now),
+            interactive_until: now,
+        }
+    }
+
+    pub fn record_activity(&mut self, now: Instant) {
+        self.interactive_until = now + Self::ACTIVITY_WINDOW;
+    }
+
+    pub fn is_due(&mut self, now: Instant, foreground: bool) -> bool {
+        let interval = if !foreground {
+            Self::HIDDEN_INTERVAL
+        } else if now < self.interactive_until {
+            Self::FAST_INTERVAL
+        } else {
+            Self::IDLE_INTERVAL
+        };
+        if now.saturating_duration_since(self.last_poll) < interval {
+            return false;
+        }
+        self.last_poll = now;
+        true
+    }
+}
+
+#[cfg(test)]
+mod terminal_poll_cadence_tests {
+    use super::*;
+
+    #[test]
+    fn foreground_output_is_fast_only_during_activity_and_background_is_throttled() {
+        let now = Instant::now();
+        let mut cadence = TerminalPollCadence::new(now);
+        assert!(cadence.is_due(now, true));
+        assert!(!cadence.is_due(now + Duration::from_millis(99), true));
+        cadence.record_activity(now + Duration::from_millis(100));
+        assert!(cadence.is_due(now + Duration::from_millis(100), true));
+        assert!(!cadence.is_due(now + Duration::from_millis(199), true));
+        assert!(cadence.is_due(now + Duration::from_millis(200), true));
+        assert!(!cadence.is_due(now + Duration::from_millis(400), false));
+        assert!(cadence.is_due(now + Duration::from_millis(1700), false));
+        assert!(!cadence.is_due(now + Duration::from_millis(1799), true));
+        assert!(cadence.is_due(now + Duration::from_millis(1800), true));
+        assert!(cadence.is_due(now + Duration::from_millis(3200), true));
+        assert!(!cadence.is_due(now + Duration::from_millis(3449), true));
+        assert!(cadence.is_due(now + Duration::from_millis(3550), true));
+    }
+}
+
+/// Gate successive failed Host reads, independent of the normal polling
+/// cadence, so a broken CLI cannot create an unbounded read loop.
 #[derive(Debug, Clone)]
 pub struct TerminalPollGate {
     enabled: bool,

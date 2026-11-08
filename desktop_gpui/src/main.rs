@@ -45,7 +45,7 @@ use alera_gpui_desktop::session::{PreviewSessionStore, TerminalLayout, TerminalL
 use alera_gpui_desktop::terminal::{
     encode_terminal_key, estimate_terminal_viewport, raw_key_reply_may_drain,
     select_registered_host_workspace, TerminalAutoResizeGate, TerminalCreateFlow,
-    TerminalCreateTick, TerminalDock, TerminalLineSelection, TerminalPollGate,
+    TerminalCreateTick, TerminalDock, TerminalLineSelection, TerminalPollCadence, TerminalPollGate,
     TerminalTabContextTarget, TerminalViewMode, TerminalViewportProposal, HOST_SESSION_LIST_SCOPE,
 };
 use alera_gpui_desktop::terminal_panes::{TerminalPaneLayout, TerminalSplitDirection};
@@ -424,6 +424,7 @@ struct Workbench {
     terminal_read_loading: Option<String>,
     terminal_split_read_loading: bool,
     terminal_poll: TerminalPollGate,
+    terminal_poll_cadence: TerminalPollCadence,
     terminal_tick: u64,
 }
 
@@ -2667,6 +2668,7 @@ impl Workbench {
         self.terminal_key_sending = false;
         self.terminal_input.update(cx, |input, cx| input.clear(cx));
         self.terminal_poll = TerminalPollGate::default();
+        self.terminal_poll_cadence = TerminalPollCadence::default();
         self.terminal_list_loading = false;
         self.terminal_read_loading = None;
         self.terminal_split_read_loading = false;
@@ -4019,6 +4021,7 @@ impl Workbench {
             self.terminal_key_queue_target = Some(target);
         }
         self.terminal_key_queue.push_back(encoded);
+        self.terminal_poll_cadence.record_activity(Instant::now());
         self.flush_terminal_key_queue(cx);
         true
     }
@@ -4189,7 +4192,6 @@ impl Workbench {
         let cursor = ticket.cursor;
         let generation = self.workspace_generation;
         self.terminal_read_loading = Some(handle.clone());
-        cx.notify();
         cx.spawn(async move |view, cx| {
             let result = cx
                 .background_spawn(async move { bridge.read_terminal(&handle, cursor) })
@@ -4199,6 +4201,7 @@ impl Workbench {
                     return;
                 }
                 view.terminal_read_loading = None;
+                let mut needs_repaint = false;
                 match result {
                     Ok(chunk) => {
                         if view.terminals.active_ticket().as_ref() == Some(&ticket) {
@@ -4206,17 +4209,30 @@ impl Workbench {
                             // reset previous failure backoff.
                             view.terminal_poll.reset();
                         }
-                        view.terminals
-                            .apply_workspace_read(generation, &ticket, chunk);
+                        let had_output = !chunk.text.is_empty();
+                        if view
+                            .terminals
+                            .apply_workspace_read(generation, &ticket, chunk)
+                        {
+                            if had_output {
+                                view.terminal_poll_cadence.record_activity(Instant::now());
+                            }
+                            needs_repaint = true;
+                        }
                     }
                     Err(error) => {
                         if view.terminals.active_ticket().as_ref() == Some(&ticket) {
                             view.terminal_poll.failed();
                             view.terminals.status = format!("Terminal read failed: {error}");
+                            needs_repaint = true;
                         }
                     }
                 }
-                cx.notify();
+                // Empty read responses are common; painting the entire
+                // Workbench at each idle poll was needless UI thread work.
+                if needs_repaint {
+                    cx.notify();
+                }
             })
             .ok();
         })
@@ -4962,10 +4978,17 @@ impl Workbench {
                     return;
                 }
                 if let Ok(chunk) = result {
-                    view.terminals
-                        .apply_workspace_read(generation, &ticket, chunk);
+                    let had_output = !chunk.text.is_empty();
+                    if view
+                        .terminals
+                        .apply_workspace_read(generation, &ticket, chunk)
+                    {
+                        if had_output {
+                            view.terminal_poll_cadence.record_activity(Instant::now());
+                        }
+                        cx.notify();
+                    }
                 }
-                cx.notify();
             })
             .ok();
         })
@@ -4973,8 +4996,37 @@ impl Workbench {
     }
 
     fn start_terminal_polling(&mut self, cx: &mut Context<Self>) {
-        // A single lifecycle-bound timer: no timer per tab, no stale callback
-        // after the Workbench entity/window has been destroyed.
+        // Foreground Host output must not wait for housekeeping (1.5s).
+        // The cadence adapts from 100ms during input/output to 350ms idle,
+        // with hidden terminals throttled back to 1.5s. No per-tab timers.
+        cx.spawn(async move |view, cx| loop {
+            cx.background_executor()
+                .timer(TerminalPollCadence::WAKE_INTERVAL)
+                .await;
+            if view
+                .update(cx, |view, cx| {
+                    let foreground = view.center_view == CenterView::Terminal
+                        || view.mixed_panes.background_host_target().is_some();
+                    if (view.terminals.active_ticket().is_none()
+                        && view.mixed_panes.background_host_target().is_none())
+                        || !view
+                            .terminal_poll_cadence
+                            .is_due(Instant::now(), foreground)
+                        || !view.terminal_poll.tick()
+                    {
+                        return;
+                    }
+                    view.refresh_terminal_output(cx);
+                    view.refresh_terminal_split_output(cx);
+                })
+                .is_err()
+            {
+                break;
+            }
+        })
+        .detach();
+        // Housekeeping retains its existing 1.5s interval and is independent
+        // of the fast output reader. Never spawn a timer per tab.
         cx.spawn(async move |view, cx| loop {
             cx.background_executor().timer(Duration::from_millis(1500)).await;
             if view
@@ -5016,16 +5068,6 @@ impl Workbench {
                     }
                     if view.terminal_tick % 10 == 1 {
                         view.refresh_terminals(cx);
-                    }
-                    if view.terminal_poll.tick() {
-                        if view.terminal_read_loading.is_none()
-                            && view.terminals.active_ticket().is_some()
-                        {
-                            view.refresh_terminal_output(cx);
-                        }
-                        if !view.terminal_split_read_loading {
-                            view.refresh_terminal_split_output(cx);
-                        }
                     }
                 })
                 .is_err()
@@ -8322,6 +8364,7 @@ fn main() {
                             terminal_read_loading: None,
                             terminal_split_read_loading: false,
                             terminal_poll: TerminalPollGate::default(),
+                            terminal_poll_cadence: TerminalPollCadence::default(),
                             terminal_tick: 0,
                         };
                         workbench.restore_scratch_tabs(cx);
