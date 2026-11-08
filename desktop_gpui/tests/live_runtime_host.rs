@@ -5,6 +5,8 @@
 
 use alera_core::child_process::windowless_command;
 use alera_gpui_desktop::runtime_bridge::{RuntimeCliBridge, RuntimeStatus};
+use alera_gpui_desktop::terminal::{TerminalCreateFlow, TerminalDock};
+use alera_gpui_desktop::terminal_panes::TerminalPaneLayout;
 use alera_gpui_desktop::vt_screen::VtScreen;
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
@@ -217,6 +219,145 @@ fn real_host_terminal_list_and_incremental_read_never_autostart() {
             row.text.is_char_boundary(span.range.start) && row.text.is_char_boundary(span.range.end)
         })
     }));
+
+    // Exercise the *real* Host creation contract via GPUI's strict CLI
+    // adapter, not a synthetic reply. In particular, this Host omits
+    // attachment.workspaceId/tabId and instead reports the session identity
+    // in tab.payload.terminalSessionId. A previously passing unit fixture
+    // failed in the native GUI because it incorrectly required those fields.
+    let project = windowless_command(&cli)
+        .args(["project", "--runtime-dir"])
+        .arg(&runtime)
+        .args([
+            "--json",
+            "add",
+            "--id",
+            "gpui-registered-test-project",
+            "--name",
+            "GPUI Host test",
+            "--repo-path",
+        ])
+        .arg(&home)
+        .args(["--kind", "folder"])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(
+        project.status.success(),
+        "isolated project registration failed: {}",
+        String::from_utf8_lossy(&project.stderr)
+    );
+    let workspace = windowless_command(&cli)
+        .args(["workspace", "--runtime-dir"])
+        .arg(&runtime)
+        .args([
+            "--json",
+            "register",
+            "--id",
+            "gpui-registered-test-workspace",
+            "--project-id",
+            "gpui-registered-test-project",
+            "--name",
+            "GPUI Host test Workspace",
+            "--path",
+        ])
+        .arg(&home)
+        .args(["--kind", "main"])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(
+        workspace.status.success(),
+        "isolated workspace registration failed: {}",
+        String::from_utf8_lossy(&workspace.stderr)
+    );
+    let registered = bridge.list_registered_workspaces().unwrap();
+    assert!(registered
+        .iter()
+        .any(|ws| ws.id == "gpui-registered-test-workspace" && ws.path == home));
+
+    let native_created = bridge
+        .create_terminal("gpui-registered-test-workspace")
+        .expect("GPUI CLI adapter must parse the Host's real terminal.create response");
+    let sessions = bridge.list_terminals().unwrap();
+    assert!(
+        sessions
+            .iter()
+            .any(|session| native_created.matches_live_session(session)),
+        "created Host session must match the authenticated list before attachment"
+    );
+    let mut create_flow = TerminalCreateFlow::default();
+    let request = create_flow.start_request().unwrap();
+    assert!(create_flow.finish_request(request, native_created.clone()));
+    assert_eq!(
+        create_flow
+            .confirm_sessions(&sessions)
+            .expect("Host identities must pass GPUI's create-confirmation gate"),
+        native_created
+    );
+    let new_marker = format!("GPUI_BRIDGE_EXEC_{}", std::process::id());
+    // A real filesystem side-effect in the temporary workspace proves
+    // command execution; echoed keystrokes alone would be misleading.
+    let command_output = home.join("gpui-bridge-exec.txt");
+    bridge
+        .write_terminal(
+            &native_created.handle,
+            &format!("echo {new_marker} > gpui-bridge-exec.txt"),
+            true,
+        )
+        .unwrap();
+    bridge
+        .resize_terminal(&native_created.handle, 120, 36)
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut created_cursor = None;
+    let mut created_transcript = String::new();
+    loop {
+        let chunk = bridge
+            .read_terminal(&native_created.handle, created_cursor)
+            .unwrap();
+        assert!(created_cursor.is_none_or(|value| chunk.next_cursor >= value));
+        created_cursor = Some(chunk.next_cursor);
+        created_transcript.push_str(&chunk.text);
+        if created_transcript.contains(&new_marker) && command_output.is_file() {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "created Host PTY never echoed test command: {created_transcript:?}"
+        );
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    assert_eq!(
+        std::fs::read_to_string(&command_output).unwrap().trim(),
+        new_marker,
+        "temporary workspace command output did not match the Host input"
+    );
+
+    // Two independently Host-owned PTYs must be enough for a split local
+    // preview without changing, duplicating or terminating either session.
+    let second_created = bridge
+        .create_terminal("gpui-registered-test-workspace")
+        .unwrap();
+    let sessions = bridge.list_terminals().unwrap();
+    assert!(sessions
+        .iter()
+        .any(|session| second_created.matches_live_session(session)));
+    let mut dock = TerminalDock::default();
+    dock.update_sessions(sessions);
+    assert!(dock.open(&native_created.handle));
+    assert!(dock.open(&second_created.handle));
+    assert!(dock.open(&native_created.handle));
+    let mut panes = TerminalPaneLayout::default();
+    assert!(panes.split(&dock));
+    assert_eq!(
+        panes.secondary.as_ref().map(|item| item.handle.as_str()),
+        Some(second_created.handle.as_str())
+    );
+    assert!(panes.switch_focus(&mut dock));
+    assert_eq!(dock.active().unwrap().handle, second_created.handle);
+    panes.close_secondary();
+    assert!(panes.secondary.is_none());
 
     // Optional native GUI process smoke against the SAME isolated Host.
     // It observes the existing test session through its window-owned

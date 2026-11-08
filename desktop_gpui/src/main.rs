@@ -1527,7 +1527,16 @@ impl Workbench {
                         if !view.terminal_create_flow.fail_request(request_id) {
                             return;
                         }
-                        view.terminals.status = format!("Cannot create Host terminal: {error}");
+                        view.terminals.status = if error.kind() == std::io::ErrorKind::InvalidData {
+                            // The Host RPC may already have created a PTY,
+                            // even when the CLI reply failed validation.
+                            // Never encourage a second create as a retry.
+                            format!(
+                                "Host terminal reply could not be verified: {error}. +                                 A session may already exist; use Attach existing before retrying New Terminal."
+                            )
+                        } else {
+                            format!("Cannot create Host terminal: {error}")
+                        };
                     }
                 }
                 cx.notify();

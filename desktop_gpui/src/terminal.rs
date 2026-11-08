@@ -423,10 +423,11 @@ pub fn select_registered_host_workspace(
     })
 }
 
-/// Parse a `terminal create` reply of the form
-/// `{tab:{id,workspaceId},attachment:{sessionId,workspaceId,tabId}}` and prove
-/// it belongs to the workspace that was requested. A reply for a different
-/// workspace or tab is malformed rather than silently attached.
+/// Parse the real Host `terminal create` reply:
+/// `{tab:{id,workspaceId,payload:{terminalSessionId}},attachment:{sessionId}}`.
+/// Older Hosts may also include attachment.workspaceId/tabId instead of the
+/// tab payload's terminalSessionId. Accept either *corroborated* identity
+/// shape; never trust the bare attachment sessionId or mismatched fields.
 pub fn parse_created_terminal(
     value: &Value,
     expected_workspace_id: &str,
@@ -454,20 +455,49 @@ pub fn parse_created_terminal(
         .ok_or_else(|| invalid("CLI create response session handle is invalid"))?;
     let attachment_workspace = attachment
         .get("workspaceId")
-        .and_then(Value::as_str)
-        .filter(|id| valid_host_id(id))
-        .ok_or_else(|| invalid("CLI create response attachment has no workspaceId"))?;
+        .map(|value| {
+            value
+                .as_str()
+                .filter(|id| valid_host_id(id))
+                .ok_or_else(|| invalid("CLI create response attachment has invalid workspaceId"))
+        })
+        .transpose()?;
     let attachment_tab = attachment
         .get("tabId")
-        .and_then(Value::as_str)
-        .filter(|id| valid_host_id(id))
-        .ok_or_else(|| invalid("CLI create response attachment has no tabId"))?;
+        .map(|value| {
+            value
+                .as_str()
+                .filter(|id| valid_host_id(id))
+                .ok_or_else(|| invalid("CLI create response attachment has invalid tabId"))
+        })
+        .transpose()?;
+    let tab_session = tab
+        .get("payload")
+        .and_then(|payload| payload.get("terminalSessionId"))
+        .map(|value| {
+            value
+                .as_str()
+                .filter(|id| valid_handle(id))
+                .ok_or_else(|| invalid("CLI create response tab has invalid terminalSessionId"))
+        })
+        .transpose()?;
     if tab_workspace != expected_workspace_id
-        || attachment_workspace != expected_workspace_id
-        || attachment_tab != tab_id
+        || attachment_workspace.is_some_and(|id| id != expected_workspace_id)
+        || attachment_tab.is_some_and(|id| id != tab_id)
+        || tab_session.is_some_and(|id| id != handle)
     {
         return Err(invalid(
             "CLI create response does not match the requested workspace",
+        ));
+    }
+    // The active Host omits attachment.workspaceId/tabId; its tab payload
+    // independently binds the session to the already verified workspace/tab.
+    // Legacy replies need both attachment IDs if that payload is absent.
+    if tab_session != Some(handle)
+        && !(attachment_workspace == Some(expected_workspace_id) && attachment_tab == Some(tab_id))
+    {
+        return Err(invalid(
+            "CLI create response has no corroborated terminal identity",
         ));
     }
     Ok(CreatedHostTerminal {
@@ -1500,6 +1530,42 @@ mod tests {
             "attachment":{"sessionId":"bad\nhandle","workspaceId":"ws-1","tabId":"tab-1"}
         });
         assert!(parse_created_terminal(&bad_handle, "ws-1").is_err());
+    }
+
+    #[test]
+    fn parses_actual_host_creation_without_attachment_workspace_or_tab_fields() {
+        // The live CLI Host returns session identity in attachment and the
+        // workspace/tab correlation in tab + tab.payload, NOT attachment.
+        let value = json!({
+            "tab":{
+                "id":"tab-live","workspaceId":"ws-live","kind":"terminal",
+                "payload":{"source":"mobile","terminalSessionId":"session-live"}
+            },
+            "attachment":{
+                "sessionId":"session-live","created":true,"running":true,
+                "snapshotCols":80,"snapshotRows":24
+            }
+        });
+        let created = parse_created_terminal(&value, "ws-live").unwrap();
+        assert_eq!(created.handle, "session-live");
+        assert_eq!(created.workspace_id, "ws-live");
+        assert_eq!(created.tab_id, "tab-live");
+
+        let mut wrong_session = value.clone();
+        wrong_session["tab"]["payload"]["terminalSessionId"] = json!("other-session");
+        assert!(parse_created_terminal(&wrong_session, "ws-live").is_err());
+
+        let mut missing_proof = value.clone();
+        missing_proof["tab"]["payload"] = json!({});
+        assert!(parse_created_terminal(&missing_proof, "ws-live").is_err());
+
+        let mut mismatched_workspace = value.clone();
+        mismatched_workspace["attachment"]["workspaceId"] = json!("other-workspace");
+        assert!(parse_created_terminal(&mismatched_workspace, "ws-live").is_err());
+
+        let mut mismatched_tab = value.clone();
+        mismatched_tab["attachment"]["tabId"] = json!("other-tab");
+        assert!(parse_created_terminal(&mismatched_tab, "ws-live").is_err());
     }
 
     #[test]

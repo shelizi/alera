@@ -50,12 +50,56 @@ Base: `5a8786644` from the clean P0-P2 integration branch. Production `main`, Fl
   The test shut down its own Host; a later process check found
   **0 experimental CLI/GPUI processes** remaining.
 
+## Registered Host terminal create, input and split follow-up
+
+- Created a **separate test Git repository** under this fix worktree in
+  `.gpui-terminal-e2e-20261108/workspace` and started a dedicated Runtime Host
+  with a different control file, HOME, state directory and disposable project /
+  workspace registration. No existing Host or user workspace was registered.
+- The first actual GPUI `+ New Terminal` click reproduced
+  `CLI create response attachment has no workspaceId`. **The Host nevertheless
+  created a running PTY**, confirmed by authenticated CLI session listing.
+  Blindly clicking New Terminal again could therefore create duplicates.
+- Captured the real Host reply: `tab.id`, `tab.workspaceId` and
+  `tab.payload.terminalSessionId` corroborate
+  `attachment.sessionId`. The Host intentionally does **not** include
+  `attachment.workspaceId` or `attachment.tabId`.
+- The native adapter now accepts this real shape and the verified legacy shape,
+  while refusing workspace, tab or session mismatches and replies without
+  corroborating identity. Malformed replies now tell the user to
+  **Attach existing before retrying**, because the RPC might have created a PTY.
+- Added a unit reproduction using the actual Host shape: **failed before fix,
+  passed after fix**. Full native Rust library regression: **179 passed,
+  0 failed**. Windows GUI `cargo build --locked --offline`: **PASS**.
+- Direct CLI in the separate test Host successfully created a running PTY,
+  submitted input, requested **120×36** Resize and read incremental VT output.
+  A real `echo` command produced the expected execution marker.
+- Expanded opt-in `tests/live_runtime_host.rs` to register a disposable
+  Workspace, call **RuntimeCliBridge.create_terminal** against a real Host,
+  confirm the exact live session triple, run a command whose result is checked
+  by reading a file inside the temporary workspace, resize, create a second
+  independent PTY, and test split/swap/close in `TerminalPaneLayout`.
+  **1 test passed, 0 failed** with the experimental CLI.
+- The post-fix native GUI click test remained **blocked** by an unrelated
+  Windows Security firewall dialog for Coding Tools MCP. The dialog was not
+  accepted or rejected. No claim is made that the corrected `+ New Terminal`
+  path, GUI raw keystrokes or GUI split controls passed by clicking.
+- After testing, the dedicated GPUI and Host processes were terminated only
+  after verifying their executable paths and test runtime arguments.
+  **0 experimental GPUI/CLI processes remained**, and the corrected Windows
+  executable rebuilt successfully once the test GUI released its file lock.
+  The nested disposable Git test fixture under
+  `.gpui-terminal-e2e-20261108/` remains **untracked in the fix worktree**
+  because the MCP `protect_repository_metadata` policy rejected recursive
+  removal of its `.git` directory. We did not bypass that safeguard.
+
 ## Still unverified
 
 This smoke is not a blanket release gate. The live-Host fixture verifies
-Host-backed PTY creation and CLI reading, **not** clicking `+ New Terminal`
-within GPUI with a registered Host workspace, nor GUI attach/raw keyboard,
-resize or split operations. Microsoft Zhuyin/TSF, OS Explorer drag/drop,
+Host-backed PTY creation, write/resize/read, confirmation and the split model,
+**not** the corrected `+ New Terminal` GUI click path after the firewall
+dialog blocked input, nor GUI attach/raw keyboard, resize or split controls.
+Microsoft Zhuyin/TSF, OS Explorer drag/drop,
 macOS/Linux GUI and performance parity also remain separate checks.
 GPUI remains `supported=false`. No production deployment, push, tag
 or release is authorized.
