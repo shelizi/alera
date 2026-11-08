@@ -231,3 +231,67 @@ coordinator instead of weakening the permission policy.
   in the native window. No user acceptance has been claimed from compilation.
 - Keep GPUI `supported=false`; do not merge, push, tag or release until
   the outstanding runtime GUI gates and core Agent/MCP parity are satisfied.
+
+## Follow-up: Native Windows mixed-pane smoke and VT work (2026-11-08)
+
+This phase reused the **same** `integrate/gpui-p0p1p2-20261108` worktree;
+no other worktree or branch was created. We launched the native GPUI binary
+using `cargo run --manifest-path desktop_gpui/Cargo.toml --locked --offline`
+and actually exercised its mouse and keyboard interactions on Windows.
+
+### Verified in the live GPUI window
+
+- The common Editor tab's right-click inline menu opens; selecting
+  **Second Pane** moves even an *inactive* file tab to the second pane without
+  replacing the first pane's document. **First Pane** moves a tab back.
+- A physical mouse **drag/drop** from the common tab strip to the secondary
+  header also transfers the intended tab. Switching **Stack / Side by side**
+  and **Unsplit** changes the visible native split layout.
+- After fixing GPUI's display-style order (applying `.hidden()` after
+  `.flex()`), the redundant nested NativeEditor tabs/navigation and legacy
+  file-preview tab row no longer crowd editable workbench panes. The compact
+  Editor toolbar clips its filename and hides redundant buttons.
+- In an isolated two-file fixture, one Editor tab was moved to the secondary
+  pane and edited with mouse + keyboard, then saved via **Ctrl+S**. On-disk
+  verification confirmed **only the intended file changed**. Closing the
+  application and relaunching restored both file-backed editable tabs,
+  their primary/secondary membership, split orientation, and saved content.
+- Native startup now describes restored tabs as **editable** rather than
+  reporting them as read-only previews.
+
+### Implementation and safety
+
+- Second-pane Host output now has the same **styled ANSI/VT rows** as the
+  primary renderer: foreground/background, cursor, bold, italic, underline
+  and text positioning are projected from the existing bounded `VtScreen`.
+- Background Host polling selects the non-focused pane's exact
+  `TerminalTabContextTarget`; replies are dropped if the workspace, pane
+  assignment or Host ticket becomes stale. It does not poll the active ticket
+  twice. Pane focus changes reset the old terminal key queue before
+  switching the authenticated Host session.
+- Editor tab/file identity changes (including Save As and keyboard tab
+  navigation) persist pane layout; typing ordinary editor content does **not**
+  trigger a layout JSON write.
+- `workbench_panes` adds a regression test for independent Host background
+  selection and for Editor-only panes not opening Host read targets.
+- **216/216 Rust library tests pass**. The Windows GPUI native
+  `cargo build --locked --offline` succeeds; only the preexisting
+  `proc-macro-error2` future-incompatibility advisory remains.
+
+### Gates still open
+
+- No authenticated Runtime Host control file was available during this GUI
+  test. Therefore true two-PTY streaming, resizing, focus and raw keyboard
+  input **were not live-accepted**, despite compiling the VT/polling changes.
+- The host OS input used for this smoke is not a true Chinese IME composition
+  test. Preserve the separate Windows IME acceptance gate.
+- Unfocused Editor panes still use a read-only snapshot from one shared
+  `NativeEditor` entity; independent concurrent editable surfaces, agent
+  launch/MCP, pointer-anchored native menus, detachable windows and full
+  mixed tab-order persistence still require work.
+- The isolated fixture was created under the existing worktree as
+  `.gpui-smoke-20261108/`. Cleanup requires explicit destructive-command
+  approval under the workspace security policy; do not confuse that
+  temporary folder with a Git worktree or commit it.
+- GPUI remains **`supported=false`**. No production merge, remote push,
+  tag or release was performed.
