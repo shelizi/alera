@@ -30,6 +30,7 @@ mod managed_workspace_tests;
 mod mcp;
 mod mobile_access;
 mod native_credential_entry;
+mod native_ui_bridge;
 mod netbird;
 mod orchestration_command_summaries;
 mod orchestration_commands;
@@ -166,6 +167,7 @@ async fn run(cli: Cli) -> i32 {
             orchestration_commands::run_orchestration_command(command).await
         }
         Command::Mcp(command) => mcp::run(command).await,
+        Command::NativeUiBridge(command) => native_ui_bridge::run(command).await,
     }
 }
 

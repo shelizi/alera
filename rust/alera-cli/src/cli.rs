@@ -89,6 +89,17 @@ pub enum Command {
     Orchestration(OrchestrationCommand),
     /// Expose authorized Alera capabilities over MCP stdio to local agents.
     Mcp(McpCommand),
+    /// Private, Host-authenticated UI-event relay for Alera Native GPUI.
+    #[command(name = "native-ui-bridge", hide = true)]
+    NativeUiBridge(NativeUiBridgeCommand),
+}
+
+#[derive(Debug, Args)]
+pub struct NativeUiBridgeCommand {
+    #[command(flatten)]
+    pub runtime: RuntimeDirArgs,
+    #[arg(long = "window-id", value_name = "id")]
+    pub window_id: String,
 }
 
 #[derive(Debug, Args)]
