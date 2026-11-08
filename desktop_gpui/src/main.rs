@@ -23,6 +23,7 @@ use alera_gpui_desktop::visual_tokens::{
     ACTIVE, BG, BORDER, MUTED, PANEL, PROJECTS_SIDEBAR_WIDTH, RIGHT_SIDEBAR_WIDTH,
     SECTION_HEADER_HEIGHT, STATUS_BAR_HEIGHT, TAB_STRIP_HEIGHT, TEXT, TOOLBAR, TOP_BAR_HEIGHT,
 };
+use alera_gpui_desktop::vt_screen::StyledRow;
 use alera_gpui_desktop::workbench_layout_store::{
     SavedWorkbenchAxis, SavedWorkbenchLayoutV1, SavedWorkbenchPane, WORKBENCH_LAYOUT_VERSION,
 };
@@ -158,6 +159,8 @@ struct Workbench {
     explorer_action_input: Option<Entity<QuickOpenInput>>,
     explorer_delete_confirmed: bool,
     editor: Option<Entity<NativeEditor>>,
+    editor_file_layout_snapshot: Vec<(u64, PathBuf)>,
+    editor_active_layout_snapshot: Option<u64>,
     session_store: Option<PreviewSessionStore>,
     recent_workspaces: Vec<PathBuf>,
     saved_projects: Vec<PathBuf>,
@@ -569,6 +572,8 @@ impl Workbench {
         editor.update(cx, |editor, cx| {
             editor.set_local_tab_strip_visible(false, cx)
         });
+        self.editor_file_layout_snapshot = editor.read(cx).file_backed_tab_instances();
+        self.editor_active_layout_snapshot = editor.read(cx).active_tab_instance();
         cx.observe(&editor, |workbench, _, cx| {
             if workbench
                 .editor
@@ -577,6 +582,27 @@ impl Workbench {
             {
                 workbench.editor = None;
                 workbench.model.set_status("Native editor closed");
+            }
+            let (files, active) = workbench
+                .editor
+                .as_ref()
+                .map(|current| {
+                    let current = current.read(cx);
+                    (
+                        current.file_backed_tab_instances(),
+                        current.active_tab_instance(),
+                    )
+                })
+                .unwrap_or_default();
+            // Save As and keyboard tab switching can originate in the editor
+            // instead of Workbench. Do not write layout for ordinary typing.
+            let layout_changed = files != workbench.editor_file_layout_snapshot
+                || active != workbench.editor_active_layout_snapshot;
+            workbench.editor_file_layout_snapshot = files;
+            workbench.editor_active_layout_snapshot = active;
+            if layout_changed && workbench.mixed_layout_restore.is_none() {
+                workbench.sync_mixed_tabs(cx);
+                workbench.save_mixed_pane_layout(cx);
             }
             // A nested editor tab can open, close, reorder or turn dirty
             // without a Workbench callback; refresh the mixed tab projection.
@@ -933,6 +959,8 @@ impl Workbench {
                     path.display()
                 )),
             }
+            self.sync_mixed_tabs(cx);
+            self.save_mixed_pane_layout(cx);
             cx.notify();
             return;
         }
@@ -951,6 +979,8 @@ impl Workbench {
                 path.display()
             )),
         }
+        self.sync_mixed_tabs(cx);
+        self.save_mixed_pane_layout(cx);
         cx.notify();
     }
 
@@ -1049,6 +1079,10 @@ impl Workbench {
             }
         }
         self.model.set_status(effect.status());
+        if effect.closed() {
+            self.sync_mixed_tabs(cx);
+            self.save_mixed_pane_layout(cx);
+        }
         cx.notify();
     }
 
@@ -1318,6 +1352,8 @@ impl Workbench {
         self.explorer_drop_busy = false;
         self.cancel_explorer_action(cx);
         self.editor = None;
+        self.editor_file_layout_snapshot.clear();
+        self.editor_active_layout_snapshot = None;
         self.restore_scratch_tabs(cx);
         self.load_mixed_pane_layout();
         self.restore_file_tabs_from_pane_layout(cx);
@@ -2140,6 +2176,9 @@ impl Workbench {
                 }
             }
             self.center_view = CenterView::Editor;
+            self.model.set_status(format!(
+                "Restored {restored} editable file tab(s) into GPUI panes"
+            ));
         }
     }
 
@@ -2232,7 +2271,7 @@ impl Workbench {
             }
         }
         self.mixed_tabs
-            .reconcile(self.workspace_generation, observed, preferred);
+            .reconcile(self.workspace_generation, observed, preferred.clone());
         let live_tabs: Vec<_> = self
             .mixed_tabs
             .entries()
@@ -2240,6 +2279,12 @@ impl Workbench {
             .map(|tab| tab.identity.clone())
             .collect();
         self.mixed_panes.reconcile(&live_tabs);
+        // NativeEditor can open/activate a tab through its own shortcuts or
+        // async Save As callbacks. Its currently selected owner must follow
+        // the actual pane holding that identity, not remain in a stale pane.
+        if let Some(identity) = preferred {
+            self.mixed_panes.activate(&identity);
+        }
         self.apply_restored_mixed_panes(cx);
         if !self
             .mixed_tab_context
@@ -2284,6 +2329,10 @@ impl Workbench {
         match id {
             WorkbenchTabIdentity::Host(target) => {
                 if let Some(index) = self.terminals.index_for_context(target) {
+                    if self.terminals.active_tab != Some(index) {
+                        self.terminal_key_queue.clear();
+                        self.terminal_key_queue_handle = None;
+                    }
                     self.terminals.activate(index);
                     self.center_view = CenterView::Terminal;
                     self.save_terminal_layout();
@@ -2319,6 +2368,10 @@ impl Workbench {
             return;
         };
         self.mixed_panes.focus_pane(PaneSlot::Primary);
+        if self.terminals.active_tab != Some(index) {
+            self.terminal_key_queue.clear();
+            self.terminal_key_queue_handle = None;
+        }
         self.terminals.activate(index);
         self.center_view = CenterView::Terminal;
         self.refresh_terminal_output(cx);
@@ -2442,10 +2495,16 @@ impl Workbench {
             MixedContextAction::SecondPane => {
                 // Pane membership is a local projection. Neither Host PTYs
                 // nor dirty Editor buffers change ownership when moved.
-                self.mixed_panes.split_with(&id);
+                if self.mixed_panes.split_with(&id) {
+                    self.focus_mixed_tab(&id, window, cx);
+                    self.refresh_terminal_split_output(cx);
+                }
             }
             MixedContextAction::FirstPane => {
-                self.mixed_panes.move_to(&id, PaneSlot::Primary);
+                if self.mixed_panes.move_to(&id, PaneSlot::Primary) {
+                    self.focus_mixed_tab(&id, window, cx);
+                    self.refresh_terminal_split_output(cx);
+                }
             }
         }
         self.save_mixed_pane_layout(cx);
@@ -2580,12 +2639,26 @@ impl Workbench {
         if self.terminal_split_read_loading {
             return;
         }
-        let Some(index) = self.terminal_panes.secondary_index(&self.terminals) else {
+        // The legacy Host-only split and the mixed Workbench split share the
+        // same guarded read path. In a mixed split, poll whichever Host pane
+        // is *not* focused; don't allow the global TerminalDock active tab to
+        // cause one Host to be polled twice while the other stays frozen.
+        let index = if self.mixed_panes.has_secondary() {
+            self.mixed_panes
+                .background_host_target()
+                .and_then(|target| self.terminals.index_for_context(target))
+        } else {
+            self.terminal_panes.secondary_index(&self.terminals)
+        };
+        let Some(index) = index else {
             return;
         };
         let Some(ticket) = self.terminals.ticket_at(index) else {
             return;
         };
+        if self.terminals.active_ticket().as_ref() == Some(&ticket) {
+            return;
+        }
         let Some(bridge) = self.runtime_bridge.clone() else {
             return;
         };
@@ -2602,11 +2675,21 @@ impl Workbench {
                     return;
                 }
                 view.terminal_split_read_loading = false;
-                if view
-                    .terminal_panes
-                    .secondary_index(&view.terminals)
-                    .is_none()
-                {
+                let still_visible = if view.mixed_panes.has_secondary() {
+                    view.mixed_panes
+                        .background_host_target()
+                        .and_then(|target| view.terminals.index_for_context(target))
+                        .and_then(|index| view.terminals.ticket_at(index))
+                        .as_ref()
+                        == Some(&ticket)
+                } else {
+                    view.terminal_panes
+                        .secondary_index(&view.terminals)
+                        .and_then(|index| view.terminals.ticket_at(index))
+                        .as_ref()
+                        == Some(&ticket)
+                };
+                if !still_visible {
                     return;
                 }
                 if let Ok(chunk) = result {
@@ -2684,6 +2767,16 @@ impl Render for Workbench {
             WorkbenchTabIdentity::Editor { .. } => None,
         });
         let mixed_secondary_key_target = mixed_secondary_host.clone();
+        let mixed_secondary_vt_rows: Option<Vec<StyledRow>> =
+            if self.terminals.view_mode == TerminalViewMode::Screen {
+                mixed_secondary_host
+                    .as_ref()
+                    .and_then(|target| self.terminals.index_for_context(target))
+                    .and_then(|index| self.terminals.tabs.get(index))
+                    .map(|terminal| terminal.screen.styled_rows())
+            } else {
+                None
+            };
         let mixed_secondary_preview = mixed_secondary_identity.as_ref().and_then(|identity| {
             let tab = self
                 .mixed_tabs
@@ -2770,6 +2863,8 @@ impl Render for Workbench {
         } else {
             self.center_view == CenterView::Editor
         };
+        let show_preview_tabs = center_is_editor && self.editor.is_none();
+        let show_editor_toolbar = center_is_editor || mixed_editor_in_secondary;
         let content = if mixed_editor_in_secondary && primary_is_editor {
             self.mixed_panes
                 .active_in(PaneSlot::Primary)
@@ -2788,11 +2883,13 @@ impl Render for Workbench {
             content
         };
         let editor = self.editor.clone();
+        let has_native_editor = editor.is_some();
         let secondary_native_editor = if mixed_editor_in_secondary {
             editor.clone()
         } else {
             None
         };
+        let secondary_editor_live = secondary_native_editor.is_some();
         let editor_dirty = self.editor_dirty(cx);
         let discard_pending = self
             .editor
@@ -2802,11 +2899,10 @@ impl Render for Workbench {
             .editor
             .as_ref()
             .and_then(|editor| {
-                editor
-                    .read(cx)
-                    .document()
-                    .path()
-                    .map(|path| path.display().to_string())
+                editor.read(cx).document().path().and_then(|path| {
+                    path.file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                })
             })
             .unwrap_or_else(|| filename.clone());
         let status = self.model.status().to_owned();
@@ -3916,12 +4012,12 @@ impl Render for Workbench {
                             .child(
                                 div()
                                     .h(px(TAB_STRIP_HEIGHT))
-                                    .when(!center_is_editor, |panel| panel.hidden())
                                     .flex()
                                     .items_center()
                                     .bg(rgb(PANEL))
                                     .border_b_1()
                                     .border_color(rgb(BORDER))
+                                    .when(!show_preview_tabs, |panel| panel.hidden())
                                     .child(
                                         div()
                                             .id("file-tabs")
@@ -4011,7 +4107,6 @@ impl Render for Workbench {
                             .child(
                                 div()
                                     .h(px(29.0))
-                                    .when(!center_is_editor, |panel| panel.hidden())
                                     .px_4()
                                     .bg(rgb(BG))
                                     .flex()
@@ -4019,11 +4114,18 @@ impl Render for Workbench {
                                     .justify_between()
                                     .text_sm()
                                     .text_color(rgb(MUTED))
-                                    .child(if editor.is_some() {
-                                        format!("Editing: {}{}", editor_title, if editor_dirty { " ●" } else { "" })
-                                    } else {
-                                        format!("{} · read-only preview", filename)
-                                    })
+                                    .when(!show_editor_toolbar, |panel| panel.hidden())
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .overflow_hidden()
+                                            .child(if has_native_editor {
+                                                format!("Editing: {}{}", editor_title, if editor_dirty { " ●" } else { "" })
+                                            } else {
+                                                format!("{} · read-only preview", filename)
+                                            }),
+                                    )
                                     .child(
                                         div()
                                             .flex()
@@ -4037,7 +4139,8 @@ impl Render for Workbench {
                                                     .child("New")
                                                     .on_click(cx.listener(|this, _, _, cx| {
                                                         this.new_editor(cx);
-                                                    })),
+                                                    }))
+                                                    .when(has_native_editor, |button| button.hidden()),
                                             )
                                             .child(
                                                 div()
@@ -4047,7 +4150,8 @@ impl Render for Workbench {
                                                     .child("Edit")
                                                     .on_click(cx.listener(|this, _, _, cx| {
                                                         this.open_editor(cx);
-                                                    })),
+                                                    }))
+                                                    .when(has_native_editor, |button| button.hidden()),
                                             )
                                             .when(editor.is_some(), |toolbar| {
                                                 toolbar
@@ -4092,7 +4196,8 @@ impl Render for Workbench {
                                                             })
                                                             .on_click(cx.listener(|this, _, _, cx| {
                                                                 this.close_editor(true, cx);
-                                                            })),
+                                                            }))
+                                                            .when(!editor_dirty && !discard_pending, |button| button.hidden()),
                                                     )
                                             }),
                                     ),
@@ -4140,9 +4245,9 @@ impl Render for Workbench {
                                 div()
                                     .flex_1()
                                     .min_h_0()
-                                    .when(center_is_editor, |panel| panel.hidden())
                                     .flex()
                                     .flex_col()
+                                    .when(center_is_editor, |panel| panel.hidden())
                                     .border_t_1()
                                     .border_color(rgb(BORDER))
                                     .bg(rgb(BG))
@@ -4761,14 +4866,17 @@ impl Render for Workbench {
                                                             .flex_1()
                                                             .min_w_0()
                                                             .text_sm()
-                                                            .child(format!("Second · {label} · preview"))
-                                                            .on_drop(cx.listener(|this, drag: &MixedTabDrag, _, cx| {
+                                                            .child(format!(
+                                                                "Second · {label} · {}",
+                                                                if secondary_editor_live { "Editor" } else { "Preview" }
+                                                            ))
+                                                            .on_drop(cx.listener(|this, drag: &MixedTabDrag, window, cx| {
                                                                 if drag.workspace_generation == this.workspace_generation
                                                                     && this.mixed_tab_is_current(&drag.identity, cx)
                                                                     && this.mixed_panes.move_to(&drag.identity, PaneSlot::Secondary)
                                                                 {
-                                                                    this.save_mixed_pane_layout(cx);
-                                                                    cx.notify();
+                                                                    this.focus_mixed_tab(&drag.identity, window, cx);
+                                                                    this.refresh_terminal_split_output(cx);
                                                                 }
                                                             })),
                                                     )
@@ -4813,13 +4921,20 @@ impl Render for Workbench {
                                                     .track_focus(&terminal_keyboard_focus)
                                                     .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |this, _, window, cx| {
                                                         if let Some(target) = mixed_secondary_host.as_ref() {
-                                                            if let Some(index) = this.terminals.index_for_context(target) {
+                                                            if this.terminals.context_target_is_live(target) {
+                                                                if let Some(index) = this.terminals.index_for_context(target) {
+                                                                if this.terminals.active_tab != Some(index) {
+                                                                    this.terminal_key_queue.clear();
+                                                                    this.terminal_key_queue_handle = None;
+                                                                }
                                                                 this.mixed_panes.focus_pane(PaneSlot::Secondary);
                                                                 this.terminals.activate(index);
+                                                                this.center_view = CenterView::Terminal;
                                                                 this.refresh_terminal_output(cx);
                                                                 this.save_mixed_pane_layout(cx);
                                                                 window.focus(&this.terminal_keyboard_focus);
                                                                 cx.notify();
+                                                                }
                                                             }
                                                         }
                                                     }))
@@ -4837,7 +4952,46 @@ impl Render for Workbench {
                                                     .p_3()
                                                     .font_family("JetBrains Mono")
                                                     .text_sm()
-                                                    .child(preview)
+                                                    .child(if let Some(rows) = mixed_secondary_vt_rows {
+                                                        div()
+                                                            .id("mixed-secondary-colored-grid")
+                                                            .flex()
+                                                            .flex_col()
+                                                            .whitespace_nowrap()
+                                                            .children(rows.into_iter().enumerate().map(|(index, row)| {
+                                                                div()
+                                                                    .id(("mixed-secondary-colored-row", index))
+                                                                    .whitespace_nowrap()
+                                                                    .line_height(px(17.0))
+                                                                    .child(
+                                                                        gpui::StyledText::new(row.text)
+                                                                            .with_highlights(row.spans.into_iter().map(|span| {
+                                                                                let style = span.style;
+                                                                                (
+                                                                                    span.range,
+                                                                                    gpui::HighlightStyle {
+                                                                                        color: Some(rgb(style.fg).into()),
+                                                                                        background_color: Some(rgb(style.bg).into()),
+                                                                                        font_weight: style.bold.then_some(gpui::FontWeight::BOLD),
+                                                                                        font_style: style.italic.then_some(gpui::FontStyle::Italic),
+                                                                                        underline: style.underline.then_some(gpui::UnderlineStyle {
+                                                                                            thickness: px(1.0),
+                                                                                            color: Some(rgb(style.fg).into()),
+                                                                                            wavy: false,
+                                                                                        }),
+                                                                                        ..Default::default()
+                                                                                    },
+                                                                                )
+                                                                            })),
+                                                                    )
+                                                            }))
+                                                            .into_any_element()
+                                                    } else {
+                                                        div()
+                                                            .id("mixed-secondary-plain-text")
+                                                            .child(preview)
+                                                            .into_any_element()
+                                                    })
                                                     .into_any_element()
                                             })
                                             .into_any_element()
@@ -5433,6 +5587,8 @@ fn main() {
                         model,
                         center_view: CenterView::Terminal,
                         editor: None,
+                        editor_file_layout_snapshot: Vec::new(),
+                        editor_active_layout_snapshot: None,
                         session_store,
                         recent_workspaces,
                         saved_projects,

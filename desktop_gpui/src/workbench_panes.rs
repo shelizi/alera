@@ -9,6 +9,7 @@
 //! Host PTY or editor buffer, and closing the secondary pane returns every
 //! tab to the primary pane.
 
+use crate::terminal::TerminalTabContextTarget;
 use crate::workbench_tabs::WorkbenchTabIdentity;
 
 /// Which of the two workbench panes a tab strip belongs to.
@@ -194,6 +195,22 @@ impl WorkbenchPaneLayout {
         }
         self.focused = slot;
         true
+    }
+
+    /// The non-focused mixed pane needs a separate Host poll. Only a live
+    /// Host identity (not an Editor) may provide a terminal read target.
+    pub fn background_host_target(&self) -> Option<&TerminalTabContextTarget> {
+        if !self.has_secondary() {
+            return None;
+        }
+        let background_slot = match self.focused {
+            PaneSlot::Primary => PaneSlot::Secondary,
+            PaneSlot::Secondary => PaneSlot::Primary,
+        };
+        match self.active_in(background_slot) {
+            Some(WorkbenchTabIdentity::Host(target)) => Some(target),
+            _ => None,
+        }
     }
 
     /// Close the split: every secondary tab moves back to the primary pane,
@@ -522,6 +539,39 @@ mod tests {
         assert_eq!(panes.axis(), PaneAxis::Vertical);
         assert!(panes.has_secondary());
         expect(&panes, PaneSlot::Secondary, &[b.clone()]);
+    }
+
+    #[test]
+    fn background_host_poll_tracks_other_pane_and_never_targets_editors() {
+        let primary_host = host("pty-primary");
+        let secondary_host = host("pty-secondary");
+        let file = editor(3, 1);
+        let mut panes = WorkbenchPaneLayout::new();
+        panes.reconcile(&[primary_host.clone(), secondary_host.clone(), file.clone()]);
+        assert_eq!(panes.background_host_target(), None);
+
+        assert!(panes.split_with(&secondary_host));
+        assert_eq!(
+            panes.background_host_target(),
+            match &primary_host {
+                WorkbenchTabIdentity::Host(target) => Some(target),
+                _ => None,
+            }
+        );
+        assert!(panes.focus_pane(PaneSlot::Primary));
+        assert_eq!(
+            panes.background_host_target(),
+            match &secondary_host {
+                WorkbenchTabIdentity::Host(target) => Some(target),
+                _ => None,
+            }
+        );
+        assert!(panes.move_to(&secondary_host, PaneSlot::Primary));
+        assert!(panes.split_with(&file));
+        assert!(panes.focus_pane(PaneSlot::Primary));
+        assert_eq!(panes.background_host_target(), None);
+        panes.close_secondary();
+        assert_eq!(panes.background_host_target(), None);
     }
 
     #[test]

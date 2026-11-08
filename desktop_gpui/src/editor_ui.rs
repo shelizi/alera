@@ -1410,12 +1410,14 @@ impl Render for NativeEditor {
             .on_action(cx.listener(Self::close_current_tab_action))
             .child(
                 div()
-                    .when(!show_local_tab_strip, |row| row.hidden())
                     .flex()
                     .items_center()
                     .gap_2()
                     .px_3()
                     .py_1()
+                    // GPUI .flex() sets display:flex; apply .hidden() *after*
+                    // display-changing methods or the local tab row reappears.
+                    .when(!show_local_tab_strip, |row| row.hidden())
                     .child(
                         div()
                             .id("editor-tab-scroll")
@@ -1599,6 +1601,7 @@ impl Render for NativeEditor {
                     .py_1()
                     .text_sm()
                     .text_color(rgb(MUTED_TEXT))
+                    .when(!show_local_tab_strip, |row| row.hidden())
                     .child(
                         div()
                             .id("editor-tab-previous")
