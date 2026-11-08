@@ -19,6 +19,8 @@ pub const EDITOR_TAB_LIMIT: &str = "Editor tab limit reached";
 pub struct EditorTabs {
     drafts: Option<EditorDraftStore>,
     tabs: Vec<EditorSession>,
+    tab_instances: Vec<u64>,
+    next_instance: u64,
     active: Option<usize>,
     /// Changes whenever a tab is opened, closed, selected or reordered.
     /// Invalidates a Save As picker callback after close/reopen of the same path.
@@ -84,6 +86,8 @@ impl EditorTabs {
         Self {
             drafts,
             tabs: Vec::new(),
+            tab_instances: Vec::new(),
+            next_instance: 0,
             active: None,
             revision: 0,
         }
@@ -130,6 +134,21 @@ impl EditorTabs {
 
     pub fn active_index(&self) -> Option<usize> {
         self.active
+    }
+
+    /// Opaque per-mount tab identity. A closed/reopened path never inherits
+    /// its former identity, even when both documents have the same filename.
+    pub fn tab_instance_at(&self, index: usize) -> Option<u64> {
+        self.tab_instances.get(index).copied()
+    }
+
+    pub fn index_for_instance(&self, instance: u64) -> Option<usize> {
+        self.tab_instances.iter().position(|id| *id == instance)
+    }
+
+    fn allocate_instance(&mut self) -> u64 {
+        self.next_instance = self.next_instance.wrapping_add(1);
+        self.next_instance
     }
 
     pub fn has_draft_store(&self) -> bool {
@@ -181,7 +200,7 @@ impl EditorTabs {
     /// Startup hook after selecting a workspace and constructing its draft store.
     /// Idempotent; invalid records or insufficient capacity leave all tabs intact.
     pub fn restore_scratch_drafts(&mut self, root: &Path) -> io::Result<usize> {
-        let Some(store) = &self.drafts else {
+        let Some(store) = self.drafts.clone() else {
             return Ok(0);
         };
         let documents: Vec<_> = store
@@ -205,6 +224,8 @@ impl EditorTabs {
         for document in documents {
             self.tabs
                 .push(EditorSession::recovered_scratch(document, store.clone()));
+            let instance = self.allocate_instance();
+            self.tab_instances.push(instance);
         }
         if count > 0 {
             self.revision = self.revision.wrapping_add(1);
@@ -242,6 +263,8 @@ impl EditorTabs {
         }
         let tab = self.tabs.remove(from);
         self.tabs.insert(to, tab);
+        let instance = self.tab_instances.remove(from);
+        self.tab_instances.insert(to, instance);
         self.revision = self.revision.wrapping_add(1);
         self.active = self.active.map(|current| {
             if current == from {
@@ -303,6 +326,7 @@ impl EditorTabs {
         if effect.closed() {
             let active = self.active;
             self.tabs.remove(index);
+            self.tab_instances.remove(index);
             self.revision = self.revision.wrapping_add(1);
             self.active = match active {
                 _ if self.tabs.is_empty() => None,
@@ -409,6 +433,8 @@ impl EditorTabs {
             return Ok(self.focus(index));
         }
         self.tabs.push(session);
+        let instance = self.allocate_instance();
+        self.tab_instances.push(instance);
         self.active = Some(self.tabs.len() - 1);
         self.revision = self.revision.wrapping_add(1);
         Ok(effect)
@@ -443,6 +469,28 @@ mod tests {
     use crate::editor::EditorDraftStore;
     use crate::editor_session::OpenEffect;
     use std::fs;
+
+    #[test]
+    fn tab_instance_follows_reorder_but_is_not_reused_after_close() {
+        let workspace = tempfile::tempdir().unwrap();
+        let root = workspace.path();
+        let mut tabs = EditorTabs::new(None);
+        let first_path = root.join("first.txt");
+        let second_path = root.join("second.txt");
+        fs::write(&first_path, "first").unwrap();
+        fs::write(&second_path, "second").unwrap();
+        tabs.open_file(root, &first_path).unwrap();
+        let first = tabs.tab_instance_at(0).unwrap();
+        tabs.open_file(root, &second_path).unwrap();
+        let second = tabs.tab_instance_at(1).unwrap();
+        assert_ne!(first, second);
+        assert!(tabs.move_tab(0, 1));
+        assert_eq!(tabs.index_for_instance(first), Some(1));
+        assert!(tabs.close_tab(1, false).closed());
+        tabs.open_file(root, &first_path).unwrap();
+        assert!(tabs.index_for_instance(first).is_none());
+        assert_ne!(tabs.tab_instance_at(1), Some(first));
+    }
 
     #[test]
     fn one_failed_scratch_flush_does_not_block_other_tabs() {

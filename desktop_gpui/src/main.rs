@@ -23,6 +23,9 @@ use alera_gpui_desktop::visual_tokens::{
     ACTIVE, BG, BORDER, MUTED, PANEL, PROJECTS_SIDEBAR_WIDTH, RIGHT_SIDEBAR_WIDTH,
     SECTION_HEADER_HEIGHT, STATUS_BAR_HEIGHT, TAB_STRIP_HEIGHT, TEXT, TOOLBAR, TOP_BAR_HEIGHT,
 };
+use alera_gpui_desktop::workbench_tabs::{
+    WorkbenchTab, WorkbenchTabIdentity, WorkbenchTabKind, WorkbenchTabs,
+};
 use alera_gpui_desktop::workspace_tree::WorkspaceTree;
 use alera_gpui_desktop::worktree_manager::{WorktreeEntry, WorktreeManager};
 use editor_ui::{bind_editor_keys, NativeEditor};
@@ -60,6 +63,12 @@ struct TerminalTabDrag {
 
 struct TerminalTabDragPreview {
     label: String,
+}
+
+#[derive(Clone)]
+struct MixedTabDrag {
+    identity: WorkbenchTabIdentity,
+    workspace_generation: u64,
 }
 
 impl gpui::Render for TerminalTabDragPreview {
@@ -104,6 +113,17 @@ enum TerminalContextAction {
     SplitToSecondary,
     MoveLeft,
     MoveRight,
+}
+
+#[derive(Clone, Copy)]
+enum MixedContextAction {
+    Focus,
+    Close,
+    CloseOthers,
+    CloseToRight,
+    MoveLeft,
+    MoveRight,
+    SecondPane,
 }
 
 impl ExplorerAction {
@@ -170,6 +190,9 @@ struct Workbench {
     git_diff_loading: bool,
     git_diff_request: u64,
     workspace_generation: u64,
+    editor_epoch: u64,
+    mixed_tabs: WorkbenchTabs,
+    mixed_tab_context: Option<WorkbenchTabIdentity>,
     runtime_bridge: Option<RuntimeCliBridge>,
     runtime_status: String,
     runtime_loading: bool,
@@ -533,6 +556,7 @@ impl Workbench {
 
     // Clear the parent editor after closing its last inline tab.
     fn install_editor(&mut self, tabs: EditorTabs, cx: &mut Context<Self>) {
+        self.editor_epoch = self.editor_epoch.wrapping_add(1);
         let editor = cx.new(|cx| NativeEditor::new(tabs, cx));
         cx.observe(&editor, |workbench, _, cx| {
             if workbench
@@ -542,8 +566,10 @@ impl Workbench {
             {
                 workbench.editor = None;
                 workbench.model.set_status("Native editor closed");
-                cx.notify();
             }
+            // A nested editor tab can open, close, reorder or turn dirty
+            // without a Workbench callback; refresh the mixed tab projection.
+            cx.notify();
         })
         .detach();
         self.editor = Some(editor);
@@ -1269,6 +1295,9 @@ impl Workbench {
         self.save_terminal_layout();
         self.model = next;
         self.center_view = CenterView::Terminal;
+        self.mixed_tabs
+            .reset(self.workspace_generation.wrapping_add(1));
+        self.mixed_tab_context = None;
         self.tree = WorkspaceTree::new(&canonical).ok();
         self.explorer_selection = None;
         self.explorer_clipboard = None;
@@ -1922,6 +1951,243 @@ impl Workbench {
         .detach();
     }
 
+    /// Project both original state owners into one stable, mixed-order tab
+    /// strip. The original editor buffers and Host PTYs remain authoritative.
+    fn sync_mixed_tabs(&mut self, cx: &mut Context<Self>) {
+        let mut observed = Vec::new();
+        let mut preferred = None;
+        for (index, tab) in self.terminals.tabs.iter().enumerate() {
+            let Some(target) = self.terminals.context_target_at(index) else {
+                continue;
+            };
+            let identity = WorkbenchTabIdentity::Host(target);
+            let is_agent = self.terminals.sessions.iter().any(|session| {
+                session.handle == tab.handle
+                    && session.workspace_id == tab.workspace_id
+                    && session.tab_id == tab.tab_id
+                    && session.agent_type.is_some()
+            });
+            observed.push(WorkbenchTab {
+                identity: identity.clone(),
+                kind: if is_agent {
+                    WorkbenchTabKind::Agent
+                } else {
+                    WorkbenchTabKind::Terminal
+                },
+                title: tab.title.clone(),
+                dirty: false,
+                running: tab.running,
+            });
+            if self.center_view == CenterView::Terminal && self.terminals.active_tab == Some(index)
+            {
+                preferred = Some(identity);
+            }
+        }
+        if let Some(editor) = &self.editor {
+            let editor = editor.read(cx);
+            let active = editor.active_tab_instance();
+            for (instance, label) in editor.tab_instances() {
+                let identity = WorkbenchTabIdentity::Editor {
+                    editor_epoch: self.editor_epoch,
+                    instance,
+                };
+                if self.center_view == CenterView::Editor && active == Some(instance) {
+                    preferred = Some(identity.clone());
+                }
+                observed.push(WorkbenchTab {
+                    identity,
+                    kind: WorkbenchTabKind::Editor,
+                    title: label.title,
+                    dirty: label.dirty,
+                    running: true,
+                });
+            }
+        }
+        self.mixed_tabs
+            .reconcile(self.workspace_generation, observed, preferred);
+        if !self
+            .mixed_tab_context
+            .as_ref()
+            .is_some_and(|id| self.mixed_tabs.contains(id))
+        {
+            self.mixed_tab_context = None;
+        }
+    }
+
+    fn mixed_tab_is_current(&self, id: &WorkbenchTabIdentity, cx: &Context<Self>) -> bool {
+        match id {
+            WorkbenchTabIdentity::Host(target) => {
+                self.terminals.index_for_context(target).is_some()
+            }
+            WorkbenchTabIdentity::Editor {
+                editor_epoch,
+                instance,
+            } => {
+                *editor_epoch == self.editor_epoch
+                    && self
+                        .editor
+                        .as_ref()
+                        .is_some_and(|editor| editor.read(cx).contains_tab_instance(*instance))
+            }
+        }
+    }
+
+    fn focus_mixed_tab(
+        &mut self,
+        id: &WorkbenchTabIdentity,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.mixed_tab_is_current(id, cx) {
+            self.mixed_tab_context = None;
+            cx.notify();
+            return;
+        }
+        self.mixed_tab_context = None;
+        match id {
+            WorkbenchTabIdentity::Host(target) => {
+                if let Some(index) = self.terminals.index_for_context(target) {
+                    self.terminals.activate(index);
+                    self.center_view = CenterView::Terminal;
+                    self.save_terminal_layout();
+                    self.refresh_terminal_output(cx);
+                    window.focus(&self.terminal_keyboard_focus);
+                }
+            }
+            WorkbenchTabIdentity::Editor { instance, .. } => {
+                if let Some(editor) = &self.editor {
+                    if editor.update(cx, |editor, cx| editor.activate_tab_instance(*instance, cx)) {
+                        self.center_view = CenterView::Editor;
+                        window.focus(&editor.read(cx).focus_handle(cx));
+                    }
+                }
+            }
+        }
+        cx.notify();
+    }
+
+    fn close_mixed_tab(&mut self, id: &WorkbenchTabIdentity, cx: &mut Context<Self>) {
+        if !self.mixed_tab_is_current(id, cx) {
+            self.mixed_tab_context = None;
+            cx.notify();
+            return;
+        }
+        self.mixed_tab_context = None;
+        match id {
+            WorkbenchTabIdentity::Host(target) => {
+                if let Some(index) = self.terminals.index_for_context(target) {
+                    self.terminals.close(index);
+                    if self
+                        .terminal_panes
+                        .secondary_index(&self.terminals)
+                        .is_none()
+                    {
+                        self.terminal_panes.close_secondary();
+                    }
+                    self.terminals.status = "Preview closed; Host PTY remains alive".into();
+                    self.save_terminal_layout();
+                    self.refresh_terminal_output(cx);
+                }
+            }
+            WorkbenchTabIdentity::Editor { instance, .. } => {
+                if let Some(editor) = self.editor.clone() {
+                    let closed =
+                        editor.update(cx, |editor, cx| editor.close_tab_instance(*instance, cx));
+                    self.model
+                        .set_status(editor.read(cx).status_text().to_owned());
+                    if closed && editor.read(cx).tabs_empty() {
+                        self.editor = None;
+                        if self.center_view == CenterView::Editor {
+                            self.center_view = CenterView::Terminal;
+                        }
+                    }
+                }
+            }
+        }
+        cx.notify();
+    }
+
+    fn reorder_mixed_tab(
+        &mut self,
+        drag: &MixedTabDrag,
+        target: &WorkbenchTabIdentity,
+        cx: &mut Context<Self>,
+    ) {
+        if drag.workspace_generation != self.workspace_generation
+            || !self.mixed_tab_is_current(&drag.identity, cx)
+            || !self.mixed_tab_is_current(target, cx)
+        {
+            return;
+        }
+        if self.mixed_tabs.move_to(&drag.identity, target) {
+            cx.notify();
+        }
+    }
+
+    fn apply_mixed_tab_context(
+        &mut self,
+        action: MixedContextAction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(id) = self.mixed_tab_context.take() else {
+            return;
+        };
+        if !self.mixed_tab_is_current(&id, cx) || !self.mixed_tabs.contains(&id) {
+            cx.notify();
+            return;
+        }
+        match action {
+            MixedContextAction::Focus => self.focus_mixed_tab(&id, window, cx),
+            MixedContextAction::Close => self.close_mixed_tab(&id, cx),
+            MixedContextAction::CloseOthers | MixedContextAction::CloseToRight => {
+                let entries = self.mixed_tabs.entries();
+                let Some(index) = entries.iter().position(|tab| tab.identity == id) else {
+                    return;
+                };
+                let candidates: Vec<_> = entries
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, item)| {
+                        (i != index
+                            && (matches!(action, MixedContextAction::CloseOthers) || i > index))
+                            .then_some(item.identity.clone())
+                    })
+                    .collect();
+                for target in candidates {
+                    // Editor dirty-buffer protection and Host PTY ownership
+                    // are enforced by the original owners for every close.
+                    self.close_mixed_tab(&target, cx);
+                }
+            }
+            MixedContextAction::MoveLeft | MixedContextAction::MoveRight => {
+                let entries = self.mixed_tabs.entries();
+                if let Some(index) = entries.iter().position(|tab| tab.identity == id) {
+                    let other = match action {
+                        MixedContextAction::MoveLeft => index.checked_sub(1),
+                        _ => (index + 1 < entries.len()).then_some(index + 1),
+                    }
+                    .and_then(|index| entries.get(index).map(|tab| tab.identity.clone()));
+                    if let Some(other) = other {
+                        if matches!(action, MixedContextAction::MoveLeft) {
+                            self.mixed_tabs.move_to(&id, &other);
+                        } else {
+                            self.mixed_tabs.move_to(&id, &other);
+                        }
+                    }
+                }
+            }
+            MixedContextAction::SecondPane => {
+                if let WorkbenchTabIdentity::Host(target) = id {
+                    self.terminal_tab_context = Some(target);
+                    self.apply_terminal_context(TerminalContextAction::SplitToSecondary, cx);
+                    self.center_view = CenterView::Terminal;
+                }
+            }
+        }
+        cx.notify();
+    }
+
     fn show_terminal_tab_context(&mut self, index: usize, cx: &mut Context<Self>) {
         // Right-click targets the tab under the pointer, not the active Host
         // input session. No session is attached or mutated by opening a menu.
@@ -2137,6 +2403,12 @@ impl Workbench {
 
 impl Render for Workbench {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.sync_mixed_tabs(cx);
+        let mixed_tabs = self.mixed_tabs.entries().to_vec();
+        let mixed_active = self.mixed_tabs.active().cloned();
+        let mixed_context = self.mixed_tab_context.clone();
+        let mixed_context_is_host = matches!(mixed_context, Some(WorkbenchTabIdentity::Host(_)));
+        let mixed_drag_generation = self.workspace_generation;
         let folder_name = self
             .model
             .directory()
@@ -3102,6 +3374,147 @@ impl Render for Workbench {
                                                 cx.notify();
                                             })),
                                     ),
+                            )
+                            .child(
+                                div()
+                                    .id("mixed-workbench-tab-strip")
+                                    .h(px(TAB_STRIP_HEIGHT))
+                                    .min_w_0()
+                                    .flex()
+                                    .items_center()
+                                    .bg(rgb(PANEL))
+                                    .border_b_1()
+                                    .border_color(rgb(BORDER))
+                                    .child(
+                                        div()
+                                            .id("mixed-tabs-scroll")
+                                            .flex_1()
+                                            .min_w_0()
+                                            .flex()
+                                            .overflow_x_scroll()
+                                            .children(mixed_tabs.into_iter().enumerate().map(|(index, tab)| {
+                                                let identity = tab.identity;
+                                                let selected = mixed_active.as_ref() == Some(&identity);
+                                                let icon = match tab.kind {
+                                                    WorkbenchTabKind::Terminal => "T",
+                                                    WorkbenchTabKind::Agent => "A",
+                                                    WorkbenchTabKind::Editor => "E",
+                                                };
+                                                let caption = format!("{icon} {}{}{}", tab.title,
+                                                    if tab.dirty { " ●" } else { "" },
+                                                    if !tab.running { " ○" } else { "" });
+                                                let for_click = identity.clone();
+                                                let for_middle = identity.clone();
+                                                let for_right = identity.clone();
+                                                let for_close = identity.clone();
+                                                let for_drop = identity.clone();
+                                                let drag_identity = identity.clone();
+                                                let drag_caption = caption.clone();
+                                                div()
+                                                    .id(("mixed-tab", index))
+                                                    .h(px(TAB_STRIP_HEIGHT - 1.0))
+                                                    .flex()
+                                                    .items_center()
+                                                    .bg(rgb(if selected { ACTIVE } else { PANEL }))
+                                                    .border_r_1()
+                                                    .border_color(rgb(BORDER))
+                                                    .child(
+                                                        div()
+                                                            .id(("mixed-tab-focus", index))
+                                                            .px_2()
+                                                            .cursor_pointer()
+                                                            .text_sm()
+                                                            .text_color(rgb(if selected { TEXT } else { MUTED }))
+                                                            .child(caption)
+                                                            .on_click(cx.listener(move |this, _, window, cx| {
+                                                                this.focus_mixed_tab(&for_click, window, cx);
+                                                            }))
+                                                            .on_mouse_up(gpui::MouseButton::Middle, cx.listener(move |this, _, _, cx| {
+                                                                this.close_mixed_tab(&for_middle, cx);
+                                                            }))
+                                                            .on_mouse_down(gpui::MouseButton::Right, cx.listener(move |this, _, _, cx| {
+                                                                if this.mixed_tab_is_current(&for_right, cx) {
+                                                                    this.mixed_tab_context = Some(for_right.clone());
+                                                                    cx.notify();
+                                                                }
+                                                            }))
+                                                            .on_drag(MixedTabDrag {
+                                                                identity: drag_identity,
+                                                                workspace_generation: mixed_drag_generation,
+                                                            }, move |_, _, _, cx| {
+                                                                cx.new(|_| TerminalTabDragPreview { label: drag_caption.clone() })
+                                                            })
+                                                            .on_drop(cx.listener(move |this, drag: &MixedTabDrag, _, cx| {
+                                                                this.reorder_mixed_tab(drag, &for_drop, cx);
+                                                            })),
+                                                    )
+                                                    .child(
+                                                        div()
+                                                            .id(("mixed-tab-close", index))
+                                                            .px_2()
+                                                            .cursor_pointer()
+                                                            .text_xs()
+                                                            .text_color(rgb(MUTED))
+                                                            .child("×")
+                                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                                this.close_mixed_tab(&for_close, cx);
+                                                            })),
+                                                    )
+                                            }))
+                                            .child(
+                                                div()
+                                                    .id("mixed-tabs-empty-area")
+                                                    .flex_1()
+                                                    .min_w(px(40.0))
+                                                    .h(px(TAB_STRIP_HEIGHT - 1.0))
+                                                    .on_click(cx.listener(|this, event: &gpui::ClickEvent, _, cx| {
+                                                        if event.click_count() == 2 { this.new_editor(cx); }
+                                                    })),
+                                            ),
+                                    ),
+                            )
+                            .child(
+                                div().id("mixed-tab-context-actions")
+                                    .when(mixed_context.is_some(), |menu| {
+                                        menu.flex().items_center().gap_3().px_3().py_2()
+                                            .text_xs().overflow_x_scroll().bg(rgb(PANEL))
+                                            .border_b_1().border_color(rgb(BORDER))
+                                            .child(div().id("mixed-focus").cursor_pointer().child("Focus")
+                                                .on_click(cx.listener(|this, _, window, cx| {
+                                                    this.apply_mixed_tab_context(MixedContextAction::Focus, window, cx);
+                                                })))
+                                            .child(div().id("mixed-close").cursor_pointer().child("Close")
+                                                .on_click(cx.listener(|this, _, window, cx| {
+                                                    this.apply_mixed_tab_context(MixedContextAction::Close, window, cx);
+                                                })))
+                                            .child(div().id("mixed-close-others").cursor_pointer().child("Close Others")
+                                                .on_click(cx.listener(|this, _, window, cx| {
+                                                    this.apply_mixed_tab_context(MixedContextAction::CloseOthers, window, cx);
+                                                })))
+                                            .child(div().id("mixed-close-right").cursor_pointer().child("Close Right")
+                                                .on_click(cx.listener(|this, _, window, cx| {
+                                                    this.apply_mixed_tab_context(MixedContextAction::CloseToRight, window, cx);
+                                                })))
+                                            .child(div().id("mixed-move-left").cursor_pointer().child("Move ←")
+                                                .on_click(cx.listener(|this, _, window, cx| {
+                                                    this.apply_mixed_tab_context(MixedContextAction::MoveLeft, window, cx);
+                                                })))
+                                            .child(div().id("mixed-move-right").cursor_pointer().child("Move →")
+                                                .on_click(cx.listener(|this, _, window, cx| {
+                                                    this.apply_mixed_tab_context(MixedContextAction::MoveRight, window, cx);
+                                                })))
+                                            .when(mixed_context_is_host, |menu| menu.child(
+                                                div().id("mixed-second-pane").cursor_pointer().child("Second Pane")
+                                                    .on_click(cx.listener(|this, _, window, cx| {
+                                                        this.apply_mixed_tab_context(MixedContextAction::SecondPane, window, cx);
+                                                    }))
+                                            ))
+                                            .child(div().id("mixed-cancel").cursor_pointer().text_color(rgb(MUTED)).child("Cancel")
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.mixed_tab_context = None;
+                                                    cx.notify();
+                                                })))
+                                    }),
                             )
                             .child(if !center_is_editor && show_terminal_attach_picker {
                                 div()
@@ -4561,6 +4974,9 @@ fn main() {
                         git_diff_loading: false,
                         git_diff_request: 0,
                         workspace_generation: 0,
+                        editor_epoch: 0,
+                        mixed_tabs: WorkbenchTabs::for_workspace(0),
+                        mixed_tab_context: None,
                         runtime_bridge,
                         runtime_status,
                         runtime_loading: false,

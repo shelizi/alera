@@ -18,6 +18,7 @@ pub mod terminal_panes;
 pub mod visible_line_hit;
 pub mod visual_tokens;
 pub mod vt_screen;
+pub mod workbench_tabs;
 pub mod workspace_tree;
 pub mod worktree_manager;
 

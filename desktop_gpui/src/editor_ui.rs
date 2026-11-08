@@ -8,7 +8,9 @@ use alera_gpui_desktop::editor::{
     byte_to_utf16, edge_scroll_offset, utf16_to_byte, EditorDocument, EditorLineIndex,
 };
 use alera_gpui_desktop::editor_session::{OpenEffect, RECOVERY_PLAINTEXT_NOTICE};
-use alera_gpui_desktop::editor_tabs::{EditorSaveGuard, EditorTabDragIdentity, EditorTabs};
+use alera_gpui_desktop::editor_tabs::{
+    EditorSaveGuard, EditorTabDragIdentity, EditorTabLabel, EditorTabs,
+};
 use alera_gpui_desktop::visible_line_hit::{
     apply_pointer_hit, VisibleLineGeometry, VisibleLineHitSet,
 };
@@ -320,6 +322,44 @@ impl NativeEditor {
             self.reveal_caret();
             cx.notify();
         }
+    }
+
+    /// Read-only projection consumed by the mixed Host/Editor tab strip.
+    pub fn tab_instances(&self) -> Vec<(u64, EditorTabLabel)> {
+        self.tabs
+            .tab_labels()
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, label)| {
+                self.tabs
+                    .tab_instance_at(index)
+                    .map(|instance| (instance, label))
+            })
+            .collect()
+    }
+
+    pub fn active_tab_instance(&self) -> Option<u64> {
+        self.tabs.tab_instance_at(self.tabs.active_index()?)
+    }
+
+    pub fn contains_tab_instance(&self, instance: u64) -> bool {
+        self.tabs.index_for_instance(instance).is_some()
+    }
+
+    pub fn activate_tab_instance(&mut self, instance: u64, cx: &mut Context<Self>) -> bool {
+        let Some(index) = self.tabs.index_for_instance(instance) else {
+            return false;
+        };
+        self.activate_tab(index, cx);
+        true
+    }
+
+    pub fn close_tab_instance(&mut self, instance: u64, cx: &mut Context<Self>) -> bool {
+        let Some(index) = self.tabs.index_for_instance(instance) else {
+            return false;
+        };
+        self.close_editor_tab(index, false, cx);
+        !self.contains_tab_instance(instance)
     }
 
     fn new_untitled_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
