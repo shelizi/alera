@@ -449,8 +449,24 @@ fn real_host_terminal_list_and_incremental_read_never_autostart() {
     assert_eq!(mixed_panes.active_in(PaneSlot::Primary), Some(&first_id));
     assert_eq!(mixed_panes.active_in(PaneSlot::Secondary), Some(&second_id));
     assert_eq!(mixed_panes.background_host_target(), Some(&first_target));
+    assert_eq!(
+        mixed_panes.focused_host_target_for_input(PaneSlot::Secondary),
+        Some(&second_target)
+    );
+    assert_eq!(
+        mixed_panes.focused_host_target_for_input(PaneSlot::Primary),
+        None
+    );
     assert!(mixed_panes.focus_pane(PaneSlot::Primary));
     assert_eq!(mixed_panes.background_host_target(), Some(&second_target));
+    assert_eq!(
+        mixed_panes.focused_host_target_for_input(PaneSlot::Primary),
+        Some(&first_target)
+    );
+    assert_eq!(
+        mixed_panes.focused_host_target_for_input(PaneSlot::Secondary),
+        None
+    );
     mixed_panes.close_secondary();
     assert!(!mixed_panes.has_secondary());
     assert!(mixed_panes.tabs_in(PaneSlot::Primary).contains(&first_id));

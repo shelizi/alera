@@ -179,6 +179,22 @@ impl WorkbenchPaneLayout {
         self.focused
     }
 
+    /// The only Host ticket whose raw keyboard input is authorized from
+    /// this pane. An unfocused pane or Editor tab can never inherit the
+    /// globally selected TerminalDock keyboard destination.
+    pub fn focused_host_target_for_input(
+        &self,
+        slot: PaneSlot,
+    ) -> Option<&TerminalTabContextTarget> {
+        if self.focused != slot {
+            return None;
+        }
+        match self.active_in(slot) {
+            Some(WorkbenchTabIdentity::Host(target)) => Some(target),
+            _ => None,
+        }
+    }
+
     /// Whether the optional secondary pane currently holds at least one tab.
     pub fn has_secondary(&self) -> bool {
         !self.secondary.is_empty()
@@ -572,6 +588,52 @@ mod tests {
         assert_eq!(panes.background_host_target(), None);
         panes.close_secondary();
         assert_eq!(panes.background_host_target(), None);
+    }
+
+    #[test]
+    fn raw_keyboard_focus_allows_only_the_active_host_in_its_own_pane() {
+        let a = host("pty-a");
+        let b = host("pty-b");
+        let file = editor(8, 1);
+        let mut panes = WorkbenchPaneLayout::new();
+        panes.reconcile(&[a.clone(), b.clone(), file.clone()]);
+        fn host_target(id: &WorkbenchTabIdentity) -> &TerminalTabContextTarget {
+            match id {
+                WorkbenchTabIdentity::Host(target) => target,
+                _ => unreachable!(),
+            }
+        }
+        assert_eq!(
+            panes.focused_host_target_for_input(PaneSlot::Primary),
+            Some(host_target(&a))
+        );
+        assert!(panes.split_with(&b));
+        assert_eq!(
+            panes.focused_host_target_for_input(PaneSlot::Secondary),
+            Some(host_target(&b))
+        );
+        assert_eq!(panes.focused_host_target_for_input(PaneSlot::Primary), None);
+        assert!(panes.focus_pane(PaneSlot::Primary));
+        assert_eq!(
+            panes.focused_host_target_for_input(PaneSlot::Primary),
+            Some(host_target(&a))
+        );
+        assert_eq!(
+            panes.focused_host_target_for_input(PaneSlot::Secondary),
+            None
+        );
+        assert!(panes.activate(&file));
+        assert_eq!(panes.focused_host_target_for_input(PaneSlot::Primary), None);
+        assert!(panes.focus_pane(PaneSlot::Secondary));
+        assert_eq!(
+            panes.focused_host_target_for_input(PaneSlot::Secondary),
+            Some(host_target(&b))
+        );
+        panes.close_secondary();
+        assert_eq!(
+            panes.focused_host_target_for_input(PaneSlot::Secondary),
+            None
+        );
     }
 
     #[test]

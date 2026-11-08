@@ -14,9 +14,9 @@ use alera_gpui_desktop::project_tree::{collect_project_tree, ProjectTreeGroup};
 use alera_gpui_desktop::runtime_bridge::RuntimeCliBridge;
 use alera_gpui_desktop::session::{PreviewSessionStore, TerminalLayout, TerminalLayoutTab};
 use alera_gpui_desktop::terminal::{
-    encode_terminal_key, select_registered_host_workspace, TerminalCreateFlow, TerminalCreateTick,
-    TerminalDock, TerminalPollGate, TerminalTabContextTarget, TerminalViewMode,
-    HOST_SESSION_LIST_SCOPE,
+    encode_terminal_key, raw_key_reply_may_drain, select_registered_host_workspace,
+    TerminalCreateFlow, TerminalCreateTick, TerminalDock, TerminalPollGate,
+    TerminalTabContextTarget, TerminalViewMode, HOST_SESSION_LIST_SCOPE,
 };
 use alera_gpui_desktop::terminal_panes::{TerminalPaneLayout, TerminalSplitDirection};
 use alera_gpui_desktop::visual_tokens::{
@@ -214,8 +214,9 @@ struct Workbench {
     terminal_panes: TerminalPaneLayout,
     terminal_input: Entity<QuickOpenInput>,
     terminal_keyboard_focus: gpui::FocusHandle,
+    secondary_terminal_keyboard_focus: gpui::FocusHandle,
     terminal_key_queue: VecDeque<String>,
-    terminal_key_queue_handle: Option<String>,
+    terminal_key_queue_target: Option<TerminalTabContextTarget>,
     terminal_key_sending: bool,
     show_terminal_attach_picker: bool,
     terminal_create_flow: TerminalCreateFlow,
@@ -1497,7 +1498,7 @@ impl Workbench {
         self.load_terminal_layout();
         self.terminal_send_loading = false;
         self.terminal_key_queue.clear();
-        self.terminal_key_queue_handle = None;
+        self.terminal_key_queue_target = None;
         self.terminal_key_sending = false;
         self.terminal_input.update(cx, |input, cx| input.clear(cx));
         self.show_terminal_attach_picker = false;
@@ -1862,6 +1863,13 @@ impl Workbench {
         if !tab.running {
             return false;
         }
+        let Some(target) = self
+            .terminals
+            .active_tab
+            .and_then(|index| self.terminals.context_target_at(index))
+        else {
+            return false;
+        };
         let Some(encoded) = encode_terminal_key(
             &event.keystroke.key,
             event.keystroke.key_char.as_deref(),
@@ -1884,14 +1892,37 @@ impl Workbench {
             cx.notify();
             return true;
         }
-        let handle = tab.handle.clone();
-        if self.terminal_key_queue_handle.as_deref() != Some(handle.as_str()) {
+        if self.terminal_key_queue_target.as_ref() != Some(&target) {
             self.terminal_key_queue.clear();
-            self.terminal_key_queue_handle = Some(handle);
+            self.terminal_key_queue_target = Some(target);
         }
         self.terminal_key_queue.push_back(encoded);
         self.flush_terminal_key_queue(cx);
         true
+    }
+
+    /// Do not let both native pane surfaces forward keys via the shared
+    /// TerminalDock active index. The clicked/focused pane must still own
+    /// the exact authenticated Host tab at dispatch time.
+    fn send_terminal_key_for_pane(
+        &mut self,
+        pane: PaneSlot,
+        event: &gpui::KeyDownEvent,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.mixed_panes.has_secondary() {
+            let Some(target) = self.mixed_panes.focused_host_target_for_input(pane) else {
+                return false;
+            };
+            if !self.terminals.context_target_is_live(target)
+                || self.terminals.index_for_context(target) != self.terminals.active_tab
+            {
+                return false;
+            }
+        } else if pane != PaneSlot::Primary {
+            return false;
+        }
+        self.send_terminal_key(event, cx)
     }
 
     fn flush_terminal_key_queue(&mut self, cx: &mut Context<Self>) {
@@ -1904,19 +1935,31 @@ impl Workbench {
         let Some(bridge) = self.runtime_bridge.clone() else {
             self.terminals.status = "Cannot send raw terminal keys without CLI".into();
             self.terminal_key_queue.clear();
+            self.terminal_key_queue_target = None;
             cx.notify();
             return;
         };
         let Some(tab) = self.terminals.active() else {
             self.terminal_key_queue.clear();
+            self.terminal_key_queue_target = None;
             return;
         };
-        if !tab.running || self.terminal_key_queue_handle.as_deref() != Some(tab.handle.as_str()) {
+        let active_target = self
+            .terminals
+            .active_tab
+            .and_then(|index| self.terminals.context_target_at(index));
+        if !tab.running
+            || !active_target
+                .as_ref()
+                .is_some_and(|target| self.terminals.context_target_is_live(target))
+            || self.terminal_key_queue_target.as_ref() != active_target.as_ref()
+        {
             self.terminal_key_queue.clear();
+            self.terminal_key_queue_target = None;
             return;
         }
         let handle = tab.handle.clone();
-        let tab_id = tab.tab_id.clone();
+        let sent_target = active_target.expect("live active terminal target exists");
         let generation = self.workspace_generation;
         let mut text = String::new();
         for _ in 0..self.terminal_key_queue.len().min(64) {
@@ -1942,20 +1985,31 @@ impl Workbench {
                     return;
                 }
                 view.terminal_key_sending = false;
-                if !view
+                let active_target = view
                     .terminals
-                    .active()
-                    .is_some_and(|tab| tab.handle == handle && tab.tab_id == tab_id && tab.running)
-                {
+                    .active_tab
+                    .and_then(|index| view.terminals.context_target_at(index));
+                let active_is_live = active_target
+                    .as_ref()
+                    .is_some_and(|target| view.terminals.context_target_is_live(target));
+                let reply_is_for_active = active_target.as_ref() == Some(&sent_target);
+                if raw_key_reply_may_drain(
+                    &sent_target,
+                    view.terminal_key_queue_target.as_ref(),
+                    active_target.as_ref(),
+                    active_is_live,
+                    result.is_ok(),
+                ) {
+                    // A's late completion must let B's queued keys continue.
+                    view.flush_terminal_key_queue(cx);
+                } else {
                     view.terminal_key_queue.clear();
-                    view.terminal_key_queue_handle = None;
-                    return;
-                }
-                match result {
-                    Ok(()) => view.flush_terminal_key_queue(cx),
-                    Err(error) => {
-                        view.terminal_key_queue.clear();
-                        view.terminals.status = format!("Raw terminal key send failed: {error}");
+                    view.terminal_key_queue_target = None;
+                    if reply_is_for_active {
+                        if let Err(error) = result {
+                            view.terminals.status =
+                                format!("Raw terminal key send failed: {error}");
+                        }
                     }
                 }
                 cx.notify();
@@ -2554,13 +2608,18 @@ impl Workbench {
                 if let Some(index) = self.terminals.index_for_context(target) {
                     if self.terminals.active_tab != Some(index) {
                         self.terminal_key_queue.clear();
-                        self.terminal_key_queue_handle = None;
+                        self.terminal_key_queue_target = None;
                     }
                     self.terminals.activate(index);
                     self.center_view = CenterView::Terminal;
                     self.save_terminal_layout();
                     self.refresh_terminal_output(cx);
-                    window.focus(&self.terminal_keyboard_focus);
+                    let focus = if self.mixed_panes.focused_pane() == PaneSlot::Secondary {
+                        &self.secondary_terminal_keyboard_focus
+                    } else {
+                        &self.terminal_keyboard_focus
+                    };
+                    window.focus(focus);
                 }
             }
             WorkbenchTabIdentity::Editor { instance, .. } => {
@@ -2587,13 +2646,16 @@ impl Workbench {
         else {
             return;
         };
+        if !self.terminals.context_target_is_live(&target) {
+            return;
+        }
         let Some(index) = self.terminals.index_for_context(&target) else {
             return;
         };
         self.mixed_panes.focus_pane(PaneSlot::Primary);
         if self.terminals.active_tab != Some(index) {
             self.terminal_key_queue.clear();
-            self.terminal_key_queue_handle = None;
+            self.terminal_key_queue_target = None;
         }
         self.terminals.activate(index);
         self.center_view = CenterView::Terminal;
@@ -2853,7 +2915,7 @@ impl Workbench {
     fn switch_terminal_split_focus(&mut self, cx: &mut Context<Self>) {
         if self.terminal_panes.switch_focus(&mut self.terminals) {
             self.terminal_key_queue.clear();
-            self.terminal_key_queue_handle = None;
+            self.terminal_key_queue_target = None;
             self.save_terminal_layout();
             self.refresh_terminal_output(cx);
             self.refresh_terminal_split_output(cx);
@@ -3236,6 +3298,7 @@ impl Render for Workbench {
         let has_terminal_preview = primary_terminal.is_some();
         let terminal_input = self.terminal_input.clone();
         let terminal_keyboard_focus = self.terminal_keyboard_focus.clone();
+        let secondary_terminal_keyboard_focus = self.secondary_terminal_keyboard_focus.clone();
         let terminal_send_loading = self.terminal_send_loading;
         let terminal_auto = self.terminal_poll.enabled();
         let terminal_is_vt = self.terminals.view_mode == TerminalViewMode::Screen;
@@ -4872,7 +4935,7 @@ impl Render for Workbench {
                                                 window.focus(&this.terminal_keyboard_focus);
                                             }))
                                             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
-                                                if this.send_terminal_key(event, cx) { cx.stop_propagation(); }
+                                                if this.send_terminal_key_for_pane(PaneSlot::Primary, event, cx) { cx.stop_propagation(); }
                                             }))
                                             .flex_1()
                                             .min_h_0()
@@ -4922,7 +4985,7 @@ impl Render for Workbench {
                                                 window.focus(&this.terminal_keyboard_focus);
                                             }))
                                             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
-                                                if this.send_terminal_key(event, cx) { cx.stop_propagation(); }
+                                                if this.send_terminal_key_for_pane(PaneSlot::Primary, event, cx) { cx.stop_propagation(); }
                                             }))
                                             .flex_1()
                                             .min_h_0()
@@ -4970,7 +5033,7 @@ impl Render for Workbench {
                                                             }
                                                             if this.terminal_panes.drop_tab_on_secondary(&mut this.terminals, &drag.handle) {
                                                                 this.terminal_key_queue.clear();
-                                                                this.terminal_key_queue_handle = None;
+                                                                this.terminal_key_queue_target = None;
                                                                 this.save_terminal_layout();
                                                                 this.refresh_terminal_output(cx);
                                                                 this.refresh_terminal_split_output(cx);
@@ -5138,21 +5201,21 @@ impl Render for Workbench {
                                                     .flex_1()
                                                     .min_h_0()
                                                     .key_context("AleraGpuiTerminalRaw")
-                                                    .track_focus(&terminal_keyboard_focus)
+                                                    .track_focus(&secondary_terminal_keyboard_focus)
                                                     .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |this, _, window, cx| {
                                                         if let Some(target) = mixed_secondary_host.as_ref() {
                                                             if this.terminals.context_target_is_live(target) {
                                                                 if let Some(index) = this.terminals.index_for_context(target) {
                                                                 if this.terminals.active_tab != Some(index) {
                                                                     this.terminal_key_queue.clear();
-                                                                    this.terminal_key_queue_handle = None;
+                                                                    this.terminal_key_queue_target = None;
                                                                 }
                                                                 this.mixed_panes.focus_pane(PaneSlot::Secondary);
                                                                 this.terminals.activate(index);
                                                                 this.center_view = CenterView::Terminal;
                                                                 this.refresh_terminal_output(cx);
                                                                 this.save_mixed_pane_layout(cx);
-                                                                window.focus(&this.terminal_keyboard_focus);
+                                                                window.focus(&this.secondary_terminal_keyboard_focus);
                                                                 cx.notify();
                                                                 }
                                                             }
@@ -5163,7 +5226,7 @@ impl Render for Workbench {
                                                             this.terminals.context_target_is_live(target)
                                                                 && this.terminals.index_for_context(target) == this.terminals.active_tab
                                                         });
-                                                        if authorized && this.send_terminal_key(event, cx) {
+                                                        if authorized && this.send_terminal_key_for_pane(PaneSlot::Secondary, event, cx) {
                                                             cx.stop_propagation();
                                                         }
                                                     }))
@@ -5864,8 +5927,9 @@ fn main() {
                         terminal_panes: TerminalPaneLayout::default(),
                         terminal_input,
                         terminal_keyboard_focus: cx.focus_handle(),
+                        secondary_terminal_keyboard_focus: cx.focus_handle(),
                         terminal_key_queue: VecDeque::new(),
-                        terminal_key_queue_handle: None,
+                        terminal_key_queue_target: None,
                         terminal_key_sending: false,
                         show_terminal_attach_picker: false,
                         terminal_create_flow: TerminalCreateFlow::default(),

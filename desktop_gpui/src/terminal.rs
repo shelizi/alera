@@ -653,6 +653,24 @@ pub struct TerminalTabContextTarget {
     workspace_generation: u64,
 }
 
+/// A late reply for PTY A may not discard pending keys for PTY B. Only
+/// the exact still-live active session may receive queued raw input; a
+/// failure for the *same* session stops its own queue.
+pub fn raw_key_reply_may_drain(
+    sent: &TerminalTabContextTarget,
+    queued: Option<&TerminalTabContextTarget>,
+    active: Option<&TerminalTabContextTarget>,
+    active_is_live: bool,
+    send_succeeded: bool,
+) -> bool {
+    match (queued, active) {
+        (Some(queued), Some(active)) if active_is_live && queued == active => {
+            sent != active || send_succeeded
+        }
+        _ => false,
+    }
+}
+
 impl TerminalTab {
     fn new(session: &TerminalSession, generation: u64) -> Self {
         Self {
@@ -1316,6 +1334,80 @@ mod tests {
         assert!(encode_terminal_key("v", Some("v"), false, false, true).is_none());
         assert!(encode_terminal_key("a", Some("a"), false, true, false).is_none());
         assert!(encode_terminal_key("key", Some("\0"), false, false, false).is_none());
+    }
+
+    #[test]
+    fn late_raw_key_reply_cannot_discard_keys_for_a_new_active_host() {
+        let first = TerminalTabContextTarget {
+            handle: "pty-a".into(),
+            workspace_id: "ws".into(),
+            tab_id: "tab-a".into(),
+            generation: 1,
+            workspace_generation: 7,
+        };
+        let second = TerminalTabContextTarget {
+            handle: "pty-b".into(),
+            tab_id: "tab-b".into(),
+            ..first.clone()
+        };
+        // B keys arrive while A's asynchronous CLI write is still running.
+        // A's success OR failure must permit the still-live B queue to flush.
+        assert!(raw_key_reply_may_drain(
+            &first,
+            Some(&second),
+            Some(&second),
+            true,
+            true,
+        ));
+        assert!(raw_key_reply_may_drain(
+            &first,
+            Some(&second),
+            Some(&second),
+            true,
+            false,
+        ));
+        // A failure for the currently active A is not silently ignored.
+        assert!(!raw_key_reply_may_drain(
+            &first,
+            Some(&first),
+            Some(&first),
+            true,
+            false,
+        ));
+        assert!(raw_key_reply_may_drain(
+            &first,
+            Some(&first),
+            Some(&first),
+            true,
+            true,
+        ));
+        // Neither a stale tab identity nor a stopped session can receive
+        // queued keyboard data, even if the Host reuses the same handle.
+        let reused = TerminalTabContextTarget {
+            tab_id: "new-tab-a".into(),
+            ..first.clone()
+        };
+        assert!(!raw_key_reply_may_drain(
+            &first,
+            Some(&first),
+            Some(&reused),
+            true,
+            true,
+        ));
+        assert!(!raw_key_reply_may_drain(
+            &first,
+            Some(&second),
+            Some(&second),
+            false,
+            true,
+        ));
+        assert!(!raw_key_reply_may_drain(
+            &first,
+            None,
+            Some(&second),
+            true,
+            true,
+        ));
     }
 
     #[test]
