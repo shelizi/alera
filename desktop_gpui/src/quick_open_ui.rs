@@ -316,7 +316,7 @@ impl Render for QuickOpenInput {
             )
             .flex()
             .flex_col()
-            .bg(rgb(0x303741))
+            .bg(rgb(alera_gpui_desktop::visual_tokens::ACTIVE))
             .px_2()
             .py_1()
             .text_sm()

@@ -9,6 +9,15 @@ GPUI 0.2.2 to Kit's pinned `gpui-pre 0.3.11`. Initialize with
 `gpui_kit::open_window(...)` so the Base Root can host framework overlays.
 Do not add another direct `gpui` dependency.
 
+After `gpui_kit::init(cx)`, call
+`native_ui_theme::install_alera_dark_theme(cx)` **before** creating any
+window. Kit 0.9.0 initializes in Light mode regardless of Alera's shell
+colors; without this call its Button, TabBar, dropdown and Dialog surfaces
+show bright white on the dark Alera UI. The adapter sets Kit's Dark mode and
+aligns its semantic control backgrounds, borders, foregrounds and overlays
+with Flutter Classic's `AleraTokens`. Do not patch individual Kit buttons
+with hardcoded colors or sync to Windows Light appearance behind this policy.
+
 Prefer `gpui_kit::component` for generic Button, Switch, TabBar, menus,
 selects and dialogs; Alera owns only target identity, Git confirmation and
 filesystem/Host authorization. The source migration now uses Kit Button

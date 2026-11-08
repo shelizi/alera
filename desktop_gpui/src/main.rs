@@ -5,6 +5,7 @@ mod native_components;
 mod native_popup_ui;
 mod native_settings_ui;
 mod native_ui_icons;
+mod native_ui_theme;
 mod quick_open_ui;
 
 // GPUI Kit re-exports its pinned GPUI runtime. Use a single version of all
@@ -8772,6 +8773,11 @@ fn main() {
         .with_assets(gpui_kit::assets::Assets)
         .run(move |cx: &mut App| {
             gpui_kit::init(cx);
+            // Kit initializes its global palette in Light mode. Alera Native
+            // has a deliberately dark shell regardless of Windows appearance.
+            // Configure Kit once at the root so buttons, menus, tabs and
+            // dialogs share the same Classic-derived semantic colors.
+            native_ui_theme::install_alera_dark_theme(cx);
             // Flutter embeds these licensed typefaces. Without explicitly
             // registering them GPUI silently falls back to a Windows font even
             // if font_family("Inter") is set on the native workbench root.
