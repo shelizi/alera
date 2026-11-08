@@ -61,6 +61,10 @@ that modified the requested path, based on each commit's first parent.
 Directory history includes commits touching the subtree. Reads have a
 2048-commit scan ceiling and a 96-result display ceiling; truncated results
 are marked. A visible **Clear path filter** control returns to the full graph.
+The Explorer also provides a **Git history** action for its selected file or
+directory, opening the same scoped Native graph without using MCP. The path
+is canonicalized within the current Workspace before the background history
+job is scheduled, and existing branch favorites are preserved.
 File history tracks first-parent Git renames backward from each displayed
 branch tip using libgit2 content similarity, with per-commit alias tracking
 so parallel branch histories cannot overwrite one another. A removed file

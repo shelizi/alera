@@ -852,6 +852,58 @@ impl Workbench {
         cx.notify();
     }
 
+    /// Human-facing counterpart to MCP open_git_graph.filePath/gitDiffRoot:
+    /// view the selected Explorer file or folder history in the same bounded
+    /// read-only Native Git Graph, without modifying the Git repository.
+    fn open_explorer_selection_history(&mut self, cx: &mut Context<Self>) {
+        let Some(selected) = self.explorer_selection.clone() else {
+            self.model
+                .set_status("Select an Explorer file or folder for Git history");
+            cx.notify();
+            return;
+        };
+        let scoped = (|| -> Result<(Option<String>, Option<String>), String> {
+            let root = dunce::canonicalize(self.model.root()).map_err(|error| error.to_string())?;
+            let selected = dunce::canonicalize(selected)
+                .map_err(|_| "Selected Explorer item no longer exists".to_string())?;
+            let relative = selected
+                .strip_prefix(&root)
+                .map_err(|_| "Selected Explorer item is outside this Workspace".to_string())?;
+            if relative.as_os_str().is_empty() {
+                return Ok((None, None));
+            }
+            let path = relative
+                .to_str()
+                .ok_or("Git history cannot use a non-Unicode Explorer path")?
+                .replace('\\', "/");
+            if selected.is_file() {
+                Ok((Some(path), None))
+            } else if selected.is_dir() {
+                Ok((None, Some(path)))
+            } else {
+                Err("Select a regular file or directory for Git history".into())
+            }
+        })();
+        let (file_path, git_diff_root) = match scoped {
+            Ok(scope) => scope,
+            Err(error) => {
+                self.model
+                    .set_status(format!("Git history unavailable: {error}"));
+                cx.notify();
+                return;
+            }
+        };
+        self.git_history_options.file_path = file_path;
+        self.git_history_options.git_diff_root = git_diff_root;
+        self.git_history_options.selected_ref = None;
+        self.git_history_options.favorites_only = false;
+        self.git_history_open = true;
+        self.refresh_git_history(cx);
+        self.model
+            .set_status("Loading selected Explorer item Git history…");
+        cx.notify();
+    }
+
     fn set_git_history_ref(&mut self, selected: Option<String>, cx: &mut Context<Self>) {
         self.git_history_options.selected_ref = selected;
         self.refresh_git_history(cx);
@@ -4661,6 +4713,7 @@ impl Render for Workbench {
                                     .child(
                                         div()
                                             .flex()
+                                            .flex_wrap()
                                             .items_center()
                                             .gap_3()
                                             .text_xs()
@@ -4678,6 +4731,11 @@ impl Render for Workbench {
                                                 .text_color(rgb(TEXT)).child("Paste here")
                                                 .on_click(cx.listener(|this, _, _, cx| {
                                                     this.paste_explorer_clipboard(cx);
+                                                })))
+                                            .child(div().id("explorer-view-git-history").cursor_pointer()
+                                                .text_color(rgb(TEXT)).child("Git history")
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.open_explorer_selection_history(cx);
                                                 }))),
                                     )
                                     .child(if let Some(action) = explorer_action {
