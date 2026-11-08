@@ -3645,9 +3645,10 @@ impl Workbench {
         cx.spawn(async move |view, cx| {
             let result = cx
                 .background_spawn(async move {
-                    let registered = bridge.list_registered_workspaces()?;
-                    let host_workspace_id = select_registered_host_workspace(&root, &registered)?;
-                    bridge.create_terminal(&host_workspace_id)
+                    // Explicit New Terminal may start the existing CLI Host
+                    // and register this *already existing* checkout. Passive
+                    // refresh/read/write still never start a Host or PTY.
+                    bridge.create_terminal_for_workspace(&root)
                 })
                 .await;
             view.update(cx, |view, cx| {
@@ -3774,7 +3775,11 @@ impl Workbench {
                     }
                     Err(error) => {
                         view.terminals.apply_session_list(generation, Vec::new());
-                        view.terminals.status = format!("Session refresh failed: {error}");
+                        view.terminals.status = if error.kind() == std::io::ErrorKind::NotConnected {
+                            "Runtime Host is offline · use + → New Terminal to start one".into()
+                        } else {
+                            format!("Session refresh failed: {error}")
+                        };
                     }
                 }
                 cx.notify();

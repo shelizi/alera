@@ -26,6 +26,7 @@ pub mod project_tree;
 pub mod runtime_bridge;
 pub mod session;
 pub mod terminal;
+pub mod terminal_bootstrap;
 pub mod terminal_panes;
 pub mod visible_line_hit;
 pub mod visual_tokens;

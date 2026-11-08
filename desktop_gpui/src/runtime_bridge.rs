@@ -288,7 +288,10 @@ fn is_resize_terminal_args(args: &[OsString]) -> bool {
         && rows.parse::<u16>().is_ok_and(|n| (5..=200).contains(&n))
 }
 
-fn wait_with_timeout(child: &mut Child, timeout: Duration) -> io::Result<std::process::ExitStatus> {
+pub(crate) fn wait_with_timeout(
+    child: &mut Child,
+    timeout: Duration,
+) -> io::Result<std::process::ExitStatus> {
     let started = Instant::now();
     loop {
         match child.try_wait() {
