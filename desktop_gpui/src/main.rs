@@ -96,7 +96,7 @@ enum GitUiAction {
     Unstage(PathBuf),
     Commit(String),
     SwitchBranch(String),
-    MergeFastForward(String),
+    MergeWithoutConflicts(String),
     Fetch,
 }
 
@@ -842,7 +842,9 @@ impl Workbench {
                             git.switch_branch(&branch)?;
                             Ok(format!("Switched to branch {branch}"))
                         }
-                        GitUiAction::MergeFastForward(branch) => git.merge_fast_forward(&branch),
+                        GitUiAction::MergeWithoutConflicts(branch) => {
+                            git.merge_without_conflicts(&branch)
+                        }
                         GitUiAction::Fetch => {
                             git.fetch_current_remote()?;
                             Ok("Fetched remote refs; working tree unchanged".to_string())
@@ -4138,11 +4140,11 @@ impl Render for Workbench {
                                         this.preview_git_history(GitReadRequest::Compare(branch), cx);
                                     })))
                                 .child(div()
-                                    .id("git-merge-fast-forward")
+                                    .id("git-merge-auto")
                                     .cursor_pointer()
                                     .text_xs()
                                     .text_color(rgb(if git_action_busy { MUTED } else { TEXT }))
-                                    .child(if git_merge_armed { "Confirm FF Merge" } else { "Merge FF" })
+                                    .child(if git_merge_armed { "Confirm Merge" } else { "Merge" })
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         if this.git_action_busy { return; }
                                         let branch = this.git_branch_input.read(cx).query().trim().to_owned();
@@ -4150,10 +4152,10 @@ impl Render for Workbench {
                                             this.git_action_status = "Select a source branch before merging".into();
                                         } else if this.git_merge_armed.as_deref() == Some(branch.as_str()) {
                                             this.git_merge_armed = None;
-                                            this.run_git_action(GitUiAction::MergeFastForward(branch), cx);
+                                            this.run_git_action(GitUiAction::MergeWithoutConflicts(branch), cx);
                                         } else {
                                             this.git_merge_armed = Some(branch.clone());
-                                            this.git_action_status = format!("Click Confirm FF Merge to advance the current branch to {branch}; non-FF merges will be refused");
+                                            this.git_action_status = format!("Click Confirm Merge to merge {branch} into the current branch; merge conflicts will be refused without changing files");
                                         }
                                         cx.notify();
                                     })))
