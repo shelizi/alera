@@ -13,7 +13,7 @@ use alera_gpui_desktop::explorer_ops::{ExplorerClipboard, ExplorerClipboardMode,
 use alera_gpui_desktop::file_search::WorkspaceFileIndex;
 use alera_gpui_desktop::git_actions::GitActions;
 use alera_gpui_desktop::git_history::{
-    compare_git_refs, compare_local_branch, preview_commit, GitHistorySnapshot,
+    compare_git_refs, compare_local_branch, preview_commit, GitHistoryOptions, GitHistorySnapshot,
 };
 use alera_gpui_desktop::git_inspect::{read_file_diff, GitSnapshot};
 use alera_gpui_desktop::mcp_ui_bridge::{
@@ -211,6 +211,7 @@ struct Workbench {
     git_snapshot: Option<GitSnapshot>,
     git_history: Option<GitHistorySnapshot>,
     git_history_open: bool,
+    git_history_options: GitHistoryOptions,
     git_history_loading: bool,
     git_history_error: Option<String>,
     git_history_request: u64,
@@ -768,33 +769,63 @@ impl Workbench {
     }
 
     fn refresh_git_history(&mut self, cx: &mut Context<Self>) {
-        if self.git_history_loading {
-            return;
-        }
+        self.load_git_history(None, cx);
+    }
+
+    /// Installing the selected graph is the success boundary for MCP:
+    /// a queued background read is NOT a visible Git Graph.
+    fn load_git_history(
+        &mut self,
+        mcp_command: Option<NativeMcpUiCommand>,
+        cx: &mut Context<Self>,
+    ) {
         let root = self.model.root().to_path_buf();
         let generation = self.workspace_generation;
+        let options = self.git_history_options.clone();
         self.git_history_request = self.git_history_request.wrapping_add(1);
         let request = self.git_history_request;
         self.git_history_loading = true;
         self.git_history_error = None;
         cx.spawn(async move |view, cx| {
             let result = cx
-                .background_spawn(async move { GitHistorySnapshot::load(&root) })
+                .background_spawn(async move { GitHistorySnapshot::load_filtered(&root, &options) })
                 .await;
             view.update(cx, |view, cx| {
                 if view.workspace_generation != generation || view.git_history_request != request {
+                    if let Some(command) = mcp_command {
+                        if let Some(bridge) = view.mcp_ui_bridge.as_mut() {
+                            let _ = bridge.complete(&command.request_id, false, None, Some("not_visible"));
+                        }
+                    }
                     return;
                 }
                 view.git_history_loading = false;
+                let mut applied = false;
                 match result {
                     Ok(history) => {
                         view.git_history = Some(history);
                         view.git_history_error = None;
+                        applied = view.git_history_open;
                     }
                     Err(error) => {
                         view.git_history = None;
                         view.git_history_error = Some(error);
                     }
+                }
+                if let Some(command) = mcp_command {
+                    if let Some(bridge) = view.mcp_ui_bridge.as_mut() {
+                        let _ = bridge.complete(
+                            &command.request_id,
+                            applied,
+                            None,
+                            if applied { None } else { Some("ui_operation_failed") },
+                        );
+                    }
+                    view.mcp_ui_status = if applied {
+                        "MCP: Native Git Graph loaded with requested filters".into()
+                    } else {
+                        "MCP: Native Git Graph failed or is not visible".into()
+                    };
                 }
                 cx.notify();
             })
@@ -808,6 +839,32 @@ impl Workbench {
         self.git_history_open = !self.git_history_open;
         if self.git_history_open {
             self.refresh_git_history(cx);
+        }
+        cx.notify();
+    }
+
+    fn set_git_history_ref(&mut self, selected: Option<String>, cx: &mut Context<Self>) {
+        self.git_history_options.selected_ref = selected;
+        self.refresh_git_history(cx);
+    }
+
+    fn toggle_git_history_favorite(&mut self, branch: String, cx: &mut Context<Self>) {
+        let mut next = self.git_history_options.favorites.clone();
+        if let Some(index) = next.iter().position(|value| value == &branch) {
+            next.remove(index);
+        } else {
+            next.push(branch);
+        }
+        let result = self.session_store.as_ref()
+            .ok_or_else(|| std::io::Error::other("Native session storage unavailable"))
+            .and_then(|store| store.save_git_favorites(self.model.root(), &next));
+        match result {
+            Ok(()) => {
+                self.git_history_options.favorites = next;
+                self.refresh_git_history(cx);
+            }
+            Err(error) => self.git_history_error =
+                Some(format!("Cannot persist Git favorites: {error}")),
         }
         cx.notify();
     }
@@ -1616,6 +1673,14 @@ impl Workbench {
         self.git_history = None;
         self.git_history_loading = false;
         self.git_history_error = None;
+        self.git_history_options = GitHistoryOptions::default();
+        if let Some(store) = &self.session_store {
+            match store.load_git_favorites(&canonical) {
+                Ok(favorites) => self.git_history_options.favorites = favorites,
+                Err(error) => self.git_history_error =
+                    Some(format!("Native Git favorites cannot be loaded: {error}")),
+            }
+        }
         self.git_history_request = self.git_history_request.wrapping_add(1);
         self.git_merge_armed = None;
         self.git_action_request = self.git_action_request.wrapping_add(1);
@@ -2047,39 +2112,52 @@ impl Workbench {
                 }
                 Ok(Some(tab_id.to_owned()))
             }
-            "open_git_graph" => {
-                // The native graph can show its current local branch list;
-                // filters/ref selection must wait for the actual UI feature.
-                if args.keys().any(|key| {
-                    !matches!(
-                        key.as_str(),
-                        "allBranches" | "favoritesOnly" | "selectedRef"
-                    )
-                }) {
-                    return Err("ui_not_ready");
-                }
-                if args.get("favoritesOnly") == Some(&serde_json::Value::Bool(true))
-                    || args
-                        .get("selectedRef")
-                        .and_then(|value| value.as_str())
-                        .is_some_and(|name| !name.is_empty())
-                {
-                    return Err("ui_not_ready");
-                }
-                self.git_history_open = true;
-                self.refresh_git_history(cx);
-                cx.notify();
-                if self.git_history_open {
-                    Ok(None)
-                } else {
-                    Err("not_visible")
-                }
-            }
-            // No fake success for the not-yet-migrated Settings, asynchronous
-            // compare/readback, or creation paths. Host retains timeout and
-            // per-command receipt enforcement.
+            // Background Git Graph selection, compare and creation paths all
+            // have dedicated request-ticket owners and deferred receipts.
             _ => Err("ui_not_ready"),
         }
+    }
+
+    fn start_native_mcp_git_graph(
+        &mut self,
+        command: NativeMcpUiCommand,
+        cx: &mut Context<Self>,
+    ) {
+        let registered = self.mcp_host_workspaces.iter().any(|workspace| {
+            workspace.id == command.workspace_id
+                && dunce::canonicalize(&workspace.path).ok().as_deref() == Some(self.model.root())
+        });
+        let args = command.arguments.as_object();
+        let supported = args.is_some_and(|args| {
+            args.keys().all(|key| matches!(
+                key.as_str(), "allBranches" | "favoritesOnly" | "selectedRef"
+            ))
+                && ["allBranches", "favoritesOnly"].into_iter().all(|key|
+                    args.get(key).is_none_or(serde_json::Value::is_boolean)
+                )
+                && args.get("selectedRef")
+                    .is_none_or(|value| value.as_str().is_some_and(|name|
+                        !name.is_empty() && name.len() <= 128 && !name.chars().any(char::is_control)
+                    ))
+        });
+        if !registered || !supported {
+            if let Some(bridge) = self.mcp_ui_bridge.as_mut() {
+                let _ = bridge.complete(&command.request_id, false, None,
+                    Some(if !registered { "workspace_missing" } else { "ui_not_ready" }));
+            }
+            return;
+        }
+        let args = args.expect("validated graph arguments");
+        self.git_history_options.all_branches = args.get("allBranches")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(self.git_history_options.all_branches);
+        self.git_history_options.favorites_only = args.get("favoritesOnly")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(self.git_history_options.favorites_only);
+        self.git_history_options.selected_ref =
+            args.get("selectedRef").and_then(serde_json::Value::as_str).map(str::to_owned);
+        self.git_history_open = true;
+        self.load_git_history(Some(command), cx);
     }
 
     /// Use the existing Host-owned managed Workspace workflow. Only one
@@ -2292,6 +2370,10 @@ impl Workbench {
                     }
                     if command.action == "compare_branches" {
                         self.start_native_mcp_compare(command, cx);
+                        continue;
+                    }
+                    if command.action == "open_git_graph" {
+                        self.start_native_mcp_git_graph(command, cx);
                         continue;
                     }
                     let result = self.apply_native_mcp_action(&command, cx);
@@ -4326,11 +4408,14 @@ impl Render for Workbench {
         let git_commit_input = self.git_commit_input.clone();
         let git_branch_input = self.git_branch_input.clone();
         let git_graph_open = self.git_history_open;
+        let git_graph_all_branches = self.git_history_options.all_branches;
+        let git_graph_favorites_only = self.git_history_options.favorites_only;
+        let git_graph_selected_ref = self.git_history_options.selected_ref.clone();
         let git_history_status = if self.git_history_loading {
             "Loading commit graph…".to_owned()
         } else if let Some(history) = &self.git_history {
             format!(
-                "{} local branch(es), {} commit(s){}",
+                "{} branch(es), {} commit(s){}",
                 history.branches.len(),
                 history.commits.len(),
                 if history.truncated { " (limited)" } else { "" }
@@ -4888,26 +4973,84 @@ impl Render for Workbench {
                                     .flex_col()
                                     .gap_1()
                                     .child(div().text_xs().text_color(rgb(MUTED)).child(git_history_status))
-                                    .child(div().text_xs().text_color(rgb(TEXT)).child("Local branches · select to compare"))
+                                    .child(div()
+                                        .flex()
+                                        .items_center()
+                                        .gap_3()
+                                        .child(div()
+                                            .id("git-graph-toggle-remotes")
+                                            .text_xs()
+                                            .cursor_pointer()
+                                            .text_color(rgb(TEXT))
+                                            .child(if git_graph_all_branches { "Remote branches: On" } else { "Remote branches: Off" })
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.git_history_options.all_branches = !this.git_history_options.all_branches;
+                                                this.refresh_git_history(cx);
+                                            })))
+                                        .child(div()
+                                            .id("git-graph-toggle-favorites")
+                                            .text_xs()
+                                            .cursor_pointer()
+                                            .text_color(rgb(TEXT))
+                                            .child(if git_graph_favorites_only { "★ Favorites only" } else { "☆ All branches" })
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.git_history_options.favorites_only = !this.git_history_options.favorites_only;
+                                                this.refresh_git_history(cx);
+                                            })))
+                                        .child(div()
+                                            .id("git-graph-clear-ref")
+                                            .text_xs()
+                                            .cursor_pointer()
+                                            .text_color(rgb(TEXT))
+                                            .child(if git_graph_selected_ref.is_some() { "Clear selected ref" } else { "All commits" })
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.set_git_history_ref(None, cx);
+                                            }))))
+                                    .child(div().text_xs().text_color(rgb(TEXT)).child("Branches · click name to select history, star to favorite"))
                                     .child(div()
                                         .id("git-graph-branches")
                                         .max_h(px(85.0))
                                         .overflow_y_scroll()
                                         .children(git_branch_rows.into_iter().enumerate().map(|(index, row)| {
                                             let name = row.name;
-                                            let label = format!("{} {} · {}", if row.current { "●" } else { "○" }, name, row.tip);
+                                            let remote = row.remote;
+                                            let favorite = row.favorite;
+                                            let reference = if remote { format!("refs/remotes/{name}") } else { name.clone() };
+                                            let selected = git_graph_selected_ref.as_deref() == Some(reference.as_str());
+                                            let label = format!("{} {}{} · {}",
+                                                if row.current { "●" } else { "○" },
+                                                if remote { "☁ " } else { "" }, name, row.tip);
+                                            let favorite_name = reference.clone();
                                             div()
                                                 .id(("git-graph-branch", index))
-                                                .cursor_pointer()
-                                                .text_xs()
-                                                .text_color(rgb(if row.current { TEXT } else { MUTED }))
-                                                .hover(|style| style.bg(rgb(ACTIVE)))
-                                                .child(label)
-                                                .on_click(cx.listener(move |this, _, _, cx| {
-                                                    this.git_merge_armed = None;
-                                                    this.git_branch_input.update(cx, |input, cx| { input.set_query(&name, cx); });
-                                                    this.preview_git_history(GitReadRequest::Compare(name.clone()), cx);
-                                                }))
+                                                .flex()
+                                                .items_center()
+                                                .gap_2()
+                                                .child(div()
+                                                    .id(("git-graph-favorite", index))
+                                                    .cursor_pointer()
+                                                    .text_xs()
+                                                    .text_color(rgb(TEXT))
+                                                    .child(if favorite { "★" } else { "☆" })
+                                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                                        this.toggle_git_history_favorite(favorite_name.clone(), cx);
+                                                    })))
+                                                .child(div()
+                                                    .id(("git-graph-branch-select", index))
+                                                    .flex_1()
+                                                    .cursor_pointer()
+                                                    .text_xs()
+                                                    .text_color(rgb(if row.current || selected { TEXT } else { MUTED }))
+                                                    .hover(|style| style.bg(rgb(ACTIVE)))
+                                                    .child(label)
+                                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                                        this.git_merge_armed = None;
+                                                        this.set_git_history_ref(Some(reference.clone()), cx);
+                                                        if !remote {
+                                                            this.git_branch_input.update(cx, |input, cx| { input.set_query(&name, cx); });
+                                                            this.preview_git_history(GitReadRequest::Compare(name.clone()), cx);
+                                                        }
+                                                    })))
                                         })))
                                     .child(div().text_xs().text_color(rgb(TEXT)).child("Commits · select to preview"))
                                     .child(div()
@@ -7022,6 +7165,17 @@ fn main() {
         .as_ref()
         .and_then(|store| store.saved_projects().ok())
         .unwrap_or_default();
+    let initial_git_favorites = match session_store
+        .as_ref()
+        .map(|store| store.load_git_favorites(model.root()))
+    {
+        Some(Ok(saved)) => saved,
+        Some(Err(error)) => {
+            model.set_status(format!("Native Git favorites could not be restored: {error}"));
+            Vec::new()
+        }
+        None => Vec::new(),
+    };
     let native_settings_store = session_store
         .as_ref()
         .map(|store| NativeSettingsStore::new(store.state_dir()));
@@ -7113,6 +7267,10 @@ fn main() {
                         git_snapshot: None,
                         git_history: None,
                         git_history_open: false,
+                        git_history_options: GitHistoryOptions {
+                            favorites: initial_git_favorites,
+                            ..Default::default()
+                        },
                         git_history_loading: false,
                         git_history_error: None,
                         git_history_request: 0,
