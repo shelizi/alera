@@ -8,6 +8,8 @@ use alera_gpui_desktop::runtime_bridge::{RuntimeCliBridge, RuntimeStatus};
 use alera_gpui_desktop::terminal::{TerminalCreateFlow, TerminalDock};
 use alera_gpui_desktop::terminal_panes::TerminalPaneLayout;
 use alera_gpui_desktop::vt_screen::VtScreen;
+use alera_gpui_desktop::workbench_panes::{PaneSlot, WorkbenchPaneLayout};
+use alera_gpui_desktop::workbench_tabs::WorkbenchTabIdentity;
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpStream;
@@ -343,6 +345,78 @@ fn real_host_terminal_list_and_incremental_read_never_autostart() {
     assert!(sessions
         .iter()
         .any(|session| second_created.matches_live_session(session)));
+    assert_ne!(native_created.handle, second_created.handle);
+
+    // A split view must not just list two Host tickets: prove that each
+    // authenticated PTY independently accepts commands and returns its OWN
+    // output. The filesystem effects verify actual execution, while the
+    // separate output cursors detect a wrong-pane read or keyboard target.
+    let first_marker = format!("GPUI_PANE_ONE_{}", std::process::id());
+    let second_marker = format!("GPUI_PANE_TWO_{}", std::process::id());
+    let first_file = home.join("gpui-pane-one.txt");
+    let second_file = home.join("gpui-pane-two.txt");
+    bridge
+        .write_terminal(
+            &native_created.handle,
+            &format!("echo {first_marker} > gpui-pane-one.txt"),
+            true,
+        )
+        .unwrap();
+    bridge
+        .write_terminal(
+            &second_created.handle,
+            &format!("echo {second_marker} > gpui-pane-two.txt"),
+            true,
+        )
+        .unwrap();
+    let mut first_cursor = created_cursor;
+    let mut second_cursor = None;
+    let mut first_transcript = String::new();
+    let mut second_transcript = String::new();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let first = bridge
+            .read_terminal(&native_created.handle, first_cursor)
+            .unwrap();
+        assert!(first_cursor.is_none_or(|old| first.next_cursor >= old));
+        first_cursor = Some(first.next_cursor);
+        first_transcript.push_str(&first.text);
+        let second = bridge
+            .read_terminal(&second_created.handle, second_cursor)
+            .unwrap();
+        assert!(second_cursor.is_none_or(|old| second.next_cursor >= old));
+        second_cursor = Some(second.next_cursor);
+        second_transcript.push_str(&second.text);
+        if first_transcript.contains(&first_marker)
+            && second_transcript.contains(&second_marker)
+            && first_file.is_file()
+            && second_file.is_file()
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "two independent Host PTYs did not complete: first={first_transcript:?} second={second_transcript:?}"
+        );
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    assert!(
+        !first_transcript.contains(&second_marker),
+        "second pane leaked into first PTY"
+    );
+    assert!(
+        !second_transcript.contains(&first_marker),
+        "first pane leaked into second PTY"
+    );
+    assert_eq!(
+        std::fs::read_to_string(first_file).unwrap().trim(),
+        first_marker
+    );
+    assert_eq!(
+        std::fs::read_to_string(second_file).unwrap().trim(),
+        second_marker
+    );
+
     let mut dock = TerminalDock::default();
     dock.update_sessions(sessions);
     assert!(dock.open(&native_created.handle));
@@ -358,6 +432,36 @@ fn real_host_terminal_list_and_incremental_read_never_autostart() {
     assert_eq!(dock.active().unwrap().handle, second_created.handle);
     panes.close_secondary();
     assert!(panes.secondary.is_none());
+    // Feed real authenticated Host tickets through the *new* mixed
+    // WorkbenchPaneLayout, not just the legacy TerminalPaneLayout. Each
+    // pane must keep its own exact Host identity while focus swaps.
+    let first_target = dock.context_target_at(0).unwrap();
+    let second_target = dock.context_target_at(1).unwrap();
+    assert_eq!(first_target.handle, native_created.handle);
+    assert_eq!(second_target.handle, second_created.handle);
+    assert!(dock.context_target_is_live(&first_target));
+    assert!(dock.context_target_is_live(&second_target));
+    let first_id = WorkbenchTabIdentity::Host(first_target.clone());
+    let second_id = WorkbenchTabIdentity::Host(second_target.clone());
+    let mut mixed_panes = WorkbenchPaneLayout::new();
+    mixed_panes.reconcile(&[first_id.clone(), second_id.clone()]);
+    assert!(mixed_panes.split_with(&second_id));
+    assert_eq!(mixed_panes.active_in(PaneSlot::Primary), Some(&first_id));
+    assert_eq!(mixed_panes.active_in(PaneSlot::Secondary), Some(&second_id));
+    assert_eq!(mixed_panes.background_host_target(), Some(&first_target));
+    assert!(mixed_panes.focus_pane(PaneSlot::Primary));
+    assert_eq!(mixed_panes.background_host_target(), Some(&second_target));
+    mixed_panes.close_secondary();
+    assert!(!mixed_panes.has_secondary());
+    assert!(mixed_panes.tabs_in(PaneSlot::Primary).contains(&first_id));
+    assert!(mixed_panes.tabs_in(PaneSlot::Primary).contains(&second_id));
+    let running_after_preview_close = bridge.list_terminals().unwrap();
+    assert!(running_after_preview_close
+        .iter()
+        .any(|s| native_created.matches_live_session(s)));
+    assert!(running_after_preview_close
+        .iter()
+        .any(|s| second_created.matches_live_session(s)));
 
     // Optional native GUI process smoke against the SAME isolated Host.
     // It observes the existing test session through its window-owned

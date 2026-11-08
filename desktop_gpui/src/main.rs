@@ -2453,6 +2453,10 @@ impl Workbench {
             source_editor.update(cx, |editor, cx| editor.take_tab_for_pane(*instance, cx));
         let Some(detached) = detached else {
             self.editor_transfer_in_progress = false;
+            self.model.set_status(
+                "Cannot move Editor tab while Chinese IME is composing; commit or cancel composition first",
+            );
+            cx.notify();
             return false;
         };
         let result = if let Some(target) = self.editor_for_pane(destination) {

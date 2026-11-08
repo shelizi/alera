@@ -420,6 +420,16 @@ impl EditorTabs {
     /// [`Self::close_tab`]. Returns `None` for an unknown or stale instance.
     pub fn take_for_pane(&mut self, instance: u64) -> Option<DetachedEditorTab> {
         let index = self.index_for_instance(instance)?;
+        // The platform IME composition is still owned by the current native
+        // input handler. A pane move must not detach that live buffer while
+        // Windows TSF may still deliver marked-text callbacks to this view.
+        // Leave tab order, selection, revision and undo history unchanged.
+        if self.tabs[index]
+            .document()
+            .is_some_and(|document| document.marked().is_some())
+        {
+            return None;
+        }
         let session = self.tabs.remove(index);
         self.tab_instances.remove(index);
         self.revision = self.revision.wrapping_add(1);
@@ -1281,5 +1291,47 @@ mod tests {
         assert_eq!(target.tab_labels().len(), 2);
         assert_eq!(target.active_index(), Some(1));
         assert_eq!(target.document().unwrap().path(), Some(file_b.as_path()));
+    }
+
+    #[test]
+    fn pane_transfer_during_chinese_ime_preedit_is_refused_until_commit() {
+        let workspace = tempfile::tempdir().unwrap();
+        let root = workspace.path();
+        let file = root.join("composing.txt");
+        fs::write(&file, "base").unwrap();
+        let mut source = EditorTabs::new(None);
+        let mut target = EditorTabs::new(None);
+        source.open_file(root, &file).unwrap();
+        let instance = source.tab_instance_at(0).unwrap();
+        source
+            .document_mut()
+            .unwrap()
+            .replace_and_mark(None, "\u{3105}\u{310b}", None)
+            .unwrap();
+        let before = source.tab_guard_at(0).unwrap();
+
+        // Windows IME composition belongs to the source GPUI input handler.
+        // Detaching it would orphan pending TSF updates after focus changes.
+        assert!(source.take_for_pane(instance).is_none());
+        assert_eq!(source.index_for_instance(instance), Some(0));
+        assert_eq!(source.index_for_guard(&before), Some(0));
+        assert!(source.document().unwrap().marked().is_some());
+        assert_eq!(source.document().unwrap().history_depth(), (0, 0));
+        assert!(target.is_empty());
+
+        // A committed IME candidate stays one undo step across the move.
+        source
+            .document_mut()
+            .unwrap()
+            .replace(None, "\u{4e2d}")
+            .unwrap();
+        assert!(source.document().unwrap().marked().is_none());
+        let detached = source.take_for_pane(instance).unwrap();
+        target.insert_from_pane(detached).unwrap();
+        assert_eq!(target.document().unwrap().content(), "base\u{4e2d}");
+        assert_eq!(target.document().unwrap().history_depth(), (1, 0));
+        target.document_mut().unwrap().undo();
+        assert_eq!(target.document().unwrap().content(), "base");
+        assert_eq!(fs::read_to_string(file).unwrap(), "base");
     }
 }
