@@ -12,6 +12,8 @@ pub struct GitBranchRow {
     pub name: String,
     pub current: bool,
     pub tip: String,
+    pub remote: bool,
+    pub favorite: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -32,6 +34,16 @@ pub struct GitHistorySnapshot {
     pub truncated: bool,
 }
 
+/// Native-owned Git Graph selection. Favorites belong to independent Native
+/// state, never to the Flutter edition or to the repository's Git config.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct GitHistoryOptions {
+    pub all_branches: bool,
+    pub favorites_only: bool,
+    pub selected_ref: Option<String>,
+    pub favorites: Vec<String>,
+}
+
 fn repo_in(workspace: &Path) -> Result<Repository, String> {
     let repo = Repository::discover(workspace).map_err(|e| e.to_string())?;
     if repo.is_bare() {
@@ -46,6 +58,10 @@ fn subject(line: &str, count: usize) -> String {
 
 impl GitHistorySnapshot {
     pub fn load(workspace: &Path) -> Result<Self, String> {
+        Self::load_filtered(workspace, &GitHistoryOptions::default())
+    }
+
+    pub fn load_filtered(workspace: &Path, options: &GitHistoryOptions) -> Result<Self, String> {
         let repo = repo_in(workspace)?;
         let current = repo
             .head()
@@ -56,13 +72,30 @@ impl GitHistorySnapshot {
         let mut tips = Vec::new();
         let mut truncated = false;
         for branch in repo
-            .branches(Some(BranchType::Local))
+            .branches(if options.all_branches {
+                None
+            } else {
+                Some(BranchType::Local)
+            })
             .map_err(|e| e.to_string())?
         {
-            let (branch, _) = branch.map_err(|e| e.to_string())?;
+            let (branch, kind) = branch.map_err(|e| e.to_string())?;
             let Some(name) = branch.name().map_err(|e| e.to_string())?.map(str::to_owned) else {
                 continue;
             };
+            if kind == BranchType::Remote && name.ends_with("/HEAD") {
+                continue;
+            }
+            let remote = kind == BranchType::Remote;
+            let favorite_key = if remote {
+                format!("refs/remotes/{name}")
+            } else {
+                name.clone()
+            };
+            let favorite = options.favorites.contains(&favorite_key);
+            if options.favorites_only && !favorite {
+                continue;
+            }
             let Ok(commit) = branch.get().peel_to_commit() else {
                 continue;
             };
@@ -71,22 +104,58 @@ impl GitHistorySnapshot {
                 continue;
             }
             let tip = commit.id();
-            tips.push((tip, name.clone()));
+            tips.push((tip, name.clone(), remote));
             branches.push(GitBranchRow {
                 current: branch.is_head(),
                 name,
                 tip: tip.to_string()[..8].to_owned(),
+                remote,
+                favorite,
             });
         }
         branches.sort_by(|a, b| b.current.cmp(&a.current).then(a.name.cmp(&b.name)));
+        if let Some(requested) = options.selected_ref.as_deref() {
+            // Host references are accepted only after resolving an exact,
+            // visible branch. Do not interpret arbitrary revspec operators.
+            let expected_remote = if requested.starts_with("refs/remotes/") {
+                Some(true)
+            } else if requested.starts_with("refs/heads/") {
+                Some(false)
+            } else {
+                None
+            };
+            let requested = requested
+                .strip_prefix("refs/heads/")
+                .or_else(|| requested.strip_prefix("refs/remotes/"))
+                .unwrap_or(requested);
+            let selected = if requested == "HEAD" {
+                current.as_str()
+            } else {
+                requested
+            };
+            let matching = tips
+                .iter()
+                .filter(|(_, name, remote)| {
+                    name == selected && expected_remote.is_none_or(|expected| expected == *remote)
+                })
+                .collect::<Vec<_>>();
+            if matching.len() != 1 {
+                return Err("Requested Git Graph reference is missing or ambiguous".into());
+            }
+            let tip = (*matching[0]).clone();
+            tips.clear();
+            tips.push(tip);
+        }
         let mut walk = repo.revwalk().map_err(|e| e.to_string())?;
         walk.set_sorting(Sort::TOPOLOGICAL | Sort::TIME)
             .map_err(|e| e.to_string())?;
-        for (oid, _) in &tips {
+        for (oid, _, _) in &tips {
             walk.push(*oid).map_err(|e| e.to_string())?;
         }
-        if let Ok(head) = repo.head().and_then(|head| head.peel_to_commit()) {
-            walk.push(head.id()).map_err(|e| e.to_string())?;
+        if !options.favorites_only && options.selected_ref.is_none() {
+            if let Ok(head) = repo.head().and_then(|head| head.peel_to_commit()) {
+                walk.push(head.id()).map_err(|e| e.to_string())?;
+            }
         }
         let mut commits = Vec::new();
         for oid in walk {
@@ -107,9 +176,15 @@ impl GitHistorySnapshot {
                 parents: commit.parent_count(),
                 labels: tips
                     .iter()
-                    .filter(|(tip, _)| *tip == oid)
+                    .filter(|(tip, _, _)| *tip == oid)
                     .take(5)
-                    .map(|(_, branch)| branch.clone())
+                    .map(|(_, branch, remote)| {
+                        if *remote {
+                            format!("refs/remotes/{branch}")
+                        } else {
+                            branch.clone()
+                        }
+                    })
                     .collect(),
             });
         }
@@ -334,6 +409,13 @@ mod tests {
                 &[&repo.find_commit(first).unwrap()],
             )
             .unwrap();
+        repo.reference(
+            "refs/remotes/origin/feature",
+            second,
+            false,
+            "disposable fixture remote branch",
+        )
+        .unwrap();
         drop(next);
         drop(index);
         let snapshot = GitHistorySnapshot::load(dir.path()).unwrap();
@@ -343,6 +425,73 @@ mod tests {
             .commits
             .iter()
             .any(|row| row.oid == second.to_string()));
+        let all = GitHistorySnapshot::load_filtered(
+            dir.path(),
+            &GitHistoryOptions {
+                all_branches: true,
+                favorites: vec!["feature".into()],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(all.branches.len(), 3);
+        assert!(all
+            .branches
+            .iter()
+            .any(|row| row.remote && row.name == "origin/feature"));
+        assert!(all
+            .branches
+            .iter()
+            .any(|row| row.favorite && row.name == "feature"));
+        let focused = GitHistorySnapshot::load_filtered(
+            dir.path(),
+            &GitHistoryOptions {
+                favorites_only: true,
+                selected_ref: Some("feature".into()),
+                favorites: vec!["feature".into()],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(focused.branches.len(), 1);
+        assert_eq!(
+            focused.commits.len(),
+            1,
+            "filter must not include unfavorited HEAD"
+        );
+        assert_eq!(focused.commits[0].oid, first.to_string());
+        let remote = GitHistorySnapshot::load_filtered(
+            dir.path(),
+            &GitHistoryOptions {
+                all_branches: true,
+                selected_ref: Some("refs/remotes/origin/feature".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(remote.commits[0].oid, second.to_string());
+        assert!(
+            GitHistorySnapshot::load_filtered(
+                dir.path(),
+                &GitHistoryOptions {
+                    selected_ref: Some("origin/feature".into()),
+                    ..Default::default()
+                },
+            )
+            .is_err(),
+            "remote references require allBranches"
+        );
+        assert!(
+            GitHistorySnapshot::load_filtered(
+                dir.path(),
+                &GitHistoryOptions {
+                    selected_ref: Some("feature~1".into()),
+                    ..Default::default()
+                },
+            )
+            .is_err(),
+            "MCP cannot smuggle a revspec into branch selection"
+        );
         assert!(preview_commit(dir.path(), &second.to_string())
             .unwrap()
             .contains("+second"));

@@ -14,6 +14,7 @@ const MAX_RESTORED_TABS: usize = 24;
 const MAX_RECENT_WORKSPACES: usize = 12;
 const MAX_SAVED_PROJECTS: usize = 32;
 const MAX_TERMINAL_LAYOUT_TABS: usize = 8;
+const MAX_GIT_FAVORITES: usize = 80;
 
 #[derive(Debug, Clone)]
 pub struct PreviewSessionStore {
@@ -71,6 +72,35 @@ struct SavedTerminalLayout {
     layout: TerminalLayout,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SavedGitFavorites {
+    version: u32,
+    root: PathBuf,
+    branches: Vec<String>,
+}
+
+fn validate_git_favorites(branches: &[String]) -> io::Result<()> {
+    if branches.len() > MAX_GIT_FAVORITES
+        || branches.iter().any(|name| {
+            name.is_empty()
+                || name.len() > 128
+                || name.starts_with('-')
+                || name.chars().any(char::is_control)
+        })
+        || branches
+            .iter()
+            .enumerate()
+            .any(|(index, name)| branches[..index].contains(name))
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Invalid or duplicate Native favorite Git branch",
+        ));
+    }
+    Ok(())
+}
+
 fn valid_terminal_layout_id(id: &str, max_bytes: usize) -> bool {
     !id.is_empty()
         && id.len() <= max_bytes
@@ -106,6 +136,61 @@ fn validate_terminal_layout(layout: &TerminalLayout) -> io::Result<()> {
 }
 
 impl PreviewSessionStore {
+    /// Per-workspace Git Graph favorites; never modifies repository config or
+    /// Flutter's local preferences. Fail closed on corrupt or mismatched data.
+    pub fn save_git_favorites(&self, root: &Path, branches: &[String]) -> io::Result<()> {
+        let canonical = dunce::canonicalize(root)?;
+        if canonical != root || !canonical.is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Git favorite workspace root must be canonical",
+            ));
+        }
+        validate_git_favorites(branches)?;
+        // A malformed or future-version file may contain user data unknown
+        // to this preview. Never silently overwrite it during a star click.
+        if self.git_favorites_path(root).exists() {
+            self.load_git_favorites(root)?;
+        }
+        self.write_json(
+            &self.git_favorites_path(root),
+            &SavedGitFavorites {
+                version: VERSION,
+                root: root.to_path_buf(),
+                branches: branches.to_vec(),
+            },
+        )
+    }
+
+    pub fn load_git_favorites(&self, root: &Path) -> io::Result<Vec<String>> {
+        let canonical = dunce::canonicalize(root)?;
+        if canonical != root || !canonical.is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Git favorite workspace root must be canonical",
+            ));
+        }
+        let Some(saved) = self.read_json::<SavedGitFavorites>(&self.git_favorites_path(root))?
+        else {
+            return Ok(Vec::new());
+        };
+        if saved.version != VERSION || saved.root != root {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Git favorites do not belong to this Native workspace/version",
+            ));
+        }
+        validate_git_favorites(&saved.branches)?;
+        Ok(saved.branches)
+    }
+
+    fn git_favorites_path(&self, root: &Path) -> PathBuf {
+        let file = self.session_path(root);
+        let name = file.file_name().unwrap_or_default().to_string_lossy();
+        self.state_dir
+            .join(name.replacen("workspace-", "git-favorites-", 1))
+    }
+
     /// A separate, bounded view-only layout scoped to one canonical root.
     /// Never writes Alera's RuntimeStore or creates/attaches a Host session.
     pub fn save_terminal_layout(&self, root: &Path, layout: &TerminalLayout) -> io::Result<()> {
@@ -654,6 +739,42 @@ fn is_safe_relative(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_git_favorites_survive_restart_and_stay_scoped_to_canonical_workspace() {
+        let state = tempfile::tempdir().unwrap();
+        let workspace_a = tempfile::tempdir().unwrap();
+        let workspace_b = tempfile::tempdir().unwrap();
+        let root_a = dunce::canonicalize(workspace_a.path()).unwrap();
+        let root_b = dunce::canonicalize(workspace_b.path()).unwrap();
+        let store = PreviewSessionStore::new(state.path());
+        assert!(store.load_git_favorites(&root_a).unwrap().is_empty());
+        let saved = vec!["main".into(), "origin/feature".into()];
+        store.save_git_favorites(&root_a, &saved).unwrap();
+        let reopened = PreviewSessionStore::new(state.path());
+        assert_eq!(reopened.load_git_favorites(&root_a).unwrap(), saved);
+        assert!(reopened.load_git_favorites(&root_b).unwrap().is_empty());
+        assert!(store
+            .save_git_favorites(&root_a, &["main".into(), "main".into()])
+            .is_err());
+        assert!(store
+            .save_git_favorites(&root_a, &["bad\nname".into()])
+            .is_err());
+        let path = store.git_favorites_path(&root_a);
+        fs::write(
+            &path,
+            b"{\"version\":999,\"root\":\"unsafe\",\"branches\":[]}",
+        )
+        .unwrap();
+        assert!(reopened.load_git_favorites(&root_a).is_err());
+        assert!(reopened
+            .save_git_favorites(&root_a, &["feature".into()])
+            .is_err());
+        assert!(
+            path.exists(),
+            "Corrupt favorite state must never be silently replaced"
+        );
+    }
 
     #[test]
     fn restores_tabs_order_selected_file_and_directory_without_storing_text() {
