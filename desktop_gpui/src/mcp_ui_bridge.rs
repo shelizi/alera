@@ -214,13 +214,24 @@ impl NativeMcpUiBridge {
         tab_id: Option<&str>,
         error_code: Option<&str>,
     ) -> io::Result<()> {
-        self.complete_internal(request_id, applied, tab_id, error_code, None)
+        self.complete_internal(request_id, applied, tab_id, error_code, None, None)
     }
 
     /// The Host validates that this was a `create_workspace` operation,
     /// that the workspace was absent before, and that its Project matches.
     pub fn complete_workspace(&mut self, request_id: &str, created_id: &str) -> io::Result<()> {
-        self.complete_internal(request_id, true, None, None, Some(created_id))
+        self.complete_internal(request_id, true, None, None, Some(created_id), None)
+    }
+
+    /// Only a true Native settings owner may send a scalar persisted readback.
+    pub fn complete_setting(&mut self, request_id: &str, readback: &Value) -> io::Result<()> {
+        if !readback.is_boolean() && !readback.is_number() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "MCP setting readback must be scalar",
+            ));
+        }
+        self.complete_internal(request_id, true, None, None, None, Some(readback))
     }
 
     fn complete_internal(
@@ -230,6 +241,7 @@ impl NativeMcpUiBridge {
         tab_id: Option<&str>,
         error_code: Option<&str>,
         created_id: Option<&str>,
+        setting_value: Option<&Value>,
     ) -> io::Result<()> {
         if !valid_id(request_id)
             || tab_id.is_some_and(|id| !valid_id(id))
@@ -245,6 +257,11 @@ impl NativeMcpUiBridge {
             "errorCode": if applied { None } else { Some(error_code.unwrap_or("ui_not_ready")) }});
         if let Some(created) = created_id {
             value["createdWorkspaceId"] = json!(created);
+        }
+        if applied {
+            if let Some(setting) = setting_value {
+                value["settingValue"] = setting.clone();
+            }
         }
         let encoded = serde_json::to_vec(&value).map_err(io::Error::other)?;
         self.stdin.write_all(&encoded)?;

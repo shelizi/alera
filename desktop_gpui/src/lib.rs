@@ -14,6 +14,7 @@ pub mod git_history;
 pub mod git_inspect;
 pub mod mcp_ui_bridge;
 pub mod mcp_workspace_creation;
+pub mod native_settings;
 pub mod model;
 pub mod project_search;
 pub mod project_tree;

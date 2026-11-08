@@ -51,7 +51,7 @@ fn validate_completion(value: &Value, pending: &PendingUiCommands) -> Result<Val
     if object.keys().any(|key| {
         !matches!(
             key.as_str(),
-            "requestId" | "applied" | "tabId" | "errorCode" | "createdWorkspaceId"
+            "requestId" | "applied" | "tabId" | "errorCode" | "createdWorkspaceId" | "settingValue"
         )
     }) {
         return Err(anyhow!("Native UI receipt contains unsupported fields"));
@@ -72,6 +72,15 @@ fn validate_completion(value: &Value, pending: &PendingUiCommands) -> Result<Val
     let error = object.get("errorCode").and_then(Value::as_str);
     let created = object.get("createdWorkspaceId").and_then(Value::as_str);
     let requested_action = pending.get(id).map(|(_, action)| action.as_str());
+    let setting = object.get("settingValue");
+    let expects_setting = matches!(requested_action, Some("get_setting" | "update_setting"));
+    if (applied && expects_setting) != setting.is_some()
+        || setting.is_some_and(|value| !value.is_boolean() && !value.is_number())
+    {
+        return Err(anyhow!(
+            "Native settings result requires a scalar readback only for settings commands"
+        ));
+    }
     if created.is_some_and(|id| !valid_ui_id(id))
         || (created.is_some() != (requested_action == Some("create_workspace") && applied))
     {
@@ -106,6 +115,9 @@ fn validate_completion(value: &Value, pending: &PendingUiCommands) -> Result<Val
         }
         if let Some(created) = created {
             result["createdWorkspaceId"] = json!(created);
+        }
+        if let Some(value) = setting {
+            result["settingValue"] = value.clone();
         }
     } else {
         result["errorCode"] = json!(error.unwrap_or("ui_not_ready"));
@@ -280,5 +292,41 @@ mod tests {
             &pending
         )
         .is_err());
+    }
+
+    #[test]
+    fn native_settings_receipt_requires_requested_scalar_readback() {
+        let mut pending = HashMap::new();
+        pending.insert("get".into(), (Instant::now(), "get_setting".into()));
+        pending.insert("update".into(), (Instant::now(), "update_setting".into()));
+        pending.insert("file".into(), (Instant::now(), "open_file".into()));
+        assert!(validate_completion(&json!({"requestId":"get","applied":true}), &pending).is_err());
+        assert!(validate_completion(
+            &json!({"requestId":"file","applied":true,"settingValue":13}),
+            &pending
+        )
+        .is_err());
+        assert!(validate_completion(
+            &json!({"requestId":"update","applied":false,"settingValue":13}),
+            &pending
+        )
+        .is_err());
+        assert!(validate_completion(
+            &json!({"requestId":"get","applied":true,"settingValue":{"secret":"x"}}),
+            &pending
+        )
+        .is_err());
+        let value = validate_completion(
+            &json!({"requestId":"update","applied":true,"settingValue":14.5}),
+            &pending,
+        )
+        .unwrap();
+        assert_eq!(value["settingValue"], json!(14.5));
+        let value = validate_completion(
+            &json!({"requestId":"get","applied":true,"settingValue":true}),
+            &pending,
+        )
+        .unwrap();
+        assert_eq!(value["settingValue"], json!(true));
     }
 }
