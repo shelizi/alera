@@ -17,6 +17,7 @@ use crate::runtime_host_client::RuntimeHostRpcClient;
 
 const MAX_PENDING_RECEIPTS: usize = 32;
 const MAX_RECEIPT_BYTES: usize = 2048;
+type PendingUiCommands = HashMap<String, (Instant, String)>;
 
 fn valid_ui_id(value: &str) -> bool {
     !value.is_empty()
@@ -43,14 +44,14 @@ fn command_for_window(value: &Value, window_id: &str) -> Option<(String, Value)>
     Some((id.to_owned(), value.clone()))
 }
 
-fn validate_completion(value: &Value, pending: &HashMap<String, Instant>) -> Result<Value> {
+fn validate_completion(value: &Value, pending: &PendingUiCommands) -> Result<Value> {
     let object = value
         .as_object()
         .ok_or_else(|| anyhow!("Invalid Native UI receipt"))?;
     if object.keys().any(|key| {
         !matches!(
             key.as_str(),
-            "requestId" | "applied" | "tabId" | "errorCode"
+            "requestId" | "applied" | "tabId" | "errorCode" | "createdWorkspaceId"
         )
     }) {
         return Err(anyhow!("Native UI receipt contains unsupported fields"));
@@ -69,6 +70,15 @@ fn validate_completion(value: &Value, pending: &HashMap<String, Instant>) -> Res
         return Err(anyhow!("Invalid Native UI Tab id"));
     }
     let error = object.get("errorCode").and_then(Value::as_str);
+    let created = object.get("createdWorkspaceId").and_then(Value::as_str);
+    let requested_action = pending.get(id).map(|(_, action)| action.as_str());
+    if created.is_some_and(|id| !valid_ui_id(id))
+        || (created.is_some() != (requested_action == Some("create_workspace") && applied))
+    {
+        return Err(anyhow!(
+            "Created Workspace ID is missing or not assigned to creation request"
+        ));
+    }
     if error.is_some_and(|code| {
         !matches!(
             code,
@@ -78,6 +88,7 @@ fn validate_completion(value: &Value, pending: &HashMap<String, Instant>) -> Res
                 | "file_missing"
                 | "tab_missing"
                 | "workspace_missing"
+                | "workspace_create_failed"
                 | "git_compare_failed"
                 | "ui_operation_failed"
         )
@@ -92,6 +103,9 @@ fn validate_completion(value: &Value, pending: &HashMap<String, Instant>) -> Res
     if applied {
         if let Some(tab) = tab {
             result["tabId"] = json!(tab);
+        }
+        if let Some(created) = created {
+            result["createdWorkspaceId"] = json!(created);
         }
     } else {
         result["errorCode"] = json!(error.unwrap_or("ui_not_ready"));
@@ -142,9 +156,9 @@ async fn run_checked(args: NativeUiBridgeCommand) -> Result<()> {
     .await?;
     let stdin = BufReader::new(tokio::io::stdin());
     let mut replies = stdin.lines();
-    let mut pending: HashMap<String, Instant> = HashMap::new();
+    let mut pending: PendingUiCommands = HashMap::new();
     loop {
-        pending.retain(|_, seen| seen.elapsed() < Duration::from_secs(190));
+        pending.retain(|_, (seen, _)| seen.elapsed() < Duration::from_secs(190));
         tokio::select! {
             received = client.next_native_ui_command() => {
                 let Some(command) = received? else { break; };
@@ -152,7 +166,8 @@ async fn run_checked(args: NativeUiBridgeCommand) -> Result<()> {
                     if pending.len() >= MAX_PENDING_RECEIPTS || pending.contains_key(&id) {
                         continue;
                     }
-                    pending.insert(id, Instant::now());
+                    let action = payload["action"].as_str().unwrap_or_default().to_owned();
+                    pending.insert(id, (Instant::now(), action));
                     send_line(&mut stdout, &json!({"kind":"command","payload":payload})).await?;
                 }
             }
@@ -216,7 +231,7 @@ mod tests {
             "req_1"
         );
         let mut pending = HashMap::new();
-        pending.insert("req_1".to_string(), Instant::now());
+        pending.insert("req_1".to_string(), (Instant::now(), "open_file".into()));
         assert!(
             validate_completion(&json!({"requestId":"other","applied":true}), &pending).is_err()
         );
@@ -237,5 +252,33 @@ mod tests {
         .unwrap();
         assert_eq!(fail["applied"], false);
         assert_eq!(fail["errorCode"], "not_visible");
+        assert!(validate_completion(
+            &json!({"requestId":"req_1","applied":true,"createdWorkspaceId":"forged_workspace"}),
+            &pending
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn creation_receipt_requires_host_verified_action_and_new_workspace_id() {
+        let mut pending = HashMap::new();
+        pending.insert(
+            "create1".into(),
+            (Instant::now(), "create_workspace".into()),
+        );
+        assert!(
+            validate_completion(&json!({"requestId":"create1","applied":true}), &pending).is_err()
+        );
+        let success = validate_completion(
+            &json!({"requestId":"create1","applied":true,"createdWorkspaceId":"new_workspace_1"}),
+            &pending,
+        )
+        .unwrap();
+        assert_eq!(success["createdWorkspaceId"], "new_workspace_1");
+        assert!(validate_completion(
+            &json!({"requestId":"create1","applied":false,"createdWorkspaceId":"new_workspace_1"}),
+            &pending
+        )
+        .is_err());
     }
 }
