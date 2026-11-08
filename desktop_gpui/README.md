@@ -1,5 +1,31 @@
 # Alera Native Desktop (GPUI)
 
+## Independent Alera desktop editions
+
+**Alera Classic (Flutter)** remains the existing `Alera.exe` Windows desktop
+application, AppUserModelID `dev.leynier.alera`, single-instance behavior,
+settings, updater and release pipeline. It is **not renamed, uninstalled or
+upgraded** when building Alera Native.
+
+**Alera Native (GPUI)** is a separate experimental desktop application with
+AppUserModelID `dev.leynier.alera.native`. The manual workflow template
+`tool/release/workflows/alera-native-preview.yml` is ready for a separately
+authorized installation in `.github/workflows`. It packages `AleraNative.exe`
+with the existing `alera.exe` CLI sidecar in a Native-only ZIP. No Classic
+updater is included, and no public Native release is performed. Both app
+windows can run simultaneously; the shared Runtime Host remains Host-owned,
+so do not send raw input from both UIs to the exact same PTY concurrently.
+
+Fresh Native sessions live in `%APPDATA%\AleraNative` (on Windows) rather
+than Classic's application data. If an earlier GPUI preview already saved
+scratch drafts in `%APPDATA%\Alera\gpui-preview` and the new directory has
+not been created, Native continues using the legacy GPUI-only directory;
+**it does not delete or silently move drafts**. `ALERA_GPUI_STATE_DIR`
+remains an absolute-path override for disposable instances.
+
+For distribution and coexistence details see
+[`docs/alera-desktop-editions-20261108.md`](../docs/alera-desktop-editions-20261108.md).
+
 **Current MVP direction:** [GPUI three-pane workbench](../docs/gpui-three-pane-mvp-20261107.md) — **Projects on the left, Terminal (default) / basic Editor in the center, Explorer + read-only Git on the right.** Terminal input now goes through the existing Host CLI; this is not a new PTY owner or full TUI attach. The older architecture/history sections below describe earlier phases.
 
 **Latest active work and verified integration status (2026-11-07):** [GPUI active work ledger](../docs/gpui-active-work-ledger-20261107.md). It records the reconciled Git inspector, per-tab close, Explorer tree, native Find/Replace and project content-search panels, scratch recovery, verified Rust tests, and remaining real-GUI acceptance gates. Earlier test counts below are historical snapshots, not the latest merged baseline.
@@ -46,8 +72,9 @@ from the previous workspace. The Runtime Host session list remains global
 and is explicitly marked **all workspaces**: this is not a workspace-scoped
 Host session-ownership or permission migration.
 
-State lives in `%APPDATA%\Alera\gpui-preview` on Windows, the
-Application Support directory on macOS, or XDG State on Linux. It does not
+New Native state lives in `%APPDATA%\AleraNative` on Windows, an independent
+Application Support directory on macOS, or XDG State on Linux. Existing GPUI
+preview state is retained as a legacy fallback. It does not
 modify the project or the production RuntimeStore.
 
 For isolated smoke tests, set `ALERA_GPUI_STATE_DIR` to an absolute

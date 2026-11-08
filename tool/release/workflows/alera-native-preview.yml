@@ -1,0 +1,53 @@
+# Reviewed Native preview workflow template. Installation in .github/workflows
+# requires the protected-workflow authorization path (not a regular Git add).
+name: Alera Native - Independent Windows Preview ZIP
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: alera-native-preview-${{ github.ref }}
+  cancel-in-progress: false
+
+# Separate from Flutter Classic's release-cut/auto-updater channels.
+# Manual workflow produces a CI artifact only: NO Git tag, public Release,
+# stable updater manifest, production installation or app replacement.
+jobs:
+  native-preview:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: false
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.98.0'
+      - name: Test Native model
+        run: cargo test --manifest-path desktop_gpui/Cargo.toml --no-default-features --lib --locked
+      - name: Build Native desktop release binary
+        run: cargo build --manifest-path desktop_gpui/Cargo.toml --release --locked
+      - name: Build companion Alera Runtime CLI
+        run: cargo build --manifest-path rust/Cargo.toml -p alera-cli --bin alera --release --locked
+      - name: Package Native-only preview and checksum
+        shell: pwsh
+        run: |
+          $nativeVersion = "${{ github.sha }}".Substring(0, 12)
+          ./tool/release/package_alera_native_windows.ps1 `
+            -NativeExe (Resolve-Path 'desktop_gpui/target/release/alera-gpui-desktop.exe').Path `
+            -CliExe (Resolve-Path 'rust/target/release/alera.exe').Path `
+            -OutputDir (Join-Path $PWD 'native-preview-artifacts') `
+            -Version $nativeVersion
+      - name: Store preview ZIP separately from Classic releases
+        uses: actions/upload-artifact@v4
+        with:
+          name: AleraNative-windows-x64-preview
+          path: |
+            native-preview-artifacts/*.zip
+            native-preview-artifacts/*.sha256
+          if-no-files-found: error
+          retention-days: 14
