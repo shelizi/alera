@@ -85,3 +85,21 @@ editors, Git comparisons or multi-file actions under misleading names.
 Keep Native `supported=false` until original behavioral paths are usable
 with a real Host. Do not merge to `main`, push, tag or release during
 this experimental migration without explicit approval.
+
+## Verification of this first Explorer slice
+
+- `269/269` Rust model tests passed (including file index Unicode search,
+  folder search, Collapse All and safe nested directory reveal).
+- Native Windows `cargo check` and `cargo build --locked --offline` passed.
+  Formatting and `git diff --check` passed. Rust emitted only existing
+  `proc-macro-error2` compatibility notice and intentionally retained
+  unreferenced, Classic-superseded Move/Copy-Into action variants.
+- Launched an isolated Windows Native preview with an intentionally missing
+  CLI/Host and a disposable test repository. Actual screen verified the
+  persistent **Filter files** input, separate folder chevron, distinct folder
+  and file icons, and the one-line truncated workspace title after a visual
+  iteration. No production workspace or Runtime Host was accessed.
+- The precise mouse/keyboard interaction behavior of the new search input
+  and context menu is **not signed off** by the screenshot or Cargo checks.
+  Remote mouse injection on this secondary monitor did not reliably
+  activate basic GPUI controls in previous isolated attempts.

@@ -32,6 +32,12 @@ Agent troubleshooting controls consumed significant vertical space.
   guarded file operations and explicit delete confirmation are reused.
   File Quick Open remains available with Ctrl+P. Content Search is
   available from the blank-area menu, with Search inside its input panel.
+
+**Superseded by the original-desktop parity pass:** see
+`docs/gpui-flutter-classic-ux-parity-20261108.md`. The Explorer header
+now has New File, New Folder, **Collapse All**, Refresh, plus the Classic
+always-visible Filter files input. Ctrl+P remains separate from filtering,
+and item context-menu actions match the original's ordering more closely.
 - Git: icon-based Graph, Refresh, Commit, Switch, Fetch, Compare, Merge,
   Pull, Push and More. Less-frequent Stash and conflict inspection are
   behind More. The underlying non-force and 2-click confirmation logic
