@@ -10,9 +10,20 @@ use crate::editor_session::{
 };
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 pub const MAX_EDITOR_TABS: usize = 24;
 pub const EDITOR_TAB_LIMIT: &str = "Editor tab limit reached";
+
+/// Process-wide editor tab instance allocator. Every `EditorTabs` owner —
+/// one per pane — draws identities from this counter so an instance ID stays
+/// unique across all live owners at once. IDs are handed out once, start at
+/// one and are never reused or zeroed.
+static NEXT_TAB_INSTANCE: AtomicU64 = AtomicU64::new(1);
+
+fn allocate_tab_instance() -> u64 {
+    NEXT_TAB_INSTANCE.fetch_add(1, Ordering::Relaxed)
+}
 
 /// Editable tabs for one workspace. Preview tabs stay outside this type.
 #[derive(Debug)]
@@ -20,7 +31,6 @@ pub struct EditorTabs {
     drafts: Option<EditorDraftStore>,
     tabs: Vec<EditorSession>,
     tab_instances: Vec<u64>,
-    next_instance: u64,
     active: Option<usize>,
     /// Changes whenever a tab is opened, closed, selected or reordered.
     /// Invalidates a Save As picker callback after close/reopen of the same path.
@@ -59,6 +69,18 @@ pub struct CleanCloseReport {
     pub blocked: usize,
 }
 
+/// A live editor tab held outside every `EditorTabs` owner while it moves
+/// between per-pane editors. The exact [`EditorSession`] — buffer, undo
+/// history, selection, armed-discard flag and draft-store link — travels
+/// unchanged; no file is reloaded and nothing is saved or discarded.
+/// Reinstall it with [`EditorTabs::insert_from_pane`]; a rejected insert
+/// hands the value back so the caller can restore the previous owner.
+#[derive(Debug)]
+pub struct DetachedEditorTab {
+    session: EditorSession,
+    instance: u64,
+}
+
 impl EditorTabs {
     pub fn drag_identity_at(&self, index: usize) -> Option<EditorTabDragIdentity> {
         let doc = self.tabs.get(index)?.document()?;
@@ -87,7 +109,6 @@ impl EditorTabs {
             drafts,
             tabs: Vec::new(),
             tab_instances: Vec::new(),
-            next_instance: 0,
             active: None,
             revision: 0,
         }
@@ -136,8 +157,9 @@ impl EditorTabs {
         self.active
     }
 
-    /// Opaque per-mount tab identity. A closed/reopened path never inherits
-    /// its former identity, even when both documents have the same filename.
+    /// Opaque per-mount tab identity, unique across every `EditorTabs` owner
+    /// in the process. A closed/reopened path never inherits its former
+    /// identity, even when both documents have the same filename.
     pub fn tab_instance_at(&self, index: usize) -> Option<u64> {
         self.tab_instances.get(index).copied()
     }
@@ -169,11 +191,6 @@ impl EditorTabs {
                     .map(|path| (instance, path.to_path_buf()))
             })
             .collect()
-    }
-
-    fn allocate_instance(&mut self) -> u64 {
-        self.next_instance = self.next_instance.wrapping_add(1);
-        self.next_instance
     }
 
     pub fn has_draft_store(&self) -> bool {
@@ -249,7 +266,7 @@ impl EditorTabs {
         for document in documents {
             self.tabs
                 .push(EditorSession::recovered_scratch(document, store.clone()));
-            let instance = self.allocate_instance();
+            let instance = allocate_tab_instance();
             self.tab_instances.push(instance);
         }
         if count > 0 {
@@ -395,6 +412,63 @@ impl EditorTabs {
         report
     }
 
+    /// Detach the live tab registered under `instance` for a move to another
+    /// per-pane `EditorTabs` owner. The exact [`EditorSession`] — buffer,
+    /// undo history, selection, armed-discard flag and draft-store link — is
+    /// carried unchanged: no file is reloaded and nothing is saved or
+    /// discarded. `active` and `revision` follow the removal exactly as in
+    /// [`Self::close_tab`]. Returns `None` for an unknown or stale instance.
+    pub fn take_for_pane(&mut self, instance: u64) -> Option<DetachedEditorTab> {
+        let index = self.index_for_instance(instance)?;
+        let session = self.tabs.remove(index);
+        self.tab_instances.remove(index);
+        self.revision = self.revision.wrapping_add(1);
+        self.active = match self.active {
+            _ if self.tabs.is_empty() => None,
+            Some(current) if current > index => Some(current - 1),
+            Some(current) if current == index => Some(index.min(self.tabs.len() - 1)),
+            other => other,
+        };
+        Some(DetachedEditorTab { session, instance })
+    }
+
+    /// Install a tab detached by [`Self::take_for_pane`] under its original
+    /// instance ID and make it active. When the tab limit is reached or
+    /// another tab already holds the same file/scratch identity, the
+    /// detached tab is returned unchanged so the caller can roll back to its
+    /// previous owner. No save or discard runs on either side of the move.
+    pub fn insert_from_pane(
+        &mut self,
+        detached: DetachedEditorTab,
+    ) -> Result<(), DetachedEditorTab> {
+        let DetachedEditorTab { session, instance } = detached;
+        let duplicate = session
+            .document()
+            .is_some_and(|document| self.has_document_identity(document));
+        if self.tabs.len() >= MAX_EDITOR_TABS || duplicate {
+            return Err(DetachedEditorTab { session, instance });
+        }
+        self.tabs.push(session);
+        self.tab_instances.push(instance);
+        self.active = Some(self.tabs.len() - 1);
+        self.revision = self.revision.wrapping_add(1);
+        Ok(())
+    }
+
+    /// Whether a live tab already holds `document`'s identity: the same
+    /// workspace root plus either the same canonical file path or the same
+    /// scratch recovery id. File and scratch tabs share this one rule.
+    fn has_document_identity(&self, document: &EditorDocument) -> bool {
+        self.tabs
+            .iter()
+            .filter_map(EditorSession::document)
+            .any(|open| {
+                open.root() == document.root()
+                    && open.path() == document.path()
+                    && open.scratch_id() == document.scratch_id()
+            })
+    }
+
     pub fn can_switch_workspace(&self) -> Result<(), &'static str> {
         if self
             .tabs
@@ -458,7 +532,7 @@ impl EditorTabs {
             return Ok(self.focus(index));
         }
         self.tabs.push(session);
-        let instance = self.allocate_instance();
+        let instance = allocate_tab_instance();
         self.tab_instances.push(instance);
         self.active = Some(self.tabs.len() - 1);
         self.revision = self.revision.wrapping_add(1);
@@ -490,7 +564,7 @@ impl EditorTabs {
 
 #[cfg(test)]
 mod tests {
-    use super::EditorTabs;
+    use super::{EditorTabs, MAX_EDITOR_TABS};
     use crate::editor::EditorDraftStore;
     use crate::editor_session::OpenEffect;
     use std::fs;
@@ -944,5 +1018,268 @@ mod tests {
         assert!(tabs.document().unwrap().is_dirty());
         assert!(tabs.index_for_guard(&right_clicked).is_none());
         assert_eq!(fs::read_to_string(&paths[2]).unwrap(), "c.txt");
+    }
+
+    #[test]
+    fn pane_transfer_preserves_dirty_buffer_undo_and_disk_bytes() {
+        let workspace = tempfile::tempdir().unwrap();
+        let root = workspace.path();
+        let file = root.join("move.txt");
+        fs::write(&file, "disk\n").unwrap();
+        let mut source = EditorTabs::new(None);
+        let mut target = EditorTabs::new(None);
+        source.open_file(root, &file).unwrap();
+        let instance = source.tab_instance_at(0).unwrap();
+        {
+            let doc = source.document_mut().unwrap();
+            doc.replace(None, "alpha").unwrap();
+            doc.replace(None, "beta").unwrap();
+        }
+        let doc = source.document().unwrap();
+        assert!(doc.is_dirty());
+        let (undo, redo) = doc.history_depth();
+        assert!(undo > 0);
+
+        let detached = source.take_for_pane(instance).expect("open tab detaches");
+        assert!(source.is_empty());
+        assert_eq!(source.active_index(), None);
+        assert!(source.index_for_instance(instance).is_none());
+        assert_eq!(detached.instance, instance);
+
+        target.insert_from_pane(detached).unwrap();
+        assert_eq!(target.active_index(), Some(0));
+        assert_eq!(target.index_for_instance(instance), Some(0));
+        assert_eq!(target.tab_instance_at(0), Some(instance));
+        let doc = target.document().unwrap();
+        assert_eq!(doc.path(), Some(file.as_path()));
+        assert_eq!(doc.content(), "disk\nalphabeta");
+        assert!(doc.is_dirty());
+        assert_eq!(doc.history_depth(), (undo, redo));
+
+        target.document_mut().unwrap().undo();
+        assert_eq!(target.document().unwrap().content(), "disk\nalpha");
+        assert!(target.document().unwrap().is_dirty());
+        assert_eq!(fs::read_to_string(&file).unwrap(), "disk\n");
+    }
+
+    #[test]
+    fn pane_transfer_preserves_scratch_identity_and_draft_recovery() {
+        let workspace = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let store = EditorDraftStore::new(state.path());
+        let mut source = EditorTabs::new(Some(store.clone()));
+        let mut target = EditorTabs::new(None);
+        source.open_scratch(workspace.path()).unwrap();
+        let instance = source.tab_instance_at(0).unwrap();
+        let scratch_id = source.document().unwrap().scratch_id().unwrap().to_string();
+        source
+            .document_mut()
+            .unwrap()
+            .replace(None, "scratch 中文")
+            .unwrap();
+
+        let detached = source.take_for_pane(instance).unwrap();
+        target.insert_from_pane(detached).unwrap();
+        let doc = target.document().unwrap();
+        assert!(doc.path().is_none());
+        assert_eq!(doc.scratch_id(), Some(scratch_id.as_str()));
+        assert_eq!(doc.content(), "scratch 中文");
+        assert!(doc.is_dirty());
+
+        // The moved session still owns its draft store: persisting through
+        // the receiving owner writes the same scratch recovery record.
+        target.persist_draft().unwrap();
+        let restored = store.restore_scratch(workspace.path()).unwrap();
+        assert_eq!(restored.len(), 1);
+        assert_eq!(restored[0].content(), "scratch 中文");
+        assert_eq!(restored[0].scratch_id(), Some(scratch_id.as_str()));
+    }
+
+    #[test]
+    fn tab_instances_are_unique_and_nonzero_across_owners() {
+        let workspace = tempfile::tempdir().unwrap();
+        let root = workspace.path();
+        let first_file = root.join("first.txt");
+        let second_file = root.join("second.txt");
+        fs::write(&first_file, "1").unwrap();
+        fs::write(&second_file, "2").unwrap();
+        let mut first = EditorTabs::new(None);
+        let mut second = EditorTabs::new(None);
+        first.open_file(root, &first_file).unwrap();
+        second.open_file(root, &second_file).unwrap();
+        first.open_scratch(root).unwrap();
+        second.open_scratch(root).unwrap();
+        let collect = |tabs: &EditorTabs| -> Vec<u64> {
+            (0..tabs.tab_labels().len())
+                .map(|index| tabs.tab_instance_at(index).unwrap())
+                .collect()
+        };
+        let first_ids = collect(&first);
+        let second_ids = collect(&second);
+        assert_eq!(first_ids.len(), 2);
+        assert_eq!(second_ids.len(), 2);
+        assert!(first_ids.iter().chain(second_ids.iter()).all(|id| *id != 0));
+        for id in &first_ids {
+            assert!(
+                !second_ids.contains(id),
+                "instance {id} collided across owners"
+            );
+        }
+        let mut all = first_ids;
+        all.extend(second_ids);
+        all.sort_unstable();
+        all.dedup();
+        assert_eq!(all.len(), 4);
+    }
+
+    #[test]
+    fn insert_rejects_duplicate_file_identity_and_returns_detached_tab() {
+        let workspace = tempfile::tempdir().unwrap();
+        let root = workspace.path();
+        let file = root.join("shared.txt");
+        fs::write(&file, "original").unwrap();
+        let mut source = EditorTabs::new(None);
+        let mut target = EditorTabs::new(None);
+        // Both owners independently opened the same file: two live buffers.
+        target.open_file(root, &file).unwrap();
+        source.open_file(root, &file).unwrap();
+        source.document_mut().unwrap().replace(None, "!").unwrap();
+        let instance = source.tab_instance_at(0).unwrap();
+        let labels_before = target.tab_labels();
+        let guard = target.tab_guard_at(0).unwrap();
+
+        let detached = source.take_for_pane(instance).unwrap();
+        let returned = target
+            .insert_from_pane(detached)
+            .expect_err("duplicate file identity must be rejected");
+        assert_eq!(returned.instance, instance);
+        assert_eq!(target.tab_labels(), labels_before);
+        assert_eq!(
+            target.index_for_guard(&guard),
+            Some(0),
+            "a rejected insert must not bump revision"
+        );
+        assert_eq!(target.document().unwrap().content(), "original");
+
+        // Rollback: the untouched session goes back to its previous owner.
+        source.insert_from_pane(returned).unwrap();
+        assert_eq!(source.index_for_instance(instance), Some(0));
+        assert_eq!(source.document().unwrap().content(), "original!");
+        assert!(source.document().unwrap().is_dirty());
+        assert_eq!(fs::read_to_string(&file).unwrap(), "original");
+    }
+
+    #[test]
+    fn insert_rejects_duplicate_scratch_identity_and_returns_detached_tab() {
+        let workspace = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let store = EditorDraftStore::new(state.path());
+        let mut seed = EditorTabs::new(Some(store.clone()));
+        seed.open_scratch(workspace.path()).unwrap();
+        seed.document_mut()
+            .unwrap()
+            .replace(None, "seeded")
+            .unwrap();
+        seed.persist_draft().unwrap();
+        drop(seed);
+
+        // Two owners restore the same persisted scratch draft, so both hold
+        // a live session with the same scratch identity.
+        let mut first = EditorTabs::new(Some(store.clone()));
+        let mut second = EditorTabs::new(Some(store.clone()));
+        assert_eq!(first.restore_scratch_drafts(workspace.path()).unwrap(), 1);
+        assert_eq!(second.restore_scratch_drafts(workspace.path()).unwrap(), 1);
+        let instance = first.tab_instance_at(0).unwrap();
+        let scratch_id = first.document().unwrap().scratch_id().unwrap().to_string();
+
+        let detached = first.take_for_pane(instance).unwrap();
+        let returned = second
+            .insert_from_pane(detached)
+            .expect_err("same scratch identity must be rejected");
+        assert_eq!(returned.instance, instance);
+        assert_eq!(second.tab_labels().len(), 1);
+
+        first.insert_from_pane(returned).unwrap();
+        assert_eq!(first.index_for_instance(instance), Some(0));
+        assert_eq!(first.document().unwrap().content(), "seeded");
+        assert_eq!(
+            first.document().unwrap().scratch_id(),
+            Some(scratch_id.as_str())
+        );
+    }
+
+    #[test]
+    fn insert_rejects_at_tab_limit_and_returns_detached_tab() {
+        let workspace = tempfile::tempdir().unwrap();
+        let root = workspace.path();
+        let file = root.join("limited.txt");
+        fs::write(&file, "x").unwrap();
+        let mut source = EditorTabs::new(None);
+        source.open_file(root, &file).unwrap();
+        let instance = source.tab_instance_at(0).unwrap();
+
+        let mut target = EditorTabs::new(None);
+        for _ in 0..MAX_EDITOR_TABS {
+            target.open_scratch(root).unwrap();
+        }
+        assert_eq!(target.tab_labels().len(), MAX_EDITOR_TABS);
+        assert_eq!(target.active_index(), Some(MAX_EDITOR_TABS - 1));
+
+        let detached = source.take_for_pane(instance).unwrap();
+        let returned = target
+            .insert_from_pane(detached)
+            .expect_err("a full target must reject the move");
+        assert_eq!(returned.instance, instance);
+        assert_eq!(target.tab_labels().len(), MAX_EDITOR_TABS);
+        assert_eq!(target.active_index(), Some(MAX_EDITOR_TABS - 1));
+
+        source.insert_from_pane(returned).unwrap();
+        assert_eq!(source.index_for_instance(instance), Some(0));
+        assert_eq!(source.document().unwrap().path(), Some(file.as_path()));
+    }
+
+    #[test]
+    fn take_and_insert_bump_revision_and_reject_stale_instances() {
+        let workspace = tempfile::tempdir().unwrap();
+        let root = workspace.path();
+        let file_a = root.join("a.txt");
+        let file_b = root.join("b.txt");
+        fs::write(&file_a, "a").unwrap();
+        fs::write(&file_b, "b").unwrap();
+        let mut source = EditorTabs::new(None);
+        source.open_file(root, &file_a).unwrap();
+        source.open_file(root, &file_b).unwrap();
+        source.activate(0);
+        let guard = source.tab_guard_at(0).unwrap();
+        let instance_b = source.tab_instance_at(1).unwrap();
+
+        assert!(source.take_for_pane(0).is_none(), "zero is never valid");
+        assert!(source.take_for_pane(u64::MAX).is_none());
+        assert_eq!(source.tab_labels().len(), 2);
+
+        let detached = source.take_for_pane(instance_b).unwrap();
+        assert!(
+            source.take_for_pane(instance_b).is_none(),
+            "a moved instance is stale in its previous owner"
+        );
+        assert!(
+            source.index_for_guard(&guard).is_none(),
+            "take must bump revision so stale guards fail"
+        );
+        assert_eq!(source.tab_labels().len(), 1);
+        assert_eq!(source.active_index(), Some(0));
+        assert_eq!(source.document().unwrap().path(), Some(file_a.as_path()));
+
+        let mut target = EditorTabs::new(None);
+        target.open_file(root, &file_a).unwrap();
+        let target_guard = target.tab_guard_at(0).unwrap();
+        target.insert_from_pane(detached).unwrap();
+        assert!(
+            target.index_for_guard(&target_guard).is_none(),
+            "insert must bump revision so stale guards fail"
+        );
+        assert_eq!(target.tab_labels().len(), 2);
+        assert_eq!(target.active_index(), Some(1));
+        assert_eq!(target.document().unwrap().path(), Some(file_b.as_path()));
     }
 }

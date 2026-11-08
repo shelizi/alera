@@ -159,6 +159,8 @@ struct Workbench {
     explorer_action_input: Option<Entity<QuickOpenInput>>,
     explorer_delete_confirmed: bool,
     editor: Option<Entity<NativeEditor>>,
+    secondary_editor: Option<Entity<NativeEditor>>,
+    editor_transfer_in_progress: bool,
     editor_file_layout_snapshot: Vec<(u64, PathBuf)>,
     editor_active_layout_snapshot: Option<u64>,
     session_store: Option<PreviewSessionStore>,
@@ -565,51 +567,115 @@ impl Workbench {
         cx.notify();
     }
 
-    // Clear the parent editor after closing its last inline tab.
+    /// Each pane owns a separate native viewport and its own EditorTabs.
+    /// Dirty buffers are moved between owners, never cloned or reopened.
+    fn editor_for_pane(&self, pane: PaneSlot) -> Option<Entity<NativeEditor>> {
+        match pane {
+            PaneSlot::Primary => self.editor.clone(),
+            PaneSlot::Secondary => self.secondary_editor.clone(),
+        }
+    }
+
+    fn editor_for_instance(
+        &self,
+        instance: u64,
+        cx: &Context<Self>,
+    ) -> Option<(PaneSlot, Entity<NativeEditor>)> {
+        for slot in [PaneSlot::Primary, PaneSlot::Secondary] {
+            if let Some(editor) = self.editor_for_pane(slot) {
+                if editor.read(cx).contains_tab_instance(instance) {
+                    return Some((slot, editor));
+                }
+            }
+        }
+        None
+    }
+
+    fn focused_editor(&self) -> Option<Entity<NativeEditor>> {
+        self.editor_for_pane(self.mixed_panes.focused_pane())
+            .or_else(|| self.editor.clone())
+            .or_else(|| self.secondary_editor.clone())
+    }
+
+    fn all_editor_files_and_active(
+        &self,
+        cx: &Context<Self>,
+    ) -> (Vec<(u64, PathBuf)>, Option<u64>) {
+        let mut files = Vec::new();
+        for slot in [PaneSlot::Primary, PaneSlot::Secondary] {
+            if let Some(editor) = self.editor_for_pane(slot) {
+                files.extend(editor.read(cx).file_backed_tab_instances());
+            }
+        }
+        let active = self
+            .focused_editor()
+            .and_then(|editor| editor.read(cx).active_tab_instance());
+        (files, active)
+    }
+
+    fn observe_native_editor(&mut self, editor: &Entity<NativeEditor>, cx: &mut Context<Self>) {
+        let workspace_generation = self.workspace_generation;
+        cx.observe(editor, move |workbench, _, cx| {
+            if workbench.workspace_generation != workspace_generation
+                || workbench.editor_transfer_in_progress
+            {
+                return;
+            }
+            if workbench
+                .editor
+                .as_ref()
+                .is_some_and(|entity| entity.read(cx).tabs_empty())
+            {
+                workbench.editor = None;
+            }
+            if workbench
+                .secondary_editor
+                .as_ref()
+                .is_some_and(|entity| entity.read(cx).tabs_empty())
+            {
+                workbench.secondary_editor = None;
+            }
+            let (files, active) = workbench.all_editor_files_and_active(cx);
+            let changed = files != workbench.editor_file_layout_snapshot
+                || active != workbench.editor_active_layout_snapshot;
+            workbench.editor_file_layout_snapshot = files;
+            workbench.editor_active_layout_snapshot = active;
+            if changed && workbench.mixed_layout_restore.is_none() {
+                workbench.sync_mixed_tabs(cx);
+                workbench.save_mixed_pane_layout(cx);
+            }
+            cx.notify();
+        })
+        .detach();
+    }
+
     fn install_editor(&mut self, tabs: EditorTabs, cx: &mut Context<Self>) {
-        self.editor_epoch = self.editor_epoch.wrapping_add(1);
+        if self.editor.is_none() && self.secondary_editor.is_none() {
+            self.editor_epoch = self.editor_epoch.wrapping_add(1);
+        }
         let editor = cx.new(|cx| NativeEditor::new(tabs, cx));
         editor.update(cx, |editor, cx| {
             editor.set_local_tab_strip_visible(false, cx)
         });
-        self.editor_file_layout_snapshot = editor.read(cx).file_backed_tab_instances();
-        self.editor_active_layout_snapshot = editor.read(cx).active_tab_instance();
-        cx.observe(&editor, |workbench, _, cx| {
-            if workbench
-                .editor
-                .as_ref()
-                .is_some_and(|current| current.read(cx).tabs_empty())
-            {
-                workbench.editor = None;
-                workbench.model.set_status("Native editor closed");
-            }
-            let (files, active) = workbench
-                .editor
-                .as_ref()
-                .map(|current| {
-                    let current = current.read(cx);
-                    (
-                        current.file_backed_tab_instances(),
-                        current.active_tab_instance(),
-                    )
-                })
-                .unwrap_or_default();
-            // Save As and keyboard tab switching can originate in the editor
-            // instead of Workbench. Do not write layout for ordinary typing.
-            let layout_changed = files != workbench.editor_file_layout_snapshot
-                || active != workbench.editor_active_layout_snapshot;
-            workbench.editor_file_layout_snapshot = files;
-            workbench.editor_active_layout_snapshot = active;
-            if layout_changed && workbench.mixed_layout_restore.is_none() {
-                workbench.sync_mixed_tabs(cx);
-                workbench.save_mixed_pane_layout(cx);
-            }
-            // A nested editor tab can open, close, reorder or turn dirty
-            // without a Workbench callback; refresh the mixed tab projection.
-            cx.notify();
-        })
-        .detach();
-        self.editor = Some(editor);
+        self.editor = Some(editor.clone());
+        (
+            self.editor_file_layout_snapshot,
+            self.editor_active_layout_snapshot,
+        ) = self.all_editor_files_and_active(cx);
+        self.observe_native_editor(&editor, cx);
+    }
+
+    fn install_secondary_editor(&mut self, tabs: EditorTabs, cx: &mut Context<Self>) {
+        let editor = cx.new(|cx| NativeEditor::new(tabs, cx));
+        editor.update(cx, |editor, cx| {
+            editor.set_local_tab_strip_visible(false, cx)
+        });
+        self.secondary_editor = Some(editor.clone());
+        (
+            self.editor_file_layout_snapshot,
+            self.editor_active_layout_snapshot,
+        ) = self.all_editor_files_and_active(cx);
+        self.observe_native_editor(&editor, cx);
     }
 
     fn refresh_git(&mut self, cx: &mut Context<Self>) {
@@ -891,7 +957,7 @@ impl Workbench {
             return;
         }
         self.open_editor(cx);
-        let Some(editor) = self.editor.clone() else {
+        let Some(editor) = self.focused_editor() else {
             return;
         };
         match editor.update(cx, |editor, cx| {
@@ -907,9 +973,10 @@ impl Workbench {
     }
 
     fn editor_dirty(&self, cx: &mut Context<Self>) -> bool {
-        self.editor
-            .as_ref()
-            .is_some_and(|editor| editor.read(cx).has_unsaved_changes())
+        [PaneSlot::Primary, PaneSlot::Secondary]
+            .into_iter()
+            .filter_map(|pane| self.editor_for_pane(pane))
+            .any(|editor| editor.read(cx).has_unsaved_changes())
     }
 
     fn draft_store(&self) -> Option<EditorDraftStore> {
@@ -946,6 +1013,31 @@ impl Workbench {
             return;
         };
         let root = self.model.root().to_path_buf();
+        // Never open the same disk file as two independent mutable buffers.
+        // If a pane already owns it, focus that exact existing document.
+        for pane in [PaneSlot::Primary, PaneSlot::Secondary] {
+            if let Some(owner) = self.editor_for_pane(pane) {
+                if let Some((instance, _)) = owner
+                    .read(cx)
+                    .file_backed_tab_instances()
+                    .into_iter()
+                    .find(|(_, open)| open == &path)
+                {
+                    owner.update(cx, |editor, cx| {
+                        editor.activate_tab_instance(instance, cx);
+                    });
+                    self.mixed_panes.activate(&WorkbenchTabIdentity::Editor {
+                        editor_epoch: self.editor_epoch,
+                        instance,
+                    });
+                    self.center_view = CenterView::Editor;
+                    self.model
+                        .set_status("Focused existing editor buffer; no duplicate opened");
+                    cx.notify();
+                    return;
+                }
+            }
+        }
         if self.editor.is_none() {
             let mut tabs = EditorTabs::new(self.draft_store());
             match tabs.open_file(&root, &path) {
@@ -964,11 +1056,8 @@ impl Workbench {
             cx.notify();
             return;
         }
-        let result = self
-            .editor
-            .as_ref()
-            .unwrap()
-            .update(cx, |editor, cx| editor.open_in_place(&root, &path, cx));
+        let owner = self.focused_editor().expect("primary editor installed");
+        let result = owner.update(cx, |editor, cx| editor.open_in_place(&root, &path, cx));
         match result {
             Ok(effect) => {
                 self.model.set_status(effect.status());
@@ -985,7 +1074,7 @@ impl Workbench {
     }
 
     fn save_editor(&mut self, cx: &mut Context<Self>) {
-        let Some(editor) = &self.editor else {
+        let Some(editor) = self.focused_editor() else {
             return;
         };
         if editor.read(cx).tabs_empty() {
@@ -1031,11 +1120,8 @@ impl Workbench {
             cx.notify();
             return;
         }
-        let result = self
-            .editor
-            .as_ref()
-            .unwrap()
-            .update(cx, |editor, cx| editor.open_scratch(&root, cx));
+        let owner = self.focused_editor().expect("native editor installed");
+        let result = owner.update(cx, |editor, cx| editor.open_scratch(&root, cx));
         match result {
             Ok(effect) => {
                 self.model.set_status(effect.status());
@@ -1049,7 +1135,7 @@ impl Workbench {
     }
 
     fn pick_save_as(&mut self, cx: &mut Context<Self>) {
-        let Some(editor) = self.editor.clone() else {
+        let Some(editor) = self.focused_editor() else {
             return;
         };
         editor.update(cx, |editor, cx| editor.prompt_save_as(cx));
@@ -1059,11 +1145,16 @@ impl Workbench {
     }
 
     fn close_editor(&mut self, discard: bool, cx: &mut Context<Self>) {
-        let Some(editor) = &self.editor else {
+        let Some(editor) = self.focused_editor() else {
             return;
         };
+        let secondary = self.secondary_editor.as_ref() == Some(&editor);
         if editor.read(cx).tabs_empty() {
-            self.editor = None;
+            if secondary {
+                self.secondary_editor = None;
+            } else {
+                self.editor = None;
+            }
             self.model.set_status("Editor closed");
             cx.notify();
             return;
@@ -1075,7 +1166,11 @@ impl Workbench {
                 self.model.reload_active();
             }
             if editor.read(cx).tabs_empty() {
-                self.editor = None;
+                if secondary {
+                    self.secondary_editor = None;
+                } else {
+                    self.editor = None;
+                }
             }
         }
         self.model.set_status(effect.status());
@@ -1299,11 +1394,13 @@ impl Workbench {
             cx.notify();
             return;
         }
-        if let Some(editor) = &self.editor {
-            if let Err(status) = editor.read(cx).switch_allowed() {
-                self.model.set_status(status);
-                cx.notify();
-                return;
+        for pane in [PaneSlot::Primary, PaneSlot::Secondary] {
+            if let Some(editor) = self.editor_for_pane(pane) {
+                if let Err(status) = editor.read(cx).switch_allowed() {
+                    self.model.set_status(status);
+                    cx.notify();
+                    return;
+                }
             }
         }
         let canonical = match dunce::canonicalize(&root) {
@@ -1352,6 +1449,8 @@ impl Workbench {
         self.explorer_drop_busy = false;
         self.cancel_explorer_action(cx);
         self.editor = None;
+        self.secondary_editor = None;
+        self.editor_transfer_in_progress = false;
         self.editor_file_layout_snapshot.clear();
         self.editor_active_layout_snapshot = None;
         self.restore_scratch_tabs(cx);
@@ -2013,26 +2112,26 @@ impl Workbench {
     /// Keep their keys workspace-relative and treat saved strings as inert;
     /// unsaved drafts are recovered separately by EditorDraftStore.
     fn editor_layout_keys(&self, cx: &Context<Self>) -> Vec<(WorkbenchTabIdentity, String)> {
-        let Some(editor) = self.editor.as_ref() else {
-            return Vec::new();
-        };
-        editor
-            .read(cx)
-            .file_backed_tab_instances()
-            .into_iter()
-            .filter_map(|(instance, path)| {
-                let relative = path.strip_prefix(self.model.root()).ok()?;
-                Self::valid_editor_layout_key(relative).then(|| {
-                    (
-                        WorkbenchTabIdentity::Editor {
-                            editor_epoch: self.editor_epoch,
-                            instance,
-                        },
-                        relative.to_string_lossy().into_owned(),
-                    )
-                })
-            })
-            .collect()
+        let mut keys = Vec::new();
+        for pane in [PaneSlot::Primary, PaneSlot::Secondary] {
+            if let Some(editor) = self.editor_for_pane(pane) {
+                for (instance, path) in editor.read(cx).file_backed_tab_instances() {
+                    let Ok(relative) = path.strip_prefix(self.model.root()) else {
+                        continue;
+                    };
+                    if Self::valid_editor_layout_key(relative) {
+                        keys.push((
+                            WorkbenchTabIdentity::Editor {
+                                editor_epoch: self.editor_epoch,
+                                instance,
+                            },
+                            relative.to_string_lossy().into_owned(),
+                        ));
+                    }
+                }
+            }
+        }
+        keys
     }
 
     fn load_mixed_pane_layout(&mut self) {
@@ -2182,7 +2281,7 @@ impl Workbench {
         }
     }
 
-    fn apply_restored_mixed_panes(&mut self, cx: &Context<Self>) {
+    fn apply_restored_mixed_panes(&mut self, cx: &mut Context<Self>) {
         let Some(saved) = self.mixed_layout_restore.take() else {
             return;
         };
@@ -2195,7 +2294,7 @@ impl Workbench {
         }
         for (id, key) in &keys {
             if saved.secondary_editors.contains(key) {
-                self.mixed_panes.move_to(id, PaneSlot::Secondary);
+                self.transfer_editor_to_pane(id, PaneSlot::Secondary, cx);
             }
         }
         for wanted in [
@@ -2206,11 +2305,18 @@ impl Workbench {
         .flatten()
         {
             if let Some((id, _)) = keys.iter().find(|(_, key)| key == wanted) {
+                if let WorkbenchTabIdentity::Editor { instance, .. } = id {
+                    if let Some((_, owner)) = self.editor_for_instance(*instance, cx) {
+                        owner.update(cx, |editor, cx| {
+                            editor.activate_tab_instance(*instance, cx);
+                        });
+                    }
+                }
                 self.mixed_panes.activate(id);
             }
         }
         if !saved.split_enabled {
-            self.mixed_panes.close_secondary();
+            self.unsplit_mixed_panes(cx);
         } else if saved.focused_pane == SavedWorkbenchPane::Primary {
             self.mixed_panes.focus_pane(PaneSlot::Primary);
         } else {
@@ -2250,24 +2356,29 @@ impl Workbench {
                 preferred = Some(identity);
             }
         }
-        if let Some(editor) = &self.editor {
-            let editor = editor.read(cx);
-            let active = editor.active_tab_instance();
-            for (instance, label) in editor.tab_instances() {
-                let identity = WorkbenchTabIdentity::Editor {
-                    editor_epoch: self.editor_epoch,
-                    instance,
-                };
-                if self.center_view == CenterView::Editor && active == Some(instance) {
-                    preferred = Some(identity.clone());
+        for slot in [PaneSlot::Primary, PaneSlot::Secondary] {
+            if let Some(editor) = self.editor_for_pane(slot) {
+                let editor = editor.read(cx);
+                let active = editor.active_tab_instance();
+                for (instance, label) in editor.tab_instances() {
+                    let identity = WorkbenchTabIdentity::Editor {
+                        editor_epoch: self.editor_epoch,
+                        instance,
+                    };
+                    if self.center_view == CenterView::Editor
+                        && self.mixed_panes.focused_pane() == slot
+                        && active == Some(instance)
+                    {
+                        preferred = Some(identity.clone());
+                    }
+                    observed.push(WorkbenchTab {
+                        identity,
+                        kind: WorkbenchTabKind::Editor,
+                        title: label.title,
+                        dirty: label.dirty,
+                        running: true,
+                    });
                 }
-                observed.push(WorkbenchTab {
-                    identity,
-                    kind: WorkbenchTabKind::Editor,
-                    title: label.title,
-                    dirty: label.dirty,
-                    running: true,
-                });
             }
         }
         self.mixed_tabs
@@ -2279,6 +2390,23 @@ impl Workbench {
             .map(|tab| tab.identity.clone())
             .collect();
         self.mixed_panes.reconcile(&live_tabs);
+        // A new tab opened through NativeEditor's own Ctrl+N/Save As is
+        // initially unknown to WorkbenchPaneLayout. Reconcile appends new
+        // identities to Primary by default; correct that projection to
+        // whichever native view *actually owns* the editable buffer.
+        for slot in [PaneSlot::Primary, PaneSlot::Secondary] {
+            if let Some(owner) = self.editor_for_pane(slot) {
+                for (instance, _) in owner.read(cx).tab_instances() {
+                    let id = WorkbenchTabIdentity::Editor {
+                        editor_epoch: self.editor_epoch,
+                        instance,
+                    };
+                    if !self.mixed_panes.tabs_in(slot).contains(&id) {
+                        self.mixed_panes.move_to(&id, slot);
+                    }
+                }
+            }
+        }
         // NativeEditor can open/activate a tab through its own shortcuts or
         // async Save As callbacks. Its currently selected owner must follow
         // the actual pane holding that identity, not remain in a stale pane.
@@ -2295,6 +2423,100 @@ impl Workbench {
         }
     }
 
+    /// Move a live EditorSession between two real NativeEditor view owners.
+    /// Unlike a plain pane-layout move this transfers its *existing*
+    /// document, drafts, undo history and identity without disk reload.
+    fn transfer_editor_to_pane(
+        &mut self,
+        id: &WorkbenchTabIdentity,
+        destination: PaneSlot,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let WorkbenchTabIdentity::Editor {
+            editor_epoch,
+            instance,
+        } = id
+        else {
+            return self.mixed_panes.move_to(id, destination);
+        };
+        if *editor_epoch != self.editor_epoch {
+            return false;
+        }
+        let Some((source, source_editor)) = self.editor_for_instance(*instance, cx) else {
+            return false;
+        };
+        if source == destination {
+            return false;
+        }
+        self.editor_transfer_in_progress = true;
+        let detached =
+            source_editor.update(cx, |editor, cx| editor.take_tab_for_pane(*instance, cx));
+        let Some(detached) = detached else {
+            self.editor_transfer_in_progress = false;
+            return false;
+        };
+        let result = if let Some(target) = self.editor_for_pane(destination) {
+            target.update(cx, |editor, cx| editor.install_tab_from_pane(detached, cx))
+        } else {
+            let mut tabs = EditorTabs::new(self.draft_store());
+            match tabs.insert_from_pane(detached) {
+                Ok(()) => {
+                    match destination {
+                        PaneSlot::Primary => self.install_editor(tabs, cx),
+                        PaneSlot::Secondary => self.install_secondary_editor(tabs, cx),
+                    }
+                    Ok(())
+                }
+                Err(rejected) => Err(rejected),
+            }
+        };
+        let success = match result {
+            Ok(()) => {
+                if source_editor.read(cx).tabs_empty() {
+                    match source {
+                        PaneSlot::Primary => self.editor = None,
+                        PaneSlot::Secondary => self.secondary_editor = None,
+                    }
+                }
+                self.mixed_panes.move_to(id, destination)
+            }
+            Err(rejected) => {
+                // A capacity/duplicate failure is reversible because the
+                // source stayed alive until the destination accepted its tab.
+                let restored = source_editor
+                    .update(cx, |editor, cx| editor.install_tab_from_pane(rejected, cx))
+                    .is_ok();
+                self.model.set_status(if restored {
+                    "Editor pane move refused; original dirty buffer was kept"
+                } else {
+                    "Editor pane move failed; keep this workspace open for draft recovery"
+                });
+                false
+            }
+        };
+        self.editor_transfer_in_progress = false;
+        if success {
+            self.sync_mixed_tabs(cx);
+            self.save_mixed_pane_layout(cx);
+        }
+        cx.notify();
+        success
+    }
+
+    fn unsplit_mixed_panes(&mut self, cx: &mut Context<Self>) {
+        let secondary = self.mixed_panes.tabs_in(PaneSlot::Secondary).to_vec();
+        for id in secondary {
+            if matches!(id, WorkbenchTabIdentity::Editor { .. }) {
+                if !self.transfer_editor_to_pane(&id, PaneSlot::Primary, cx) {
+                    return;
+                }
+            }
+        }
+        self.mixed_panes.close_secondary();
+        self.save_mixed_pane_layout(cx);
+        cx.notify();
+    }
+
     fn mixed_tab_is_current(&self, id: &WorkbenchTabIdentity, cx: &Context<Self>) -> bool {
         match id {
             WorkbenchTabIdentity::Host(target) => {
@@ -2305,10 +2527,7 @@ impl Workbench {
                 instance,
             } => {
                 *editor_epoch == self.editor_epoch
-                    && self
-                        .editor
-                        .as_ref()
-                        .is_some_and(|editor| editor.read(cx).contains_tab_instance(*instance))
+                    && self.editor_for_instance(*instance, cx).is_some()
             }
         }
     }
@@ -2341,7 +2560,7 @@ impl Workbench {
                 }
             }
             WorkbenchTabIdentity::Editor { instance, .. } => {
-                if let Some(editor) = &self.editor {
+                if let Some((_, editor)) = self.editor_for_instance(*instance, cx) {
                     if editor.update(cx, |editor, cx| editor.activate_tab_instance(*instance, cx)) {
                         self.center_view = CenterView::Editor;
                         window.focus(&editor.read(cx).focus_handle(cx));
@@ -2403,14 +2622,17 @@ impl Workbench {
                 }
             }
             WorkbenchTabIdentity::Editor { instance, .. } => {
-                if let Some(editor) = self.editor.clone() {
+                if let Some((slot, editor)) = self.editor_for_instance(*instance, cx) {
                     let closed =
                         editor.update(cx, |editor, cx| editor.close_tab_instance(*instance, cx));
                     self.model
                         .set_status(editor.read(cx).status_text().to_owned());
                     if closed && editor.read(cx).tabs_empty() {
-                        self.editor = None;
-                        if self.center_view == CenterView::Editor {
+                        match slot {
+                            PaneSlot::Primary => self.editor = None,
+                            PaneSlot::Secondary => self.secondary_editor = None,
+                        }
+                        if self.editor.is_none() && self.secondary_editor.is_none() {
                             self.center_view = CenterView::Terminal;
                         }
                     }
@@ -2493,15 +2715,15 @@ impl Workbench {
                 }
             }
             MixedContextAction::SecondPane => {
-                // Pane membership is a local projection. Neither Host PTYs
-                // nor dirty Editor buffers change ownership when moved.
-                if self.mixed_panes.split_with(&id) {
+                // Host stays in its Host-owned runtime; Editor transfers its
+                // existing EditorSession into an independent native viewport.
+                if self.transfer_editor_to_pane(&id, PaneSlot::Secondary, cx) {
                     self.focus_mixed_tab(&id, window, cx);
                     self.refresh_terminal_split_output(cx);
                 }
             }
             MixedContextAction::FirstPane => {
-                if self.mixed_panes.move_to(&id, PaneSlot::Primary) {
+                if self.transfer_editor_to_pane(&id, PaneSlot::Primary, cx) {
                     self.focus_mixed_tab(&id, window, cx);
                     self.refresh_terminal_split_output(cx);
                 }
@@ -2800,9 +3022,8 @@ impl Render for Workbench {
                     if *editor_epoch != self.editor_epoch {
                         return None;
                     }
-                    self.editor
-                        .as_ref()
-                        .and_then(|editor| editor.read(cx).tab_content_snapshot(*instance))
+                    self.editor_for_instance(*instance, cx)
+                        .and_then(|(_, editor)| editor.read(cx).tab_content_snapshot(*instance))
                         .unwrap_or_else(|| "Editor buffer no longer available".to_owned())
                 }
             };
@@ -2850,14 +3071,13 @@ impl Render for Workbench {
             self.mixed_panes.active_in(PaneSlot::Primary),
             Some(WorkbenchTabIdentity::Editor { .. })
         );
-        // One NativeEditor owns all buffers; render it in the focused Editor
-        // pane and show the other Editor tab's immutable content in the other.
+        // Each pane owns an independent native editor viewport and its own
+        // dirty-buffer/undo owner. No shared Entity is rendered twice.
         let mixed_editor_in_secondary = mixed_has_secondary
             && matches!(
                 self.mixed_panes.active_in(PaneSlot::Secondary),
                 Some(WorkbenchTabIdentity::Editor { .. })
-            )
-            && (!primary_is_editor || self.mixed_panes.focused_pane() == PaneSlot::Secondary);
+            );
         let center_is_editor = if mixed_has_secondary {
             primary_is_editor
         } else {
@@ -2865,38 +3085,22 @@ impl Render for Workbench {
         };
         let show_preview_tabs = center_is_editor && self.editor.is_none();
         let show_editor_toolbar = center_is_editor || mixed_editor_in_secondary;
-        let content = if mixed_editor_in_secondary && primary_is_editor {
-            self.mixed_panes
-                .active_in(PaneSlot::Primary)
-                .and_then(|id| match id {
-                    WorkbenchTabIdentity::Editor {
-                        editor_epoch,
-                        instance,
-                    } if *editor_epoch == self.editor_epoch => self
-                        .editor
-                        .as_ref()
-                        .and_then(|editor| editor.read(cx).tab_content_snapshot(*instance)),
-                    _ => None,
-                })
-                .unwrap_or(content)
-        } else {
-            content
-        };
         let editor = self.editor.clone();
-        let has_native_editor = editor.is_some();
+        let toolbar_editor = self.focused_editor();
+        let has_native_editor = toolbar_editor.is_some();
         let secondary_native_editor = if mixed_editor_in_secondary {
-            editor.clone()
+            self.secondary_editor.clone()
         } else {
             None
         };
         let secondary_editor_live = secondary_native_editor.is_some();
-        let editor_dirty = self.editor_dirty(cx);
-        let discard_pending = self
-            .editor
+        let editor_dirty = toolbar_editor
+            .as_ref()
+            .is_some_and(|editor| editor.read(cx).document().is_dirty());
+        let discard_pending = toolbar_editor
             .as_ref()
             .is_some_and(|editor| editor.read(cx).discard_armed());
-        let editor_title = self
-            .editor
+        let editor_title = toolbar_editor
             .as_ref()
             .and_then(|editor| {
                 editor.read(cx).document().path().and_then(|path| {
@@ -4220,11 +4424,18 @@ impl Render for Workbench {
                                             .flex()
                                             .flex_col()
                             .child(
-                                if let Some(editor) = editor.filter(|_| !mixed_editor_in_secondary) {
+                                if let Some(editor) = editor {
                                     div()
                                         .flex_1()
                                         .min_h_0()
                                         .when(!center_is_editor, |panel| panel.hidden())
+                                        .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
+                                            if this.mixed_panes.focus_pane(PaneSlot::Primary) {
+                                                this.center_view = CenterView::Editor;
+                                                this.save_mixed_pane_layout(cx);
+                                                cx.notify();
+                                            }
+                                        }))
                                         .child(editor)
                                         .into_any_element()
                                 } else {
@@ -4873,7 +5084,7 @@ impl Render for Workbench {
                                                             .on_drop(cx.listener(|this, drag: &MixedTabDrag, window, cx| {
                                                                 if drag.workspace_generation == this.workspace_generation
                                                                     && this.mixed_tab_is_current(&drag.identity, cx)
-                                                                    && this.mixed_panes.move_to(&drag.identity, PaneSlot::Secondary)
+                                                                    && this.transfer_editor_to_pane(&drag.identity, PaneSlot::Secondary, cx)
                                                                 {
                                                                     this.focus_mixed_tab(&drag.identity, window, cx);
                                                                     this.refresh_terminal_split_output(cx);
@@ -4899,9 +5110,7 @@ impl Render for Workbench {
                                                             .text_xs()
                                                             .child("Unsplit")
                                                             .on_click(cx.listener(|this, _, _, cx| {
-                                                                this.mixed_panes.close_secondary();
-                                                                this.save_mixed_pane_layout(cx);
-                                                                cx.notify();
+                                                                this.unsplit_mixed_panes(cx);
                                                             })),
                                                     ),
                                             )
@@ -4910,6 +5119,13 @@ impl Render for Workbench {
                                                     .id("mixed-secondary-editor")
                                                     .flex_1()
                                                     .min_h_0()
+                                                    .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
+                                                        if this.mixed_panes.focus_pane(PaneSlot::Secondary) {
+                                                            this.center_view = CenterView::Editor;
+                                                            this.save_mixed_pane_layout(cx);
+                                                            cx.notify();
+                                                        }
+                                                    }))
                                                     .child(editor)
                                                     .into_any_element()
                                             } else {
@@ -5587,6 +5803,8 @@ fn main() {
                         model,
                         center_view: CenterView::Terminal,
                         editor: None,
+                        secondary_editor: None,
+                        editor_transfer_in_progress: false,
                         editor_file_layout_snapshot: Vec::new(),
                         editor_active_layout_snapshot: None,
                         session_store,

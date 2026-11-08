@@ -9,7 +9,7 @@ use alera_gpui_desktop::editor::{
 };
 use alera_gpui_desktop::editor_session::{OpenEffect, RECOVERY_PLAINTEXT_NOTICE};
 use alera_gpui_desktop::editor_tabs::{
-    EditorSaveGuard, EditorTabDragIdentity, EditorTabLabel, EditorTabs,
+    DetachedEditorTab, EditorSaveGuard, EditorTabDragIdentity, EditorTabLabel, EditorTabs,
 };
 use alera_gpui_desktop::visible_line_hit::{
     apply_pointer_hit, VisibleLineGeometry, VisibleLineHitSet,
@@ -538,6 +538,43 @@ impl NativeEditor {
 
     pub fn tabs_empty(&self) -> bool {
         self.tabs.is_empty()
+    }
+
+    /// Transfer ownership of this exact live document to another native
+    /// viewport. Dirty edits, undo history and recovery remain inside the
+    /// detached EditorSession, never re-opened from disk or force-closed.
+    pub fn take_tab_for_pane(
+        &mut self,
+        instance: u64,
+        cx: &mut Context<Self>,
+    ) -> Option<DetachedEditorTab> {
+        let detached = self.tabs.take_for_pane(instance)?;
+        self.tab_context = None;
+        self.stop_drag();
+        self.line_geometry.clear();
+        if !self.tabs.is_empty() {
+            self.reveal_caret();
+        }
+        self.status = "Moved editor buffer to another pane".into();
+        cx.notify();
+        Some(detached)
+    }
+
+    /// Insert a live detached tab; return it unchanged on rejection so that
+    /// Workbench can put it back into the source owner.
+    pub fn install_tab_from_pane(
+        &mut self,
+        detached: DetachedEditorTab,
+        cx: &mut Context<Self>,
+    ) -> Result<(), DetachedEditorTab> {
+        self.tabs.insert_from_pane(detached)?;
+        self.tab_context = None;
+        self.stop_drag();
+        self.line_geometry.clear();
+        self.reveal_caret();
+        self.status = "Editor buffer moved into this pane".into();
+        cx.notify();
+        Ok(())
     }
 
     pub fn close_editor_tab(&mut self, index: usize, discard: bool, cx: &mut Context<Self>) {
