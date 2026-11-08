@@ -1,6 +1,7 @@
 //! Local Alera Native MCP UI event relay. The CLI authenticates as the App;
 //! this model never reads Host control tokens or speaks raw Host RPC.
 use crate::runtime_bridge::RuntimeCliBridge;
+use crate::terminal::TerminalSession;
 use alera_core::child_process::windowless_command;
 use serde_json::{json, Value};
 use std::io::{self, BufRead, BufReader, Write};
@@ -63,6 +64,35 @@ pub fn parse_native_ui_event(value: &Value, window_id: &str) -> Option<NativeMcp
         }
         _ => None,
     }
+}
+
+/// An Agent focus needs the Host Agent's exact handle as well as its tab and
+/// Workspace ID. Selecting a different Agent with the same tab ID is unsafe.
+pub fn matching_host_tab_handle<'a>(
+    command: &NativeMcpUiCommand,
+    sessions: &'a [TerminalSession],
+) -> Option<&'a str> {
+    let tab_id = command.arguments.get("tabId")?.as_str()?;
+    let agent_handle = match command.action.as_str() {
+        "select_tab" => None,
+        "focus_agent" => Some(command.arguments.get("handle")?.as_str()?),
+        _ => return None,
+    };
+    sessions
+        .iter()
+        .find(|session| {
+            session.running
+                && session.workspace_id == command.workspace_id
+                && session.tab_id == tab_id
+                && agent_handle.is_none_or(|handle| {
+                    session.handle == handle
+                        && session
+                            .agent_type
+                            .as_deref()
+                            .is_some_and(|kind| !kind.is_empty())
+                })
+        })
+        .map(|session| session.handle.as_str())
 }
 
 pub struct NativeMcpUiBridge {
@@ -184,15 +214,38 @@ impl NativeMcpUiBridge {
         tab_id: Option<&str>,
         error_code: Option<&str>,
     ) -> io::Result<()> {
-        if !valid_id(request_id) || tab_id.is_some_and(|id| !valid_id(id)) {
+        self.complete_internal(request_id, applied, tab_id, error_code, None)
+    }
+
+    /// The Host validates that this was a `create_workspace` operation,
+    /// that the workspace was absent before, and that its Project matches.
+    pub fn complete_workspace(&mut self, request_id: &str, created_id: &str) -> io::Result<()> {
+        self.complete_internal(request_id, true, None, None, Some(created_id))
+    }
+
+    fn complete_internal(
+        &mut self,
+        request_id: &str,
+        applied: bool,
+        tab_id: Option<&str>,
+        error_code: Option<&str>,
+        created_id: Option<&str>,
+    ) -> io::Result<()> {
+        if !valid_id(request_id)
+            || tab_id.is_some_and(|id| !valid_id(id))
+            || created_id.is_some_and(|id| !valid_id(id))
+        {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "Invalid MCP UI receipt ID",
             ));
         }
-        let value = json!({"requestId":request_id,"applied":applied,
+        let mut value = json!({"requestId":request_id,"applied":applied,
             "tabId": if applied { tab_id } else { None },
             "errorCode": if applied { None } else { Some(error_code.unwrap_or("ui_not_ready")) }});
+        if let Some(created) = created_id {
+            value["createdWorkspaceId"] = json!(created);
+        }
         let encoded = serde_json::to_vec(&value).map_err(io::Error::other)?;
         self.stdin.write_all(&encoded)?;
         self.stdin.write_all(b"\n")?;
@@ -226,6 +279,44 @@ mod tests {
             Some(NativeMcpUiEvent::Ready)
         ));
         assert!(parse_native_ui_event(&json!({"kind":"command","payload":{"requestId":"../bad", "windowId":"native-a","workspaceId":"ws_1","action":"open_file","arguments":{}}}),"native-a").is_none());
+    }
+
+    #[test]
+    fn agent_focus_requires_live_host_identity_and_exact_agent_handle() {
+        let agent = TerminalSession {
+            handle: "agent-verified".into(),
+            workspace_id: "ws1".into(),
+            tab_id: "tab1".into(),
+            running: true,
+            agent_type: Some("codex".into()),
+        };
+        let terminal = TerminalSession {
+            handle: "plain-terminal".into(),
+            workspace_id: "ws1".into(),
+            tab_id: "tab2".into(),
+            running: true,
+            agent_type: None,
+        };
+        let command = NativeMcpUiCommand {
+            request_id: "req1".into(),
+            workspace_id: "ws1".into(),
+            action: "focus_agent".into(),
+            arguments: json!({"tabId":"tab1","handle":"agent-verified"}),
+        };
+        assert_eq!(
+            matching_host_tab_handle(&command, &[agent.clone(), terminal.clone()]),
+            Some("agent-verified")
+        );
+        let wrong = NativeMcpUiCommand {
+            arguments: json!({"tabId":"tab1","handle":"other-session"}),
+            ..command.clone()
+        };
+        assert!(matching_host_tab_handle(&wrong, &[agent.clone()]).is_none());
+        let wrong_kind = NativeMcpUiCommand {
+            arguments: json!({"tabId":"tab2","handle":"plain-terminal"}),
+            ..command.clone()
+        };
+        assert!(matching_host_tab_handle(&wrong_kind, &[agent, terminal]).is_none());
     }
 
     #[test]

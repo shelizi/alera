@@ -11,9 +11,14 @@ use alera_gpui_desktop::editor_tabs::{EditorTabs, MAX_EDITOR_TABS};
 use alera_gpui_desktop::explorer_ops::{ExplorerClipboard, ExplorerClipboardMode, ExplorerFiles};
 use alera_gpui_desktop::file_search::WorkspaceFileIndex;
 use alera_gpui_desktop::git_actions::GitActions;
-use alera_gpui_desktop::git_history::{compare_local_branch, preview_commit, GitHistorySnapshot};
+use alera_gpui_desktop::git_history::{
+    compare_git_refs, compare_local_branch, preview_commit, GitHistorySnapshot,
+};
 use alera_gpui_desktop::git_inspect::{read_file_diff, GitSnapshot};
-use alera_gpui_desktop::mcp_ui_bridge::{NativeMcpUiBridge, NativeMcpUiCommand, NativeMcpUiEvent};
+use alera_gpui_desktop::mcp_ui_bridge::{
+    matching_host_tab_handle, NativeMcpUiBridge, NativeMcpUiCommand, NativeMcpUiEvent,
+};
+use alera_gpui_desktop::mcp_workspace_creation::HostManagedWorkspaceRequest;
 use alera_gpui_desktop::model::WorkbenchModel;
 use alera_gpui_desktop::project_search::{ContentMatch, ProjectSearch};
 use alera_gpui_desktop::project_tree::{collect_project_tree, ProjectTreeGroup};
@@ -235,6 +240,10 @@ struct Workbench {
     mcp_host_workspaces: Vec<alera_gpui_desktop::terminal::RegisteredHostWorkspace>,
     mcp_host_workspaces_loading: bool,
     mcp_host_workspaces_request: u64,
+    mcp_compare_busy: bool,
+    mcp_compare_request: u64,
+    mcp_workspace_create_busy: bool,
+    mcp_workspace_create_request: u64,
     agent_profiles: Vec<AgentProfileRow>,
     agent_profiles_loading: bool,
     agent_profiles_request: u64,
@@ -1405,7 +1414,7 @@ impl Workbench {
     }
 
     fn create_worktree(&mut self, cx: &mut Context<Self>) {
-        if self.worktree_busy || self.editor_dirty(cx) {
+        if self.worktree_busy || self.mcp_workspace_create_busy || self.editor_dirty(cx) {
             self.model
                 .set_status("Save editor changes and finish other worktree operations first");
             cx.notify();
@@ -1449,7 +1458,7 @@ impl Workbench {
     }
 
     fn remove_worktree(&mut self, target: PathBuf, cx: &mut Context<Self>) {
-        if self.worktree_busy {
+        if self.worktree_busy || self.mcp_workspace_create_busy {
             return;
         }
         if self.worktree_delete_pending.as_deref() != Some(target.as_path()) {
@@ -1509,9 +1518,11 @@ impl Workbench {
 
     fn switch_workspace(&mut self, root: PathBuf, cx: &mut Context<Self>) {
         if self.worktree_busy
+            || self.mcp_workspace_create_busy
             || self.terminal_create_flow.is_creating()
             || self.git_action_busy
             || self.agent_launch_busy
+            || self.mcp_compare_busy
         {
             self.model.set_status(
                 "Finish current Git, Worktree or Host terminal create before switching projects",
@@ -1888,17 +1899,9 @@ impl Workbench {
                     .get("tabId")
                     .and_then(|id| id.as_str())
                     .ok_or("tab_missing")?;
-                let handle = self
-                    .terminals
-                    .sessions
-                    .iter()
-                    .find(|session| {
-                        session.workspace_id == command.workspace_id
-                            && session.tab_id == tab_id
-                            && (command.action != "focus_agent" || session.agent_type.is_some())
-                    })
-                    .map(|session| session.handle.clone())
-                    .ok_or("tab_missing")?;
+                let handle = matching_host_tab_handle(command, &self.terminals.sessions)
+                    .ok_or("tab_missing")?
+                    .to_owned();
                 self.select_terminal(handle.clone(), cx);
                 let active = self
                     .terminals
@@ -1945,6 +1948,189 @@ impl Workbench {
         }
     }
 
+    /// Use the existing Host-owned managed Workspace workflow. Only one
+    /// request at a time, and no success receipt until both the Host's new
+    /// registered Workspace and this actual Native Workbench selection agree.
+    fn start_native_mcp_workspace_create(
+        &mut self,
+        command: NativeMcpUiCommand,
+        cx: &mut Context<Self>,
+    ) {
+        let valid_caller = self
+            .mcp_host_workspaces
+            .iter()
+            .find(|entry| entry.id == command.workspace_id)
+            .and_then(|entry| dunce::canonicalize(&entry.path).ok())
+            .as_deref()
+            == Some(self.model.root());
+        let request = HostManagedWorkspaceRequest::from_host_arguments(&command.arguments);
+        let busy = self.mcp_workspace_create_busy
+            || self.mcp_compare_busy
+            || self.worktree_busy
+            || self.git_action_busy
+            || self.agent_launch_busy
+            || self.terminal_create_flow.is_creating()
+            || self.editor_dirty(cx);
+        let Some(bridge) = self.runtime_bridge.clone() else {
+            if let Some(mcp) = self.mcp_ui_bridge.as_mut() {
+                let _ = mcp.complete(&command.request_id, false, None, Some("ui_not_ready"));
+            }
+            return;
+        };
+        if !valid_caller || request.is_err() || busy {
+            if let Some(mcp) = self.mcp_ui_bridge.as_mut() {
+                let code = if !valid_caller {
+                    "workspace_missing"
+                } else if busy {
+                    "ui_not_ready"
+                } else {
+                    "workspace_create_failed"
+                };
+                let _ = mcp.complete(&command.request_id, false, None, Some(code));
+            }
+            return;
+        }
+        let request = request.expect("Host Workspace args checked");
+        self.mcp_workspace_create_busy = true;
+        self.mcp_workspace_create_request = self.mcp_workspace_create_request.wrapping_add(1);
+        let ticket = self.mcp_workspace_create_request;
+        let generation = self.workspace_generation;
+        self.model
+            .set_status("Creating Host-managed Workspace for MCP Agent…");
+        cx.notify();
+        cx.spawn(async move |view, cx| {
+            let result = cx.background_spawn(async move { bridge.create_mcp_workspace(&request) }).await;
+            view.update(cx, |view, cx| {
+                if view.workspace_generation != generation || view.mcp_workspace_create_request != ticket {
+                    return;
+                }
+                view.mcp_workspace_create_busy = false;
+                match result {
+                    Ok(created) => {
+                        // This can fail when the user edited a buffer during
+                        // creation: never discard it, never report success.
+                        view.switch_workspace(created.path.clone(), cx);
+                        let visible = view.model.root() == created.path;
+                        if visible {
+                            if let Some(mcp) = view.mcp_ui_bridge.as_mut() {
+                                if mcp.complete_workspace(&command.request_id, &created.id).is_err() {
+                                    view.model.set_status("Created Workspace is open but MCP Host completion failed; inspect Host state before retrying");
+                                } else {
+                                    view.model.set_status("Host-managed MCP Workspace created and selected");
+                                }
+                            }
+                        } else {
+                            view.model.set_status("Host created the Workspace, but Native did not switch. Reopen it from Projects; do not create a duplicate");
+                            if let Some(mcp) = view.mcp_ui_bridge.as_mut() {
+                                let _ = mcp.complete(&command.request_id, false, None, Some("not_visible"));
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        view.model.set_status(format!("MCP Workspace creation not confirmed: {error}; check Host workspaces before retrying"));
+                        if let Some(mcp) = view.mcp_ui_bridge.as_mut() {
+                            let _ = mcp.complete(&command.request_id, false, None, Some("workspace_create_failed"));
+                        }
+                    }
+                }
+                cx.notify();
+            }).ok();
+        }).detach();
+    }
+
+    /// A deferred Host UI receipt. The comparison must be computed on a
+    /// worker and actually installed in the visible Git pane before success.
+    fn start_native_mcp_compare(&mut self, command: NativeMcpUiCommand, cx: &mut Context<Self>) {
+        let authorized_root = self
+            .mcp_host_workspaces
+            .iter()
+            .find(|entry| entry.id == command.workspace_id)
+            .and_then(|entry| dunce::canonicalize(&entry.path).ok());
+        let valid_workspace = authorized_root.as_deref() == Some(self.model.root());
+        let arguments = command.arguments.as_object();
+        let refs = arguments.and_then(|args| {
+            Some((
+                args.get("baseRef")?.as_str()?.to_owned(),
+                args.get("headRef")?.as_str()?.to_owned(),
+                args.get("gitDiffRoot")
+                    .and_then(|value| value.as_str())
+                    .map(str::to_owned),
+            ))
+        });
+        if !valid_workspace || refs.is_none() || self.mcp_compare_busy || self.git_diff_loading {
+            if let Some(bridge) = self.mcp_ui_bridge.as_mut() {
+                let _ = bridge.complete(
+                    &command.request_id,
+                    false,
+                    None,
+                    Some(if !valid_workspace {
+                        "workspace_missing"
+                    } else {
+                        "ui_not_ready"
+                    }),
+                );
+            }
+            return;
+        }
+        let (base, head, scope) = refs.expect("refs checked");
+        self.mcp_compare_busy = true;
+        self.mcp_compare_request = self.mcp_compare_request.wrapping_add(1);
+        let ticket = self.mcp_compare_request;
+        self.git_diff_request = self.git_diff_request.wrapping_add(1);
+        let diff_ticket = self.git_diff_request;
+        let generation = self.workspace_generation;
+        let root = self.model.root().to_path_buf();
+        self.git_history_open = true;
+        self.git_diff_loading = true;
+        self.git_diff = None;
+        self.model
+            .set_status(format!("Comparing {base}..{head} for MCP Agent…"));
+        cx.notify();
+        cx.spawn(async move |view, cx| {
+            let result = cx
+                .background_spawn(
+                    async move { compare_git_refs(&root, &base, &head, scope.as_deref()) },
+                )
+                .await;
+            view.update(cx, |view, cx| {
+                if view.workspace_generation != generation || view.mcp_compare_request != ticket {
+                    return;
+                }
+                view.mcp_compare_busy = false;
+                let visible = view.git_diff_request == diff_ticket && view.git_history_open;
+                let mut applied = false;
+                if visible {
+                    view.git_diff_loading = false;
+                    match result {
+                        Ok(comparison) => {
+                            view.git_diff = Some(comparison);
+                            applied = true;
+                            view.model.set_status("MCP Git branch comparison displayed");
+                        }
+                        Err(error) => {
+                            view.git_diff = Some(format!("MCP Git comparison refused: {error}"));
+                        }
+                    }
+                }
+                if let Some(bridge) = view.mcp_ui_bridge.as_mut() {
+                    let _ = bridge.complete(
+                        &command.request_id,
+                        applied,
+                        None,
+                        if applied {
+                            None
+                        } else {
+                            Some("git_compare_failed")
+                        },
+                    );
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     fn poll_native_mcp_commands(&mut self, cx: &mut Context<Self>) {
         let events = self
             .mcp_ui_bridge
@@ -1962,6 +2148,14 @@ impl Workbench {
                     self.refresh_mcp_host_workspaces(cx);
                 }
                 NativeMcpUiEvent::Command(command) => {
+                    if command.action == "create_workspace" {
+                        self.start_native_mcp_workspace_create(command, cx);
+                        continue;
+                    }
+                    if command.action == "compare_branches" {
+                        self.start_native_mcp_compare(command, cx);
+                        continue;
+                    }
                     let result = self.apply_native_mcp_action(&command, cx);
                     let (applied, tab_id, error) = match result {
                         Ok(tab_id) => (true, tab_id, None),
@@ -6771,6 +6965,10 @@ fn main() {
                         mcp_host_workspaces: Vec::new(),
                         mcp_host_workspaces_loading: false,
                         mcp_host_workspaces_request: 0,
+                        mcp_compare_busy: false,
+                        mcp_compare_request: 0,
+                        mcp_workspace_create_busy: false,
+                        mcp_workspace_create_request: 0,
                         agent_profiles: Vec::new(),
                         agent_profiles_loading: false,
                         agent_profiles_request: 0,

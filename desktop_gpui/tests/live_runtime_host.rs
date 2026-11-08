@@ -5,6 +5,7 @@
 
 use alera_core::child_process::windowless_command;
 use alera_gpui_desktop::mcp_ui_bridge::NativeMcpUiEvent;
+use alera_gpui_desktop::mcp_workspace_creation::HostManagedWorkspaceRequest;
 use alera_gpui_desktop::runtime_bridge::{RuntimeCliBridge, RuntimeStatus};
 use alera_gpui_desktop::terminal::{TerminalCreateFlow, TerminalDock};
 use alera_gpui_desktop::terminal_panes::TerminalPaneLayout;
@@ -503,6 +504,73 @@ fn real_host_terminal_list_and_incremental_read_never_autostart() {
     assert!(running_after_preview_close
         .iter()
         .any(|s| second_created.matches_live_session(s)));
+
+    // Real managed Workspace creation (not a mock Git folder) via the same
+    // CLI and isolated Host. Reuse a local test branch so the Host never
+    // attempts to refresh a remote. The Host chooses the destination under
+    // the disposable HOME, registers it, and reports its authoritative ID.
+    let repo_dir = home.join("mcp-managed-git");
+    std::fs::create_dir_all(&repo_dir).unwrap();
+    let repo = git2::Repository::init(&repo_dir).unwrap();
+    std::fs::write(repo_dir.join("README.md"), "Host MCP creation fixture\n").unwrap();
+    let mut index = repo.index().unwrap();
+    index.add_path(std::path::Path::new("README.md")).unwrap();
+    let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+    let signature = git2::Signature::now("Native Fixture", "native@example.invalid").unwrap();
+    let commit = repo
+        .commit(Some("HEAD"), &signature, &signature, "initial", &tree, &[])
+        .unwrap();
+    repo.branch(
+        "feature/managed-native",
+        &repo.find_commit(commit).unwrap(),
+        false,
+    )
+    .unwrap();
+    drop(index);
+    drop(tree);
+    drop(repo);
+    let register_project = windowless_command(&cli)
+        .args(["project", "--runtime-dir"])
+        .arg(&runtime)
+        .args([
+            "--json",
+            "add",
+            "--id",
+            "native-mcp-test-project",
+            "--name",
+            "Native MCP Host Git Project",
+            "--repo-path",
+        ])
+        .arg(&repo_dir)
+        .args(["--kind", "git-repository"])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(
+        register_project.status.success(),
+        "test Git Project registration failed: {}",
+        String::from_utf8_lossy(&register_project.stderr)
+    );
+    let create_request = HostManagedWorkspaceRequest::from_host_arguments(&json!({
+        "projectId":"native-mcp-test-project", "newBranchName":"feature/managed-native",
+        "sourceBranch":"main", "reuseExistingBranch":true,
+        "name":"mcp-native-isolated"
+    }))
+    .unwrap();
+    let created_managed = bridge
+        .create_mcp_workspace(&create_request)
+        .expect("actual Host-managed Git Worktree creation must succeed in isolated test runtime");
+    assert_eq!(created_managed.project_id, "native-mcp-test-project");
+    assert!(created_managed.path.join(".git").exists());
+    assert!(bridge
+        .list_registered_workspaces()
+        .unwrap()
+        .iter()
+        .any(|item| item.id == created_managed.id && item.path == created_managed.path));
+    assert!(
+        created_managed.path.starts_with(&home),
+        "managed fixture must not escape isolated home"
+    );
 
     // Optional native GUI process smoke against the SAME isolated Host.
     // It observes the existing test session through its window-owned

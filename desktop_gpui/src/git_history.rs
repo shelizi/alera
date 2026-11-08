@@ -1,6 +1,6 @@
 //! Bounded read-only history, commit preview and local branch comparison.
 //! All repository I/O belongs on a background worker, never in GPUI render.
-use git2::{BranchType, DiffFormat, Oid, Repository, Sort};
+use git2::{BranchType, DiffFormat, DiffOptions, Oid, Repository, Sort};
 use std::path::Path;
 
 const MAX_HISTORY: usize = 96;
@@ -227,6 +227,80 @@ pub fn compare_local_branch(workspace: &Path, branch: &str) -> Result<String, St
     ))
 }
 
+/// Read-only Host-authorized two-ref Git range comparison. Match Classic's
+/// merge-base..head semantics; never touch worktree files or the index.
+pub fn compare_git_refs(
+    workspace: &Path,
+    base_ref: &str,
+    head_ref: &str,
+    scope: Option<&str>,
+) -> Result<String, String> {
+    fn valid_ref(name: &str) -> bool {
+        !name.is_empty()
+            && name.len() <= 128
+            && !name.starts_with('-')
+            && !name.contains("..")
+            && !name.contains("@{")
+            && !name.ends_with(['.', '/'])
+            && name
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || b"/._-".contains(&c))
+    }
+    if !valid_ref(base_ref) || !valid_ref(head_ref) {
+        return Err("Invalid Git comparison ref".into());
+    }
+    let repo = repo_in(workspace)?;
+    let base = repo
+        .revparse_single(base_ref)
+        .and_then(|value| value.peel_to_commit())
+        .map_err(|_| format!("Git base ref unavailable: {base_ref}"))?;
+    let head = repo
+        .revparse_single(head_ref)
+        .and_then(|value| value.peel_to_commit())
+        .map_err(|_| format!("Git head ref unavailable: {head_ref}"))?;
+    let ancestor = repo
+        .merge_base(base.id(), head.id())
+        .map_err(|_| "Refs have no common merge base".to_string())?;
+    let merge_tree = repo
+        .find_commit(ancestor)
+        .and_then(|commit| commit.tree())
+        .map_err(|e| e.to_string())?;
+    let head_tree = head.tree().map_err(|e| e.to_string())?;
+    let mut options = DiffOptions::new();
+    options.context_lines(3);
+    if let Some(scope) = scope {
+        use std::path::Component;
+        let relative = Path::new(scope);
+        if scope.is_empty()
+            || scope.len() > 1024
+            || !relative
+                .components()
+                .all(|part| matches!(part, Component::Normal(_)))
+        {
+            return Err("Invalid Git comparison subdirectory".into());
+        }
+        let repo_root = repo.workdir().ok_or("Git worktree path unavailable")?;
+        let target = dunce::canonicalize(workspace.join(relative))
+            .map_err(|_| "Git comparison scope unavailable".to_string())?;
+        if !target.is_dir() || !target.starts_with(repo_root) {
+            return Err("Git comparison scope outside worktree".into());
+        }
+        let in_repo = target
+            .strip_prefix(repo_root)
+            .map_err(|_| "Invalid Git scope".to_string())?;
+        options.pathspec(in_repo);
+    }
+    let diff = repo
+        .diff_tree_to_tree(Some(&merge_tree), Some(&head_tree), Some(&mut options))
+        .map_err(|e| e.to_string())?;
+    let patch = bounded_patch(&diff)?;
+    let (ahead, behind) = repo
+        .graph_ahead_behind(head.id(), base.id())
+        .map_err(|e| e.to_string())?;
+    Ok(format!("Compare {base_ref}..{head_ref}\nBase: {}\nHead: {}\nMerge base: {ancestor}\nHead: {ahead} ahead / {behind} behind\n\n{}",
+        base.id(), head.id(), if patch.is_empty() { "(no changed files in this scope)" } else { &patch }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -275,6 +349,12 @@ mod tests {
         assert!(compare_local_branch(dir.path(), "feature")
             .unwrap()
             .contains("0 ahead / 1 behind"));
+        let ref_comparison = compare_git_refs(dir.path(), "feature", "HEAD", None).unwrap();
+        assert!(ref_comparison.contains("Compare feature..HEAD"));
+        assert!(ref_comparison.contains("+second"));
+        assert!(compare_git_refs(dir.path(), "../unsafe", "HEAD", None).is_err());
+        assert!(compare_git_refs(dir.path(), "feature", "missing", None).is_err());
+        assert!(compare_git_refs(dir.path(), "feature", "HEAD", Some("../outside")).is_err());
         assert!(preview_commit(dir.path(), "../invalid").is_err());
         assert!(compare_local_branch(dir.path(), "unknown").is_err());
         assert_eq!(repo.head().unwrap().peel_to_commit().unwrap().id(), second);

@@ -33,15 +33,27 @@ MCP window ID** action. A copied window ID is a selector, **not** a token.
 | `reveal_file` | Expand Explorer ancestors and select file | Real in-workspace file is visible in tree |
 | `open_file` | Reuse existing or open file-backed NativeEditor | Correct editor file active; optional line/caret navigation verified |
 | `select_tab` | Focus existing authenticated Host Terminal tab | Selected Host handle maps to requested workspace+tab ID |
-| `focus_agent` | Focus existing authenticated Host Agent tab | Requested workspace, tab ID, and Agent type match |
+| `focus_agent` | Focus existing authenticated Host Agent tab | Requested workspace, tab ID, Agent type **and Agent session handle** match |
 | `open_git_graph` | Show Native Git Graph panel | Panel is open; unsupported ref/filter modes are refused |
+| `compare_branches` | Display a merge-base-to-head Git diff in the Native Git preview | Background comparison is read-only, scoped, and installed in the visible pane before receipt |
+| `create_workspace` | Delegate to Host-owned `workspace add` managed Git worktree workflow, then switch Native | New active Host Workspace, Project ID, branch and canonical worktree path independently verified before receipt containing `createdWorkspaceId` |
 
-Unsupported (`create_workspace`, `compare_branches`, Settings operations,
+Unsupported (Settings operations,
 external editors, `openMode=new`, and unsupported Git filters) return
 `applied=false`, never a made-up success. Native workbench's existing dirty
 buffer guards can refuse cross-workspace switching. All file targets are
 canonicalized again and required to remain within the target workspace;
 Host authorization alone is not sufficient to open a symlink outside it.
+
+The Native `create_workspace` path **does not** manually call `git worktree add`:
+it delegates Git setup, Project/Workspace registration, setup policies and
+parent links to the existing Runtime Host managed creation API. The CLI
+subprocess and Host readback are bounded, and Native blocks unrelated
+worktree/switch operations during creation. If a user starts editing while
+creation is running, Native refuses a destructive Workspace switch and
+reports `not_visible` instead of `applied`. The Host-created Workspace remains
+available; the caller must **inspect existing Host Workspaces before retrying**
+to avoid duplicates. Creation does not auto-delete a Workspace or stop PTYs.
 
 ## Compatibility and operational boundaries
 
@@ -70,5 +82,7 @@ cargo test --manifest-path desktop_gpui/Cargo.toml --no-default-features --test 
 ```
 
 The integration test starts **its own temporary Host and workspace**, proves
-Native App registration and disconnection, and never needs the user's real
-terminal, Agent or production Host.
+Native App registration and disconnection, **builds a disposable Git repository,
+then creates and reads back a real Host-managed linked worktree**, and never
+needs the user's real terminal, Agent or production Host. GUI-level MCP tool
+to Native receipt end-to-end remains a separate acceptance gate.

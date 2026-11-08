@@ -43,6 +43,14 @@ Native run together, MCP tools must specify the intended `windowId` (use
 the **Copy Native MCP window ID** control). Details and verification:
 [`docs/gpui-native-mcp-ui-20261108.md`](../docs/gpui-native-mcp-ui-20261108.md).
 
+Native additionally handles MCP **compare_branches** through a bounded
+read-only merge-base patch and MCP **create_workspace** through the existing
+Host-managed workspace-add workflow. Success is acknowledged only after the
+comparison is visible or the created Workspace has been authenticated and
+selected in GPUI. MCP settings read/write still requires independent Native
+settings persistence and remains unsupported rather than reporting false
+success.
+
 **Current MVP direction:** [GPUI three-pane workbench](../docs/gpui-three-pane-mvp-20261107.md) — **Projects on the left, Terminal (default) / basic Editor in the center, Explorer + read-only Git on the right.** Terminal input now goes through the existing Host CLI; this is not a new PTY owner or full TUI attach. The older architecture/history sections below describe earlier phases.
 
 **Latest active work and verified integration status (2026-11-07):** [GPUI active work ledger](../docs/gpui-active-work-ledger-20261107.md). It records the reconciled Git inspector, per-tab close, Explorer tree, native Find/Replace and project content-search panels, scratch recovery, verified Rust tests, and remaining real-GUI acceptance gates. Earlier test counts below are historical snapshots, not the latest merged baseline.
