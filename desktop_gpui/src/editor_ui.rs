@@ -8,7 +8,7 @@ use alera_gpui_desktop::editor::{
     byte_to_utf16, edge_scroll_offset, utf16_to_byte, EditorDocument, EditorLineIndex,
 };
 use alera_gpui_desktop::editor_session::{OpenEffect, RECOVERY_PLAINTEXT_NOTICE};
-use alera_gpui_desktop::editor_tabs::{EditorTabDragIdentity, EditorTabs};
+use alera_gpui_desktop::editor_tabs::{EditorSaveGuard, EditorTabDragIdentity, EditorTabs};
 use alera_gpui_desktop::visible_line_hit::{
     apply_pointer_hit, VisibleLineGeometry, VisibleLineHitSet,
 };
@@ -153,6 +153,7 @@ impl gpui::Render for EditorTabDragPreview {
 pub struct NativeEditor {
     find: EditorFindUi,
     tabs: EditorTabs,
+    tab_context: Option<EditorSaveGuard>,
     workspace_root: PathBuf,
     picking_save_as: bool,
     focus: FocusHandle,
@@ -219,6 +220,7 @@ impl NativeEditor {
         Self {
             find: EditorFindUi::new(cx),
             tabs,
+            tab_context: None,
             workspace_root,
             picking_save_as: false,
             focus: cx.focus_handle(),
@@ -299,6 +301,7 @@ impl NativeEditor {
 
     pub fn open_scratch(&mut self, root: &Path, cx: &mut Context<Self>) -> io::Result<OpenEffect> {
         let effect = self.tabs.open_scratch(root)?;
+        self.tab_context = None;
         self.workspace_root = root.to_path_buf();
         self.line_geometry.clear();
         self.mouse_selecting = false;
@@ -309,6 +312,7 @@ impl NativeEditor {
     }
 
     pub fn activate_tab(&mut self, index: usize, cx: &mut Context<Self>) {
+        self.tab_context = None;
         if self.tabs.activate(index) {
             self.line_geometry.clear();
             self.mouse_selecting = false;
@@ -369,6 +373,7 @@ impl NativeEditor {
     }
 
     fn on_tab_navigation(&mut self, cx: &mut Context<Self>) {
+        self.tab_context = None;
         self.line_geometry.clear();
         self.mouse_selecting = false;
         self.status = "Switched editor tab".into();
@@ -402,11 +407,72 @@ impl NativeEditor {
         }
     }
 
+    fn show_tab_context(&mut self, index: usize, cx: &mut Context<Self>) {
+        // Flutter right-click targets the clicked tab without changing which
+        // editor is currently focused. Keep the target revision-bound.
+        self.tab_context = self.tabs.tab_guard_at(index);
+        cx.notify();
+    }
+
+    fn close_context_tab(&mut self, cx: &mut Context<Self>) {
+        let index = self
+            .tab_context
+            .as_ref()
+            .and_then(|guard| self.tabs.index_for_guard(guard));
+        self.tab_context = None;
+        if let Some(index) = index {
+            self.close_editor_tab(index, false, cx);
+        } else {
+            cx.notify();
+        }
+    }
+
+    fn close_context_other_tabs(&mut self, cx: &mut Context<Self>) {
+        let index = self
+            .tab_context
+            .as_ref()
+            .and_then(|guard| self.tabs.index_for_guard(guard));
+        self.tab_context = None;
+        if let Some(index) = index {
+            let result = self.tabs.close_clean_others(index);
+            self.status = format!(
+                "Closed {} other tab(s); {} unsaved tab(s) kept",
+                result.closed, result.blocked
+            );
+            self.line_geometry.clear();
+            if !self.tabs.is_empty() {
+                self.reveal_caret();
+            }
+        }
+        cx.notify();
+    }
+
+    fn close_context_tabs_to_right(&mut self, cx: &mut Context<Self>) {
+        let index = self
+            .tab_context
+            .as_ref()
+            .and_then(|guard| self.tabs.index_for_guard(guard));
+        self.tab_context = None;
+        if let Some(index) = index {
+            let result = self.tabs.close_clean_to_right(index);
+            self.status = format!(
+                "Closed {} tab(s) to right; {} unsaved tab(s) kept",
+                result.closed, result.blocked
+            );
+            self.line_geometry.clear();
+            if !self.tabs.is_empty() {
+                self.reveal_caret();
+            }
+        }
+        cx.notify();
+    }
+
     pub fn tabs_empty(&self) -> bool {
         self.tabs.is_empty()
     }
 
     pub fn close_editor_tab(&mut self, index: usize, discard: bool, cx: &mut Context<Self>) {
+        self.tab_context = None;
         let effect = self.tabs.close_tab(index, discard);
         self.status = effect.status();
         if effect.closed() {
@@ -1212,6 +1278,10 @@ impl Render for NativeEditor {
             .map(|index| self.tabs.drag_identity_at(index))
             .collect();
         let active_tab = self.tabs.active_index();
+        let context_target = self
+            .tab_context
+            .as_ref()
+            .and_then(|guard| self.tabs.index_for_guard(guard));
         let status = format!(
             "{} · Ln {} / {} Col {} · Undo {} / Redo {} · {}{}{}",
             self.status,
@@ -1306,6 +1376,18 @@ impl Render for NativeEditor {
                                                     label.title,
                                                     if label.dirty { " ●" } else { "" }
                                                 ))
+                                                .on_mouse_down(
+                                                    MouseButton::Right,
+                                                    cx.listener(move |this, _, _, cx| {
+                                                        this.show_tab_context(index, cx);
+                                                    }),
+                                                )
+                                                .on_mouse_up(
+                                                    MouseButton::Middle,
+                                                    cx.listener(move |this, _, _, cx| {
+                                                        this.close_editor_tab(index, false, cx);
+                                                    }),
+                                                )
                                                 .on_click(cx.listener(
                                                     move |this, _, window, cx| {
                                                         this.activate_tab(index, cx);
@@ -1381,6 +1463,63 @@ impl Render for NativeEditor {
                                 this.new_untitled_tab(window, cx);
                             })),
                     ),
+            )
+            // The actions are shown only for the tab actually right-clicked.
+            // They do not change the active editor and never force-close a
+            // dirty tab. Unlike a platform popup this slim inline menu stays
+            // within GPUI's own tab surface.
+            .child(
+                div()
+                    .id("editor-tab-context-actions")
+                    .when(context_target.is_some(), |menu| {
+                        menu.flex()
+                            .items_center()
+                            .gap_3()
+                            .px_3()
+                            .py_2()
+                            .border_b_1()
+                            .border_color(rgb(MUTED_TEXT))
+                            .bg(rgb(PANEL_BG))
+                            .text_sm()
+                            .child(
+                                div()
+                                    .id("editor-tab-context-close")
+                                    .cursor_pointer()
+                                    .child("Close")
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.close_context_tab(cx);
+                                    })),
+                            )
+                            .child(
+                                div()
+                                    .id("editor-tab-context-close-others")
+                                    .cursor_pointer()
+                                    .child("Close Others")
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.close_context_other_tabs(cx);
+                                    })),
+                            )
+                            .child(
+                                div()
+                                    .id("editor-tab-context-close-right")
+                                    .cursor_pointer()
+                                    .child("Close to Right")
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.close_context_tabs_to_right(cx);
+                                    })),
+                            )
+                            .child(
+                                div()
+                                    .id("editor-tab-context-cancel")
+                                    .cursor_pointer()
+                                    .text_color(rgb(MUTED_TEXT))
+                                    .child("Cancel")
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.tab_context = None;
+                                        cx.notify();
+                                    })),
+                            )
+                    }),
             )
             .child(
                 div()

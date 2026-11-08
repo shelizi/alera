@@ -90,10 +90,24 @@ impl EditorTabs {
     }
 
     pub fn active_save_guard(&self) -> Option<EditorSaveGuard> {
+        self.tab_guard_at(self.active?)
+    }
+
+    /// A stable contextual tab target. Unlike a bare index or path, it becomes
+    /// stale if the user closes/reopens, changes or reorders the tab list.
+    pub fn tab_guard_at(&self, index: usize) -> Option<EditorSaveGuard> {
         Some(EditorSaveGuard {
-            identity: self.drag_identity_at(self.active?)?,
+            identity: self.drag_identity_at(index)?,
             revision: self.revision,
         })
+    }
+
+    pub fn index_for_guard(&self, guard: &EditorSaveGuard) -> Option<usize> {
+        if self.revision != guard.revision {
+            return None;
+        }
+        (0..self.tabs.len())
+            .find(|&index| self.drag_identity_at(index).as_ref() == Some(&guard.identity))
     }
 
     /// Ignore late OS-dialog responses if the user changed, closed, opened
@@ -822,5 +836,40 @@ mod tests {
         assert_eq!(fs::read_to_string(&occupied).unwrap(), "untouched");
         assert_eq!(tabs.document().unwrap().path(), Some(named.as_path()));
         assert!(!new_path.exists());
+    }
+
+    #[test]
+    fn right_click_context_targets_inactive_tab_and_never_drops_dirty_neighbors() {
+        let workspace = tempfile::tempdir().unwrap();
+        let root = workspace.path();
+        let paths: Vec<_> = ["a.txt", "b.txt", "c.txt", "d.txt"]
+            .iter()
+            .map(|name| root.join(name))
+            .collect();
+        let mut tabs = EditorTabs::new(None);
+        for path in &paths {
+            fs::write(path, path.file_name().unwrap().to_string_lossy().as_bytes()).unwrap();
+            tabs.open_file(root, path).unwrap();
+        }
+        tabs.activate(2);
+        tabs.document_mut()
+            .unwrap()
+            .replace(None, "not saved")
+            .unwrap();
+        tabs.activate(3);
+        let right_clicked = tabs.tab_guard_at(1).unwrap();
+        assert_eq!(tabs.index_for_guard(&right_clicked), Some(1));
+        assert_eq!(tabs.document().unwrap().path(), Some(paths[3].as_path()));
+
+        // A context action on b does not first switch the current editor:
+        // only clean tabs to b's right close, dirty c remains untouched.
+        let result = tabs.close_clean_to_right(tabs.index_for_guard(&right_clicked).unwrap());
+        assert_eq!(result.closed, 1);
+        assert_eq!(result.blocked, 1);
+        assert_eq!(tabs.tab_labels().len(), 3);
+        assert_eq!(tabs.document().unwrap().path(), Some(paths[2].as_path()));
+        assert!(tabs.document().unwrap().is_dirty());
+        assert!(tabs.index_for_guard(&right_clicked).is_none());
+        assert_eq!(fs::read_to_string(&paths[2]).unwrap(), "c.txt");
     }
 }

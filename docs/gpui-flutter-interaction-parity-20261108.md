@@ -70,5 +70,28 @@ the total open tabs to 24 rather than allocating unbounded state.
   headless Rust suite after this change passed **186/186**; Windows native
   executable compiled successfully. Live OS-dialog acceptance remains open.
 
+## Follow-up: Editor tab right-click and middle-click actions
+
+- Right-click on a native editor tab opens a compact in-workbench action bar
+  for **Close**, **Close Others**, **Close to Right** and **Cancel**. This is an
+  inline GPUI action bar, not yet a pointer-anchored native popup.
+- The right-click target is the clicked tab, **not automatically the active
+  editor**. Its revision-bound identity prevents a stale context from
+  addressing another tab after an intervening reorder or close.
+- Middle-click a tab to close it, but only when safe; no implicit discard of
+  unsaved file edits or recovered scratch content. Contextual Close likewise
+  refuses unsaved tabs. Explicit two-step discard remains available through
+  the tab's Close / Confirm control.
+- Close Others and Close to Right operate relative to the right-clicked tab,
+  skipping dirty neighbors. A headless regression tests closing to the
+  right of a non-active tab with another dirty tab and unchanged disk content.
+- Complete GPUI headless Rust tests: **187/187 PASS**. Windows native GPUI
+  binary compiles successfully after resolving a GPUI 0.2.2 conditional
+  element builder type mismatch. Live Windows mouse-event/position/focus
+  testing is still required before calling this interaction accepted.
+
+Remaining: terminal/agent unified context-menu actions, native popup
+placement, drag between pane groups, and GUI acceptance on high-DPI Windows.
+
 Production `main`, existing Host sessions, and Flutter releases are not
 changed. Keep `supported=false`; no push/tag/release.
