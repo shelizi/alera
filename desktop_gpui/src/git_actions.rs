@@ -2,6 +2,7 @@
 //! this module; a native click starts a bounded background operation.
 //! No command invokes reset --hard, rebase, shell or force push. Merges use
 //! explicit local git2 operations and refuse unresolved conflicts.
+use alera_core::git_cli::git_in_dir;
 use git2::{build::CheckoutBuilder, BranchType, Repository, StatusOptions};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
@@ -12,6 +13,164 @@ pub struct GitActions {
 }
 
 impl GitActions {
+    /// Only local changes already tracked by Git are stashed. New, untracked
+    /// files remain in place; hiding them without explicit consent is unsafe.
+    /// This never drops an older stash entry.
+    pub fn stash_tracked_changes(&mut self) -> Result<String, String> {
+        if self
+            .repo
+            .index()
+            .map_err(|error| error.to_string())?
+            .has_conflicts()
+        {
+            return Err("Resolve index conflicts before creating a stash".into());
+        }
+        let mut options = StatusOptions::new();
+        options.include_untracked(false);
+        let changed = self
+            .repo
+            .statuses(Some(&mut options))
+            .map_err(|error| error.to_string())?
+            .iter()
+            .any(|entry| {
+                let status = entry.status();
+                !status.is_empty()
+                    && status != git2::Status::WT_NEW
+                    && status != git2::Status::IGNORED
+            });
+        if !changed {
+            return Err("No tracked changes to stash; untracked files are left untouched".into());
+        }
+        let signature = self.repo.signature().map_err(|_| {
+            "Configure Git user.name/user.email before creating a stash".to_string()
+        })?;
+        let oid = self
+            .repo
+            .stash_save(&signature, "Alera Native tracked changes", None)
+            .map_err(|error| error.to_string())?;
+        Ok(format!(
+            "Saved tracked changes to stash {} (untracked files kept)",
+            &oid.to_string()[..8]
+        ))
+    }
+
+    /// Apply without consuming the stash. If conflicts arise libgit2 may
+    /// leave conflict markers/index stages; the user's stash stays recoverable.
+    pub fn apply_latest_stash(&mut self) -> Result<String, String> {
+        self.require_clean_worktree()?;
+        self.repo
+            .stash_apply(0, None)
+            .map_err(|error| format!("Could not apply latest stash; stash retained: {error}"))?;
+        Ok("Applied latest stash; original stash retained until explicitly dropped".into())
+    }
+
+    /// Resolve only the current local branch's exact configured upstream.
+    /// Arbitrary refspec, upstream-branch inference or force flags supplied
+    /// through the UI are never accepted.
+    fn current_tracking(&self) -> Result<(String, String, String), String> {
+        let head = self.repo.head().map_err(|error| error.to_string())?;
+        if !head.is_branch() {
+            return Err("Pull/Push requires a checked-out local branch".into());
+        }
+        let current = head
+            .shorthand()
+            .map_err(|_| "Current Git branch name unavailable")?;
+        if !valid_branch(current) {
+            return Err("Current Git branch name is unsafe".into());
+        }
+        let branch = self
+            .repo
+            .find_branch(current, BranchType::Local)
+            .map_err(|error| error.to_string())?;
+        let upstream = branch.upstream().map_err(|_| {
+            "Current branch has no configured upstream; publish/configure it in Git first"
+                .to_string()
+        })?;
+        let config = self.repo.config().map_err(|error| error.to_string())?;
+        let remote = config
+            .get_string(&format!("branch.{current}.remote"))
+            .map_err(|_| "Current branch has no configured remote".to_string())?;
+        let target = config
+            .get_string(&format!("branch.{current}.merge"))
+            .map_err(|_| "Current branch has no configured upstream ref".to_string())?;
+        let remote_branch = target
+            .strip_prefix("refs/heads/")
+            .ok_or("Upstream is not a remote branch")?;
+        if remote.is_empty()
+            || !remote
+                .bytes()
+                .next()
+                .is_some_and(|ch| ch.is_ascii_alphanumeric())
+            || !remote
+                .bytes()
+                .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, b'-' | b'_' | b'.'))
+            || !valid_branch(remote_branch)
+        {
+            return Err("Remote or upstream branch name is unsafe".into());
+        }
+        let expected = format!("refs/remotes/{remote}/{remote_branch}");
+        if upstream.get().name().map_err(|error| error.to_string())? != expected {
+            return Err("Custom upstream ref mapping is unsupported for Native Pull/Push".into());
+        }
+        self.repo
+            .find_remote(&remote)
+            .map_err(|_| "Configured Git remote unavailable".to_string())?;
+        Ok((current.to_owned(), remote, remote_branch.to_owned()))
+    }
+
+    /// Safe default: git CLI uses the user's existing credential helper
+    /// (libgit2 was built without HTTPS/SSH), only --ff-only is allowed, and
+    /// worktree/index/untracked files must be clean first.
+    pub fn pull_ff_only(&self) -> Result<String, String> {
+        let (current, remote, upstream) = self.current_tracking()?;
+        self.require_clean_worktree()?;
+        let refspec = format!("refs/heads/{upstream}");
+        git_in_dir(
+            &self.root,
+            &["pull", "--ff-only", "--no-rebase", "--", &remote, &refspec],
+        )
+        .map_err(|_| "Fast-forward Pull failed; check upstream access and branch divergence. Inspect Git status before retrying".to_string())?;
+        Ok(format!(
+            "Pulled {remote}/{upstream} into {current} (fast-forward only)"
+        ))
+    }
+
+    /// Never force-push and never publish to an arbitrary user-supplied
+    /// destination. Reject known divergence locally; the server additionally
+    /// rejects any race where remote history changed after our last Fetch.
+    pub fn push_current_upstream(&self) -> Result<String, String> {
+        let (current, remote, upstream) = self.current_tracking()?;
+        let head = self
+            .repo
+            .head()
+            .and_then(|head| head.peel_to_commit())
+            .map_err(|error| error.to_string())?;
+        let tracking = self
+            .repo
+            .find_reference(&format!("refs/remotes/{remote}/{upstream}"))
+            .and_then(|reference| reference.peel_to_commit())
+            .map_err(|_| "Upstream tracking ref unavailable; Fetch before Push".to_string())?;
+        if head.id() != tracking.id()
+            && !self
+                .repo
+                .graph_descendant_of(head.id(), tracking.id())
+                .map_err(|error| error.to_string())?
+        {
+            return Err(
+                "Push refused: local branch diverged from its last fetched upstream".into(),
+            );
+        }
+        let refspec = format!("refs/heads/{current}:refs/heads/{upstream}");
+        git_in_dir(
+            &self.root,
+            &["push", "--porcelain", "--", &remote, &refspec],
+        )
+        .map_err(|_| "Normal Push failed; no force attempted. Check upstream status, server permissions and Git credential helper".to_string())?;
+        Ok(format!(
+            "Pushed {current} to {remote}/{upstream} without force"
+        ))
+    }
+
     fn require_clean_worktree(&self) -> Result<(), String> {
         let mut options = StatusOptions::new();
         options.include_untracked(true).recurse_untracked_dirs(true);
@@ -370,8 +529,9 @@ impl GitActions {
         ))
     }
 
-    /// Explicit user click only. Credentials are never harvested from GPUI;
-    /// git2's configured transport handles the remote or reports an error.
+    /// Fetch through the system Git credential helper (libgit2 in this
+    /// workspace has HTTPS/SSH disabled). Auto Fetch is noninteractive; users
+    /// must authenticate through their normal Git tooling if required.
     pub fn fetch_current_remote(&self) -> Result<(), String> {
         let remote_name = self
             .repo
@@ -389,14 +549,22 @@ impl GitActions {
                             .ok_or("No configured Git remote".to_string())
                     })
             })?;
-        let mut remote = self
-            .repo
-            .find_remote(&remote_name)
-            .map_err(|error| error.to_string())?;
-        let refspecs: [&str; 0] = [];
-        remote
-            .fetch(&refspecs, None, Some("Alera GPUI explicit fetch"))
-            .map_err(|error| error.to_string())
+        // -- separates even a remote whose configured name resembles an
+        // option. Do not pass Git stderr to the UI: URLs may embed secrets.
+        git_in_dir(
+            &self.root,
+            &[
+                "-c",
+                "credential.interactive=never",
+                "fetch",
+                "--",
+                &remote_name,
+            ],
+        )
+        .map(|_| ())
+        .map_err(|_| {
+            "Git Fetch failed; check configured remote and noninteractive credentials".into()
+        })
     }
 }
 
@@ -432,6 +600,7 @@ mod tests {
         let sig = Signature::now("Fixture", "fixture@example.invalid").unwrap();
         repo.commit(Some("HEAD"), &sig, &sig, "initial", &tree, &[])
             .unwrap();
+        index.write().unwrap();
         drop(tree);
         drop(repo);
         let root = dunce::canonicalize(dir.path()).unwrap();
@@ -729,5 +898,197 @@ mod tests {
             "leave me"
         );
         assert!(!dir.path().join("theirs.txt").exists());
+    }
+
+    #[test]
+    fn stash_save_and_apply_preserve_untracked_files_and_stash_identity() {
+        let (dir, mut actions) = repo_fixture();
+        let before = actions.repo.head().unwrap().target().unwrap();
+        let original = fs::read(dir.path().join("a.txt")).unwrap();
+        fs::write(dir.path().join("a.txt"), "unsaved tracked edits").unwrap();
+        fs::write(dir.path().join("untracked.txt"), "personal untracked").unwrap();
+        assert!(actions
+            .stash_tracked_changes()
+            .unwrap()
+            .contains("Saved tracked"));
+        assert_eq!(fs::read(dir.path().join("a.txt")).unwrap(), original);
+        assert_eq!(
+            fs::read_to_string(dir.path().join("untracked.txt")).unwrap(),
+            "personal untracked"
+        );
+        // Failed application must not remove the stash or touch an untracked
+        // file the user created after saving their tracked changes.
+        assert!(actions.apply_latest_stash().is_err());
+        fs::remove_file(dir.path().join("untracked.txt")).unwrap();
+        assert!(actions.apply_latest_stash().unwrap().contains("retained"));
+        assert_eq!(
+            fs::read_to_string(dir.path().join("a.txt")).unwrap(),
+            "unsaved tracked edits"
+        );
+        let mut entries = Vec::new();
+        actions
+            .repo
+            .stash_foreach(|index, _message, oid| {
+                entries.push((index, *oid));
+                true
+            })
+            .unwrap();
+        assert_eq!(entries.len(), 1, "Apply must never silently pop the stash");
+        assert!(actions.apply_latest_stash().is_err());
+        assert_eq!(actions.repo.head().unwrap().target().unwrap(), before);
+        assert!(actions.stash_tracked_changes().is_ok());
+    }
+
+    #[test]
+    fn stash_refuses_missing_tracked_changes_and_keeps_untracked_files() {
+        let (dir, mut actions) = repo_fixture();
+        fs::write(dir.path().join("untracked.txt"), "only untracked").unwrap();
+        assert!(actions
+            .stash_tracked_changes()
+            .unwrap_err()
+            .contains("No tracked"));
+        assert!(actions.apply_latest_stash().is_err());
+        assert_eq!(
+            fs::read_to_string(dir.path().join("untracked.txt")).unwrap(),
+            "only untracked"
+        );
+    }
+
+    fn bare_remote_fixture() -> (tempfile::TempDir, tempfile::TempDir, GitActions, String) {
+        let (work, actions) = repo_fixture();
+        let remote = tempfile::tempdir().unwrap();
+        let bare = Repository::init_bare(remote.path()).unwrap();
+        let current = actions.repo.head().unwrap().shorthand().unwrap().to_owned();
+        bare.set_head(&format!("refs/heads/{current}")).unwrap();
+        let remote_path = remote.path().to_str().unwrap();
+        git_in_dir(actions.root(), &["remote", "add", "origin", remote_path]).unwrap();
+        let refspec = format!("refs/heads/{current}");
+        git_in_dir(actions.root(), &["push", "-u", "origin", &refspec]).unwrap();
+        assert_eq!(
+            actions.current_tracking().unwrap(),
+            (current.clone(), "origin".into(), current.clone())
+        );
+        (work, remote, actions, current)
+    }
+
+    #[test]
+    fn explicit_push_and_ff_pull_exchange_commits_through_configured_local_remote() {
+        let (work, remote, actions, branch) = bare_remote_fixture();
+        let first = actions.repo.head().unwrap().peel_to_commit().unwrap().id();
+        actions
+            .fetch_current_remote()
+            .expect("CLI Fetch works with configured local remote");
+        let ours = fixture_commit(&actions, "a.txt", "local update", "local new");
+        assert!(actions
+            .push_current_upstream()
+            .unwrap()
+            .contains("without force"));
+        assert_eq!(
+            Repository::open_bare(remote.path())
+                .unwrap()
+                .find_reference(&format!("refs/heads/{branch}"))
+                .unwrap()
+                .target()
+                .unwrap(),
+            ours
+        );
+        assert_ne!(first, ours);
+        let second = tempfile::tempdir().unwrap();
+        let clone = second.path().join("clone");
+        git_in_dir(
+            second.path(),
+            &[
+                "clone",
+                remote.path().to_str().unwrap(),
+                clone.to_str().unwrap(),
+            ],
+        )
+        .unwrap();
+        let clone_actions = GitActions::open(&dunce::canonicalize(&clone).unwrap()).unwrap();
+        let remote_tip = fixture_commit(&clone_actions, "a.txt", "remote update", "remote new");
+        let refspec = format!("refs/heads/{branch}");
+        git_in_dir(&clone, &["push", "origin", &refspec]).unwrap();
+        assert!(actions.pull_ff_only().unwrap().contains("fast-forward"));
+        assert_eq!(
+            actions.repo.head().unwrap().peel_to_commit().unwrap().id(),
+            remote_tip
+        );
+        assert_eq!(
+            fs::read_to_string(work.path().join("a.txt")).unwrap(),
+            "remote update"
+        );
+        assert!(actions.repo.statuses(None).unwrap().is_empty());
+    }
+
+    #[test]
+    fn pull_never_merges_divergence_or_overwrites_dirty_workspace() {
+        let (work, remote, actions, branch) = bare_remote_fixture();
+        let second = tempfile::tempdir().unwrap();
+        let clone = second.path().join("clone");
+        git_in_dir(
+            second.path(),
+            &[
+                "clone",
+                remote.path().to_str().unwrap(),
+                clone.to_str().unwrap(),
+            ],
+        )
+        .unwrap();
+        let clone_actions = GitActions::open(&dunce::canonicalize(&clone).unwrap()).unwrap();
+        fixture_commit(
+            &clone_actions,
+            "remote.txt",
+            "remote change",
+            "upstream diverges",
+        );
+        let refspec = format!("refs/heads/{branch}");
+        git_in_dir(&clone, &["push", "origin", &refspec]).unwrap();
+        let ours = fixture_commit(&actions, "a.txt", "local divergence", "local diverges");
+        assert!(
+            actions.pull_ff_only().is_err(),
+            "Diverged histories must not auto merge"
+        );
+        assert_eq!(
+            actions.repo.head().unwrap().peel_to_commit().unwrap().id(),
+            ours
+        );
+        assert_eq!(
+            fs::read_to_string(work.path().join("a.txt")).unwrap(),
+            "local divergence"
+        );
+        assert!(!work.path().join("remote.txt").exists());
+        assert!(
+            actions.push_current_upstream().is_err(),
+            "Non-FF push must be rejected"
+        );
+        fs::write(work.path().join("untracked.txt"), "private").unwrap();
+        assert!(
+            actions.pull_ff_only().is_err(),
+            "Untracked files block Pull"
+        );
+        assert_eq!(
+            fs::read_to_string(work.path().join("untracked.txt")).unwrap(),
+            "private"
+        );
+        assert_eq!(
+            actions.repo.head().unwrap().peel_to_commit().unwrap().id(),
+            ours
+        );
+    }
+
+    #[test]
+    fn upstream_only_remote_actions_refuse_unpublished_branches() {
+        let (dir, actions) = repo_fixture();
+        let head = actions.repo.head().unwrap().peel_to_commit().unwrap().id();
+        assert!(actions.pull_ff_only().is_err());
+        assert!(actions.push_current_upstream().is_err());
+        assert_eq!(
+            actions.repo.head().unwrap().peel_to_commit().unwrap().id(),
+            head
+        );
+        assert_eq!(
+            fs::read_to_string(dir.path().join("a.txt")).unwrap(),
+            "before"
+        );
     }
 }
