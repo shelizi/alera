@@ -4,6 +4,135 @@
 use super::*;
 
 impl Workbench {
+    /// Classic's single + button creates a File/Terminal, while the optional
+    /// Host session list remains an action rather than pretending to be a tab.
+    pub(super) fn kit_new_tab_menu(
+        owner: gpui::WeakEntity<Self>,
+        running: Vec<(String, String)>,
+        terminal_create_busy: bool,
+        terminal_create_timed_out: bool,
+    ) -> impl Fn(
+        gpui_kit::component::menu::PopupMenu,
+        &mut Window,
+        &mut Context<gpui_kit::component::menu::PopupMenu>,
+    ) -> gpui_kit::component::menu::PopupMenu
+           + 'static {
+        move |mut menu, _, _| {
+            let new_file_owner = owner.clone();
+            menu = menu.item(PopupMenuItem::new("New File").on_click(move |_, _, cx| {
+                let _ = new_file_owner.update(cx, |view, cx| view.new_editor(cx));
+            }));
+            let new_terminal_owner = owner.clone();
+            menu = menu.item(
+                PopupMenuItem::new("New Terminal").on_click(move |_, _, cx| {
+                    let _ = new_terminal_owner.update(cx, |view, cx| view.create_host_terminal(cx));
+                }),
+            );
+            if terminal_create_timed_out {
+                let retry_owner = owner.clone();
+                menu = menu.item(PopupMenuItem::new("Retry terminal confirmation").on_click(
+                    move |_, _, cx| {
+                        let _ = retry_owner
+                            .update(cx, |view, cx| view.retry_host_terminal_confirmation(cx));
+                    },
+                ));
+            }
+            if terminal_create_busy {
+                let cancel_owner = owner.clone();
+                menu = menu.item(PopupMenuItem::new("Cancel waiting for terminal").on_click(
+                    move |_, _, cx| {
+                        let _ = cancel_owner
+                            .update(cx, |view, cx| view.cancel_host_terminal_confirmation(cx));
+                    },
+                ));
+            }
+            menu = menu.label("Attach running Host session");
+            if running.is_empty() {
+                menu = menu.label("No running Host sessions");
+            }
+            for (handle, title) in running.iter().cloned() {
+                let owner = owner.clone();
+                menu = menu.item(PopupMenuItem::new(title).on_click(move |_, _, cx| {
+                    let _ = owner.update(cx, |view, cx| {
+                        // Recheck Host identity at click-time. Refreshing the
+                        // menu must never attach to a recycled/stopped tab.
+                        if view
+                            .terminals
+                            .sessions
+                            .iter()
+                            .any(|session| session.running && session.handle == handle)
+                        {
+                            view.explorer_preview_active = false;
+                            view.select_terminal(handle.clone(), cx);
+                        } else {
+                            view.model.set_status("Host session stopped; cannot attach");
+                            cx.notify();
+                        }
+                    });
+                }));
+            }
+            menu.scrollable(true).max_h(px(320.0))
+        }
+    }
+
+    pub(super) fn kit_pane_actions_menu(
+        owner: gpui::WeakEntity<Self>,
+        active: Option<WorkbenchTabIdentity>,
+        active_in_secondary: bool,
+        has_secondary: bool,
+    ) -> impl Fn(
+        gpui_kit::component::menu::PopupMenu,
+        &mut Window,
+        &mut Context<gpui_kit::component::menu::PopupMenu>,
+    ) -> gpui_kit::component::menu::PopupMenu
+           + 'static {
+        move |mut menu, _, _| {
+            if let Some(active) = active.clone() {
+                let split_owner = owner.clone();
+                let label = if active_in_secondary {
+                    "Move tab to first pane"
+                } else {
+                    "Move tab to second pane"
+                };
+                let action = if active_in_secondary {
+                    MixedContextAction::FirstPane
+                } else {
+                    MixedContextAction::SecondPane
+                };
+                menu = menu.item(PopupMenuItem::new(label).on_click(move |_, window, cx| {
+                    let _ = split_owner.update(cx, |view, cx| {
+                        if view.mixed_tab_is_current(&active, cx) {
+                            view.mixed_tab_context = Some(active.clone());
+                            view.apply_mixed_tab_context(action, window, cx);
+                        }
+                    });
+                }));
+            }
+            if has_secondary {
+                let axis_owner = owner.clone();
+                menu = menu.item(PopupMenuItem::new("Switch split direction").on_click(
+                    move |_, _, cx| {
+                        let _ = axis_owner.update(cx, |view, cx| {
+                            view.mixed_panes.toggle_axis();
+                            view.save_mixed_pane_layout(cx);
+                            cx.notify();
+                        });
+                    },
+                ));
+                let owner = owner.clone();
+                menu = menu.item(PopupMenuItem::new("Close split pane").on_click(
+                    move |_, _, cx| {
+                        let _ = owner.update(cx, |view, cx| view.unsplit_mixed_panes(cx));
+                    },
+                ));
+            }
+            if active.is_none() && !has_secondary {
+                menu = menu.label("Open a tab to split");
+            }
+            menu
+        }
+    }
+
     /// GPUI Kit positions, focuses, and dismisses this menu. The callback
     /// revalidates the exact Explorer target at action time to avoid sending
     /// a stale or off-workspace path into file-system operations.

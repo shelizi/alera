@@ -96,6 +96,16 @@ impl WorkbenchTabs {
         self.tabs.iter().any(|tab| &tab.identity == id)
     }
 
+    /// Keep the mixed strip's highlighted tab in step with actual pane focus.
+    /// Selecting another tab never changes the underlying Host/Editor owner.
+    pub fn select(&mut self, id: &WorkbenchTabIdentity) -> bool {
+        if !self.contains(id) || self.active.as_ref() == Some(id) {
+            return false;
+        }
+        self.active = Some(id.clone());
+        true
+    }
+
     /// A stale drag source or target is ignored, never redirected to a tab
     /// which happens to occupy the same index after a close/reopen.
     /// Move a tab into the target's slot (the same drop semantics as the
@@ -216,6 +226,20 @@ mod tests {
             .iter()
             .any(|item| item.kind == WorkbenchTabKind::Agent));
         assert!(!tabs.contains(&old_editor.identity));
+    }
+
+    #[test]
+    fn selecting_a_tab_updates_the_mixed_active_indicator() {
+        let first = editor(1, 1);
+        let second = editor(1, 2);
+        let mut tabs = WorkbenchTabs::for_workspace(2);
+        tabs.reconcile(2, vec![first.clone(), second.clone()], None);
+        assert_eq!(tabs.active(), Some(&first.identity));
+        assert!(tabs.select(&second.identity));
+        assert_eq!(tabs.active(), Some(&second.identity));
+        assert!(!tabs.select(&second.identity));
+        assert!(!tabs.select(&editor(1, 99).identity));
+        assert_eq!(tabs.active(), Some(&second.identity));
     }
 
     #[test]

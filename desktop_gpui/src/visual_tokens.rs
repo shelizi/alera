@@ -7,6 +7,7 @@ pub const PANEL: u32 = 0x202020; // Flutter surfaceVariant.
 pub const TOOLBAR: u32 = 0x181818; // Flutter surface.
 pub const ELEVATED: u32 = 0x242424;
 pub const BORDER: u32 = 0x272727; // Flutter borderSubtle.
+pub const BORDER_ACTIVE: u32 = 0x323232; // Flutter border (active tab outline).
 pub const TEXT: u32 = 0xf5f5f5;
 pub const MUTED: u32 = 0xa1a1a1;
 pub const FAINT: u32 = 0x606060;
@@ -35,6 +36,7 @@ mod tests {
             ("surfaceVariant", PANEL),
             ("surfaceElevated", ELEVATED),
             ("borderSubtle", BORDER),
+            ("border", BORDER_ACTIVE),
             ("foreground", TEXT),
             ("foregroundMuted", MUTED),
             ("foregroundFaint", FAINT),

@@ -50,8 +50,9 @@ use alera_gpui_desktop::terminal::{
 };
 use alera_gpui_desktop::terminal_panes::{TerminalPaneLayout, TerminalSplitDirection};
 use alera_gpui_desktop::visual_tokens::{
-    ACTIVE, BG, BORDER, MUTED, PANEL, PROJECTS_SIDEBAR_WIDTH, RIGHT_SIDEBAR_WIDTH,
-    SECTION_HEADER_HEIGHT, STATUS_BAR_HEIGHT, TAB_STRIP_HEIGHT, TEXT, TOOLBAR, TOP_BAR_HEIGHT,
+    ACTIVE, BG, BORDER, BORDER_ACTIVE, ELEVATED, MUTED, PANEL, PROJECTS_SIDEBAR_WIDTH,
+    RIGHT_SIDEBAR_WIDTH, SECTION_HEADER_HEIGHT, STATUS_BAR_HEIGHT, TAB_STRIP_HEIGHT, TEXT, TOOLBAR,
+    TOP_BAR_HEIGHT,
 };
 use alera_gpui_desktop::vt_screen::StyledRow;
 use alera_gpui_desktop::workbench_layout_store::{
@@ -4614,6 +4615,14 @@ impl Workbench {
             self.mixed_panes.activate(&identity);
         }
         self.apply_restored_mixed_panes(cx);
+        // Classic has one active content tab per pane. In unsplit mode the
+        // mixed strip is authoritative even after session restoration, when
+        // the legacy center_view flag can still point at an empty Terminal.
+        if !self.mixed_panes.has_secondary() {
+            if let Some(active) = self.mixed_tabs.active() {
+                self.mixed_panes.activate(active);
+            }
+        }
         if !self
             .mixed_tab_context
             .as_ref()
@@ -4749,6 +4758,7 @@ impl Workbench {
         }
         self.mixed_tab_context = None;
         self.explorer_preview_active = false;
+        self.mixed_tabs.select(id);
         self.mixed_panes.activate(id);
         match id {
             WorkbenchTabIdentity::Host(target) => {
@@ -5348,8 +5358,9 @@ impl Render for Workbench {
             .map(|(index, tab)| (index, tab.title.clone(), tab.transient))
             .collect();
         let active_tab = self.model.active_tab();
+        let active_primary_identity = self.mixed_panes.active_in(PaneSlot::Primary);
         let primary_is_editor = matches!(
-            self.mixed_panes.active_in(PaneSlot::Primary),
+            active_primary_identity,
             Some(WorkbenchTabIdentity::Editor { .. })
         );
         // Each pane owns an independent native editor viewport and its own
@@ -5359,17 +5370,20 @@ impl Render for Workbench {
                 self.mixed_panes.active_in(PaneSlot::Secondary),
                 Some(WorkbenchTabIdentity::Editor { .. })
             );
-        let showing_explorer_preview =
-            self.explorer_preview_active && self.model.active_document().is_some();
+        // On restart the old read-only preview owner may restore tabs before
+        // any NativeEditor/Host mixed tab exists. Classic opens the selected
+        // restored file, not a misleading empty Terminal behind file chips.
+        let showing_explorer_preview = (self.explorer_preview_active
+            || self.mixed_tabs.entries().is_empty())
+            && self.model.active_document().is_some();
         let center_is_editor = if showing_explorer_preview {
             true
-        } else if mixed_has_secondary {
+        } else if active_primary_identity.is_some() {
             primary_is_editor
         } else {
+            // Empty workbench fallback only; a real tab selection owns mode.
             self.center_view == CenterView::Editor
         };
-        let show_preview_tabs =
-            center_is_editor && (self.editor.is_none() || showing_explorer_preview);
         let show_editor_toolbar = center_is_editor || mixed_editor_in_secondary;
         let editor = self.editor.clone();
         let toolbar_editor = self.focused_editor();
@@ -5563,7 +5577,6 @@ impl Render for Workbench {
             - TOP_BAR_HEIGHT
             - STATUS_BAR_HEIGHT
             - TAB_STRIP_HEIGHT
-            - SECTION_HEADER_HEIGHT
             - 26.0
             - 22.0
             - 45.0
@@ -6881,151 +6894,15 @@ impl Render for Workbench {
                             .flex_col()
                             .child(
                                 div()
-                                    .id("center-mode-switch")
-                                    .h(px(SECTION_HEADER_HEIGHT))
-                                    .bg(rgb(TOOLBAR))
-                                    .flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .px_3()
-                                    .child(
-                                        div()
-                                            .id("center-terminal-tab")
-                                            .cursor_pointer()
-                                            .flex()
-                                            .items_center()
-                                            .gap_2()
-                                            .text_color(rgb(if center_is_editor { MUTED } else { TEXT }))
-                                            .child(icon(UiIcon::Terminal, 16.0, if center_is_editor { MUTED } else { TEXT }))
-                                            .child("Terminal")
-                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                this.explorer_preview_active = false;
-                                                this.center_view = CenterView::Terminal;
-                                                this.refresh_terminals(cx);
-                                                cx.notify();
-                                            })),
-                                    )
-                                    .child(
-                                        icon_button("terminal-create-new", UiIcon::Add, "New Terminal (requires Runtime Host)", terminal_creating)
-                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                this.create_host_terminal(cx);
-                                            })),
-                                    )
-                                    .child(
-                                        icon_button("center-create-untitled", UiIcon::NewFile, "Create untitled file (autosaved draft)", false)
-                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                this.new_editor(cx);
-                                            })),
-                                    )
-                                    .child(if terminal_create_timed_out {
-                                        div()
-                                            .id("terminal-confirmation-retry")
-                                            .cursor_pointer()
-                                            .text_sm()
-                                            .text_color(rgb(TEXT))
-                                            .child("Retry confirmation")
-                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                this.retry_host_terminal_confirmation(cx);
-                                            }))
-                                            .into_any_element()
-                                    } else {
-                                        div().h(px(0.0)).into_any_element()
-                                    })
-                                    .child(if terminal_create_busy {
-                                        div()
-                                            .id("terminal-confirmation-cancel")
-                                            .cursor_pointer()
-                                            .text_sm()
-                                            .text_color(rgb(MUTED))
-                                            .child("Cancel waiting")
-                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                this.cancel_host_terminal_confirmation(cx);
-                                            }))
-                                            .into_any_element()
-                                    } else {
-                                        div().h(px(0.0)).into_any_element()
-                                    })
-                                    .child({
-                                        let owner = cx.entity().downgrade();
-                                        let refresh_owner = owner.clone();
-                                        let running = self
-                                            .terminals
-                                            .sessions
-                                            .iter()
-                                            .filter(|session| session.running)
-                                            .map(|session| {
-                                                (
-                                                    session.handle.clone(),
-                                                    format!(
-                                                        "{} · {}",
-                                                        session.label(),
-                                                        session.workspace_id
-                                                    ),
-                                                )
-                                            })
-                                            .collect::<Vec<_>>();
-                                        native_components::select_trigger(
-                                            "terminal-attach-existing",
-                                            "Attach session",
-                                            false,
-                                        )
-                                        .dropdown_menu(move |mut menu, _, _| {
-                                            if running.is_empty() {
-                                                menu = menu.label("No running Host sessions");
-                                            }
-                                            for (handle, label) in running.iter().cloned() {
-                                                let owner = owner.clone();
-                                                menu = menu.item(
-                                                    PopupMenuItem::new(label)
-                                                        .on_click(move |_, _, cx| {
-                                                            let _ = owner.update(cx, |view, cx| {
-                                                                view.explorer_preview_active = false;
-                                                                view.center_view = CenterView::Terminal;
-                                                                if view.terminals.sessions.iter().any(|session| session.running && session.handle == handle) {
-                                                                    view.select_terminal(handle.clone(), cx);
-                                                                } else {
-                                                                    view.model.set_status("Host session stopped; cannot attach");
-                                                                    cx.notify();
-                                                                }
-                                                            });
-                                                        }),
-                                                );
-                                            }
-                                            menu.scrollable(true).max_h(px(320.0))
-                                        })
-                                        .on_open_change(move |open, _, cx| {
-                                            if *open {
-                                                let _ = refresh_owner.update(cx, |view, cx| {
-                                                    view.refresh_terminals(cx);
-                                                });
-                                            }
-                                        })
-                                    })
-                                    .child(
-                                        div()
-                                            .id("center-editor-tab")
-                                            .cursor_pointer()
-                                            .flex()
-                                            .items_center()
-                                            .gap_2()
-                                            .text_color(rgb(if center_is_editor { TEXT } else { MUTED }))
-                                            .child(icon(UiIcon::File, 16.0, if center_is_editor { TEXT } else { MUTED }))
-                                            .child("Editor")
-                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                this.explorer_preview_active = false;
-                                                this.center_view = CenterView::Editor;
-                                                cx.notify();
-                                            })),
-                                    ),
-                            )
-                            .child(
-                                div()
                                     .id("mixed-workbench-tab-strip")
+                                    // Flutter Classic uses ONE 44px mixed content
+                                    // strip. Terminal/Editor are tab kinds, not
+                                    // top-level navigation modes.
                                     .h(px(TAB_STRIP_HEIGHT))
                                     .min_w_0()
                                     .flex()
                                     .items_center()
-                                    .bg(rgb(PANEL))
+                                    .bg(rgb(TOOLBAR))
                                     .border_b_1()
                                     .border_color(rgb(BORDER))
                                     .child(
@@ -7034,43 +6911,61 @@ impl Render for Workbench {
                                             .flex_1()
                                             .min_w_0()
                                             .flex()
+                                            .items_center()
                                             .overflow_x_scroll()
+                                            .pl_2()
                                             .children(mixed_tabs.into_iter().enumerate().map(|(index, tab)| {
                                                 let identity = tab.identity;
                                                 let in_secondary = mixed_secondary_tab_ids.contains(&identity);
-                                                let selected = mixed_active.as_ref() == Some(&identity)
-                                                    || mixed_secondary_active.as_ref() == Some(&identity);
-                                                let icon = match tab.kind {
-                                                    WorkbenchTabKind::Terminal => "T",
-                                                    WorkbenchTabKind::Agent => "A",
-                                                    WorkbenchTabKind::Editor => "E",
+                                                let selected = !showing_explorer_preview
+                                                    && (mixed_active.as_ref() == Some(&identity)
+                                                        || mixed_secondary_active.as_ref() == Some(&identity));
+                                                let icon_kind = match tab.kind {
+                                                    WorkbenchTabKind::Terminal | WorkbenchTabKind::Agent => UiIcon::Terminal,
+                                                    WorkbenchTabKind::Editor => UiIcon::File,
                                                 };
-                                                let caption = format!("{} {icon} {}{}{}", if in_secondary { "②" } else { "①" }, tab.title,
-                                                    if tab.dirty { " ●" } else { "" },
-                                                    if !tab.running { " ○" } else { "" });
+                                                let title = tab.title.clone();
                                                 let for_click = identity.clone();
                                                 let for_middle = identity.clone();
                                                 let for_right = identity.clone();
                                                 let for_close = identity.clone();
                                                 let for_drop = identity.clone();
                                                 let drag_identity = identity.clone();
-                                                let drag_caption = caption.clone();
+                                                let drag_caption = title.clone();
                                                 div()
                                                     .id(("mixed-tab", index))
-                                                    .h(px(TAB_STRIP_HEIGHT - 1.0))
+                                                    .h(px(32.0))
+                                                    .mr_2()
+                                                    .px_1()
                                                     .flex()
                                                     .items_center()
-                                                    .bg(rgb(if selected { ACTIVE } else { PANEL }))
-                                                    .border_r_1()
-                                                    .border_color(rgb(BORDER))
+                                                    .rounded_md()
+                                                    .border_1()
+                                                    .border_color(rgb(if selected { BORDER_ACTIVE } else { BORDER }))
+                                                    .bg(rgb(if selected { ELEVATED } else { TOOLBAR }))
                                                     .child(
                                                         div()
                                                             .id(("mixed-tab-focus", index))
-                                                            .px_2()
+                                                            .min_w_0()
+                                                            .max_w(px(210.0))
+                                                            .flex()
+                                                            .items_center()
+                                                            .gap_1()
+                                                            .px_1()
                                                             .cursor_pointer()
-                                                            .text_sm()
                                                             .text_color(rgb(if selected { TEXT } else { MUTED }))
-                                                            .child(caption)
+                                                            .child(icon(icon_kind, 12.0, if selected { TEXT } else { MUTED }))
+                                                            .child(
+                                                                div()
+                                                                    .min_w_0()
+                                                                    .max_w(px(if tab.kind == WorkbenchTabKind::Terminal { 92.0 } else { 180.0 }))
+                                                                    .truncate()
+                                                                    .text_sm()
+                                                                    .child(title),
+                                                            )
+                                                            .when(tab.dirty, |entry| entry.child(div().text_xs().child("●")))
+                                                            .when(!tab.running, |entry| entry.child(div().text_xs().text_color(rgb(MUTED)).child("○")))
+                                                            .when(in_secondary, |entry| entry.child(div().text_xs().text_color(rgb(MUTED)).child("②")))
                                                             .on_click(cx.listener(move |this, _, window, cx| {
                                                                 this.focus_mixed_tab(&for_click, window, cx);
                                                             }))
@@ -7093,111 +6988,112 @@ impl Render for Workbench {
                                                             )),
                                                     )
                                                     .child(
-                                                        div()
-                                                            .id(("mixed-tab-close", index))
-                                                            .px_2()
-                                                            .cursor_pointer()
-                                                            .text_xs()
-                                                            .text_color(rgb(MUTED))
-                                                            .child("×")
+                                                        icon_button(("mixed-tab-close", index), UiIcon::Close, "Close tab", false)
+                                                            .w(px(22.0))
+                                                            .h(px(22.0))
                                                             .on_click(cx.listener(move |this, _, _, cx| {
                                                                 this.close_mixed_tab(&for_close, cx);
                                                             })),
                                                     )
                                             }))
-                                            .child(
-                                                div()
-                                                    .id("mixed-tabs-empty-area")
-                                                    .flex_1()
-                                                    .min_w(px(40.0))
-                                                    .h(px(TAB_STRIP_HEIGHT - 1.0))
-                                                    .on_click(cx.listener(|this, event: &gpui::ClickEvent, _, cx| {
-                                                        if event.click_count() == 2 { this.new_editor(cx); }
-                                                    })),
-                                            ),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .h(px(TAB_STRIP_HEIGHT))
-                                    .flex()
-                                    .items_center()
-                                    .bg(rgb(PANEL))
-                                    .border_b_1()
-                                    .border_color(rgb(BORDER))
-                                    .when(!show_preview_tabs, |panel| panel.hidden())
-                                    .child(
-                                        div()
-                                            .id("file-tabs")
-                                            .flex_1()
-                                            .min_w_0()
-                                            .flex()
-                                            .overflow_x_scroll()
+                                            // Legacy Explorer preview tabs belong
+                                            // to the same visual strip, never a
+                                            // second line beneath live tabs.
                                             .children(tabs.into_iter().map(|(index, title, transient)| {
+                                                let selected = showing_explorer_preview && active_tab == Some(index);
                                                 div()
+                                                    .id(("file-preview-tab", index))
+                                                    .h(px(32.0))
+                                                    .mr_2()
+                                                    .px_1()
                                                     .flex()
                                                     .items_center()
-                                                    .w(px(165.0))
-                                                    .h(px(TAB_STRIP_HEIGHT - 1.0))
-                                                    .bg(rgb(if active_tab == Some(index) {
-                                                        ACTIVE
-                                                    } else {
-                                                        PANEL
-                                                    }))
-                                                    .border_r_1()
-                                                    .border_color(rgb(BORDER))
+                                                    .rounded_md()
+                                                    .border_1()
+                                                    .border_color(rgb(if selected { BORDER_ACTIVE } else { BORDER }))
+                                                    .bg(rgb(if selected { ELEVATED } else { TOOLBAR }))
                                                     .child(
                                                         div()
                                                             .id(("file-tab", index))
-                                                            .flex_1()
                                                             .min_w_0()
-                                                            .px_2()
+                                                            .max_w(px(180.0))
+                                                            .flex()
+                                                            .items_center()
+                                                            .gap_1()
+                                                            .px_1()
                                                             .cursor_pointer()
-                                                            .text_sm()
-                                                            .text_color(rgb(
-                                                                if active_tab == Some(index) {
-                                                                    TEXT
-                                                                } else {
-                                                                    MUTED
-                                                                },
-                                                            ))
-                                                            .child(if transient { format!("{title} · preview") } else { title })
-                                                            .on_click(cx.listener(
-                                                                move |this, event: &gpui::ClickEvent, window, cx| {
-                                                                    this.model.activate_tab(index);
-                                                                    if event.click_count() >= 2 && transient {
-                                                                        if let Some(path) = this.model.selected_path().map(PathBuf::from) {
-                                                                            this.click_explorer_file(&path, true, window, cx);
-                                                                        }
-                                                                    } else {
-                                                                        this.explorer_preview_active = true;
-                                                                        this.center_view = CenterView::Editor;
-                                                                        window.focus(&this.explorer_keyboard_focus, cx);
+                                                            .text_color(rgb(if selected { TEXT } else { MUTED }))
+                                                            .child(icon(UiIcon::File, 12.0, if selected { TEXT } else { MUTED }))
+                                                            .child(
+                                                                div()
+                                                                    .min_w_0()
+                                                                    .max_w(px(160.0))
+                                                                    .truncate()
+                                                                    .text_sm()
+                                                                    .when(transient, |label| label.italic())
+                                                                    .child(title),
+                                                            )
+                                                            .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
+                                                                this.model.activate_tab(index);
+                                                                if event.click_count() >= 2 && transient {
+                                                                    if let Some(path) = this.model.selected_path().map(PathBuf::from) {
+                                                                        this.click_explorer_file(&path, true, window, cx);
                                                                     }
-                                                                    this.persist_session();
-                                                                    cx.notify();
-                                                                },
-                                                            )),
+                                                                } else {
+                                                                    this.explorer_preview_active = true;
+                                                                    this.center_view = CenterView::Editor;
+                                                                    window.focus(&this.explorer_keyboard_focus, cx);
+                                                                }
+                                                                this.persist_session();
+                                                                cx.notify();
+                                                            })),
                                                     )
                                                     .child(
-                                                        div()
-                                                            .id(("close-tab", index))
-                                                            .px_2()
-                                                            .cursor_pointer()
-                                                            .text_color(rgb(MUTED))
-                                                            .child("×")
-                                                            .on_click(cx.listener(
-                                                                move |this, _, _, cx| {
-                                                                    this.model.close_tab(index);
-                                                                    this.persist_session();
-                                                                    cx.notify();
-                                                                },
-                                                            )),
+                                                        icon_button(("file-tab-close", index), UiIcon::Close, "Close preview", false)
+                                                            .w(px(22.0))
+                                                            .h(px(22.0))
+                                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                                this.model.close_tab(index);
+                                                                if this.model.tabs().is_empty() {
+                                                                    this.explorer_preview_active = false;
+                                                                }
+                                                                this.persist_session();
+                                                                cx.notify();
+                                                            })),
                                                     )
                                             }))
+                                            .child({
+                                                // Classic's + opens one New Tab
+                                                // menu after all real content tabs.
+                                                let owner = cx.entity().downgrade();
+                                                let refresh_owner = owner.clone();
+                                                let running = self.terminals.sessions.iter()
+                                                    .filter(|session| session.running)
+                                                    .map(|session| (
+                                                        session.handle.clone(),
+                                                        format!("{} · {}", session.label(), session.workspace_id),
+                                                    ))
+                                                    .collect::<Vec<_>>();
+                                                icon_button("mixed-new-tab", UiIcon::Add, "New Tab", terminal_creating)
+                                                    .w(px(28.0))
+                                                    .h(px(28.0))
+                                                    .dropdown_menu(Self::kit_new_tab_menu(
+                                                        owner,
+                                                        running,
+                                                        terminal_create_busy,
+                                                        terminal_create_timed_out,
+                                                    ))
+                                                    .on_open_change(move |open, _, cx| {
+                                                        if *open {
+                                                            let _ = refresh_owner.update(cx, |view, cx| {
+                                                                view.refresh_terminals(cx);
+                                                            });
+                                                        }
+                                                    })
+                                            })
                                             .child(
                                                 div()
-                                                    .id("upper-file-tabs-empty-area")
+                                                    .id("mixed-tabs-empty-area")
                                                     .flex_1()
                                                     .min_w(px(40.0))
                                                     .h(px(TAB_STRIP_HEIGHT - 1.0))
@@ -7209,16 +7105,13 @@ impl Render for Workbench {
                                             ),
                                     )
                                     .child(
-                                        div()
-                                            .id("reload-preview")
-                                            .px_3()
-                                            .cursor_pointer()
-                                            .text_color(rgb(MUTED))
-                                            .child("↻")
-                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                this.model.reload_active();
-                                                cx.notify();
-                                            })),
+                                        icon_button("mixed-pane-actions", UiIcon::More, "Pane actions", false)
+                                            .dropdown_menu(Self::kit_pane_actions_menu(
+                                                cx.entity().downgrade(),
+                                                mixed_active.clone(),
+                                                mixed_active.as_ref().is_some_and(|id| mixed_secondary_tab_ids.contains(id)),
+                                                mixed_has_secondary,
+                                            )),
                                     ),
                             )
                             .child(

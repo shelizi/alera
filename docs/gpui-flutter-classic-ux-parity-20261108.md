@@ -19,6 +19,33 @@ not on a visual mockup or a collection of generic IDE assumptions.
 | Terminal toolbar | `terminal_surface_toolbar.dart` | `desktop_gpui/src/main.rs`, `terminal.rs` |
 | Tabs / context menu | `workspace_workbench_tab_chips.dart`, `workspace_workbench_tab_menu.dart` | `desktop_gpui/src/main.rs`, `editor_tabs.rs`, `workbench_tabs.rs` |
 
+## Tab strip parity (2026-11-09)
+
+Classic's `workspace_workbench_tab_strip.dart` and
+`workspace_workbench_new_tab_button.dart` define **one 44px mixed Tab strip
+per pane**: Terminal, Agent and Editor are content tab kinds, not separate
+Terminal/Editor navigation modes. Rounded 32px chips have a leading type
+icon, ellipsized title, state indicators and an explicit close control;
+inactive chips use the surface color, active chips use surfaceElevated.
+The + after tabs opens one menu (New File, New Terminal, agent options).
+Blank strip double-click creates an untitled file. A trailing pane menu
+offers split actions. Classic may opt into two rows **only** when pinned
+tabs exist and the user enabled twoRowTabs.
+
+Native now drops its redundant Terminal/Editor mode header, merges its
+formerly separate legacy Explorer preview row into the same 44px strip,
+keeps the tab click/middle-click/drag/right-click contracts, places
+New File/Terminal/Host attach behind one + menu, and puts pane actions
+at the strip's right end. Native uses its existing GPUI Kit buttons and
+menus, while custom draggable chips retain Classic interaction semantics.
+The displayed primary content follows the active mixed pane identity
+instead of the stale legacy `center_view` flag after session restore.
+
+**Remaining parity:** Native's global mixed strip does not yet render
+an independent tab strip inside each split pane; pinned-tab grouping and
+Classic's opt-in two-row pinned layout remain unimplemented. Do not
+confuse either with the now-removed redundant mode/preview header.
+
 ## Explorer baseline and implemented slice
 
 Classic's actual header is **workspace name** followed by global buttons:
