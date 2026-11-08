@@ -1,6 +1,7 @@
 //! Experimental Alera desktop shell powered by native GPUI (no Flutter/WebView).
 mod editor_ui;
 mod native_settings_ui;
+mod native_ui_icons;
 mod quick_open_ui;
 
 use alera_gpui_desktop::agent_profiles::{
@@ -52,6 +53,7 @@ use gpui::{
     actions, div, prelude::*, px, rgb, size, App, Application, Bounds, Context, Entity, Focusable,
     KeyBinding, PathPromptOptions, Window, WindowBounds, WindowOptions,
 };
+use native_ui_icons::{icon, icon_button, UiIcon};
 use quick_open_ui::{bind_quick_open_keys, QuickOpenInput};
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -204,9 +206,20 @@ impl ExplorerAction {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RightSidebarView {
+    Explorer,
+    Git,
+}
+
 struct Workbench {
     model: WorkbenchModel,
     center_view: CenterView,
+    right_sidebar_view: RightSidebarView,
+    explorer_more_open: bool,
+    git_more_open: bool,
+    show_project_management: bool,
+    runtime_details_open: bool,
     tree: Option<WorkspaceTree>,
     tree_mode: bool,
     explorer_selection: Option<PathBuf>,
@@ -4663,7 +4676,6 @@ impl Render for Workbench {
             .unwrap_or_else(|| filename.clone());
         let status = self.model.status().to_owned();
         let branch = self.model.branch().to_owned();
-        let can_up = self.model.can_go_up();
         let show_recent_workspaces = self.show_recent_workspaces;
         let picking_workspace = self.picking_workspace;
         let workspace_root = self.model.root().to_path_buf();
@@ -4756,7 +4768,6 @@ impl Render for Workbench {
         let show_terminal_attach_picker = self.show_terminal_attach_picker;
         let terminal_create_busy = self.terminal_create_flow.is_active();
         let terminal_create_timed_out = self.terminal_create_flow.is_timed_out();
-        let terminal_create_waiting = self.terminal_create_flow.is_waiting();
         let terminal_creating = self.terminal_create_flow.is_creating();
         // The primary pane renders its own Host identity, even when the
         // second pane currently owns keyboard focus. The global TerminalDock
@@ -5118,26 +5129,30 @@ impl Render for Workbench {
                     .bg(rgb(TOOLBAR))
                     .flex()
                     .items_center()
-                    .justify_between()
+                    .gap_3()
                     .child(div().font_weight(gpui::FontWeight::BOLD).child("Alera"))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(rgb(MUTED))
+                            .child("NATIVE PREVIEW"),
+                    )
+                    .child(div().flex_1())
                     .child(div()
-                        .id("native-settings-open")
-                        .cursor_pointer()
-                        .text_sm()
-                        .child("Settings")
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .text_xs()
+                        .text_color(rgb(MUTED))
+                        .child(icon(UiIcon::Branch, 14.0, MUTED))
+                        .child(branch.clone()))
+                    .child(icon_button("native-settings-open", UiIcon::Settings, "Settings", false)
                         .on_click(cx.listener(|view, _, _, cx| {
                             if let Err(code) = view.show_native_settings_section("application", cx) {
                                 view.model.set_status(format!("Native settings unavailable: {code}"));
                                 cx.notify();
                             }
                         })))
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(rgb(MUTED))
-                            .child("Native desktop · Preview"),
-                    )
-                    .child(div().text_sm().child(branch.clone())),
             )
             .child(
                 div()
@@ -5149,7 +5164,6 @@ impl Render for Workbench {
                         div()
                             .id("native-right-sidebar-scroll")
                             .w(px(RIGHT_SIDEBAR_WIDTH))
-                            .overflow_y_scroll()
                             .flex()
                             .flex_col()
                             .bg(rgb(PANEL))
@@ -5157,33 +5171,88 @@ impl Render for Workbench {
                             .border_color(rgb(BORDER))
                             .child(
                                 div()
+                                    .id("right-sidebar-view-switch")
+                                    .h(px(38.0))
+                                    .px_2()
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .border_b_1()
+                                    .border_color(rgb(BORDER))
+                                    .child(
+                                        div()
+                                            .id("right-sidebar-explorer-tab")
+                                            .flex_1()
+                                            .h(px(32.0))
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .gap_2()
+                                            .rounded_md()
+                                            .cursor_pointer()
+                                            .bg(rgb(if self.right_sidebar_view == RightSidebarView::Explorer { ACTIVE } else { PANEL }))
+                                            .hover(|s| s.bg(rgb(ACTIVE)))
+                                            .child(icon(UiIcon::Folder, 16.0, TEXT))
+                                            .child("Explorer")
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.right_sidebar_view = RightSidebarView::Explorer;
+                                                cx.notify();
+                                            })),
+                                    )
+                                    .child(
+                                        div()
+                                            .id("right-sidebar-git-tab")
+                                            .flex_1()
+                                            .h(px(32.0))
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .gap_2()
+                                            .rounded_md()
+                                            .cursor_pointer()
+                                            .bg(rgb(if self.right_sidebar_view == RightSidebarView::Git { ACTIVE } else { PANEL }))
+                                            .hover(|s| s.bg(rgb(ACTIVE)))
+                                            .child(icon(UiIcon::Branch, 16.0, TEXT))
+                                            .child("Git")
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.right_sidebar_view = RightSidebarView::Git;
+                                                cx.notify();
+                                            })),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .id("right-explorer-panel")
+                                    .flex_1()
+                                    .min_h_0()
+                                    .flex()
+                                    .flex_col()
+                                    .when(self.right_sidebar_view != RightSidebarView::Explorer, |v| v.hidden())
+                            .child(
+                                div()
                                     .h(px(SECTION_HEADER_HEIGHT))
                                     .px_3()
                                     .flex()
                                     .justify_between()
                                     .items_center()
-                                    .child(div().text_sm().child(format!("Explorer · {folder_name}")))
+                                    .child(div()
+                                        .min_w_0()
+                                        .text_xs()
+                                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                                        .child("FILES"))
                                     .child(
                                         div()
                                             .flex()
-                                            .gap_2()
+                                            .gap_1()
                                             .child(
-                                                div()
-                                                    .id("explorer-tree-toggle")
-                                                    .cursor_pointer()
-                                                    .text_color(rgb(if tree_mode { TEXT } else { MUTED }))
-                                                    .child(if tree_mode { "Tree ✓" } else { "Tree" })
+                                                icon_button("explorer-tree-toggle", UiIcon::Folder, "Toggle folder tree", tree_mode)
                                                     .on_click(cx.listener(|this, _, _, cx| {
                                                         this.tree_mode = !this.tree_mode;
                                                         cx.notify();
                                                     })),
                                             )
                                             .child(
-                                                div()
-                                                    .id("up")
-                                                    .cursor_pointer()
-                                                    .text_color(rgb(MUTED))
-                                                    .child(if can_up { "↑ Up" } else { "Root" })
+                                                icon_button("up", UiIcon::Back, "Go up one folder", false)
                                                     .on_click(cx.listener(|this, _, _, cx| {
                                                         this.model.go_up();
                                                         this.persist_session();
@@ -5191,11 +5260,7 @@ impl Render for Workbench {
                                                     })),
                                             )
                                             .child(
-                                                div()
-                                                    .id("explorer-refresh")
-                                                    .cursor_pointer()
-                                                    .text_color(rgb(MUTED))
-                                                    .child("↻")
+                                                icon_button("explorer-refresh", UiIcon::Refresh, "Refresh Explorer", false)
                                                     .on_click(cx.listener(|this, _, _, cx| {
                                                         this.model.refresh_directory();
                                                         if let Some(tree) = &mut this.tree {
@@ -5222,59 +5287,72 @@ impl Render for Workbench {
                                         div()
                                             .flex()
                                             .flex_wrap()
-                                            .gap_2()
+                                            .gap_1()
                                             .children([
-                                                ("+ File", ExplorerAction::NewFile),
-                                                ("+ Folder", ExplorerAction::NewFolder),
-                                                ("Rename", ExplorerAction::Rename),
-                                                ("Move", ExplorerAction::Move),
-                                                ("Copy", ExplorerAction::Copy),
-                                                ("Duplicate", ExplorerAction::Duplicate),
-                                                ("Delete", ExplorerAction::Delete),
-                                            ].into_iter().enumerate().map(|(i, (label, action))| {
-                                                div()
-                                                    .id(("explorer-file-action", i))
-                                                    .cursor_pointer()
-                                                    .text_xs()
-                                                    .text_color(rgb(if action == ExplorerAction::Delete { MUTED } else { TEXT }))
-                                                    .child(label)
+                                                (UiIcon::NewFile, "New file", ExplorerAction::NewFile),
+                                                (UiIcon::NewFolder, "New folder", ExplorerAction::NewFolder),
+                                                (UiIcon::Rename, "Rename selected file or folder", ExplorerAction::Rename),
+                                                (UiIcon::Delete, "Delete selected file or folder (confirmation required)", ExplorerAction::Delete),
+                                            ].into_iter().enumerate().map(|(i, (glyph, label, action))| {
+                                                icon_button(("explorer-file-action", i), glyph, label, false)
                                                     .on_click(cx.listener(move |this, _, window, cx| {
                                                         this.begin_explorer_action(action, window, cx);
                                                     }))
-                                            })),
+                                            }))
+                                            .child(icon_button("explorer-more-actions", UiIcon::More, "More file actions", self.explorer_more_open)
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.explorer_more_open = !this.explorer_more_open;
+                                                    cx.notify();
+                                                }))),
                                     )
+                                    .child(if self.explorer_more_open {
+                                        div()
+                                            .id("explorer-overflow-actions")
+                                            .flex()
+                                            .items_center()
+                                            .gap_1()
+                                            .children([
+                                                (UiIcon::Move, "Move selected item", ExplorerAction::Move),
+                                                (UiIcon::Copy, "Copy selected item into a folder", ExplorerAction::Copy),
+                                                (UiIcon::File, "Duplicate selected item", ExplorerAction::Duplicate),
+                                            ].into_iter().enumerate().map(|(i, (glyph, label, action))| {
+                                                icon_button(("explorer-file-action", i + 4), glyph, label, false)
+                                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                                        this.begin_explorer_action(action, window, cx);
+                                                        this.explorer_more_open = false;
+                                                    }))
+                                            }))
+                                            .into_any_element()
+                                    } else {
+                                        div().h(px(0.0)).into_any_element()
+                                    })
                                     .child(
                                         div()
                                             .text_xs()
                                             .text_color(rgb(MUTED))
                                             .child(explorer_selection.as_ref().map(|path| {
                                                 format!("Selected: {}", path.strip_prefix(&workspace_root).unwrap_or(path).display())
-                                            }).unwrap_or_else(|| "Select a file/folder to rename, move or delete".into())),
+                                            }).unwrap_or_default())
+                                            .when(explorer_selection.is_none(), |view| view.hidden()),
                                     )
                                     .child(
                                         div()
                                             .flex()
-                                            .flex_wrap()
                                             .items_center()
-                                            .gap_3()
-                                            .text_xs()
-                                            .child(div().id("explorer-clipboard-copy").cursor_pointer()
-                                                .text_color(rgb(TEXT)).child("Copy selection")
+                                            .gap_1()
+                                            .child(icon_button("explorer-clipboard-copy", UiIcon::Copy, "Copy selection to Explorer clipboard", false)
                                                 .on_click(cx.listener(|this, _, _, cx| {
                                                     this.set_explorer_clipboard(ExplorerClipboardMode::Copy, cx);
                                                 })))
-                                            .child(div().id("explorer-clipboard-cut").cursor_pointer()
-                                                .text_color(rgb(TEXT)).child("Cut selection")
+                                            .child(icon_button("explorer-clipboard-cut", UiIcon::Cut, "Cut selected file or folder", false)
                                                 .on_click(cx.listener(|this, _, _, cx| {
                                                     this.set_explorer_clipboard(ExplorerClipboardMode::Cut, cx);
                                                 })))
-                                            .child(div().id("explorer-clipboard-paste").cursor_pointer()
-                                                .text_color(rgb(TEXT)).child("Paste here")
+                                            .child(icon_button("explorer-clipboard-paste", UiIcon::Paste, "Paste into current folder", false)
                                                 .on_click(cx.listener(|this, _, _, cx| {
                                                     this.paste_explorer_clipboard(cx);
                                                 })))
-                                            .child(div().id("explorer-view-git-history").cursor_pointer()
-                                                .text_color(rgb(TEXT)).child("Git history")
+                                            .child(icon_button("explorer-view-git-history", UiIcon::History, "History of selected file or folder", false)
                                                 .on_click(cx.listener(|this, _, _, cx| {
                                                     this.open_explorer_selection_history(cx);
                                                 }))),
@@ -5343,18 +5421,26 @@ impl Render for Workbench {
                                     .border_color(rgb(BORDER))
                                     .child(
                                         div()
-                                            .id("quick-open-toggle")
-                                            .cursor_pointer()
-                                            .text_sm()
-                                            .text_color(rgb(TEXT))
-                                            .child(if quick_open.is_some() {
-                                                "⌕ Quick Open  ×"
+                                            .flex()
+                                            .items_center()
+                                            .gap_1()
+                                            .child(icon_button("quick-open-toggle", UiIcon::Search, "Quick Open files (Ctrl+P)", quick_open.is_some())
+                                                .on_click(cx.listener(|this, _, window, cx| {
+                                                    this.toggle_file_search(window, cx);
+                                                })))
+                                            .child(icon_button("content-search-toggle", UiIcon::File, "Search contents across the project", content_query.is_some())
+                                                .on_click(cx.listener(|this, _, window, cx| {
+                                                    this.toggle_content_search(window, cx);
+                                                })))
+                                            .child(if content_query.is_some() {
+                                                icon_button("content-search-run", UiIcon::Refresh, "Run project content search", content_loading)
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.search_project_contents(cx);
+                                                    }))
+                                                    .into_any_element()
                                             } else {
-                                                "⌕ Quick Open  Ctrl+P"
-                                            })
-                                            .on_click(cx.listener(|this, _, window, cx| {
-                                                this.toggle_file_search(window, cx);
-                                            })),
+                                                div().h(px(0.0)).into_any_element()
+                                            }),
                                     )
                                     .child(if let Some(input) = quick_open {
                                         div()
@@ -5415,44 +5501,10 @@ impl Render for Workbench {
                                 div()
                                     .id("content-search-panel")
                                     .px_3()
-                                    .py_2()
+                                    .py_1()
                                     .border_b_1()
                                     .border_color(rgb(BORDER))
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .items_center()
-                                            .justify_between()
-                                            .child(
-                                                div()
-                                                    .id("content-search-toggle")
-                                                    .cursor_pointer()
-                                                    .text_sm()
-                                                    .text_color(rgb(TEXT))
-                                                    .child(if content_query.is_some() {
-                                                        "⌕ Search Contents  ×"
-                                                    } else {
-                                                        "⌕ Search Contents"
-                                                    })
-                                                    .on_click(cx.listener(|this, _, window, cx| {
-                                                        this.toggle_content_search(window, cx);
-                                                    })),
-                                            )
-                                            .child(if content_query.is_some() {
-                                                div()
-                                                    .id("content-search-run")
-                                                    .cursor_pointer()
-                                                    .text_sm()
-                                                    .text_color(rgb(TEXT))
-                                                    .child(if content_loading { "Search again" } else { "Search" })
-                                                    .on_click(cx.listener(|this, _, _, cx| {
-                                                        this.search_project_contents(cx);
-                                                    }))
-                                                    .into_any_element()
-                                            } else {
-                                                div().h(px(0.0)).into_any_element()
-                                            }),
-                                    )
+                                    .when(content_query.is_none(), |panel| panel.hidden())
                                     .child(if let Some(input) = content_query {
                                         div()
                                             .mt_2()
@@ -5575,36 +5627,39 @@ impl Render for Workbench {
                                         view.child(div().text_color(rgb(MUTED)).child("Tree limited to 4,000 visible items"))
                                     }),
                             )
+                            )
+                            .child(
+                                div()
+                                    .id("right-git-panel")
+                                    .flex_1()
+                                    .min_h_0()
+                                    .flex()
+                                    .flex_col()
+                                    .overflow_y_scroll()
+                                    .when(self.right_sidebar_view != RightSidebarView::Git, |v| v.hidden())
                             .child(
                                 div()
                                     .flex()
                                     .items_center()
                                     .justify_between()
+                                    .px_2()
+                                    .h(px(36.0))
                                     .child(
                                         div()
-                                            .font_weight(gpui::FontWeight::BOLD)
-                                            .child("Git changes"),
+                                            .text_xs()
+                                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                                            .child("SOURCE CONTROL"),
                                     )
                                     .child(
                                         div()
                                             .flex()
                                             .items_center()
-                                            .gap_3()
-                                            .child(div()
-                                                .id("git-graph-toggle")
-                                                .cursor_pointer()
-                                                .text_xs()
-                                                .text_color(rgb(TEXT))
-                                                .child(if git_graph_open { "Hide Graph" } else { "Git Graph" })
+                                            .gap_1()
+                                            .child(icon_button("git-graph-toggle", UiIcon::Graph, "Toggle Git Graph", git_graph_open)
                                                 .on_click(cx.listener(|this, _, _, cx| {
                                                     this.toggle_git_history(cx);
                                                 })))
-                                            .child(div()
-                                                .id("git-refresh")
-                                                .cursor_pointer()
-                                                .text_sm()
-                                                .text_color(rgb(TEXT))
-                                                .child("↻")
+                                            .child(icon_button("git-refresh", UiIcon::Refresh, "Refresh Git status", false)
                                                 .on_click(cx.listener(|this, _, _, cx| {
                                                     this.refresh_git(cx);
                                                     if this.git_history_open { this.refresh_git_history(cx); }
@@ -5769,12 +5824,7 @@ impl Render for Workbench {
                                     .items_center()
                                     .gap_1()
                                     .child(git_commit_input)
-                                    .child(div()
-                                        .id("git-commit-submit")
-                                        .cursor_pointer()
-                                        .text_xs()
-                                        .text_color(rgb(if git_action_busy { MUTED } else { TEXT }))
-                                        .child("Commit")
+                                    .child(icon_button("git-commit-submit", UiIcon::GitCommit, "Commit staged changes using this message", false)
                                         .on_click(cx.listener(|this, _, _, cx| {
                                             let message = this.git_commit_input.read(cx).query().trim().to_owned();
                                             this.run_git_action(GitUiAction::Commit(message), cx);
@@ -5784,24 +5834,14 @@ impl Render for Workbench {
                                 div()
                                     .flex()
                                     .items_center()
-                                    .gap_2()
+                                    .gap_1()
                                     .child(git_branch_input)
-                                    .child(div()
-                                        .id("git-switch-branch")
-                                        .cursor_pointer()
-                                        .text_xs()
-                                        .text_color(rgb(if git_action_busy { MUTED } else { TEXT }))
-                                        .child("Switch")
+                                    .child(icon_button("git-switch-branch", UiIcon::Branch, "Switch to the specified local branch", false)
                                         .on_click(cx.listener(|this, _, _, cx| {
                                             let branch = this.git_branch_input.read(cx).query().trim().to_owned();
                                             this.run_git_action(GitUiAction::SwitchBranch(branch), cx);
                                         })))
-                                    .child(div()
-                                        .id("git-fetch-remote")
-                                        .cursor_pointer()
-                                        .text_xs()
-                                        .text_color(rgb(if git_action_busy { MUTED } else { TEXT }))
-                                        .child("Fetch")
+                                    .child(icon_button("git-fetch-remote", UiIcon::GitFetch, "Fetch upstream branches (no working tree change)", false)
                                         .on_click(cx.listener(|this, _, _, cx| {
                                             this.run_git_action(GitUiAction::Fetch, cx);
                                         }))),
@@ -5809,24 +5849,14 @@ impl Render for Workbench {
                             .child(div()
                                 .flex()
                                 .items_center()
-                                .gap_3()
-                                .child(div()
-                                    .id("git-compare-local")
-                                    .cursor_pointer()
-                                    .text_xs()
-                                    .text_color(rgb(TEXT))
-                                    .child("Compare branch")
+                                .gap_1()
+                                .child(icon_button("git-compare-local", UiIcon::History, "Compare the selected branch with HEAD (read-only)", false)
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         let branch = this.git_branch_input.read(cx).query().trim().to_owned();
                                         this.git_merge_armed = None;
                                         this.preview_git_history(GitReadRequest::Compare(branch), cx);
                                     })))
-                                .child(div()
-                                    .id("git-merge-auto")
-                                    .cursor_pointer()
-                                    .text_xs()
-                                    .text_color(rgb(if git_action_busy { MUTED } else { TEXT }))
-                                    .child(if git_merge_armed { "Confirm Merge" } else { "Merge" })
+                                .child(icon_button("git-merge-auto", if git_merge_armed { UiIcon::Check } else { UiIcon::GitMerge }, "Merge selected branch into HEAD (click twice to confirm)", git_merge_armed)
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         if this.git_action_busy { return; }
                                         let branch = this.git_branch_input.read(cx).query().trim().to_owned();
@@ -5843,78 +5873,47 @@ impl Render for Workbench {
                                         }
                                         cx.notify();
                                     })))
-                            )
-                            .child(div()
-                                .flex()
-                                .flex_wrap()
-                                .items_center()
-                                .gap_3()
-                                .child(div()
-                                    .id("git-stash-save-tracked")
-                                    .cursor_pointer()
-                                    .text_xs()
-                                    .text_color(rgb(if git_action_busy { MUTED } else { TEXT }))
-                                    .child(if git_sensitive_armed == Some(ConfirmGitAction::StashSave) {
-                                        "Confirm Stash"
-                                    } else { "Stash tracked" })
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.confirm_sensitive_git_action(ConfirmGitAction::StashSave, cx);
-                                    })))
-                                .child(div()
-                                    .id("git-stash-apply-latest")
-                                    .cursor_pointer()
-                                    .text_xs()
-                                    .text_color(rgb(if git_action_busy { MUTED } else { TEXT }))
-                                    .child(if git_sensitive_armed == Some(ConfirmGitAction::StashApply) {
-                                        "Confirm Apply"
-                                    } else { "Apply stash" })
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.confirm_sensitive_git_action(ConfirmGitAction::StashApply, cx);
-                                    })))
-                                .child(div()
-                                    .id("git-pull-ff-only")
-                                    .cursor_pointer()
-                                    .text_xs()
-                                    .text_color(rgb(if git_action_busy { MUTED } else { TEXT }))
-                                    .child(if git_sensitive_armed == Some(ConfirmGitAction::PullFfOnly) {
-                                        "Confirm Pull"
-                                    } else { "Pull FF-only" })
+                                .child(icon_button("git-pull-ff-only", if git_sensitive_armed == Some(ConfirmGitAction::PullFfOnly) { UiIcon::Check } else { UiIcon::GitPull }, "Pull current branch from upstream, fast-forward only (confirm twice)", git_sensitive_armed == Some(ConfirmGitAction::PullFfOnly))
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.confirm_sensitive_git_action(ConfirmGitAction::PullFfOnly, cx);
                                     })))
-                                .child(div()
-                                    .id("git-push-upstream")
-                                    .cursor_pointer()
-                                    .text_xs()
-                                    .text_color(rgb(if git_action_busy { MUTED } else { TEXT }))
-                                    .child(if git_sensitive_armed == Some(ConfirmGitAction::PushUpstream) {
-                                        "Confirm Push"
-                                    } else { "Push" })
+                                .child(icon_button("git-push-upstream", if git_sensitive_armed == Some(ConfirmGitAction::PushUpstream) { UiIcon::Check } else { UiIcon::GitPush }, "Push current branch to upstream without force (confirm twice)", git_sensitive_armed == Some(ConfirmGitAction::PushUpstream))
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.confirm_sensitive_git_action(ConfirmGitAction::PushUpstream, cx);
+                                    })))
+                                .child(icon_button("git-more-actions", UiIcon::More, "More Git actions: Stash, apply, conflict review", self.git_more_open)
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.git_more_open = !this.git_more_open;
+                                        cx.notify();
                                     })))
                             )
                             .child(div()
                                 .flex()
                                 .flex_wrap()
                                 .items_center()
-                                .gap_3()
-                                .child(div()
-                                    .id("git-conflict-inspect")
-                                    .cursor_pointer()
-                                    .text_xs()
-                                    .text_color(rgb(if git_action_busy || git_conflict_loading { MUTED } else { TEXT }))
-                                    .child(if git_conflict_loading { "Inspecting conflicts…" } else { "Inspect merge conflicts" })
+                                .gap_1()
+                                .when(!self.git_more_open, |row| row.hidden())
+                                .child(icon_button("git-stash-save-tracked", if git_sensitive_armed == Some(ConfirmGitAction::StashSave) { UiIcon::Check } else { UiIcon::GitStash }, "Stash tracked file edits (confirm twice)", git_sensitive_armed == Some(ConfirmGitAction::StashSave))
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.confirm_sensitive_git_action(ConfirmGitAction::StashSave, cx);
+                                    })))
+                                .child(icon_button("git-stash-apply-latest", if git_sensitive_armed == Some(ConfirmGitAction::StashApply) { UiIcon::Check } else { UiIcon::GitStashApply }, "Apply latest stash without deleting it (confirm twice)", git_sensitive_armed == Some(ConfirmGitAction::StashApply))
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.confirm_sensitive_git_action(ConfirmGitAction::StashApply, cx);
+                                    })))
+                            )
+                            .child(div()
+                                .flex()
+                                .flex_wrap()
+                                .items_center()
+                                .gap_1()
+                                .when(!self.git_more_open && git_conflict_count == 0, |row| row.hidden())
+                                .child(icon_button("git-conflict-inspect", UiIcon::GitMerge, "Inspect merge conflicts (read-only) before choosing file sides", git_conflict_loading)
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.preview_git_merge_conflicts(cx);
                                     })))
                                 .child(if git_conflict_count > 0 {
-                                    div()
-                                        .id("git-conflict-cancel")
-                                        .cursor_pointer()
-                                        .text_xs()
-                                        .text_color(rgb(MUTED))
-                                        .child("Cancel review")
+                                    icon_button("git-conflict-cancel", UiIcon::Close, "Cancel conflict review without writing files", false)
                                         .on_click(cx.listener(|this, _, _, cx| {
                                             this.git_conflict_preview = None;
                                             this.git_conflict_choices.clear();
@@ -6042,19 +6041,11 @@ impl Render for Workbench {
                                                 .on_click(cx.listener(move |this, _, _, cx| {
                                                     this.preview_git_change(relative.clone(), cx);
                                                 })))
-                                            .child(div()
-                                                .id(("git-stage-file", i))
-                                                .cursor_pointer()
-                                                .text_color(rgb(TEXT))
-                                                .child("+")
+                                            .child(icon_button(("git-stage-file", i), UiIcon::GitStage, "Stage this file for commit", false)
                                                 .on_click(cx.listener(move |this, _, _, cx| {
                                                     this.run_git_action(GitUiAction::Stage(stage_path.clone()), cx);
                                                 })))
-                                            .child(div()
-                                                .id(("git-unstage-file", i))
-                                                .cursor_pointer()
-                                                .text_color(rgb(MUTED))
-                                                .child("−")
+                                            .child(icon_button(("git-unstage-file", i), UiIcon::GitUnstage, "Unstage this file (keep working edits)", false)
                                                 .on_click(cx.listener(move |this, _, _, cx| {
                                                     this.run_git_action(GitUiAction::Unstage(unstage_path.clone()), cx);
                                                 })))
@@ -6070,6 +6061,7 @@ impl Render for Workbench {
                                     .text_color(rgb(MUTED))
                                     .child(git_diff),
                             ),
+                            )
                     )
                     .child(
                         div()
@@ -6084,14 +6076,18 @@ impl Render for Workbench {
                                     .bg(rgb(TOOLBAR))
                                     .flex()
                                     .items_center()
-                                    .gap_3()
+                                    .gap_2()
                                     .px_3()
                                     .child(
                                         div()
                                             .id("center-terminal-tab")
                                             .cursor_pointer()
+                                            .flex()
+                                            .items_center()
+                                            .gap_2()
                                             .text_color(rgb(if center_is_editor { MUTED } else { TEXT }))
-                                            .child(if center_is_editor { "Terminal" } else { "● Terminal" })
+                                            .child(icon(UiIcon::Terminal, 16.0, if center_is_editor { MUTED } else { TEXT }))
+                                            .child("Terminal")
                                             .on_click(cx.listener(|this, _, _, cx| {
                                                 this.center_view = CenterView::Terminal;
                                                 this.refresh_terminals(cx);
@@ -6099,31 +6095,13 @@ impl Render for Workbench {
                                             })),
                                     )
                                     .child(
-                                        div()
-                                            .id("terminal-create-new")
-                                            .cursor_pointer()
-                                            .text_sm()
-                                            .text_color(rgb(if terminal_create_busy { MUTED } else { TEXT }))
-                                            .child(if terminal_creating {
-                                                "Creating…"
-                                            } else if terminal_create_waiting {
-                                                "Waiting for Host…"
-                                            } else if terminal_create_timed_out {
-                                                "Confirmation timed out"
-                                            } else {
-                                                "+ New Terminal"
-                                            })
+                                        icon_button("terminal-create-new", UiIcon::Add, "New Terminal (requires Runtime Host)", terminal_creating)
                                             .on_click(cx.listener(|this, _, _, cx| {
                                                 this.create_host_terminal(cx);
                                             })),
                                     )
                                     .child(
-                                        div()
-                                            .id("center-create-untitled")
-                                            .cursor_pointer()
-                                            .text_sm()
-                                            .text_color(rgb(TEXT))
-                                            .child("+ New File")
+                                        icon_button("center-create-untitled", UiIcon::NewFile, "Create untitled file (autosaved draft)", false)
                                             .on_click(cx.listener(|this, _, _, cx| {
                                                 this.new_editor(cx);
                                             })),
@@ -6157,12 +6135,7 @@ impl Render for Workbench {
                                         div().h(px(0.0)).into_any_element()
                                     })
                                     .child(
-                                        div()
-                                            .id("terminal-attach-existing")
-                                            .cursor_pointer()
-                                            .text_sm()
-                                            .text_color(rgb(if center_is_editor { MUTED } else { TEXT }))
-                                            .child("+ Attach existing")
+                                        icon_button("terminal-attach-existing", UiIcon::Open, "Attach existing Runtime Host Terminal session", self.show_terminal_attach_picker)
                                             .on_click(cx.listener(|this, _, _, cx| {
                                                 this.center_view = CenterView::Terminal;
                                                 this.show_terminal_attach_picker = !this.show_terminal_attach_picker;
@@ -6176,8 +6149,12 @@ impl Render for Workbench {
                                         div()
                                             .id("center-editor-tab")
                                             .cursor_pointer()
+                                            .flex()
+                                            .items_center()
+                                            .gap_2()
                                             .text_color(rgb(if center_is_editor { TEXT } else { MUTED }))
-                                            .child(if center_is_editor { "● Editor" } else { "Editor" })
+                                            .child(icon(UiIcon::File, 16.0, if center_is_editor { TEXT } else { MUTED }))
+                                            .child("Editor")
                                             .on_click(cx.listener(|this, _, _, cx| {
                                                 this.center_view = CenterView::Editor;
                                                 cx.notify();
@@ -6486,24 +6463,16 @@ impl Render for Workbench {
                                         div()
                                             .flex()
                                             .items_center()
-                                            .gap_3()
+                                            .gap_1()
                                             .child(
-                                                div()
-                                                    .id("native-editor-new")
-                                                    .cursor_pointer()
-                                                    .text_color(rgb(TEXT))
-                                                    .child("New")
+                                                icon_button("native-editor-new", UiIcon::NewFile, "Create new untitled editor", false)
                                                     .on_click(cx.listener(|this, _, _, cx| {
                                                         this.new_editor(cx);
                                                     }))
                                                     .when(has_native_editor, |button| button.hidden()),
                                             )
                                             .child(
-                                                div()
-                                                    .id("native-editor-edit")
-                                                    .cursor_pointer()
-                                                    .text_color(rgb(TEXT))
-                                                    .child("Edit")
+                                                icon_button("native-editor-edit", UiIcon::Edit, "Edit currently selected file", false)
                                                     .on_click(cx.listener(|this, _, _, cx| {
                                                         this.open_editor(cx);
                                                     }))
@@ -6512,44 +6481,25 @@ impl Render for Workbench {
                                             .when(editor.is_some(), |toolbar| {
                                                 toolbar
                                                     .child(
-                                                        div()
-                                                            .id("native-editor-save")
-                                                            .cursor_pointer()
-                                                            .text_color(rgb(TEXT))
-                                                            .child("Save")
+                                                        icon_button("native-editor-save", UiIcon::Save, "Save current editor file (Ctrl+S)", false)
                                                             .on_click(cx.listener(|this, _, _, cx| {
                                                                 this.save_editor(cx);
                                                             })),
                                                     )
                                                     .child(
-                                                        div()
-                                                            .id("native-editor-save-as")
-                                                            .cursor_pointer()
-                                                            .text_color(rgb(TEXT))
-                                                            .child("Save As")
+                                                        icon_button("native-editor-save-as", UiIcon::SaveAs, "Save current editor as a different file", false)
                                                             .on_click(cx.listener(|this, _, _, cx| {
                                                                 this.pick_save_as(cx);
                                                             })),
                                                     )
                                                     .child(
-                                                        div()
-                                                            .id("native-editor-close")
-                                                            .cursor_pointer()
-                                                            .child("Close")
+                                                        icon_button("native-editor-close", UiIcon::Close, "Close current editor tab", false)
                                                             .on_click(cx.listener(|this, _, _, cx| {
                                                                 this.close_editor(false, cx);
                                                             })),
                                                     )
                                                     .child(
-                                                        div()
-                                                            .id("native-editor-discard")
-                                                            .cursor_pointer()
-                                                            .text_color(rgb(MUTED))
-                                                            .child(if discard_pending {
-                                                                "Confirm discard"
-                                                            } else {
-                                                                "Discard"
-                                                            })
+                                                        icon_button("native-editor-discard", if discard_pending { UiIcon::Check } else { UiIcon::Delete }, "Discard unsaved changes (confirmation required)", discard_pending)
                                                             .on_click(cx.listener(|this, _, _, cx| {
                                                                 this.close_editor(true, cx);
                                                             }))
@@ -6808,13 +6758,7 @@ impl Render for Workbench {
                                                     }),
                                             )
                                             .child(
-                                                div()
-                                                    .id("terminal-vt-mode")
-                                                    .px_2()
-                                                    .cursor_pointer()
-                                                    .text_sm()
-                                                    .text_color(rgb(TEXT))
-                                                    .child(if terminal_is_vt { "VT screen" } else { "Text log" })
+                                                icon_button("terminal-vt-mode", if terminal_is_vt { UiIcon::Terminal } else { UiIcon::File }, "Toggle VT screen / plain text log", terminal_is_vt)
                                                     .on_click(cx.listener(|this, _, _, cx| {
                                                         this.terminals.toggle_view_mode();
                                                         this.save_terminal_layout();
@@ -6822,49 +6766,26 @@ impl Render for Workbench {
                                                     })),
                                             )
                                             .child(
-                                                div()
-                                                    .id("terminal-preview-autopoll")
-                                                    .px_2()
-                                                    .cursor_pointer()
-                                                    .text_sm()
-                                                    .text_color(rgb(if terminal_auto { TEXT } else { MUTED }))
-                                                    .child(if terminal_auto { "Auto: On" } else { "Auto: Off" })
+                                                icon_button("terminal-preview-autopoll", UiIcon::Refresh, "Toggle automatic terminal output refresh", terminal_auto)
                                                     .on_click(cx.listener(|this, _, _, cx| {
                                                         this.terminal_poll.toggle();
                                                         cx.notify();
                                                     })),
                                             )
                                             .child(
-                                                div()
-                                                    .id("terminal-preview-refresh")
-                                                    .px_3()
-                                                    .cursor_pointer()
-                                                    .text_color(rgb(MUTED))
-                                                    .child(if terminal_read_loading { "Reading…" } else { "Read more ↻" })
+                                                icon_button("terminal-preview-refresh", UiIcon::Sync, "Read more Terminal output now", terminal_read_loading)
                                                     .on_click(cx.listener(|this, _, _, cx| {
                                                         this.refresh_terminal_output(cx);
                                                     })),
                                             )
                                             .child(
-                                                div()
-                                                    .id("terminal-copy-selected-lines")
-                                                    .px_2()
-                                                    .cursor_pointer()
-                                                    .text_xs()
-                                                    .text_color(rgb(TEXT))
-                                                    .child("Copy selected rows")
+                                                icon_button("terminal-copy-selected-lines", UiIcon::Copy, "Copy selected terminal rows", false)
                                                     .on_click(cx.listener(|this, _, _, cx| {
                                                         this.copy_primary_terminal_text(true, cx);
                                                     })),
                                             )
                                             .child(
-                                                div()
-                                                    .id("terminal-copy-visible-text")
-                                                    .px_2()
-                                                    .cursor_pointer()
-                                                    .text_xs()
-                                                    .text_color(rgb(TEXT))
-                                                    .child("Copy visible")
+                                                icon_button("terminal-copy-visible-text", UiIcon::File, "Copy visible terminal screen or text log", false)
                                                     .on_click(cx.listener(|this, _, _, cx| {
                                                         this.copy_primary_terminal_text(false, cx);
                                                     })),
@@ -7455,12 +7376,7 @@ impl Render for Workbench {
                                             })),
                                     )
                                     .child(
-                                        div()
-                                            .id("projects-open-folder")
-                                            .cursor_pointer()
-                                            .text_sm()
-                                            .text_color(rgb(TEXT))
-                                            .child(if picking_workspace { "Opening…" } else { "+ Open" })
+                                        icon_button("projects-open-folder", UiIcon::Open, "Open a project folder…", picking_workspace)
                                             .on_click(cx.listener(|this, _, _, cx| {
                                                 this.pick_workspace(cx);
                                             })),
@@ -7493,14 +7409,18 @@ impl Render for Workbench {
                                             )
                                             .child(
                                                 div()
-                                                    .id("project-tree-refresh")
-                                                    .cursor_pointer()
-                                                    .text_xs()
-                                                    .text_color(rgb(MUTED))
-                                                    .child(if project_tree_loading { "Loading…" } else { "↻" })
-                                                    .on_click(cx.listener(|this, _, _, cx| {
-                                                        this.refresh_project_tree(cx);
-                                                    })),
+                                                    .flex()
+                                                    .items_center()
+                                                    .gap_1()
+                                                    .child(icon_button("projects-management-toggle", UiIcon::Settings, "Manage saved projects and Git worktrees", self.show_project_management)
+                                                        .on_click(cx.listener(|this, _, _, cx| {
+                                                            this.show_project_management = !this.show_project_management;
+                                                            cx.notify();
+                                                        })))
+                                                    .child(icon_button("project-tree-refresh", UiIcon::Refresh, "Refresh saved projects and worktrees", project_tree_loading)
+                                                        .on_click(cx.listener(|this, _, _, cx| {
+                                                            this.refresh_project_tree(cx);
+                                                        }))),
                                             ),
                                     )
                                     .child(
@@ -7524,37 +7444,38 @@ impl Render for Workbench {
                                                     .py_1()
                                                     .child(
                                                         div()
-                                                            .id(("project-tree-toggle", index))
-                                                            .cursor_pointer()
-                                                            .text_xs()
-                                                            .text_color(rgb(MUTED))
-                                                            .child(if collapsed { "▸ Expand" } else { "▾ Collapse" })
-                                                            .on_click(cx.listener(move |this, _, _, cx| {
-                                                                if !this.collapsed_project_roots.insert(fold_root.clone()) {
-                                                                    this.collapsed_project_roots.remove(&fold_root);
-                                                                }
-                                                                cx.notify();
-                                                            })),
-                                                    )
-                                                    .child(
-                                                        div()
-                                                            .id(("project-tree-open", index))
-                                                            .px_2()
-                                                            .py_1()
-                                                            .bg(rgb(if current { ACTIVE } else { PANEL }))
-                                                            .hover(|style| style.bg(rgb(ACTIVE)))
-                                                            .cursor_pointer()
-                                                            .text_sm()
-                                                            .text_color(rgb(if current { TEXT } else { MUTED }))
-                                                            .child(format!(
-                                                                "{} {} {}",
-                                                                if current { "●" } else { "▸" },
-                                                                if pinned { "★" } else { " " },
-                                                                title
-                                                            ))
-                                                            .on_click(cx.listener(move |this, _, _, cx| {
-                                                                this.switch_workspace(root.clone(), cx);
-                                                            })),
+                                                            .flex()
+                                                            .items_center()
+                                                            .gap_1()
+                                                            .child(
+                                                                icon_button(("project-tree-toggle", index),
+                                                                    if collapsed { UiIcon::ChevronRight } else { UiIcon::ChevronDown },
+                                                                    "Expand or collapse this project's worktrees",
+                                                                    false)
+                                                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                                                        if !this.collapsed_project_roots.insert(fold_root.clone()) {
+                                                                            this.collapsed_project_roots.remove(&fold_root);
+                                                                        }
+                                                                        cx.notify();
+                                                                    })),
+                                                            )
+                                                            .child(
+                                                                div()
+                                                                    .id(("project-tree-open", index))
+                                                                    .flex_1()
+                                                                    .min_w_0()
+                                                                    .px_2()
+                                                                    .py_1()
+                                                                    .bg(rgb(if current { ACTIVE } else { PANEL }))
+                                                                    .hover(|style| style.bg(rgb(ACTIVE)))
+                                                                    .cursor_pointer()
+                                                                    .text_sm()
+                                                                    .text_color(rgb(if current { TEXT } else { MUTED }))
+                                                                    .child(format!("{}{}", if pinned { "★ " } else { "" }, title))
+                                                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                                                        this.switch_workspace(root.clone(), cx);
+                                                                    })),
+                                                            ),
                                                     )
                                                     .children(group.worktrees.into_iter().take(if collapsed { 0 } else { 14 }).enumerate().map(|(child_index, entry)| {
                                                         let target = entry.path.clone();
@@ -7593,6 +7514,13 @@ impl Render for Workbench {
                             )
                             .child(
                                 div()
+                                    .id("project-management-details")
+                                    .flex()
+                                    .flex_col()
+                                    .gap_2()
+                                    .when(!self.show_project_management, |panel| panel.hidden())
+                            .child(
+                                div()
                                     .flex()
                                     .justify_between()
                                     .items_center()
@@ -7603,12 +7531,7 @@ impl Render for Workbench {
                                             .child("Saved projects"),
                                     )
                                     .child(
-                                        div()
-                                            .id("project-pin-current")
-                                            .cursor_pointer()
-                                            .text_sm()
-                                            .text_color(rgb(TEXT))
-                                            .child("☆ Save current")
+                                        icon_button("project-pin-current", UiIcon::Check, "Save / pin the current project", false)
                                             .on_click(cx.listener(|this, _, _, cx| {
                                                 this.pin_current_project(cx);
                                             })),
@@ -7819,6 +7742,37 @@ impl Render for Workbench {
                             } else {
                                 div().h(px(0.0)).into_any_element()
                             })
+                            )
+                            .child(
+                                div()
+                                    .id("runtime-tools-toggle")
+                                    .h(px(34.0))
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .cursor_pointer()
+                                    .border_t_1()
+                                    .border_color(rgb(BORDER))
+                                    .child(div()
+                                        .text_xs()
+                                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                                        .child("RUNTIME / AGENTS"))
+                                    .child(icon(
+                                        if self.runtime_details_open { UiIcon::Close } else { UiIcon::More },
+                                        16.0, MUTED,
+                                    ))
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.runtime_details_open = !this.runtime_details_open;
+                                        cx.notify();
+                                    })),
+                            )
+                            .child(
+                                div()
+                                    .id("runtime-tools-details")
+                                    .flex()
+                                    .flex_col()
+                                    .gap_2()
+                                    .when(!self.runtime_details_open, |panel| panel.hidden())
                             .child(
                                 div()
                                     .font_weight(gpui::FontWeight::BOLD)
@@ -7984,6 +7938,7 @@ impl Render for Workbench {
                                             }))
                                     })),
                             )
+                            )
                     ),
             )
             .child(
@@ -8112,6 +8067,9 @@ fn main() {
             Cow::Borrowed(
                 include_bytes!("../../assets/fonts/JetBrainsMono-Variable.ttf").as_slice(),
             ),
+            Cow::Borrowed(
+                include_bytes!("../../assets/fonts/VSCodeCodicons-0.0.46-24.ttf").as_slice(),
+            ),
         ]) {
             eprintln!("Alera GPUI: cannot load bundled desktop fonts: {error}");
         }
@@ -8147,6 +8105,11 @@ fn main() {
                         explorer_delete_confirmed: false,
                         model,
                         center_view: CenterView::Terminal,
+                        right_sidebar_view: RightSidebarView::Explorer,
+                        explorer_more_open: false,
+                        git_more_open: false,
+                        show_project_management: false,
+                        runtime_details_open: false,
                         editor: None,
                         secondary_editor: None,
                         editor_transfer_in_progress: false,
