@@ -8,6 +8,11 @@ pub struct AgentProfileCommand {
     pub runtime: RuntimeDirArgs,
     #[command(flatten)]
     pub output: OutputArgs,
+    /// Connect only to an already-running Runtime Host; never auto-start it.
+    /// Used by the independent GPUI Native client for safe profile discovery
+    /// and explicitly confirmed launch requests.
+    #[arg(long = "no-start", default_value_t = false)]
+    pub no_start: bool,
     #[command(subcommand)]
     pub action: AgentProfileAction,
 }
