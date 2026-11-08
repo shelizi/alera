@@ -39,7 +39,7 @@ MCP window ID** action. A copied window ID is a selector, **not** a token.
 | `create_workspace` | Delegate to Host-owned `workspace add` managed Git worktree workflow, then switch Native | New active Host Workspace, Project ID, branch and canonical worktree path independently verified before receipt containing `createdWorkspaceId` |
 | `get_setting` | Read one of the eight Host-allowlisted Native settings from the independent state store | Return the persisted typed scalar as `settingValue` |
 | `update_setting` | Compare `expectedValue`, atomically persist a writable scalar, read it back and update the Native UI owner | Applied only with readback; stale expected values or invalid/corrupt data fail closed |
-| `open_settings` | Show the actual GPUI Native Settings panel and selected section | Visible section and Native settings read must succeed |
+| `open_settings` | Show the actual GPUI Native Settings panel: Application, Terminal, Editor, Agents, or Agent Profiles | Visible requested section and Native settings read must succeed; Host inventories refresh asynchronously |
 
 Unsupported (external editors, `openMode=new`, and unsupported Git filters) return
 `applied=false`, never a made-up success. Native workbench's existing dirty
@@ -72,9 +72,16 @@ and 1–60-minute interval; Terminal text size 8–48 px; Editor idle autosave
 (only a file-backed buffer after 3 seconds without IME composition); Editor
 Tab indentation width 1–16 spaces, applied to both editors. Three destructive
 confirmation/archive controls remain MCP read-only. Native Settings are
-also accessible from the top bar. Agent/Agent Profiles settings sections
-are not implemented yet; their MCP navigation requests correctly return
-`applied=false` rather than showing a placeholder and claiming success.
+also accessible from the top bar. The Agents section lists actual running
+Host Agent sessions and can attach one without restarting it. Agent Profiles
+lists the Host's display-safe catalog, selects an existing profile for the
+next launch, and allows setting or clearing a Native-only default profile
+ID. That choice is persisted with a separate CAS field in Native Settings,
+does not expose Host launch arguments, and falls back to an available Host
+profile if the preferred ID is removed. Existing settings files remain
+readable because the optional field has a backward-compatible default.
+The Agent Profile launcher itself stays in Projects, and creating/editing
+Host-owned profile definitions remains a separate capability.
 Native Git Auto Fetch defaults to enabled with a five-minute interval,
 matching Classic's first-run behavior without sharing its preferences.
 
@@ -136,3 +143,6 @@ execute disk-backed operations and send typed receipts. On Windows
 stale CAS rejection, secret/range rejection, and explicit fail-closed
 `open_settings` without a GUI; the test restores original settings.
 **This is real Host/MCP/data-layer E2E, not Native GPUI GUI acceptance.**
+New Agent/Agent Profiles settings sections have been type-checked with
+`cargo check` and the default-profile store tested with Rust unit tests.
+No graphical Native settings interactions were exercised, per current scope.
