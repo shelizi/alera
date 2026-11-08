@@ -258,3 +258,18 @@ this experimental migration without explicit approval.
 - Future Native confirm/input/selection dialogs can reuse the same shell.
   This change does not claim all Classic settings sections have been ported
   or that pointer/focus behavior has been GUI-tested.
+
+## Follow-up: anchored dropdowns and common component library
+
+- See `docs/gpui-native-component-library-20261108.md` for the Native
+  components, GPUI 0.2.2 primitives and Classic controls used as references.
+- Converted Explorer right-click, visibility, Git More, Git local-branch
+  selection, existing Terminal Host attach, Terminal size, and Editor/Terminal
+  right-click from inline labels/toolbars to a shared anchored popup.
+- Converted Explorer file-action strips and Ctrl+P Quick Open into reusable
+  compact/centered modals. Native Settings uses shared switches/buttons and
+  the Explorer/Git sidebar uses shared segmented options.
+- The new popup is an in-app GPUI element, not a Windows native shell menu.
+  Do not claim native OS popup behavior or keyboard/pointer acceptance
+  without actual Windows GUI testing. Existing Git/worktree/Editor behavior
+  remains guarded by its own domain layer.

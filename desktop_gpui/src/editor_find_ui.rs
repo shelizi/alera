@@ -69,7 +69,7 @@ impl NativeEditor {
         }
         self.stop_drag();
         self.find.visible = true;
-        window.focus(&self.find.query.focus_handle(cx));
+        window.focus(&self.find.query.focus_handle(cx), cx);
         cx.notify();
     }
 
@@ -78,7 +78,7 @@ impl NativeEditor {
             return;
         }
         self.find.visible = false;
-        window.focus(&self.focus);
+        window.focus(&self.focus, cx);
         cx.notify();
     }
 
@@ -97,7 +97,7 @@ impl NativeEditor {
         } else {
             query
         };
-        window.focus(&target);
+        window.focus(&target, cx);
     }
 
     pub(super) fn find_next(&mut self, _: &FindNext, window: &mut Window, cx: &mut Context<Self>) {

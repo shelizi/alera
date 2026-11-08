@@ -310,8 +310,8 @@ impl Render for QuickOpenInput {
             .on_action(cx.listener(Self::paste))
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(|this, _, window, _| {
-                    window.focus(&this.focus);
+                cx.listener(|this, _, window, cx| {
+                    window.focus(&this.focus, cx);
                 }),
             )
             .flex()

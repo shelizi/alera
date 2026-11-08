@@ -3,10 +3,8 @@
 //! Use Alera's existing VS Code Codicon font instead of hard-coded emoji or
 //! one-off icon substitutes. Flutter Classic already bundles this font and
 //! assigns these same glyphs to version-control operations.
-use gpui::{
-    div, px, rgb, AppContext, Context, Div, ElementId, InteractiveElement, IntoElement,
-    ParentElement, Render, Stateful, StatefulInteractiveElement, Styled, Window,
-};
+use gpui::{div, px, rgb, Div, ElementId, ParentElement, Styled};
+use gpui_kit::component::button::{Button, ButtonVariants as _};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UiIcon {
@@ -43,8 +41,6 @@ pub enum UiIcon {
     GitFetch,
     GitPull,
     GitPush,
-    GitStash,
-    GitStashApply,
     GitMerge,
     History,
     Save,
@@ -87,8 +83,6 @@ impl UiIcon {
             Self::GitFetch => '\u{ecb2}',
             Self::GitPull => '\u{eb40}',
             Self::GitPush => '\u{eb41}',
-            Self::GitStash => '\u{ec26}',
-            Self::GitStashApply => '\u{ec27}',
             Self::GitMerge => '\u{eafe}',
             Self::History => '\u{ea82}',
             Self::Save => '\u{eb4b}',
@@ -133,48 +127,28 @@ pub fn icon(icon: UiIcon, size_px: f32, color: u32) -> Div {
         .child(icon.glyph().to_string())
 }
 
-struct IconTooltip {
-    label: &'static str,
-}
-
-impl Render for IconTooltip {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .px_3()
-            .py_2()
-            .rounded_md()
-            .bg(rgb(0x252931))
-            .border_1()
-            .border_color(rgb(0x454b55))
-            .text_size(px(12.0))
-            .text_color(rgb(0xf1f3f7))
-            .child(self.label)
-    }
-}
-
-/// A 30 px hit target, uniform hover/focus treatment, and discoverable
-/// semantic tooltip. The caller provides the click action; no inert buttons.
+/// GPUI Kit owns the button, hover, focus, and tooltip semantics. Keep
+/// Alera's Codicon glyph mapping for Classic-compatible Git/file icons.
 pub fn icon_button(
     id: impl Into<ElementId>,
     icon_kind: UiIcon,
     label: &'static str,
     active: bool,
-) -> Stateful<Div> {
-    div()
-        .id(id)
+) -> Button {
+    let button = Button::new(id)
+        .tooltip(label)
+        .compact()
         .w(px(30.0))
         .h(px(30.0))
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded_md()
-        .cursor_pointer()
-        .bg(rgb(if active { 0x343b46 } else { 0x22262e }))
-        .hover(|style| style.bg(rgb(0x414956)))
-        .tooltip(move |_, cx| cx.new(|_| IconTooltip { label }).into())
+        .p_0()
         .child(icon(
             icon_kind,
             16.0,
             if active { 0xf4f6fa } else { 0xc6cbd4 },
-        ))
+        ));
+    if active {
+        button.secondary()
+    } else {
+        button.ghost()
+    }
 }

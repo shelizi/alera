@@ -20,6 +20,7 @@ pub mod mcp_ui_bridge;
 pub mod mcp_workspace_creation;
 pub mod model;
 pub mod native_modal;
+pub mod native_popup;
 pub mod native_settings;
 pub mod project_search;
 pub mod project_tree;

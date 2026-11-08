@@ -2,6 +2,7 @@
 //! Host-authorized MCP commands. A visible screen must precede open_settings
 //! success, and every local change is a durable compare-and-set.
 use super::*;
+use gpui_kit::component::switch::Switch;
 
 impl Workbench {
     pub(super) fn show_native_settings_section(
@@ -18,6 +19,15 @@ impl Workbench {
         let store = self.native_settings_store.as_ref().ok_or("ui_not_ready")?;
         let settings = store.read().map_err(|_| "ui_operation_failed")?;
         self.install_native_settings(settings, cx);
+        self.native_popup.dismiss();
+        self.native_popup_needs_focus = false;
+        self.explorer_context_menu = None;
+        self.mixed_tab_context = None;
+        self.terminal_tab_context = None;
+        self.quick_open = None;
+        if self.explorer_action.is_some() {
+            self.cancel_explorer_action(cx);
+        }
         if self.settings_section.is_none() {
             self.settings_modal_needs_focus = true;
         }
@@ -36,12 +46,12 @@ impl Workbench {
         self.settings_modal_needs_focus = false;
         if self.center_view == CenterView::Editor {
             if let Some(editor) = self.focused_editor() {
-                window.focus(&editor.read(cx).focus_handle(cx));
+                window.focus(&editor.read(cx).focus_handle(cx), cx);
             } else {
-                window.focus(&self.explorer_keyboard_focus);
+                window.focus(&self.explorer_keyboard_focus, cx);
             }
         } else {
-            window.focus(&self.terminal_keyboard_focus);
+            window.focus(&self.terminal_keyboard_focus, cx);
         }
         cx.notify();
     }
@@ -72,7 +82,7 @@ impl Workbench {
                     view.model
                         .set_status(format!("Native settings unavailable: {code}"));
                 }
-                window.focus(&view.settings_modal_focus);
+                window.focus(&view.settings_modal_focus, cx);
                 cx.notify();
             }))
             .into_any_element()
@@ -129,25 +139,14 @@ impl Workbench {
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         div()
-            .flex()
-            .items_center()
-            .justify_between()
             .p_3()
             .bg(rgb(PANEL))
-            .child(div().text_sm().child(label))
             .child(
-                div()
-                    .id(path)
-                    .cursor_pointer()
-                    .text_sm()
-                    .text_color(rgb(TEXT))
-                    .child(if value {
-                        "On · change"
-                    } else {
-                        "Off · change"
-                    })
-                    .on_click(cx.listener(move |view, _, _, cx| {
-                        view.change_native_setting(path, serde_json::json!(!value), cx);
+                Switch::new(path)
+                    .label(label)
+                    .checked(value)
+                    .on_change(cx.listener(move |view, checked, _, cx| {
+                        view.change_native_setting(path, serde_json::json!(*checked), cx);
                     })),
             )
             .into_any_element()
@@ -185,35 +184,37 @@ impl Workbench {
                     .items_center()
                     .gap_3()
                     .child(
-                        div()
-                            .id(("native-setting-down", control_key))
-                            .cursor_pointer()
-                            .text_color(rgb(TEXT))
-                            .child("−")
-                            .on_click(cx.listener(move |view, _, _, cx| {
-                                let candidate = if integer {
-                                    serde_json::json!(previous as u64)
-                                } else {
-                                    serde_json::json!(previous)
-                                };
-                                view.change_native_setting(path, candidate, cx);
-                            })),
+                        native_components::action_button(
+                            ("native-setting-down", control_key),
+                            "−",
+                            false,
+                            false,
+                        )
+                        .on_click(cx.listener(move |view, _, _, cx| {
+                            let candidate = if integer {
+                                serde_json::json!(previous as u64)
+                            } else {
+                                serde_json::json!(previous)
+                            };
+                            view.change_native_setting(path, candidate, cx);
+                        })),
                     )
                     .child(div().text_sm().child(format!("{value}")))
                     .child(
-                        div()
-                            .id(("native-setting-up", control_key))
-                            .cursor_pointer()
-                            .text_color(rgb(TEXT))
-                            .child("+")
-                            .on_click(cx.listener(move |view, _, _, cx| {
-                                let candidate = if integer {
-                                    serde_json::json!(next as u64)
-                                } else {
-                                    serde_json::json!(next)
-                                };
-                                view.change_native_setting(path, candidate, cx);
-                            })),
+                        native_components::action_button(
+                            ("native-setting-up", control_key),
+                            "+",
+                            false,
+                            false,
+                        )
+                        .on_click(cx.listener(move |view, _, _, cx| {
+                            let candidate = if integer {
+                                serde_json::json!(next as u64)
+                            } else {
+                                serde_json::json!(next)
+                            };
+                            view.change_native_setting(path, candidate, cx);
+                        })),
                     ),
             )
             .into_any_element()

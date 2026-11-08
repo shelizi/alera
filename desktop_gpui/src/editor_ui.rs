@@ -421,7 +421,7 @@ impl NativeEditor {
     fn new_untitled_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let root = self.workspace_root.clone();
         match self.open_scratch(&root, cx) {
-            Ok(_) => window.focus(&self.focus),
+            Ok(_) => window.focus(&self.focus, cx),
             Err(error) => {
                 self.status = format!("Cannot create new file: {error}");
                 cx.notify();
@@ -666,7 +666,7 @@ impl NativeEditor {
             f32::from(viewport.top()),
             f32::from(viewport.bottom()),
             f32::from(self.scroll.offset().y),
-            f32::from(self.scroll.max_offset().height),
+            f32::from(self.scroll.max_offset().y),
         )
     }
 
@@ -687,7 +687,9 @@ impl NativeEditor {
         // release, at scroll bounds, on entity destruction or after a bounded
         // 10s fallback in case the OS loses the release event.
         cx.spawn(async move |editor, cx| loop {
-            gpui::Timer::after(Duration::from_millis(40)).await;
+            cx.background_executor()
+                .timer(Duration::from_millis(40))
+                .await;
             match editor.update(cx, |editor, cx| editor.tick_drag_autoscroll(cx)) {
                 Ok(true) => {}
                 Ok(false) | Err(_) => break,
@@ -1378,7 +1380,7 @@ impl NativeEditor {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, event: &gpui::MouseDownEvent, window, cx| {
-                    window.focus(&this.focus);
+                    window.focus(&this.focus, cx);
                     this.pointer_down(event, cx);
                 }),
             )
@@ -1556,7 +1558,7 @@ impl Render for NativeEditor {
                                                 .on_click(cx.listener(
                                                     move |this, _, window, cx| {
                                                         this.activate_tab(index, cx);
-                                                        window.focus(&this.focus);
+                                                        window.focus(&this.focus, cx);
                                                     },
                                                 ))
                                                 .on_drag(
@@ -1830,7 +1832,7 @@ impl Render for NativeEditor {
                     .track_focus(&self.focus)
                     .on_mouse_down(
                         MouseButton::Left,
-                        cx.listener(|this, _, window, _| window.focus(&this.focus)),
+                        cx.listener(|this, _, window, cx| window.focus(&this.focus, cx)),
                     )
                     .flex_1()
                     .min_h_0()
@@ -1866,7 +1868,7 @@ impl Render for NativeEditor {
                         .w_full()
                         .px_3()
                         .py_2()
-                        .track_scroll(self.list_scroll.clone()),
+                        .track_scroll(&self.list_scroll),
                     ),
             )
             .into_any_element()

@@ -1,9 +1,16 @@
 //! Experimental Alera desktop shell powered by native GPUI (no Flutter/WebView).
 mod editor_ui;
+mod native_action_dialog_ui;
+mod native_components;
 mod native_modal_ui;
+mod native_popup_ui;
 mod native_settings_ui;
 mod native_ui_icons;
 mod quick_open_ui;
+
+// GPUI Kit re-exports its pinned GPUI runtime. Use a single version of all
+// GPUI types throughout Native instead of mixing gpui 0.2.x and gpui-pre.
+extern crate gpui_kit as gpui;
 
 use alera_gpui_desktop::agent_profiles::{
     matching_agent_handle, AgentProfileRow, LaunchedAgentTab,
@@ -30,6 +37,7 @@ use alera_gpui_desktop::mcp_ui_bridge::{
 use alera_gpui_desktop::mcp_workspace_creation::HostManagedWorkspaceRequest;
 use alera_gpui_desktop::model::WorkbenchModel;
 use alera_gpui_desktop::native_modal::NativeModalSize;
+use alera_gpui_desktop::native_popup::{NativePopupKind, NativePopupState};
 use alera_gpui_desktop::native_settings::{NativeSettings, NativeSettingsStore};
 use alera_gpui_desktop::project_search::{ContentMatch, ProjectSearch};
 use alera_gpui_desktop::project_tree::{collect_project_tree, ProjectTreeGroup};
@@ -58,11 +66,15 @@ use alera_gpui_desktop::workspace_tree::WorkspaceTree;
 use alera_gpui_desktop::worktree_manager::{WorktreeEntry, WorktreeManager};
 use editor_ui::{bind_editor_keys, NativeEditor};
 use gpui::{
-    actions, div, prelude::*, px, rgb, size, App, Application, Bounds, Context, Entity, Focusable,
-    KeyBinding, PathPromptOptions, Window, WindowBounds, WindowOptions,
+    actions, div, prelude::*, px, rgb, size, App, Bounds, Context, Entity, Focusable, KeyBinding,
+    PathPromptOptions, Window, WindowBounds, WindowOptions,
 };
-use native_modal_ui::AleraNativeModal;
-use native_ui_icons::{explorer_file_icon, icon, icon_button, UiIcon};
+use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
+use gpui_kit::component::tab::{Tab, TabBar};
+use gpui_kit::component::IconName;
+use native_components::{icon, icon_button, AleraNativeModal, UiIcon};
+use native_ui_icons::explorer_file_icon;
 use quick_open_ui::{bind_quick_open_keys, QuickOpenInput};
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -281,8 +293,6 @@ impl ExplorerMenuAction {
 struct ExplorerContextMenu {
     /// None means the user right-clicked empty space, not a stale selection.
     path: Option<PathBuf>,
-    left: f32,
-    top: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -296,13 +306,14 @@ struct Workbench {
     center_view: CenterView,
     right_sidebar_view: RightSidebarView,
     explorer_context_menu: Option<ExplorerContextMenu>,
-    git_more_open: bool,
+    native_popup: NativePopupState,
+    native_popup_focus: gpui::FocusHandle,
+    native_popup_needs_focus: bool,
     show_project_management: bool,
     runtime_details_open: bool,
     tree: Option<WorkspaceTree>,
     tree_mode: bool,
     explorer_visibility: ExplorerVisibilityOptions,
-    explorer_visibility_menu_open: bool,
     explorer_selection: Option<PathBuf>,
     explorer_multi_selection: ExplorerMultiSelection,
     /// A read-only Explorer preview can cover an editor viewport without
@@ -314,6 +325,7 @@ struct Workbench {
     explorer_drop_request: u64,
     explorer_action: Option<ExplorerAction>,
     explorer_action_input: Option<Entity<QuickOpenInput>>,
+    explorer_action_modal_focus: gpui::FocusHandle,
     explorer_delete_confirmed: bool,
     explorer_delete_pending: Option<ExplorerDeleteBatch>,
     editor: Option<Entity<NativeEditor>>,
@@ -421,7 +433,6 @@ struct Workbench {
     terminal_key_sending: bool,
     terminal_auto_resize: TerminalAutoResizeGate,
     terminal_line_selection: Option<TerminalLineSelection>,
-    show_terminal_attach_picker: bool,
     terminal_create_flow: TerminalCreateFlow,
     terminal_layout_restore: Option<TerminalLayout>,
     terminal_send_loading: bool,
@@ -453,7 +464,7 @@ impl Workbench {
         self.explorer_selection = Some(path.to_path_buf());
         self.explorer_delete_confirmed = false;
         self.explorer_delete_pending = None;
-        window.focus(&self.explorer_keyboard_focus);
+        window.focus(&self.explorer_keyboard_focus, cx);
         if ctrl || shift {
             self.explorer_context_menu = None;
             self.model.set_status(format!(
@@ -482,14 +493,14 @@ impl Workbench {
                 self.explorer_preview_active = false;
                 self.open_editor(cx);
                 if let Some(editor) = self.focused_editor() {
-                    window.focus(&editor.read(cx).focus_handle(cx));
+                    window.focus(&editor.read(cx).focus_handle(cx), cx);
                 }
                 self.persist_session();
             }
         } else if self.model.preview_path(path) {
             self.explorer_preview_active = true;
             self.center_view = CenterView::Editor;
-            window.focus(&self.explorer_keyboard_focus);
+            window.focus(&self.explorer_keyboard_focus, cx);
         }
         cx.notify();
     }
@@ -556,7 +567,7 @@ impl Workbench {
             self.native_settings.explorer_show_ignored = next.show_ignored;
         }
         self.explorer_visibility = next;
-        self.explorer_visibility_menu_open = false;
+        self.native_popup.dismiss();
         self.explorer_multi_selection.clear();
         self.explorer_selection = None;
         self.explorer_context_menu = None;
@@ -931,18 +942,14 @@ impl Workbench {
         self.explorer_selection = path.clone();
         self.explorer_delete_confirmed = false;
         self.explorer_delete_pending = None;
-        window.focus(&self.explorer_keyboard_focus);
-        let viewport = window.viewport_size();
-        let left = (f32::from(event.position.x)
-            - (f32::from(viewport.width) - RIGHT_SIDEBAR_WIDTH))
-            .clamp(6.0, (RIGHT_SIDEBAR_WIDTH - 232.0).max(6.0));
-        let menu_height = if path.is_some() { 319.0 } else { 252.0 };
-        let top = (f32::from(event.position.y) - TOP_BAR_HEIGHT - 38.0).clamp(
-            4.0,
-            (f32::from(viewport.height) - TOP_BAR_HEIGHT - 38.0 - menu_height - 6.0).max(4.0),
+        window.focus(&self.explorer_keyboard_focus, cx);
+        self.explorer_context_menu = Some(ExplorerContextMenu { path });
+        self.show_native_popup(
+            NativePopupKind::ExplorerContext,
+            f32::from(event.position.x),
+            f32::from(event.position.y),
+            cx,
         );
-        self.explorer_context_menu = Some(ExplorerContextMenu { path, left, top });
-        cx.notify();
     }
 
     fn begin_explorer_action(
@@ -966,6 +973,8 @@ impl Workbench {
             return;
         }
         self.explorer_action = Some(action);
+        self.native_popup.dismiss();
+        self.quick_open = None;
         self.explorer_delete_confirmed = false;
         self.explorer_delete_pending = None;
         self.explorer_action_input =
@@ -981,9 +990,12 @@ impl Workbench {
                     ExplorerAction::Duplicate | ExplorerAction::Delete => unreachable!(),
                 };
                 let input = cx.new(|cx| QuickOpenInput::with_placeholder(placeholder, cx));
-                window.focus(&input.read(cx).focus_handle(cx));
+                window.focus(&input.read(cx).focus_handle(cx), cx);
                 Some(input)
             };
+        if self.explorer_action_input.is_none() {
+            window.focus(&self.explorer_action_modal_focus, cx);
+        }
         cx.notify();
     }
 
@@ -1924,13 +1936,19 @@ impl Workbench {
     }
     fn toggle_file_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.quick_open.is_some() {
-            self.quick_open = None;
-            cx.notify();
+            self.close_quick_open_dialog(window, cx);
             return;
         }
+        if self.settings_section.is_some() {
+            return;
+        }
+        if self.explorer_action.is_some() {
+            self.cancel_explorer_action(cx);
+        }
+        self.native_popup.dismiss();
         let input = cx.new(QuickOpenInput::new);
         cx.observe(&input, |_, _, cx| cx.notify()).detach();
-        window.focus(&input.read(cx).focus_handle(cx));
+        window.focus(&input.read(cx).focus_handle(cx), cx);
         self.quick_open = Some(input);
         self.ensure_file_index(cx);
         cx.notify();
@@ -1992,7 +2010,7 @@ impl Workbench {
             self.content_truncated = false;
         } else {
             let input = cx.new(QuickOpenInput::new);
-            window.focus(&input.read(cx).focus_handle(cx));
+            window.focus(&input.read(cx).focus_handle(cx), cx);
             self.content_query = Some(input);
         }
         cx.notify();
@@ -2075,7 +2093,7 @@ impl Workbench {
         match editor.update(cx, |editor, cx| {
             editor.navigate_to_content_hit(path, line, column, cx)
         }) {
-            Ok(()) => window.focus(&editor.read(cx).focus_handle(cx)),
+            Ok(()) => window.focus(&editor.read(cx).focus_handle(cx), cx),
             Err(error) => self.model.set_status(format!(
                 "Cannot navigate to search result {line}:{column}: {error}; rerun search"
             )),
@@ -2599,7 +2617,7 @@ impl Workbench {
         self.mixed_panes.reset();
         self.mixed_tab_context = None;
         self.tree = WorkspaceTree::new_with_options(&canonical, self.explorer_visibility).ok();
-        self.explorer_visibility_menu_open = false;
+        self.native_popup.dismiss();
         self.explorer_multi_selection = ExplorerMultiSelection::new(&canonical);
         self.explorer_preview_active = false;
         self.explorer_filter_input
@@ -2702,7 +2720,7 @@ impl Workbench {
         self.terminal_key_queue_target = None;
         self.terminal_key_sending = false;
         self.terminal_input.update(cx, |input, cx| input.clear(cx));
-        self.show_terminal_attach_picker = false;
+        self.native_popup.dismiss();
         self.terminal_poll = TerminalPollGate::default();
         self.terminal_list_loading = false;
         self.terminal_read_loading = None;
@@ -4780,14 +4798,14 @@ impl Workbench {
                     } else {
                         &self.terminal_keyboard_focus
                     };
-                    window.focus(focus);
+                    window.focus(focus, cx);
                 }
             }
             WorkbenchTabIdentity::Editor { instance, .. } => {
                 if let Some((_, editor)) = self.editor_for_instance(*instance, cx) {
                     if editor.update(cx, |editor, cx| editor.activate_tab_instance(*instance, cx)) {
                         self.center_view = CenterView::Editor;
-                        window.focus(&editor.read(cx).focus_handle(cx));
+                        window.focus(&editor.read(cx).focus_handle(cx), cx);
                     }
                 }
             }
@@ -4961,11 +4979,23 @@ impl Workbench {
         cx.notify();
     }
 
-    fn show_terminal_tab_context(&mut self, index: usize, cx: &mut Context<Self>) {
+    fn show_terminal_tab_context(
+        &mut self,
+        index: usize,
+        event: &gpui::MouseDownEvent,
+        cx: &mut Context<Self>,
+    ) {
         // Right-click targets the tab under the pointer, not the active Host
         // input session. No session is attached or mutated by opening a menu.
         self.terminal_tab_context = self.terminals.context_target_at(index);
-        cx.notify();
+        if self.terminal_tab_context.is_some() {
+            self.show_native_popup(
+                NativePopupKind::TerminalTabContext,
+                f32::from(event.position.x),
+                f32::from(event.position.y),
+                cx,
+            );
+        }
     }
 
     fn apply_terminal_context(&mut self, action: TerminalContextAction, cx: &mut Context<Self>) {
@@ -5157,7 +5187,7 @@ impl Workbench {
         // A single lifecycle-bound timer: no timer per tab, no stale callback
         // after the Workbench entity/window has been destroyed.
         cx.spawn(async move |view, cx| loop {
-            gpui::Timer::after(Duration::from_millis(1500)).await;
+            cx.background_executor().timer(Duration::from_millis(1500)).await;
             if view
                 .update(cx, |view, cx| {
                     view.terminal_tick = view.terminal_tick.wrapping_add(1);
@@ -5222,11 +5252,26 @@ impl Render for Workbench {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_mixed_tabs(cx);
         if self.settings_section.is_some() && self.settings_modal_needs_focus {
-            window.focus(&self.settings_modal_focus);
+            window.focus(&self.settings_modal_focus, cx);
             self.settings_modal_needs_focus = false;
+        }
+        if self.native_popup.active().is_some() && self.native_popup_needs_focus {
+            window.focus(&self.native_popup_focus, cx);
+            self.native_popup_needs_focus = false;
         }
         let viewport = window.viewport_size();
         let native_settings_panel = self.render_native_settings_panel(
+            f32::from(viewport.width),
+            f32::from(viewport.height),
+            cx,
+        );
+        let native_popup_panel = self.render_native_popup(cx);
+        let explorer_action_dialog = self.render_explorer_action_dialog(
+            f32::from(viewport.width),
+            f32::from(viewport.height),
+            cx,
+        );
+        let quick_open_dialog = self.render_quick_open_dialog(
             f32::from(viewport.width),
             f32::from(viewport.height),
             cx,
@@ -5236,10 +5281,6 @@ impl Render for Workbench {
         let mixed_active = self.mixed_tabs.active().cloned();
         let mixed_secondary_tab_ids = self.mixed_panes.tabs_in(PaneSlot::Secondary).to_vec();
         let mixed_secondary_active = self.mixed_panes.active_in(PaneSlot::Secondary).cloned();
-        let mixed_context = self.mixed_tab_context.clone();
-        let mixed_context_in_second = mixed_context
-            .as_ref()
-            .is_some_and(|id| self.mixed_panes.tabs_in(PaneSlot::Secondary).contains(id));
         let mixed_has_secondary = self.mixed_panes.has_secondary();
         let mixed_split_horizontal = self.mixed_panes.axis() == PaneAxis::Horizontal;
         let mixed_secondary_identity = self.mixed_panes.active_in(PaneSlot::Secondary).cloned();
@@ -5333,8 +5374,6 @@ impl Render for Workbench {
         let explorer_git_badges = ExplorerGitBadges::from_snapshot(self.git_snapshot.as_ref());
         let tree_mode = self.tree_mode && self.tree.is_some();
         let tree_truncated = self.tree.as_ref().is_some_and(WorkspaceTree::truncated);
-        let explorer_visibility = self.explorer_visibility;
-        let explorer_visibility_menu_open = self.explorer_visibility_menu_open;
         let explorer_multi_selection = self.explorer_multi_selection.clone();
         let explorer_drag_selection: Arc<Vec<PathBuf>> =
             Arc::new(explorer_multi_selection.top_level_paths());
@@ -5356,14 +5395,6 @@ impl Render for Workbench {
                 .map(|row| row.path.clone())
                 .collect()
         });
-        let explorer_action = self.explorer_action;
-        let explorer_action_input = self.explorer_action_input.clone();
-        let explorer_delete_confirmed = self.explorer_delete_confirmed;
-        let explorer_delete_count = self
-            .explorer_delete_pending
-            .as_ref()
-            .map(ExplorerDeleteBatch::len)
-            .unwrap_or_default();
         let tabs: Vec<_> = self
             .model
             .tabs()
@@ -5487,7 +5518,6 @@ impl Render for Workbench {
                 )
             })
             .collect();
-        let terminal_attach_sessions = terminal_sessions.clone();
         let terminal_tabs: Vec<_> = self
             .terminals
             .tabs
@@ -5503,14 +5533,8 @@ impl Render for Workbench {
                 )
             })
             .collect();
-        let terminal_context_open = self
-            .terminal_tab_context
-            .as_ref()
-            .and_then(|target| self.terminals.index_for_context(target))
-            .is_some();
         let terminal_drag_generation = self.workspace_generation;
         let terminal_active = self.terminals.active_tab;
-        let show_terminal_attach_picker = self.show_terminal_attach_picker;
         let terminal_create_busy = self.terminal_create_flow.is_active();
         let terminal_create_timed_out = self.terminal_create_flow.is_timed_out();
         let terminal_creating = self.terminal_create_flow.is_creating();
@@ -5707,15 +5731,7 @@ impl Render for Workbench {
         } else {
             terminal_status
         };
-        let quick_open = self.quick_open.clone();
-        let indexed_total = self.file_index.as_ref().map(|index| index.total());
         let index_loading = self.file_index_loading;
-        let quick_results = self
-            .quick_open
-            .as_ref()
-            .zip(self.file_index.as_ref())
-            .map(|(input, index)| index.search(input.read(cx).query(), 18))
-            .unwrap_or_default();
         let content_query = self.content_query.clone();
         let content_loading = self.content_loading;
         let content_results_total = self.content_matches.len();
@@ -5789,7 +5805,6 @@ impl Render for Workbench {
             .map(|history| history.commits.clone())
             .unwrap_or_default();
         let git_merge_armed = self.git_merge_armed.is_some();
-        let git_conflict_loading = self.git_conflict_loading;
         let git_conflict_armed = self.git_conflict_confirm_armed;
         let git_conflict_count = self
             .git_conflict_preview
@@ -5930,43 +5945,25 @@ impl Render for Workbench {
                                     .border_b_1()
                                     .border_color(rgb(BORDER))
                                     .child(
-                                        div()
-                                            .id("right-sidebar-explorer-tab")
-                                            .flex_1()
-                                            .h(px(32.0))
-                                            .flex()
-                                            .items_center()
-                                            .justify_center()
-                                            .gap_2()
-                                            .rounded_md()
-                                            .cursor_pointer()
-                                            .bg(rgb(if self.right_sidebar_view == RightSidebarView::Explorer { ACTIVE } else { PANEL }))
-                                            .hover(|s| s.bg(rgb(ACTIVE)))
-                                            .child(icon(UiIcon::Folder, 16.0, TEXT))
-                                            .child("Explorer")
-                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                this.right_sidebar_view = RightSidebarView::Explorer;
-                                                cx.notify();
-                                            })),
-                                    )
-                                    .child(
-                                        div()
-                                            .id("right-sidebar-git-tab")
-                                            .flex_1()
-                                            .h(px(32.0))
-                                            .flex()
-                                            .items_center()
-                                            .justify_center()
-                                            .gap_2()
-                                            .rounded_md()
-                                            .cursor_pointer()
-                                            .bg(rgb(if self.right_sidebar_view == RightSidebarView::Git { ACTIVE } else { PANEL }))
-                                            .hover(|s| s.bg(rgb(ACTIVE)))
-                                            .child(icon(UiIcon::Branch, 16.0, TEXT))
-                                            .child("Git")
-                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                this.right_sidebar_view = RightSidebarView::Git;
-                                                this.explorer_context_menu = None;
+                                        TabBar::new("right-sidebar-view-tabs")
+                                            .segmented()
+                                            .selected_index(
+                                                if self.right_sidebar_view == RightSidebarView::Explorer {
+                                                    0
+                                                } else {
+                                                    1
+                                                },
+                                            )
+                                            .child(Tab::new().label("Explorer").prefix(icon(UiIcon::Folder, 15.0, TEXT)))
+                                            .child(Tab::new().label("Git").prefix(icon(UiIcon::Branch, 15.0, TEXT)))
+                                            .on_click(cx.listener(|view, index, _, cx| {
+                                                view.right_sidebar_view = if *index == 0 {
+                                                    RightSidebarView::Explorer
+                                                } else {
+                                                    view.explorer_context_menu = None;
+                                                    view.native_popup.dismiss();
+                                                    RightSidebarView::Git
+                                                };
                                                 cx.notify();
                                             })),
                                     ),
@@ -6023,13 +6020,50 @@ impl Render for Workbench {
                                                         this.save_all_editors(cx);
                                                     })),
                                             )
-                                            .child(
-                                                icon_button("explorer-visibility-options", UiIcon::More, "Show/hide Explorer items", explorer_visibility_menu_open)
-                                                    .on_click(cx.listener(|this, _, _, cx| {
-                                                        this.explorer_visibility_menu_open = !this.explorer_visibility_menu_open;
-                                                        cx.notify();
-                                                    })),
-                                            )
+                                            .child({
+                                                let owner = cx.entity().downgrade();
+                                                let ignored = self.explorer_visibility.show_ignored;
+                                                let hidden = self.explorer_visibility.show_hidden;
+                                                Button::new("explorer-visibility-options")
+                                                    .icon(IconName::Ellipsis)
+                                                    .tooltip("Show/hide Explorer items")
+                                                    .ghost()
+                                                    .dropdown_menu(move |menu, _, _| {
+                                                        let ignored_owner = owner.clone();
+                                                        let mut menu = menu.item(
+                                                            PopupMenuItem::new(if ignored {
+                                                                "Hide ignored files"
+                                                            } else {
+                                                                "Show ignored files"
+                                                            })
+                                                            .on_click(move |_, _, cx| {
+                                                                let _ = ignored_owner.update(cx, |view, cx| {
+                                                                    let mut next = view.explorer_visibility;
+                                                                    next.show_ignored = !next.show_ignored;
+                                                                    view.update_explorer_visibility(next, cx);
+                                                                });
+                                                            }),
+                                                        );
+                                                        if cfg!(windows) {
+                                                            let hidden_owner = owner.clone();
+                                                            menu = menu.item(
+                                                                PopupMenuItem::new(if hidden {
+                                                                    "Hide hidden items"
+                                                                } else {
+                                                                    "Show hidden items"
+                                                                })
+                                                                .on_click(move |_, _, cx| {
+                                                                    let _ = hidden_owner.update(cx, |view, cx| {
+                                                                        let mut next = view.explorer_visibility;
+                                                                        next.show_hidden = !next.show_hidden;
+                                                                        view.update_explorer_visibility(next, cx);
+                                                                    });
+                                                                }),
+                                                            );
+                                                        }
+                                                        menu
+                                                    })
+                                            })
                                             .child(
                                                 icon_button("explorer-collapse-all", UiIcon::CollapseAll, "Collapse all folders", false)
                                                     .on_click(cx.listener(|this, _, _window, cx| {
@@ -6059,185 +6093,12 @@ impl Render for Workbench {
                             )
                             .child(
                                 div()
-                                    .id("explorer-visibility-options-panel")
-                                    .border_b_1()
-                                    .border_color(rgb(BORDER))
-                                    .when(!explorer_visibility_menu_open, |panel| panel.hidden())
-                                    .child(
-                                        div()
-                                            .id("explorer-toggle-ignored")
-                                            .cursor_pointer()
-                                            .px_3()
-                                            .py_2()
-                                            .text_xs()
-                                            .hover(|style| style.bg(rgb(ACTIVE)))
-                                            .child(if explorer_visibility.show_ignored {
-                                                "Hide ignored files"
-                                            } else {
-                                                "Show ignored files"
-                                            })
-                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                let mut next = this.explorer_visibility;
-                                                next.show_ignored = !next.show_ignored;
-                                                this.update_explorer_visibility(next, cx);
-                                            })),
-                                    )
-                                    .child(
-                                        div()
-                                            .id("explorer-toggle-hidden")
-                                            .cursor_pointer()
-                                            .px_3()
-                                            .py_2()
-                                            .text_xs()
-                                            .hover(|style| style.bg(rgb(ACTIVE)))
-                                            .when(!cfg!(windows), |row| row.hidden())
-                                            .child(if explorer_visibility.show_hidden {
-                                                "Hide hidden items"
-                                            } else {
-                                                "Show hidden items"
-                                            })
-                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                let mut next = this.explorer_visibility;
-                                                next.show_hidden = !next.show_hidden;
-                                                this.update_explorer_visibility(next, cx);
-                                            })),
-                                    ),
-                            )
-                            .child(
-                                div()
                                     .id("explorer-classic-filter")
                                     .px_2()
                                     .py_2()
                                     .border_b_1()
                                     .border_color(rgb(BORDER))
                                     .child(explorer_filter_input),
-                            )
-                            .child(
-                                div()
-                                    .id("explorer-action-prompt")
-                                    .px_3()
-                                    .py_2()
-                                    .border_b_1()
-                                    .border_color(rgb(BORDER))
-                                    .when(explorer_action.is_none(), |panel| panel.hidden())
-                                    .child(if let Some(action) = explorer_action {
-                                        div()
-                                            .id("explorer-action-editor")
-                                            .flex()
-                                            .flex_col()
-                                            .gap_1()
-                                            .child(div().text_xs().text_color(rgb(TEXT)).child(
-                                                if action == ExplorerAction::Delete {
-                                                    "Delete selection permanently? Folder contents will be deleted.".into()
-                                                } else {
-                                                    action.label().to_string()
-                                                }
-                                            ))
-                                            .child(if let Some(input) = explorer_action_input {
-                                                div().child(input).into_any_element()
-                                            } else {
-                                                div().h(px(0.0)).into_any_element()
-                                            })
-                                            .child(
-                                                div()
-                                                    .flex()
-                                                    .gap_3()
-                                                    .child(
-                                                        div()
-                                                            .id("explorer-apply")
-                                                            .cursor_pointer()
-                                                            .text_sm()
-                                                            .text_color(rgb(TEXT))
-                                                            .child(if explorer_delete_confirmed {
-                                                                format!("CONFIRM PERMANENT DELETE ({explorer_delete_count})")
-                                                            } else if action == ExplorerAction::Delete {
-                                                                "Delete permanently…".to_owned()
-                                                            } else {
-                                                                "Apply".to_owned()
-                                                            })
-                                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                                this.apply_explorer_action(cx);
-                                                            })),
-                                                    )
-                                                    .child(
-                                                        div()
-                                                            .id("explorer-action-cancel")
-                                                            .cursor_pointer()
-                                                            .text_sm()
-                                                            .text_color(rgb(MUTED))
-                                                            .child("Cancel")
-                                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                                this.cancel_explorer_action(cx);
-                                                            })),
-                                                    ),
-                                            )
-                                            .into_any_element()
-                                    } else {
-                                        div().h(px(0.0)).into_any_element()
-                                    }),
-                            )
-                            .child(
-                                div()
-                                    .id("explorer-quick-open-panel")
-                                    .px_3()
-                                    .py_2()
-                                    .border_b_1()
-                                    .border_color(rgb(BORDER))
-                                    .when(quick_open.is_none(), |panel| panel.hidden())
-                                    .child(if let Some(input) = quick_open {
-                                        div()
-                                            .mt_2()
-                                            .flex()
-                                            .flex_col()
-                                            .gap_1()
-                                            .child(input)
-                                            .child(
-                                                div()
-                                                    .text_xs()
-                                                    .text_color(rgb(MUTED))
-                                                    .child(if index_loading {
-                                                        "Indexing workspace files…".into()
-                                                    } else {
-                                                        format!(
-                                                            "{} files indexed · {} matches",
-                                                            indexed_total.unwrap_or(0),
-                                                            quick_results.len()
-                                                        )
-                                                    }),
-                                            )
-                                            .child(
-                                                div()
-                                                    .id("quick-open-results")
-                                                    .max_h(px(260.0))
-                                                    .overflow_y_scroll()
-                                                    .children(quick_results.into_iter().enumerate().map(
-                                                        |(index, path)| {
-                                                            let label = path
-                                                                .strip_prefix(&workspace_root)
-                                                                .unwrap_or(&path)
-                                                                .display()
-                                                                .to_string();
-                                                            div()
-                                                                .id(("quick-open-result", index))
-                                                                .cursor_pointer()
-                                                                .text_sm()
-                                                                .py_1()
-                                                                .hover(|style| style.bg(rgb(ACTIVE)))
-                                                                .child(label)
-                                                                .on_click(cx.listener(move |this, _, _, cx| {
-                                                                    if this.model.open_path(&path) {
-                                                                        this.open_editor(cx);
-                                                                    }
-                                                                    this.quick_open = None;
-                                                                    this.persist_session();
-                                                                    cx.notify();
-                                                                }))
-                                                        }
-                                                    )),
-                                            )
-                                    } else {
-                                        div().h(px(0.0))
-                                    }),
                             )
                             .child(
                                 div()
@@ -6596,87 +6457,6 @@ impl Render for Workbench {
                                         view.child(div().text_color(rgb(MUTED)).child("Tree limited to 4,000 visible items"))
                                     }),
                             )
-                            .child(if let Some(menu) = self.explorer_context_menu.clone() {
-                                let actions = if let Some(path) = menu.path.as_ref() {
-                                    let mut actions = vec![
-                                        ExplorerMenuAction::File(ExplorerAction::NewFile),
-                                        ExplorerMenuAction::File(ExplorerAction::NewFolder),
-                                        ExplorerMenuAction::Clipboard(ExplorerClipboardMode::Copy),
-                                        ExplorerMenuAction::Clipboard(ExplorerClipboardMode::Cut),
-                                        ExplorerMenuAction::Paste,
-                                        ExplorerMenuAction::CopyAbsolutePath,
-                                        ExplorerMenuAction::CopyRelativePath,
-                                        ExplorerMenuAction::File(ExplorerAction::Duplicate),
-                                    ];
-                                    if path.is_file() {
-                                        actions.push(ExplorerMenuAction::OpenInAlera);
-                                        actions.push(ExplorerMenuAction::ViewCurrentGitDiff);
-                                        actions.push(ExplorerMenuAction::GitHistory);
-                                    }
-                                    actions.push(ExplorerMenuAction::File(ExplorerAction::Rename));
-                                    if path.is_dir() {
-                                        actions.push(ExplorerMenuAction::CollapseFolder);
-                                    }
-                                    actions.extend([
-                                        ExplorerMenuAction::Refresh,
-                                        ExplorerMenuAction::File(ExplorerAction::Delete),
-                                    ]);
-                                    actions
-                                } else {
-                                    vec![
-                                        ExplorerMenuAction::File(ExplorerAction::NewFile),
-                                        ExplorerMenuAction::File(ExplorerAction::NewFolder),
-                                        ExplorerMenuAction::Paste,
-                                    ]
-                                };
-                                let label = menu.path.as_ref()
-                                    .and_then(|path| path.file_name())
-                                    .map(|name| name.to_string_lossy().to_string())
-                                    .unwrap_or_else(|| "Current folder".into());
-                                div()
-                                    .id("explorer-context-menu")
-                                    .absolute()
-                                    .top(px(menu.top))
-                                    .left(px(menu.left))
-                                    .w(px(226.0))
-                                    .max_h(px(340.0))
-                                    .overflow_y_scroll()
-                                    .rounded_md()
-                                    .border_1()
-                                    .border_color(rgb(BORDER))
-                                    .bg(rgb(0x2d323c))
-                                    .p_1()
-                                    .on_mouse_down(gpui::MouseButton::Left, cx.listener(|_, _, _, cx| {
-                                        cx.stop_propagation();
-                                    }))
-                                    .child(div()
-                                        .px_2()
-                                        .py_1()
-                                        .text_xs()
-                                        .text_color(rgb(MUTED))
-                                        .child(label))
-                                    .children(actions.into_iter().enumerate().map(|(index, action)| {
-                                        div()
-                                            .id(("explorer-context-action", index))
-                                            .h(px(30.0))
-                                            .px_2()
-                                            .flex()
-                                            .items_center()
-                                            .cursor_pointer()
-                                            .rounded_sm()
-                                            .hover(|style| style.bg(rgb(ACTIVE)))
-                                            .text_sm()
-                                            .text_color(rgb(TEXT))
-                                            .child(action.label())
-                                            .on_click(cx.listener(move |this, _, window, cx| {
-                                                this.run_explorer_menu_action(action, window, cx);
-                                                cx.stop_propagation();
-                                            }))
-                                    }))
-                                    .into_any_element()
-                            } else {
-                                div().h(px(0.0)).into_any_element()
-                            })
                             )
                             .child(
                                 div()
@@ -6885,7 +6665,18 @@ impl Render for Workbench {
                                     .flex()
                                     .items_center()
                                     .gap_1()
-                                    .child(git_branch_input)
+                                    .child(self.render_kit_branch_dropdown(
+                                        "git-branch-dropdown",
+                                        "Choose local branch".into(),
+                                        cx,
+                                    ))
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .child(div().flex_1().min_w_0().child(git_branch_input))
                                     .child(icon_button("git-switch-branch", UiIcon::Branch, "Switch to the specified local branch", false)
                                         .on_click(cx.listener(|this, _, _, cx| {
                                             let branch = this.git_branch_input.read(cx).query().trim().to_owned();
@@ -6931,51 +6722,76 @@ impl Render for Workbench {
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.confirm_sensitive_git_action(ConfirmGitAction::PushUpstream, cx);
                                     })))
-                                .child(icon_button("git-more-actions", UiIcon::More, "More Git actions: Stash, apply, conflict review", self.git_more_open)
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.git_more_open = !this.git_more_open;
-                                        cx.notify();
-                                    })))
+                                .child({
+                                    let owner = cx.entity().downgrade();
+                                    let armed = self.git_sensitive_armed;
+                                    let has_conflict_review = self.git_conflict_preview.is_some();
+                                    Button::new("git-more-actions")
+                                        .icon(IconName::Ellipsis)
+                                        .ghost()
+                                        .tooltip("More Git actions: stash and conflict review")
+                                        .dropdown_menu(move |menu, _, _| {
+                                            let save_owner = owner.clone();
+                                            let apply_owner = owner.clone();
+                                            let inspect_owner = owner.clone();
+                                            let mut menu = menu
+                                                .item(
+                                                    PopupMenuItem::new(
+                                                        if armed == Some(ConfirmGitAction::StashSave) {
+                                                            "Confirm stash tracked changes"
+                                                        } else {
+                                                            "Stash tracked changes"
+                                                        }
+                                                    )
+                                                    .on_click(move |_, _, cx| {
+                                                        let _ = save_owner.update(cx, |view, cx| {
+                                                            view.confirm_sensitive_git_action(ConfirmGitAction::StashSave, cx);
+                                                        });
+                                                    }),
+                                                )
+                                                .item(
+                                                    PopupMenuItem::new(
+                                                        if armed == Some(ConfirmGitAction::StashApply) {
+                                                            "Confirm apply latest stash"
+                                                        } else {
+                                                            "Apply latest stash"
+                                                        }
+                                                    )
+                                                    .on_click(move |_, _, cx| {
+                                                        let _ = apply_owner.update(cx, |view, cx| {
+                                                            view.confirm_sensitive_git_action(ConfirmGitAction::StashApply, cx);
+                                                        });
+                                                    }),
+                                                )
+                                                .separator()
+                                                .item(
+                                                    PopupMenuItem::new("Inspect merge conflicts")
+                                                        .on_click(move |_, _, cx| {
+                                                            let _ = inspect_owner.update(cx, |view, cx| {
+                                                                view.preview_git_merge_conflicts(cx);
+                                                            });
+                                                        }),
+                                                );
+                                            if has_conflict_review {
+                                                let cancel_owner = owner.clone();
+                                                menu = menu.item(
+                                                    PopupMenuItem::new("Cancel conflict review")
+                                                        .on_click(move |_, _, cx| {
+                                                            let _ = cancel_owner.update(cx, |view, cx| {
+                                                                view.git_conflict_preview = None;
+                                                                view.git_conflict_choices.clear();
+                                                                view.git_conflict_selected = None;
+                                                                view.git_conflict_confirm_armed = false;
+                                                                view.git_action_status = "Merge conflict review cancelled; no files changed".into();
+                                                                cx.notify();
+                                                            });
+                                                        }),
+                                                );
+                                            }
+                                            menu
+                                        })
+                                })
                             )
-                            .child(div()
-                                .flex()
-                                .flex_wrap()
-                                .items_center()
-                                .gap_1()
-                                .when(!self.git_more_open, |row| row.hidden())
-                                .child(icon_button("git-stash-save-tracked", if git_sensitive_armed == Some(ConfirmGitAction::StashSave) { UiIcon::Check } else { UiIcon::GitStash }, "Stash tracked file edits (confirm twice)", git_sensitive_armed == Some(ConfirmGitAction::StashSave))
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.confirm_sensitive_git_action(ConfirmGitAction::StashSave, cx);
-                                    })))
-                                .child(icon_button("git-stash-apply-latest", if git_sensitive_armed == Some(ConfirmGitAction::StashApply) { UiIcon::Check } else { UiIcon::GitStashApply }, "Apply latest stash without deleting it (confirm twice)", git_sensitive_armed == Some(ConfirmGitAction::StashApply))
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.confirm_sensitive_git_action(ConfirmGitAction::StashApply, cx);
-                                    })))
-                            )
-                            .child(div()
-                                .flex()
-                                .flex_wrap()
-                                .items_center()
-                                .gap_1()
-                                .when(!self.git_more_open && git_conflict_count == 0, |row| row.hidden())
-                                .child(icon_button("git-conflict-inspect", UiIcon::GitMerge, "Inspect merge conflicts (read-only) before choosing file sides", git_conflict_loading)
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.preview_git_merge_conflicts(cx);
-                                    })))
-                                .child(if git_conflict_count > 0 {
-                                    icon_button("git-conflict-cancel", UiIcon::Close, "Cancel conflict review without writing files", false)
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            this.git_conflict_preview = None;
-                                            this.git_conflict_choices.clear();
-                                            this.git_conflict_selected = None;
-                                            this.git_conflict_confirm_armed = false;
-                                            this.git_action_status = "Merge conflict review cancelled; no files changed".into();
-                                            cx.notify();
-                                        }))
-                                        .into_any_element()
-                                } else {
-                                    div().h(px(0.0)).into_any_element()
-                                }))
                             .child(if git_conflict_count > 0 {
                                 div()
                                     .flex()
@@ -7185,18 +7001,62 @@ impl Render for Workbench {
                                     } else {
                                         div().h(px(0.0)).into_any_element()
                                     })
-                                    .child(
-                                        icon_button("terminal-attach-existing", UiIcon::Open, "Attach existing Runtime Host Terminal session", self.show_terminal_attach_picker)
-                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                this.explorer_preview_active = false;
-                                                this.center_view = CenterView::Terminal;
-                                                this.show_terminal_attach_picker = !this.show_terminal_attach_picker;
-                                                if this.show_terminal_attach_picker {
-                                                    this.refresh_terminals(cx);
-                                                }
-                                                cx.notify();
-                                            })),
-                                    )
+                                    .child({
+                                        let owner = cx.entity().downgrade();
+                                        let refresh_owner = owner.clone();
+                                        let running = self
+                                            .terminals
+                                            .sessions
+                                            .iter()
+                                            .filter(|session| session.running)
+                                            .map(|session| {
+                                                (
+                                                    session.handle.clone(),
+                                                    format!(
+                                                        "{} · {}",
+                                                        session.label(),
+                                                        session.workspace_id
+                                                    ),
+                                                )
+                                            })
+                                            .collect::<Vec<_>>();
+                                        native_components::select_trigger(
+                                            "terminal-attach-existing",
+                                            "Attach session",
+                                            false,
+                                        )
+                                        .dropdown_menu(move |mut menu, _, _| {
+                                            if running.is_empty() {
+                                                menu = menu.label("No running Host sessions");
+                                            }
+                                            for (handle, label) in running.iter().cloned() {
+                                                let owner = owner.clone();
+                                                menu = menu.item(
+                                                    PopupMenuItem::new(label)
+                                                        .on_click(move |_, _, cx| {
+                                                            let _ = owner.update(cx, |view, cx| {
+                                                                view.explorer_preview_active = false;
+                                                                view.center_view = CenterView::Terminal;
+                                                                if view.terminals.sessions.iter().any(|session| session.running && session.handle == handle) {
+                                                                    view.select_terminal(handle.clone(), cx);
+                                                                } else {
+                                                                    view.model.set_status("Host session stopped; cannot attach");
+                                                                    cx.notify();
+                                                                }
+                                                            });
+                                                        }),
+                                                );
+                                            }
+                                            menu.scrollable(true).max_h(px(320.0))
+                                        })
+                                        .on_open_change(move |open, _, cx| {
+                                            if *open {
+                                                let _ = refresh_owner.update(cx, |view, cx| {
+                                                    view.refresh_terminals(cx);
+                                                });
+                                            }
+                                        })
+                                    })
                                     .child(
                                         div()
                                             .id("center-editor-tab")
@@ -7273,10 +7133,16 @@ impl Render for Workbench {
                                                             .on_mouse_up(gpui::MouseButton::Middle, cx.listener(move |this, _, _, cx| {
                                                                 this.close_mixed_tab(&for_middle, cx);
                                                             }))
-                                                            .on_mouse_down(gpui::MouseButton::Right, cx.listener(move |this, _, _, cx| {
+                                                            .on_mouse_down(gpui::MouseButton::Right, cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
                                                                 if this.mixed_tab_is_current(&for_right, cx) {
                                                                     this.mixed_tab_context = Some(for_right.clone());
-                                                                    cx.notify();
+                                                                    this.show_native_popup(
+                                                                        NativePopupKind::MixedTabContext,
+                                                                        f32::from(event.position.x),
+                                                                        f32::from(event.position.y),
+                                                                        cx,
+                                                                    );
+                                                                    cx.stop_propagation();
                                                                 }
                                                             }))
                                                             .on_drag(MixedTabDrag {
@@ -7314,87 +7180,6 @@ impl Render for Workbench {
                                             ),
                                     ),
                             )
-                            .child(
-                                div().id("mixed-tab-context-actions")
-                                    .when(mixed_context.is_some(), |menu| {
-                                        menu.flex().items_center().gap_3().px_3().py_2()
-                                            .text_xs().overflow_x_scroll().bg(rgb(PANEL))
-                                            .border_b_1().border_color(rgb(BORDER))
-                                            .child(div().id("mixed-focus").cursor_pointer().child("Focus")
-                                                .on_click(cx.listener(|this, _, window, cx| {
-                                                    this.apply_mixed_tab_context(MixedContextAction::Focus, window, cx);
-                                                })))
-                                            .child(div().id("mixed-close").cursor_pointer().child("Close")
-                                                .on_click(cx.listener(|this, _, window, cx| {
-                                                    this.apply_mixed_tab_context(MixedContextAction::Close, window, cx);
-                                                })))
-                                            .child(div().id("mixed-close-others").cursor_pointer().child("Close Others")
-                                                .on_click(cx.listener(|this, _, window, cx| {
-                                                    this.apply_mixed_tab_context(MixedContextAction::CloseOthers, window, cx);
-                                                })))
-                                            .child(div().id("mixed-close-right").cursor_pointer().child("Close Right")
-                                                .on_click(cx.listener(|this, _, window, cx| {
-                                                    this.apply_mixed_tab_context(MixedContextAction::CloseToRight, window, cx);
-                                                })))
-                                            .child(div().id("mixed-move-left").cursor_pointer().child("Move ←")
-                                                .on_click(cx.listener(|this, _, window, cx| {
-                                                    this.apply_mixed_tab_context(MixedContextAction::MoveLeft, window, cx);
-                                                })))
-                                            .child(div().id("mixed-move-right").cursor_pointer().child("Move →")
-                                                .on_click(cx.listener(|this, _, window, cx| {
-                                                    this.apply_mixed_tab_context(MixedContextAction::MoveRight, window, cx);
-                                                })))
-                                            .when(!mixed_context_in_second, |menu| menu.child(
-                                                div().id("mixed-second-pane").cursor_pointer().child("Second Pane")
-                                                    .on_click(cx.listener(|this, _, window, cx| {
-                                                        this.apply_mixed_tab_context(MixedContextAction::SecondPane, window, cx);
-                                                    }))
-                                            ))
-                                            .when(mixed_context_in_second, |menu| menu.child(
-                                                div().id("mixed-first-pane").cursor_pointer().child("First Pane")
-                                                    .on_click(cx.listener(|this, _, window, cx| {
-                                                        this.apply_mixed_tab_context(MixedContextAction::FirstPane, window, cx);
-                                                    }))
-                                            ))
-                                            .child(div().id("mixed-cancel").cursor_pointer().text_color(rgb(MUTED)).child("Cancel")
-                                                .on_click(cx.listener(|this, _, _, cx| {
-                                                    this.mixed_tab_context = None;
-                                                    cx.notify();
-                                                })))
-                                    }),
-                            )
-                            .child(if !center_is_editor && show_terminal_attach_picker {
-                                div()
-                                    .id("terminal-existing-session-picker")
-                                    .max_h(px(135.0))
-                                    .overflow_y_scroll()
-                                    .bg(rgb(PANEL))
-                                    .px_3()
-                                    .py_1()
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(rgb(MUTED))
-                                            .child("Attach to an existing Host session; does not create a PTY"),
-                                    )
-                                    .children(terminal_attach_sessions.into_iter().enumerate().map(|(index, (handle, label, workspace_id))| {
-                                        div()
-                                            .id(("terminal-attach-session", index))
-                                            .cursor_pointer()
-                                            .py_1()
-                                            .text_xs()
-                                            .text_color(rgb(TEXT))
-                                            .child(format!("{label} · Host workspace: {workspace_id}"))
-                                            .on_click(cx.listener(move |this, _, _, cx| {
-                                                this.select_terminal(handle.clone(), cx);
-                                                this.show_terminal_attach_picker = false;
-                                                cx.notify();
-                                            }))
-                                    }))
-                                    .into_any_element()
-                            } else {
-                                div().h(px(0.0)).into_any_element()
-                            })
                             .child(
                                 div()
                                     .h(px(TAB_STRIP_HEIGHT))
@@ -7450,7 +7235,7 @@ impl Render for Workbench {
                                                                     } else {
                                                                         this.explorer_preview_active = true;
                                                                         this.center_view = CenterView::Editor;
-                                                                        window.focus(&this.explorer_keyboard_focus);
+                                                                        window.focus(&this.explorer_keyboard_focus, cx);
                                                                     }
                                                                     this.persist_session();
                                                                     cx.notify();
@@ -7672,14 +7457,15 @@ impl Render for Workbench {
                                                                         ))
                                                                         .on_mouse_down(
                                                                             gpui::MouseButton::Right,
-                                                                            cx.listener(move |this, _, _, cx| {
-                                                                                this.show_terminal_tab_context(index, cx);
+                                                                            cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
+                                                                                this.show_terminal_tab_context(index, event, cx);
+                                                                                cx.stop_propagation();
                                                                             }),
                                                                         )
                                                                         .on_mouse_up(
                                                                             gpui::MouseButton::Middle,
                                                                             cx.listener(move |this, _, _, cx| {
-                                                                                this.show_terminal_tab_context(index, cx);
+                                                                                this.terminal_tab_context = this.terminals.context_target_at(index);
                                                                                 this.apply_terminal_context(TerminalContextAction::Close, cx);
                                                                             }),
                                                                         )
@@ -7737,89 +7523,6 @@ impl Render for Workbench {
                                                     )),
                                             )
                                             .child(
-                                                div()
-                                                    .id("terminal-tab-context-actions")
-                                                    .hidden()
-                                                    .when(terminal_context_open, |menu| {
-                                                        menu.flex()
-                                                            .items_center()
-                                                            .gap_3()
-                                                            .px_3()
-                                                            .py_2()
-                                                            .text_xs()
-                                                            .overflow_x_scroll()
-                                                            .border_b_1()
-                                                            .border_color(rgb(BORDER))
-                                                            .bg(rgb(PANEL))
-                                                            .child(
-                                                                div().id("terminal-context-focus")
-                                                                    .cursor_pointer()
-                                                                    .child("Focus")
-                                                                    .on_click(cx.listener(|this, _, _, cx| {
-                                                                        this.apply_terminal_context(TerminalContextAction::Focus, cx);
-                                                                    })),
-                                                            )
-                                                            .child(
-                                                                div().id("terminal-context-close")
-                                                                    .cursor_pointer()
-                                                                    .child("Close")
-                                                                    .on_click(cx.listener(|this, _, _, cx| {
-                                                                        this.apply_terminal_context(TerminalContextAction::Close, cx);
-                                                                    })),
-                                                            )
-                                                            .child(
-                                                                div().id("terminal-context-close-others")
-                                                                    .cursor_pointer()
-                                                                    .child("Close Others")
-                                                                    .on_click(cx.listener(|this, _, _, cx| {
-                                                                        this.apply_terminal_context(TerminalContextAction::CloseOthers, cx);
-                                                                    })),
-                                                            )
-                                                            .child(
-                                                                div().id("terminal-context-close-right")
-                                                                    .cursor_pointer()
-                                                                    .child("Close Right")
-                                                                    .on_click(cx.listener(|this, _, _, cx| {
-                                                                        this.apply_terminal_context(TerminalContextAction::CloseToRight, cx);
-                                                                    })),
-                                                            )
-                                                            .child(
-                                                                div().id("terminal-context-split-second")
-                                                                    .cursor_pointer()
-                                                                    .child("Second Pane")
-                                                                    .on_click(cx.listener(|this, _, _, cx| {
-                                                                        this.apply_terminal_context(TerminalContextAction::SplitToSecondary, cx);
-                                                                    })),
-                                                            )
-                                                            .child(
-                                                                div().id("terminal-context-move-left")
-                                                                    .cursor_pointer()
-                                                                    .child("Move ←")
-                                                                    .on_click(cx.listener(|this, _, _, cx| {
-                                                                        this.apply_terminal_context(TerminalContextAction::MoveLeft, cx);
-                                                                    })),
-                                                            )
-                                                            .child(
-                                                                div().id("terminal-context-move-right")
-                                                                    .cursor_pointer()
-                                                                    .child("Move →")
-                                                                    .on_click(cx.listener(|this, _, _, cx| {
-                                                                        this.apply_terminal_context(TerminalContextAction::MoveRight, cx);
-                                                                    })),
-                                                            )
-                                                            .child(
-                                                                div().id("terminal-context-cancel")
-                                                                    .cursor_pointer()
-                                                                    .text_color(rgb(MUTED))
-                                                                    .child("Cancel")
-                                                                    .on_click(cx.listener(|this, _, _, cx| {
-                                                                        this.terminal_tab_context = None;
-                                                                        cx.notify();
-                                                                    })),
-                                                            )
-                                                    }),
-                                            )
-                                            .child(
                                                 icon_button("terminal-vt-mode", if terminal_is_vt { UiIcon::Terminal } else { UiIcon::File }, "Toggle VT screen / plain text log", terminal_is_vt)
                                                     .on_click(cx.listener(|this, _, _, cx| {
                                                         this.terminals.toggle_view_mode();
@@ -7852,30 +7555,34 @@ impl Render for Workbench {
                                                         this.copy_primary_terminal_text(false, cx);
                                                     })),
                                             )
-                                            .child(
-                                                div()
-                                                    .id("terminal-resize-80x24")
-                                                    .px_2()
-                                                    .cursor_pointer()
-                                                    .text_xs()
-                                                    .text_color(rgb(TEXT))
-                                                    .child("80×24")
-                                                    .on_click(cx.listener(|this, _, _, cx| {
-                                                        this.resize_terminal(80, 24, cx);
-                                                    })),
-                                            )
-                                            .child(
-                                                div()
-                                                    .id("terminal-resize-120x36")
-                                                    .px_2()
-                                                    .cursor_pointer()
-                                                    .text_xs()
-                                                    .text_color(rgb(TEXT))
-                                                    .child("120×36")
-                                                    .on_click(cx.listener(|this, _, _, cx| {
-                                                        this.resize_terminal(120, 36, cx);
-                                                    })),
-                                            ),
+                                            .child({
+                                                let owner = cx.entity().downgrade();
+                                                native_components::select_trigger(
+                                                    "terminal-resize-choices",
+                                                    "Terminal size",
+                                                    false,
+                                                )
+                                                .dropdown_menu(move |menu, _, _| {
+                                                    let first = owner.clone();
+                                                    let second = owner.clone();
+                                                    menu.item(
+                                                        PopupMenuItem::new("80 × 24")
+                                                            .on_click(move |_, _, cx| {
+                                                                let _ = first.update(cx, |view, cx| {
+                                                                    view.resize_terminal(80, 24, cx);
+                                                                });
+                                                            }),
+                                                    )
+                                                    .item(
+                                                        PopupMenuItem::new("120 × 36")
+                                                            .on_click(move |_, _, cx| {
+                                                                let _ = second.update(cx, |view, cx| {
+                                                                    view.resize_terminal(120, 36, cx);
+                                                                });
+                                                            }),
+                                                    )
+                                                })
+                                            }),
                                     )
                                     .child(
                                         div()
@@ -8027,7 +7734,7 @@ impl Render for Workbench {
                                             .track_focus(&terminal_keyboard_focus)
                                             .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, window, cx| {
                                                 this.focus_primary_mixed_terminal(cx);
-                                                window.focus(&this.terminal_keyboard_focus);
+                                                window.focus(&this.terminal_keyboard_focus, cx);
                                             }))
                                             .on_mouse_up(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
                                                 this.finish_terminal_line_selection(cx);
@@ -8099,7 +7806,7 @@ impl Render for Workbench {
                                             .track_focus(&terminal_keyboard_focus)
                                             .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, window, cx| {
                                                 this.focus_primary_mixed_terminal(cx);
-                                                window.focus(&this.terminal_keyboard_focus);
+                                                window.focus(&this.terminal_keyboard_focus, cx);
                                             }))
                                             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
                                                 if event.keystroke.modifiers.control
@@ -8340,7 +8047,7 @@ impl Render for Workbench {
                                                                 this.center_view = CenterView::Terminal;
                                                                 this.refresh_terminal_output(cx);
                                                                 this.save_mixed_pane_layout(cx);
-                                                                window.focus(&this.secondary_terminal_keyboard_focus);
+                                                                window.focus(&this.secondary_terminal_keyboard_focus, cx);
                                                                 cx.notify();
                                                                 }
                                                             }
@@ -9014,8 +8721,15 @@ impl Render for Workbench {
                     .text_sm()
                     .text_color(rgb(MUTED))
                     .child(status)
-                    .child(format!("{} · {}", branch, NATIVE_APP_NAME)),
+                    .child(self.render_kit_branch_dropdown(
+                        "status-branch-picker",
+                        format!("{} · {}", branch, NATIVE_APP_NAME),
+                        cx,
+                    )),
             )
+            .children(native_popup_panel)
+            .children(explorer_action_dialog)
+            .children(quick_open_dialog)
             .children(native_settings_panel)
     }
 }
@@ -9124,234 +8838,239 @@ fn main() {
         show_hidden: native_settings.explorer_show_hidden,
     };
 
-    Application::new().run(move |cx: &mut App| {
-        // Flutter embeds these licensed typefaces. Without explicitly
-        // registering them GPUI silently falls back to a Windows font even
-        // if font_family("Inter") is set on the native workbench root.
-        if let Err(error) = cx.text_system().add_fonts(vec![
-            Cow::Borrowed(include_bytes!("../../assets/fonts/Inter-Variable.ttf").as_slice()),
-            Cow::Borrowed(
-                include_bytes!("../../assets/fonts/JetBrainsMono-Variable.ttf").as_slice(),
-            ),
-            Cow::Borrowed(
-                include_bytes!("../../assets/fonts/VSCodeCodicons-0.0.46-24.ttf").as_slice(),
-            ),
-        ]) {
-            eprintln!("Alera GPUI: cannot load bundled desktop fonts: {error}");
-        }
-        bind_editor_keys(cx);
-        bind_quick_open_keys(cx);
-        cx.bind_keys([
-            KeyBinding::new("ctrl-p", ToggleFileSearch, None),
-            KeyBinding::new("cmd-p", ToggleFileSearch, None),
-            KeyBinding::new("ctrl-c", ExplorerCopy, Some("AleraGpuiExplorer")),
-            KeyBinding::new("cmd-c", ExplorerCopy, Some("AleraGpuiExplorer")),
-            KeyBinding::new("ctrl-x", ExplorerCut, Some("AleraGpuiExplorer")),
-            KeyBinding::new("cmd-x", ExplorerCut, Some("AleraGpuiExplorer")),
-            KeyBinding::new("ctrl-v", ExplorerPaste, Some("AleraGpuiExplorer")),
-            KeyBinding::new("cmd-v", ExplorerPaste, Some("AleraGpuiExplorer")),
-            KeyBinding::new("ctrl-a", ExplorerSelectAll, Some("AleraGpuiExplorer")),
-            KeyBinding::new("cmd-a", ExplorerSelectAll, Some("AleraGpuiExplorer")),
-            KeyBinding::new("ctrl-shift-f", ToggleContentSearch, None),
-            KeyBinding::new("cmd-shift-f", ToggleContentSearch, None),
-            KeyBinding::new(
-                "enter",
-                SubmitTerminalCommand,
-                Some("AleraGpuiTerminalInput"),
-            ),
-        ]);
-        let bounds = Bounds::centered(None, size(px(1200.0), px(800.0)), cx);
-        cx.open_window(
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                ..Default::default()
-            },
-            |_, cx| {
-                let view = cx.new(|cx| {
-                    let terminal_input = cx.new(QuickOpenInput::terminal);
-                    let explorer_filter_input =
-                        cx.new(|cx| QuickOpenInput::with_placeholder("Filter files…", cx));
-                    cx.observe(&explorer_filter_input, |view: &mut Workbench, _, cx| {
-                        // The visual result set has changed; never let hidden
-                        // stale selections enter a later batch mutation.
-                        view.explorer_multi_selection.clear();
-                        view.explorer_selection = None;
-                        if !view
-                            .explorer_filter_input
-                            .read(cx)
-                            .query()
-                            .trim()
-                            .is_empty()
-                        {
-                            view.ensure_file_index(cx);
-                        }
-                        cx.notify();
-                    })
-                    .detach();
-                    let mut workbench = Workbench {
-                        tree: WorkspaceTree::new_with_options(model.root(), initial_visibility)
-                            .ok(),
-                        tree_mode: true,
-                        explorer_visibility: initial_visibility,
-                        explorer_visibility_menu_open: false,
-                        explorer_selection: None,
-                        explorer_multi_selection: ExplorerMultiSelection::new(model.root()),
-                        explorer_preview_active: false,
-                        explorer_keyboard_focus: cx.focus_handle(),
-                        explorer_clipboard: None,
-                        explorer_drop_busy: false,
-                        explorer_drop_request: 0,
-                        explorer_action: None,
-                        explorer_action_input: None,
-                        explorer_delete_confirmed: false,
-                        explorer_delete_pending: None,
-                        model,
-                        center_view: CenterView::Terminal,
-                        right_sidebar_view: RightSidebarView::Explorer,
-                        explorer_context_menu: None,
-                        git_more_open: false,
-                        show_project_management: false,
-                        runtime_details_open: false,
-                        editor: None,
-                        secondary_editor: None,
-                        editor_transfer_in_progress: false,
-                        editor_file_layout_snapshot: Vec::new(),
-                        editor_active_layout_snapshot: None,
-                        session_store,
-                        recent_workspaces,
-                        saved_projects,
-                        project_tree_groups: Vec::new(),
-                        project_tree_loading: false,
-                        project_tree_request: 0,
-                        collapsed_project_roots: HashSet::new(),
-                        show_recent_workspaces: true,
-                        worktrees: Vec::new(),
-                        worktree_error: None,
-                        worktree_loading: false,
-                        worktree_busy: false,
-                        worktree_create_input: None,
-                        worktree_delete_pending: None,
-                        picking_workspace: false,
-                        quick_open: None,
-                        explorer_filter_input,
-                        file_index: None,
-                        file_index_loading: false,
-                        file_index_request: 0,
-                        content_query: None,
-                        content_loading: false,
-                        content_matches: Vec::new(),
-                        content_truncated: false,
-                        content_error: None,
-                        content_searched_query: String::new(),
-                        content_request: 0,
-                        git_snapshot: None,
-                        git_history: None,
-                        git_history_open: false,
-                        git_history_options: GitHistoryOptions {
-                            favorites: initial_git_favorites,
-                            ..Default::default()
-                        },
-                        git_history_loading: false,
-                        git_history_error: None,
-                        git_history_request: 0,
-                        git_merge_armed: None,
-                        git_sensitive_armed: None,
-                        git_conflict_preview: None,
-                        git_conflict_choices: HashMap::new(),
-                        git_conflict_selected: None,
-                        git_conflict_loading: false,
-                        git_conflict_request: 0,
-                        git_conflict_confirm_armed: false,
-                        git_commit_input: cx
-                            .new(|cx| QuickOpenInput::with_placeholder("Commit message", cx)),
-                        git_branch_input: cx
-                            .new(|cx| QuickOpenInput::with_placeholder("Existing branch", cx)),
-                        git_action_busy: false,
-                        git_action_request: 0,
-                        git_action_status: String::new(),
-                        git_loading: false,
-                        git_error: None,
-                        git_diff: None,
-                        git_diff_loading: false,
-                        git_diff_request: 0,
-                        workspace_generation: 0,
-                        editor_epoch: 0,
-                        mixed_tabs: WorkbenchTabs::for_workspace(0),
-                        mixed_panes: WorkbenchPaneLayout::default(),
-                        mixed_layout_restore: None,
-                        mixed_layout_read_only: false,
-                        mixed_tab_context: None,
-                        runtime_bridge,
-                        runtime_status,
-                        runtime_loading: false,
-                        mcp_ui_bridge: None,
-                        mcp_ui_window_id: NativeMcpUiBridge::new_window_id(),
-                        mcp_ui_status: "Waiting for existing Runtime Host".into(),
-                        mcp_ui_ready: false,
-                        mcp_host_workspaces: Vec::new(),
-                        mcp_host_workspaces_loading: false,
-                        mcp_host_workspaces_request: 0,
-                        mcp_compare_busy: false,
-                        mcp_compare_request: 0,
-                        mcp_workspace_create_busy: false,
-                        mcp_workspace_create_request: 0,
-                        native_settings_store,
-                        native_settings,
-                        native_settings_error,
-                        settings_section: None,
-                        settings_modal_focus: cx.focus_handle(),
-                        settings_modal_needs_focus: false,
-                        last_auto_git_fetch: Instant::now(),
-                        agent_profiles: Vec::new(),
-                        agent_profiles_loading: false,
-                        agent_profiles_request: 0,
-                        agent_selected_profile: None,
-                        agent_prompt_input: cx.new(|cx| {
-                            QuickOpenInput::with_placeholder("Task for selected Agent…", cx)
-                        }),
-                        agent_launch_busy: false,
-                        agent_launch_request: 0,
-                        agent_pending_tab: None,
-                        agent_status: "Select an Agent Profile and enter a task".into(),
-                        terminals: TerminalDock::for_workspace(0),
-                        terminal_tab_context: None,
-                        terminal_panes: TerminalPaneLayout::default(),
-                        terminal_input,
-                        terminal_keyboard_focus: cx.focus_handle(),
-                        secondary_terminal_keyboard_focus: cx.focus_handle(),
-                        terminal_key_queue: VecDeque::new(),
-                        terminal_key_queue_target: None,
-                        terminal_key_sending: false,
-                        terminal_auto_resize: TerminalAutoResizeGate::default(),
-                        terminal_line_selection: None,
-                        show_terminal_attach_picker: false,
-                        terminal_create_flow: TerminalCreateFlow::default(),
-                        terminal_layout_restore: None,
-                        terminal_send_loading: false,
-                        terminal_list_loading: false,
-                        terminal_read_loading: None,
-                        terminal_split_read_loading: false,
-                        terminal_poll: TerminalPollGate::default(),
-                        terminal_tick: 0,
-                    };
-                    workbench.restore_scratch_tabs(cx);
-                    workbench.load_terminal_layout();
-                    workbench.load_mixed_pane_layout();
-                    workbench.restore_file_tabs_from_pane_layout(cx);
-                    workbench
-                });
-                view.update(cx, |view, cx| {
-                    view.start_terminal_polling(cx);
-                    view.refresh_project_tree(cx);
-                    view.refresh_worktrees(cx);
-                    view.refresh_git(cx);
-                    view.refresh_agent_profiles(cx);
-                    view.connect_mcp_ui_bridge(cx);
-                });
-                view
-            },
-        )
-        .expect("create native GPUI desktop window");
-        cx.activate(true);
-    });
+    gpui_kit::application()
+        .with_assets(gpui_kit::assets::Assets)
+        .run(move |cx: &mut App| {
+            gpui_kit::init(cx);
+            // Flutter embeds these licensed typefaces. Without explicitly
+            // registering them GPUI silently falls back to a Windows font even
+            // if font_family("Inter") is set on the native workbench root.
+            if let Err(error) = cx.text_system().add_fonts(vec![
+                Cow::Borrowed(include_bytes!("../../assets/fonts/Inter-Variable.ttf").as_slice()),
+                Cow::Borrowed(
+                    include_bytes!("../../assets/fonts/JetBrainsMono-Variable.ttf").as_slice(),
+                ),
+                Cow::Borrowed(
+                    include_bytes!("../../assets/fonts/VSCodeCodicons-0.0.46-24.ttf").as_slice(),
+                ),
+            ]) {
+                eprintln!("Alera GPUI: cannot load bundled desktop fonts: {error}");
+            }
+            bind_editor_keys(cx);
+            bind_quick_open_keys(cx);
+            cx.bind_keys([
+                KeyBinding::new("ctrl-p", ToggleFileSearch, None),
+                KeyBinding::new("cmd-p", ToggleFileSearch, None),
+                KeyBinding::new("ctrl-c", ExplorerCopy, Some("AleraGpuiExplorer")),
+                KeyBinding::new("cmd-c", ExplorerCopy, Some("AleraGpuiExplorer")),
+                KeyBinding::new("ctrl-x", ExplorerCut, Some("AleraGpuiExplorer")),
+                KeyBinding::new("cmd-x", ExplorerCut, Some("AleraGpuiExplorer")),
+                KeyBinding::new("ctrl-v", ExplorerPaste, Some("AleraGpuiExplorer")),
+                KeyBinding::new("cmd-v", ExplorerPaste, Some("AleraGpuiExplorer")),
+                KeyBinding::new("ctrl-a", ExplorerSelectAll, Some("AleraGpuiExplorer")),
+                KeyBinding::new("cmd-a", ExplorerSelectAll, Some("AleraGpuiExplorer")),
+                KeyBinding::new("ctrl-shift-f", ToggleContentSearch, None),
+                KeyBinding::new("cmd-shift-f", ToggleContentSearch, None),
+                KeyBinding::new(
+                    "enter",
+                    SubmitTerminalCommand,
+                    Some("AleraGpuiTerminalInput"),
+                ),
+            ]);
+            let bounds = Bounds::centered(None, size(px(1200.0), px(800.0)), cx);
+            gpui_kit::open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(bounds)),
+                    ..Default::default()
+                },
+                cx,
+                |_, cx| {
+                    let view = cx.new(|cx| {
+                        let terminal_input = cx.new(QuickOpenInput::terminal);
+                        let explorer_filter_input =
+                            cx.new(|cx| QuickOpenInput::with_placeholder("Filter files…", cx));
+                        cx.observe(&explorer_filter_input, |view: &mut Workbench, _, cx| {
+                            // The visual result set has changed; never let hidden
+                            // stale selections enter a later batch mutation.
+                            view.explorer_multi_selection.clear();
+                            view.explorer_selection = None;
+                            if !view
+                                .explorer_filter_input
+                                .read(cx)
+                                .query()
+                                .trim()
+                                .is_empty()
+                            {
+                                view.ensure_file_index(cx);
+                            }
+                            cx.notify();
+                        })
+                        .detach();
+                        let mut workbench = Workbench {
+                            tree: WorkspaceTree::new_with_options(model.root(), initial_visibility)
+                                .ok(),
+                            tree_mode: true,
+                            explorer_visibility: initial_visibility,
+                            explorer_selection: None,
+                            explorer_multi_selection: ExplorerMultiSelection::new(model.root()),
+                            explorer_preview_active: false,
+                            explorer_keyboard_focus: cx.focus_handle(),
+                            explorer_clipboard: None,
+                            explorer_drop_busy: false,
+                            explorer_drop_request: 0,
+                            explorer_action: None,
+                            explorer_action_input: None,
+                            explorer_action_modal_focus: cx.focus_handle(),
+                            explorer_delete_confirmed: false,
+                            explorer_delete_pending: None,
+                            model,
+                            center_view: CenterView::Terminal,
+                            right_sidebar_view: RightSidebarView::Explorer,
+                            explorer_context_menu: None,
+                            native_popup: NativePopupState::default(),
+                            native_popup_focus: cx.focus_handle(),
+                            native_popup_needs_focus: false,
+                            show_project_management: false,
+                            runtime_details_open: false,
+                            editor: None,
+                            secondary_editor: None,
+                            editor_transfer_in_progress: false,
+                            editor_file_layout_snapshot: Vec::new(),
+                            editor_active_layout_snapshot: None,
+                            session_store,
+                            recent_workspaces,
+                            saved_projects,
+                            project_tree_groups: Vec::new(),
+                            project_tree_loading: false,
+                            project_tree_request: 0,
+                            collapsed_project_roots: HashSet::new(),
+                            show_recent_workspaces: true,
+                            worktrees: Vec::new(),
+                            worktree_error: None,
+                            worktree_loading: false,
+                            worktree_busy: false,
+                            worktree_create_input: None,
+                            worktree_delete_pending: None,
+                            picking_workspace: false,
+                            quick_open: None,
+                            explorer_filter_input,
+                            file_index: None,
+                            file_index_loading: false,
+                            file_index_request: 0,
+                            content_query: None,
+                            content_loading: false,
+                            content_matches: Vec::new(),
+                            content_truncated: false,
+                            content_error: None,
+                            content_searched_query: String::new(),
+                            content_request: 0,
+                            git_snapshot: None,
+                            git_history: None,
+                            git_history_open: false,
+                            git_history_options: GitHistoryOptions {
+                                favorites: initial_git_favorites,
+                                ..Default::default()
+                            },
+                            git_history_loading: false,
+                            git_history_error: None,
+                            git_history_request: 0,
+                            git_merge_armed: None,
+                            git_sensitive_armed: None,
+                            git_conflict_preview: None,
+                            git_conflict_choices: HashMap::new(),
+                            git_conflict_selected: None,
+                            git_conflict_loading: false,
+                            git_conflict_request: 0,
+                            git_conflict_confirm_armed: false,
+                            git_commit_input: cx
+                                .new(|cx| QuickOpenInput::with_placeholder("Commit message", cx)),
+                            git_branch_input: cx
+                                .new(|cx| QuickOpenInput::with_placeholder("Existing branch", cx)),
+                            git_action_busy: false,
+                            git_action_request: 0,
+                            git_action_status: String::new(),
+                            git_loading: false,
+                            git_error: None,
+                            git_diff: None,
+                            git_diff_loading: false,
+                            git_diff_request: 0,
+                            workspace_generation: 0,
+                            editor_epoch: 0,
+                            mixed_tabs: WorkbenchTabs::for_workspace(0),
+                            mixed_panes: WorkbenchPaneLayout::default(),
+                            mixed_layout_restore: None,
+                            mixed_layout_read_only: false,
+                            mixed_tab_context: None,
+                            runtime_bridge,
+                            runtime_status,
+                            runtime_loading: false,
+                            mcp_ui_bridge: None,
+                            mcp_ui_window_id: NativeMcpUiBridge::new_window_id(),
+                            mcp_ui_status: "Waiting for existing Runtime Host".into(),
+                            mcp_ui_ready: false,
+                            mcp_host_workspaces: Vec::new(),
+                            mcp_host_workspaces_loading: false,
+                            mcp_host_workspaces_request: 0,
+                            mcp_compare_busy: false,
+                            mcp_compare_request: 0,
+                            mcp_workspace_create_busy: false,
+                            mcp_workspace_create_request: 0,
+                            native_settings_store,
+                            native_settings,
+                            native_settings_error,
+                            settings_section: None,
+                            settings_modal_focus: cx.focus_handle(),
+                            settings_modal_needs_focus: false,
+                            last_auto_git_fetch: Instant::now(),
+                            agent_profiles: Vec::new(),
+                            agent_profiles_loading: false,
+                            agent_profiles_request: 0,
+                            agent_selected_profile: None,
+                            agent_prompt_input: cx.new(|cx| {
+                                QuickOpenInput::with_placeholder("Task for selected Agent…", cx)
+                            }),
+                            agent_launch_busy: false,
+                            agent_launch_request: 0,
+                            agent_pending_tab: None,
+                            agent_status: "Select an Agent Profile and enter a task".into(),
+                            terminals: TerminalDock::for_workspace(0),
+                            terminal_tab_context: None,
+                            terminal_panes: TerminalPaneLayout::default(),
+                            terminal_input,
+                            terminal_keyboard_focus: cx.focus_handle(),
+                            secondary_terminal_keyboard_focus: cx.focus_handle(),
+                            terminal_key_queue: VecDeque::new(),
+                            terminal_key_queue_target: None,
+                            terminal_key_sending: false,
+                            terminal_auto_resize: TerminalAutoResizeGate::default(),
+                            terminal_line_selection: None,
+                            terminal_create_flow: TerminalCreateFlow::default(),
+                            terminal_layout_restore: None,
+                            terminal_send_loading: false,
+                            terminal_list_loading: false,
+                            terminal_read_loading: None,
+                            terminal_split_read_loading: false,
+                            terminal_poll: TerminalPollGate::default(),
+                            terminal_tick: 0,
+                        };
+                        workbench.restore_scratch_tabs(cx);
+                        workbench.load_terminal_layout();
+                        workbench.load_mixed_pane_layout();
+                        workbench.restore_file_tabs_from_pane_layout(cx);
+                        workbench
+                    });
+                    view.update(cx, |view, cx| {
+                        view.start_terminal_polling(cx);
+                        view.refresh_project_tree(cx);
+                        view.refresh_worktrees(cx);
+                        view.refresh_git(cx);
+                        view.refresh_agent_profiles(cx);
+                        view.connect_mcp_ui_bridge(cx);
+                    });
+                    view
+                },
+            )
+            .expect("create native GPUI desktop window");
+            cx.activate(true);
+        });
 }
