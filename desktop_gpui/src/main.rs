@@ -2,7 +2,6 @@
 mod editor_ui;
 mod native_action_dialog_ui;
 mod native_components;
-mod native_modal_ui;
 mod native_popup_ui;
 mod native_settings_ui;
 mod native_ui_icons;
@@ -37,7 +36,6 @@ use alera_gpui_desktop::mcp_ui_bridge::{
 use alera_gpui_desktop::mcp_workspace_creation::HostManagedWorkspaceRequest;
 use alera_gpui_desktop::model::WorkbenchModel;
 use alera_gpui_desktop::native_modal::NativeModalSize;
-use alera_gpui_desktop::native_popup::{NativePopupKind, NativePopupState};
 use alera_gpui_desktop::native_settings::{NativeSettings, NativeSettingsStore};
 use alera_gpui_desktop::project_search::{ContentMatch, ProjectSearch};
 use alera_gpui_desktop::project_tree::{collect_project_tree, ProjectTreeGroup};
@@ -70,10 +68,11 @@ use gpui::{
     PathPromptOptions, Window, WindowBounds, WindowOptions,
 };
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
+use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::IconName;
-use native_components::{icon, icon_button, AleraNativeModal, UiIcon};
+use gpui_kit::component::WindowExt as _;
+use native_components::{icon, icon_button, UiIcon};
 use native_ui_icons::explorer_file_icon;
 use quick_open_ui::{bind_quick_open_keys, QuickOpenInput};
 use std::borrow::Cow;
@@ -306,9 +305,6 @@ struct Workbench {
     center_view: CenterView,
     right_sidebar_view: RightSidebarView,
     explorer_context_menu: Option<ExplorerContextMenu>,
-    native_popup: NativePopupState,
-    native_popup_focus: gpui::FocusHandle,
-    native_popup_needs_focus: bool,
     show_project_management: bool,
     runtime_details_open: bool,
     tree: Option<WorkspaceTree>,
@@ -411,7 +407,7 @@ struct Workbench {
     native_settings_error: Option<String>,
     settings_section: Option<String>,
     settings_modal_focus: gpui::FocusHandle,
-    settings_modal_needs_focus: bool,
+    settings_kit_dialog_open: bool,
     last_auto_git_fetch: Instant,
     agent_profiles: Vec<AgentProfileRow>,
     agent_profiles_loading: bool,
@@ -567,7 +563,6 @@ impl Workbench {
             self.native_settings.explorer_show_ignored = next.show_ignored;
         }
         self.explorer_visibility = next;
-        self.native_popup.dismiss();
         self.explorer_multi_selection.clear();
         self.explorer_selection = None;
         self.explorer_context_menu = None;
@@ -920,38 +915,6 @@ impl Workbench {
         }
     }
 
-    fn open_explorer_context_menu(
-        &mut self,
-        path: Option<PathBuf>,
-        event: &gpui::MouseDownEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if let Some(path) = &path {
-            if !path.starts_with(self.model.root()) || !path.exists() {
-                self.model
-                    .set_status("Explorer item no longer exists; refresh the folder");
-                self.explorer_context_menu = None;
-                cx.notify();
-                return;
-            }
-            self.explorer_multi_selection.context_target(path);
-        } else {
-            self.explorer_multi_selection.clear();
-        }
-        self.explorer_selection = path.clone();
-        self.explorer_delete_confirmed = false;
-        self.explorer_delete_pending = None;
-        window.focus(&self.explorer_keyboard_focus, cx);
-        self.explorer_context_menu = Some(ExplorerContextMenu { path });
-        self.show_native_popup(
-            NativePopupKind::ExplorerContext,
-            f32::from(event.position.x),
-            f32::from(event.position.y),
-            cx,
-        );
-    }
-
     fn begin_explorer_action(
         &mut self,
         action: ExplorerAction,
@@ -973,8 +936,12 @@ impl Workbench {
             return;
         }
         self.explorer_action = Some(action);
-        self.native_popup.dismiss();
         self.quick_open = None;
+        // If another Kit dialog was opened by a shortcut/MCP before this
+        // action, it must not remain as an empty layer beneath the new one.
+        if window.has_active_dialog(cx) {
+            window.close_all_dialogs(cx);
+        }
         self.explorer_delete_confirmed = false;
         self.explorer_delete_pending = None;
         self.explorer_action_input =
@@ -996,6 +963,7 @@ impl Workbench {
         if self.explorer_action_input.is_none() {
             window.focus(&self.explorer_action_modal_focus, cx);
         }
+        self.open_kit_explorer_action_dialog(window, cx);
         cx.notify();
     }
 
@@ -1944,13 +1912,14 @@ impl Workbench {
         }
         if self.explorer_action.is_some() {
             self.cancel_explorer_action(cx);
+            window.close_dialog(cx);
         }
-        self.native_popup.dismiss();
         let input = cx.new(QuickOpenInput::new);
         cx.observe(&input, |_, _, cx| cx.notify()).detach();
         window.focus(&input.read(cx).focus_handle(cx), cx);
         self.quick_open = Some(input);
         self.ensure_file_index(cx);
+        self.open_kit_quick_open_dialog(window, cx);
         cx.notify();
     }
 
@@ -2617,7 +2586,6 @@ impl Workbench {
         self.mixed_panes.reset();
         self.mixed_tab_context = None;
         self.tree = WorkspaceTree::new_with_options(&canonical, self.explorer_visibility).ok();
-        self.native_popup.dismiss();
         self.explorer_multi_selection = ExplorerMultiSelection::new(&canonical);
         self.explorer_preview_active = false;
         self.explorer_filter_input
@@ -2720,7 +2688,6 @@ impl Workbench {
         self.terminal_key_queue_target = None;
         self.terminal_key_sending = false;
         self.terminal_input.update(cx, |input, cx| input.clear(cx));
-        self.native_popup.dismiss();
         self.terminal_poll = TerminalPollGate::default();
         self.terminal_list_loading = false;
         self.terminal_read_loading = None;
@@ -4979,25 +4946,6 @@ impl Workbench {
         cx.notify();
     }
 
-    fn show_terminal_tab_context(
-        &mut self,
-        index: usize,
-        event: &gpui::MouseDownEvent,
-        cx: &mut Context<Self>,
-    ) {
-        // Right-click targets the tab under the pointer, not the active Host
-        // input session. No session is attached or mutated by opening a menu.
-        self.terminal_tab_context = self.terminals.context_target_at(index);
-        if self.terminal_tab_context.is_some() {
-            self.show_native_popup(
-                NativePopupKind::TerminalTabContext,
-                f32::from(event.position.x),
-                f32::from(event.position.y),
-                cx,
-            );
-        }
-    }
-
     fn apply_terminal_context(&mut self, action: TerminalContextAction, cx: &mut Context<Self>) {
         let Some(target) = self.terminal_tab_context.take() else {
             cx.notify();
@@ -5251,31 +5199,27 @@ impl Workbench {
 impl Render for Workbench {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_mixed_tabs(cx);
-        if self.settings_section.is_some() && self.settings_modal_needs_focus {
-            window.focus(&self.settings_modal_focus, cx);
-            self.settings_modal_needs_focus = false;
+        if self.settings_section.is_some() && !self.settings_kit_dialog_open {
+            // MCP open_settings has no Window parameter. Defer Kit overlay
+            // creation until after the Workbench render to avoid re-entering
+            // the Root while it is painting this Workbench.
+            self.settings_kit_dialog_open = true;
+            let owner = cx.entity().downgrade();
+            window.defer(cx, move |window, cx| {
+                if owner
+                    .upgrade()
+                    .is_some_and(|entity| entity.read(cx).settings_section.is_some())
+                {
+                    // MCP Settings can replace a live Quick Open / file dialog.
+                    // Close the previous Kit layer so its stale content never
+                    // reappears when Settings is dismissed.
+                    if window.has_active_dialog(cx) {
+                        window.close_all_dialogs(cx);
+                    }
+                    Workbench::open_kit_native_settings_dialog(owner, window, cx);
+                }
+            });
         }
-        if self.native_popup.active().is_some() && self.native_popup_needs_focus {
-            window.focus(&self.native_popup_focus, cx);
-            self.native_popup_needs_focus = false;
-        }
-        let viewport = window.viewport_size();
-        let native_settings_panel = self.render_native_settings_panel(
-            f32::from(viewport.width),
-            f32::from(viewport.height),
-            cx,
-        );
-        let native_popup_panel = self.render_native_popup(cx);
-        let explorer_action_dialog = self.render_explorer_action_dialog(
-            f32::from(viewport.width),
-            f32::from(viewport.height),
-            cx,
-        );
-        let quick_open_dialog = self.render_quick_open_dialog(
-            f32::from(viewport.width),
-            f32::from(viewport.height),
-            cx,
-        );
         let terminal_font_size = self.native_settings.terminal_font_size as f32;
         let mixed_tabs = self.mixed_tabs.entries().to_vec();
         let mixed_active = self.mixed_tabs.active().cloned();
@@ -5961,7 +5905,6 @@ impl Render for Workbench {
                                                     RightSidebarView::Explorer
                                                 } else {
                                                     view.explorer_context_menu = None;
-                                                    view.native_popup.dismiss();
                                                     RightSidebarView::Git
                                                 };
                                                 cx.notify();
@@ -6169,10 +6112,6 @@ impl Render for Workbench {
                                     .on_drop(cx.listener(|this, paths: &gpui::ExternalPaths, _, cx| {
                                         this.import_explorer_drop(paths.paths().to_vec(), None, cx);
                                     }))
-                                    .on_mouse_down(gpui::MouseButton::Right, cx.listener(|this, event: &gpui::MouseDownEvent, window, cx| {
-                                        this.open_explorer_context_menu(None, event, window, cx);
-                                        cx.stop_propagation();
-                                    }))
                                     .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
                                         if this.explorer_context_menu.take().is_some() { cx.notify(); }
                                     }))
@@ -6220,10 +6159,6 @@ impl Render for Workbench {
                                                     .child(div().text_xs().text_color(rgb(MUTED))
                                                         .child(relative.display().to_string())))
                                                 .child(explorer_status_badge(status_badge))
-                                                .on_mouse_down(gpui::MouseButton::Right, cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
-                                                    this.open_explorer_context_menu(Some(context_path.clone()), event, window, cx);
-                                                    cx.stop_propagation();
-                                                }))
                                                 .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
                                                     this.explorer_context_menu = None;
                                                     let modifiers = event.modifiers();
@@ -6264,6 +6199,10 @@ impl Render for Workbench {
                                                     cx.stop_propagation();
                                                     this.import_explorer_drop(paths.paths().to_vec(), Some(external_drop_target.clone()), cx);
                                                 }))
+                                                .context_menu(Self::kit_explorer_context_menu(
+                                                    cx.entity().downgrade(),
+                                                    Some(context_path),
+                                                ))
                                         }).collect::<Vec<_>>()
                                     } else if tree_mode {
                                         tree_rows.into_iter().enumerate().map(|(i, item)| {
@@ -6327,10 +6266,6 @@ impl Render for Workbench {
                                                 .child(icon(row_icon, 15.0, if selected { TEXT } else { MUTED }))
                                                 .child(div().flex_1().min_w_0().overflow_hidden().text_sm().child(row_label))
                                                 .child(explorer_status_badge(status_badge))
-                                                .on_mouse_down(gpui::MouseButton::Right, cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
-                                                    this.open_explorer_context_menu(Some(context_path.clone()), event, window, cx);
-                                                    cx.stop_propagation();
-                                                }))
                                                 .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
                                                     this.explorer_context_menu = None;
                                                     let clicked = this.model.root().join(&relative);
@@ -6371,6 +6306,10 @@ impl Render for Workbench {
                                                     cx.stop_propagation();
                                                     this.import_explorer_drop(paths.paths().to_vec(), Some(external_drop_target.clone()), cx);
                                                 }))
+                                                .context_menu(Self::kit_explorer_context_menu(
+                                                    cx.entity().downgrade(),
+                                                    Some(context_path),
+                                                ))
                                         }).collect::<Vec<_>>()
                                     } else {
                                         entries.into_iter().enumerate().map(|(i, item)| {
@@ -6408,10 +6347,6 @@ impl Render for Workbench {
                                                 .child(icon(row_icon, 15.0, if selected { TEXT } else { MUTED }))
                                                 .child(div().flex_1().min_w_0().overflow_hidden().text_sm().child(item.name))
                                                 .child(explorer_status_badge(status_badge))
-                                                .on_mouse_down(gpui::MouseButton::Right, cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
-                                                    this.open_explorer_context_menu(Some(context_path.clone()), event, window, cx);
-                                                    cx.stop_propagation();
-                                                }))
                                                 .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
                                                     this.explorer_context_menu = None;
                                                     let modifiers = event.modifiers();
@@ -6447,6 +6382,10 @@ impl Render for Workbench {
                                                     cx.stop_propagation();
                                                     this.import_explorer_drop(paths.paths().to_vec(), Some(external_drop_target.clone()), cx);
                                                 }))
+                                                .context_menu(Self::kit_explorer_context_menu(
+                                                    cx.entity().downgrade(),
+                                                    Some(context_path),
+                                                ))
                                         }).collect::<Vec<_>>()
                                     })
                                     .when(explorer_filter_active && explorer_filter_empty,
@@ -6455,7 +6394,11 @@ impl Render for Workbench {
                                             .child(if index_loading { "Indexing workspace files…" } else { "No matching files or folders" })))
                                     .when(tree_mode && tree_truncated, |view| {
                                         view.child(div().text_color(rgb(MUTED)).child("Tree limited to 4,000 visible items"))
-                                    }),
+                                    })
+                                    .context_menu(Self::kit_explorer_context_menu(
+                                        cx.entity().downgrade(),
+                                        None,
+                                    )),
                             )
                             )
                             .child(
@@ -7133,18 +7076,6 @@ impl Render for Workbench {
                                                             .on_mouse_up(gpui::MouseButton::Middle, cx.listener(move |this, _, _, cx| {
                                                                 this.close_mixed_tab(&for_middle, cx);
                                                             }))
-                                                            .on_mouse_down(gpui::MouseButton::Right, cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
-                                                                if this.mixed_tab_is_current(&for_right, cx) {
-                                                                    this.mixed_tab_context = Some(for_right.clone());
-                                                                    this.show_native_popup(
-                                                                        NativePopupKind::MixedTabContext,
-                                                                        f32::from(event.position.x),
-                                                                        f32::from(event.position.y),
-                                                                        cx,
-                                                                    );
-                                                                    cx.stop_propagation();
-                                                                }
-                                                            }))
                                                             .on_drag(MixedTabDrag {
                                                                 identity: drag_identity,
                                                                 workspace_generation: mixed_drag_generation,
@@ -7153,7 +7084,12 @@ impl Render for Workbench {
                                                             })
                                                             .on_drop(cx.listener(move |this, drag: &MixedTabDrag, _, cx| {
                                                                 this.reorder_mixed_tab(drag, &for_drop, cx);
-                                                            })),
+                                                            }))
+                                                            .context_menu(Self::kit_mixed_tab_context_menu(
+                                                                cx.entity().downgrade(),
+                                                                for_right,
+                                                                in_secondary,
+                                                            )),
                                                     )
                                                     .child(
                                                         div()
@@ -7434,6 +7370,7 @@ impl Render for Workbench {
                                                     .children(terminal_tabs.into_iter().map(
                                                         |(index, title, running, handle, identity)| {
                                                             let destination = identity.clone();
+                                                            let context_target = identity.clone();
                                                             div()
                                                                 .flex()
                                                                 .items_center()
@@ -7455,13 +7392,6 @@ impl Render for Workbench {
                                                                             "{} {title}",
                                                                             if running { "●" } else { "○" }
                                                                         ))
-                                                                        .on_mouse_down(
-                                                                            gpui::MouseButton::Right,
-                                                                            cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
-                                                                                this.show_terminal_tab_context(index, event, cx);
-                                                                                cx.stop_propagation();
-                                                                            }),
-                                                                        )
                                                                         .on_mouse_up(
                                                                             gpui::MouseButton::Middle,
                                                                             cx.listener(move |this, _, _, cx| {
@@ -7503,7 +7433,11 @@ impl Render for Workbench {
                                                                                 this.save_terminal_layout();
                                                                                 cx.notify();
                                                                             }
-                                                                        })),
+                                                                        }))
+                                                                        .context_menu(Self::kit_terminal_tab_context_menu(
+                                                                            cx.entity().downgrade(),
+                                                                            context_target,
+                                                                        )),
                                                                 )
                                                                 .child(
                                                                     div()
@@ -8727,10 +8661,6 @@ impl Render for Workbench {
                         cx,
                     )),
             )
-            .children(native_popup_panel)
-            .children(explorer_action_dialog)
-            .children(quick_open_dialog)
-            .children(native_settings_panel)
     }
 }
 
@@ -8927,9 +8857,6 @@ fn main() {
                             center_view: CenterView::Terminal,
                             right_sidebar_view: RightSidebarView::Explorer,
                             explorer_context_menu: None,
-                            native_popup: NativePopupState::default(),
-                            native_popup_focus: cx.focus_handle(),
-                            native_popup_needs_focus: false,
                             show_project_management: false,
                             runtime_details_open: false,
                             editor: None,
@@ -9020,7 +8947,7 @@ fn main() {
                             native_settings_error,
                             settings_section: None,
                             settings_modal_focus: cx.focus_handle(),
-                            settings_modal_needs_focus: false,
+                            settings_kit_dialog_open: false,
                             last_auto_git_fetch: Instant::now(),
                             agent_profiles: Vec::new(),
                             agent_profiles_loading: false,

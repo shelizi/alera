@@ -5,6 +5,52 @@ use super::*;
 use gpui_kit::component::switch::Switch;
 
 impl Workbench {
+    pub(super) fn open_kit_native_settings_dialog(
+        owner: gpui::WeakEntity<Self>,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let first_focus = std::cell::Cell::new(true);
+        window.open_dialog(cx, move |dialog, window, cx| {
+            if first_focus.replace(false) {
+                if let Some(entity) = owner.upgrade() {
+                    let focus = entity.read(cx).settings_modal_focus.clone();
+                    window.focus(&focus, cx);
+                }
+            }
+            let viewport = window.viewport_size();
+            let content = owner
+                .upgrade()
+                .and_then(|entity| {
+                    entity.update(cx, |view, cx| {
+                        view.render_native_settings_panel(
+                            f32::from(viewport.width),
+                            f32::from(viewport.height),
+                            cx,
+                        )
+                    })
+                })
+                .unwrap_or_else(|| div().into_any_element());
+            let for_cancel = owner.clone();
+            dialog
+                .title("Settings")
+                .w(px(960.))
+                .centered()
+                .close_button(false)
+                .overlay_closable(true)
+                .on_cancel(move |_, _, cx| {
+                    let _ = for_cancel.update(cx, |view, cx| {
+                        view.settings_section = None;
+                        view.settings_kit_dialog_open = false;
+                        cx.notify();
+                    });
+                    true
+                })
+                .on_ok(|_, _, _| false)
+                .child(content)
+        });
+    }
+
     pub(super) fn show_native_settings_section(
         &mut self,
         section: &str,
@@ -19,17 +65,12 @@ impl Workbench {
         let store = self.native_settings_store.as_ref().ok_or("ui_not_ready")?;
         let settings = store.read().map_err(|_| "ui_operation_failed")?;
         self.install_native_settings(settings, cx);
-        self.native_popup.dismiss();
-        self.native_popup_needs_focus = false;
         self.explorer_context_menu = None;
         self.mixed_tab_context = None;
         self.terminal_tab_context = None;
         self.quick_open = None;
         if self.explorer_action.is_some() {
             self.cancel_explorer_action(cx);
-        }
-        if self.settings_section.is_none() {
-            self.settings_modal_needs_focus = true;
         }
         self.settings_section = Some(section.to_owned());
         match section {
@@ -43,7 +84,8 @@ impl Workbench {
 
     fn dismiss_native_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.settings_section = None;
-        self.settings_modal_needs_focus = false;
+        self.settings_kit_dialog_open = false;
+        window.close_dialog(cx);
         if self.center_view == CenterView::Editor {
             if let Some(editor) = self.focused_editor() {
                 window.focus(&editor.read(cx).focus_handle(cx), cx);
@@ -77,12 +119,11 @@ impl Workbench {
             .text_sm()
             .when(!compact, |row| row.w_full())
             .child(label)
-            .on_click(cx.listener(move |view, _, window, cx| {
+            .on_click(cx.listener(move |view, _, _window, cx| {
                 if let Err(code) = view.show_native_settings_section(id, cx) {
                     view.model
                         .set_status(format!("Native settings unavailable: {code}"));
                 }
-                window.focus(&view.settings_modal_focus, cx);
                 cx.notify();
             }))
             .into_any_element()
@@ -464,7 +505,6 @@ impl Workbench {
             _ => return None,
         };
         let metrics = NativeModalSize::Settings.resolve(viewport_width, viewport_height);
-        let modal = AleraNativeModal::new(metrics);
         let compact = metrics.stacked_navigation;
         let categories = [
             ("application", "Application"),
@@ -532,18 +572,26 @@ impl Workbench {
             .flex()
             .flex_col()
             .child(
-                modal.header(
-                    heading,
-                    icon_button(
-                        "native-settings-close",
-                        UiIcon::Close,
-                        "Close settings",
-                        false,
-                    )
-                    .on_click(cx.listener(|view, _, window, cx| {
-                        view.dismiss_native_settings(window, cx);
-                    })),
-                ),
+                div()
+                    .h(px(44.0))
+                    .px_4()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .border_b_1()
+                    .border_color(rgb(BORDER))
+                    .child(div().text_sm().child(heading))
+                    .child(
+                        icon_button(
+                            "native-settings-close",
+                            UiIcon::Close,
+                            "Close settings",
+                            false,
+                        )
+                        .on_click(cx.listener(|view, _, window, cx| {
+                            view.dismiss_native_settings(window, cx);
+                        })),
+                    ),
             )
             .child(
                 div()
@@ -576,31 +624,12 @@ impl Workbench {
             .flex()
             .flex_1()
             .min_h_0()
+            .key_context("AleraNativeModal")
+            .track_focus(&self.settings_modal_focus)
             .when(compact, |body| body.flex_col())
             .when(!compact, |body| body.flex_row())
             .child(navigation)
             .child(content);
-        let dialog = modal
-            .frame(body)
-            .key_context("AleraNativeModal")
-            .track_focus(&self.settings_modal_focus)
-            .on_key_down(cx.listener(|view, event: &gpui::KeyDownEvent, window, cx| {
-                if event.keystroke.key.eq_ignore_ascii_case("escape") {
-                    view.dismiss_native_settings(window, cx);
-                }
-                // Never allow modal keystrokes to reach Editor or Terminal.
-                cx.stop_propagation();
-            }));
-        Some(
-            modal
-                .overlay(
-                    dialog,
-                    cx.listener(|view, _, window, cx| {
-                        view.dismiss_native_settings(window, cx);
-                        cx.stop_propagation();
-                    }),
-                )
-                .into_any_element(),
-        )
+        Some(body.into_any_element())
     }
 }

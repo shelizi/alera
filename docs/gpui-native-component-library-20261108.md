@@ -1,6 +1,6 @@
 # Alera GPUI Native component library
 
-## GPUI Kit adoption (in progress, 2026-11-08)
+## GPUI Kit adoption (source migration complete, 2026-11-09)
 
 The dependency policy has changed: **use GPUI Kit 0.9.0 as the sole GPUI
 runtime and styled component dependency**. This upgrades Alera Native from
@@ -16,17 +16,17 @@ for action/select triggers and icon-toolbar hit targets (retaining Alera's
 Codicon glyphs), Kit Switch in Native Settings, Kit TabBar
 for the right Explorer/Git sidebar, and Kit DropdownMenu/PopupMenuItem
 for visibility, branch selection, Git More, Terminal session attachment and
-Terminal size. Windows `cargo check --offline --locked` passed after
-updating GPUI 0.3 focus, timer and scroll APIs; this does **not** constitute
-native UI acceptance.
+Terminal size. Explorer file rows (filtered, tree, list and blank area),
+the primary mixed Editor/Terminal tab bar and the hidden legacy Terminal
+tab strip now use Kit's `ContextMenuExt` with live target validation.
+Explorer file operations, Quick Open and Native Settings use
+`WindowExt::open_dialog` with Kit's overlay and focus lifecycle. The
+home-grown modal/popup rendering and transient popup state were removed.
 
-Still to migrate: the remaining Explorer/Tab right-click paths in
-`native_popup_ui.rs`, `native_modal_ui.rs` and Action/Quick Open modal.
-Those are **temporary compatibility code**, not a new reusable design
-system to maintain or extend. Preserve their guarded actions until Kit
-PopupMenu / WindowExt dialog hosting replaces them with equivalent
-keyboard, dismissal and focus behavior. Never disable the existing safe
-two-click destructive actions just to simplify the UI.
+Windows `cargo check --offline --locked` passes with the upgraded GPUI
+runtime; this does **not** constitute native mouse, keyboard, focus, IME or
+accessibility acceptance. Preserve the original guarded operations, including
+two-click destructive file and Git actions. Native remains `supported=false`.
 
 The inventory below documents the *previous bespoke implementation* and
 its behavior contract; it is not a recommendation to keep building new
@@ -38,8 +38,8 @@ Previously pinned GPUI 0.2.2 exposed `gpui::anchored()` for viewport-fit popup
 positioning, `gpui::deferred()` for popup z-order, `div()` layout and
 event handling, and OS window/keyboard focus. It exposes platform application
 menus, **not** a complete cross-platform anchored select, context-menu,
-confirmation-dialog or dropdown field widget. Reuse its low-level primitives;
-do not render a toolbar full of fake options to simulate a dropdown.
+confirmation-dialog or dropdown field widget. This limitation no longer
+applies to the current Kit dependency; do not rebuild these controls.
 
 Classic Flutter sources remain the UX contract:
 
@@ -55,12 +55,11 @@ Classic Flutter sources remain the UX contract:
 
 | Module | API and ownership |
 | --- | --- |
-| `desktop_gpui/src/native_components.rs` | Reusable `menu_surface`, `menu_item`, `menu_separator`, `select_trigger`, `action_button`, `toggle_row`, `segmented_option`, `popup_at`; re-exports Native icon and modal components. No filesystem or Git side effects. |
-| `desktop_gpui/src/native_popup.rs` | Pure typed `NativePopupState`, `NativePopupKind` and menu keyboard selection model; one transient popup at a time. |
-| `desktop_gpui/src/native_popup_ui.rs` | One popup presentation layer and typed application callbacks. Uses GPUI `anchored`/`deferred`, click-outside dismissal, Escape, ArrowUp/ArrowDown and Enter; validates live target on action. |
-| `desktop_gpui/src/native_modal.rs` | Pure viewport bounded Settings/Compact dialog sizing, with small-window layout policies. |
-| `desktop_gpui/src/native_modal_ui.rs` | Shared `AleraNativeModal` dimmed backdrop, frame and header. |
-| `desktop_gpui/src/native_action_dialog_ui.rs` | Explorer file create/rename/move/copy/duplicate/permanent-delete dialogs and Ctrl+P Quick Open dialog, reusing the shared modal shell. |
+| `desktop_gpui/src/native_components.rs` | Kit Button adapters and the feature-specific Quick Open results row; no custom popup/overlay or file-system side effects. |
+| `desktop_gpui/src/native_popup_ui.rs` | GPUI Kit `ContextMenuExt` and `DropdownMenu` application callbacks only; validates the exact Explorer path, Git branch, or Host/Editor tab before action. |
+| `desktop_gpui/src/native_modal.rs` | UI-agnostic responsive Settings layout thresholds; no custom modal rendering. |
+| `desktop_gpui/src/native_action_dialog_ui.rs` | Explorer guarded file dialogs and Ctrl+P Quick Open rendered in Kit `WindowExt::open_dialog`. |
+| `desktop_gpui/src/native_settings_ui.rs` | Kit Dialog for MCP and toolbar Settings, Kit Switch, and existing durable settings compare-and-set. |
 
 ## Integration inventory
 
@@ -76,7 +75,7 @@ Classic Flutter sources remain the UX contract:
 | Explorer create/rename/move/copy/duplicate/delete | Inline action form occupying file list | Compact reusable modal with explicit confirmation and cancellation |
 | Ctrl+P Quick Open | Inline Explorer search/results panel | Centered modal with indexed fuzzy results, selection, keyboard close/open |
 | Native Settings | Standalone textual `On · change` and bare `+`/`−` | Shared switch and button; existing durable Native preferences compare-and-set unchanged |
-| Right sidebar Explorer/Git | Duplicated local tab styling | Reusable segmented option control |
+| Right sidebar Explorer/Git | Duplicated local tab styling | Kit segmented TabBar control |
 
 ## Behavioral invariants
 
@@ -98,17 +97,18 @@ Classic Flutter sources remain the UX contract:
 - Do not call these visual migrations production-ready until Windows
   mouse/keyboard/focus acceptance passes. Native remains `supported=false`.
 
-## Future component-library backlog
+## Kit integration acceptance backlog
 
-- Reusable native dropdown **search/filter** for long lists, with paging and
-  advanced keyboard selection. Initial dropdowns are finite/labeled only.
-- General-purpose confirmation binding that owns explicit arm/confirm state,
-  then migrate remaining Git/worktree sensitive inline confirmation affordances.
-- Popup dynamic positioning against nontrivial scrolling parents, multi-window
-  DPI and IME, and focus-trap acceptance on Windows/macOS.
-- Standard text input and validation, toast/status message, virtualized
-  list and tree controls; these require feature-specific semantics and should
-  not be replaced by decorative abstractions.
+- Windows real GUI smoke for context menus: right-click on Explorer
+  file/blank/tree and the mixed tab strip, keyboard navigation, dismissal,
+  nested scroll, DPI, and stale-session refusal.
+- Kit Dialog real GUI smoke: open Settings via toolbar and Host MCP, switch
+  sections, focus without repeated stealing, escape/backdrop close, Ctrl+P
+  selection, and Explorer delete's two-click confirmation.
+- Prefer Kit's long-list Select, virtualized list/tree, input and notification
+  primitives when feature parity calls for them. Do not build replacements.
+- Add explicit functional regression coverage for Kit overlay stacking when
+  MCP opens Settings while another file/Quick Open dialog is present.
 
 Do not merge into Classic, push or release solely because `cargo check`
 passes. Actual native GUI acceptance is separately gated.

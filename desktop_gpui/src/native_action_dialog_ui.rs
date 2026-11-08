@@ -6,20 +6,105 @@ use super::*;
 use native_components::action_button;
 
 impl Workbench {
+    pub(super) fn open_kit_quick_open_dialog(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(input) = self.quick_open.clone() else {
+            return;
+        };
+        let owner = cx.entity().downgrade();
+        let first_focus = std::cell::Cell::new(true);
+        window.open_dialog(cx, move |dialog, window, cx| {
+            if first_focus.replace(false) {
+                window.focus(&input.read(cx).focus_handle(cx), cx);
+            }
+            let content = owner
+                .upgrade()
+                .and_then(|entity| entity.update(cx, |view, cx| view.render_quick_open_dialog(cx)))
+                .unwrap_or_else(|| div().into_any_element());
+            let for_cancel = owner.clone();
+            dialog
+                .title("Open file")
+                .w(px(730.))
+                .centered()
+                .close_button(false)
+                .on_cancel(move |_, _, cx| {
+                    let _ = for_cancel.update(cx, |view, cx| {
+                        view.quick_open = None;
+                        cx.notify();
+                    });
+                    true
+                })
+                // Enter is handled by the real QuickOpen result selection.
+                // Do not silently dismiss the dialog with the default OK.
+                .on_ok(|_, _, _| false)
+                .child(content)
+        });
+    }
+
+    pub(super) fn open_kit_explorer_action_dialog(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(action) = self.explorer_action else {
+            return;
+        };
+        let owner = cx.entity().downgrade();
+        let first_focus = std::cell::Cell::new(true);
+        let input = self.explorer_action_input.clone();
+        let fallback_focus = self.explorer_action_modal_focus.clone();
+        window.open_dialog(cx, move |dialog, window, cx| {
+            if first_focus.replace(false) {
+                if let Some(input) = input.as_ref() {
+                    window.focus(&input.read(cx).focus_handle(cx), cx);
+                } else {
+                    window.focus(&fallback_focus, cx);
+                }
+            }
+            let content = owner
+                .upgrade()
+                .and_then(|entity| {
+                    entity.update(cx, |view, cx| view.render_explorer_action_dialog(cx))
+                })
+                .unwrap_or_else(|| div().into_any_element());
+            let for_cancel = owner.clone();
+            let for_submit = owner.clone();
+            dialog
+                .title(if action == ExplorerAction::Delete {
+                    "Delete permanently"
+                } else {
+                    action.label()
+                })
+                .w(px(520.))
+                .centered()
+                .close_button(false)
+                .on_cancel(move |_, _, cx| {
+                    let _ = for_cancel.update(cx, |view, cx| view.cancel_explorer_action(cx));
+                    true
+                })
+                .on_ok(move |_, _, cx| {
+                    for_submit
+                        .update(cx, |view, cx| {
+                            view.apply_explorer_action(cx);
+                            view.explorer_action.is_none()
+                        })
+                        .unwrap_or(true)
+                })
+                .child(content)
+        });
+    }
+
     pub(super) fn render_quick_open_dialog(
         &self,
-        viewport_width: f32,
-        viewport_height: f32,
         cx: &mut Context<Self>,
     ) -> Option<gpui::AnyElement> {
         let input = self.quick_open.clone()?;
         if self.settings_section.is_some() || self.explorer_action.is_some() {
             return None;
         }
-        let mut dims = NativeModalSize::Settings.resolve(viewport_width, viewport_height);
-        dims.width = dims.width.min(760.0);
-        dims.height = dims.height.min(580.0);
-        let modal = AleraNativeModal::new(dims);
         let matches = self
             .file_index
             .as_ref()
@@ -73,52 +158,20 @@ impl Workbench {
                         ))
                     })),
             );
-        let dialog = modal
-            .frame(
-                div()
-                    .flex()
-                    .flex_col()
-                    .flex_1()
-                    .min_h_0()
-                    .child(
-                        modal.header(
-                            "Open file",
-                            icon_button("native-quick-open-close", UiIcon::Close, "Close", false)
-                                .on_click(cx.listener(|view, _, window, cx| {
-                                    view.close_quick_open_dialog(window, cx);
-                                })),
-                        ),
-                    )
-                    .child(content),
-            )
-            .on_key_down(
-                cx.listener(move |view, event: &gpui::KeyDownEvent, window, cx| {
-                    let key = event.keystroke.key.as_str();
-                    if key.eq_ignore_ascii_case("escape") {
-                        view.close_quick_open_dialog(window, cx);
-                        cx.stop_propagation();
-                    } else if (key.eq_ignore_ascii_case("enter")
-                        || key.eq_ignore_ascii_case("return"))
-                        && first_match.is_some()
-                    {
-                        if let Some(path) = &first_match {
-                            view.choose_quick_open_path(path, window, cx);
-                        }
-                        cx.stop_propagation();
+        let content = content.on_key_down(cx.listener(
+            move |view, event: &gpui::KeyDownEvent, window, cx| {
+                let key = event.keystroke.key.as_str();
+                if (key.eq_ignore_ascii_case("enter") || key.eq_ignore_ascii_case("return"))
+                    && first_match.is_some()
+                {
+                    if let Some(path) = &first_match {
+                        view.choose_quick_open_path(path, window, cx);
                     }
-                }),
-            );
-        Some(
-            modal
-                .overlay(
-                    dialog,
-                    cx.listener(|view, _, window, cx| {
-                        view.close_quick_open_dialog(window, cx);
-                        cx.stop_propagation();
-                    }),
-                )
-                .into_any_element(),
-        )
+                    cx.stop_propagation();
+                }
+            },
+        ));
+        Some(content.into_any_element())
     }
 
     fn choose_quick_open_path(&mut self, path: &Path, window: &mut Window, cx: &mut Context<Self>) {
@@ -126,6 +179,7 @@ impl Workbench {
             self.open_editor(cx);
             self.quick_open = None;
             self.persist_session();
+            window.close_dialog(cx);
             if let Some(editor) = self.focused_editor() {
                 window.focus(&editor.read(cx).focus_handle(cx), cx);
             }
@@ -138,6 +192,7 @@ impl Workbench {
 
     pub(super) fn close_quick_open_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.quick_open = None;
+        window.close_dialog(cx);
         if let Some(editor) = self.focused_editor() {
             window.focus(&editor.read(cx).focus_handle(cx), cx);
         } else {
@@ -148,27 +203,13 @@ impl Workbench {
 
     pub(super) fn render_explorer_action_dialog(
         &self,
-        viewport_width: f32,
-        viewport_height: f32,
         cx: &mut Context<Self>,
     ) -> Option<gpui::AnyElement> {
         let action = self.explorer_action?;
         if self.settings_section.is_some() {
             return None;
         }
-        let mut dims = NativeModalSize::Compact.resolve(viewport_width, viewport_height);
-        dims.height = dims.height.min(if action == ExplorerAction::Delete {
-            265.0
-        } else {
-            245.0
-        });
-        let modal = AleraNativeModal::new(dims);
         let destructive = action == ExplorerAction::Delete;
-        let title = if destructive {
-            "Delete permanently"
-        } else {
-            action.label()
-        };
         let description = if destructive {
             "The selected files and folders (including contents) will be permanently removed, not moved to Recycle Bin. Review the selection before confirming."
         } else if action == ExplorerAction::Duplicate {
@@ -215,7 +256,7 @@ impl Workbench {
                         action_button("explorer-action-cancel", "Cancel", false, false).on_click(
                             cx.listener(|view, _, window, cx| {
                                 view.cancel_explorer_action(cx);
-                                window.focus(&view.explorer_keyboard_focus, cx);
+                                window.close_dialog(cx);
                             }),
                         ),
                     )
@@ -224,56 +265,13 @@ impl Workbench {
                             .on_click(cx.listener(|view, _, window, cx| {
                                 view.apply_explorer_action(cx);
                                 if view.explorer_action.is_none() {
-                                    window.focus(&view.explorer_keyboard_focus, cx);
+                                    window.close_dialog(cx);
                                 }
                             })),
                     ),
             );
-        let dialog = modal
-            .frame(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .flex()
-                    .flex_col()
-                    .child(
-                        modal.header(
-                            title,
-                            icon_button("explorer-modal-close", UiIcon::Close, "Close", false)
-                                .on_click(cx.listener(|view, _, window, cx| {
-                                    view.cancel_explorer_action(cx);
-                                    window.focus(&view.explorer_keyboard_focus, cx);
-                                })),
-                        ),
-                    )
-                    .child(body),
-            )
-            .key_context("AleraNativeActionDialog")
-            .track_focus(&self.explorer_action_modal_focus)
-            .on_key_down(cx.listener(|view, event: &gpui::KeyDownEvent, window, cx| {
-                let key = event.keystroke.key.as_str();
-                if key.eq_ignore_ascii_case("escape") {
-                    view.cancel_explorer_action(cx);
-                    window.focus(&view.explorer_keyboard_focus, cx);
-                } else if key.eq_ignore_ascii_case("enter") || key.eq_ignore_ascii_case("return") {
-                    view.apply_explorer_action(cx);
-                    if view.explorer_action.is_none() {
-                        window.focus(&view.explorer_keyboard_focus, cx);
-                    }
-                }
-                cx.stop_propagation();
-            }));
-        Some(
-            modal
-                .overlay(
-                    dialog,
-                    cx.listener(|view, _, window, cx| {
-                        view.cancel_explorer_action(cx);
-                        window.focus(&view.explorer_keyboard_focus, cx);
-                        cx.stop_propagation();
-                    }),
-                )
-                .into_any_element(),
-        )
+        // GPUI Kit Dialog owns the backdrop, key focus, Escape and viewport
+        // clamping. The Workbench only renders the guarded action content.
+        Some(body.into_any_element())
     }
 }
