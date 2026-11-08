@@ -3,9 +3,38 @@
 //! No command invokes reset --hard, rebase, shell or force push. Merges use
 //! explicit local git2 operations and refuse unresolved conflicts.
 use alera_core::git_cli::git_in_dir;
-use git2::{build::CheckoutBuilder, BranchType, Repository, StatusOptions};
+use git2::{build::CheckoutBuilder, BranchType, Index, Oid, Repository, StatusOptions};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
+
+/// Whole-file choices for explicitly confirmed, text-only merge conflicts.
+/// This intentionally does not pretend to perform per-hunk/AI resolution.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GitConflictChoice {
+    Ours,
+    Theirs,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GitConflictFile {
+    pub path: String,
+    pub ancestor_preview: Option<String>,
+    pub ours_preview: String,
+    pub theirs_preview: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GitConflictPlan {
+    pub current_branch: String,
+    pub source_branch: String,
+    pub current_oid: String,
+    pub source_oid: String,
+    pub conflicts: Vec<GitConflictFile>,
+}
+
+const MAX_MERGE_CONFLICT_FILES: usize = 48;
+const MAX_MERGE_CONFLICT_TEXT_BYTES: usize = 64 * 1024;
 
 pub struct GitActions {
     repo: Repository,
@@ -13,6 +42,268 @@ pub struct GitActions {
 }
 
 impl GitActions {
+    fn conflicting_merge_index(&self, source: &str) -> Result<(String, Oid, Oid, Index), String> {
+        if !valid_branch(source) {
+            return Err("Enter a valid local source branch".into());
+        }
+        self.require_clean_worktree()?;
+        let head = self.repo.head().map_err(|error| error.to_string())?;
+        if !head.is_branch() {
+            return Err("Conflict resolution requires a checked-out local branch".into());
+        }
+        let current_name = head
+            .shorthand()
+            .map_err(|error| error.to_string())?
+            .to_owned();
+        let ours = head.peel_to_commit().map_err(|error| error.to_string())?;
+        let theirs = self
+            .repo
+            .find_branch(source, BranchType::Local)
+            .map_err(|error| error.to_string())?
+            .get()
+            .peel_to_commit()
+            .map_err(|error| error.to_string())?;
+        if ours.id() == theirs.id()
+            || self
+                .repo
+                .graph_descendant_of(ours.id(), theirs.id())
+                .map_err(|error| error.to_string())?
+            || self
+                .repo
+                .graph_descendant_of(theirs.id(), ours.id())
+                .map_err(|error| error.to_string())?
+        {
+            return Err("Branches are not diverged; use the regular Merge action".into());
+        }
+        let ancestor_id = self
+            .repo
+            .merge_base(ours.id(), theirs.id())
+            .map_err(|_| "Merge refused: branches have no common ancestor".to_string())?;
+        let ancestor = self
+            .repo
+            .find_commit(ancestor_id)
+            .and_then(|commit| commit.tree())
+            .map_err(|error| error.to_string())?;
+        let ours_tree = ours.tree().map_err(|error| error.to_string())?;
+        let theirs_tree = theirs.tree().map_err(|error| error.to_string())?;
+        let index = self
+            .repo
+            .merge_trees(&ancestor, &ours_tree, &theirs_tree, None)
+            .map_err(|error| error.to_string())?;
+        if !index.has_conflicts() {
+            return Err("Merge has no unresolved conflicts; use regular Merge".into());
+        }
+        Ok((current_name, ours.id(), theirs.id(), index))
+    }
+
+    fn conflict_stage_text(&self, stage: &git2::IndexEntry) -> Result<String, String> {
+        if !matches!(stage.mode, 0o100644 | 0o100755) {
+            return Err(
+                "Symlink, submodule and non-regular merge conflicts require a dedicated merge tool"
+                    .into(),
+            );
+        }
+        let blob = self
+            .repo
+            .find_blob(stage.id)
+            .map_err(|error| error.to_string())?;
+        let bytes = blob.content();
+        if bytes.len() > MAX_MERGE_CONFLICT_TEXT_BYTES || bytes.contains(&0) {
+            return Err("Binary or large merge conflicts require a dedicated merge tool".into());
+        }
+        std::str::from_utf8(bytes)
+            .map(ToString::to_string)
+            .map_err(|_| "Non-UTF-8 merge conflicts require a dedicated merge tool".into())
+    }
+
+    /// No checkout, index writes, refs or file mutations. A per-file plan
+    /// includes *complete* UTF-8 sides (bounded to 64 KiB per stage) so a
+    /// user can compare them before selecting whole-file Ours or Theirs.
+    pub fn preview_merge_conflicts(&self, source: &str) -> Result<GitConflictPlan, String> {
+        let (current_branch, current_oid, source_oid, index) =
+            self.conflicting_merge_index(source)?;
+        let mut conflicts = Vec::new();
+        for item in index.conflicts().map_err(|error| error.to_string())? {
+            if conflicts.len() >= MAX_MERGE_CONFLICT_FILES {
+                return Err("Too many merge conflict files for Native preview".into());
+            }
+            let item = item.map_err(|error| error.to_string())?;
+            let (Some(ours), Some(theirs)) = (item.our, item.their) else {
+                return Err(
+                    "Delete/modify or add/delete conflicts require a dedicated merge tool".into(),
+                );
+            };
+            if ours.path != theirs.path
+                || item
+                    .ancestor
+                    .as_ref()
+                    .is_some_and(|entry| entry.path != ours.path)
+            {
+                return Err("Rename/path merge conflicts require a dedicated merge tool".into());
+            }
+            let path = String::from_utf8(ours.path.clone())
+                .map_err(|_| "Non-UTF-8 Git conflict paths are not supported".to_string())?;
+            self.relative(Path::new(&path), true)?;
+            let ancestor_preview = item
+                .ancestor
+                .as_ref()
+                .map(|stage| self.conflict_stage_text(stage))
+                .transpose()?;
+            conflicts.push(GitConflictFile {
+                path,
+                ancestor_preview,
+                ours_preview: self.conflict_stage_text(&ours)?,
+                theirs_preview: self.conflict_stage_text(&theirs)?,
+            });
+        }
+        conflicts.sort_by(|a, b| a.path.cmp(&b.path));
+        if conflicts.is_empty() {
+            return Err("No supported conflicts found".into());
+        }
+        Ok(GitConflictPlan {
+            current_branch,
+            source_branch: source.to_string(),
+            current_oid: current_oid.to_string(),
+            source_oid: source_oid.to_string(),
+            conflicts,
+        })
+    }
+
+    /// Apply only an exact, still-current preview. Every conflicting path
+    /// must have one explicit choice, and all nonconflicting merge changes
+    /// remain generated by Git's own three-way merge. This never produces
+    /// conflict markers or mutates the user's files before checkout preflight.
+    pub fn merge_with_conflict_choices(
+        &self,
+        preview: &GitConflictPlan,
+        choices: &[(String, GitConflictChoice)],
+    ) -> Result<String, String> {
+        let fresh = self.preview_merge_conflicts(&preview.source_branch)?;
+        if &fresh != preview {
+            return Err(
+                "Merge preview is stale; refresh the conflict list before continuing".into(),
+            );
+        }
+        if choices.len() != preview.conflicts.len() {
+            return Err("Choose exactly one side for every conflicting file".into());
+        }
+        let mut selection = HashMap::new();
+        for (path, choice) in choices {
+            if !preview.conflicts.iter().any(|file| file.path == *path)
+                || selection.insert(path.as_str(), *choice).is_some()
+            {
+                return Err("Conflict choices contain unknown or duplicate file paths".into());
+            }
+        }
+        let (branch, current_oid, source_oid, mut index) =
+            self.conflicting_merge_index(&preview.source_branch)?;
+        if branch != preview.current_branch
+            || current_oid.to_string() != preview.current_oid
+            || source_oid.to_string() != preview.source_oid
+        {
+            return Err("Merge refs changed after preview; refresh before continuing".into());
+        }
+        let mut entries = Vec::new();
+        for item in index.conflicts().map_err(|error| error.to_string())? {
+            let item = item.map_err(|error| error.to_string())?;
+            let (Some(ours), Some(theirs)) = (item.our, item.their) else {
+                return Err("Conflict type changed after preview".into());
+            };
+            let path = String::from_utf8(ours.path.clone())
+                .map_err(|_| "Invalid Git conflict file name".to_string())?;
+            let side = *selection
+                .get(path.as_str())
+                .ok_or("Missing Git conflict resolution choice")?;
+            let mut chosen = match side {
+                GitConflictChoice::Ours => ours,
+                GitConflictChoice::Theirs => theirs,
+            };
+            // Git stages live in bits 12-13 of IndexEntry.flags; a resolved
+            // stage-zero entry must not retain those conflict stage bits.
+            chosen.flags &= !0x3000;
+            entries.push((path, chosen));
+        }
+        for (path, entry) in entries {
+            index
+                .conflict_remove(Path::new(&path))
+                .map_err(|error| error.to_string())?;
+            index.add(&entry).map_err(|error| error.to_string())?;
+        }
+        if index.has_conflicts() {
+            return Err("Refusing to commit: Git index still contains unresolved conflicts".into());
+        }
+        let tree_oid = index
+            .write_tree_to(&self.repo)
+            .map_err(|error| error.to_string())?;
+        let merged_tree = self
+            .repo
+            .find_tree(tree_oid)
+            .map_err(|error| error.to_string())?;
+        let signature = self
+            .repo
+            .signature()
+            .map_err(|_| "Configure Git user.name/user.email before merging".to_string())?;
+        let ours = self
+            .repo
+            .find_commit(current_oid)
+            .map_err(|error| error.to_string())?;
+        let theirs = self
+            .repo
+            .find_commit(source_oid)
+            .map_err(|error| error.to_string())?;
+        let mut preflight = CheckoutBuilder::new();
+        preflight.safe().dry_run();
+        self.repo
+            .checkout_tree(merged_tree.as_object(), Some(&mut preflight))
+            .map_err(|error| format!("Merge checkout preflight refused: {error}"))?;
+        self.require_clean_worktree()?;
+        if self
+            .repo
+            .head()
+            .map_err(|error| error.to_string())?
+            .peel_to_commit()
+            .map_err(|error| error.to_string())?
+            .id()
+            != current_oid
+        {
+            return Err("Local branch advanced during merge; no files were written".into());
+        }
+        let mut checkout = CheckoutBuilder::new();
+        checkout.safe().recreate_missing(false);
+        self.repo
+            .checkout_tree(merged_tree.as_object(), Some(&mut checkout))
+            .map_err(|error| format!("Merge checkout refused; branch ref unchanged: {error}"))?;
+        let mut worktree_index = self.repo.index().map_err(|error| error.to_string())?;
+        worktree_index
+            .read_tree(&merged_tree)
+            .map_err(|error| error.to_string())?;
+        worktree_index.write().map_err(|error| error.to_string())?;
+        let message = format!(
+            "Merge branch '{}' into {} (explicit conflict choices)",
+            preview.source_branch, branch
+        );
+        let merge_oid = self
+            .repo
+            .commit(
+                Some("HEAD"),
+                &signature,
+                &signature,
+                &message,
+                &merged_tree,
+                &[&ours, &theirs],
+            )
+            .map_err(|error| {
+                format!("Merge commit failed; resolved changes remain staged: {error}")
+            })?;
+        Ok(format!(
+            "Merged {} into {} with {} chosen file side(s) ({})",
+            preview.source_branch,
+            branch,
+            choices.len(),
+            &merge_oid.to_string()[..8],
+        ))
+    }
+
     /// Only local changes already tracked by Git are stashed. New, untracked
     /// files remain in place; hiding them without explicit consent is unsafe.
     /// This never drops an older stash entry.
@@ -1090,5 +1381,181 @@ mod tests {
             fs::read_to_string(dir.path().join("a.txt")).unwrap(),
             "before"
         );
+    }
+
+    #[test]
+    fn conflict_preview_is_read_only_and_exposes_two_text_sides() {
+        let (dir, actions, ours, theirs) = fixture_divergence(true);
+        let index_before = actions.repo.index().unwrap().write_tree().unwrap();
+        let plan = actions.preview_merge_conflicts("feature").unwrap();
+        assert_eq!(plan.current_oid, ours.to_string());
+        assert_eq!(plan.source_oid, theirs.to_string());
+        assert_eq!(plan.source_branch, "feature");
+        assert_eq!(plan.conflicts.len(), 1);
+        assert_eq!(plan.conflicts[0].path, "a.txt");
+        assert_eq!(plan.conflicts[0].ours_preview, "ours\n");
+        assert_eq!(plan.conflicts[0].theirs_preview, "theirs\n");
+        assert_eq!(
+            actions.repo.index().unwrap().write_tree().unwrap(),
+            index_before
+        );
+        assert_eq!(
+            actions.repo.head().unwrap().peel_to_commit().unwrap().id(),
+            ours
+        );
+        assert_eq!(
+            fs::read_to_string(dir.path().join("a.txt")).unwrap(),
+            "ours\n"
+        );
+        assert!(actions.repo.statuses(None).unwrap().is_empty());
+    }
+
+    #[test]
+    fn conflict_choice_commits_two_parents_without_losing_unrelated_files() {
+        for (choice, content) in [
+            (GitConflictChoice::Ours, "ours\n"),
+            (GitConflictChoice::Theirs, "theirs\n"),
+        ] {
+            let (dir, actions, ours, theirs) = fixture_divergence(true);
+            let original_name = actions.repo.head().unwrap().shorthand().unwrap().to_owned();
+            let preview = actions.preview_merge_conflicts("feature").unwrap();
+            let result = actions
+                .merge_with_conflict_choices(&preview, &[("a.txt".into(), choice)])
+                .unwrap();
+            assert!(result.contains("Merged"), "{result}");
+            let merged = actions.repo.head().unwrap().peel_to_commit().unwrap();
+            assert_eq!(merged.parent_count(), 2);
+            assert_eq!(merged.parent_id(0).unwrap(), ours);
+            assert_eq!(merged.parent_id(1).unwrap(), theirs);
+            assert_eq!(
+                actions.repo.head().unwrap().shorthand().unwrap(),
+                original_name
+            );
+            assert_eq!(
+                fs::read_to_string(dir.path().join("a.txt")).unwrap(),
+                content
+            );
+            assert!(actions.repo.statuses(None).unwrap().is_empty());
+            assert!(!actions.repo.index().unwrap().has_conflicts());
+        }
+    }
+
+    #[test]
+    fn conflict_resolution_requires_exact_complete_choices_and_fresh_refs() {
+        let (dir, actions, ours, _) = fixture_divergence(true);
+        let plan = actions.preview_merge_conflicts("feature").unwrap();
+        for choices in [
+            vec![],
+            vec![("wrong.txt".into(), GitConflictChoice::Ours)],
+            vec![
+                ("a.txt".into(), GitConflictChoice::Ours),
+                ("a.txt".into(), GitConflictChoice::Theirs),
+            ],
+        ] {
+            assert!(actions
+                .merge_with_conflict_choices(&plan, &choices)
+                .is_err());
+            assert_eq!(
+                actions.repo.head().unwrap().peel_to_commit().unwrap().id(),
+                ours
+            );
+        }
+        fs::write(dir.path().join("untracked-notes.txt"), "private").unwrap();
+        assert!(actions
+            .merge_with_conflict_choices(&plan, &[("a.txt".into(), GitConflictChoice::Ours)])
+            .is_err());
+        assert_eq!(
+            fs::read_to_string(dir.path().join("untracked-notes.txt")).unwrap(),
+            "private"
+        );
+        fs::remove_file(dir.path().join("untracked-notes.txt")).unwrap();
+        // The UI could have kept an older plan while another agent advanced
+        // the source branch. Never apply a stale selection to a new commit.
+        let original = actions.repo.head().unwrap().peel_to_commit().unwrap();
+        actions
+            .repo
+            .branch("feature-updated", &original, false)
+            .unwrap();
+        let mut feature_branch = actions.repo.find_reference("refs/heads/feature").unwrap();
+        feature_branch
+            .set_target(ours, "fixture: ref changed after preview")
+            .unwrap();
+        assert!(actions
+            .merge_with_conflict_choices(&plan, &[("a.txt".into(), GitConflictChoice::Ours)])
+            .is_err());
+        assert_eq!(
+            fs::read_to_string(dir.path().join("a.txt")).unwrap(),
+            "ours\n"
+        );
+        assert!(actions.repo.statuses(None).unwrap().is_empty());
+    }
+
+    #[test]
+    fn chosen_conflict_side_keeps_automatic_nonconflicting_source_additions() {
+        let (dir, actions, ours, theirs) = fixture_divergence(true);
+        let current = actions.repo.head().unwrap().shorthand().unwrap().to_owned();
+        actions.repo.set_head("refs/heads/feature").unwrap();
+        // Fixture-only force checkout while switching to the disposable
+        // source branch, then restore its committed index before editing.
+        actions
+            .repo
+            .checkout_head(Some(CheckoutBuilder::new().force()))
+            .unwrap();
+        let theirs_tree = actions.repo.find_commit(theirs).unwrap().tree().unwrap();
+        let mut index = actions.repo.index().unwrap();
+        index.read_tree(&theirs_tree).unwrap();
+        index.write().unwrap();
+        drop(index);
+        let new_theirs = fixture_commit(
+            &actions,
+            "source-only.txt",
+            "source auto-merged content\n",
+            "source file addition",
+        );
+        actions
+            .repo
+            .set_head(&format!("refs/heads/{current}"))
+            .unwrap();
+        actions
+            .repo
+            .checkout_head(Some(CheckoutBuilder::new().force()))
+            .unwrap();
+        let ours_tree = actions.repo.find_commit(ours).unwrap().tree().unwrap();
+        let mut index = actions.repo.index().unwrap();
+        index.read_tree(&ours_tree).unwrap();
+        index.write().unwrap();
+        drop(index);
+        let plan = actions.preview_merge_conflicts("feature").unwrap();
+        assert_eq!(plan.source_oid, new_theirs.to_string());
+        assert_eq!(plan.conflicts.len(), 1);
+        actions
+            .merge_with_conflict_choices(&plan, &[("a.txt".into(), GitConflictChoice::Ours)])
+            .unwrap();
+        let merged = actions.repo.head().unwrap().peel_to_commit().unwrap();
+        assert_eq!(merged.parent_id(0).unwrap(), ours);
+        assert_eq!(merged.parent_id(1).unwrap(), new_theirs);
+        assert_eq!(
+            fs::read_to_string(dir.path().join("a.txt")).unwrap(),
+            "ours\n"
+        );
+        assert_eq!(
+            fs::read_to_string(dir.path().join("source-only.txt")).unwrap(),
+            "source auto-merged content\n"
+        );
+        assert!(actions.repo.statuses(None).unwrap().is_empty());
+    }
+
+    #[test]
+    fn binary_merge_conflicts_are_never_offered_as_text_file_choices() {
+        let (dir, actions, ours, _) = fixture_divergence(true);
+        let new_ours = fixture_commit(&actions, "a.txt", "binary\0file", "binary ours");
+        assert_ne!(new_ours, ours);
+        let error = actions.preview_merge_conflicts("feature").unwrap_err();
+        assert!(
+            error.contains("Binary") || error.contains("binary"),
+            "{error}"
+        );
+        assert_eq!(fs::read(dir.path().join("a.txt")).unwrap(), b"binary\0file");
+        assert!(actions.repo.statuses(None).unwrap().is_empty());
     }
 }
