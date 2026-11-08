@@ -22,10 +22,16 @@ Agent troubleshooting controls consumed significant vertical space.
   confirmation/status text remain visible.
 - Right sidebar: **Explorer / Git tabs** share the same width but do not
   display their long panels simultaneously. Git scrolls independently.
-- Explorer: compact folder view, parent, refresh, new file/folder, rename,
-  delete, copy/cut/paste/history actions; infrequent move/copy-into/
-  duplicate in a **More** menu. Quick Open and project-content search now
-  share one action strip; empty search controls do not waste height.
+- Explorer: the header now holds **only New File, New Folder, Search and
+  Refresh**. Rename, copy, cut, paste, duplicate, move, delete and Git
+  history appear as **text-labelled right-click options on the clicked
+  file/folder**, not as permanent icon rows. Right-clicking blank space
+  opens a current-folder menu with New File/Folder, Paste, tree navigation
+  and search. A popup is clamped inside the Explorer panel; clicking away,
+  switching the active file or changing workspace dismisses it. Existing
+  guarded file operations and explicit delete confirmation are reused.
+  File Quick Open remains available with Ctrl+P. Content Search is
+  available from the blank-area menu, with Search inside its input panel.
 - Git: icon-based Graph, Refresh, Commit, Switch, Fetch, Compare, Merge,
   Pull, Push and More. Less-frequent Stash and conflict inspection are
   behind More. The underlying non-force and 2-click confirmation logic
@@ -52,10 +58,18 @@ render as icons (not missing-glyph boxes), Explorer/Git navigation tabs
 appear, the compact Explorer toolbar is visible, and Runtime/Agents
 starts collapsed.
 
-The subsequent project-management collapse must be independently rebuilt
-and checked. Clicking across all new hover tooltips, using a fully
-authenticated Host, constrained window sizes, and interaction accessibility
-remain follow-up tasks; icon-first alone is not full Classic UX parity.
+The project-management collapse was subsequently compiled and checked.
+The right-click Explorer menu was type-checked, with the existing
+268/268 Rust model regressions passing. The contextual popup's precise
+position and click routing still require acceptance: an isolated Windows
+preview launched and confirmed the Explorer now has only four persistent
+toolbar icons, but remote pointer injection did not activate even the
+ordinary Git tab or file-opening click during that attempt. The real
+right-click menu therefore **must not yet be reported as GUI-tested**.
+Use a reliable interactive Windows input session to confirm it. Using a
+fully authenticated Host, constrained window sizes
+and accessibility acceptance are separate follow-up tasks. Icon-first
+alone is not full Classic UX parity.
 
 Avoid `main` merge, production push, release and tag until Native is
 fully accepted; `supported=false` remains in force.
