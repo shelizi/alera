@@ -68,9 +68,11 @@ editors, Git comparisons or multi-file actions under misleading names.
   Editor tab. The preview is not saved as a permanent tab. Pointer-level
   acceptance, exact Classic timing, large-file preview limits, editor reveal,
   and file-search context-menu parity remain incomplete.
-- Full file context menu options (Open in Alera, Open with Default
-  Application, external editor, reveal in system file manager, compare
-  with latest revision/branch, nested Git source control root) are pending.
+- The file context menu now includes Open in Alera and a safe View current
+  Git changes action using the existing read-only diff panel. Full parity
+  still needs Open with Default Application, external editor, reveal in the
+  system file manager, HEAD/branch comparisons and nested source-control
+  root actions. The current-diff action must not be called a HEAD comparison.
 - Pointer-level Windows acceptance of the menu, keyboard focus after
   selection, actual popup bounds and high DPI remains required.
 
@@ -202,3 +204,7 @@ this experimental migration without explicit approval.
 - Focused Rust unit tests cover safe batch moves, collision/cycle/generation
   refusal, open-editor identity guards, badge mapping and ancestor priority.
   No UI/pointer testing or formal release acceptance was performed.
+- Native file context now additionally exposes Open in Alera (promoting
+  into a real guarded Editor tab) and View current Git changes (switches
+  to the preexisting async Git preview). These reuse established
+  workspace/path guards and do not open files through a new OS process.

@@ -241,6 +241,8 @@ enum ExplorerMenuAction {
     File(ExplorerAction),
     Clipboard(ExplorerClipboardMode),
     Paste,
+    OpenInAlera,
+    ViewCurrentGitDiff,
     CopyAbsolutePath,
     CopyRelativePath,
     CollapseFolder,
@@ -261,6 +263,8 @@ impl ExplorerMenuAction {
             Self::Clipboard(ExplorerClipboardMode::Copy) => "Copy selection",
             Self::Clipboard(ExplorerClipboardMode::Cut) => "Cut selection",
             Self::Paste => "Paste",
+            Self::OpenInAlera => "Open in Alera",
+            Self::ViewCurrentGitDiff => "View current Git changes",
             Self::CopyAbsolutePath => "Copy path",
             Self::CopyRelativePath => "Copy relative path",
             Self::CollapseFolder => "Collapse folder",
@@ -812,6 +816,24 @@ impl Workbench {
             ExplorerMenuAction::File(action) => self.begin_explorer_action(action, window, cx),
             ExplorerMenuAction::Clipboard(mode) => self.set_explorer_clipboard(mode, cx),
             ExplorerMenuAction::Paste => self.paste_explorer_clipboard(cx),
+            ExplorerMenuAction::OpenInAlera => {
+                if let Some(path) = self.explorer_selection.clone() {
+                    self.click_explorer_file(&path, true, window, cx);
+                }
+            }
+            ExplorerMenuAction::ViewCurrentGitDiff => {
+                if let Some(path) = self
+                    .explorer_selection
+                    .as_ref()
+                    .filter(|path| path.is_file())
+                {
+                    if let Ok(relative) = path.strip_prefix(self.model.root()) {
+                        let relative = relative.to_path_buf();
+                        self.right_sidebar_view = RightSidebarView::Git;
+                        self.preview_git_change(relative, cx);
+                    }
+                }
+            }
             ExplorerMenuAction::CopyAbsolutePath | ExplorerMenuAction::CopyRelativePath => {
                 let Some(path) = self
                     .explorer_selection
@@ -6452,6 +6474,8 @@ impl Render for Workbench {
                                         ExplorerMenuAction::File(ExplorerAction::Duplicate),
                                     ];
                                     if path.is_file() {
+                                        actions.push(ExplorerMenuAction::OpenInAlera);
+                                        actions.push(ExplorerMenuAction::ViewCurrentGitDiff);
                                         actions.push(ExplorerMenuAction::GitHistory);
                                     }
                                     actions.push(ExplorerMenuAction::File(ExplorerAction::Rename));
