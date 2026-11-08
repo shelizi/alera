@@ -295,3 +295,59 @@ and actually exercised its mouse and keyboard interactions on Windows.
   temporary folder with a Git worktree or commit it.
 - GPUI remains **`supported=false`**. No production merge, remote push,
   tag or release was performed.
+
+## Follow-up: Independent NativeEditor pane owners (2026-11-08)
+
+The earlier shared-Editor read-only second-pane limitation above has now
+been **replaced in source**, but the full native mouse/IME GUI acceptance
+gate remains open.
+
+- Continued in the existing `integrate/gpui-p0p1p2-20261108` worktree.
+  Devin SWE-2 Flash Max owned only `editor_tabs.rs` for the core data
+  transfer and regression tests. Runtime pane/UI composition was handled
+  separately; the second Devin job did not start successfully and was not
+  treated as completed. No branch/worktree was added.
+- `EditorTabs` allocates process-unique nonzero tab instance IDs and can
+  detach/insert an opaque `DetachedEditorTab` containing the **same live
+  EditorSession**, dirty document, undo/redo history, selection, discard
+  state and recovery store. Insertion refusal returns the value for
+  rollback; moving a tab never reloads or writes disk contents.
+- Workbench owns one native `NativeEditor` entity per pane. Moving a tab
+  through context actions or native drag transfers the exact session
+  between owners; `Unsplit` returns the sessions to the primary editor.
+  A move refused by tab capacity or duplicate path attempts to restore the
+  original session. A file already edited in the other pane is focused,
+  not opened as another independent buffer.
+- Each view has its own GPUI focus handle, line geometry and scroll state.
+  Pointer focus updates the owning Workbench pane; toolbar Save, Save As
+  and Close use that pane. Dirty-buffer guards cover **both** entities on
+  workspace switch and Explorer mutations. Late editor observers from a
+  previous workspace generation are ignored.
+- Restoration rebuilds the actual primary/secondary Editor owners from
+  file-backed paths, not merely their display slots. Native Editor Ctrl+N
+  and Save As additions are assigned to the real owning pane; no Host
+  sessions or unsaved draft contents are serialized into the pane layout.
+- `cargo test --manifest-path desktop_gpui/Cargo.toml --no-default-features
+  --lib --locked --offline`: **223/223 PASS** (seven new editor-transfer
+  tests), `cargo check --locked --offline`: **PASS**, `cargo fmt --check`
+  and `git diff --check`: **PASS**. The pre-existing
+  `proc-macro-error2` advisory remains.
+
+### Acceptance still required
+
+- The native binary was launched for the existing isolated fixture, but the
+  interactive desktop was being used by another foreground application.
+  The GPUI window could not be kept in a reliable test foreground, so no
+  reproducible end-to-end dual Editor mouse/IME/Save proof was obtained
+  **for this new two-entity implementation**. The launched GPUI process was
+  stopped through its own managed command session; no other application
+  was terminated or controlled. The previous phase's Editor GUI smoke
+  belongs to the old single-owner implementation and is not substituted.
+- The default `~/.alera/runtime` does not provide an authenticated Runtime
+  Host control file. True dual Host PTY input/output, resizing and Chinese
+  IME composition remain unaccepted; do not start or take over an existing
+  user's Host just to satisfy a smoke test.
+- The existing untracked `.gpui-smoke-20261108/` fixture is deliberately
+  **not staged** or deleted without the workspace tool's destructive action
+  approval. Keep production `main` untouched and GPUI
+  `supported=false`; no remote push, tag or release.
