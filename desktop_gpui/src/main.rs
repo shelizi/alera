@@ -88,7 +88,6 @@ actions!(
     [
         ToggleFileSearch,
         ToggleContentSearch,
-        SubmitTerminalCommand,
         ExplorerCopy,
         ExplorerCut,
         ExplorerPaste,
@@ -211,17 +210,6 @@ enum ExplorerAction {
     Copy,
     Duplicate,
     Delete,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum TerminalContextAction {
-    Focus,
-    Close,
-    CloseOthers,
-    CloseToRight,
-    SplitToSecondary,
-    MoveLeft,
-    MoveRight,
 }
 
 #[derive(Clone, Copy)]
@@ -421,7 +409,6 @@ struct Workbench {
     agent_pending_tab: Option<LaunchedAgentTab>,
     agent_status: String,
     terminals: TerminalDock,
-    terminal_tab_context: Option<TerminalTabContextTarget>,
     terminal_panes: TerminalPaneLayout,
     terminal_input: Entity<QuickOpenInput>,
     terminal_keyboard_focus: gpui::FocusHandle,
@@ -433,7 +420,6 @@ struct Workbench {
     terminal_line_selection: Option<TerminalLineSelection>,
     terminal_create_flow: TerminalCreateFlow,
     terminal_layout_restore: Option<TerminalLayout>,
-    terminal_send_loading: bool,
     terminal_list_loading: bool,
     terminal_read_loading: Option<String>,
     terminal_split_read_loading: bool,
@@ -1896,14 +1882,6 @@ impl Workbench {
         self.toggle_content_search(window, cx);
     }
 
-    fn submit_terminal_action(
-        &mut self,
-        _: &SubmitTerminalCommand,
-        _: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.send_terminal_input(true, cx);
-    }
     fn toggle_file_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.quick_open.is_some() {
             self.close_quick_open_dialog(window, cx);
@@ -2681,11 +2659,9 @@ impl Workbench {
         self.terminals = TerminalDock::for_workspace(self.workspace_generation);
         self.terminal_auto_resize.clear();
         self.terminal_line_selection = None;
-        self.terminal_tab_context = None;
         self.terminal_panes.reset();
         self.terminal_create_flow.cancel();
         self.load_terminal_layout();
-        self.terminal_send_loading = false;
         self.terminal_key_queue.clear();
         self.terminal_key_queue_target = None;
         self.terminal_key_sending = false;
@@ -3790,12 +3766,10 @@ impl Workbench {
     }
 
     fn select_terminal(&mut self, handle: String, cx: &mut Context<Self>) {
-        self.terminal_tab_context = None;
         if self.terminals.open(&handle) {
             self.explorer_preview_active = false;
             self.terminal_line_selection = None;
             self.center_view = CenterView::Terminal;
-            self.terminal_send_loading = false;
             self.terminal_input.update(cx, |input, cx| input.clear(cx));
             self.save_terminal_layout();
             self.refresh_terminal_output(cx);
@@ -3804,8 +3778,8 @@ impl Workbench {
         }
     }
 
-    /// Native terminal output focus routes key events directly to Host PTY.
-    /// The command input bar remains available for full IME composition.
+    /// Native terminal content routes keys and committed IME text directly to
+    /// the Host PTY; no always-visible proxy command input is needed.
     fn resize_terminal(&mut self, cols: u16, rows: u16, cx: &mut Context<Self>) {
         let Some(bridge) = self.runtime_bridge.clone() else {
             self.terminals.status = "Host CLI unavailable for Resize".into();
@@ -4005,7 +3979,9 @@ impl Workbench {
         cx.notify();
     }
 
-    fn send_terminal_key(&mut self, event: &gpui::KeyDownEvent, cx: &mut Context<Self>) -> bool {
+    /// Committed TextInput/IME text and raw control keys use the same
+    /// identity-guarded, bounded Host queue. No duplicate local command bar.
+    fn enqueue_terminal_text(&mut self, encoded: String, cx: &mut Context<Self>) -> bool {
         if self.center_view != CenterView::Terminal {
             return false;
         }
@@ -4022,15 +3998,9 @@ impl Workbench {
         else {
             return false;
         };
-        let Some(encoded) = encode_terminal_key(
-            &event.keystroke.key,
-            event.keystroke.key_char.as_deref(),
-            event.keystroke.modifiers.control,
-            event.keystroke.modifiers.alt,
-            event.keystroke.modifiers.platform,
-        ) else {
+        if encoded.is_empty() {
             return false;
-        };
+        }
         if self.terminal_key_queue.len() >= 512
             || self
                 .terminal_key_queue
@@ -4051,6 +4021,19 @@ impl Workbench {
         self.terminal_key_queue.push_back(encoded);
         self.flush_terminal_key_queue(cx);
         true
+    }
+
+    fn send_terminal_key(&mut self, event: &gpui::KeyDownEvent, cx: &mut Context<Self>) -> bool {
+        let Some(encoded) = encode_terminal_key(
+            &event.keystroke.key,
+            event.keystroke.key_char.as_deref(),
+            event.keystroke.modifiers.control,
+            event.keystroke.modifiers.alt,
+            event.keystroke.modifiers.platform,
+        ) else {
+            return false;
+        };
+        self.enqueue_terminal_text(encoded, cx)
     }
 
     /// Do not let both native pane surfaces forward keys via the shared
@@ -4074,14 +4057,33 @@ impl Workbench {
         } else if pane != PaneSlot::Primary {
             return false;
         }
+        if pane == PaneSlot::Primary {
+            if event.keystroke.modifiers.control
+                && !event.keystroke.modifiers.shift
+                && event.keystroke.key.eq_ignore_ascii_case("v")
+            {
+                if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
+                    return self.enqueue_terminal_text(text, cx);
+                }
+                return true;
+            }
+            // GPUI may deliver both a native text commit and a KeyDown for
+            // the same printable character. Never duplicate it in the PTY.
+            if alera_gpui_desktop::terminal::is_text_input_keystroke(
+                &event.keystroke.key,
+                event.keystroke.key_char.as_deref(),
+                event.keystroke.modifiers.control,
+                event.keystroke.modifiers.alt,
+                event.keystroke.modifiers.platform,
+            ) {
+                return false;
+            }
+        }
         self.send_terminal_key(event, cx)
     }
 
     fn flush_terminal_key_queue(&mut self, cx: &mut Context<Self>) {
-        if self.terminal_key_sending
-            || self.terminal_send_loading
-            || self.terminal_key_queue.is_empty()
-        {
+        if self.terminal_key_sending || self.terminal_key_queue.is_empty() {
             return;
         }
         let Some(bridge) = self.runtime_bridge.clone() else {
@@ -4162,92 +4164,6 @@ impl Workbench {
                             view.terminals.status =
                                 format!("Raw terminal key send failed: {error}");
                         }
-                    }
-                }
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
-    }
-
-    fn send_terminal_input(&mut self, enter: bool, cx: &mut Context<Self>) {
-        if self.terminal_send_loading
-            || self.terminal_key_sending
-            || !self.terminal_key_queue.is_empty()
-        {
-            self.terminals.status =
-                "Finish pending terminal keystrokes before sending a command".into();
-            cx.notify();
-            return;
-        }
-        let Some(bridge) = self.runtime_bridge.clone() else {
-            self.terminals.status = "Host CLI is not available for terminal input".into();
-            cx.notify();
-            return;
-        };
-        let Some(tab) = self.terminals.active() else {
-            self.terminals.status = "Select a Host terminal session first".into();
-            cx.notify();
-            return;
-        };
-        if !tab.running {
-            self.terminals.status = "Stopped Host terminals cannot accept input".into();
-            cx.notify();
-            return;
-        }
-        if self.terminal_input.read(cx).composing() {
-            self.terminals.status = "Finish IME composition before sending terminal input".into();
-            cx.notify();
-            return;
-        }
-        let text = self.terminal_input.read(cx).query().to_owned();
-        if text.trim().is_empty() {
-            self.terminals.status = "Type terminal input before sending".into();
-            cx.notify();
-            return;
-        }
-        let handle = tab.handle.clone();
-        let tab_id = tab.tab_id.clone();
-        let generation = self.workspace_generation;
-        self.terminal_send_loading = true;
-        self.terminals.status = "Sending to existing Host terminal…".into();
-        cx.notify();
-        cx.spawn(async move |view, cx| {
-            let sent_handle = handle.clone();
-            let sent_text = text.clone();
-            let result = cx
-                .background_spawn(async move { bridge.write_terminal(&handle, &text, enter) })
-                .await;
-            view.update(cx, |view, cx| {
-                if view.workspace_generation != generation {
-                    return;
-                }
-                view.terminal_send_loading = false;
-                if !view
-                    .terminals
-                    .active()
-                    .is_some_and(|active| active.handle == sent_handle && active.tab_id == tab_id)
-                {
-                    cx.notify();
-                    return;
-                }
-                match result {
-                    Ok(()) => {
-                        view.terminal_input.update(cx, |input, cx| {
-                            if input.query() == sent_text {
-                                input.clear(cx);
-                            }
-                        });
-                        view.terminals.status = if enter {
-                            "Command submitted to Runtime Host".into()
-                        } else {
-                            "Input sent to Runtime Host without Enter".into()
-                        };
-                        view.refresh_terminal_output(cx);
-                    }
-                    Err(error) => {
-                        view.terminals.status = format!("Host terminal rejected input: {error}");
                     }
                 }
                 cx.notify();
@@ -4776,12 +4692,11 @@ impl Workbench {
                     self.center_view = CenterView::Terminal;
                     self.save_terminal_layout();
                     self.refresh_terminal_output(cx);
-                    let focus = if self.mixed_panes.focused_pane() == PaneSlot::Secondary {
-                        &self.secondary_terminal_keyboard_focus
+                    if self.mixed_panes.focused_pane() == PaneSlot::Secondary {
+                        window.focus(&self.secondary_terminal_keyboard_focus, cx);
                     } else {
-                        &self.terminal_keyboard_focus
-                    };
-                    window.focus(focus, cx);
+                        window.focus(&self.terminal_input.read(cx).focus_handle(cx), cx);
+                    }
                 }
             }
             WorkbenchTabIdentity::Editor { instance, .. } => {
@@ -4959,96 +4874,6 @@ impl Workbench {
             }
         }
         self.save_mixed_pane_layout(cx);
-        cx.notify();
-    }
-
-    fn apply_terminal_context(&mut self, action: TerminalContextAction, cx: &mut Context<Self>) {
-        let Some(target) = self.terminal_tab_context.take() else {
-            cx.notify();
-            return;
-        };
-        let Some(index) = self.terminals.index_for_context(&target) else {
-            self.terminals.status = "Terminal tab changed; action canceled".into();
-            cx.notify();
-            return;
-        };
-        match action {
-            TerminalContextAction::Focus => {
-                self.select_terminal(target.handle, cx);
-                return;
-            }
-            TerminalContextAction::Close => {
-                self.terminals.close(index);
-                if self
-                    .terminal_panes
-                    .secondary_index(&self.terminals)
-                    .is_none()
-                {
-                    self.terminal_panes.close_secondary();
-                }
-                self.terminals.status =
-                    "Preview tab closed; Runtime Host terminal remains alive".into();
-                self.save_terminal_layout();
-                self.refresh_terminal_output(cx);
-            }
-            TerminalContextAction::CloseOthers => {
-                let count = self.terminals.close_others(index);
-                self.terminal_panes.close_secondary();
-                self.terminals.status =
-                    format!("Closed {count} other previews; Host sessions remain alive");
-                self.save_terminal_layout();
-                self.refresh_terminal_output(cx);
-            }
-            TerminalContextAction::CloseToRight => {
-                let count = self.terminals.close_to_right(index);
-                if self
-                    .terminal_panes
-                    .secondary_index(&self.terminals)
-                    .is_none()
-                {
-                    self.terminal_panes.close_secondary();
-                }
-                self.terminals.status =
-                    format!("Closed {count} preview(s) to right; Host sessions remain alive");
-                self.save_terminal_layout();
-                self.refresh_terminal_output(cx);
-            }
-            TerminalContextAction::SplitToSecondary => {
-                if self
-                    .terminals
-                    .active()
-                    .is_some_and(|active| active.handle == target.handle)
-                {
-                    self.terminals.status =
-                        "Choose a different Terminal tab for the second pane".into();
-                } else if !self.terminals.context_target_is_live(&target) {
-                    self.terminals.status =
-                        "Cannot split a stopped or stale Host terminal preview".into();
-                } else if self
-                    .terminal_panes
-                    .drop_tab_on_secondary(&mut self.terminals, &target.handle)
-                {
-                    self.terminals.status =
-                        "Second pane assigned to existing Host terminal; PTYs unchanged".into();
-                    self.refresh_terminal_split_output(cx);
-                } else {
-                    self.terminals.status =
-                        "Cannot assign terminal to second pane; attach a valid session".into();
-                }
-            }
-            TerminalContextAction::MoveLeft | TerminalContextAction::MoveRight => {
-                let to = if action == TerminalContextAction::MoveLeft {
-                    index.checked_sub(1)
-                } else {
-                    (index + 1 < self.terminals.tabs.len()).then_some(index + 1)
-                };
-                if let Some(to) = to {
-                    if self.terminals.move_tab(index, to) {
-                        self.save_terminal_layout();
-                    }
-                }
-            }
-        }
         cx.notify();
     }
 
@@ -5469,7 +5294,6 @@ impl Render for Workbench {
         let agent_prompt_input = self.agent_prompt_input.clone();
         let agent_status = self.agent_status.clone();
         let terminal_list_loading = self.terminal_list_loading;
-        let terminal_read_loading = self.terminal_read_loading.is_some();
         let terminal_sessions: Vec<_> = self
             .terminals
             .sessions
@@ -5482,23 +5306,6 @@ impl Render for Workbench {
                 )
             })
             .collect();
-        let terminal_tabs: Vec<_> = self
-            .terminals
-            .tabs
-            .iter()
-            .enumerate()
-            .map(|(i, tab)| {
-                (
-                    i,
-                    tab.title.clone(),
-                    tab.running,
-                    tab.handle.clone(),
-                    self.terminals.context_target_at(i),
-                )
-            })
-            .collect();
-        let terminal_drag_generation = self.workspace_generation;
-        let terminal_active = self.terminals.active_tab;
         let terminal_create_busy = self.terminal_create_flow.is_active();
         let terminal_create_timed_out = self.terminal_create_flow.is_timed_out();
         let terminal_creating = self.terminal_create_flow.is_creating();
@@ -5544,8 +5351,6 @@ impl Render for Workbench {
         let terminal_input = self.terminal_input.clone();
         let terminal_keyboard_focus = self.terminal_keyboard_focus.clone();
         let secondary_terminal_keyboard_focus = self.secondary_terminal_keyboard_focus.clone();
-        let terminal_send_loading = self.terminal_send_loading;
-        let terminal_auto = self.terminal_poll.enabled();
         let terminal_is_vt = self.terminals.view_mode == TerminalViewMode::Screen;
         let terminal_screen_rows = if terminal_is_vt {
             primary_terminal
@@ -5582,10 +5387,7 @@ impl Render for Workbench {
             - TOP_BAR_HEIGHT
             - STATUS_BAR_HEIGHT
             - TAB_STRIP_HEIGHT
-            - 26.0
-            - 22.0
-            - 45.0
-            - 26.0)
+            - 14.0)
             .max(0.0);
         let split_width = mixed_has_secondary && mixed_split_horizontal;
         let split_height = mixed_has_secondary && !mixed_split_horizontal;
@@ -5674,26 +5476,6 @@ impl Render for Workbench {
         }
         self.terminal_auto_resize
             .observe(proposed_viewports, Instant::now());
-        let terminal_status = if terminal_is_vt {
-            if let Some(tab) = primary_terminal {
-                let (rows, cols) = tab.screen.dimensions();
-                let (cursor_row, cursor_col) = tab.screen.cursor();
-                format!(
-                    "{terminal_status} · {cols}×{rows} · Cursor {}:{}{}",
-                    cursor_row + 1,
-                    cursor_col + 1,
-                    if tab.screen.alternate_screen() {
-                        " · Alt"
-                    } else {
-                        ""
-                    }
-                )
-            } else {
-                terminal_status
-            }
-        } else {
-            terminal_status
-        };
         let index_loading = self.file_index_loading;
         let content_query = self.content_query.clone();
         let content_loading = self.content_loading;
@@ -5840,7 +5622,6 @@ impl Render for Workbench {
             .relative()
             .on_action(cx.listener(Self::toggle_file_search_action))
             .on_action(cx.listener(Self::toggle_content_search_action))
-            .on_action(cx.listener(Self::submit_terminal_action))
             .on_action(cx.listener(Self::explorer_copy_action))
             .on_action(cx.listener(Self::explorer_cut_action))
             .on_action(cx.listener(Self::explorer_paste_action))
@@ -7248,313 +7029,6 @@ impl Render for Workbench {
                                     .bg(rgb(BG))
                                     .child(
                                         div()
-                                            .id("terminal-toolbar-horizontal-scroll")
-                                            .h(px(TAB_STRIP_HEIGHT))
-                                            .flex()
-                                            .items_center()
-                                            .overflow_x_scroll()
-                                            .whitespace_nowrap()
-                                            .bg(rgb(PANEL))
-                                            .child(
-                                                div()
-                                                    .id("terminal-preview-tabs")
-                                                    // The mixed Workbench strip is authoritative.
-                                                    // Keep the legacy handlers compiled while
-                                                    // retaining VT/auto-poll controls beside them.
-                                                    .hidden()
-                                                    .flex_1()
-                                                    .min_w_0()
-                                                    .flex()
-                                                    .overflow_x_scroll()
-                                                    .children(terminal_tabs.into_iter().map(
-                                                        |(index, title, running, handle, identity)| {
-                                                            let destination = identity.clone();
-                                                            let context_target = identity.clone();
-                                                            div()
-                                                                .flex()
-                                                                .items_center()
-                                                                .h(px(TAB_STRIP_HEIGHT - 1.0))
-                                                                .bg(rgb(if terminal_active == Some(index) {
-                                                                    ACTIVE
-                                                                } else {
-                                                                    PANEL
-                                                                }))
-                                                                .border_r_1()
-                                                                .border_color(rgb(BORDER))
-                                                                .child(
-                                                                    div()
-                                                                        .id(("term-tab", index))
-                                                                        .px_2()
-                                                                        .cursor_pointer()
-                                                                        .text_sm()
-                                                                        .child(format!(
-                                                                            "{} {title}",
-                                                                            if running { "●" } else { "○" }
-                                                                        ))
-                                                                        .on_mouse_up(
-                                                                            gpui::MouseButton::Middle,
-                                                                            cx.listener(move |this, _, _, cx| {
-                                                                                this.terminal_tab_context = this.terminals.context_target_at(index);
-                                                                                this.apply_terminal_context(TerminalContextAction::Close, cx);
-                                                                            }),
-                                                                        )
-                                                                        .on_click(cx.listener(move |this, _, _, cx| {
-                                                                            this.terminal_tab_context = None;
-                                                                            if this.terminals.activate(index) {
-                                                                                this.save_terminal_layout();
-                                                                                this.refresh_terminal_output(cx);
-                                                                            }
-                                                                            cx.notify();
-                                                                        }))
-                                                                        .on_drag(
-                                                                            TerminalTabDrag {
-                                                                                handle: handle.clone(),
-                                                                                workspace_generation: terminal_drag_generation,
-                                                                                target: identity,
-                                                                            },
-                                                                            |drag, _, _, cx| {
-                                                                                cx.new(|_| TerminalTabDragPreview {
-                                                                                    label: drag.handle.clone(),
-                                                                                })
-                                                                            },
-                                                                        )
-                                                                        .on_drop(cx.listener(move |this, payload: &TerminalTabDrag, _, cx| {
-                                                                            if payload.workspace_generation != this.workspace_generation {
-                                                                                return;
-                                                                            }
-                                                                            let Some(from) = payload.target.as_ref().and_then(|target| this.terminals.index_for_context(target)) else {
-                                                                                return;
-                                                                            };
-                                                                            let Some(to) = destination.as_ref().and_then(|target| this.terminals.index_for_context(target)) else {
-                                                                                return;
-                                                                            };
-                                                                            if this.terminals.move_tab(from, to) {
-                                                                                this.save_terminal_layout();
-                                                                                cx.notify();
-                                                                            }
-                                                                        }))
-                                                                        .context_menu(Self::kit_terminal_tab_context_menu(
-                                                                            cx.entity().downgrade(),
-                                                                            context_target,
-                                                                        )),
-                                                                )
-                                                                .child(
-                                                                    div()
-                                                                        .id(("term-close", index))
-                                                                        .px_2()
-                                                                        .cursor_pointer()
-                                                                        .text_color(rgb(MUTED))
-                                                                        .child("×")
-                                                                        .on_click(cx.listener(move |this, _, _, cx| {
-                                                                            this.terminal_tab_context = None;
-                                                                            this.terminals.close(index);
-                                                                            this.save_terminal_layout();
-                                                                            cx.notify();
-                                                                        })),
-                                                                )
-                                                        },
-                                                    )),
-                                            )
-                                            .child(
-                                                icon_button("terminal-vt-mode", if terminal_is_vt { UiIcon::Terminal } else { UiIcon::File }, "Toggle VT screen / plain text log", terminal_is_vt)
-                                                    .on_click(cx.listener(|this, _, _, cx| {
-                                                        this.terminals.toggle_view_mode();
-                                                        this.save_terminal_layout();
-                                                        cx.notify();
-                                                    })),
-                                            )
-                                            .child(
-                                                icon_button("terminal-preview-autopoll", UiIcon::Refresh, "Toggle automatic terminal output refresh", terminal_auto)
-                                                    .on_click(cx.listener(|this, _, _, cx| {
-                                                        this.terminal_poll.toggle();
-                                                        cx.notify();
-                                                    })),
-                                            )
-                                            .child(
-                                                icon_button("terminal-preview-refresh", UiIcon::Sync, "Read more Terminal output now", terminal_read_loading)
-                                                    .on_click(cx.listener(|this, _, _, cx| {
-                                                        this.refresh_terminal_output(cx);
-                                                    })),
-                                            )
-                                            .child(
-                                                icon_button("terminal-copy-selected-lines", UiIcon::Copy, "Copy selected terminal rows", false)
-                                                    .on_click(cx.listener(|this, _, _, cx| {
-                                                        this.copy_primary_terminal_text(true, cx);
-                                                    })),
-                                            )
-                                            .child(
-                                                icon_button("terminal-copy-visible-text", UiIcon::File, "Copy visible terminal screen or text log", false)
-                                                    .on_click(cx.listener(|this, _, _, cx| {
-                                                        this.copy_primary_terminal_text(false, cx);
-                                                    })),
-                                            )
-                                            .child({
-                                                let owner = cx.entity().downgrade();
-                                                native_components::select_trigger(
-                                                    "terminal-resize-choices",
-                                                    "Terminal size",
-                                                    false,
-                                                )
-                                                .dropdown_menu(move |menu, _, _| {
-                                                    let first = owner.clone();
-                                                    let second = owner.clone();
-                                                    menu.item(
-                                                        PopupMenuItem::new("80 × 24")
-                                                            .on_click(move |_, _, cx| {
-                                                                let _ = first.update(cx, |view, cx| {
-                                                                    view.resize_terminal(80, 24, cx);
-                                                                });
-                                                            }),
-                                                    )
-                                                    .item(
-                                                        PopupMenuItem::new("120 × 36")
-                                                            .on_click(move |_, _, cx| {
-                                                                let _ = second.update(cx, |view, cx| {
-                                                                    view.resize_terminal(120, 36, cx);
-                                                                });
-                                                            }),
-                                                    )
-                                                })
-                                            }),
-                                    )
-                                    .child(
-                                        div()
-                                            .id("terminal-tab-actions")
-                                            .h(px(26.0))
-                                            .px_3()
-                                            .flex()
-                                            .items_center()
-                                            .gap_3()
-                                            .bg(rgb(PANEL))
-                                            .text_xs()
-                                            .text_color(rgb(MUTED))
-                                            .child(
-                                                div()
-                                                    .id("terminal-previous-tab")
-                                                    .cursor_pointer()
-                                                    .child("◀ Previous")
-                                                    .on_click(cx.listener(|this, _, _, cx| {
-                                                        if this.terminals.activate_previous() {
-                                                            this.save_terminal_layout();
-                                                            this.refresh_terminal_output(cx);
-                                                        }
-                                                        cx.notify();
-                                                    })),
-                                            )
-                                            .child(
-                                                div()
-                                                    .id("terminal-next-tab")
-                                                    .cursor_pointer()
-                                                    .child("Next ▶")
-                                                    .on_click(cx.listener(|this, _, _, cx| {
-                                                        if this.terminals.activate_next() {
-                                                            this.save_terminal_layout();
-                                                            this.refresh_terminal_output(cx);
-                                                        }
-                                                        cx.notify();
-                                                    })),
-                                            )
-                                            .child(
-                                                div()
-                                                    .id("terminal-move-tab-left")
-                                                    .cursor_pointer()
-                                                    .child("Move ←")
-                                                    .on_click(cx.listener(|this, _, _, cx| {
-                                                        if let Some(index) = this.terminals.active_tab {
-                                                            if index > 0 {
-                                                                this.terminals.move_tab(index, index - 1);
-                                                                this.save_terminal_layout();
-                                                            }
-                                                        }
-                                                        cx.notify();
-                                                    })),
-                                            )
-                                            .child(
-                                                div()
-                                                    .id("terminal-move-tab-right")
-                                                    .cursor_pointer()
-                                                    .child("Move →")
-                                                    .on_click(cx.listener(|this, _, _, cx| {
-                                                        if let Some(index) = this.terminals.active_tab {
-                                                            if index + 1 < this.terminals.tabs.len() {
-                                                                this.terminals.move_tab(index, index + 1);
-                                                                this.save_terminal_layout();
-                                                            }
-                                                        }
-                                                        cx.notify();
-                                                    })),
-                                            )
-                                            .child(
-                                                div()
-                                                    .id("terminal-close-other-tabs")
-                                                    .cursor_pointer()
-                                                    .child("Close others")
-                                                    .on_click(cx.listener(|this, _, _, cx| {
-                                                        if let Some(index) = this.terminals.active_tab {
-                                                            this.terminals.close_others(index);
-                                                            this.save_terminal_layout();
-                                                        }
-                                                        cx.notify();
-                                                    })),
-                                            )
-                                            .child(
-                                                div()
-                                                    .id("terminal-close-right-tabs")
-                                                    .cursor_pointer()
-                                                    .child("Close right")
-                                                    .on_click(cx.listener(|this, _, _, cx| {
-                                                        if let Some(index) = this.terminals.active_tab {
-                                                            this.terminals.close_to_right(index);
-                                                            this.save_terminal_layout();
-                                                        }
-                                                        cx.notify();
-                                                    })),
-                                            )
-                                            .child(
-                                                div()
-                                                    .id("terminal-split-toggle")
-                                                    .cursor_pointer()
-                                                    .child(if terminal_split_exists { "Close split" } else { "Split Terminal" })
-                                                    .on_click(cx.listener(|this, _, _, cx| {
-                                                        this.toggle_terminal_split(cx);
-                                                    })),
-                                            )
-                                            .child(if terminal_split_exists {
-                                                div()
-                                                    .id("terminal-split-swap")
-                                                    .cursor_pointer()
-                                                    .child("Swap panes")
-                                                    .on_click(cx.listener(|this, _, _, cx| {
-                                                        this.switch_terminal_split_focus(cx);
-                                                    }))
-                                                    .into_any_element()
-                                            } else {
-                                                div().h(px(0.0)).into_any_element()
-                                            })
-                                            .child(if terminal_split_exists {
-                                                div()
-                                                    .id("terminal-split-direction")
-                                                    .cursor_pointer()
-                                                    .child(if terminal_split_horizontal { "Side by side" } else { "Stacked" })
-                                                    .on_click(cx.listener(|this, _, _, cx| {
-                                                        this.terminal_panes.toggle_direction();
-                                                        cx.notify();
-                                                    }))
-                                                    .into_any_element()
-                                            } else {
-                                                div().h(px(0.0)).into_any_element()
-                                            }),
-                                    )
-                                    .child(
-                                        div()
-                                            .h(px(22.0))
-                                            .px_3()
-                                            .text_sm()
-                                            .text_color(rgb(MUTED))
-                                            .child(terminal_status.clone()),
-                                    )
-                                    .child(
-                                        div()
                                             .flex_1()
                                             .min_h_0()
                                             .flex()
@@ -7567,7 +7041,7 @@ impl Render for Workbench {
                                             .track_focus(&terminal_keyboard_focus)
                                             .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, window, cx| {
                                                 this.focus_primary_mixed_terminal(cx);
-                                                window.focus(&this.terminal_keyboard_focus, cx);
+                                                window.focus(&this.terminal_input.read(cx).focus_handle(cx), cx);
                                             }))
                                             .on_mouse_up(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
                                                 this.finish_terminal_line_selection(cx);
@@ -7595,6 +7069,7 @@ impl Render for Workbench {
                                             .font_family("JetBrains Mono")
                                             .text_size(px(terminal_font_size))
                                             .whitespace_nowrap()
+                                            .child(terminal_input.clone())
                                             .children(terminal_screen_rows.into_iter().enumerate().map(
                                                 |(row_index, row)| {
                                                     let selected = terminal_selected_rows.get(row_index).copied().unwrap_or(false);
@@ -7639,7 +7114,7 @@ impl Render for Workbench {
                                             .track_focus(&terminal_keyboard_focus)
                                             .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, window, cx| {
                                                 this.focus_primary_mixed_terminal(cx);
-                                                window.focus(&this.terminal_keyboard_focus, cx);
+                                                window.focus(&this.terminal_input.read(cx).focus_handle(cx), cx);
                                             }))
                                             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
                                                 if event.keystroke.modifiers.control
@@ -7659,6 +7134,7 @@ impl Render for Workbench {
                                             .py_2()
                                             .font_family("JetBrains Mono")
                                             .text_size(px(terminal_font_size))
+                                            .child(terminal_input)
                                             .child(if terminal_output.is_empty() {
                                                 "No terminal content yet. Auto updates are enabled by default.".into()
                                             } else {
@@ -7720,46 +7196,6 @@ impl Render for Workbench {
                                             } else {
                                                 div().h(px(0.0)).into_any_element()
                                             }),
-                                    )
-                                    .child(
-                                        div()
-                                            .id("terminal-command-bar")
-                                            .h(px(45.0))
-                                            .px_3()
-                                            .flex()
-                                            .items_center()
-                                            .gap_2()
-                                            .bg(rgb(PANEL))
-                                            .border_t_1()
-                                            .border_color(rgb(BORDER))
-                                            .child(
-                                                div()
-                                                    .flex_1()
-                                                    .min_w_0()
-                                                    .child(terminal_input),
-                                            )
-                                            .child(
-                                                div()
-                                                    .id("terminal-send-raw")
-                                                    .cursor_pointer()
-                                                    .text_sm()
-                                                    .text_color(rgb(MUTED))
-                                                    .child("Send")
-                                                    .on_click(cx.listener(|this, _, _, cx| {
-                                                        this.send_terminal_input(false, cx);
-                                                    })),
-                                            )
-                                            .child(
-                                                div()
-                                                    .id("terminal-send-enter")
-                                                    .cursor_pointer()
-                                                    .text_sm()
-                                                    .text_color(rgb(TEXT))
-                                                    .child(if terminal_send_loading { "Sending…" } else { "Run ↵" })
-                                                    .on_click(cx.listener(|this, _, _, cx| {
-                                                        this.send_terminal_input(true, cx);
-                                                    })),
-                                            ),
                                     )
                                     .into_any_element()
                             } else {
@@ -8705,11 +8141,6 @@ fn main() {
                 KeyBinding::new("cmd-a", ExplorerSelectAll, Some("AleraGpuiExplorer")),
                 KeyBinding::new("ctrl-shift-f", ToggleContentSearch, None),
                 KeyBinding::new("cmd-shift-f", ToggleContentSearch, None),
-                KeyBinding::new(
-                    "enter",
-                    SubmitTerminalCommand,
-                    Some("AleraGpuiTerminalInput"),
-                ),
             ]);
             let bounds = Bounds::centered(None, size(px(1200.0), px(800.0)), cx);
             gpui_kit::open_window(
@@ -8721,6 +8152,17 @@ fn main() {
                 |_, cx| {
                     let view = cx.new(|cx| {
                         let terminal_input = cx.new(QuickOpenInput::terminal);
+                        cx.observe(&terminal_input, |view: &mut Workbench, input, cx| {
+                            // GPUI TextInput delivers ASCII and finalized IME
+                            // characters here. Composing text never enters a
+                            // Host until native input has committed it.
+                            let committed =
+                                input.update(cx, |input, _| input.take_terminal_committed());
+                            for text in committed {
+                                view.enqueue_terminal_text(text, cx);
+                            }
+                        })
+                        .detach();
                         let explorer_filter_input =
                             cx.new(|cx| QuickOpenInput::with_placeholder("Filter files…", cx));
                         cx.observe(&explorer_filter_input, |view: &mut Workbench, _, cx| {
@@ -8865,7 +8307,6 @@ fn main() {
                             agent_pending_tab: None,
                             agent_status: "Select an Agent Profile and enter a task".into(),
                             terminals: TerminalDock::for_workspace(0),
-                            terminal_tab_context: None,
                             terminal_panes: TerminalPaneLayout::default(),
                             terminal_input,
                             terminal_keyboard_focus: cx.focus_handle(),
@@ -8877,7 +8318,6 @@ fn main() {
                             terminal_line_selection: None,
                             terminal_create_flow: TerminalCreateFlow::default(),
                             terminal_layout_restore: None,
-                            terminal_send_loading: false,
                             terminal_list_loading: false,
                             terminal_read_loading: None,
                             terminal_split_read_loading: false,

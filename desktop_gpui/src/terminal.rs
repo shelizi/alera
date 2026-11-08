@@ -230,6 +230,62 @@ pub fn encode_terminal_key(
     Some(sequence.to_owned())
 }
 
+/// IME owns Unicode commits. Ordinary ASCII keys must use KeyDown because
+/// GPUI/Windows may not send EntityInputHandler events for plain typing.
+pub fn is_text_input_keystroke(
+    key: &str,
+    key_char: Option<&str>,
+    control: bool,
+    alt: bool,
+    platform: bool,
+) -> bool {
+    if control || alt || platform {
+        return false;
+    }
+    key_char.is_some_and(|text| text.chars().any(|ch| !ch.is_ascii() && !ch.is_control()))
+        || (key.chars().count() == 1 && key.chars().any(|ch| !ch.is_ascii()))
+}
+
+#[cfg(test)]
+mod direct_text_input_tests {
+    use super::*;
+
+    #[test]
+    fn ascii_keys_reach_raw_host_while_unicode_uses_ime_commit() {
+        assert!(!is_text_input_keystroke(
+            "a",
+            Some("a"),
+            false,
+            false,
+            false
+        ));
+        assert!(!is_text_input_keystroke(
+            "space",
+            Some(" "),
+            false,
+            false,
+            false
+        ));
+        assert!(is_text_input_keystroke(
+            "中",
+            Some("中"),
+            false,
+            false,
+            false
+        ));
+        assert!(!is_text_input_keystroke("enter", None, false, false, false));
+        assert!(!is_text_input_keystroke(
+            "backspace",
+            None,
+            false,
+            false,
+            false
+        ));
+        assert!(!is_text_input_keystroke("a", Some("a"), true, false, false));
+        assert!(!is_text_input_keystroke("left", None, false, false, false));
+    }
+}
+
 pub fn resize_terminal_verb(handle: &str, cols: u16, rows: u16) -> io::Result<Vec<OsString>> {
     if !valid_handle(handle) || !(20..=512).contains(&cols) || !(5..=200).contains(&rows) {
         return Err(io::Error::new(

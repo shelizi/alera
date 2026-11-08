@@ -41,6 +41,31 @@ menus, while custom draggable chips retain Classic interaction semantics.
 The displayed primary content follows the active mixed pane identity
 instead of the stale legacy `center_view` flag after session restore.
 
+### Native Terminal surface follow-up (2026-11-09)
+
+- The old second Terminal-only Tab bar, adjacent Previous/Next/Move/Close
+  text controls, standalone status strip and permanent bottom Send/Run
+  command field were **not** Classic UX. They have been deleted, rather than
+  hidden behind zero opacity. The mixed 44px Workbench Tab strip is the only
+  single-pane tab navigation surface.
+- Terminal actions (manual refresh, copy visible/selected text, VT/text
+  mode, fixed-size resize and Terminal split) now use the top pane's Kit
+  overflow menu and revalidate the exact active Host identity on click.
+  The Host continues to own all PTYs and session lifetimes.
+- The Terminal viewport forwards real ASCII keyboard events directly via
+  the bounded per-Host input queue, including Enter and Ctrl+C. A native
+  invisible TextInput capture collects committed Unicode/IME strings and
+  rejects uncommitted marked text. No proxy command field is shown.
+  Normal KeyDown and TextInput use separate routing to avoid swallowing
+  ASCII or duplicating Unicode. Terminal viewport estimation no longer
+  subtracts heights for deleted legacy toolbar/input rows.
+- Actual Windows GUI verified one Tab row and no bottom input field,
+  and typing `ver` with individual keydown events followed by Enter
+  produced Windows version output inside the active Terminal. Full Chinese
+  IME candidate selection/commit acceptance is still outstanding. Do not
+  interpret a Rust compile or a synthetic Unicode typing attempt as a
+  successful real Windows IME test.
+
 **Remaining parity:** Native's global mixed strip does not yet render
 an independent tab strip inside each split pane; pinned-tab grouping and
 Classic's opt-in two-row pinned layout remain unimplemented. Do not

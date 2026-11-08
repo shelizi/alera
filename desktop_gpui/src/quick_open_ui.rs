@@ -8,6 +8,7 @@ use gpui::{
     InspectorElementId, KeyBinding, LayoutId, MouseButton, Pixels, Point, Style, UTF16Selection,
     Window,
 };
+use std::collections::VecDeque;
 use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -23,11 +24,6 @@ pub fn bind_quick_open_keys(cx: &mut App) {
         KeyBinding::new("cmd-a", QuerySelectAll, Some("AleraGpuiQuickOpen")),
         KeyBinding::new("ctrl-v", QueryPaste, Some("AleraGpuiQuickOpen")),
         KeyBinding::new("cmd-v", QueryPaste, Some("AleraGpuiQuickOpen")),
-        KeyBinding::new("backspace", QueryBackspace, Some("AleraGpuiTerminalInput")),
-        KeyBinding::new("ctrl-a", QuerySelectAll, Some("AleraGpuiTerminalInput")),
-        KeyBinding::new("cmd-a", QuerySelectAll, Some("AleraGpuiTerminalInput")),
-        KeyBinding::new("ctrl-v", QueryPaste, Some("AleraGpuiTerminalInput")),
-        KeyBinding::new("cmd-v", QueryPaste, Some("AleraGpuiTerminalInput")),
     ]);
 }
 
@@ -38,6 +34,7 @@ pub struct QuickOpenInput {
     terminal_mode: bool,
     selection: Range<usize>,
     marked: Option<Range<usize>>,
+    terminal_committed: VecDeque<String>,
 }
 
 impl QuickOpenInput {
@@ -53,6 +50,7 @@ impl QuickOpenInput {
             terminal_mode: false,
             selection: 0..0,
             marked: None,
+            terminal_committed: VecDeque::new(),
         }
     }
 
@@ -68,6 +66,13 @@ impl QuickOpenInput {
 
     pub fn composing(&self) -> bool {
         self.marked.is_some()
+    }
+
+    /// In Terminal mode the input handler is a nonvisible IME sink; only
+    /// completed text leaves it. Provisional phonetic/marked text never
+    /// enters the Host PTY.
+    pub fn take_terminal_committed(&mut self) -> Vec<String> {
+        self.terminal_committed.drain(..).collect()
     }
 
     pub fn clear(&mut self, cx: &mut Context<Self>) {
@@ -111,13 +116,25 @@ impl QuickOpenInput {
             return;
         }
         let text = raw.replace(['\r', '\n', '\0'], " ");
-        if self.text.len() - (range.end - range.start) + text.len() > 512 {
+        let max_length = if self.terminal_mode { 4096 } else { 512 };
+        if self.text.len() - (range.end - range.start) + text.len() > max_length {
             return;
         }
+        let was_marked = self.marked.is_some();
         self.text.replace_range(range.clone(), &text);
         let end = range.start + text.len();
         self.selection = end..end;
         self.marked = mark.then_some(range.start..end).filter(|r| !r.is_empty());
+        if self.terminal_mode && !mark && !self.text.is_empty() {
+            let committed = std::mem::take(&mut self.text);
+            // ASCII is routed through KeyDown. Windows may also call
+            // TextInput for the same key, so avoid echoing it twice.
+            if was_marked || !committed.is_ascii() {
+                self.terminal_committed.push_back(committed);
+            }
+            self.selection = 0..0;
+            self.marked = None;
+        }
         cx.notify();
     }
 
@@ -297,13 +314,22 @@ impl IntoElement for QuickOpenCapture {
 
 impl Render for QuickOpenInput {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.terminal_mode {
+            // Keep a full-width native TextInput capture for Windows IME
+            // candidate placement. It remains only 1px tall and paints
+            // no visible text or command bar.
+            return div()
+                .id("terminal-ime-capture")
+                .key_context("AleraGpuiTerminalInput")
+                .track_focus(&self.focus)
+                .w_full()
+                .h(px(1.0))
+                .child(QuickOpenCapture { input: cx.entity() })
+                .into_any_element();
+        }
         div()
             .id("quick-open-query")
-            .key_context(if self.terminal_mode {
-                "AleraGpuiTerminalInput"
-            } else {
-                "AleraGpuiQuickOpen"
-            })
+            .key_context("AleraGpuiQuickOpen")
             .track_focus(&self.focus)
             .on_action(cx.listener(Self::backspace))
             .on_action(cx.listener(Self::select_all))
@@ -326,5 +352,6 @@ impl Render for QuickOpenInput {
                 format!("⌕ {}", self.text)
             })
             .child(QuickOpenCapture { input: cx.entity() })
+            .into_any_element()
     }
 }

@@ -67,7 +67,6 @@ impl Workbench {
         self.install_native_settings(settings, cx);
         self.explorer_context_menu = None;
         self.mixed_tab_context = None;
-        self.terminal_tab_context = None;
         self.quick_open = None;
         if self.explorer_action.is_some() {
             self.cancel_explorer_action(cx);
@@ -93,7 +92,7 @@ impl Workbench {
                 window.focus(&self.explorer_keyboard_focus, cx);
             }
         } else {
-            window.focus(&self.terminal_keyboard_focus, cx);
+            window.focus(&self.terminal_input.read(cx).focus_handle(cx), cx);
         }
         cx.notify();
     }

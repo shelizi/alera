@@ -4,6 +4,16 @@
 use super::*;
 
 impl Workbench {
+    fn kit_menu_host_is_active(&self, target: &TerminalTabContextTarget) -> bool {
+        self.terminals.context_target_is_live(target)
+            && self
+                .terminals
+                .active_tab
+                .and_then(|index| self.terminals.context_target_at(index))
+                .as_ref()
+                == Some(target)
+    }
+
     /// Classic's single + button creates a File/Terminal, while the optional
     /// Host session list remains an action rather than pretending to be a tab.
     pub(super) fn kit_new_tab_menu(
@@ -87,6 +97,96 @@ impl Workbench {
     ) -> gpui_kit::component::menu::PopupMenu
            + 'static {
         move |mut menu, _, _| {
+            if let Some(WorkbenchTabIdentity::Host(target)) = active.clone() {
+                menu = menu.label("Terminal");
+                let refresh_owner = owner.clone();
+                let refresh_target = target.clone();
+                menu = menu.item(
+                    PopupMenuItem::new("Refresh output").on_click(move |_, _, cx| {
+                        let _ = refresh_owner.update(cx, |view, cx| {
+                            if view.kit_menu_host_is_active(&refresh_target) {
+                                view.refresh_terminal_output(cx);
+                            }
+                        });
+                    }),
+                );
+                let copy_owner = owner.clone();
+                let copy_target = target.clone();
+                menu = menu.item(PopupMenuItem::new("Copy visible terminal").on_click(
+                    move |_, _, cx| {
+                        let _ = copy_owner.update(cx, |view, cx| {
+                            if view.kit_menu_host_is_active(&copy_target) {
+                                view.copy_primary_terminal_text(false, cx);
+                            }
+                        });
+                    },
+                ));
+                let selected_owner = owner.clone();
+                let selected_target = target.clone();
+                menu = menu.item(PopupMenuItem::new("Copy selected rows").on_click(
+                    move |_, _, cx| {
+                        let _ = selected_owner.update(cx, |view, cx| {
+                            if view.kit_menu_host_is_active(&selected_target) {
+                                view.copy_primary_terminal_text(true, cx);
+                            }
+                        });
+                    },
+                ));
+                let mode_owner = owner.clone();
+                let mode_target = target.clone();
+                menu = menu.item(PopupMenuItem::new("Toggle VT screen / text log").on_click(
+                    move |_, _, cx| {
+                        let _ = mode_owner.update(cx, |view, cx| {
+                            if view.kit_menu_host_is_active(&mode_target) {
+                                view.terminals.toggle_view_mode();
+                                view.save_terminal_layout();
+                                cx.notify();
+                            }
+                        });
+                    },
+                ));
+                for (label, cols, rows) in
+                    [("Resize: 80 × 24", 80, 24), ("Resize: 120 × 36", 120, 36)]
+                {
+                    let size_owner = owner.clone();
+                    let size_target = target.clone();
+                    menu = menu.item(PopupMenuItem::new(label).on_click(move |_, _, cx| {
+                        let _ = size_owner.update(cx, |view, cx| {
+                            if view.kit_menu_host_is_active(&size_target) {
+                                view.resize_terminal(cols, rows, cx);
+                            }
+                        });
+                    }));
+                }
+                let split_owner = owner.clone();
+                let split_target = target.clone();
+                menu = menu.item(PopupMenuItem::new("Toggle Terminal split").on_click(
+                    move |_, _, cx| {
+                        let _ = split_owner.update(cx, |view, cx| {
+                            if view.kit_menu_host_is_active(&split_target) {
+                                view.toggle_terminal_split(cx);
+                            }
+                        });
+                    },
+                ));
+                let direction_owner = owner.clone();
+                let direction_target = target.clone();
+                menu = menu.item(
+                    PopupMenuItem::new("Switch Terminal split direction").on_click(
+                        move |_, _, cx| {
+                            let _ = direction_owner.update(cx, |view, cx| {
+                                if view.kit_menu_host_is_active(&direction_target)
+                                    && view.terminal_panes.secondary.is_some()
+                                {
+                                    view.terminal_panes.toggle_direction();
+                                    cx.notify();
+                                }
+                            });
+                        },
+                    ),
+                );
+                menu = menu.separator();
+            }
             if let Some(active) = active.clone() {
                 let split_owner = owner.clone();
                 let label = if active_in_secondary {
@@ -233,50 +333,6 @@ impl Workbench {
                         } else {
                             view.model.set_status("Tab changed; action cancelled");
                             cx.notify();
-                        }
-                    });
-                }));
-            }
-            menu
-        }
-    }
-
-    pub(super) fn kit_terminal_tab_context_menu(
-        owner: gpui::WeakEntity<Self>,
-        target: Option<TerminalTabContextTarget>,
-    ) -> impl Fn(
-        gpui_kit::component::menu::PopupMenu,
-        &mut Window,
-        &mut Context<gpui_kit::component::menu::PopupMenu>,
-    ) -> gpui_kit::component::menu::PopupMenu
-           + 'static {
-        move |mut menu, _, _| {
-            let actions = [
-                (TerminalContextAction::Focus, "Focus"),
-                (TerminalContextAction::Close, "Close"),
-                (TerminalContextAction::CloseOthers, "Close others"),
-                (TerminalContextAction::CloseToRight, "Close to right"),
-                (
-                    TerminalContextAction::SplitToSecondary,
-                    "Move to second pane",
-                ),
-                (TerminalContextAction::MoveLeft, "Move left"),
-                (TerminalContextAction::MoveRight, "Move right"),
-            ];
-            for (action, label) in actions {
-                let owner = owner.clone();
-                let target = target.clone();
-                menu = menu.item(PopupMenuItem::new(label).on_click(move |_, _, cx| {
-                    let _ = owner.update(cx, |view, cx| {
-                        if let Some(target) = target.as_ref() {
-                            if view.terminals.index_for_context(target).is_some() {
-                                view.terminal_tab_context = Some(target.clone());
-                                view.apply_terminal_context(action, cx);
-                            } else {
-                                view.terminals.status =
-                                    "Terminal tab changed; action cancelled".into();
-                                cx.notify();
-                            }
                         }
                     });
                 }));
