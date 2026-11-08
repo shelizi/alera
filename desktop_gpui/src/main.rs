@@ -2,6 +2,7 @@
 mod editor_ui;
 mod quick_open_ui;
 
+use alera_gpui_desktop::edition::NATIVE_APP_NAME;
 use alera_gpui_desktop::editor::EditorDraftStore;
 use alera_gpui_desktop::editor_tabs::{EditorTabs, MAX_EDITOR_TABS};
 use alera_gpui_desktop::explorer_ops::{ExplorerClipboard, ExplorerClipboardMode, ExplorerFiles};
@@ -6002,12 +6003,34 @@ impl Render for Workbench {
                     .text_sm()
                     .text_color(rgb(MUTED))
                     .child(status)
-                    .child(format!("{} · GPUI", branch)),
+                    .child(format!("{} · {}", branch, NATIVE_APP_NAME)),
             )
     }
 }
 
+#[cfg(windows)]
+fn install_native_windows_app_identity() {
+    // The Flutter desktop keeps dev.leynier.alera (or .dev) as its single-
+    // instance identifier. Native must use its own taskbar/shortcut grouping.
+    // shell32 is part of Windows, so this adds no new Rust dependencies.
+    #[link(name = "shell32")]
+    extern "system" {
+        fn SetCurrentProcessExplicitAppUserModelID(app_id: *const u16) -> i32;
+    }
+    use alera_gpui_desktop::edition::NATIVE_WINDOWS_APP_ID;
+    let utf16 = NATIVE_WINDOWS_APP_ID
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let hr = unsafe { SetCurrentProcessExplicitAppUserModelID(utf16.as_ptr()) };
+    if hr < 0 {
+        eprintln!("Alera Native: Windows AppUserModelID could not be set (HRESULT {hr:#x})");
+    }
+}
+
 fn main() {
+    #[cfg(windows)]
+    install_native_windows_app_identity();
     let session_store = PreviewSessionStore::platform_default();
     let root = std::env::args_os()
         .nth(1)

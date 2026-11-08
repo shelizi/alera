@@ -219,7 +219,11 @@ impl PreviewSessionStore {
         #[cfg(not(any(windows, unix)))]
         let base: Option<PathBuf> = None;
 
-        base.map(|base| Self::new(base.join("Alera").join("gpui-preview")))
+        base.map(|base| {
+            Self::new(crate::edition::native_state_directory_preserving_preview(
+                &base,
+            ))
+        })
     }
 
     /// Last used workspace is only a hint; its path must still exist and
