@@ -18,6 +18,10 @@ use alera_gpui_desktop::terminal::{
     TerminalDock, TerminalPollGate, TerminalViewMode, HOST_SESSION_LIST_SCOPE,
 };
 use alera_gpui_desktop::terminal_panes::{TerminalPaneLayout, TerminalSplitDirection};
+use alera_gpui_desktop::visual_tokens::{
+    ACTIVE, BG, BORDER, MUTED, PANEL, PROJECTS_SIDEBAR_WIDTH, RIGHT_SIDEBAR_WIDTH,
+    SECTION_HEADER_HEIGHT, STATUS_BAR_HEIGHT, TAB_STRIP_HEIGHT, TEXT, TOOLBAR, TOP_BAR_HEIGHT,
+};
 use alera_gpui_desktop::workspace_tree::WorkspaceTree;
 use alera_gpui_desktop::worktree_manager::{WorktreeEntry, WorktreeManager};
 use editor_ui::{bind_editor_keys, NativeEditor};
@@ -30,14 +34,6 @@ use std::collections::{HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-
-const BG: u32 = 0x15171b;
-const PANEL: u32 = 0x1c1f24;
-const TOOLBAR: u32 = 0x252931;
-const BORDER: u32 = 0x343942;
-const TEXT: u32 = 0xe1e4e8;
-const MUTED: u32 = 0xa6adb7;
-const ACTIVE: u32 = 0x303741;
 
 actions!(
     alera_gpui_workbench,
@@ -2304,21 +2300,22 @@ impl Render for Workbench {
             .flex()
             .flex_col()
             .bg(rgb(BG))
+            .font_family("Inter")
             .text_color(rgb(TEXT))
             .child(
                 div()
-                    .h(px(46.0))
+                    .h(px(TOP_BAR_HEIGHT))
                     .px_4()
                     .bg(rgb(TOOLBAR))
                     .flex()
                     .items_center()
                     .justify_between()
-                    .child(div().font_weight(gpui::FontWeight::BOLD).child("ALERA"))
+                    .child(div().font_weight(gpui::FontWeight::BOLD).child("Alera"))
                     .child(
                         div()
                             .text_sm()
                             .text_color(rgb(MUTED))
-                            .child("GPUI · Native Desktop Preview"),
+                            .child("Native desktop · Preview"),
                     )
                     .child(div().text_sm().child(branch.clone())),
             )
@@ -2330,7 +2327,7 @@ impl Render for Workbench {
                     .flex_row_reverse()
                     .child(
                         div()
-                            .w(px(315.0))
+                            .w(px(RIGHT_SIDEBAR_WIDTH))
                             .flex()
                             .flex_col()
                             .bg(rgb(PANEL))
@@ -2338,8 +2335,8 @@ impl Render for Workbench {
                             .border_color(rgb(BORDER))
                             .child(
                                 div()
+                                    .h(px(SECTION_HEADER_HEIGHT))
                                     .px_3()
-                                    .py_3()
                                     .flex()
                                     .justify_between()
                                     .items_center()
@@ -2890,7 +2887,7 @@ impl Render for Workbench {
                             .child(
                                 div()
                                     .id("center-mode-switch")
-                                    .h(px(38.0))
+                                    .h(px(SECTION_HEADER_HEIGHT))
                                     .bg(rgb(TOOLBAR))
                                     .flex()
                                     .items_center()
@@ -3017,7 +3014,7 @@ impl Render for Workbench {
                             })
                             .child(
                                 div()
-                                    .h(px(38.0))
+                                    .h(px(TAB_STRIP_HEIGHT))
                                     .when(!center_is_editor, |panel| panel.hidden())
                                     .flex()
                                     .items_center()
@@ -3036,7 +3033,7 @@ impl Render for Workbench {
                                                     .flex()
                                                     .items_center()
                                                     .w(px(165.0))
-                                                    .h(px(37.0))
+                                                    .h(px(TAB_STRIP_HEIGHT - 1.0))
                                                     .bg(rgb(if active_tab == Some(index) {
                                                         ACTIVE
                                                     } else {
@@ -3221,7 +3218,7 @@ impl Render for Workbench {
                                     .bg(rgb(BG))
                                     .child(
                                         div()
-                                            .h(px(36.0))
+                                            .h(px(TAB_STRIP_HEIGHT))
                                             .flex()
                                             .items_center()
                                             .bg(rgb(PANEL))
@@ -3237,7 +3234,7 @@ impl Render for Workbench {
                                                             div()
                                                                 .flex()
                                                                 .items_center()
-                                                                .h(px(35.0))
+                                                                .h(px(TAB_STRIP_HEIGHT - 1.0))
                                                                 .bg(rgb(if terminal_active == Some(index) {
                                                                     ACTIVE
                                                                 } else {
@@ -3697,16 +3694,19 @@ impl Render for Workbench {
                     )
                     .child(
                         div()
-                            .w(px(248.0))
+                            .w(px(PROJECTS_SIDEBAR_WIDTH))
                             .flex()
                             .flex_col()
                             .bg(rgb(PANEL))
                             .border_r_1()
                             .border_color(rgb(BORDER))
-                            .p_3()
-                            .gap_3()
+                            .px_2()
+                            .py_1()
+                            .gap_2()
                             .child(
                                 div()
+                                    .h(px(SECTION_HEADER_HEIGHT))
+                                    .px_1()
                                     .flex()
                                     .items_center()
                                     .justify_between()
@@ -3737,7 +3737,7 @@ impl Render for Workbench {
                                 div()
                                     .text_xs()
                                     .text_color(rgb(MUTED))
-                                    .child(format!("Active: {}", workspace_root.display())),
+                                    .child(format!("Active workspace · {folder_name}")),
                             )
                             .child(
                                 div()
@@ -3803,6 +3803,10 @@ impl Render for Workbench {
                                                     .child(
                                                         div()
                                                             .id(("project-tree-open", index))
+                                                            .px_2()
+                                                            .py_1()
+                                                            .bg(rgb(if current { ACTIVE } else { PANEL }))
+                                                            .hover(|style| style.bg(rgb(ACTIVE)))
                                                             .cursor_pointer()
                                                             .text_sm()
                                                             .text_color(rgb(if current { TEXT } else { MUTED }))
@@ -3826,6 +3830,8 @@ impl Render for Workbench {
                                                             .id(("project-tree-worktree", index * 16 + child_index))
                                                             .pl_4()
                                                             .py_1()
+                                                            .bg(rgb(if active { ACTIVE } else { PANEL }))
+                                                            .hover(|style| style.bg(rgb(ACTIVE)))
                                                             .cursor_pointer()
                                                             .text_xs()
                                                             .text_color(rgb(if active { TEXT } else { MUTED }))
@@ -4160,7 +4166,7 @@ impl Render for Workbench {
             )
             .child(
                 div()
-                    .h(px(27.0))
+                    .h(px(STATUS_BAR_HEIGHT))
                     .px_3()
                     .flex()
                     .items_center()

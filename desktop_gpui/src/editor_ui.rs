@@ -12,6 +12,7 @@ use alera_gpui_desktop::editor_tabs::{EditorTabDragIdentity, EditorTabs};
 use alera_gpui_desktop::visible_line_hit::{
     apply_pointer_hit, VisibleLineGeometry, VisibleLineHitSet,
 };
+use alera_gpui_desktop::visual_tokens::{BG as PANEL_BG, MUTED as MUTED_TEXT, TEXT as EDITOR_TEXT};
 use gpui::{
     actions, div, fill, point, prelude::*, px, relative, rgb, size, uniform_list, App, Bounds,
     ClipboardItem, Context, CursorStyle, Element, ElementId, ElementInputHandler, Entity,
@@ -31,12 +32,11 @@ mod editor_find_ui;
 use editor_find_ui::EditorFindUi;
 
 const EDITOR_LINE_HEIGHT: f32 = 19.0;
-const PANEL_BG: u32 = 0x15171b;
-const EDITOR_TEXT: u32 = 0xe1e4e8;
-const MUTED_TEXT: u32 = 0x9fa7b3;
-const SELECTED_BG: u32 = 0x345477;
-const COMPOSITION_COLOR: u32 = 0x74d9d2;
-const CURSOR_COLOR: u32 = 0x8bc5ff;
+// Match the Flutter desktop's neutral theme rather than the old blue-tinted
+// GPUI prototype. Keep selection distinct from the editor surface.
+const SELECTED_BG: u32 = 0x3b3b3b;
+const COMPOSITION_COLOR: u32 = 0xe0e0e0;
+const CURSOR_COLOR: u32 = EDITOR_TEXT;
 
 actions!(
     alera_gpui_native_editor,

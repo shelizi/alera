@@ -16,6 +16,7 @@ pub mod session;
 pub mod terminal;
 pub mod terminal_panes;
 pub mod visible_line_hit;
+pub mod visual_tokens;
 pub mod vt_screen;
 pub mod workspace_tree;
 pub mod worktree_manager;
