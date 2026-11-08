@@ -18,6 +18,9 @@ impl Workbench {
         let store = self.native_settings_store.as_ref().ok_or("ui_not_ready")?;
         let settings = store.read().map_err(|_| "ui_operation_failed")?;
         self.install_native_settings(settings, cx);
+        if self.settings_section.is_none() {
+            self.settings_modal_needs_focus = true;
+        }
         self.settings_section = Some(section.to_owned());
         match section {
             "agents" => self.refresh_terminals(cx),
@@ -26,6 +29,53 @@ impl Workbench {
         }
         cx.notify();
         Ok(())
+    }
+
+    fn dismiss_native_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.settings_section = None;
+        self.settings_modal_needs_focus = false;
+        if self.center_view == CenterView::Editor {
+            if let Some(editor) = self.focused_editor() {
+                window.focus(&editor.read(cx).focus_handle(cx));
+            } else {
+                window.focus(&self.explorer_keyboard_focus);
+            }
+        } else {
+            window.focus(&self.terminal_keyboard_focus);
+        }
+        cx.notify();
+    }
+
+    fn native_settings_nav_item(
+        &self,
+        id: &'static str,
+        label: &'static str,
+        active: bool,
+        compact: bool,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        div()
+            .id(id)
+            .cursor_pointer()
+            .rounded_md()
+            .flex()
+            .items_center()
+            .px_3()
+            .py_2()
+            .bg(rgb(if active { ACTIVE } else { PANEL }))
+            .text_color(rgb(if active { TEXT } else { MUTED }))
+            .text_sm()
+            .when(!compact, |row| row.w_full())
+            .child(label)
+            .on_click(cx.listener(move |view, _, window, cx| {
+                if let Err(code) = view.show_native_settings_section(id, cx) {
+                    view.model
+                        .set_status(format!("Native settings unavailable: {code}"));
+                }
+                window.focus(&view.settings_modal_focus);
+                cx.notify();
+            }))
+            .into_any_element()
     }
 
     /// Store only a Host-listed Agent Profile ID, never its launch command,
@@ -173,6 +223,8 @@ impl Workbench {
     /// model flag. Returns None while settings are closed.
     pub(super) fn render_native_settings_panel(
         &self,
+        viewport_width: f32,
+        viewport_height: f32,
         cx: &mut Context<Self>,
     ) -> Option<gpui::AnyElement> {
         let section = self.settings_section.as_deref()?;
@@ -283,14 +335,14 @@ impl Workbench {
                             agent.workspace_id,
                             agent.tab_id
                         ))
-                        .on_click(cx.listener(move |view, _, _, cx| {
+                        .on_click(cx.listener(move |view, _, window, cx| {
                             view.select_terminal(handle.clone(), cx);
                             if view
                                 .terminals
                                 .active()
                                 .is_some_and(|active| active.handle == handle)
                             {
-                                view.settings_section = None;
+                                view.dismiss_native_settings(window, cx);
                             } else {
                                 view.model.set_status("Agent session is no longer available");
                             }
@@ -410,66 +462,142 @@ impl Workbench {
                 .into_any_element(),
             _ => return None,
         };
-        let load_error = self.native_settings_error.clone();
-        Some(
-            div()
-                .id("native-settings-panel")
-                .absolute()
-                .inset_0()
-                .flex()
-                .flex_col()
-                .bg(rgb(BG))
-                .text_color(rgb(TEXT))
-                .p_4()
-                .gap_3()
-                .child(
+        let metrics = NativeModalSize::Settings.resolve(viewport_width, viewport_height);
+        let modal = AleraNativeModal::new(metrics);
+        let compact = metrics.stacked_navigation;
+        let categories = [
+            ("application", "Application"),
+            ("terminal", "Terminal"),
+            ("editor", "Editor"),
+            ("agents", "Agents"),
+            ("agentProfiles", "Agent Profiles"),
+        ];
+        let navigation = div()
+            .id("native-settings-sidebar")
+            .flex()
+            .flex_col()
+            .bg(rgb(PANEL))
+            .when(compact, |sidebar| {
+                sidebar
+                    .w_full()
+                    .h(px(58.0))
+                    .border_b_1()
+                    .border_color(rgb(BORDER))
+            })
+            .when(!compact, |sidebar| {
+                sidebar
+                    .w(px(244.0))
+                    .h_full()
+                    .border_r_1()
+                    .border_color(rgb(BORDER))
+            })
+            .when(!compact, |sidebar| {
+                sidebar.child(
                     div()
+                        .h(px(54.0))
+                        .px_4()
                         .flex()
-                        .justify_between()
                         .items_center()
-                        .child(div().text_sm().font_weight(gpui::FontWeight::BOLD)
-                            .child(format!("Alera Native Settings · {section}")))
-                        .child(
-                            div()
-                                .id("native-settings-close")
-                                .cursor_pointer()
-                                .text_sm()
-                                .child("Close ✕")
-                                .on_click(cx.listener(|view, _, _, cx| {
-                                    view.settings_section = None;
-                                    cx.notify();
-                                })),
-                        ),
+                        .border_b_1()
+                        .border_color(rgb(BORDER))
+                        .text_sm()
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .child("Settings"),
                 )
-                .child(
-                    div()
-                        .flex()
-                        .gap_3()
-                        .children(
-                            ["application", "terminal", "editor", "agents", "agentProfiles"]
-                                .into_iter()
-                                .map(|target| {
-                                    div()
-                                        .id(target)
-                                        .cursor_pointer()
-                                        .text_sm()
-                                        .text_color(rgb(if section == target { TEXT } else { MUTED }))
-                                        .child(target)
-                                        .on_click(cx.listener(move |view, _, _, cx| {
-                                            let _ = view.show_native_settings_section(target, cx);
-                                        }))
-                                }),
-                        ),
-                )
-                .child(div().id("native-settings-rows").flex_1().overflow_y_scroll().child(rows))
-                .children(load_error.map(|error| {
-                    div().text_sm().child(format!("Settings load error: {error}"))
-                }))
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(rgb(MUTED))
-                        .child("Native preview preferences live in a separate app state directory and never change Alera Classic."),
+            })
+            .child(
+                div()
+                    .id("native-settings-nav")
+                    .flex()
+                    .gap_1()
+                    .p_2()
+                    .when(compact, |nav| nav.flex_row().overflow_x_scroll())
+                    .when(!compact, |nav| {
+                        nav.flex_col().flex_1().min_h_0().overflow_y_scroll()
+                    })
+                    .children(categories.into_iter().map(|(id, label)| {
+                        self.native_settings_nav_item(id, label, section == id, compact, cx)
+                    })),
+            );
+        let heading = categories
+            .iter()
+            .find_map(|(id, title)| (*id == section).then_some(*title))
+            .unwrap_or("Settings");
+        let content = div()
+            .id("native-settings-content")
+            .flex_1()
+            .min_w_0()
+            .min_h_0()
+            .flex()
+            .flex_col()
+            .child(
+                modal.header(
+                    heading,
+                    icon_button(
+                        "native-settings-close",
+                        UiIcon::Close,
+                        "Close settings",
+                        false,
+                    )
+                    .on_click(cx.listener(|view, _, window, cx| {
+                        view.dismiss_native_settings(window, cx);
+                    })),
+                ),
+            )
+            .child(
+                div()
+                    .id("native-settings-rows")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .p_4()
+                    .child(rows),
+            )
+            .children(self.native_settings_error.clone().map(|error| {
+                div()
+                    .px_4()
+                    .text_sm()
+                    .text_color(rgb(MUTED))
+                    .child(format!("Settings load error: {error}"))
+            }))
+            .child(
+                div()
+                    .border_t_1()
+                    .border_color(rgb(BORDER))
+                    .px_4()
+                    .py_2()
+                    .text_xs()
+                    .text_color(rgb(MUTED))
+                    .child("Native preferences are stored separately from Alera Classic."),
+            );
+        let body = div()
+            .id("native-settings-panel")
+            .flex()
+            .flex_1()
+            .min_h_0()
+            .when(compact, |body| body.flex_col())
+            .when(!compact, |body| body.flex_row())
+            .child(navigation)
+            .child(content);
+        let dialog = modal
+            .frame(body)
+            .key_context("AleraNativeModal")
+            .track_focus(&self.settings_modal_focus)
+            .on_key_down(cx.listener(|view, event: &gpui::KeyDownEvent, window, cx| {
+                if event.keystroke.key.eq_ignore_ascii_case("escape") {
+                    view.dismiss_native_settings(window, cx);
+                }
+                // Never allow modal keystrokes to reach Editor or Terminal.
+                cx.stop_propagation();
+            }));
+        Some(
+            modal
+                .overlay(
+                    dialog,
+                    cx.listener(|view, _, window, cx| {
+                        view.dismiss_native_settings(window, cx);
+                        cx.stop_propagation();
+                    }),
                 )
                 .into_any_element(),
         )

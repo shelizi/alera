@@ -234,3 +234,27 @@ this experimental migration without explicit approval.
   GPUI drop handler stops event propagation to avoid duplicate root imports.
 - This is source/compilation and focused Rust-model verification only.
   No Windows drag pointer or native GUI testing performed by request.
+
+## Follow-up: reusable Alera-style Native modal and Settings
+
+- Classic's `AleraDialog` and `AleraDialogHeader` already provide the
+  canonical modal surface; Classic Settings uses 92% of the viewport up to
+  1800x1280 with a 260px category sidebar and right-hand settings content.
+- Native previously replaced the entire workbench with an absolute opaque
+  full-screen settings panel rather than a modal. It now uses the reusable
+  `AleraNativeModal` backdrop/frame/header in
+  `desktop_gpui/src/native_modal_ui.rs`. The sizing policy lives in
+  `desktop_gpui/src/native_modal.rs` and also supports future compact
+  confirmation/picker dialogs. It keeps a margin on small windows.
+- Settings now opens centered over a dimmed workbench, with a left category
+  navigation and independently scrolling right panel. Narrow windows stack
+  navigation horizontally. Close is icon-only; Escape and a backdrop click
+  dismiss. Pointer events in the dialog do not dismiss or activate the
+  underlying workbench. The modal receives its own keyboard focus and
+  suppresses terminal/editor keystrokes while open.
+- Existing Native-only persistent settings storage and compare-and-set
+  callbacks are reused; the MCP `open_settings` command still targets
+  exactly the requested section. No Classic preferences are written.
+- Future Native confirm/input/selection dialogs can reuse the same shell.
+  This change does not claim all Classic settings sections have been ported
+  or that pointer/focus behavior has been GUI-tested.

@@ -1,5 +1,6 @@
 //! Experimental Alera desktop shell powered by native GPUI (no Flutter/WebView).
 mod editor_ui;
+mod native_modal_ui;
 mod native_settings_ui;
 mod native_ui_icons;
 mod quick_open_ui;
@@ -28,6 +29,7 @@ use alera_gpui_desktop::mcp_ui_bridge::{
 };
 use alera_gpui_desktop::mcp_workspace_creation::HostManagedWorkspaceRequest;
 use alera_gpui_desktop::model::WorkbenchModel;
+use alera_gpui_desktop::native_modal::NativeModalSize;
 use alera_gpui_desktop::native_settings::{NativeSettings, NativeSettingsStore};
 use alera_gpui_desktop::project_search::{ContentMatch, ProjectSearch};
 use alera_gpui_desktop::project_tree::{collect_project_tree, ProjectTreeGroup};
@@ -59,6 +61,7 @@ use gpui::{
     actions, div, prelude::*, px, rgb, size, App, Application, Bounds, Context, Entity, Focusable,
     KeyBinding, PathPromptOptions, Window, WindowBounds, WindowOptions,
 };
+use native_modal_ui::AleraNativeModal;
 use native_ui_icons::{explorer_file_icon, icon, icon_button, UiIcon};
 use quick_open_ui::{bind_quick_open_keys, QuickOpenInput};
 use std::borrow::Cow;
@@ -395,6 +398,8 @@ struct Workbench {
     native_settings: NativeSettings,
     native_settings_error: Option<String>,
     settings_section: Option<String>,
+    settings_modal_focus: gpui::FocusHandle,
+    settings_modal_needs_focus: bool,
     last_auto_git_fetch: Instant,
     agent_profiles: Vec<AgentProfileRow>,
     agent_profiles_loading: bool,
@@ -5216,7 +5221,16 @@ impl Workbench {
 impl Render for Workbench {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_mixed_tabs(cx);
-        let native_settings_panel = self.render_native_settings_panel(cx);
+        if self.settings_section.is_some() && self.settings_modal_needs_focus {
+            window.focus(&self.settings_modal_focus);
+            self.settings_modal_needs_focus = false;
+        }
+        let viewport = window.viewport_size();
+        let native_settings_panel = self.render_native_settings_panel(
+            f32::from(viewport.width),
+            f32::from(viewport.height),
+            cx,
+        );
         let terminal_font_size = self.native_settings.terminal_font_size as f32;
         let mixed_tabs = self.mixed_tabs.entries().to_vec();
         let mixed_active = self.mixed_tabs.active().cloned();
@@ -9285,6 +9299,8 @@ fn main() {
                         native_settings,
                         native_settings_error,
                         settings_section: None,
+                        settings_modal_focus: cx.focus_handle(),
+                        settings_modal_needs_focus: false,
                         last_auto_git_fetch: Instant::now(),
                         agent_profiles: Vec::new(),
                         agent_profiles_loading: false,
