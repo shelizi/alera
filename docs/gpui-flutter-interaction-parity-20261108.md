@@ -394,3 +394,42 @@ gate remains open.
 - Keep `supported=false`; the previous GUI proof on a single NativeEditor
   owner does not validate the newer two-entity implementation. Leave
   `.gpui-smoke-20261108/` untracked and untouched without cleanup approval.
+
+## Follow-up: Split Terminal raw-key routing and late Host replies (2026-11-08)
+
+- Continued **only** in `integrate/gpui-p0p1p2-20261108`; the Windows
+  foreground was still occupied by another application, so no GUI mouse
+  or real Zhuyin IME acceptance was claimed or attempted on that desktop.
+- Found a split-input race: when PTY A's CLI key write was still in flight,
+  switching focus and typing into PTY B left B's new keys queued; A's late
+  callback then cleared B's pending input instead of sending it. A reply
+  is now checked against the still-live, full `TerminalTabContextTarget`.
+  A late reply for A drains B's valid queued keys; a write failure for
+  the current Host still stops that Host's queue and reports its error.
+  Reused/stale Host tab identities are rejected, not matched by handle alone.
+- Primary and secondary Terminal views now track **different GPUI focus
+  handles**, and raw key dispatch additionally verifies the focused pane's
+  own Host identity against the authenticated active session. A non-focused
+  pane or Editor cannot forward keys into the other PTY.
+- Two new red-then-green Rust model regressions cover focused-pane
+  authorization and delayed reply transitions, including stopped/recycled
+  targets: **2/2 PASS**. The complete native Rust library suite is now
+  **226/226 PASS**. Windows `cargo check`, `cargo build`, `cargo fmt --check`
+  and `git diff --check`: **PASS**. The pre-existing `proc-macro-error2`
+  future-incompatibility advisory is unchanged.
+- The opt-in Windows real-Host integration test was rerun with its own
+  temporary authenticated Host and two PTYs. It now checks focused input
+  target identity in each mixed pane in addition to separate PTY execution,
+  read cursors, output isolation and preview-close lifetime: **1/1 PASS**.
+  No production Runtime Host or existing user PTY was touched.
+
+### Still not GUI-accepted
+
+- Real dual-NativeEditor Windows pointer/keyboard, per-pane save, dirty
+  scratch drag/Undo and restart verification on the new two-entity UI.
+- Actual Zhuyin preedit/candidate/cancel and pane switch in the GPUI window.
+- Real two-PTY GPUI visual rendering, raw-key delivery and resize in the
+  native window. Headless authenticated Host testing does not cover pixels
+  or OS keyboard focus.
+- Keep `supported=false`, `main` unchanged; do not push, tag or release.
+  Preserve the existing untracked `.gpui-smoke-20261108/` fixture.
