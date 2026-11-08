@@ -1,6 +1,7 @@
 //! Explicit, guarded filesystem mutations for the experimental GPUI Explorer.
 //! The caller must provide an action and confirmation; merely browsing or
 //! indexing must never reach this module. No symlinks or Git metadata writes.
+use std::collections::HashSet;
 use std::fs::{self, OpenOptions};
 use std::io::{self, ErrorKind, Read};
 use std::path::{Component, Path, PathBuf};
@@ -473,6 +474,106 @@ impl ExplorerClipboard {
     }
 }
 
+/// Clipboard for several selected items. All source paths are validated
+/// before capture, and a paste preflights every destination before writing
+/// the first byte. A directory selection subsumes nested selected children.
+/// This remains workspace-local; it never reads arbitrary OS clipboard paths.
+#[derive(Debug, Clone)]
+pub struct ExplorerClipboardBatch {
+    workspace_root: PathBuf,
+    entries: Vec<ExplorerClipboard>,
+}
+
+impl ExplorerClipboardBatch {
+    pub fn capture(
+        files: &ExplorerFiles,
+        paths: &[PathBuf],
+        mode: ExplorerClipboardMode,
+    ) -> io::Result<Self> {
+        if paths.is_empty() || paths.len() > 24 {
+            return Err(invalid("Select between 1 and 24 Explorer items"));
+        }
+        let mut canonical = paths
+            .iter()
+            .map(|path| files.existing(path))
+            .collect::<io::Result<Vec<_>>>()?;
+        canonical.sort();
+        canonical.dedup();
+        let top_level: Vec<_> = canonical
+            .iter()
+            .filter(|path| {
+                !canonical.iter().any(|parent| {
+                    parent.as_path() != path.as_path() && path.starts_with(parent.as_path())
+                })
+            })
+            .collect();
+        let entries = top_level
+            .into_iter()
+            .map(|path| ExplorerClipboard::capture(files, path, mode))
+            .collect::<io::Result<Vec<_>>>()?;
+        Ok(Self {
+            workspace_root: files.root().to_path_buf(),
+            entries,
+        })
+    }
+
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn consumed(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    pub fn paste_into(
+        &mut self,
+        files: &ExplorerFiles,
+        destination_folder: &Path,
+    ) -> io::Result<Vec<PathBuf>> {
+        if files.root() != self.workspace_root {
+            return Err(forbidden("Cannot paste a batch across workspaces"));
+        }
+        let destination_folder = files.folder(destination_folder)?;
+        let mut destinations = HashSet::new();
+        // Do not begin mutating until all predictable errors are rejected,
+        // including conflicting basenames from two source directories.
+        for clipboard in &self.entries {
+            let source = files.existing(clipboard.source())?;
+            if destination_folder == source || destination_folder.starts_with(&source) {
+                return Err(forbidden("Cannot paste a folder into itself"));
+            }
+            let name = source
+                .file_name()
+                .and_then(|name| name.to_str())
+                .ok_or_else(|| invalid("Source has no valid name"))?;
+            let target = files.destination(&destination_folder, name)?;
+            if !destinations.insert(target) {
+                return Err(invalid("Selected files have the same destination filename"));
+            }
+        }
+        let mut completed = Vec::new();
+        let total = self.entries.len();
+        for index in 0..total {
+            match self.entries[index].paste_into(files, &destination_folder) {
+                Ok(path) => completed.push(path),
+                Err(error) => {
+                    self.entries.retain(|clip| !clip.consumed());
+                    return Err(io::Error::new(
+                        error.kind(),
+                        format!(
+                            "Batch paste stopped after {} of {} item(s): {error}",
+                            completed.len(),
+                            total
+                        ),
+                    ));
+                }
+            }
+        }
+        self.entries.retain(|clip| !clip.consumed());
+        Ok(completed)
+    }
+}
+
 fn forbidden(message: &str) -> io::Error {
     io::Error::new(ErrorKind::PermissionDenied, message)
 }
@@ -480,6 +581,72 @@ fn forbidden(message: &str) -> io::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn batch_clipboard_preflights_collision_and_preserves_sources() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = dunce::canonicalize(temp.path()).unwrap();
+        let a = root.join("a");
+        let b = root.join("b");
+        let target = root.join("target");
+        for folder in [&a, &b, &target] {
+            fs::create_dir(folder).unwrap();
+        }
+        fs::write(a.join("same.txt"), "A").unwrap();
+        fs::write(b.join("same.txt"), "B").unwrap();
+        let files = ExplorerFiles::new(&root).unwrap();
+        let mut batch = ExplorerClipboardBatch::capture(
+            &files,
+            &[a.join("same.txt"), b.join("same.txt")],
+            ExplorerClipboardMode::Cut,
+        )
+        .unwrap();
+        assert!(batch.paste_into(&files, &target).is_err());
+        assert!(!target.join("same.txt").exists());
+        assert!(a.join("same.txt").exists());
+        assert!(b.join("same.txt").exists());
+        assert_eq!(batch.len(), 2);
+    }
+
+    #[test]
+    fn batch_copy_then_cut_remains_scoped_and_does_not_duplicate_nested_parent() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = dunce::canonicalize(temp.path()).unwrap();
+        let files = ExplorerFiles::new(&root).unwrap();
+        fs::create_dir(root.join("from")).unwrap();
+        fs::create_dir(root.join("into")).unwrap();
+        fs::write(root.join("from/a.txt"), "A").unwrap();
+        fs::write(root.join("from/b.txt"), "B").unwrap();
+        let mut copy = ExplorerClipboardBatch::capture(
+            &files,
+            &[root.join("from/a.txt"), root.join("from/b.txt")],
+            ExplorerClipboardMode::Copy,
+        )
+        .unwrap();
+        assert_eq!(
+            copy.paste_into(&files, &root.join("into")).unwrap().len(),
+            2
+        );
+        assert!(!copy.consumed());
+        assert_eq!(fs::read_to_string(root.join("into/a.txt")).unwrap(), "A");
+        let mut cut = ExplorerClipboardBatch::capture(
+            &files,
+            &[root.join("from"), root.join("from/a.txt")],
+            ExplorerClipboardMode::Cut,
+        )
+        .unwrap();
+        assert_eq!(cut.len(), 1);
+        assert_eq!(cut.paste_into(&files, &root.join("into")).unwrap().len(), 1);
+        assert!(cut.consumed());
+        assert!(!root.join("from").exists());
+        assert_eq!(
+            fs::read_to_string(root.join("into/from/a.txt")).unwrap(),
+            "A"
+        );
+        let other = tempfile::tempdir().unwrap();
+        let other_files = ExplorerFiles::new(other.path()).unwrap();
+        assert!(copy.paste_into(&other_files, other.path()).is_err());
+    }
 
     #[test]
     fn external_drop_imports_bounded_file_and_directory_without_overwrite() {

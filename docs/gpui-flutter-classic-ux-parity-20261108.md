@@ -54,8 +54,10 @@ editors, Git comparisons or multi-file actions under misleading names.
   reproduced exactly (Native currently uses closest bundled Codicons).
 - Classic toggles for ignored/hidden files and **Save All** need a true
   implementation; never add decorative buttons without a working handler.
-- Ctrl/Shift multiselection, copy/cut/paste on multiple selected items,
-  drag-to-folder and drag into/out of the OS need targeted parity testing.
+- Ctrl/Shift multi-selection and batch Copy/Cut/Paste now have initial
+  Native implementations across tree, flat list and filter results. Native
+  uses bounded, workspace-scoped validation and preflight; actual mouse/
+  keyboard acceptance and drag-to-folder / OS drag in/out parity remain.
 - Single-click versus double-click now has an initial implementation in
   the Native tree, flat list, and filtered search results: one replaceable
   read-only preview, with a second click promoting into the editable Native
@@ -124,3 +126,24 @@ this experimental migration without explicit approval.
 - This remains **source/test verified only**, not a Windows mouse/double-click
   usability sign-off. Preview limits remain 256 KiB / 600 lines; completing
   the Classic large-text-file behavior needs another slice.
+
+## Follow-up: multi-selection and batch clipboard
+
+- Native Explorer shares a workspace-bound visual selection model across
+  filtered, tree and flat presentations. Ctrl/Cmd toggles an individual file
+  or folder; Shift selects an inclusive visible range from a stable anchor.
+  Modified clicks do not open, expand or edit files. Context-right-click
+  retains an existing multi-selection, and selecting a new item replaces it.
+- Batch Copy/Cut/Paste now captures up to 24 validated top-level entries.
+  A selected folder subsumes its selected descendants. Paste preflights
+  destination names, existing paths, symlink/Git metadata safety, and
+  same-workspace identity before any normal file move/copy. Copy may be
+  reused; successfully moved Cut entries are consumed.
+- For rare mid-batch I/O failure, earlier successful writes cannot safely
+  be rolled back automatically. The UI refreshes and reports the partial
+  failure, retaining remaining clipboard entries for explicit retry.
+- Changing filter/workspace and successful Explorer mutations invalidates
+  stale row selections. This does not implicitly delete user files.
+- Remaining: dedicated Explorer-scoped Ctrl+C/X/V keyboard shortcuts,
+  native OS drag/drop, multi-file deletion UX, per-file Git badges and
+  real Windows pointer acceptance. Those gaps must not be called complete.

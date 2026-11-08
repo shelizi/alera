@@ -10,7 +10,10 @@ use alera_gpui_desktop::agent_profiles::{
 use alera_gpui_desktop::edition::NATIVE_APP_NAME;
 use alera_gpui_desktop::editor::EditorDraftStore;
 use alera_gpui_desktop::editor_tabs::{EditorTabs, MAX_EDITOR_TABS};
-use alera_gpui_desktop::explorer_ops::{ExplorerClipboard, ExplorerClipboardMode, ExplorerFiles};
+use alera_gpui_desktop::explorer_ops::{
+    ExplorerClipboardBatch, ExplorerClipboardMode, ExplorerFiles,
+};
+use alera_gpui_desktop::explorer_selection::ExplorerMultiSelection;
 use alera_gpui_desktop::file_search::WorkspaceFileIndex;
 use alera_gpui_desktop::git_actions::{GitActions, GitConflictChoice, GitConflictPlan};
 use alera_gpui_desktop::git_history::{
@@ -267,11 +270,12 @@ struct Workbench {
     tree: Option<WorkspaceTree>,
     tree_mode: bool,
     explorer_selection: Option<PathBuf>,
+    explorer_multi_selection: ExplorerMultiSelection,
     /// A read-only Explorer preview can cover an editor viewport without
     /// dropping its existing dirty buffer, tab identity, or undo history.
     explorer_preview_active: bool,
     explorer_keyboard_focus: gpui::FocusHandle,
-    explorer_clipboard: Option<ExplorerClipboard>,
+    explorer_clipboard: Option<ExplorerClipboardBatch>,
     explorer_drop_busy: bool,
     explorer_drop_request: u64,
     explorer_action: Option<ExplorerAction>,
@@ -391,6 +395,36 @@ struct Workbench {
 }
 
 impl Workbench {
+    /// Returns true when this was a multi-selection gesture, which must not
+    /// also open or expand the clicked row. All views share visible ordering.
+    fn select_explorer_row(
+        &mut self,
+        path: &Path,
+        visible: &[PathBuf],
+        ctrl: bool,
+        shift: bool,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self
+            .explorer_multi_selection
+            .click(path, visible, ctrl, shift)
+        {
+            return false;
+        }
+        self.explorer_selection = Some(path.to_path_buf());
+        self.explorer_delete_confirmed = false;
+        if ctrl || shift {
+            self.explorer_context_menu = None;
+            self.model.set_status(format!(
+                "Selected {} Explorer item(s)",
+                self.explorer_multi_selection.len()
+            ));
+            cx.notify();
+            return true;
+        }
+        false
+    }
+
     fn click_explorer_file(
         &mut self,
         path: &Path,
@@ -450,19 +484,24 @@ impl Workbench {
             cx.notify();
             return;
         };
+        let paths = match self.explorer_multi_selection.top_level_paths() {
+            selected_paths if !selected_paths.is_empty() => selected_paths,
+            _ => vec![selected],
+        };
         let result = ExplorerFiles::new(self.model.root())
-            .and_then(|files| ExplorerClipboard::capture(&files, &selected, mode));
+            .and_then(|files| ExplorerClipboardBatch::capture(&files, &paths, mode));
         match result {
             Ok(clipboard) => {
+                let count = clipboard.len();
                 self.explorer_clipboard = Some(clipboard);
-                self.model.set_status(match mode {
-                    ExplorerClipboardMode::Copy => {
-                        "Explorer copied selection; choose destination and Paste"
+                self.model.set_status(format!(
+                    "{} {count} Explorer item(s); choose destination and Paste",
+                    if mode == ExplorerClipboardMode::Copy {
+                        "Copied"
+                    } else {
+                        "Cut"
                     }
-                    ExplorerClipboardMode::Cut => {
-                        "Explorer cut selection; choose destination and Paste"
-                    }
-                });
+                ));
             }
             Err(error) => self
                 .model
@@ -503,8 +542,9 @@ impl Workbench {
             self.explorer_clipboard = None;
         }
         match result {
-            Ok(path) => {
-                self.explorer_selection = Some(path.clone());
+            Ok(paths) => {
+                self.explorer_selection = paths.last().cloned();
+                self.explorer_multi_selection.clear();
                 self.model.refresh_directory();
                 if let Some(tree) = &mut self.tree {
                     let _ = tree.refresh();
@@ -513,11 +553,22 @@ impl Workbench {
                 self.content_matches.clear();
                 self.persist_session();
                 self.model
-                    .set_status(format!("Explorer Paste succeeded: {}", path.display()));
+                    .set_status(format!("Explorer Paste succeeded: {} item(s)", paths.len()));
             }
-            Err(error) => self
-                .model
-                .set_status(format!("Explorer Paste refused: {error}")),
+            Err(error) => {
+                // Batch preflight prevents predictable collisions, but an
+                // unexpected I/O failure can still occur after one item was
+                // written. Refresh the view without discarding the remaining
+                // clipboard entries or claiming atomic filesystem rollback.
+                self.model.refresh_directory();
+                if let Some(tree) = &mut self.tree {
+                    let _ = tree.refresh();
+                }
+                self.file_index = None;
+                self.content_matches.clear();
+                self.model
+                    .set_status(format!("Explorer Paste refused or stopped: {error}"));
+            }
         }
         cx.notify();
     }
@@ -579,6 +630,7 @@ impl Workbench {
                         view.model.refresh_directory();
                         if let Some(tree) = &mut view.tree { let _ = tree.refresh(); }
                         view.file_index = None;
+                        view.explorer_multi_selection.clear();
                         view.explorer_selection = imported.last().cloned();
                         view.model.set_status(format!("Imported {} external file/folder item(s)", imported.len()));
                         view.persist_session();
@@ -693,6 +745,9 @@ impl Workbench {
                 cx.notify();
                 return;
             }
+            self.explorer_multi_selection.context_target(path);
+        } else {
+            self.explorer_multi_selection.clear();
         }
         self.explorer_selection = path.clone();
         self.explorer_delete_confirmed = false;
@@ -839,6 +894,7 @@ impl Workbench {
                 self.file_index = None;
                 self.content_matches.clear();
                 self.content_searched_query.clear();
+                self.explorer_multi_selection.clear();
                 self.explorer_selection = target.clone();
                 self.cancel_explorer_action(cx);
                 self.persist_session();
@@ -2134,6 +2190,7 @@ impl Workbench {
         self.mixed_panes.reset();
         self.mixed_tab_context = None;
         self.tree = WorkspaceTree::new(&canonical).ok();
+        self.explorer_multi_selection = ExplorerMultiSelection::new(&canonical);
         self.explorer_preview_active = false;
         self.explorer_filter_input
             .update(cx, |input, cx| input.clear(cx));
@@ -4853,7 +4910,24 @@ impl Render for Workbench {
         let explorer_filter_empty = explorer_filter_results.is_empty();
         let tree_mode = self.tree_mode && self.tree.is_some();
         let tree_truncated = self.tree.as_ref().is_some_and(WorkspaceTree::truncated);
-        let explorer_selection = self.explorer_selection.clone();
+        let explorer_multi_selection = self.explorer_multi_selection.clone();
+        let explorer_visible_paths: Arc<Vec<PathBuf>> = Arc::new(if explorer_filter_active {
+            explorer_filter_results
+                .iter()
+                .map(|hit| hit.path.clone())
+                .collect()
+        } else if tree_mode {
+            tree_rows
+                .iter()
+                .map(|row| self.model.root().join(&row.relative_path))
+                .collect()
+        } else {
+            self.model
+                .entries()
+                .iter()
+                .map(|row| row.path.clone())
+                .collect()
+        });
         let explorer_action = self.explorer_action;
         let explorer_action_input = self.explorer_action_input.clone();
         let explorer_delete_confirmed = self.explorer_delete_confirmed;
@@ -5749,12 +5823,13 @@ impl Render for Workbench {
                                             let path = hit.path;
                                             let clicked_path = path.clone();
                                             let context_path = path.clone();
+                                            let visible_for_click = explorer_visible_paths.clone();
                                             let relative = path.strip_prefix(&workspace_root)
                                                 .unwrap_or(&path).to_path_buf();
                                             let label = path.file_name()
                                                 .map(|name| name.to_string_lossy().to_string())
                                                 .unwrap_or_default();
-                                            let selected = explorer_selection.as_ref() == Some(&path);
+                                            let selected = explorer_multi_selection.contains(&path);
                                             let row_icon = explorer_file_icon(&label, hit.is_directory, false);
                                             div()
                                                 .id(("explorer-filter-result", i))
@@ -5777,6 +5852,16 @@ impl Render for Workbench {
                                                 }))
                                                 .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
                                                     this.explorer_context_menu = None;
+                                                    let modifiers = event.modifiers();
+                                                    if this.select_explorer_row(
+                                                        &clicked_path,
+                                                        visible_for_click.as_ref(),
+                                                        modifiers.control || modifiers.platform,
+                                                        modifiers.shift,
+                                                        cx,
+                                                    ) {
+                                                        return;
+                                                    }
                                                     if hit.is_directory {
                                                         this.explorer_selection = Some(clicked_path.clone());
                                                         this.explorer_delete_confirmed = false;
@@ -5798,7 +5883,8 @@ impl Render for Workbench {
                                             let relative = item.relative_path.clone();
                                             let row_path = workspace_root.join(&relative);
                                             let context_path = row_path.clone();
-                                            let selected = explorer_selection.as_ref() == Some(&row_path);
+                                            let visible_for_click = explorer_visible_paths.clone();
+                                            let selected = explorer_multi_selection.contains(&row_path);
                                             let is_directory = item.is_directory;
                                             let row_icon = explorer_file_icon(&item.name, is_directory, item.expanded);
                                             let row_label = item.name;
@@ -5845,8 +5931,19 @@ impl Render for Workbench {
                                                 }))
                                                 .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
                                                     this.explorer_context_menu = None;
+                                                    let clicked = this.model.root().join(&relative);
+                                                    let modifiers = event.modifiers();
+                                                    if this.select_explorer_row(
+                                                        &clicked,
+                                                        visible_for_click.as_ref(),
+                                                        modifiers.control || modifiers.platform,
+                                                        modifiers.shift,
+                                                        cx,
+                                                    ) {
+                                                        return;
+                                                    }
                                                     if is_directory {
-                                                        this.explorer_selection = Some(this.model.root().join(&relative));
+                                                        this.explorer_selection = Some(clicked);
                                                         this.explorer_delete_confirmed = false;
                                                         if let Some(tree) = &mut this.tree {
                                                             if let Err(error) = tree.toggle(&relative) {
@@ -5865,7 +5962,8 @@ impl Render for Workbench {
                                             let is_directory = item.is_directory;
                                             let file_path = item.path.clone();
                                             let context_path = file_path.clone();
-                                            let selected = explorer_selection.as_ref() == Some(&file_path);
+                                            let visible_for_click = explorer_visible_paths.clone();
+                                            let selected = explorer_multi_selection.contains(&file_path);
                                             let row_icon = explorer_file_icon(&item.name, is_directory, false);
                                             div()
                                                 .id(i)
@@ -5886,6 +5984,16 @@ impl Render for Workbench {
                                                 }))
                                                 .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
                                                     this.explorer_context_menu = None;
+                                                    let modifiers = event.modifiers();
+                                                    if this.select_explorer_row(
+                                                        &file_path,
+                                                        visible_for_click.as_ref(),
+                                                        modifiers.control || modifiers.platform,
+                                                        modifiers.shift,
+                                                        cx,
+                                                    ) {
+                                                        return;
+                                                    }
                                                     if is_directory {
                                                         this.explorer_selection = Some(file_path.clone());
                                                         this.explorer_delete_confirmed = false;
@@ -8468,6 +8576,10 @@ fn main() {
                     let explorer_filter_input =
                         cx.new(|cx| QuickOpenInput::with_placeholder("Filter files…", cx));
                     cx.observe(&explorer_filter_input, |view: &mut Workbench, _, cx| {
+                        // The visual result set has changed; never let hidden
+                        // stale selections enter a later batch mutation.
+                        view.explorer_multi_selection.clear();
+                        view.explorer_selection = None;
                         if !view
                             .explorer_filter_input
                             .read(cx)
@@ -8484,6 +8596,7 @@ fn main() {
                         tree: WorkspaceTree::new(model.root()).ok(),
                         tree_mode: true,
                         explorer_selection: None,
+                        explorer_multi_selection: ExplorerMultiSelection::new(model.root()),
                         explorer_preview_active: false,
                         explorer_keyboard_focus: cx.focus_handle(),
                         explorer_clipboard: None,
