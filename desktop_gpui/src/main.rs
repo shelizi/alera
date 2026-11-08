@@ -53,7 +53,7 @@ use gpui::{
     actions, div, prelude::*, px, rgb, size, App, Application, Bounds, Context, Entity, Focusable,
     KeyBinding, PathPromptOptions, Window, WindowBounds, WindowOptions,
 };
-use native_ui_icons::{icon, icon_button, UiIcon};
+use native_ui_icons::{explorer_file_icon, icon, icon_button, UiIcon};
 use quick_open_ui::{bind_quick_open_keys, QuickOpenInput};
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -63,7 +63,7 @@ use std::time::{Duration, Instant};
 
 actions!(
     alera_gpui_workbench,
-    [ToggleFileSearch, SubmitTerminalCommand]
+    [ToggleFileSearch, ToggleContentSearch, SubmitTerminalCommand]
 );
 
 /// Deliberately small desktop shell: terminal first, basic editor on demand.
@@ -213,11 +213,11 @@ enum ExplorerMenuAction {
     File(ExplorerAction),
     Clipboard(ExplorerClipboardMode),
     Paste,
+    CopyAbsolutePath,
+    CopyRelativePath,
+    CollapseFolder,
+    Refresh,
     GitHistory,
-    QuickOpen,
-    SearchContents,
-    ToggleTree,
-    ParentDirectory,
 }
 
 impl ExplorerMenuAction {
@@ -233,11 +233,11 @@ impl ExplorerMenuAction {
             Self::Clipboard(ExplorerClipboardMode::Copy) => "Copy selection",
             Self::Clipboard(ExplorerClipboardMode::Cut) => "Cut selection",
             Self::Paste => "Paste",
+            Self::CopyAbsolutePath => "Copy path",
+            Self::CopyRelativePath => "Copy relative path",
+            Self::CollapseFolder => "Collapse folder",
+            Self::Refresh => "Refresh",
             Self::GitHistory => "File / folder Git history",
-            Self::QuickOpen => "Quick Open files  Ctrl+P",
-            Self::SearchContents => "Search file contents",
-            Self::ToggleTree => "Toggle folder tree",
-            Self::ParentDirectory => "Go to parent folder",
         }
     }
 }
@@ -294,6 +294,7 @@ struct Workbench {
     worktree_delete_pending: Option<PathBuf>,
     picking_workspace: bool,
     quick_open: Option<Entity<QuickOpenInput>>,
+    explorer_filter_input: Entity<QuickOpenInput>,
     file_index: Option<Arc<WorkspaceFileIndex>>,
     file_index_loading: bool,
     content_query: Option<Entity<QuickOpenInput>>,
@@ -577,18 +578,72 @@ impl Workbench {
             ExplorerMenuAction::File(action) => self.begin_explorer_action(action, window, cx),
             ExplorerMenuAction::Clipboard(mode) => self.set_explorer_clipboard(mode, cx),
             ExplorerMenuAction::Paste => self.paste_explorer_clipboard(cx),
+            ExplorerMenuAction::CopyAbsolutePath | ExplorerMenuAction::CopyRelativePath => {
+                let Some(path) = self
+                    .explorer_selection
+                    .as_ref()
+                    .filter(|path| path.starts_with(self.model.root()) && path.exists())
+                else {
+                    self.model
+                        .set_status("Choose an existing Explorer item first");
+                    cx.notify();
+                    return;
+                };
+                let text = if action == ExplorerMenuAction::CopyRelativePath {
+                    path.strip_prefix(self.model.root())
+                        .unwrap_or(path)
+                        .to_string_lossy()
+                        .replace('\\', "/")
+                } else {
+                    path.to_string_lossy().into_owned()
+                };
+                cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+                self.model
+                    .set_status(if action == ExplorerMenuAction::CopyRelativePath {
+                        "Copied path relative to the project root"
+                    } else {
+                        "Copied full file/folder path"
+                    });
+                cx.notify();
+            }
+            ExplorerMenuAction::CollapseFolder => {
+                if let Some(folder) = self
+                    .explorer_selection
+                    .as_ref()
+                    .filter(|path| path.is_dir())
+                {
+                    if let Some(tree) = &mut self.tree {
+                        if let Ok(relative) = folder.strip_prefix(self.model.root()) {
+                            if let Err(error) = tree.collapse(relative) {
+                                self.model
+                                    .set_status(format!("Collapse folder refused: {error}"));
+                            }
+                        }
+                    }
+                }
+                cx.notify();
+            }
+            ExplorerMenuAction::Refresh => {
+                self.model.refresh_directory();
+                if let Some(tree) = &mut self.tree {
+                    if let Err(error) = tree.refresh() {
+                        self.model
+                            .set_status(format!("Explorer refresh failed: {error}"));
+                    }
+                }
+                self.file_index = None;
+                if !self
+                    .explorer_filter_input
+                    .read(cx)
+                    .query()
+                    .trim()
+                    .is_empty()
+                {
+                    self.ensure_file_index(cx);
+                }
+                cx.notify();
+            }
             ExplorerMenuAction::GitHistory => self.open_explorer_selection_history(cx),
-            ExplorerMenuAction::QuickOpen => self.toggle_file_search(window, cx),
-            ExplorerMenuAction::SearchContents => self.toggle_content_search(window, cx),
-            ExplorerMenuAction::ToggleTree => {
-                self.tree_mode = !self.tree_mode;
-                cx.notify();
-            }
-            ExplorerMenuAction::ParentDirectory => {
-                self.model.go_up();
-                self.persist_session();
-                cx.notify();
-            }
         }
     }
 
@@ -1396,6 +1451,17 @@ impl Workbench {
         self.toggle_file_search(window, cx);
     }
 
+    fn toggle_content_search_action(
+        &mut self,
+        _: &ToggleContentSearch,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.right_sidebar_view = RightSidebarView::Explorer;
+        self.explorer_context_menu = None;
+        self.toggle_content_search(window, cx);
+    }
+
     fn submit_terminal_action(
         &mut self,
         _: &SubmitTerminalCommand,
@@ -1414,6 +1480,13 @@ impl Workbench {
         cx.observe(&input, |_, _, cx| cx.notify()).detach();
         window.focus(&input.read(cx).focus_handle(cx));
         self.quick_open = Some(input);
+        self.ensure_file_index(cx);
+        cx.notify();
+    }
+
+    /// Shared, bounded asynchronous index for Ctrl+P and Classic Explorer's
+    /// persistent fuzzy filter. The render pass never scans the filesystem.
+    fn ensure_file_index(&mut self, cx: &mut Context<Self>) {
         if self
             .file_index
             .as_ref()
@@ -1444,7 +1517,6 @@ impl Workbench {
             })
             .detach();
         }
-        cx.notify();
     }
 
     fn toggle_content_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -2029,6 +2101,8 @@ impl Workbench {
         self.mixed_panes.reset();
         self.mixed_tab_context = None;
         self.tree = WorkspaceTree::new(&canonical).ok();
+        self.explorer_filter_input
+            .update(cx, |input, cx| input.clear(cx));
         self.explorer_selection = None;
         self.explorer_context_menu = None;
         self.explorer_clipboard = None;
@@ -4722,6 +4796,24 @@ impl Render for Workbench {
             .as_ref()
             .map(|tree| tree.rows().to_vec())
             .unwrap_or_default();
+        let explorer_filter_input = self.explorer_filter_input.clone();
+        let explorer_filter_query = self
+            .explorer_filter_input
+            .read(cx)
+            .query()
+            .trim()
+            .to_owned();
+        let explorer_filter_active = !explorer_filter_query.is_empty();
+        let explorer_filter_results = if explorer_filter_active {
+            self.file_index
+                .as_ref()
+                .filter(|index| index.root() == self.model.root())
+                .map(|index| index.search_explorer(&explorer_filter_query, 200))
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        let explorer_filter_empty = explorer_filter_results.is_empty();
         let tree_mode = self.tree_mode && self.tree.is_some();
         let tree_truncated = self.tree.as_ref().is_some_and(WorkspaceTree::truncated);
         let explorer_selection = self.explorer_selection.clone();
@@ -5220,6 +5312,7 @@ impl Render for Workbench {
             .size_full()
             .relative()
             .on_action(cx.listener(Self::toggle_file_search_action))
+            .on_action(cx.listener(Self::toggle_content_search_action))
             .on_action(cx.listener(Self::submit_terminal_action))
             .flex()
             .flex_col()
@@ -5348,7 +5441,9 @@ impl Render for Workbench {
                                         .min_w_0()
                                         .text_xs()
                                         .font_weight(gpui::FontWeight::SEMIBOLD)
-                                        .child("EXPLORER"))
+                                        .child(workspace_root.file_name()
+                                            .map(|name| name.to_string_lossy().to_string())
+                                            .unwrap_or_else(|| "Explorer".to_string())))
                                     .child(
                                         div()
                                             .flex()
@@ -5366,9 +5461,15 @@ impl Render for Workbench {
                                                     })),
                                             )
                                             .child(
-                                                icon_button("quick-open-toggle", UiIcon::Search, "Search files (Ctrl+P)", quick_open.is_some())
-                                                    .on_click(cx.listener(|this, _, window, cx| {
-                                                        this.toggle_file_search(window, cx);
+                                                icon_button("explorer-collapse-all", UiIcon::CollapseAll, "Collapse all folders", false)
+                                                    .on_click(cx.listener(|this, _, _window, cx| {
+                                                        if let Some(tree) = &mut this.tree {
+                                                            if let Err(error) = tree.collapse_all() {
+                                                                this.model.set_status(format!("Collapse All failed: {error}"));
+                                                            }
+                                                        }
+                                                        this.tree_mode = true;
+                                                        cx.notify();
                                                     })),
                                             )
                                             .child(
@@ -5384,6 +5485,15 @@ impl Render for Workbench {
                                                     })),
                                             ),
                                     ),
+                            )
+                            .child(
+                                div()
+                                    .id("explorer-classic-filter")
+                                    .px_2()
+                                    .py_2()
+                                    .border_b_1()
+                                    .border_color(rgb(BORDER))
+                                    .child(explorer_filter_input),
                             )
                             .child(
                                 div()
@@ -5589,23 +5699,102 @@ impl Render for Workbench {
                                         if this.explorer_context_menu.take().is_some() { cx.notify(); }
                                     }))
                                     .overflow_y_scroll()
-                                    .children(if tree_mode {
+                                    .children(if explorer_filter_active {
+                                        explorer_filter_results.into_iter().enumerate().map(|(i, hit)| {
+                                            let path = hit.path;
+                                            let clicked_path = path.clone();
+                                            let context_path = path.clone();
+                                            let relative = path.strip_prefix(&workspace_root)
+                                                .unwrap_or(&path).to_path_buf();
+                                            let label = path.file_name()
+                                                .map(|name| name.to_string_lossy().to_string())
+                                                .unwrap_or_default();
+                                            let selected = explorer_selection.as_ref() == Some(&path);
+                                            let row_icon = explorer_file_icon(&label, hit.is_directory, false);
+                                            div()
+                                                .id(("explorer-filter-result", i))
+                                                .px_2()
+                                                .py_1()
+                                                .flex()
+                                                .items_center()
+                                                .gap_2()
+                                                .cursor_pointer()
+                                                .bg(rgb(if selected { ACTIVE } else { PANEL }))
+                                                .hover(|style| style.bg(rgb(ACTIVE)))
+                                                .child(icon(row_icon, 15.0, if selected { TEXT } else { MUTED }))
+                                                .child(div().min_w_0().flex_1().flex().flex_col()
+                                                    .child(div().text_sm().child(label))
+                                                    .child(div().text_xs().text_color(rgb(MUTED))
+                                                        .child(relative.display().to_string())))
+                                                .on_mouse_down(gpui::MouseButton::Right, cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
+                                                    this.open_explorer_context_menu(Some(context_path.clone()), event, window, cx);
+                                                    cx.stop_propagation();
+                                                }))
+                                                .on_click(cx.listener(move |this, _, _, cx| {
+                                                    this.explorer_context_menu = None;
+                                                    this.explorer_selection = Some(clicked_path.clone());
+                                                    this.explorer_delete_confirmed = false;
+                                                    if hit.is_directory {
+                                                        this.tree_mode = true;
+                                                        if let Some(tree) = &mut this.tree {
+                                                            if let Err(error) = tree.reveal_directory(&relative) {
+                                                                this.model.set_status(format!("Cannot reveal folder: {error}"));
+                                                            }
+                                                        }
+                                                        this.explorer_filter_input.update(cx, |input, cx| input.clear(cx));
+                                                    } else if this.model.open_path(&clicked_path) {
+                                                        this.open_editor(cx);
+                                                        this.persist_session();
+                                                    }
+                                                    cx.notify();
+                                                }))
+                                        }).collect::<Vec<_>>()
+                                    } else if tree_mode {
                                         tree_rows.into_iter().enumerate().map(|(i, item)| {
                                             let relative = item.relative_path.clone();
                                             let row_path = workspace_root.join(&relative);
                                             let context_path = row_path.clone();
                                             let selected = explorer_selection.as_ref() == Some(&row_path);
                                             let is_directory = item.is_directory;
-                                            let prefix = if !is_directory { "·" } else if item.expanded { "▾" } else { "▸" };
+                                            let row_icon = explorer_file_icon(&item.name, is_directory, item.expanded);
+                                            let row_label = item.name;
                                             div()
                                                 .id(("explorer-tree-row", i))
-                                                .pl(px(12.0 + item.depth as f32 * 14.0))
+                                                .pl(px(8.0 + item.depth as f32 * 16.0))
                                                 .pr_2()
-                                                .py_1()
+                                                .h(px(32.0))
+                                                .flex()
+                                                .items_center()
+                                                .gap_1()
                                                 .cursor_pointer()
                                                 .bg(rgb(if selected { ACTIVE } else { PANEL }))
                                                 .hover(|style| style.bg(rgb(ACTIVE)))
-                                                .child(format!("{prefix} {}", item.name))
+                                                .child(if is_directory {
+                                                    let arrow_path = relative.clone();
+                                                    div()
+                                                        .id(("explorer-folder-arrow", i))
+                                                        .w(px(20.0))
+                                                        .h(px(24.0))
+                                                        .flex()
+                                                        .items_center()
+                                                        .justify_center()
+                                                        .cursor_pointer()
+                                                        .child(icon(if item.expanded { UiIcon::ChevronDown } else { UiIcon::ChevronRight }, 14.0, MUTED))
+                                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                                            if let Some(tree) = &mut this.tree {
+                                                                if let Err(error) = tree.toggle(&arrow_path) {
+                                                                    this.model.set_status(format!("Cannot expand folder: {error}"));
+                                                                }
+                                                            }
+                                                            cx.stop_propagation();
+                                                            cx.notify();
+                                                        }))
+                                                        .into_any_element()
+                                                } else {
+                                                    div().w(px(20.0)).into_any_element()
+                                                })
+                                                .child(icon(row_icon, 15.0, if selected { TEXT } else { MUTED }))
+                                                .child(div().flex_1().min_w_0().overflow_hidden().text_sm().child(row_label))
                                                 .on_mouse_down(gpui::MouseButton::Right, cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
                                                     this.open_explorer_context_menu(Some(context_path.clone()), event, window, cx);
                                                     cx.stop_propagation();
@@ -5636,18 +5825,20 @@ impl Render for Workbench {
                                             let file_path = item.path.clone();
                                             let context_path = file_path.clone();
                                             let selected = explorer_selection.as_ref() == Some(&file_path);
+                                            let row_icon = explorer_file_icon(&item.name, is_directory, false);
                                             div()
                                                 .id(i)
-                                                .px_3()
-                                                .py_1()
+                                                .pl_2()
+                                                .pr_2()
+                                                .h(px(32.0))
+                                                .flex()
+                                                .items_center()
+                                                .gap_2()
                                                 .cursor_pointer()
                                                 .bg(rgb(if selected { ACTIVE } else { PANEL }))
                                                 .hover(|style| style.bg(rgb(ACTIVE)))
-                                                .child(format!(
-                                                    "{} {}",
-                                                    if item.is_directory { "▸" } else { "·" },
-                                                    item.name
-                                                ))
+                                                .child(icon(row_icon, 15.0, if selected { TEXT } else { MUTED }))
+                                                .child(div().flex_1().min_w_0().overflow_hidden().text_sm().child(item.name))
                                                 .on_mouse_down(gpui::MouseButton::Right, cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
                                                     this.open_explorer_context_menu(Some(context_path.clone()), event, window, cx);
                                                     cx.stop_propagation();
@@ -5665,32 +5856,43 @@ impl Render for Workbench {
                                                 }))
                                         }).collect::<Vec<_>>()
                                     })
+                                    .when(explorer_filter_active && explorer_filter_empty,
+                                        |view| view.child(div().px_3().py_3().text_xs()
+                                            .text_color(rgb(MUTED))
+                                            .child(if index_loading { "Indexing workspace files…" } else { "No matching files or folders" })))
                                     .when(tree_mode && tree_truncated, |view| {
                                         view.child(div().text_color(rgb(MUTED)).child("Tree limited to 4,000 visible items"))
                                     }),
                             )
                             .child(if let Some(menu) = self.explorer_context_menu.clone() {
-                                let actions = if menu.path.is_some() {
-                                    vec![
+                                let actions = if let Some(path) = menu.path.as_ref() {
+                                    let mut actions = vec![
+                                        ExplorerMenuAction::File(ExplorerAction::NewFile),
+                                        ExplorerMenuAction::File(ExplorerAction::NewFolder),
                                         ExplorerMenuAction::Clipboard(ExplorerClipboardMode::Copy),
                                         ExplorerMenuAction::Clipboard(ExplorerClipboardMode::Cut),
                                         ExplorerMenuAction::Paste,
-                                        ExplorerMenuAction::File(ExplorerAction::Rename),
+                                        ExplorerMenuAction::CopyAbsolutePath,
+                                        ExplorerMenuAction::CopyRelativePath,
                                         ExplorerMenuAction::File(ExplorerAction::Duplicate),
-                                        ExplorerMenuAction::File(ExplorerAction::Move),
-                                        ExplorerMenuAction::File(ExplorerAction::Copy),
-                                        ExplorerMenuAction::GitHistory,
+                                    ];
+                                    if path.is_file() {
+                                        actions.push(ExplorerMenuAction::GitHistory);
+                                    }
+                                    actions.push(ExplorerMenuAction::File(ExplorerAction::Rename));
+                                    if path.is_dir() {
+                                        actions.push(ExplorerMenuAction::CollapseFolder);
+                                    }
+                                    actions.extend([
+                                        ExplorerMenuAction::Refresh,
                                         ExplorerMenuAction::File(ExplorerAction::Delete),
-                                    ]
+                                    ]);
+                                    actions
                                 } else {
                                     vec![
                                         ExplorerMenuAction::File(ExplorerAction::NewFile),
                                         ExplorerMenuAction::File(ExplorerAction::NewFolder),
                                         ExplorerMenuAction::Paste,
-                                        ExplorerMenuAction::QuickOpen,
-                                        ExplorerMenuAction::SearchContents,
-                                        ExplorerMenuAction::ToggleTree,
-                                        ExplorerMenuAction::ParentDirectory,
                                     ]
                                 };
                                 let label = menu.path.as_ref()
@@ -8192,6 +8394,8 @@ fn main() {
         cx.bind_keys([
             KeyBinding::new("ctrl-p", ToggleFileSearch, None),
             KeyBinding::new("cmd-p", ToggleFileSearch, None),
+            KeyBinding::new("ctrl-shift-f", ToggleContentSearch, None),
+            KeyBinding::new("cmd-shift-f", ToggleContentSearch, None),
             KeyBinding::new(
                 "enter",
                 SubmitTerminalCommand,
@@ -8207,6 +8411,21 @@ fn main() {
             |_, cx| {
                 let view = cx.new(|cx| {
                     let terminal_input = cx.new(QuickOpenInput::terminal);
+                    let explorer_filter_input =
+                        cx.new(|cx| QuickOpenInput::with_placeholder("Filter files…", cx));
+                    cx.observe(&explorer_filter_input, |view: &mut Workbench, _, cx| {
+                        if !view
+                            .explorer_filter_input
+                            .read(cx)
+                            .query()
+                            .trim()
+                            .is_empty()
+                        {
+                            view.ensure_file_index(cx);
+                        }
+                        cx.notify();
+                    })
+                    .detach();
                     let mut workbench = Workbench {
                         tree: WorkspaceTree::new(model.root()).ok(),
                         tree_mode: true,
@@ -8245,6 +8464,7 @@ fn main() {
                         worktree_delete_pending: None,
                         picking_workspace: false,
                         quick_open: None,
+                        explorer_filter_input,
                         file_index: None,
                         file_index_loading: false,
                         content_query: None,

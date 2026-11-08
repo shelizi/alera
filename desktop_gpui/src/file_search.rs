@@ -14,7 +14,14 @@ const MAX_DEPTH: usize = 20;
 pub struct WorkspaceFileIndex {
     root: PathBuf,
     files: Vec<PathBuf>,
+    directories: Vec<PathBuf>,
     pub truncated: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExplorerSearchHit {
+    pub path: PathBuf,
+    pub is_directory: bool,
 }
 
 impl WorkspaceFileIndex {
@@ -28,6 +35,7 @@ impl WorkspaceFileIndex {
         }
         let mut stack = vec![(root.clone(), 0)];
         let mut files = Vec::new();
+        let mut directories = Vec::new();
         let mut visited = 0;
         let mut truncated = false;
         while let Some((directory, depth)) = stack.pop() {
@@ -66,6 +74,9 @@ impl WorkspaceFileIndex {
                 if kind.is_symlink() {
                     continue;
                 }
+                if kind.is_dir() {
+                    directories.push(entry.path().strip_prefix(&root).unwrap().to_path_buf());
+                }
                 if kind.is_dir() && depth < MAX_DEPTH {
                     stack.push((entry.path(), depth + 1));
                 } else if kind.is_file() {
@@ -81,9 +92,11 @@ impl WorkspaceFileIndex {
             }
         }
         files.sort();
+        directories.sort();
         Ok(Self {
             root,
             files,
+            directories,
             truncated,
         })
     }
@@ -134,6 +147,52 @@ impl WorkspaceFileIndex {
             .map(|(_, _, relative)| self.root.join(relative))
             .collect()
     }
+    /// The original Flutter Explorer filter searches files and directories
+    /// across the project even when their ancestors are collapsed. Unlike
+    /// Ctrl+P, this includes folders and caps the list at 200 results.
+    pub fn search_explorer(&self, query: &str, limit: usize) -> Vec<ExplorerSearchHit> {
+        let query = query.trim().to_lowercase().replace('\\', "/");
+        if query.is_empty() {
+            return Vec::new();
+        }
+        let words: Vec<_> = query.split_whitespace().filter(|s| !s.is_empty()).collect();
+        let mut matches = self
+            .directories
+            .iter()
+            .map(|path| (path, true))
+            .chain(self.files.iter().map(|path| (path, false)))
+            .filter_map(|(relative, is_directory)| {
+                let path = relative.to_string_lossy().replace('\\', "/").to_lowercase();
+                let name = relative.file_name()?.to_string_lossy().to_lowercase();
+                let mut score = 0;
+                for word in &words {
+                    if name == *word {
+                        score += 1000;
+                    } else if name.starts_with(word) {
+                        score += 650;
+                    } else if name.contains(word) {
+                        score += 400;
+                    } else if path.contains(word) {
+                        score += 200;
+                    } else if is_subsequence(word, &path) {
+                        score += 60;
+                    } else {
+                        return None;
+                    }
+                }
+                Some((score, path.matches('/').count(), relative, is_directory))
+            })
+            .collect::<Vec<_>>();
+        matches.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)).then(a.2.cmp(b.2)));
+        matches
+            .into_iter()
+            .take(limit.min(200))
+            .map(|(_, _, relative, is_directory)| ExplorerSearchHit {
+                path: self.root.join(relative),
+                is_directory,
+            })
+            .collect()
+    }
 }
 
 fn is_subsequence(needle: &str, haystack: &str) -> bool {
@@ -159,5 +218,16 @@ mod tests {
         assert_eq!(index.search("tssr", 10).len(), 1);
         assert!(index.search("nope", 10).is_empty());
         assert_eq!(index.search("missing", 10).len(), 0);
+        let filter = index.search_explorer("src", 200);
+        assert!(filter
+            .iter()
+            .any(|entry| entry.is_directory && entry.path.ends_with("src")));
+        assert!(filter
+            .iter()
+            .any(|entry| entry.is_directory && entry.path.ends_with("src/nested")));
+        assert_eq!(index.search_explorer("女主", 200).len(), 1);
+        assert!(index.search_explorer("node_modules", 200).is_empty());
+        assert!(index.search_explorer(" ", 200).is_empty());
+        assert_eq!(index.search_explorer("src", 1).len(), 1);
     }
 }

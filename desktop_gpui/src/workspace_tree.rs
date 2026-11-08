@@ -56,6 +56,49 @@ impl WorkspaceTree {
         self.truncated
     }
 
+    /// Mirrors Flutter Classic Explorer's Collapse All without replacing the
+    /// workspace, clearing the selected file, or mutating the filesystem.
+    pub fn collapse_all(&mut self) -> io::Result<()> {
+        self.expanded.clear();
+        self.refresh()
+    }
+
+    /// Unlike toggle, a context-menu Collapse operation may never expand a
+    /// folder that was already closed.
+    pub fn collapse(&mut self, relative: &Path) -> io::Result<bool> {
+        if !self.checked_relative(relative)?.is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Not a directory",
+            ));
+        }
+        if !self.expanded.remove(relative) {
+            return Ok(false);
+        }
+        self.refresh()?;
+        Ok(true)
+    }
+
+    /// Filtered folder hits can be nested beneath collapsed ancestors.
+    /// Reveal the folder in its original tree, then expand it once.
+    pub fn reveal_directory(&mut self, relative: &Path) -> io::Result<()> {
+        if !self.checked_relative(relative)?.is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Not a directory",
+            ));
+        }
+        let mut ancestor = Some(relative);
+        while let Some(directory) = ancestor {
+            if directory.as_os_str().is_empty() {
+                break;
+            }
+            self.expanded.insert(directory.to_path_buf());
+            ancestor = directory.parent();
+        }
+        self.refresh()
+    }
+
     /// Never expand a symlink, a path outside the workspace, or a file.
     pub fn toggle(&mut self, relative: &Path) -> io::Result<()> {
         if !self.checked_relative(relative)?.is_dir() {
@@ -239,6 +282,35 @@ mod tests {
         assert_eq!(
             fs::read_to_string(dir.path().join("file.txt")).unwrap(),
             "unchanged"
+        );
+    }
+
+    #[test]
+    fn classic_collapse_all_and_filter_reveal_folder_preserve_file_data() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("src/nested")).unwrap();
+        fs::write(dir.path().join("src/nested/data.rs"), "safe").unwrap();
+        let mut tree = WorkspaceTree::new(dir.path()).unwrap();
+        tree.reveal_directory(Path::new("src/nested")).unwrap();
+        assert!(tree.rows().iter().any(|row| row.name == "data.rs"));
+        assert!(tree
+            .rows()
+            .iter()
+            .any(|row| row.name == "nested" && row.expanded));
+        assert!(tree.collapse(Path::new("src/nested")).unwrap());
+        assert!(!tree.collapse(Path::new("src/nested")).unwrap());
+        assert!(!tree.rows().iter().any(|row| row.name == "data.rs"));
+        tree.reveal_directory(Path::new("src/nested")).unwrap();
+        tree.collapse_all().unwrap();
+        assert_eq!(tree.rows().len(), 1);
+        assert!(!tree.rows()[0].expanded);
+        assert!(tree
+            .reveal_directory(Path::new("src/nested/data.rs"))
+            .is_err());
+        assert!(tree.reveal_directory(Path::new("../src")).is_err());
+        assert_eq!(
+            fs::read_to_string(dir.path().join("src/nested/data.rs")).unwrap(),
+            "safe"
         );
     }
 }

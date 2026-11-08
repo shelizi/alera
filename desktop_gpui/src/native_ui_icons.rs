@@ -14,11 +14,18 @@ pub enum UiIcon {
     NewFile,
     NewFolder,
     Folder,
+    FolderOpen,
     File,
+    FileCode,
+    FileMedia,
+    FilePdf,
+    FileZip,
+    FileBinary,
     Open,
     ChevronDown,
     ChevronRight,
     Refresh,
+    CollapseAll,
     Sync,
     Search,
     Edit,
@@ -52,11 +59,18 @@ impl UiIcon {
             Self::NewFile => '\u{ea7f}',
             Self::NewFolder => '\u{ea80}',
             Self::Folder => '\u{ea83}',
+            Self::FolderOpen => '\u{eaf7}',
             Self::File => '\u{ec5e}',
+            Self::FileCode => '\u{eae9}',
+            Self::FileMedia => '\u{eaea}',
+            Self::FilePdf => '\u{eaeb}',
+            Self::FileZip => '\u{eaef}',
+            Self::FileBinary => '\u{eae8}',
             Self::Open => '\u{eaf7}',
             Self::ChevronDown => '\u{eab4}',
             Self::ChevronRight => '\u{eab6}',
             Self::Refresh => '\u{eb37}',
+            Self::CollapseAll => '\u{eac5}',
             Self::Sync => '\u{ea77}',
             Self::Search => '\u{ea6d}',
             Self::Edit => '\u{ea73}',
@@ -80,6 +94,34 @@ impl UiIcon {
             Self::Save => '\u{eb4b}',
             Self::SaveAs => '\u{eb4a}',
         }
+    }
+}
+
+/// Lightweight approximation of Flutter Classic's Material Icon Theme:
+/// one distinct file-type glyph, rather than the Native placeholder dot.
+pub fn explorer_file_icon(name: &str, is_directory: bool, expanded: bool) -> UiIcon {
+    if is_directory {
+        return if expanded {
+            UiIcon::FolderOpen
+        } else {
+            UiIcon::Folder
+        };
+    }
+    let ext = std::path::Path::new(name)
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    match ext.as_str() {
+        "rs" | "dart" | "js" | "jsx" | "ts" | "tsx" | "py" | "go" | "java" | "cpp" | "c" | "h"
+        | "cs" | "php" | "swift" | "kt" | "json" | "yaml" | "yml" | "xml" | "toml" | "html"
+        | "css" | "sh" | "ps1" | "sql" => UiIcon::FileCode,
+        "png" | "jpg" | "jpeg" | "webp" | "svg" | "gif" | "ico" | "bmp" | "mp4" | "mp3"
+        | "webm" | "mov" | "wav" => UiIcon::FileMedia,
+        "pdf" => UiIcon::FilePdf,
+        "zip" | "7z" | "rar" | "tar" | "gz" | "epub" => UiIcon::FileZip,
+        "exe" | "dll" | "so" | "bin" | "wasm" | "db" => UiIcon::FileBinary,
+        _ => UiIcon::File,
     }
 }
 
