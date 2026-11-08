@@ -34,6 +34,15 @@ retains ownership of agent sessions and MCP injection; Native's new CLI
 corroborated by an authenticated Host Agent session list before attach.
 See [the Agent Profile workflow and remaining MCP/GUI gates](../docs/gpui-native-agent-profile-20261108.md).
 
+**MCP UI routing (first functional stage):** Native now registers a distinct
+Host-authorized App window via the CLI's private JSON-lines `native-ui-bridge`
+and can fulfill existing-file navigation, Explorer reveal, Workspace focus,
+Terminal/Agent tab selection and basic Git Graph opening. Other UI actions
+fail explicitly instead of falsely acknowledging a change. When Classic and
+Native run together, MCP tools must specify the intended `windowId` (use
+the **Copy Native MCP window ID** control). Details and verification:
+[`docs/gpui-native-mcp-ui-20261108.md`](../docs/gpui-native-mcp-ui-20261108.md).
+
 **Current MVP direction:** [GPUI three-pane workbench](../docs/gpui-three-pane-mvp-20261107.md) — **Projects on the left, Terminal (default) / basic Editor in the center, Explorer + read-only Git on the right.** Terminal input now goes through the existing Host CLI; this is not a new PTY owner or full TUI attach. The older architecture/history sections below describe earlier phases.
 
 **Latest active work and verified integration status (2026-11-07):** [GPUI active work ledger](../docs/gpui-active-work-ledger-20261107.md). It records the reconciled Git inspector, per-tab close, Explorer tree, native Find/Replace and project content-search panels, scratch recovery, verified Rust tests, and remaining real-GUI acceptance gates. Earlier test counts below are historical snapshots, not the latest merged baseline.

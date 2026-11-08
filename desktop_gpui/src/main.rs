@@ -13,6 +13,7 @@ use alera_gpui_desktop::file_search::WorkspaceFileIndex;
 use alera_gpui_desktop::git_actions::GitActions;
 use alera_gpui_desktop::git_history::{compare_local_branch, preview_commit, GitHistorySnapshot};
 use alera_gpui_desktop::git_inspect::{read_file_diff, GitSnapshot};
+use alera_gpui_desktop::mcp_ui_bridge::{NativeMcpUiBridge, NativeMcpUiCommand, NativeMcpUiEvent};
 use alera_gpui_desktop::model::WorkbenchModel;
 use alera_gpui_desktop::project_search::{ContentMatch, ProjectSearch};
 use alera_gpui_desktop::project_tree::{collect_project_tree, ProjectTreeGroup};
@@ -227,6 +228,13 @@ struct Workbench {
     runtime_bridge: Option<RuntimeCliBridge>,
     runtime_status: String,
     runtime_loading: bool,
+    mcp_ui_bridge: Option<NativeMcpUiBridge>,
+    mcp_ui_window_id: String,
+    mcp_ui_status: String,
+    mcp_ui_ready: bool,
+    mcp_host_workspaces: Vec<alera_gpui_desktop::terminal::RegisteredHostWorkspace>,
+    mcp_host_workspaces_loading: bool,
+    mcp_host_workspaces_request: u64,
     agent_profiles: Vec<AgentProfileRow>,
     agent_profiles_loading: bool,
     agent_profiles_request: u64,
@@ -1609,6 +1617,9 @@ impl Workbench {
         self.agent_prompt_input
             .update(cx, |input, cx| input.clear(cx));
         self.agent_status = "Select an Agent Profile and enter a task".into();
+        self.mcp_host_workspaces.clear();
+        self.mcp_host_workspaces_loading = false;
+        self.mcp_host_workspaces_request = self.mcp_host_workspaces_request.wrapping_add(1);
         self.workspace_generation = self.workspace_generation.wrapping_add(1);
         self.project_tree_loading = false;
         self.project_tree_groups.clear();
@@ -1651,6 +1662,7 @@ impl Workbench {
         }
         self.refresh_terminals(cx);
         self.refresh_agent_profiles(cx);
+        self.refresh_mcp_host_workspaces(cx);
         self.refresh_project_tree(cx);
         self.refresh_worktrees(cx);
         self.refresh_git(cx);
@@ -1691,6 +1703,291 @@ impl Workbench {
             .ok();
         })
         .detach();
+    }
+
+    /// Register a separately identified Native window with an already
+    /// running Host. Classic remains registered as its own App window.
+    fn connect_mcp_ui_bridge(&mut self, cx: &mut Context<Self>) {
+        if self.mcp_ui_bridge.is_some() {
+            return;
+        }
+        if self.runtime_bridge.is_none() {
+            self.runtime_bridge = RuntimeCliBridge::discover().ok();
+        }
+        let Some(bridge) = self.runtime_bridge.as_ref() else {
+            self.mcp_ui_status = "MCP: existing Alera CLI unavailable".into();
+            cx.notify();
+            return;
+        };
+        match bridge.start_native_mcp_ui(self.mcp_ui_window_id.clone()) {
+            Ok(connection) => {
+                self.mcp_ui_bridge = Some(connection);
+                self.mcp_ui_status = "MCP: registering Native window…".into();
+                self.mcp_ui_ready = false;
+                self.refresh_mcp_host_workspaces(cx);
+            }
+            Err(error) => {
+                self.mcp_ui_ready = false;
+                self.mcp_ui_status = format!("MCP: {error}");
+            }
+        }
+        cx.notify();
+    }
+
+    fn refresh_mcp_host_workspaces(&mut self, cx: &mut Context<Self>) {
+        if self.mcp_host_workspaces_loading {
+            return;
+        }
+        let Some(bridge) = self.runtime_bridge.clone() else {
+            return;
+        };
+        self.mcp_host_workspaces_loading = true;
+        self.mcp_host_workspaces_request = self.mcp_host_workspaces_request.wrapping_add(1);
+        let request = self.mcp_host_workspaces_request;
+        let generation = self.workspace_generation;
+        cx.spawn(async move |view, cx| {
+            let result = cx
+                .background_spawn(async move { bridge.list_registered_workspaces() })
+                .await;
+            view.update(cx, |view, cx| {
+                if view.workspace_generation != generation
+                    || view.mcp_host_workspaces_request != request
+                {
+                    return;
+                }
+                view.mcp_host_workspaces_loading = false;
+                match result {
+                    Ok(workspaces) => view.mcp_host_workspaces = workspaces,
+                    Err(_) => view.mcp_host_workspaces.clear(),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Host has already authorized the target and parameters, but this window
+    /// must independently confirm the target exists in its visible Workbench.
+    /// Only implemented operations can produce a successful acknowledgment.
+    fn apply_native_mcp_action(
+        &mut self,
+        command: &NativeMcpUiCommand,
+        cx: &mut Context<Self>,
+    ) -> Result<Option<String>, &'static str> {
+        let target = self
+            .mcp_host_workspaces
+            .iter()
+            .find(|workspace| workspace.id == command.workspace_id)
+            .ok_or("workspace_missing")?;
+        let target_path = dunce::canonicalize(&target.path).map_err(|_| "workspace_missing")?;
+        if !target_path.is_dir() {
+            return Err("workspace_missing");
+        }
+
+        if target_path != self.model.root() {
+            if !matches!(
+                command.action.as_str(),
+                "focus_workspace" | "open_file" | "reveal_file" | "select_tab" | "focus_agent"
+            ) {
+                return Err("not_visible");
+            }
+            self.switch_workspace(target_path.clone(), cx);
+            if self.model.root() != target_path {
+                return Err("not_visible");
+            }
+        }
+
+        let args = command.arguments.as_object().ok_or("ui_not_ready")?;
+        match command.action.as_str() {
+            "focus_workspace" => {
+                if self.model.root() != target_path {
+                    return Err("not_visible");
+                }
+                cx.notify();
+                Ok(None)
+            }
+            "reveal_file" | "open_file" => {
+                let relative = args
+                    .get("relativePath")
+                    .and_then(|path| path.as_str())
+                    .ok_or("invalid_path")?;
+                let relative_path = Path::new(relative);
+                if !Self::valid_editor_layout_key(relative_path) || relative.len() > 1024 {
+                    return Err("invalid_path");
+                }
+                let target_file = dunce::canonicalize(self.model.root().join(relative_path))
+                    .map_err(|_| "file_missing")?;
+                if !target_file.starts_with(self.model.root()) || !target_file.is_file() {
+                    return Err("invalid_path");
+                }
+                if command.action == "reveal_file" {
+                    let Some(tree) = self.tree.as_mut() else {
+                        return Err("ui_not_ready");
+                    };
+                    if !tree.reveal(relative_path).map_err(|_| "not_visible")? {
+                        return Err("not_visible");
+                    }
+                    self.tree_mode = true;
+                    self.explorer_selection = Some(target_file);
+                    cx.notify();
+                    return Ok(None);
+                }
+                // Native cannot honor Flutter's multiple-buffer 'new' mode
+                // or external editor settings yet. Fail rather than falsely
+                // acknowledging an unperformed operation.
+                if args.get("openMode").and_then(|mode| mode.as_str()) == Some("new")
+                    || args
+                        .get("editor")
+                        .and_then(|editor| editor.as_str())
+                        .is_some_and(|editor| editor != "alera")
+                {
+                    return Err("ui_not_ready");
+                }
+                let line = args
+                    .get("line")
+                    .map(|value| value.as_u64().ok_or("invalid_path"))
+                    .transpose()?;
+                let column = args
+                    .get("column")
+                    .map(|value| value.as_u64().ok_or("invalid_path"))
+                    .transpose()?;
+                if column.is_some() && line.is_none() {
+                    return Err("invalid_path");
+                }
+                if !self.model.open_path(&target_file) {
+                    return Err("file_missing");
+                }
+                self.open_editor(cx);
+                let Some(editor) = self.focused_editor() else {
+                    return Err("ui_not_ready");
+                };
+                if editor.read(cx).document().path() != Some(target_file.as_path())
+                    || self.center_view != CenterView::Editor
+                {
+                    return Err("not_visible");
+                }
+                if let Some(line) = line {
+                    let line: usize = line.try_into().map_err(|_| "invalid_path")?;
+                    let column: usize =
+                        column.unwrap_or(1).try_into().map_err(|_| "invalid_path")?;
+                    if line == 0 || column == 0 {
+                        return Err("invalid_path");
+                    }
+                    editor
+                        .update(cx, |editor, cx| {
+                            editor.navigate_to_content_hit(&target_file, line, column, cx)
+                        })
+                        .map_err(|_| "not_visible")?;
+                }
+                cx.notify();
+                Ok(None)
+            }
+            "select_tab" | "focus_agent" => {
+                let tab_id = args
+                    .get("tabId")
+                    .and_then(|id| id.as_str())
+                    .ok_or("tab_missing")?;
+                let handle = self
+                    .terminals
+                    .sessions
+                    .iter()
+                    .find(|session| {
+                        session.workspace_id == command.workspace_id
+                            && session.tab_id == tab_id
+                            && (command.action != "focus_agent" || session.agent_type.is_some())
+                    })
+                    .map(|session| session.handle.clone())
+                    .ok_or("tab_missing")?;
+                self.select_terminal(handle.clone(), cx);
+                let active = self
+                    .terminals
+                    .active_tab
+                    .and_then(|index| self.terminals.tabs.get(index))
+                    .is_some_and(|tab| tab.handle == handle);
+                if !active {
+                    return Err("not_visible");
+                }
+                Ok(Some(tab_id.to_owned()))
+            }
+            "open_git_graph" => {
+                // The native graph can show its current local branch list;
+                // filters/ref selection must wait for the actual UI feature.
+                if args.keys().any(|key| {
+                    !matches!(
+                        key.as_str(),
+                        "allBranches" | "favoritesOnly" | "selectedRef"
+                    )
+                }) {
+                    return Err("ui_not_ready");
+                }
+                if args.get("favoritesOnly") == Some(&serde_json::Value::Bool(true))
+                    || args
+                        .get("selectedRef")
+                        .and_then(|value| value.as_str())
+                        .is_some_and(|name| !name.is_empty())
+                {
+                    return Err("ui_not_ready");
+                }
+                self.git_history_open = true;
+                self.refresh_git_history(cx);
+                cx.notify();
+                if self.git_history_open {
+                    Ok(None)
+                } else {
+                    Err("not_visible")
+                }
+            }
+            // No fake success for the not-yet-migrated Settings, asynchronous
+            // compare/readback, or creation paths. Host retains timeout and
+            // per-command receipt enforcement.
+            _ => Err("ui_not_ready"),
+        }
+    }
+
+    fn poll_native_mcp_commands(&mut self, cx: &mut Context<Self>) {
+        let events = self
+            .mcp_ui_bridge
+            .as_mut()
+            .map(NativeMcpUiBridge::take_events)
+            .unwrap_or_default();
+        if events.is_empty() {
+            return;
+        }
+        for event in events {
+            match event {
+                NativeMcpUiEvent::Ready => {
+                    self.mcp_ui_ready = true;
+                    self.mcp_ui_status = "MCP: Native window registered with Host".into();
+                    self.refresh_mcp_host_workspaces(cx);
+                }
+                NativeMcpUiEvent::Command(command) => {
+                    let result = self.apply_native_mcp_action(&command, cx);
+                    let (applied, tab_id, error) = match result {
+                        Ok(tab_id) => (true, tab_id, None),
+                        Err(code) => (false, None, Some(code)),
+                    };
+                    if let Some(bridge) = self.mcp_ui_bridge.as_mut() {
+                        if bridge
+                            .complete(&command.request_id, applied, tab_id.as_deref(), error)
+                            .is_err()
+                        {
+                            self.mcp_ui_status =
+                                "MCP: could not acknowledge Host UI request".into();
+                        } else if !applied {
+                            self.mcp_ui_status =
+                                "MCP: UI command refused; unsupported or invisible target".into();
+                        }
+                    }
+                }
+                NativeMcpUiEvent::Disconnected => {
+                    self.mcp_ui_ready = false;
+                    self.mcp_ui_bridge = None;
+                    self.mcp_ui_status = "MCP: Host window relay disconnected".into();
+                }
+            }
+        }
+        cx.notify();
     }
 
     fn refresh_runtime(&mut self, cx: &mut Context<Self>) {
@@ -3280,6 +3577,10 @@ impl Workbench {
             if view
                 .update(cx, |view, cx| {
                     view.terminal_tick = view.terminal_tick.wrapping_add(1);
+                    view.poll_native_mcp_commands(cx);
+                    if view.terminal_tick % 20 == 1 && view.mcp_ui_bridge.is_none() {
+                        view.connect_mcp_ui_bridge(cx);
+                    }
                     match view.terminal_create_flow.tick() {
                         TerminalCreateTick::RefreshSessions => {
                             // Retry only authenticated Host session listing.
@@ -3496,6 +3797,8 @@ impl Render for Workbench {
         let worktree_delete_pending = self.worktree_delete_pending.clone();
         let runtime_status = self.runtime_status.clone();
         let runtime_loading = self.runtime_loading;
+        let mcp_ui_status = self.mcp_ui_status.clone();
+        let mcp_ui_window_id = self.mcp_ui_window_id.clone();
         let agent_profile_rows: Vec<_> = self
             .agent_profiles
             .iter()
@@ -6123,6 +6426,21 @@ impl Render for Workbench {
                                     })),
                             )
                             .child(div()
+                                .text_xs()
+                                .text_color(rgb(MUTED))
+                                .child(mcp_ui_status))
+                            .child(div()
+                                .id("native-mcp-copy-window-id")
+                                .cursor_pointer()
+                                .text_xs()
+                                .text_color(rgb(TEXT))
+                                .child("Copy Native MCP window ID")
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(mcp_ui_window_id.clone()));
+                                    this.model.set_status("Native MCP window ID copied; set windowId when Classic and Native are both open");
+                                    cx.notify();
+                                })))
+                            .child(div()
                                 .flex()
                                 .items_center()
                                 .justify_between()
@@ -6446,6 +6764,13 @@ fn main() {
                         runtime_bridge,
                         runtime_status,
                         runtime_loading: false,
+                        mcp_ui_bridge: None,
+                        mcp_ui_window_id: NativeMcpUiBridge::new_window_id(),
+                        mcp_ui_status: "Waiting for existing Runtime Host".into(),
+                        mcp_ui_ready: false,
+                        mcp_host_workspaces: Vec::new(),
+                        mcp_host_workspaces_loading: false,
+                        mcp_host_workspaces_request: 0,
                         agent_profiles: Vec::new(),
                         agent_profiles_loading: false,
                         agent_profiles_request: 0,
@@ -6488,6 +6813,7 @@ fn main() {
                     view.refresh_worktrees(cx);
                     view.refresh_git(cx);
                     view.refresh_agent_profiles(cx);
+                    view.connect_mcp_ui_bridge(cx);
                 });
                 view
             },

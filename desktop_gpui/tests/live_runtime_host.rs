@@ -4,6 +4,7 @@
 #![cfg(windows)]
 
 use alera_core::child_process::windowless_command;
+use alera_gpui_desktop::mcp_ui_bridge::NativeMcpUiEvent;
 use alera_gpui_desktop::runtime_bridge::{RuntimeCliBridge, RuntimeStatus};
 use alera_gpui_desktop::terminal::{TerminalCreateFlow, TerminalDock};
 use alera_gpui_desktop::terminal_panes::TerminalPaneLayout;
@@ -133,6 +134,30 @@ fn real_host_terminal_list_and_incremental_read_never_autostart() {
         RuntimeStatus::Running { .. }
     ));
     assert!(bridge.list_terminals().unwrap().is_empty());
+
+    // A separately named Native window registers to the *same* isolated
+    // Host as an App, receives the CLI's ready event, and disconnects without
+    // terminating Classic's/Host's sessions or claiming a PTY.
+    let mut mcp_ui = bridge
+        .start_native_mcp_ui(format!("native-host-smoke-{}", std::process::id()))
+        .expect("Native MCP bridge should start against existing isolated Host");
+    let mcp_deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let events = mcp_ui.take_events();
+        if events.contains(&NativeMcpUiEvent::Ready) {
+            break;
+        }
+        assert!(
+            !events.contains(&NativeMcpUiEvent::Disconnected) && Instant::now() < mcp_deadline,
+            "Native MCP bridge did not register with the isolated real Host"
+        );
+        std::thread::sleep(Duration::from_millis(40));
+    }
+    drop(mcp_ui);
+    assert!(matches!(
+        bridge.probe().unwrap(),
+        RuntimeStatus::Running { .. }
+    ));
 
     // Use authenticated loopback solely to construct this test fixture. The
     // GPUI application under test still uses only the normal CLI adapter.
