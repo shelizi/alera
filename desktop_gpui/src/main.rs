@@ -11,7 +11,7 @@ use alera_gpui_desktop::editor::EditorDraftStore;
 use alera_gpui_desktop::editor_tabs::{EditorTabs, MAX_EDITOR_TABS};
 use alera_gpui_desktop::explorer_ops::{ExplorerClipboard, ExplorerClipboardMode, ExplorerFiles};
 use alera_gpui_desktop::file_search::WorkspaceFileIndex;
-use alera_gpui_desktop::git_actions::GitActions;
+use alera_gpui_desktop::git_actions::{GitActions, GitConflictChoice, GitConflictPlan};
 use alera_gpui_desktop::git_history::{
     compare_git_refs, compare_local_branch, preview_commit, GitHistoryOptions, GitHistorySnapshot,
 };
@@ -53,7 +53,7 @@ use gpui::{
 };
 use quick_open_ui::{bind_quick_open_keys, QuickOpenInput};
 use std::borrow::Cow;
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -114,6 +114,7 @@ enum GitUiAction {
     StashApply,
     PullFfOnly,
     PushUpstream,
+    MergeWithChoices(GitConflictPlan, Vec<(String, GitConflictChoice)>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -253,6 +254,12 @@ struct Workbench {
     git_history_request: u64,
     git_merge_armed: Option<String>,
     git_sensitive_armed: Option<ConfirmGitAction>,
+    git_conflict_preview: Option<GitConflictPlan>,
+    git_conflict_choices: HashMap<String, GitConflictChoice>,
+    git_conflict_selected: Option<String>,
+    git_conflict_loading: bool,
+    git_conflict_request: u64,
+    git_conflict_confirm_armed: bool,
     git_commit_input: Entity<QuickOpenInput>,
     git_branch_input: Entity<QuickOpenInput>,
     git_action_busy: bool,
@@ -1013,6 +1020,9 @@ impl Workbench {
             return;
         }
         self.git_sensitive_armed = None;
+        self.git_conflict_confirm_armed = false;
+        self.git_conflict_loading = false;
+        self.git_conflict_request = self.git_conflict_request.wrapping_add(1);
         let root = self.model.root().to_path_buf();
         let generation = self.workspace_generation;
         self.git_action_request = self.git_action_request.wrapping_add(1);
@@ -1051,6 +1061,9 @@ impl Workbench {
                         GitUiAction::StashApply => git.apply_latest_stash(),
                         GitUiAction::PullFfOnly => git.pull_ff_only(),
                         GitUiAction::PushUpstream => git.push_current_upstream(),
+                        GitUiAction::MergeWithChoices(plan, selections) => {
+                            git.merge_with_conflict_choices(&plan, &selections)
+                        }
                     }
                 })
                 .await;
@@ -1064,6 +1077,10 @@ impl Workbench {
                 match result {
                     Ok(message) => {
                         view.git_action_status = message;
+                        view.git_conflict_preview = None;
+                        view.git_conflict_choices.clear();
+                        view.git_conflict_selected = None;
+                        view.git_conflict_confirm_armed = false;
                         view.git_snapshot = None;
                         view.refresh_git(cx);
                         if view.git_history_open {
@@ -1095,10 +1112,134 @@ impl Workbench {
             self.run_git_action(action.action(), cx);
         } else {
             self.git_merge_armed = None;
+            self.git_conflict_confirm_armed = false;
             self.git_sensitive_armed = Some(action);
             self.git_action_status = action.warning().into();
         }
         cx.notify();
+    }
+
+    fn preview_git_merge_conflicts(&mut self, cx: &mut Context<Self>) {
+        if self.git_action_busy || self.git_conflict_loading {
+            self.git_action_status = "Finish the current Git operation first".into();
+            cx.notify();
+            return;
+        }
+        if self.editor_dirty(cx) {
+            self.git_action_status =
+                "Save unsaved editor buffers before previewing merge conflicts".into();
+            cx.notify();
+            return;
+        }
+        let branch = self.git_branch_input.read(cx).query().trim().to_owned();
+        if branch.is_empty() {
+            self.git_action_status =
+                "Select a local source branch to inspect merge conflicts".into();
+            cx.notify();
+            return;
+        }
+        self.git_merge_armed = None;
+        self.git_sensitive_armed = None;
+        self.git_conflict_preview = None;
+        self.git_conflict_choices.clear();
+        self.git_conflict_selected = None;
+        self.git_conflict_confirm_armed = false;
+        self.git_conflict_request = self.git_conflict_request.wrapping_add(1);
+        let ticket = self.git_conflict_request;
+        let generation = self.workspace_generation;
+        let root = self.model.root().to_path_buf();
+        self.git_conflict_loading = true;
+        self.git_action_status = format!("Inspecting merge conflicts with {branch} (read-only)…");
+        cx.notify();
+        cx.spawn(async move |view, cx| {
+            let result = cx.background_spawn(async move {
+                GitActions::open(&root)?.preview_merge_conflicts(&branch)
+            }).await;
+            view.update(cx, |view, cx| {
+                if view.workspace_generation != generation
+                    || view.git_conflict_request != ticket
+                {
+                    return;
+                }
+                view.git_conflict_loading = false;
+                match result {
+                    Ok(plan) => {
+                        view.git_action_status = format!(
+                            "{} conflict(s) found with {}. Select Ours or Theirs for every file; choices replace the whole conflicted file.",
+                            plan.conflicts.len(),
+                            plan.source_branch,
+                        );
+                        view.git_conflict_selected = plan.conflicts.first().map(|file| file.path.clone());
+                        view.git_conflict_preview = Some(plan);
+                    }
+                    Err(error) => view.git_action_status = format!("Cannot preview merge conflicts: {error}"),
+                }
+                cx.notify();
+            }).ok();
+        }).detach();
+    }
+
+    fn choose_git_conflict_side(
+        &mut self,
+        path: String,
+        choice: GitConflictChoice,
+        cx: &mut Context<Self>,
+    ) {
+        if self.git_action_busy || self.git_conflict_loading {
+            return;
+        }
+        if self
+            .git_conflict_preview
+            .as_ref()
+            .is_some_and(|preview| preview.conflicts.iter().any(|file| file.path == path))
+        {
+            self.git_conflict_selected = Some(path.clone());
+            self.git_conflict_choices.insert(path, choice);
+            self.git_conflict_confirm_armed = false;
+            self.git_action_status =
+                "Choice updated; selecting a side replaces that whole conflicted file, not just one hunk".into();
+            cx.notify();
+        }
+    }
+
+    fn confirm_git_conflict_merge(&mut self, cx: &mut Context<Self>) {
+        if self.git_action_busy || self.git_conflict_loading {
+            return;
+        }
+        let Some(preview) = self.git_conflict_preview.as_ref() else {
+            self.git_action_status = "Preview conflicts before applying any merge choice".into();
+            cx.notify();
+            return;
+        };
+        let selections = preview
+            .conflicts
+            .iter()
+            .map(|file| {
+                self.git_conflict_choices
+                    .get(&file.path)
+                    .map(|choice| (file.path.clone(), *choice))
+            })
+            .collect::<Option<Vec<_>>>();
+        let Some(selections) = selections else {
+            self.git_action_status =
+                "Choose Ours or Theirs for every conflicting file first".into();
+            cx.notify();
+            return;
+        };
+        if self.git_conflict_confirm_armed {
+            self.git_conflict_confirm_armed = false;
+            let preview = preview.clone();
+            self.run_git_action(GitUiAction::MergeWithChoices(preview, selections), cx);
+        } else {
+            self.git_conflict_confirm_armed = true;
+            self.git_sensitive_armed = None;
+            self.git_merge_armed = None;
+            self.git_action_status = format!(
+                "Click Confirm Resolved Merge to create a two-parent merge commit from {} into {}. Each Ours/Theirs selection replaces the WHOLE file.",
+                preview.source_branch, preview.current_branch,
+            );
+            cx.notify();
+        }
     }
 
     fn preview_git_change(&mut self, relative: PathBuf, cx: &mut Context<Self>) {
@@ -1810,6 +1951,12 @@ impl Workbench {
         self.git_history_request = self.git_history_request.wrapping_add(1);
         self.git_merge_armed = None;
         self.git_sensitive_armed = None;
+        self.git_conflict_preview = None;
+        self.git_conflict_choices.clear();
+        self.git_conflict_selected = None;
+        self.git_conflict_loading = false;
+        self.git_conflict_confirm_armed = false;
+        self.git_conflict_request = self.git_conflict_request.wrapping_add(1);
         self.git_action_request = self.git_action_request.wrapping_add(1);
         self.git_action_status.clear();
         self.git_commit_input
@@ -4602,6 +4749,52 @@ impl Render for Workbench {
             .map(|history| history.commits.clone())
             .unwrap_or_default();
         let git_merge_armed = self.git_merge_armed.is_some();
+        let git_conflict_loading = self.git_conflict_loading;
+        let git_conflict_armed = self.git_conflict_confirm_armed;
+        let git_conflict_count = self
+            .git_conflict_preview
+            .as_ref()
+            .map(|preview| preview.conflicts.len())
+            .unwrap_or(0);
+        let git_conflict_choices_count = self.git_conflict_choices.len();
+        let git_conflict_rows = self
+            .git_conflict_preview
+            .as_ref()
+            .map(|preview| {
+                preview
+                    .conflicts
+                    .iter()
+                    .map(|file| {
+                        (
+                            file.path.clone(),
+                            self.git_conflict_choices.get(&file.path).copied(),
+                            self.git_conflict_selected.as_deref() == Some(file.path.as_str()),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let git_conflict_detail = self.git_conflict_preview
+            .as_ref()
+            .and_then(|preview| preview.conflicts.iter().find(|file| {
+                self.git_conflict_selected.as_deref() == Some(file.path.as_str())
+            }))
+            .map(|file| {
+                let excerpt = |full: &str| {
+                    let first = full.chars().take(1800).collect::<String>();
+                    if full.chars().count() > 1800 {
+                        format!("{first}\n[Preview limited to 1,800 characters. Inspect the full file before choosing.]")
+                    } else {
+                        first
+                    }
+                };
+                format!(
+                    "BASE:\n{}\n\nOURS (current branch):\n{}\n\nTHEIRS (source branch):\n{}",
+                    file.ancestor_preview.as_deref().map(excerpt).unwrap_or_else(|| "(new in both branches)".to_string()),
+                    excerpt(&file.ours_preview),
+                    excerpt(&file.theirs_preview),
+                )
+            });
         let git_summary = if self.git_loading {
             "Reading Git status…".to_string()
         } else if let Some(snapshot) = &self.git_snapshot {
@@ -4670,7 +4863,9 @@ impl Render for Workbench {
                     .flex_row_reverse()
                     .child(
                         div()
+                            .id("native-right-sidebar-scroll")
                             .w(px(RIGHT_SIDEBAR_WIDTH))
+                            .overflow_y_scroll()
                             .flex()
                             .flex_col()
                             .bg(rgb(PANEL))
@@ -5358,6 +5553,7 @@ impl Render for Workbench {
                                             this.run_git_action(GitUiAction::MergeWithoutConflicts(branch), cx);
                                         } else {
                                             this.git_sensitive_armed = None;
+                                            this.git_conflict_confirm_armed = false;
                                             this.git_merge_armed = Some(branch.clone());
                                             this.git_action_status = format!("Click Confirm Merge to merge {branch} into the current branch; merge conflicts will be refused without changing files");
                                         }
@@ -5414,6 +5610,123 @@ impl Render for Workbench {
                                         this.confirm_sensitive_git_action(ConfirmGitAction::PushUpstream, cx);
                                     })))
                             )
+                            .child(div()
+                                .flex()
+                                .flex_wrap()
+                                .items_center()
+                                .gap_3()
+                                .child(div()
+                                    .id("git-conflict-inspect")
+                                    .cursor_pointer()
+                                    .text_xs()
+                                    .text_color(rgb(if git_action_busy || git_conflict_loading { MUTED } else { TEXT }))
+                                    .child(if git_conflict_loading { "Inspecting conflicts…" } else { "Inspect merge conflicts" })
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.preview_git_merge_conflicts(cx);
+                                    })))
+                                .child(if git_conflict_count > 0 {
+                                    div()
+                                        .id("git-conflict-cancel")
+                                        .cursor_pointer()
+                                        .text_xs()
+                                        .text_color(rgb(MUTED))
+                                        .child("Cancel review")
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.git_conflict_preview = None;
+                                            this.git_conflict_choices.clear();
+                                            this.git_conflict_selected = None;
+                                            this.git_conflict_confirm_armed = false;
+                                            this.git_action_status = "Merge conflict review cancelled; no files changed".into();
+                                            cx.notify();
+                                        }))
+                                        .into_any_element()
+                                } else {
+                                    div().h(px(0.0)).into_any_element()
+                                }))
+                            .child(if git_conflict_count > 0 {
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap_2()
+                                    .child(div()
+                                        .text_xs()
+                                        .text_color(rgb(TEXT))
+                                        .child(format!(
+                                            "Conflict choices: {git_conflict_choices_count}/{git_conflict_count} · WHOLE FILE, not individual hunks",
+                                        )))
+                                    .child(div()
+                                        .id("git-conflict-files-scroll")
+                                        .max_h(px(155.0))
+                                        .overflow_y_scroll()
+                                        .children(git_conflict_rows.into_iter().enumerate().map(|(index, (path, choice, selected))| {
+                                            let path_for_select = path.clone();
+                                            let path_for_ours = path.clone();
+                                            let path_for_theirs = path.clone();
+                                            div()
+                                                .id(("git-conflict-row", index))
+                                                .flex()
+                                                .flex_col()
+                                                .gap_1()
+                                                .py_1()
+                                                .child(div()
+                                                    .id(("git-conflict-preview-path", index))
+                                                    .cursor_pointer()
+                                                    .text_xs()
+                                                    .text_color(rgb(if selected { TEXT } else { MUTED }))
+                                                    .child(format!("{} {}", if selected { "▸" } else { "·" }, path))
+                                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                                        this.git_conflict_selected = Some(path_for_select.clone());
+                                                        this.git_conflict_confirm_armed = false;
+                                                        cx.notify();
+                                                    })))
+                                                .child(div()
+                                                    .flex()
+                                                    .items_center()
+                                                    .gap_3()
+                                                    .child(div()
+                                                        .id(("git-conflict-pick-ours", index))
+                                                        .cursor_pointer()
+                                                        .text_xs()
+                                                        .text_color(rgb(if choice == Some(GitConflictChoice::Ours) { TEXT } else { MUTED }))
+                                                        .child(if choice == Some(GitConflictChoice::Ours) { "● Ours" } else { "○ Ours" })
+                                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                                            this.choose_git_conflict_side(path_for_ours.clone(), GitConflictChoice::Ours, cx);
+                                                        })))
+                                                    .child(div()
+                                                        .id(("git-conflict-pick-theirs", index))
+                                                        .cursor_pointer()
+                                                        .text_xs()
+                                                        .text_color(rgb(if choice == Some(GitConflictChoice::Theirs) { TEXT } else { MUTED }))
+                                                        .child(if choice == Some(GitConflictChoice::Theirs) { "● Theirs" } else { "○ Theirs" })
+                                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                                            this.choose_git_conflict_side(path_for_theirs.clone(), GitConflictChoice::Theirs, cx);
+                                                        })))
+                                                )
+                                        })))
+                                    .child(div()
+                                        .text_xs()
+                                        .text_color(rgb(MUTED))
+                                        .child("Preview excerpts only (up to 1,800 characters per side); inspect entire file before choosing."))
+                                    .child(div()
+                                        .id("git-conflict-text-preview")
+                                        .max_h(px(132.0))
+                                        .overflow_y_scroll()
+                                        .text_xs()
+                                        .text_color(rgb(TEXT))
+                                        .child(git_conflict_detail.unwrap_or_else(|| "Select a conflicted file to review its base, ours and theirs".into())))
+                                    .child(div()
+                                        .id("git-conflict-resolved-merge")
+                                        .cursor_pointer()
+                                        .text_xs()
+                                        .text_color(rgb(if git_action_busy { MUTED } else { TEXT }))
+                                        .child(if git_conflict_armed { "Confirm Resolved Merge" } else { "Merge selected sides" })
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.confirm_git_conflict_merge(cx);
+                                        })))
+                                    .into_any_element()
+                            } else {
+                                div().h(px(0.0)).into_any_element()
+                            })
                             .child(div()
                                 .text_xs()
                                 .text_color(rgb(MUTED))
@@ -7535,6 +7848,12 @@ fn main() {
                         git_history_request: 0,
                         git_merge_armed: None,
                         git_sensitive_armed: None,
+                        git_conflict_preview: None,
+                        git_conflict_choices: HashMap::new(),
+                        git_conflict_selected: None,
+                        git_conflict_loading: false,
+                        git_conflict_request: 0,
+                        git_conflict_confirm_armed: false,
                         git_commit_input: cx
                             .new(|cx| QuickOpenInput::with_placeholder("Commit message", cx)),
                         git_branch_input: cx
