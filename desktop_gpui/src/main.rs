@@ -27,9 +27,10 @@ use alera_gpui_desktop::project_tree::{collect_project_tree, ProjectTreeGroup};
 use alera_gpui_desktop::runtime_bridge::RuntimeCliBridge;
 use alera_gpui_desktop::session::{PreviewSessionStore, TerminalLayout, TerminalLayoutTab};
 use alera_gpui_desktop::terminal::{
-    encode_terminal_key, raw_key_reply_may_drain, select_registered_host_workspace,
-    TerminalCreateFlow, TerminalCreateTick, TerminalDock, TerminalPollGate,
-    TerminalTabContextTarget, TerminalViewMode, HOST_SESSION_LIST_SCOPE,
+    encode_terminal_key, estimate_terminal_viewport, raw_key_reply_may_drain,
+    select_registered_host_workspace, TerminalAutoResizeGate, TerminalCreateFlow,
+    TerminalCreateTick, TerminalDock, TerminalLineSelection, TerminalPollGate,
+    TerminalTabContextTarget, TerminalViewMode, TerminalViewportProposal, HOST_SESSION_LIST_SCOPE,
 };
 use alera_gpui_desktop::terminal_panes::{TerminalPaneLayout, TerminalSplitDirection};
 use alera_gpui_desktop::visual_tokens::{
@@ -314,6 +315,8 @@ struct Workbench {
     terminal_key_queue: VecDeque<String>,
     terminal_key_queue_target: Option<TerminalTabContextTarget>,
     terminal_key_sending: bool,
+    terminal_auto_resize: TerminalAutoResizeGate,
+    terminal_line_selection: Option<TerminalLineSelection>,
     show_terminal_attach_picker: bool,
     terminal_create_flow: TerminalCreateFlow,
     terminal_layout_restore: Option<TerminalLayout>,
@@ -1993,6 +1996,8 @@ impl Workbench {
         // them on workspace changes to prevent cross-project output leakage.
         // Existing Host sessions remain alive and under Host ownership.
         self.terminals = TerminalDock::for_workspace(self.workspace_generation);
+        self.terminal_auto_resize.clear();
+        self.terminal_line_selection = None;
         self.terminal_tab_context = None;
         self.terminal_panes.reset();
         self.terminal_create_flow.cancel();
@@ -3100,6 +3105,7 @@ impl Workbench {
     fn select_terminal(&mut self, handle: String, cx: &mut Context<Self>) {
         self.terminal_tab_context = None;
         if self.terminals.open(&handle) {
+            self.terminal_line_selection = None;
             self.center_view = CenterView::Terminal;
             self.terminal_send_loading = false;
             self.terminal_input.update(cx, |input, cx| input.clear(cx));
@@ -3131,6 +3137,13 @@ impl Workbench {
         let handle = tab.handle.clone();
         let tab_id = tab.tab_id.clone();
         let generation = self.workspace_generation;
+        if let Some(target) = self
+            .terminals
+            .active_tab
+            .and_then(|index| self.terminals.context_target_at(index))
+        {
+            self.terminal_auto_resize.suspend_until_changed(&target);
+        }
         self.terminals.status = format!("Requesting Host viewport {cols}×{rows}…");
         cx.notify();
         cx.spawn(async move |view, cx| {
@@ -3153,6 +3166,155 @@ impl Workbench {
                 cx.notify();
             }).ok();
         }).detach();
+    }
+
+    /// Run from the existing Workbench lifecycle poll, never from render.
+    /// Each pending viewport is bound to one exact still-live Host tab and
+    /// is dispatched through the allowlisted, non-starting CLI resize verb.
+    fn flush_auto_terminal_resizes(&mut self, cx: &mut Context<Self>) {
+        let Some(bridge) = self.runtime_bridge.clone() else {
+            return;
+        };
+        for change in self.terminal_auto_resize.take_ready(Instant::now()) {
+            if !self.terminals.context_target_is_live(&change.target)
+                || !self
+                    .terminals
+                    .tabs
+                    .iter()
+                    .any(|tab| tab.handle == change.target.handle && tab.running)
+            {
+                continue;
+            }
+            let handle = change.target.handle.clone();
+            let target = change.target.clone();
+            let generation = self.workspace_generation;
+            let (cols, rows) = (change.cols, change.rows);
+            let bridge = bridge.clone();
+            cx.spawn(async move |view, cx| {
+                let result = cx.background_spawn(async move {
+                    bridge.resize_terminal(&handle, cols, rows)
+                }).await;
+                view.update(cx, |view, cx| {
+                    if view.workspace_generation != generation
+                        || !view.terminals.context_target_is_live(&target)
+                    {
+                        return;
+                    }
+                    if let Err(error) = result {
+                        view.terminals.status = format!(
+                            "Auto Resize {cols}×{rows} refused (no repeated retries until size changes): {error}"
+                        );
+                        cx.notify();
+                    }
+                }).ok();
+            }).detach();
+        }
+    }
+
+    /// Mouse selection is a bounded snapshot of primary VT screen rows;
+    /// never forwards mouse/selection gestures to the running Host PTY.
+    fn begin_terminal_line_selection(&mut self, row: usize, cx: &mut Context<Self>) {
+        let index = if self.mixed_panes.has_secondary() {
+            self.mixed_panes
+                .active_in(PaneSlot::Primary)
+                .and_then(|id| match id {
+                    WorkbenchTabIdentity::Host(target) => self.terminals.index_for_context(target),
+                    _ => None,
+                })
+        } else {
+            self.terminals.active_tab
+        };
+        let Some((target, tab)) = index.and_then(|i| {
+            self.terminals
+                .context_target_at(i)
+                .zip(self.terminals.tabs.get(i))
+        }) else {
+            self.terminal_line_selection = None;
+            return;
+        };
+        self.terminal_line_selection = TerminalLineSelection::begin(
+            target,
+            tab.next_cursor,
+            tab.screen
+                .styled_rows()
+                .into_iter()
+                .map(|row| row.text)
+                .collect(),
+            row,
+        );
+        cx.notify();
+    }
+
+    fn extend_terminal_line_selection(&mut self, row: usize, cx: &mut Context<Self>) {
+        if self
+            .terminal_line_selection
+            .as_mut()
+            .is_some_and(|s| s.extend(row))
+        {
+            cx.notify();
+        }
+    }
+
+    fn finish_terminal_line_selection(&mut self, cx: &mut Context<Self>) {
+        if let Some(selection) = self.terminal_line_selection.as_mut() {
+            if selection.is_dragging() {
+                selection.finish();
+                cx.notify();
+            }
+        }
+    }
+
+    fn copy_primary_terminal_text(&mut self, selected_only: bool, cx: &mut Context<Self>) {
+        let index = if self.mixed_panes.has_secondary() {
+            self.mixed_panes
+                .active_in(PaneSlot::Primary)
+                .and_then(|id| match id {
+                    WorkbenchTabIdentity::Host(target) => self.terminals.index_for_context(target),
+                    _ => None,
+                })
+        } else {
+            self.terminals.active_tab
+        };
+        let Some((target, tab)) = index.and_then(|i| {
+            self.terminals
+                .context_target_at(i)
+                .zip(self.terminals.tabs.get(i))
+        }) else {
+            self.terminals.status = "No visible primary Host terminal to copy".into();
+            cx.notify();
+            return;
+        };
+        let text = if let Some(selection) = self.terminal_line_selection.as_ref().filter(|s| {
+            self.terminals.view_mode == TerminalViewMode::Screen
+                && s.is_current(&target, tab.next_cursor)
+        }) {
+            selection.selected_text()
+        } else if selected_only {
+            self.terminals.status =
+                "Select VT rows first; old selection cannot copy after Host output changes".into();
+            cx.notify();
+            return;
+        } else if self.terminals.view_mode == TerminalViewMode::Screen {
+            tab.screen.contents()
+        } else {
+            tab.output.clone()
+        };
+        if text.is_empty() {
+            self.terminals.status = "No visible terminal text to copy".into();
+        } else {
+            let mut text = text;
+            if text.len() > 128 * 1024 {
+                let mut start = text.len() - 128 * 1024;
+                while !text.is_char_boundary(start) {
+                    start += 1;
+                }
+                text = text[start..].to_owned();
+            }
+            let bytes = text.len();
+            cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+            self.terminals.status = format!("Copied {bytes} bytes of plain terminal text");
+        }
+        cx.notify();
     }
 
     fn send_terminal_key(&mut self, event: &gpui::KeyDownEvent, cx: &mut Context<Self>) -> bool {
@@ -4301,6 +4463,7 @@ impl Workbench {
             if view
                 .update(cx, |view, cx| {
                     view.terminal_tick = view.terminal_tick.wrapping_add(1);
+                    view.flush_auto_terminal_resizes(cx);
                     view.poll_native_mcp_commands(cx);
                     if view.native_settings.editor_autosave_enabled && view.terminal_tick % 2 == 0 {
                         for editor in [view.editor.clone(), view.secondary_editor.clone()].into_iter().flatten() {
@@ -4358,7 +4521,7 @@ impl Workbench {
 }
 
 impl Render for Workbench {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_mixed_tabs(cx);
         let native_settings_panel = self.render_native_settings_panel(cx);
         let terminal_font_size = self.native_settings.terminal_font_size as f32;
@@ -4647,6 +4810,127 @@ impl Render for Workbench {
         } else {
             Vec::new()
         };
+        let current_primary_host =
+            primary_terminal_index.and_then(|index| self.terminals.context_target_at(index));
+        let terminal_selected_rows = current_primary_host
+            .as_ref()
+            .zip(primary_terminal)
+            .and_then(|(target, tab)| {
+                self.terminal_line_selection
+                    .as_ref()
+                    .filter(|selection| selection.is_current(target, tab.next_cursor))
+            })
+            .map(|selection| {
+                (0..terminal_screen_rows.len())
+                    .map(|row| selection.includes_row(row))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
+        // Window geometry is only *observed* by render. The existing 1.5s
+        // lifecycle poll coalesces stable changes before the Host RPC.
+        // No resizing from inside GPUI's paint/layout phase.
+        let viewport = window.viewport_size();
+        let content_width =
+            (f32::from(viewport.width) - PROJECTS_SIDEBAR_WIDTH - RIGHT_SIDEBAR_WIDTH - 14.0)
+                .max(0.0);
+        let content_height = (f32::from(viewport.height)
+            - TOP_BAR_HEIGHT
+            - STATUS_BAR_HEIGHT
+            - TAB_STRIP_HEIGHT
+            - SECTION_HEADER_HEIGHT
+            - 26.0
+            - 22.0
+            - 45.0
+            - 26.0)
+            .max(0.0);
+        let split_width = mixed_has_secondary && mixed_split_horizontal;
+        let split_height = mixed_has_secondary && !mixed_split_horizontal;
+        let primary_width = content_width / if split_width { 2.0 } else { 1.0 };
+        let primary_height = content_height / if split_height { 2.0 } else { 1.0 };
+        let mut proposed_viewports = Vec::new();
+        if self.settings_section.is_none() && !center_is_editor {
+            if let Some((target, tab)) = current_primary_host.as_ref().zip(primary_terminal) {
+                if tab.running && self.terminals.context_target_is_live(target) {
+                    let width = primary_width
+                        / if terminal_split_exists && terminal_split_horizontal {
+                            2.0
+                        } else {
+                            1.0
+                        };
+                    let height = primary_height
+                        / if terminal_split_exists && !terminal_split_horizontal {
+                            2.0
+                        } else {
+                            1.0
+                        };
+                    if let Some((cols, rows)) =
+                        estimate_terminal_viewport(width, height, terminal_font_size)
+                    {
+                        proposed_viewports.push(TerminalViewportProposal {
+                            target: target.clone(),
+                            cols,
+                            rows,
+                        });
+                    }
+                }
+            }
+            if terminal_split_exists {
+                if let Some((index, tab)) = self
+                    .terminal_panes
+                    .secondary_index(&self.terminals)
+                    .and_then(|index| self.terminals.tabs.get(index).map(|tab| (index, tab)))
+                {
+                    if let Some(target) = self.terminals.context_target_at(index).filter(|target| {
+                        tab.running && self.terminals.context_target_is_live(target)
+                    }) {
+                        let width =
+                            primary_width / if terminal_split_horizontal { 2.0 } else { 1.0 };
+                        let height = primary_height
+                            / if terminal_split_horizontal { 1.0 } else { 2.0 }
+                            - 28.0;
+                        if let Some((cols, rows)) =
+                            estimate_terminal_viewport(width, height, terminal_font_size)
+                        {
+                            proposed_viewports.push(TerminalViewportProposal {
+                                target,
+                                cols,
+                                rows,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        if self.settings_section.is_none() {
+            if let Some(target) = mixed_secondary_host
+                .as_ref()
+                .filter(|target| self.terminals.context_target_is_live(target))
+            {
+                if let Some(tab) = self
+                    .terminals
+                    .index_for_context(target)
+                    .and_then(|index| self.terminals.tabs.get(index))
+                {
+                    if tab.running {
+                        let width = content_width / if split_width { 2.0 } else { 1.0 };
+                        let height = content_height / if split_height { 2.0 } else { 1.0 }
+                            - TAB_STRIP_HEIGHT;
+                        if let Some((cols, rows)) =
+                            estimate_terminal_viewport(width, height, terminal_font_size)
+                        {
+                            proposed_viewports.push(TerminalViewportProposal {
+                                target: target.clone(),
+                                cols,
+                                rows,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        self.terminal_auto_resize
+            .observe(proposed_viewports, Instant::now());
         let terminal_status = if terminal_is_vt {
             if let Some(tab) = primary_terminal {
                 let (rows, cols) = tab.screen.dimensions();
@@ -6332,9 +6616,12 @@ impl Render for Workbench {
                                     .bg(rgb(BG))
                                     .child(
                                         div()
+                                            .id("terminal-toolbar-horizontal-scroll")
                                             .h(px(TAB_STRIP_HEIGHT))
                                             .flex()
                                             .items_center()
+                                            .overflow_x_scroll()
+                                            .whitespace_nowrap()
                                             .bg(rgb(PANEL))
                                             .child(
                                                 div()
@@ -6560,6 +6847,30 @@ impl Render for Workbench {
                                             )
                                             .child(
                                                 div()
+                                                    .id("terminal-copy-selected-lines")
+                                                    .px_2()
+                                                    .cursor_pointer()
+                                                    .text_xs()
+                                                    .text_color(rgb(TEXT))
+                                                    .child("Copy selected rows")
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.copy_primary_terminal_text(true, cx);
+                                                    })),
+                                            )
+                                            .child(
+                                                div()
+                                                    .id("terminal-copy-visible-text")
+                                                    .px_2()
+                                                    .cursor_pointer()
+                                                    .text_xs()
+                                                    .text_color(rgb(TEXT))
+                                                    .child("Copy visible")
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.copy_primary_terminal_text(false, cx);
+                                                    })),
+                                            )
+                                            .child(
+                                                div()
                                                     .id("terminal-resize-80x24")
                                                     .px_2()
                                                     .cursor_pointer()
@@ -6735,8 +7046,22 @@ impl Render for Workbench {
                                                 this.focus_primary_mixed_terminal(cx);
                                                 window.focus(&this.terminal_keyboard_focus);
                                             }))
+                                            .on_mouse_up(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
+                                                this.finish_terminal_line_selection(cx);
+                                            }))
+                                            .on_mouse_up_out(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
+                                                this.finish_terminal_line_selection(cx);
+                                            }))
                                             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
-                                                if this.send_terminal_key_for_pane(PaneSlot::Primary, event, cx) { cx.stop_propagation(); }
+                                                if event.keystroke.modifiers.control
+                                                    && event.keystroke.modifiers.shift
+                                                    && event.keystroke.key.eq_ignore_ascii_case("c")
+                                                {
+                                                    this.copy_primary_terminal_text(false, cx);
+                                                    cx.stop_propagation();
+                                                } else if this.send_terminal_key_for_pane(PaneSlot::Primary, event, cx) {
+                                                    cx.stop_propagation();
+                                                }
                                             }))
                                             .flex_1()
                                             .min_h_0()
@@ -6749,10 +7074,18 @@ impl Render for Workbench {
                                             .whitespace_nowrap()
                                             .children(terminal_screen_rows.into_iter().enumerate().map(
                                                 |(row_index, row)| {
+                                                    let selected = terminal_selected_rows.get(row_index).copied().unwrap_or(false);
                                                     div()
                                                         .id(("terminal-colored-row", row_index))
                                                         .whitespace_nowrap()
                                                         .line_height(px(terminal_font_size * 1.3))
+                                                        .bg(rgb(if selected { ACTIVE } else { BG }))
+                                                        .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |this, _, _, cx| {
+                                                            this.begin_terminal_line_selection(row_index, cx);
+                                                        }))
+                                                        .on_mouse_move(cx.listener(move |this, _, _, cx| {
+                                                            this.extend_terminal_line_selection(row_index, cx);
+                                                        }))
                                                         .child(
                                                             gpui::StyledText::new(row.text)
                                                                 .with_highlights(row.spans.into_iter().map(|span| {
@@ -6761,7 +7094,7 @@ impl Render for Workbench {
                                                                         span.range,
                                                                         gpui::HighlightStyle {
                                                                             color: Some(rgb(style.fg).into()),
-                                                                            background_color: Some(rgb(style.bg).into()),
+                                                                            background_color: Some(rgb(if selected { ACTIVE } else { style.bg }).into()),
                                                                             font_weight: style.bold.then_some(gpui::FontWeight::BOLD),
                                                                             font_style: style.italic.then_some(gpui::FontStyle::Italic),
                                                                             underline: style.underline.then_some(gpui::UnderlineStyle {
@@ -6786,7 +7119,15 @@ impl Render for Workbench {
                                                 window.focus(&this.terminal_keyboard_focus);
                                             }))
                                             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
-                                                if this.send_terminal_key_for_pane(PaneSlot::Primary, event, cx) { cx.stop_propagation(); }
+                                                if event.keystroke.modifiers.control
+                                                    && event.keystroke.modifiers.shift
+                                                    && event.keystroke.key.eq_ignore_ascii_case("c")
+                                                {
+                                                    this.copy_primary_terminal_text(false, cx);
+                                                    cx.stop_propagation();
+                                                } else if this.send_terminal_key_for_pane(PaneSlot::Primary, event, cx) {
+                                                    cx.stop_propagation();
+                                                }
                                             }))
                                             .flex_1()
                                             .min_h_0()
@@ -7912,6 +8253,8 @@ fn main() {
                         terminal_key_queue: VecDeque::new(),
                         terminal_key_queue_target: None,
                         terminal_key_sending: false,
+                        terminal_auto_resize: TerminalAutoResizeGate::default(),
+                        terminal_line_selection: None,
                         show_terminal_attach_picker: false,
                         terminal_create_flow: TerminalCreateFlow::default(),
                         terminal_layout_restore: None,
