@@ -351,3 +351,46 @@ gate remains open.
   **not staged** or deleted without the workspace tool's destructive action
   approval. Keep production `main` untouched and GPUI
   `supported=false`; no remote push, tag or release.
+
+## Follow-up: IME-safe pane moves and isolated dual-PTY verification (2026-11-08)
+
+- Continued on **the same** `integrate/gpui-p0p1p2-20261108` worktree;
+  no new worktree, production merge, push or release was requested.
+- Added a red-then-green Rust regression for transferring a live Editor tab
+  while Windows IME marked text is pending. The prior implementation removed
+  the document from the source NativeEditor during composition. It now
+  refuses the transfer without altering the buffer, tab ID, revision,
+  selection or Undo history; after committing the candidate, the same
+  session can move and undo the committed Chinese character as one edit.
+  The mixed workbench reports why the move was refused.
+- `cargo test --manifest-path desktop_gpui/Cargo.toml --no-default-features
+  --lib --locked --offline`: **224/224 PASS**. `cargo check --locked
+  --offline`, native `cargo build --locked --offline`, `cargo fmt --check`
+  and `git diff --check`: **PASS** on Windows. The existing
+  `proc-macro-error2` future-incompatibility advisory remains.
+- Built the experimental `alera.exe` from `rust/alera-cli` and ran the
+  opt-in Windows `tests/live_runtime_host.rs` using that CLI, with
+  `ALERA_GPUI_TEST_APP` absent. The test creates and kills its **own**
+  temporary authenticated Runtime Host and never uses production Host
+  files or sessions. **1/1 PASS**.
+- The expanded integration test creates two actual independent Host PTYs,
+  writes a different marker file from each, reads their own incremental
+  output using separate cursors, rejects cross-session output leakage, and
+  proves that closing the local split preview does not terminate either
+  Host session. It also binds the real Host identities to the **new**
+  `WorkbenchPaneLayout`, verifying per-pane selection, focus swap and
+  non-focused Host read target; this is not merely a synthetic model test.
+
+### Remaining GUI acceptance (not claimed by headless tests)
+
+- With an available Windows foreground desktop: operate both independent
+  NativeEditor panes using real pointer and keyboard; save both files,
+  drag an unsaved file between panes, Undo/Redo, close/restart and verify
+  file-backed split restoration plus scratch recovery.
+- With a real Windows Zhuyin IME: verify preedit, candidate selection,
+  commit/cancel, focus swap and attempted pane move during composition.
+- With a disposable authenticated Runtime Host: confirm actual **GPUI UI**
+  two-pane PTY streaming, raw keyboard target, resize and visual VT output.
+- Keep `supported=false`; the previous GUI proof on a single NativeEditor
+  owner does not validate the newer two-entity implementation. Leave
+  `.gpui-smoke-20261108/` untracked and untouched without cleanup approval.
