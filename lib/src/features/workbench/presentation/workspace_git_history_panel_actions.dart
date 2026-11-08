@@ -18,6 +18,7 @@ extension _GitHistoryPanelActions on _GitHistoryPanelState {
       globalPosition,
       isCurrentBranch: isCurrentBranch,
       canPullIntoCurrentBranch: isCurrentUpstream,
+      hasExistingWorktree: widget.hasExistingWorktree(itemRef.name),
     );
     if (!mounted || action == null) {
       return;

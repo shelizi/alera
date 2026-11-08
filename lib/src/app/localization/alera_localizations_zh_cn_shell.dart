@@ -145,6 +145,7 @@ const Map<String, String> _simplifiedChineseShell = <String, String>{
   'Merge conflicts in {branch}. Resolve them in Source Control.':
       '{branch} 发生合并冲突，请在源代码管理中处理。',
   'Switch to Branch': '切换到分支',
+  'Switch to Worktree': '切换到 Worktree',
   'Rename Branch...': '重命名分支…',
   'Delete Branch': '删除分支',
   'Merge into Current Branch': '合并到当前分支',

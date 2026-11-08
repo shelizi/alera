@@ -35,6 +35,16 @@ class _WorkspaceBranchStatusBarControlState
   static const _mergeAction = 'merge';
   static const _pullAction = 'pull';
   static const _pushAction = 'push';
+  static const _switchAction = 'switch';
+
+  Workspace? _existingWorktree(String branch) {
+    if (!widget.sourceControlScope.isWorkspaceRoot) return null;
+    return existingWorktreeForBranch(
+      state: ref.read(workbenchControllerProvider),
+      currentWorkspace: widget.workspace,
+      branch: branch,
+    );
+  }
 
   @override
   void initState() {
@@ -142,6 +152,19 @@ class _WorkspaceBranchStatusBarControlState
         position.dy,
       ),
       items: <PopupMenuEntry<String>>[
+        if (branch != _current && !_switching)
+          PopupMenuItem<String>(
+            key: ValueKey<String>('workspace-branch-switch:$branch'),
+            value: _switchAction,
+            child: Text(
+              context.tr(
+                _existingWorktree(branch) != null
+                    ? 'Switch to Worktree'
+                    : 'Switch to Branch',
+              ),
+            ),
+          ),
+        if (branch != _current && !_switching) const PopupMenuDivider(),
         PopupMenuItem<String>(
           key: ValueKey<String>('workspace-branch-pull:$branch'),
           value: _pullAction,
@@ -180,7 +203,9 @@ class _WorkspaceBranchStatusBarControlState
       ],
     );
     if (!mounted) return;
-    if (selected == _pullAction) {
+    if (selected == _switchAction) {
+      _selectBranch(branch);
+    } else if (selected == _pullAction) {
       await _synchronizeBranch(branch, pull: true);
     } else if (selected == _pushAction) {
       await _synchronizeBranch(branch, pull: false);
@@ -366,7 +391,13 @@ class _WorkspaceBranchStatusBarControlState
     setState(() => _switching = true);
     try {
       await widget.onSwitchBranch(branch);
-      if (mounted) setState(() => _current = branch);
+      // Navigation to a different worktree unmounts this status bar; never
+      // display the target branch as if the old checkout itself had changed.
+      if (mounted &&
+          ref.read(workbenchControllerProvider).activeWorkspaceId ==
+              widget.workspace.id) {
+        setState(() => _current = branch);
+      }
     } catch (error) {
       if (mounted) {
         AleraToast.show(context, message: error.toString(), tone: .error);
@@ -555,7 +586,13 @@ class _WorkspaceBranchStatusBarControlState
                                       const SizedBox(width: AleraTokens.space4),
                                       Expanded(
                                         child: Tooltip(
-                                          message: row.fullPath,
+                                          message:
+                                              _existingWorktree(
+                                                    row.branch ?? '',
+                                                  ) !=
+                                                  null
+                                              ? '${row.fullPath} · ${context.tr('Switch to Worktree')}'
+                                              : row.fullPath,
                                           child: Text(
                                             row.segment,
                                             maxLines: 1,
@@ -569,6 +606,19 @@ class _WorkspaceBranchStatusBarControlState
                                           ),
                                         ),
                                       ),
+                                      if (row.branch != null &&
+                                          !selected &&
+                                          _existingWorktree(row.branch!) !=
+                                              null)
+                                        Tooltip(
+                                          message: context.tr(
+                                            'Switch to Worktree',
+                                          ),
+                                          child: const Icon(
+                                            AleraIcons.folderSpecial,
+                                            size: 14,
+                                          ),
+                                        ),
                                       if (row.branch != null)
                                         AleraIconButton(
                                           key: ValueKey(

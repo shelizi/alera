@@ -2,6 +2,109 @@ part of 'workbench_controller_test.dart';
 
 void _registerWorkbenchControllerCreateWorkspaceTests() {
   test(
+    'branch navigation selects existing Worktree without checkout',
+    () async {
+      await _controller.bootstrap();
+      final current = await _selectMainWorkspace(_controller, _harness);
+      final target = await _harness.workbenchRepository.upsertWorkspace(
+        current.copyWith(
+          id: 'linked-feature',
+          kind: WorkspaceKind.linked,
+          name: 'Feature',
+          branch: 'feature/existing',
+          path: p.join(_harness.tempDir.path, 'linked-feature'),
+        ),
+      );
+      await _flushUntil(
+        () => _controller.state
+            .workspacesFor(current.projectId)
+            .any((workspace) => workspace.id == target.id),
+      );
+      _controller.toggleProjectCollapsed(_harness.project.id);
+
+      final outcome = await _controller.switchBranchOrSelectWorktree(
+        project: _harness.project,
+        workspace: current,
+        branch: 'feature/existing',
+      );
+
+      expect(outcome, BranchWorkspaceNavigationResult.selectedWorktree);
+      expect(_controller.state.activeWorkspaceId, target.id);
+      expect(
+        _controller.state.viewPrefs.collapsedProjectIds,
+        isNot(contains(_harness.project.id)),
+      );
+      expect(
+        _harness.gitBackend.calls.where(
+          (call) => call.method == 'checkoutBranch',
+        ),
+        isEmpty,
+      );
+    },
+  );
+
+  test(
+    'branch navigation restores archived Worktree instead of checkout',
+    () async {
+      await _controller.bootstrap();
+      final current = await _selectMainWorkspace(_controller, _harness);
+      final archived = await _harness.workbenchRepository.upsertWorkspace(
+        current.copyWith(
+          id: 'archived-feature',
+          kind: WorkspaceKind.linked,
+          branch: 'feature/archived',
+          name: 'Archived',
+          path: p.join(_harness.tempDir.path, 'archived-feature'),
+          archivedAt: DateTime.utc(2026, 8, 1),
+        ),
+      );
+      await _flushUntil(
+        () => _controller.state
+            .workspacesFor(current.projectId)
+            .any((workspace) => workspace.id == archived.id),
+      );
+
+      final outcome = await _controller.switchBranchOrSelectWorktree(
+        project: _harness.project,
+        workspace: current,
+        branch: 'feature/archived',
+      );
+
+      expect(outcome, BranchWorkspaceNavigationResult.selectedWorktree);
+      expect(_controller.state.activeWorkspaceId, archived.id);
+      expect(_controller.state.activeWorkspace?.isArchived, isFalse);
+      expect(
+        _harness.gitBackend.calls.where(
+          (call) => call.method == 'checkoutBranch',
+        ),
+        isEmpty,
+      );
+    },
+  );
+
+  test('branch navigation checks out only when Worktree is absent', () async {
+    await _controller.bootstrap();
+    final current = await _selectMainWorkspace(_controller, _harness);
+    _harness.gitBackend.sourceBranches.add('feature/unclaimed');
+
+    final outcome = await _controller.switchBranchOrSelectWorktree(
+      project: _harness.project,
+      workspace: current,
+      branch: 'feature/unclaimed',
+    );
+
+    expect(outcome, BranchWorkspaceNavigationResult.switchedBranch);
+    expect(_controller.state.activeWorkspaceId, current.id);
+    expect(_controller.state.activeWorkspace?.branch, 'feature/unclaimed');
+    expect(
+      _harness.gitBackend.calls.where(
+        (call) => call.method == 'checkoutBranch',
+      ),
+      hasLength(1),
+    );
+  });
+
+  test(
     'createWorkspace surfaces service failures in state and rethrows',
     () async {
       _harness.gitBackend.failingWorktreeAddBranches.add('feature/broken');

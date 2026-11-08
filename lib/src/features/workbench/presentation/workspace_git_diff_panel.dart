@@ -457,6 +457,14 @@ class _WorkspaceGitDiffPanelState extends ConsumerState<WorkspaceGitDiffPanel> {
                   onRevertCommit: _revertCommit,
                   onResetToCommit: _resetToCommit,
                   onRefAction: _handleGitHistoryRefAction,
+                  hasExistingWorktree: (branch) =>
+                      widget.sourceControlScope.isWorkspaceRoot &&
+                      existingWorktreeForBranch(
+                            state: ref.read(workbenchControllerProvider),
+                            currentWorkspace: widget.workspace,
+                            branch: branch,
+                          ) !=
+                          null,
                   onBoundaryAction: _handleGitHistoryBoundaryAction,
                   currentUpstream: state.asData?.value.repositoryState.upstream,
                   onCommitChanges: _focusCommitMessage,

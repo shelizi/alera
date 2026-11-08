@@ -8,6 +8,8 @@ import 'package:alera/src/design_system/buttons/alera_icon_button.dart';
 import 'package:alera/src/features/workbench/application/branch_compare_current_service.dart';
 import 'package:alera/src/features/shell/application/branch_merge_into_current_service.dart';
 import 'package:alera/src/features/workbench/application/workbench_branch_favorites.dart';
+import 'package:alera/src/features/workbench/application/workbench_controller.dart'
+    show existingWorktreeForBranch;
 import 'package:alera/src/features/workbench/application/workspace_explorer_reveal.dart';
 import 'package:alera/src/features/workbench/domain/workspace_source_control_scope.dart';
 import 'package:alera/src/features/workbench/application/detached_tab_window_service.dart';

@@ -299,6 +299,24 @@ extension _WorkspaceGitDiffPanelActions on _WorkspaceGitDiffPanelState {
     if (callback == null) {
       return;
     }
+    if (widget.sourceControlScope.isWorkspaceRoot &&
+        existingWorktreeForBranch(
+              state: ref.read(workbenchControllerProvider),
+              currentWorkspace: widget.workspace,
+              branch: branch,
+            ) !=
+            null) {
+      // Switching workspace is navigation: do not refresh the old Git root or
+      // report that its checkout changed.
+      try {
+        await callback(branch);
+      } catch (error) {
+        if (mounted) {
+          AleraToast.show(context, message: error.toString(), tone: .error);
+        }
+      }
+      return;
+    }
     await _run(() async {
       await callback(branch);
       await _notifier.refresh();

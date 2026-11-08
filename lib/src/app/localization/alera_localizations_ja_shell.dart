@@ -144,6 +144,7 @@ const Map<String, String> _japaneseShell = <String, String>{
   'Merge conflicts in {branch}. Resolve them in Source Control.':
       '{branch} でマージの競合が発生しました。ソース管理で解決してください。',
   'Switch to Branch': 'ブランチに切り替え',
+  'Switch to Worktree': 'Worktree に切り替え',
   'Rename Branch...': 'ブランチ名を変更…',
   'Delete Branch': 'ブランチを削除',
   'Merge into Current Branch': '現在のブランチにマージ',

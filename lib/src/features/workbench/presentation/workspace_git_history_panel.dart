@@ -50,6 +50,7 @@ class const _GitHistoryPanel({
   final Future<void> Function(GitHistoryItem item, GitResetMode mode)?
   onResetToCommit,
   required final GitHistoryRefMenuCallback onRefAction,
+  required final bool Function(String branch) hasExistingWorktree,
   required final GitHistoryBoundaryMenuCallback onBoundaryAction,
   required final String? currentUpstream,
   required final VoidCallback onCommitChanges,

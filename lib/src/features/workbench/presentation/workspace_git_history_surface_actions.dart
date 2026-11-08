@@ -295,6 +295,14 @@ extension _WorkspaceGitHistorySurfaceActions
           !isCurrentBranch &&
           _currentBranch != null &&
           _currentBranch != 'HEAD',
+      hasExistingWorktree:
+          _sourceControlScope.isWorkspaceRoot &&
+          existingWorktreeForBranch(
+                state: ref.read(workbenchControllerProvider),
+                currentWorkspace: widget.workspace,
+                branch: itemRef.name,
+              ) !=
+              null,
     );
     if (!mounted || action == null) {
       return;
@@ -389,13 +397,25 @@ extension _WorkspaceGitHistorySurfaceActions
       return;
     }
     try {
-      await ref
-          .read(workbenchControllerProvider.notifier)
-          .switchWorkspaceBranch(
-            project: project,
-            workspace: widget.workspace,
-            branch: itemRef.name,
-          );
+      if (_sourceControlScope.isWorkspaceRoot) {
+        final outcome = await ref
+            .read(workbenchControllerProvider.notifier)
+            .switchBranchOrSelectWorktree(
+              project: project,
+              workspace: widget.workspace,
+              branch: itemRef.name,
+            );
+        if (outcome == BranchWorkspaceNavigationResult.selectedWorktree) {
+          return;
+        }
+      } else {
+        await ref
+            .read(gitBackendProvider)
+            .checkoutBranch(
+              path: _sourceControlScope.path,
+              branch: itemRef.name,
+            );
+      }
       if (!mounted) {
         return;
       }

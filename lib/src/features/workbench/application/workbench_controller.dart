@@ -3,6 +3,7 @@ import 'package:alera/src/features/workbench/domain/workspace_section.dart';
 import 'dart:async';
 
 import 'package:alera/src/features/workbench/application/workbench_branch_favorites.dart';
+import 'package:alera/src/features/workbench/application/workbench_branch_worktree_lookup.dart';
 
 import 'package:alera/src/features/agent_status/application/agent_status_controller.dart';
 import 'package:alera/src/features/agent_status/application/agent_status_providers.dart';

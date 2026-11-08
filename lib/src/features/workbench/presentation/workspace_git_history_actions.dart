@@ -27,6 +27,7 @@ Future<GitHistoryRefMenuAction?> showGitHistoryRefMenu(
   bool canPullIntoCurrentBranch = false,
   bool canCompareBranches = false,
   bool canCompareWithCurrentBranch = false,
+  bool hasExistingWorktree = false,
 }) async {
   final kind = _gitHistoryRefMenuKind(itemRef);
   return showGitHistoryRefMenuForKind(
@@ -43,6 +44,7 @@ Future<GitHistoryRefMenuAction?> showGitHistoryRefMenu(
     canPullIntoCurrentBranch: canPullIntoCurrentBranch,
     canCompareBranches: canCompareBranches,
     canCompareWithCurrentBranch: canCompareWithCurrentBranch,
+    hasExistingWorktree: hasExistingWorktree,
   );
 }
 

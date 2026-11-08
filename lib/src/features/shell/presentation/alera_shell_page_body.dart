@@ -310,11 +310,12 @@ class _AleraShellPageBodyState extends ConsumerState<_AleraShellPageBody>
                                         ),
                                       );
                                     } else {
-                                      await controller.switchWorkspaceBranch(
-                                        project: project,
-                                        workspace: workspace,
-                                        branch: branch,
-                                      );
+                                      await controller
+                                          .switchBranchOrSelectWorktree(
+                                            project: project,
+                                            workspace: workspace,
+                                            branch: branch,
+                                          );
                                     }
                                   },
                             onFocusSourceControlFolder:
@@ -545,7 +546,7 @@ class _AleraShellPageBodyState extends ConsumerState<_AleraShellPageBody>
                             },
                             onSwitchBranch: (branch) async {
                               if (sourceControlScope.isWorkspaceRoot) {
-                                await controller.switchWorkspaceBranch(
+                                await controller.switchBranchOrSelectWorktree(
                                   project: project!,
                                   workspace: workspace,
                                   branch: branch,

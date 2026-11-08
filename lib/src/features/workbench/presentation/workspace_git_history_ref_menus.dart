@@ -73,6 +73,7 @@ Future<GitHistoryRefMenuAction?> showGitHistoryRefMenuForKind(
   bool canCompareBranches = false,
   bool canCompareWithCurrentBranch = false,
   bool canPullIntoCurrentBranch = false,
+  bool hasExistingWorktree = false,
 }) async {
   if (kind == GitHistoryRefMenuKind.unsupported) {
     return null;
@@ -114,11 +115,20 @@ Future<GitHistoryRefMenuAction?> showGitHistoryRefMenuForKind(
       >[
         AleraDropdownEntry<GitHistoryRefMenuAction>(
           value: .switchBranch,
-          label: isCurrentBranch ? 'Current Branch' : 'Switch to Branch',
+          label: isCurrentBranch
+              ? 'Current Branch'
+              : hasExistingWorktree
+              ? 'Switch to Worktree'
+              : 'Switch to Branch',
           localizeLabel: true,
           selected: isCurrentBranch,
           enabled: !isCurrentBranch,
-          leading: const Icon(AleraIcons.gitBranch, size: 16),
+          leading: Icon(
+            hasExistingWorktree && !isCurrentBranch
+                ? AleraIcons.folderSpecial
+                : AleraIcons.gitBranch,
+            size: 16,
+          ),
         ),
         const AleraDropdownEntry<GitHistoryRefMenuAction>(
           value: .renameBranch,
@@ -171,7 +181,7 @@ Future<GitHistoryRefMenuAction?> showGitHistoryRefMenuForKind(
           value: .openInWorktree,
           label: 'Open in New Worktree',
           localizeLabel: true,
-          enabled: !isCurrentBranch,
+          enabled: !isCurrentBranch && !hasExistingWorktree,
           leading: const Icon(AleraIcons.folderSpecial, size: 16),
         ),
         const PopupMenuDivider(),
