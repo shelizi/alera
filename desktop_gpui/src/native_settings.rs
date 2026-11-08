@@ -25,6 +25,10 @@ pub struct NativeSettings {
     pub confirm_project_removal: bool,
     pub confirm_workspace_removal: bool,
     pub auto_archive_workspaces_after_days: u64,
+    /// A Native-only preference; deliberately excluded from Host MCP setting
+    /// get/update and never copied from Classic's Agent Profile catalog.
+    #[serde(default)]
+    pub default_agent_profile_id: Option<String>,
 }
 
 impl Default for NativeSettings {
@@ -41,11 +45,20 @@ impl Default for NativeSettings {
             confirm_project_removal: true,
             confirm_workspace_removal: true,
             auto_archive_workspaces_after_days: 0,
+            default_agent_profile_id: None,
         }
     }
 }
 
 impl NativeSettings {
+    fn valid_agent_profile_id(id: &str) -> bool {
+        !id.is_empty()
+            && id.len() <= 128
+            && id
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b':'))
+    }
+
     pub fn get(&self, path: &str) -> Option<Value> {
         Some(match path {
             "general.autoGitFetchEnabled" => json!(self.auto_git_fetch_enabled),
@@ -93,6 +106,10 @@ impl NativeSettings {
 
     fn validate(&self) -> io::Result<()> {
         if self.version != VERSION
+            || self
+                .default_agent_profile_id
+                .as_deref()
+                .is_some_and(|id| !Self::valid_agent_profile_id(id))
             || [
                 (
                     "general.autoGitFetchEnabled",
@@ -218,20 +235,7 @@ impl NativeSettingsStore {
                 "Native setting is not writable or has invalid value",
             ));
         }
-        let parent = self
-            .path
-            .parent()
-            .ok_or_else(|| io::Error::other("Missing Native state directory"))?;
-        fs::create_dir_all(parent)?;
-        let lock_path = self.path.with_extension("json.lock");
-        let lock_file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&lock_path)?;
-        let _lock = SettingsFileLock {
-            path: lock_path,
-            file: Some(lock_file),
-        };
+        let _lock = self.lock()?;
         let mut settings = self.read()?;
         let current = settings
             .get(path)
@@ -259,6 +263,58 @@ impl NativeSettingsStore {
             ));
         }
         Ok(readback)
+    }
+
+    /// Native-local CAS for the default Agent Profile. This setting cannot
+    /// be accessed through the Host's scalar MCP settings allowlist.
+    pub fn compare_and_set_default_agent_profile(
+        &self,
+        expected: Option<&str>,
+        next: Option<&str>,
+    ) -> io::Result<NativeSettings> {
+        if expected.is_some_and(|id| !NativeSettings::valid_agent_profile_id(id))
+            || next.is_some_and(|id| !NativeSettings::valid_agent_profile_id(id))
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Invalid Native default Agent Profile id",
+            ));
+        }
+        let _lock = self.lock()?;
+        let mut settings = self.read()?;
+        if settings.default_agent_profile_id.as_deref() != expected {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "Native default Agent Profile changed since selection",
+            ));
+        }
+        settings.default_agent_profile_id = next.map(str::to_owned);
+        settings.validate()?;
+        self.persist(&settings)?;
+        let readback = self.read()?;
+        if readback.default_agent_profile_id.as_deref() != next {
+            return Err(io::Error::other(
+                "Native Agent Profile readback did not match write",
+            ));
+        }
+        Ok(readback)
+    }
+
+    fn lock(&self) -> io::Result<SettingsFileLock> {
+        let parent = self
+            .path
+            .parent()
+            .ok_or_else(|| io::Error::other("Missing Native state directory"))?;
+        fs::create_dir_all(parent)?;
+        let path = self.path.with_extension("json.lock");
+        let file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)?;
+        Ok(SettingsFileLock {
+            path,
+            file: Some(file),
+        })
     }
 
     fn persist(&self, settings: &NativeSettings) -> io::Result<()> {
@@ -400,5 +456,71 @@ mod tests {
             "A second Native window must not race the first writer"
         );
         assert_eq!(store.get("editor.tabSize").unwrap(), json!(4));
+    }
+
+    #[test]
+    fn native_default_agent_profile_is_local_only_cas_and_survives_restart() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = NativeSettingsStore::new(temp.path());
+        assert_eq!(store.read().unwrap().default_agent_profile_id, None);
+        let saved = store
+            .compare_and_set_default_agent_profile(None, Some("managed_codex"))
+            .unwrap();
+        assert_eq!(
+            saved.default_agent_profile_id.as_deref(),
+            Some("managed_codex")
+        );
+        assert!(
+            saved.get("agents.defaultProfileId").is_none(),
+            "Host MCP must not see this local-only preference"
+        );
+        assert_eq!(
+            NativeSettingsStore::new(temp.path())
+                .read()
+                .unwrap()
+                .default_agent_profile_id
+                .as_deref(),
+            Some("managed_codex")
+        );
+        assert!(store
+            .compare_and_set_default_agent_profile(None, Some("other"))
+            .is_err());
+        assert!(store
+            .compare_and_set_default_agent_profile(Some("managed_codex"), Some("../bad"))
+            .is_err());
+        assert_eq!(
+            store
+                .compare_and_set_default_agent_profile(Some("managed_codex"), None)
+                .unwrap()
+                .default_agent_profile_id,
+            None
+        );
+        assert!(store
+            .compare_and_set_default_agent_profile(Some("managed_codex"), None)
+            .is_err());
+    }
+
+    #[test]
+    fn older_native_settings_json_migrates_missing_profile_field_without_erasing_preferences() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = NativeSettingsStore::new(temp.path());
+        let previous = NativeSettings::default();
+        let mut value = serde_json::to_value(previous).unwrap();
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("default_agent_profile_id");
+        std::fs::write(&store.path, serde_json::to_vec(&value).unwrap()).unwrap();
+        let restored = store.read().unwrap();
+        assert!(restored.auto_git_fetch_enabled);
+        assert_eq!(restored.default_agent_profile_id, None);
+        store
+            .compare_and_set_default_agent_profile(None, Some("test_profile"))
+            .unwrap();
+        assert_eq!(store.get("editor.tabSize").unwrap(), json!(4));
+        assert_eq!(
+            store.read().unwrap().default_agent_profile_id.as_deref(),
+            Some("test_profile")
+        );
     }
 }
