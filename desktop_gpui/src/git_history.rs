@@ -1,11 +1,14 @@
 //! Bounded read-only history, commit preview and local branch comparison.
 //! All repository I/O belongs on a background worker, never in GPUI render.
 use git2::{BranchType, DiffFormat, DiffOptions, Oid, Repository, Sort};
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 
 const MAX_HISTORY: usize = 96;
 const MAX_BRANCHES: usize = 80;
 const MAX_PATCH: usize = 24 * 1024;
+/// Path-limited graph reads are background jobs but may still traverse a
+/// large repository. Never run an unbounded full-history file scan.
+const MAX_FILTER_SCAN: usize = 2048;
 
 #[derive(Debug, Clone)]
 pub struct GitBranchRow {
@@ -42,6 +45,96 @@ pub struct GitHistoryOptions {
     pub favorites_only: bool,
     pub selected_ref: Option<String>,
     pub favorites: Vec<String>,
+    /// Host-validated Workspace-relative paths, checked independently again
+    /// by Native. Paths never become shell arguments or Git revspecs.
+    pub file_path: Option<String>,
+    pub git_diff_root: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct HistoryPathFilter {
+    relative_to_repo: PathBuf,
+    directory: bool,
+}
+
+impl HistoryPathFilter {
+    fn touches(&self, diff: &git2::Diff<'_>) -> bool {
+        diff.deltas().any(|delta| {
+            [delta.old_file().path(), delta.new_file().path()]
+                .into_iter()
+                .flatten()
+                .any(|path| {
+                    if self.directory {
+                        path.starts_with(&self.relative_to_repo)
+                    } else {
+                        path == self.relative_to_repo
+                    }
+                })
+        })
+    }
+}
+
+fn validated_relative_path(path: &str) -> Result<&Path, String> {
+    let relative = Path::new(path);
+    if path.is_empty()
+        || path.len() > 1024
+        || path.contains(':')
+        || path.contains('\0')
+        || !relative
+            .components()
+            .all(|component| matches!(component, Component::Normal(_)))
+    {
+        return Err("Invalid Git Graph Workspace-relative path".into());
+    }
+    Ok(relative)
+}
+
+/// Resolve scope from an actual current Workspace directory. Disallow
+/// symlink escapes even if the Host already validated its request.
+fn history_repo_and_path_filter(
+    workspace: &Path,
+    options: &GitHistoryOptions,
+) -> Result<(Repository, Option<HistoryPathFilter>), String> {
+    let root = dunce::canonicalize(workspace).map_err(|error| error.to_string())?;
+    if !root.is_dir() {
+        return Err("Git Graph Workspace directory is unavailable".into());
+    }
+    let scope = if let Some(relative) = options.git_diff_root.as_deref() {
+        let relative = validated_relative_path(relative)?;
+        let scope = dunce::canonicalize(root.join(relative))
+            .map_err(|_| "Git Graph source control scope does not exist".to_string())?;
+        if !scope.starts_with(&root) || !scope.is_dir() {
+            return Err("Git Graph scope is outside the Workspace".into());
+        }
+        scope
+    } else {
+        root.clone()
+    };
+    let repo = repo_in(&scope)?;
+    let repo_root = dunce::canonicalize(
+        repo.workdir()
+            .ok_or("Git Graph worktree has no working directory")?,
+    )
+    .map_err(|error| error.to_string())?;
+    let (selected, directory) = if let Some(file) = options.file_path.as_deref() {
+        let file = validated_relative_path(file)?;
+        let target = dunce::canonicalize(root.join(file))
+            .map_err(|_| "Git Graph file does not exist".to_string())?;
+        if !target.starts_with(&scope) || !target.is_file() {
+            return Err("Git Graph file must be inside the selected Workspace scope".into());
+        }
+        (target, false)
+    } else {
+        (scope, true)
+    };
+    let relative = selected
+        .strip_prefix(&repo_root)
+        .map_err(|_| "Git Graph path is outside the repository".to_string())?;
+    let filter = (!relative.as_os_str().is_empty()).then(|| HistoryPathFilter {
+        relative_to_repo: relative.to_path_buf(),
+        directory,
+    });
+    Ok((repo, filter))
 }
 
 fn repo_in(workspace: &Path) -> Result<Repository, String> {
@@ -62,7 +155,7 @@ impl GitHistorySnapshot {
     }
 
     pub fn load_filtered(workspace: &Path, options: &GitHistoryOptions) -> Result<Self, String> {
-        let repo = repo_in(workspace)?;
+        let (repo, filter) = history_repo_and_path_filter(workspace, options)?;
         let current = repo
             .head()
             .ok()
@@ -158,13 +251,38 @@ impl GitHistorySnapshot {
             }
         }
         let mut commits = Vec::new();
+        let mut scanned = 0usize;
         for oid in walk {
+            if filter.is_some() && scanned >= MAX_FILTER_SCAN {
+                truncated = true;
+                break;
+            }
+            scanned += 1;
             let oid = oid.map_err(|e| e.to_string())?;
+            let commit = repo.find_commit(oid).map_err(|e| e.to_string())?;
+            if let Some(filter) = &filter {
+                let parent_tree = if commit.parent_count() > 0 {
+                    Some(
+                        commit
+                            .parent(0)
+                            .and_then(|parent| parent.tree())
+                            .map_err(|error| error.to_string())?,
+                    )
+                } else {
+                    None
+                };
+                let tree = commit.tree().map_err(|error| error.to_string())?;
+                let diff = repo
+                    .diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), None)
+                    .map_err(|error| error.to_string())?;
+                if !filter.touches(&diff) {
+                    continue;
+                }
+            }
             if commits.len() >= MAX_HISTORY {
                 truncated = true;
                 break;
             }
-            let commit = repo.find_commit(oid).map_err(|e| e.to_string())?;
             commits.push(GitCommitRow {
                 oid: oid.to_string(),
                 short: oid.to_string()[..8].to_owned(),
@@ -520,6 +638,99 @@ mod tests {
         assert_eq!(repo.head().unwrap().peel_to_commit().unwrap().id(), second);
         assert_eq!(
             fs::read_to_string(dir.path().join("中文.txt")).unwrap(),
+            "second\n"
+        );
+    }
+
+    #[test]
+    fn file_scoped_git_graph_only_lists_matching_commits_and_refuses_path_escape() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        fs::create_dir_all(dir.path().join("docs")).unwrap();
+        let signature = git2::Signature::now("Native Scope Test", "scope@example.invalid").unwrap();
+        for (path, text, message) in [
+            ("src/entry.rs", "first\n", "initial source"),
+            ("docs/notes.md", "doc\n", "documentation change"),
+            ("src/entry.rs", "second\n", "source change"),
+        ] {
+            fs::write(dir.path().join(path), text).unwrap();
+            let mut index = repo.index().unwrap();
+            index.add_path(Path::new(path)).unwrap();
+            let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+            let parents = repo.head().ok().and_then(|head| head.peel_to_commit().ok());
+            if let Some(parent) = parents.as_ref() {
+                repo.commit(
+                    Some("HEAD"),
+                    &signature,
+                    &signature,
+                    message,
+                    &tree,
+                    &[parent],
+                )
+                .unwrap();
+            } else {
+                repo.commit(Some("HEAD"), &signature, &signature, message, &tree, &[])
+                    .unwrap();
+            }
+        }
+        let before_head = repo.head().unwrap().target();
+        let source = GitHistorySnapshot::load_filtered(
+            dir.path(),
+            &GitHistoryOptions {
+                file_path: Some("src/entry.rs".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(source.commits.len(), 2);
+        assert!(source
+            .commits
+            .iter()
+            .all(|commit| commit.subject.contains("source")));
+        let subtree = GitHistorySnapshot::load_filtered(
+            dir.path(),
+            &GitHistoryOptions {
+                git_diff_root: Some("src".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(subtree.commits.len(), 2);
+        let selected = GitHistorySnapshot::load_filtered(
+            dir.path(),
+            &GitHistoryOptions {
+                git_diff_root: Some("src".into()),
+                file_path: Some("src/entry.rs".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(selected.commits.len(), 2);
+        for options in [
+            GitHistoryOptions {
+                git_diff_root: Some("../outside".into()),
+                ..Default::default()
+            },
+            GitHistoryOptions {
+                file_path: Some("../outside.txt".into()),
+                ..Default::default()
+            },
+            GitHistoryOptions {
+                file_path: Some("docs/not-found.md".into()),
+                ..Default::default()
+            },
+            GitHistoryOptions {
+                git_diff_root: Some("src".into()),
+                file_path: Some("docs/notes.md".into()),
+                ..Default::default()
+            },
+        ] {
+            assert!(GitHistorySnapshot::load_filtered(dir.path(), &options).is_err());
+        }
+        assert_eq!(repo.head().unwrap().target(), before_head);
+        assert_eq!(
+            fs::read_to_string(dir.path().join("src/entry.rs")).unwrap(),
             "second\n"
         );
     }

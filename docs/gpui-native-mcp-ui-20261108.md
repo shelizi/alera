@@ -34,14 +34,14 @@ MCP window ID** action. A copied window ID is a selector, **not** a token.
 | `open_file` | Reuse existing or open file-backed NativeEditor | Correct editor file active; optional line/caret navigation verified |
 | `select_tab` | Focus existing authenticated Host Terminal tab | Selected Host handle maps to requested workspace+tab ID |
 | `focus_agent` | Focus existing authenticated Host Agent tab | Requested workspace, tab ID, Agent type **and Agent session handle** match |
-| `open_git_graph` | Show Native Git Graph with local/remote branches, favorites-only and exact selected ref | Requested bounded history is loaded in the visible panel **before** success; unsupported file/diff scopes are refused |
+| `open_git_graph` | Show Native Git Graph with local/remote branches, favorites-only, selected ref, optional Workspace-relative file and Git root scope | Requested bounded history is loaded in the visible panel **before** success; invalid or escaping paths are refused |
 | `compare_branches` | Display a merge-base-to-head Git diff in the Native Git preview | Background comparison is read-only, scoped, and installed in the visible pane before receipt |
 | `create_workspace` | Delegate to Host-owned `workspace add` managed Git worktree workflow, then switch Native | New active Host Workspace, Project ID, branch and canonical worktree path independently verified before receipt containing `createdWorkspaceId` |
 | `get_setting` | Read one of the eight Host-allowlisted Native settings from the independent state store | Return the persisted typed scalar as `settingValue` |
 | `update_setting` | Compare `expectedValue`, atomically persist a writable scalar, read it back and update the Native UI owner | Applied only with readback; stale expected values or invalid/corrupt data fail closed |
 | `open_settings` | Show the actual GPUI Native Settings panel: Application, Terminal, Editor, Agents, or Agent Profiles | Visible requested section and Native settings read must succeed; Host inventories refresh asynchronously |
 
-Unsupported (external editors, `openMode=new`, and unsupported Git filters) return
+Unsupported external editors and `openMode=new` return
 `applied=false`, never a made-up success. Native workbench's existing dirty
 buffer guards can refuse cross-workspace switching. All file targets are
 canonicalized again and required to remain within the target workspace;
@@ -52,8 +52,17 @@ independently from Classic. A selected ref must resolve to exactly one displayed
 local or remote branch; ambiguous or missing names fail closed. Remote favorites
 are namespaced as `refs/remotes/<name>` and persisted in a bounded Native-only
 per-workspace file. Native never changes repository configuration to keep a
-favorite. `filePath` and `gitDiffRoot` restrictions for `open_git_graph`
-remain unsupported and explicitly refuse a Host success receipt.
+favorite. Native also accepts `open_git_graph.filePath` for a currently
+existing Workspace file and `gitDiffRoot` for a Workspace-contained
+source-control directory. Paths are resolved and canonicalized a second time
+inside Native, reject symlink traversal or files outside the requested scope,
+and do not reach shell commands or Git revspecs. File history shows commits
+that modified the requested path, based on each commit's first parent.
+Directory history includes commits touching the subtree. Reads have a
+2048-commit scan ceiling and a 96-result display ceiling; truncated results
+are marked. A visible **Clear path filter** control returns to the full graph.
+This is a read-only, first-parent file-history filter rather than a rename
+tracking implementation; moved or deleted files are not yet followed.
 
 ## Native Settings ownership and behavior
 

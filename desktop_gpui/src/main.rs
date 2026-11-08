@@ -2142,7 +2142,7 @@ impl Workbench {
             args.keys().all(|key| {
                 matches!(
                     key.as_str(),
-                    "allBranches" | "favoritesOnly" | "selectedRef"
+                    "allBranches" | "favoritesOnly" | "selectedRef" | "filePath" | "gitDiffRoot"
                 )
             }) && ["allBranches", "favoritesOnly"]
                 .into_iter()
@@ -2150,6 +2150,15 @@ impl Workbench {
                 && args.get("selectedRef").is_none_or(|value| {
                     value.as_str().is_some_and(|name| {
                         !name.is_empty() && name.len() <= 128 && !name.chars().any(char::is_control)
+                    })
+                })
+                && ["filePath", "gitDiffRoot"].into_iter().all(|key| {
+                    args.get(key).is_none_or(|value| {
+                        value.as_str().is_some_and(|path| {
+                            !path.is_empty()
+                                && path.len() <= 1024
+                                && !path.chars().any(char::is_control)
+                        })
                     })
                 })
         });
@@ -2182,6 +2191,14 @@ impl Workbench {
         }
         self.git_history_options.selected_ref = args
             .get("selectedRef")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned);
+        self.git_history_options.file_path = args
+            .get("filePath")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned);
+        self.git_history_options.git_diff_root = args
+            .get("gitDiffRoot")
             .and_then(serde_json::Value::as_str)
             .map(str::to_owned);
         self.git_history_open = true;
@@ -4444,6 +4461,8 @@ impl Render for Workbench {
         let git_graph_all_branches = self.git_history_options.all_branches;
         let git_graph_favorites_only = self.git_history_options.favorites_only;
         let git_graph_selected_ref = self.git_history_options.selected_ref.clone();
+        let git_graph_file = self.git_history_options.file_path.clone();
+        let git_graph_scope = self.git_history_options.git_diff_root.clone();
         let git_history_status = if self.git_history_loading {
             "Loading commit graph…".to_owned()
         } else if let Some(history) = &self.git_history {
@@ -5006,6 +5025,34 @@ impl Render for Workbench {
                                     .flex_col()
                                     .gap_1()
                                     .child(div().text_xs().text_color(rgb(MUTED)).child(git_history_status))
+                                    .child(if git_graph_file.is_some() || git_graph_scope.is_some() {
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .gap_3()
+                                            .child(div()
+                                                .text_xs()
+                                                .text_color(rgb(TEXT))
+                                                .child(format!(
+                                                    "History scope: {} · File: {}",
+                                                    git_graph_scope.as_deref().unwrap_or("Workspace"),
+                                                    git_graph_file.as_deref().unwrap_or("All files"),
+                                                )))
+                                            .child(div()
+                                                .id("git-graph-clear-path-scope")
+                                                .cursor_pointer()
+                                                .text_xs()
+                                                .text_color(rgb(TEXT))
+                                                .child("Clear path filter")
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.git_history_options.file_path = None;
+                                                    this.git_history_options.git_diff_root = None;
+                                                    this.refresh_git_history(cx);
+                                                })))
+                                            .into_any_element()
+                                    } else {
+                                        div().h(px(0.0)).into_any_element()
+                                    })
                                     .child(div()
                                         .flex()
                                         .items_center()
