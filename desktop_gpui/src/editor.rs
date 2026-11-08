@@ -488,6 +488,46 @@ impl EditorDocument {
         Ok(())
     }
 
+    /// Move to a one-based disk search line/Unicode-scalar column, snapping
+    /// inside a combined grapheme to its start. Search results may be stale,
+    /// so missing lines fail closed and columns beyond EOL are clamped.
+    /// Navigation never changes source bytes or the undo history.
+    pub fn navigate_to_content_hit(&mut self, line: usize, column: usize) -> io::Result<()> {
+        if line == 0 || column == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Invalid search position",
+            ));
+        }
+        if self.marked.is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "Finish IME composition before navigating search results",
+            ));
+        }
+        let range = EditorLineIndex::new(&self.content)
+            .line_range(&self.content, line - 1)
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::NotFound, "Search line no longer exists")
+            })?;
+        let text = self.content[range.clone()].trim_end_matches('\r');
+        let scalar_offset = text
+            .char_indices()
+            .nth(column - 1)
+            .map(|(offset, _)| offset)
+            .unwrap_or(text.len());
+        let grapheme_offset = if scalar_offset == text.len() {
+            scalar_offset
+        } else {
+            text.grapheme_indices(true)
+                .take_while(|(offset, _)| *offset <= scalar_offset)
+                .last()
+                .map(|(offset, _)| offset)
+                .unwrap_or(0)
+        };
+        self.set_pointer_caret(range.start + grapheme_offset)
+    }
+
     pub fn extend_pointer_selection(&mut self, offset: usize) -> io::Result<()> {
         self.validate_pointer_offset(offset)?;
         self.move_to(offset, true, true);
@@ -1133,6 +1173,49 @@ pub fn edge_scroll_offset(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn search_hit_navigation_snaps_graphemes_and_preserves_contents() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut doc = EditorDocument::scratch(temp.path()).unwrap();
+        let original = "first\nA e\u{301}🧑‍💻 Z\r\nthird";
+        doc.replace(None, original).unwrap();
+        let history = doc.history_depth();
+
+        doc.navigate_to_content_hit(2, 4).unwrap();
+        assert_eq!(doc.cursor(), "first\nA ".len(), "combining mark snaps to e");
+        doc.navigate_to_content_hit(2, 6).unwrap();
+        assert_eq!(
+            doc.cursor(),
+            "first\nA e\u{301}".len(),
+            "ZWJ snaps to emoji start"
+        );
+        doc.navigate_to_content_hit(2, 999).unwrap();
+        assert_eq!(doc.cursor(), "first\nA e\u{301}🧑‍💻 Z".len());
+        doc.navigate_to_content_hit(3, 1).unwrap();
+        assert_eq!(doc.cursor(), "first\nA e\u{301}🧑‍💻 Z\r\n".len());
+        assert_eq!(doc.history_depth(), history);
+        assert_eq!(doc.content(), original);
+    }
+
+    #[test]
+    fn search_hit_navigation_rejects_invalid_line_and_active_ime() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut doc = EditorDocument::scratch(temp.path()).unwrap();
+        doc.replace(None, "first\nsecond").unwrap();
+        let cursor = doc.cursor();
+        assert!(doc.navigate_to_content_hit(0, 1).is_err());
+        assert!(doc.navigate_to_content_hit(99, 1).is_err());
+        assert!(doc.navigate_to_content_hit(1, 0).is_err());
+        assert_eq!(doc.cursor(), cursor);
+        doc.replace_and_mark(None, "ㄓ", Some(1..1)).unwrap();
+        let marked_cursor = doc.cursor();
+        assert_eq!(
+            doc.navigate_to_content_hit(1, 1).unwrap_err().kind(),
+            io::ErrorKind::WouldBlock
+        );
+        assert_eq!(doc.cursor(), marked_cursor);
+    }
 
     #[test]
     fn utf16_utf8_conversion_does_not_split_cjk_or_surrogates() {

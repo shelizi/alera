@@ -256,6 +256,30 @@ impl NativeEditor {
         Ok(effect)
     }
 
+    /// Locate a content-search hit in the active native editor. The path
+    /// guard prevents a failed open from moving another document's caret.
+    pub fn navigate_to_content_hit(
+        &mut self,
+        path: &Path,
+        line: usize,
+        column: usize,
+        cx: &mut Context<Self>,
+    ) -> io::Result<()> {
+        if self.doc().path() != Some(path) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Search result does not match the active editor",
+            ));
+        }
+        self.doc_mut().navigate_to_content_hit(line, column)?;
+        self.stop_drag();
+        self.line_geometry.clear();
+        self.reveal_caret();
+        self.status = format!("Navigated to content search result {line}:{column}");
+        cx.notify();
+        Ok(())
+    }
+
     pub fn open_scratch(&mut self, root: &Path, cx: &mut Context<Self>) -> io::Result<OpenEffect> {
         let effect = self.tabs.open_scratch(root)?;
         self.line_geometry.clear();

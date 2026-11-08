@@ -802,6 +802,36 @@ impl Workbench {
         cx.notify();
     }
 
+    fn open_content_search_hit(
+        &mut self,
+        path: &std::path::Path,
+        line: usize,
+        column: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.model.open_path(path) {
+            self.model
+                .set_status("Search result is unavailable; rerun search");
+            cx.notify();
+            return;
+        }
+        self.open_editor(cx);
+        let Some(editor) = self.editor.clone() else {
+            return;
+        };
+        match editor.update(cx, |editor, cx| {
+            editor.navigate_to_content_hit(path, line, column, cx)
+        }) {
+            Ok(()) => window.focus(&editor.read(cx).focus_handle(cx)),
+            Err(error) => self.model.set_status(format!(
+                "Cannot navigate to search result {line}:{column}: {error}; rerun search"
+            )),
+        }
+        self.persist_session();
+        cx.notify();
+    }
+
     fn editor_dirty(&self, cx: &mut Context<Self>) -> bool {
         self.editor
             .as_ref()
@@ -2623,12 +2653,10 @@ impl Render for Workbench {
                                                             .text_xs()
                                                             .hover(|style| style.bg(rgb(ACTIVE)))
                                                             .child(label)
-                                                            .on_click(cx.listener(move |this, _, _, cx| {
-                                                                if this.model.open_path(&path) {
-                                                                    this.open_editor(cx);
-                                                                    this.persist_session();
-                                                                }
-                                                                cx.notify();
+                                                            .on_click(cx.listener(move |this, _, window, cx| {
+                                                                this.open_content_search_hit(
+                                                                    &path, hit.line, hit.column, window, cx,
+                                                                );
                                                             }))
                                                     })),
                                             )
@@ -3462,7 +3490,7 @@ impl Render for Workbench {
                                             .px_3()
                                             .text_sm()
                                             .text_color(rgb(MUTED))
-                                            .child(terminal_status),
+                                            .child(terminal_status.clone()),
                                     )
                                     .child(
                                         div()
@@ -3643,7 +3671,18 @@ impl Render for Workbench {
                                     .p_4()
                                     .text_sm()
                                     .text_color(rgb(MUTED))
-                                    .child("No Host terminal selected. Choose an existing session in Projects on the left.")
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .flex_col()
+                                            .gap_2()
+                                            .child("No Host terminal selected. Choose an existing session in Projects on the left.")
+                                            .child(
+                                                div()
+                                                    .text_color(rgb(TEXT))
+                                                    .child(terminal_status),
+                                            ),
+                                    )
                                     .into_any_element()
                             }),
                     )
