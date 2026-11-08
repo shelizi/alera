@@ -128,3 +128,45 @@ was made to invent a GPUI Agent tab without a working runtime agent backend.
 
 Production `main`, existing Host sessions, and Flutter releases are not
 changed. Keep `supported=false`; no push/tag/release.
+
+## Follow-up: Mixed Terminal / Editor / Host-backed Agent tabs (2026-11-08)
+
+This is **phase 1 of unified tab management**, not the completed Flutter
+pane/group architecture. `desktop_gpui/src/workbench_tabs.rs` now projects the
+existing `TerminalDock` and `EditorTabs` into a **single ordered strip**:
+
+- `Terminal` is a Host-attached PTY preview. `Agent` is shown only if the
+  authenticated Runtime Host session has a real `agent_type`; there is no fake
+  or independently launched GPUI agent process.
+- `Editor` retains its native buffer, undo, recovery and conflict-safe save.
+  Each open tab gets a monotonically allocated per-editor-instance ID; a
+  reopened path or scratch cannot borrow the identity of a closed tab.
+- The common strip supports focus, middle-click close, explicit close button,
+  right-click in-workbench actions, Close Others, Close Right, move left/right,
+  and mixed-kind drag to another slot. Terminal right-click `Second Pane`
+  delegates to the pre-existing Host-only preview split.
+- Stale tab callbacks verify workspace generation and original owner identity
+  before touching another tab. Closing a Host tab hides its **local preview**,
+  never terminates an Alera Host PTY. Dirty editor tabs remain protected by
+  the existing explicit discard / draft-recovery rules.
+- Existing upper preview, native editor, and native terminal tab strips are
+  retained during this transitional integration, so the new mixed strip is
+  **not yet the sole tab bar**. Their editing and keyboard/IME implementation
+  remain owned by existing entities.
+
+### Verification and pending acceptance
+
+- TDD covers the mixed-order projection, focus, stale identity handling,
+  close/reopen editor IDs and forward/backward slot moves.
+- Headless model regression: **194/194 PASS**. Reproduce with
+  `cargo test --manifest-path desktop_gpui/Cargo.toml --no-default-features --lib --locked --offline`.
+- Windows native compilation: **PASS** (only pre-existing
+  `proc-macro-error2` future-incompatibility warning). Reproduce with
+  `cargo build --manifest-path desktop_gpui/Cargo.toml --locked --offline`.
+- Still required: **real Windows mouse/IME drag + context-menu acceptance**;
+  a unified split-pane tree that can show Editor or Agent in either pane;
+  persistence of mixed tab order/panes; deduplicating transitional local
+  strips; pointer-anchored native context menus; detached windows. The
+  `Agent` tab classification does not establish full agent-launch/MCP parity.
+
+No production merge, push, tag or release. GPUI remains `supported=false`.
