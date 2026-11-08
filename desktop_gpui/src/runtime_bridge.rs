@@ -89,6 +89,12 @@ impl RuntimeCliBridge {
         }
     }
 
+    /// Internal subprocess parameters; the Agent adapter still checks for an
+    /// existing Host and can invoke only strict no-start CLI verbs.
+    pub(crate) fn agent_cli_paths(&self) -> (&Path, &Path) {
+        (&self.executable, &self.runtime_dir)
+    }
+
     /// Only allow listing, reading, workspace listing, explicit creation and
     /// input to an existing Host. --no-start is mandatory; older CLI builds
     /// fail closed, rather than silently starting a new runtime host or

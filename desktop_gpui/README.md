@@ -26,6 +26,14 @@ remains an absolute-path override for disposable instances.
 For distribution and coexistence details see
 [`docs/alera-desktop-editions-20261108.md`](../docs/alera-desktop-editions-20261108.md).
 
+**Agent Profile launch (functional first pass):** The Projects sidebar can
+list an existing Host's Agent Profiles, choose a profile, enter a task and
+launch it in the currently registered Workspace. The existing CLI/Host
+retains ownership of agent sessions and MCP injection; Native's new CLI
+`--no-start` flag prevents implicit Host startup. The returned tab must be
+corroborated by an authenticated Host Agent session list before attach.
+See [the Agent Profile workflow and remaining MCP/GUI gates](../docs/gpui-native-agent-profile-20261108.md).
+
 **Current MVP direction:** [GPUI three-pane workbench](../docs/gpui-three-pane-mvp-20261107.md) — **Projects on the left, Terminal (default) / basic Editor in the center, Explorer + read-only Git on the right.** Terminal input now goes through the existing Host CLI; this is not a new PTY owner or full TUI attach. The older architecture/history sections below describe earlier phases.
 
 **Latest active work and verified integration status (2026-11-07):** [GPUI active work ledger](../docs/gpui-active-work-ledger-20261107.md). It records the reconciled Git inspector, per-tab close, Explorer tree, native Find/Replace and project content-search panels, scratch recovery, verified Rust tests, and remaining real-GUI acceptance gates. Earlier test counts below are historical snapshots, not the latest merged baseline.

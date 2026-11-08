@@ -2,6 +2,9 @@
 mod editor_ui;
 mod quick_open_ui;
 
+use alera_gpui_desktop::agent_profiles::{
+    matching_agent_handle, AgentProfileRow, LaunchedAgentTab,
+};
 use alera_gpui_desktop::edition::NATIVE_APP_NAME;
 use alera_gpui_desktop::editor::EditorDraftStore;
 use alera_gpui_desktop::editor_tabs::{EditorTabs, MAX_EDITOR_TABS};
@@ -224,6 +227,15 @@ struct Workbench {
     runtime_bridge: Option<RuntimeCliBridge>,
     runtime_status: String,
     runtime_loading: bool,
+    agent_profiles: Vec<AgentProfileRow>,
+    agent_profiles_loading: bool,
+    agent_profiles_request: u64,
+    agent_selected_profile: Option<String>,
+    agent_prompt_input: Entity<QuickOpenInput>,
+    agent_launch_busy: bool,
+    agent_launch_request: u64,
+    agent_pending_tab: Option<LaunchedAgentTab>,
+    agent_status: String,
     terminals: TerminalDock,
     terminal_tab_context: Option<TerminalTabContextTarget>,
     terminal_panes: TerminalPaneLayout,
@@ -1488,7 +1500,11 @@ impl Workbench {
     }
 
     fn switch_workspace(&mut self, root: PathBuf, cx: &mut Context<Self>) {
-        if self.worktree_busy || self.terminal_create_flow.is_creating() || self.git_action_busy {
+        if self.worktree_busy
+            || self.terminal_create_flow.is_creating()
+            || self.git_action_busy
+            || self.agent_launch_busy
+        {
             self.model.set_status(
                 "Finish current Git, Worktree or Host terminal create before switching projects",
             );
@@ -1583,6 +1599,16 @@ impl Workbench {
         self.git_diff = None;
         self.git_diff_loading = false;
         self.git_diff_request = self.git_diff_request.wrapping_add(1);
+        // Agent profiles are Host-owned, but selection and an in-flight
+        // launch response must never attach to a different GPUI workspace.
+        self.agent_profiles_request = self.agent_profiles_request.wrapping_add(1);
+        self.agent_profiles_loading = false;
+        self.agent_launch_request = self.agent_launch_request.wrapping_add(1);
+        self.agent_launch_busy = false;
+        self.agent_pending_tab = None;
+        self.agent_prompt_input
+            .update(cx, |input, cx| input.clear(cx));
+        self.agent_status = "Select an Agent Profile and enter a task".into();
         self.workspace_generation = self.workspace_generation.wrapping_add(1);
         self.project_tree_loading = false;
         self.project_tree_groups.clear();
@@ -1624,6 +1650,7 @@ impl Workbench {
             self.recent_workspaces = vec![canonical];
         }
         self.refresh_terminals(cx);
+        self.refresh_agent_profiles(cx);
         self.refresh_project_tree(cx);
         self.refresh_worktrees(cx);
         self.refresh_git(cx);
@@ -1751,6 +1778,136 @@ impl Workbench {
         if self.terminals.restore_previews_from_host_layout(&layout) > 0 {
             self.refresh_terminal_output(cx);
         }
+    }
+
+    fn refresh_agent_profiles(&mut self, cx: &mut Context<Self>) {
+        if self.agent_profiles_loading {
+            return;
+        }
+        if self.runtime_bridge.is_none() {
+            self.runtime_bridge = RuntimeCliBridge::discover().ok();
+        }
+        let Some(bridge) = self.runtime_bridge.clone() else {
+            self.agent_status = "Alera CLI not installed; cannot list Agent Profiles".into();
+            cx.notify();
+            return;
+        };
+        self.agent_profiles_loading = true;
+        self.agent_profiles_request = self.agent_profiles_request.wrapping_add(1);
+        let request = self.agent_profiles_request;
+        let generation = self.workspace_generation;
+        self.agent_status = "Listing Host Agent Profiles…".into();
+        cx.spawn(async move |view, cx| {
+            let result = cx
+                .background_spawn(async move { bridge.list_agent_profiles() })
+                .await;
+            view.update(cx, |view, cx| {
+                if view.workspace_generation != generation || view.agent_profiles_request != request
+                {
+                    return;
+                }
+                view.agent_profiles_loading = false;
+                match result {
+                    Ok(profiles) => {
+                        view.agent_status =
+                            format!("{} Agent Profile(s) available", profiles.len());
+                        if !view
+                            .agent_selected_profile
+                            .as_ref()
+                            .is_some_and(|id| profiles.iter().any(|profile| profile.id == *id))
+                        {
+                            view.agent_selected_profile =
+                                profiles.first().map(|profile| profile.id.clone());
+                        }
+                        view.agent_profiles = profiles;
+                    }
+                    Err(error) => {
+                        view.agent_profiles.clear();
+                        view.agent_selected_profile = None;
+                        view.agent_status = format!("Agent Profiles unavailable: {error}");
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn launch_selected_agent(&mut self, cx: &mut Context<Self>) {
+        if self.agent_launch_busy || self.agent_pending_tab.is_some() {
+            self.agent_status =
+                "Finish confirming the previous Agent tab first; use Refresh or Dismiss tracking"
+                    .into();
+            cx.notify();
+            return;
+        }
+        let Some(profile_id) = self
+            .agent_selected_profile
+            .clone()
+            .filter(|id| self.agent_profiles.iter().any(|profile| &profile.id == id))
+        else {
+            self.agent_status = "Select an existing Agent Profile first".into();
+            cx.notify();
+            return;
+        };
+        let input = self.agent_prompt_input.read(cx);
+        if input.composing() {
+            self.agent_status = "Finish IME composition before launching an Agent".into();
+            cx.notify();
+            return;
+        }
+        let prompt = input.query().trim().to_owned();
+        if prompt.is_empty() {
+            self.agent_status = "Enter a task prompt before starting the Agent".into();
+            cx.notify();
+            return;
+        }
+        if self.runtime_bridge.is_none() {
+            self.runtime_bridge = RuntimeCliBridge::discover().ok();
+        }
+        let Some(bridge) = self.runtime_bridge.clone() else {
+            self.agent_status = "Alera CLI not installed; cannot start Agent".into();
+            cx.notify();
+            return;
+        };
+        let root = self.model.root().to_path_buf();
+        let generation = self.workspace_generation;
+        self.agent_launch_busy = true;
+        self.agent_launch_request = self.agent_launch_request.wrapping_add(1);
+        let ticket = self.agent_launch_request;
+        self.agent_status =
+            "Checking registered Host workspace and launching selected Agent…".into();
+        cx.notify();
+        cx.spawn(async move |view, cx| {
+            let result = cx.background_spawn(async move {
+                let registered = bridge.list_registered_workspaces()?;
+                let workspace_id = select_registered_host_workspace(&root, &registered)?;
+                bridge.launch_agent_profile(&profile_id, &workspace_id, &prompt)
+            }).await;
+            view.update(cx, |view, cx| {
+                if view.workspace_generation != generation || view.agent_launch_request != ticket {
+                    return;
+                }
+                view.agent_launch_busy = false;
+                match result {
+                    Ok(created) => {
+                        view.agent_pending_tab = Some(created);
+                        view.agent_prompt_input.update(cx, |input, cx| input.clear(cx));
+                        view.agent_status = "Agent launched; confirming the exact Host tab identity…".into();
+                        view.refresh_terminals(cx);
+                    }
+                    Err(error) => {
+                        view.agent_status = format!(
+                            "Agent launch not confirmed: {error}. Check Attach existing before retrying; the Host might have created the tab"
+                        );
+                        view.refresh_terminals(cx);
+                    }
+                }
+                cx.notify();
+            }).ok();
+        }).detach();
     }
 
     fn create_host_terminal(&mut self, cx: &mut Context<Self>) {
@@ -1885,6 +2042,25 @@ impl Workbench {
                                 .confirm_sessions(&view.terminals.sessions)
                             {
                                 view.select_terminal(created.handle, cx);
+                            }
+                            // Launch reply contains a Host workspace+tab id,
+                            // not a trustworthy PTY handle. Resolve through
+                            // a fresh authenticated session list, and require
+                            // this to be an Agent session before opening.
+                            let found_agent = view.agent_pending_tab.as_ref()
+                                .and_then(|pending| matching_agent_handle(pending, &view.terminals.sessions))
+                                .map(str::to_owned);
+                            if let Some(handle) = found_agent {
+                                view.select_terminal(handle.clone(), cx);
+                                let attached = view.terminals.active_tab
+                                    .and_then(|index| view.terminals.tabs.get(index))
+                                    .is_some_and(|tab| tab.handle == handle);
+                                if attached {
+                                    view.agent_pending_tab = None;
+                                    view.agent_status = "Agent Host tab confirmed and attached".into();
+                                } else {
+                                    view.agent_status = "Host Agent exists, but Native preview tabs are full; close one and Refresh".into();
+                                }
                             }
                         }
                     }
@@ -3320,6 +3496,19 @@ impl Render for Workbench {
         let worktree_delete_pending = self.worktree_delete_pending.clone();
         let runtime_status = self.runtime_status.clone();
         let runtime_loading = self.runtime_loading;
+        let agent_profile_rows: Vec<_> = self
+            .agent_profiles
+            .iter()
+            .take(28)
+            .cloned()
+            .enumerate()
+            .collect();
+        let agent_profile_selected = self.agent_selected_profile.clone();
+        let agent_profiles_loading = self.agent_profiles_loading;
+        let agent_launch_busy = self.agent_launch_busy;
+        let agent_pending = self.agent_pending_tab.is_some();
+        let agent_prompt_input = self.agent_prompt_input.clone();
+        let agent_status = self.agent_status.clone();
         let terminal_list_loading = self.terminal_list_loading;
         let terminal_read_loading = self.terminal_read_loading.is_some();
         let terminal_sessions: Vec<_> = self
@@ -5933,6 +6122,78 @@ impl Render for Workbench {
                                         this.refresh_runtime(cx);
                                     })),
                             )
+                            .child(div()
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .child(div()
+                                    .font_weight(gpui::FontWeight::BOLD)
+                                    .text_sm()
+                                    .child("Agent Profiles"))
+                                .child(div()
+                                    .id("agent-profiles-refresh")
+                                    .cursor_pointer()
+                                    .text_xs()
+                                    .text_color(rgb(TEXT))
+                                    .child(if agent_profiles_loading { "Loading…" } else { "Refresh ↻" })
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.refresh_agent_profiles(cx);
+                                    }))))
+                            .child(div()
+                                .id("agent-profiles-list")
+                                .max_h(px(116.0))
+                                .overflow_y_scroll()
+                                .children(agent_profile_rows.into_iter().map(|(index, profile)| {
+                                    let selected = agent_profile_selected.as_deref() == Some(profile.id.as_str());
+                                    let id = profile.id;
+                                    let kind = if profile.managed { "Managed" } else { "Command" };
+                                    let label = format!("{} {} · {} ({kind})",
+                                        if selected { "●" } else { "○" }, profile.name, profile.agent_type);
+                                    div()
+                                        .id(("agent-profile-row", index))
+                                        .cursor_pointer()
+                                        .text_xs()
+                                        .text_color(rgb(if selected { TEXT } else { MUTED }))
+                                        .hover(|style| style.bg(rgb(ACTIVE)))
+                                        .py_1()
+                                        .child(label)
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.agent_selected_profile = Some(id.clone());
+                                            cx.notify();
+                                        }))
+                                })))
+                            .child(agent_prompt_input)
+                            .child(div()
+                                .flex()
+                                .items_center()
+                                .gap_3()
+                                .child(div()
+                                    .id("agent-profile-launch")
+                                    .cursor_pointer()
+                                    .text_sm()
+                                    .text_color(rgb(if agent_launch_busy || agent_pending { MUTED } else { TEXT }))
+                                    .child(if agent_launch_busy { "Starting Agent…" } else { "+ Launch Agent" })
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.launch_selected_agent(cx);
+                                    })))
+                                .child(if agent_pending {
+                                    div()
+                                        .id("agent-dismiss-tracking")
+                                        .cursor_pointer()
+                                        .text_xs()
+                                        .text_color(rgb(MUTED))
+                                        .child("Dismiss tracking")
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.agent_pending_tab = None;
+                                            this.agent_status = "Agent still belongs to Host; use Attach existing to find it".into();
+                                            cx.notify();
+                                        }))
+                                        .into_any_element()
+                                } else { div().h(px(0.0)).into_any_element() }))
+                            .child(div()
+                                .text_xs()
+                                .text_color(rgb(MUTED))
+                                .child(agent_status))
                             .child(
                                 div()
                                     .flex()
@@ -6185,6 +6446,17 @@ fn main() {
                         runtime_bridge,
                         runtime_status,
                         runtime_loading: false,
+                        agent_profiles: Vec::new(),
+                        agent_profiles_loading: false,
+                        agent_profiles_request: 0,
+                        agent_selected_profile: None,
+                        agent_prompt_input: cx.new(|cx| {
+                            QuickOpenInput::with_placeholder("Task for selected Agent…", cx)
+                        }),
+                        agent_launch_busy: false,
+                        agent_launch_request: 0,
+                        agent_pending_tab: None,
+                        agent_status: "Select an Agent Profile and enter a task".into(),
                         terminals: TerminalDock::for_workspace(0),
                         terminal_tab_context: None,
                         terminal_panes: TerminalPaneLayout::default(),
@@ -6215,6 +6487,7 @@ fn main() {
                     view.refresh_project_tree(cx);
                     view.refresh_worktrees(cx);
                     view.refresh_git(cx);
+                    view.refresh_agent_profiles(cx);
                 });
                 view
             },
