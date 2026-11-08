@@ -15,7 +15,8 @@ use alera_gpui_desktop::runtime_bridge::RuntimeCliBridge;
 use alera_gpui_desktop::session::{PreviewSessionStore, TerminalLayout, TerminalLayoutTab};
 use alera_gpui_desktop::terminal::{
     encode_terminal_key, select_registered_host_workspace, TerminalCreateFlow, TerminalCreateTick,
-    TerminalDock, TerminalPollGate, TerminalViewMode, HOST_SESSION_LIST_SCOPE,
+    TerminalDock, TerminalPollGate, TerminalTabContextTarget, TerminalViewMode,
+    HOST_SESSION_LIST_SCOPE,
 };
 use alera_gpui_desktop::terminal_panes::{TerminalPaneLayout, TerminalSplitDirection};
 use alera_gpui_desktop::visual_tokens::{
@@ -92,6 +93,17 @@ enum ExplorerAction {
     Delete,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TerminalContextAction {
+    Focus,
+    Close,
+    CloseOthers,
+    CloseToRight,
+    SplitToSecondary,
+    MoveLeft,
+    MoveRight,
+}
+
 impl ExplorerAction {
     fn label(self) -> &'static str {
         match self {
@@ -160,6 +172,7 @@ struct Workbench {
     runtime_status: String,
     runtime_loading: bool,
     terminals: TerminalDock,
+    terminal_tab_context: Option<TerminalTabContextTarget>,
     terminal_panes: TerminalPaneLayout,
     terminal_input: Entity<QuickOpenInput>,
     terminal_keyboard_focus: gpui::FocusHandle,
@@ -1297,6 +1310,7 @@ impl Workbench {
         // them on workspace changes to prevent cross-project output leakage.
         // Existing Host sessions remain alive and under Host ownership.
         self.terminals = TerminalDock::for_workspace(self.workspace_generation);
+        self.terminal_tab_context = None;
         self.terminal_panes.reset();
         self.terminal_create_flow.cancel();
         self.load_terminal_layout();
@@ -1600,6 +1614,7 @@ impl Workbench {
     }
 
     fn select_terminal(&mut self, handle: String, cx: &mut Context<Self>) {
+        self.terminal_tab_context = None;
         if self.terminals.open(&handle) {
             self.center_view = CenterView::Terminal;
             self.terminal_send_loading = false;
@@ -1905,6 +1920,103 @@ impl Workbench {
         .detach();
     }
 
+    fn show_terminal_tab_context(&mut self, index: usize, cx: &mut Context<Self>) {
+        // Right-click targets the tab under the pointer, not the active Host
+        // input session. No session is attached or mutated by opening a menu.
+        self.terminal_tab_context = self.terminals.context_target_at(index);
+        cx.notify();
+    }
+
+    fn apply_terminal_context(&mut self, action: TerminalContextAction, cx: &mut Context<Self>) {
+        let Some(target) = self.terminal_tab_context.take() else {
+            cx.notify();
+            return;
+        };
+        let Some(index) = self.terminals.index_for_context(&target) else {
+            self.terminals.status = "Terminal tab changed; action canceled".into();
+            cx.notify();
+            return;
+        };
+        match action {
+            TerminalContextAction::Focus => {
+                self.select_terminal(target.handle, cx);
+                return;
+            }
+            TerminalContextAction::Close => {
+                self.terminals.close(index);
+                if self
+                    .terminal_panes
+                    .secondary_index(&self.terminals)
+                    .is_none()
+                {
+                    self.terminal_panes.close_secondary();
+                }
+                self.terminals.status =
+                    "Preview tab closed; Runtime Host terminal remains alive".into();
+                self.save_terminal_layout();
+                self.refresh_terminal_output(cx);
+            }
+            TerminalContextAction::CloseOthers => {
+                let count = self.terminals.close_others(index);
+                self.terminal_panes.close_secondary();
+                self.terminals.status =
+                    format!("Closed {count} other previews; Host sessions remain alive");
+                self.save_terminal_layout();
+                self.refresh_terminal_output(cx);
+            }
+            TerminalContextAction::CloseToRight => {
+                let count = self.terminals.close_to_right(index);
+                if self
+                    .terminal_panes
+                    .secondary_index(&self.terminals)
+                    .is_none()
+                {
+                    self.terminal_panes.close_secondary();
+                }
+                self.terminals.status =
+                    format!("Closed {count} preview(s) to right; Host sessions remain alive");
+                self.save_terminal_layout();
+                self.refresh_terminal_output(cx);
+            }
+            TerminalContextAction::SplitToSecondary => {
+                if self
+                    .terminals
+                    .active()
+                    .is_some_and(|active| active.handle == target.handle)
+                {
+                    self.terminals.status =
+                        "Choose a different Terminal tab for the second pane".into();
+                } else if !self.terminals.context_target_is_live(&target) {
+                    self.terminals.status =
+                        "Cannot split a stopped or stale Host terminal preview".into();
+                } else if self
+                    .terminal_panes
+                    .drop_tab_on_secondary(&mut self.terminals, &target.handle)
+                {
+                    self.terminals.status =
+                        "Second pane assigned to existing Host terminal; PTYs unchanged".into();
+                    self.refresh_terminal_split_output(cx);
+                } else {
+                    self.terminals.status =
+                        "Cannot assign terminal to second pane; attach a valid session".into();
+                }
+            }
+            TerminalContextAction::MoveLeft | TerminalContextAction::MoveRight => {
+                let to = if action == TerminalContextAction::MoveLeft {
+                    index.checked_sub(1)
+                } else {
+                    (index + 1 < self.terminals.tabs.len()).then_some(index + 1)
+                };
+                if let Some(to) = to {
+                    if self.terminals.move_tab(index, to) {
+                        self.save_terminal_layout();
+                    }
+                }
+            }
+        }
+        cx.notify();
+    }
+
     fn toggle_terminal_split(&mut self, cx: &mut Context<Self>) {
         if self.terminal_panes.secondary.is_some() {
             self.terminal_panes.close_secondary();
@@ -2140,6 +2252,11 @@ impl Render for Workbench {
             .enumerate()
             .map(|(i, tab)| (i, tab.title.clone(), tab.running, tab.handle.clone()))
             .collect();
+        let terminal_context_open = self
+            .terminal_tab_context
+            .as_ref()
+            .and_then(|target| self.terminals.index_for_context(target))
+            .is_some();
         let terminal_drag_generation = self.workspace_generation;
         let terminal_active = self.terminals.active_tab;
         let show_terminal_attach_picker = self.show_terminal_attach_picker;
@@ -3260,7 +3377,21 @@ impl Render for Workbench {
                                                                             "{} {title}",
                                                                             if running { "●" } else { "○" }
                                                                         ))
+                                                                        .on_mouse_down(
+                                                                            gpui::MouseButton::Right,
+                                                                            cx.listener(move |this, _, _, cx| {
+                                                                                this.show_terminal_tab_context(index, cx);
+                                                                            }),
+                                                                        )
+                                                                        .on_mouse_up(
+                                                                            gpui::MouseButton::Middle,
+                                                                            cx.listener(move |this, _, _, cx| {
+                                                                                this.show_terminal_tab_context(index, cx);
+                                                                                this.apply_terminal_context(TerminalContextAction::Close, cx);
+                                                                            }),
+                                                                        )
                                                                         .on_click(cx.listener(move |this, _, _, cx| {
+                                                                            this.terminal_tab_context = None;
                                                                             if this.terminals.activate(index) {
                                                                                 this.save_terminal_layout();
                                                                                 this.refresh_terminal_output(cx);
@@ -3299,6 +3430,7 @@ impl Render for Workbench {
                                                                         .text_color(rgb(MUTED))
                                                                         .child("×")
                                                                         .on_click(cx.listener(move |this, _, _, cx| {
+                                                                            this.terminal_tab_context = None;
                                                                             this.terminals.close(index);
                                                                             this.save_terminal_layout();
                                                                             cx.notify();
@@ -3306,6 +3438,88 @@ impl Render for Workbench {
                                                                 )
                                                         },
                                                     )),
+                                            )
+                                            .child(
+                                                div()
+                                                    .id("terminal-tab-context-actions")
+                                                    .when(terminal_context_open, |menu| {
+                                                        menu.flex()
+                                                            .items_center()
+                                                            .gap_3()
+                                                            .px_3()
+                                                            .py_2()
+                                                            .text_xs()
+                                                            .overflow_x_scroll()
+                                                            .border_b_1()
+                                                            .border_color(rgb(BORDER))
+                                                            .bg(rgb(PANEL))
+                                                            .child(
+                                                                div().id("terminal-context-focus")
+                                                                    .cursor_pointer()
+                                                                    .child("Focus")
+                                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                                        this.apply_terminal_context(TerminalContextAction::Focus, cx);
+                                                                    })),
+                                                            )
+                                                            .child(
+                                                                div().id("terminal-context-close")
+                                                                    .cursor_pointer()
+                                                                    .child("Close")
+                                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                                        this.apply_terminal_context(TerminalContextAction::Close, cx);
+                                                                    })),
+                                                            )
+                                                            .child(
+                                                                div().id("terminal-context-close-others")
+                                                                    .cursor_pointer()
+                                                                    .child("Close Others")
+                                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                                        this.apply_terminal_context(TerminalContextAction::CloseOthers, cx);
+                                                                    })),
+                                                            )
+                                                            .child(
+                                                                div().id("terminal-context-close-right")
+                                                                    .cursor_pointer()
+                                                                    .child("Close Right")
+                                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                                        this.apply_terminal_context(TerminalContextAction::CloseToRight, cx);
+                                                                    })),
+                                                            )
+                                                            .child(
+                                                                div().id("terminal-context-split-second")
+                                                                    .cursor_pointer()
+                                                                    .child("Second Pane")
+                                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                                        this.apply_terminal_context(TerminalContextAction::SplitToSecondary, cx);
+                                                                    })),
+                                                            )
+                                                            .child(
+                                                                div().id("terminal-context-move-left")
+                                                                    .cursor_pointer()
+                                                                    .child("Move ←")
+                                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                                        this.apply_terminal_context(TerminalContextAction::MoveLeft, cx);
+                                                                    })),
+                                                            )
+                                                            .child(
+                                                                div().id("terminal-context-move-right")
+                                                                    .cursor_pointer()
+                                                                    .child("Move →")
+                                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                                        this.apply_terminal_context(TerminalContextAction::MoveRight, cx);
+                                                                    })),
+                                                            )
+                                                            .child(
+                                                                div().id("terminal-context-cancel")
+                                                                    .cursor_pointer()
+                                                                    .text_color(rgb(MUTED))
+                                                                    .child("Cancel")
+                                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                                        this.terminal_tab_context = None;
+                                                                        cx.notify();
+                                                                    })),
+                                                            )
+                                                    }),
                                             )
                                             .child(
                                                 div()
@@ -4330,6 +4544,7 @@ fn main() {
                         runtime_status,
                         runtime_loading: false,
                         terminals: TerminalDock::for_workspace(0),
+                        terminal_tab_context: None,
                         terminal_panes: TerminalPaneLayout::default(),
                         terminal_input,
                         terminal_keyboard_focus: cx.focus_handle(),

@@ -642,6 +642,17 @@ pub struct TerminalTab {
     decoder: TextDecoder,
 }
 
+/// Stable target for a Terminal tab context action. The same opaque Host
+/// handle can be recycled; indexes alone do not identify a session.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TerminalTabContextTarget {
+    pub handle: String,
+    workspace_id: String,
+    tab_id: String,
+    generation: u64,
+    workspace_generation: u64,
+}
+
 impl TerminalTab {
     fn new(session: &TerminalSession, generation: u64) -> Self {
         Self {
@@ -926,6 +937,41 @@ impl TerminalDock {
 
     pub fn workspace_generation(&self) -> u64 {
         self.workspace_generation
+    }
+
+    pub fn context_target_at(&self, index: usize) -> Option<TerminalTabContextTarget> {
+        let tab = self.tabs.get(index)?;
+        Some(TerminalTabContextTarget {
+            handle: tab.handle.clone(),
+            workspace_id: tab.workspace_id.clone(),
+            tab_id: tab.tab_id.clone(),
+            generation: tab.generation,
+            workspace_generation: self.workspace_generation,
+        })
+    }
+
+    pub fn index_for_context(&self, target: &TerminalTabContextTarget) -> Option<usize> {
+        if target.workspace_generation != self.workspace_generation {
+            return None;
+        }
+        self.tabs.iter().position(|tab| {
+            tab.handle == target.handle
+                && tab.workspace_id == target.workspace_id
+                && tab.tab_id == target.tab_id
+                && tab.generation == target.generation
+        })
+    }
+
+    /// Host-owned split pane assignment requires the same still-running
+    /// session in the last authenticated Host list.
+    pub fn context_target_is_live(&self, target: &TerminalTabContextTarget) -> bool {
+        self.index_for_context(target).is_some()
+            && self.sessions.iter().any(|session| {
+                session.running
+                    && session.handle == target.handle
+                    && session.workspace_id == target.workspace_id
+                    && session.tab_id == target.tab_id
+            })
     }
 
     /// Drop a list reply captured for a workspace this dock no longer shows.
@@ -2099,5 +2145,63 @@ mod tests {
         assert!(!dock.apply_ticket_chunk(&dropped, chunk("term-3", 0, 3, "stale")));
         assert_eq!(dock.tabs.len(), 1);
         assert_eq!(dock.tabs[0].output, "fine");
+    }
+
+    #[test]
+    fn terminal_context_tracks_host_identity_through_reorder_and_rejects_recycled_handle() {
+        let mut dock = TerminalDock::for_workspace(11);
+        dock.update_sessions(vec![
+            session("term-1"),
+            session("term-2"),
+            session("term-3"),
+        ]);
+        for name in ["term-1", "term-2", "term-3"] {
+            assert!(dock.open(name));
+        }
+        assert!(dock.activate(2));
+        let context = dock.context_target_at(0).unwrap();
+        assert_eq!(context.handle, "term-1");
+        assert_eq!(dock.index_for_context(&context), Some(0));
+        assert!(dock.context_target_is_live(&context));
+        assert!(dock.move_tab(0, 1));
+        assert_eq!(dock.index_for_context(&context), Some(1));
+        assert_eq!(dock.active().unwrap().handle, "term-3");
+
+        // Right-click "Close to Right" affects its clicked tab, while the
+        // Host inventory remains intact and no PTY is terminated.
+        let count = dock.close_to_right(dock.index_for_context(&context).unwrap());
+        assert_eq!(count, 1);
+        assert_eq!(dock.active().unwrap().handle, "term-1");
+        assert_eq!(dock.sessions.len(), 3);
+
+        dock.close(dock.index_for_context(&context).unwrap());
+        assert!(dock.index_for_context(&context).is_none());
+        assert!(dock.open("term-1"));
+        assert!(dock.index_for_context(&context).is_none());
+
+        // Even a Host-reused opaque handle with a different Tab ID must
+        // never become the target of a stale context menu.
+        let mut reused = session("term-1");
+        reused.tab_id = "new-host-tab".into();
+        dock.update_sessions(vec![reused, session("term-2")]);
+        assert!(!dock.context_target_is_live(&dock.context_target_at(1).unwrap()));
+        assert!(dock.open("term-1"));
+        assert!(dock.index_for_context(&context).is_none());
+        assert_eq!(dock.sessions.len(), 2);
+    }
+
+    #[test]
+    fn context_target_cannot_cross_workspaces_or_select_stopped_host() {
+        let mut old = TerminalDock::for_workspace(1);
+        old.update_sessions(vec![session("shared")]);
+        old.open("shared");
+        let token = old.context_target_at(0).unwrap();
+        let mut next = TerminalDock::for_workspace(2);
+        next.update_sessions(vec![session("shared")]);
+        next.open("shared");
+        assert!(next.index_for_context(&token).is_none());
+        assert!(!next.context_target_is_live(&token));
+        next.sessions[0].running = false;
+        assert!(!next.context_target_is_live(&next.context_target_at(0).unwrap()));
     }
 }

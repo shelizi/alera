@@ -93,5 +93,33 @@ the total open tabs to 24 rather than allocating unbounded state.
 Remaining: terminal/agent unified context-menu actions, native popup
 placement, drag between pane groups, and GUI acceptance on high-DPI Windows.
 
+## Follow-up: Terminal tab context parity (2026-11-08)
+
+- Terminal tab **right-click** shows an inline context action row mirroring
+  the editor tab workflow: Focus, Close, Close Others, Close Right, Move
+  Left/Right, Second Pane and Cancel. **Middle-click** closes only the local
+  preview, never the Host-owned PTY.
+- Actions target the **clicked tab**, not implicitly the active terminal.
+  Context identities include the three Host fields (handle, workspace,
+  tabId), the local preview generation and the workspace generation. A
+  closed/reopened tab, recycled opaque handle or workspace switch cannot
+  reactivate an old menu target.
+- Close and bulk-close only alter `TerminalDock.tabs`; authenticated Host
+  session inventory and PTYs remain unchanged. Any orphaned second preview
+  pane is dismissed when its tab disappears.
+- Second Pane requires a distinct, still-running attached session whose Host
+  identity exactly matches the authenticated session list. It delegates to
+  the existing pane-preview assignment, without creating, terminating or
+  attaching a Host PTY.
+- Two Rust TDD cases cover reorder, close/reopen, handle reuse, stopped Host,
+  cross-workspace stale context and preservation of the session inventory.
+- Final Windows GPUI native build and 189-test Rust regression results must
+  be checked independently; compilation does not establish real right-click
+  or middle-click behavior on Windows.
+
+Still missing compared to Flutter: one mixed Terminal/Editor/Agent tab strip,
+full pointer-anchored popup menus and detached-window workflows. No attempt
+was made to invent a GPUI Agent tab without a working runtime agent backend.
+
 Production `main`, existing Host sessions, and Flutter releases are not
 changed. Keep `supported=false`; no push/tag/release.
