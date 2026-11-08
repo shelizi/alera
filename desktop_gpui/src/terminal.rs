@@ -653,6 +653,191 @@ pub struct TerminalTabContextTarget {
     workspace_generation: u64,
 }
 
+/// An auto-resize request is bound to one exact still-live Host tab, not to
+/// whichever terminal happens to be selected when the background task runs.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TerminalViewportProposal {
+    pub target: TerminalTabContextTarget,
+    pub cols: u16,
+    pub rows: u16,
+}
+
+/// Translate the drawable terminal content region (not the whole window)
+/// into bounded VT dimensions. JetBrains Mono is rendered at font_px, with
+/// GPUI row line-height = 1.3 * font_px. Rounding down avoids overflow.
+pub fn estimate_terminal_viewport(
+    region_width_px: f32,
+    region_height_px: f32,
+    font_px: f32,
+) -> Option<(u16, u16)> {
+    if !region_width_px.is_finite()
+        || !region_height_px.is_finite()
+        || !font_px.is_finite()
+        || !(8.0..=48.0).contains(&font_px)
+    {
+        return None;
+    }
+    let columns = ((region_width_px - 24.0) / (font_px * 0.62)).floor();
+    let lines = ((region_height_px - 16.0) / (font_px * 1.3)).floor();
+    if columns < 20.0 || lines < 5.0 {
+        return None;
+    }
+    Some((columns.min(240.0) as u16, lines.min(100.0) as u16))
+}
+
+/// A single, bounded per-Workbench debounce/coalescing gate.  Only visible
+/// Host tab identities are observed; each unique viewport is sent at most
+/// once until its dimensions change. A failed Host request is not spammed
+/// repeatedly while the user is idle.
+#[derive(Debug, Default)]
+pub struct TerminalAutoResizeGate {
+    pending: Vec<(TerminalViewportProposal, std::time::Instant)>,
+    attempted: Vec<TerminalViewportProposal>,
+}
+
+impl TerminalAutoResizeGate {
+    pub fn clear(&mut self) {
+        self.pending.clear();
+        self.attempted.clear();
+    }
+
+    /// Explicit manual viewport presets win over a pending auto-resize until
+    /// the displayed pane size or font changes again.
+    pub fn suspend_until_changed(&mut self, target: &TerminalTabContextTarget) {
+        if let Some((current, _)) = self
+            .pending
+            .iter()
+            .find(|(current, _)| &current.target == target)
+        {
+            let current = current.clone();
+            self.attempted.retain(|old| &old.target != target);
+            self.attempted.push(current);
+        }
+        self.pending
+            .retain(|(current, _)| &current.target != target);
+    }
+
+    pub fn observe(&mut self, visible: Vec<TerminalViewportProposal>, now: std::time::Instant) {
+        self.pending
+            .retain(|(pending, _)| visible.iter().any(|new| new.target == pending.target));
+        self.attempted
+            .retain(|attempted| visible.iter().any(|new| new.target == attempted.target));
+        for new in visible.into_iter().take(2) {
+            if self.attempted.iter().any(|attempted| attempted == &new) {
+                self.pending
+                    .retain(|(pending, _)| pending.target != new.target);
+                continue;
+            }
+            if let Some((current, since)) = self
+                .pending
+                .iter_mut()
+                .find(|(current, _)| current.target == new.target)
+            {
+                if *current != new {
+                    *current = new;
+                    *since = now;
+                }
+            } else {
+                self.pending.push((new, now));
+            }
+        }
+    }
+
+    pub fn take_ready(&mut self, now: std::time::Instant) -> Vec<TerminalViewportProposal> {
+        const DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(300);
+        let mut ready = Vec::new();
+        self.pending.retain(|(change, since)| {
+            if now.saturating_duration_since(*since) >= DEBOUNCE {
+                ready.push(change.clone());
+                false
+            } else {
+                true
+            }
+        });
+        for change in &ready {
+            self.attempted
+                .retain(|previous| previous.target != change.target);
+            self.attempted.push(change.clone());
+        }
+        ready
+    }
+}
+
+/// VT screen selection is a visible-row selection, not a shell command and
+/// not scrollback. Keeping a text snapshot prevents later Host redraws from
+/// silently changing what Copy means; a changed Host read cursor invalidates
+/// it. This first implementation selects whole rows, not character slices.
+#[derive(Debug, Clone)]
+pub struct TerminalLineSelection {
+    target: TerminalTabContextTarget,
+    output_cursor: Option<u64>,
+    rows: Vec<String>,
+    anchor_row: usize,
+    current_row: usize,
+    dragging: bool,
+}
+
+impl TerminalLineSelection {
+    pub fn begin(
+        target: TerminalTabContextTarget,
+        output_cursor: Option<u64>,
+        rows: Vec<String>,
+        row: usize,
+    ) -> Option<Self> {
+        if rows.is_empty()
+            || rows.len() > 100
+            || row >= rows.len()
+            || rows.iter().any(|text| text.len() > 4096)
+        {
+            return None;
+        }
+        Some(Self {
+            target,
+            output_cursor,
+            rows,
+            anchor_row: row,
+            current_row: row,
+            dragging: true,
+        })
+    }
+
+    pub fn is_current(&self, target: &TerminalTabContextTarget, cursor: Option<u64>) -> bool {
+        self.target == *target && self.output_cursor == cursor
+    }
+
+    pub fn extend(&mut self, row: usize) -> bool {
+        if !self.dragging || row >= self.rows.len() {
+            return false;
+        }
+        let changed = self.current_row != row;
+        self.current_row = row;
+        changed
+    }
+
+    pub fn finish(&mut self) {
+        self.dragging = false;
+    }
+
+    pub fn is_dragging(&self) -> bool {
+        self.dragging
+    }
+
+    pub fn includes_row(&self, row: usize) -> bool {
+        (self.anchor_row.min(self.current_row)..=self.anchor_row.max(self.current_row))
+            .contains(&row)
+    }
+
+    pub fn selected_text(&self) -> String {
+        let from = self.anchor_row.min(self.current_row);
+        let to = self.anchor_row.max(self.current_row);
+        self.rows[from..=to]
+            .iter()
+            .map(|row| row.trim_end_matches(' '))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+}
+
 /// A late reply for PTY A may not discard pending keys for PTY B. Only
 /// the exact still-live active session may receive queued raw input; a
 /// failure for the *same* session stops its own queue.
@@ -1290,6 +1475,173 @@ impl TerminalDock {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn terminal_auto_viewport_fits_minimum_and_bounds_dimensions() {
+        assert_eq!(estimate_terminal_viewport(24.0, 160.0, 13.0), None);
+        assert_eq!(estimate_terminal_viewport(500.0, 10.0, 13.0), None);
+        assert_eq!(estimate_terminal_viewport(f32::NAN, 500.0, 13.0), None);
+        assert_eq!(estimate_terminal_viewport(500.0, f32::INFINITY, 13.0), None);
+        assert_eq!(estimate_terminal_viewport(500.0, 200.0, 0.0), None);
+        assert_eq!(
+            estimate_terminal_viewport(1200.0, 600.0, 13.0),
+            Some((145, 34))
+        );
+        assert_eq!(
+            estimate_terminal_viewport(50_000.0, 50_000.0, 13.0),
+            Some((240, 100))
+        );
+        let smaller = estimate_terminal_viewport(800.0, 480.0, 13.0).unwrap();
+        let larger = estimate_terminal_viewport(1200.0, 780.0, 13.0).unwrap();
+        assert!(larger.0 > smaller.0 && larger.1 > smaller.1);
+    }
+
+    #[test]
+    fn auto_resize_coalesces_visible_host_identity_and_new_dimensions() {
+        let start = std::time::Instant::now();
+        let tab = TerminalTabContextTarget {
+            handle: "term-a".into(),
+            workspace_id: "ws".into(),
+            tab_id: "tab".into(),
+            generation: 4,
+            workspace_generation: 7,
+        };
+        let first = TerminalViewportProposal {
+            target: tab.clone(),
+            cols: 80,
+            rows: 24,
+        };
+        let second = TerminalViewportProposal {
+            target: tab.clone(),
+            cols: 120,
+            rows: 36,
+        };
+        let mut gate = TerminalAutoResizeGate::default();
+        gate.observe(vec![first.clone()], start);
+        assert!(gate
+            .take_ready(start + std::time::Duration::from_millis(299))
+            .is_empty());
+        gate.observe(
+            vec![second.clone()],
+            start + std::time::Duration::from_millis(100),
+        );
+        assert!(gate
+            .take_ready(start + std::time::Duration::from_millis(350))
+            .is_empty());
+        assert_eq!(
+            gate.take_ready(start + std::time::Duration::from_millis(401)),
+            vec![second.clone()]
+        );
+        gate.observe(
+            vec![second.clone()],
+            start + std::time::Duration::from_millis(420),
+        );
+        assert!(gate
+            .take_ready(start + std::time::Duration::from_millis(1600))
+            .is_empty());
+        let mut recycled = tab.clone();
+        recycled.tab_id = "new-tab".into();
+        let changed = TerminalViewportProposal {
+            target: recycled,
+            cols: 120,
+            rows: 36,
+        };
+        gate.observe(
+            vec![changed.clone()],
+            start + std::time::Duration::from_millis(1700),
+        );
+        assert_eq!(
+            gate.take_ready(start + std::time::Duration::from_millis(2100)),
+            vec![changed]
+        );
+        gate.observe(vec![], start + std::time::Duration::from_millis(2200));
+        gate.observe(
+            vec![second.clone()],
+            start + std::time::Duration::from_millis(2300),
+        );
+        assert_eq!(
+            gate.take_ready(start + std::time::Duration::from_millis(2600)),
+            vec![second]
+        );
+        gate.clear();
+        assert!(gate
+            .take_ready(start + std::time::Duration::from_millis(3000))
+            .is_empty());
+    }
+
+    #[test]
+    fn manual_resize_preserves_preset_until_pane_geometry_changes() {
+        let target = TerminalTabContextTarget {
+            handle: "term".into(),
+            workspace_id: "ws".into(),
+            tab_id: "tab".into(),
+            generation: 1,
+            workspace_generation: 2,
+        };
+        let start = std::time::Instant::now();
+        let first = TerminalViewportProposal {
+            target: target.clone(),
+            cols: 84,
+            rows: 25,
+        };
+        let second = TerminalViewportProposal {
+            target: target.clone(),
+            cols: 96,
+            rows: 30,
+        };
+        let mut gate = TerminalAutoResizeGate::default();
+        gate.observe(vec![first.clone()], start);
+        gate.suspend_until_changed(&target);
+        gate.observe(vec![first], start + std::time::Duration::from_secs(2));
+        assert!(gate
+            .take_ready(start + std::time::Duration::from_secs(4))
+            .is_empty());
+        gate.observe(
+            vec![second.clone()],
+            start + std::time::Duration::from_secs(5),
+        );
+        assert_eq!(
+            gate.take_ready(start + std::time::Duration::from_millis(5300)),
+            vec![second]
+        );
+    }
+
+    #[test]
+    fn vt_line_selection_copies_only_snapshot_rows_for_exact_host_and_cursor() {
+        let target = TerminalTabContextTarget {
+            handle: "pty-test".into(),
+            workspace_id: "ws-1".into(),
+            tab_id: "tab-1".into(),
+            generation: 9,
+            workspace_generation: 4,
+        };
+        let rows = vec!["first ".into(), "中文字  ".into(), "last".into()];
+        let mut selection =
+            TerminalLineSelection::begin(target.clone(), Some(41), rows, 1).unwrap();
+        assert!(selection.is_current(&target, Some(41)));
+        assert_eq!(selection.selected_text(), "中文字");
+        assert!(selection.extend(0));
+        assert_eq!(selection.selected_text(), "first\n中文字");
+        assert!(selection.includes_row(0));
+        assert!(selection.includes_row(1));
+        assert!(!selection.includes_row(2));
+        selection.finish();
+        assert!(!selection.extend(2));
+        assert!(
+            !selection.is_current(&target, Some(42)),
+            "New Host output invalidates old screen selection"
+        );
+        let recycled = TerminalTabContextTarget {
+            tab_id: "tab-2".into(),
+            ..target.clone()
+        };
+        assert!(
+            !selection.is_current(&recycled, Some(41)),
+            "Never copy a recycled Host handle"
+        );
+        assert!(TerminalLineSelection::begin(target.clone(), None, vec!["ok".into()], 3).is_none());
+        assert!(TerminalLineSelection::begin(target, None, vec!["long".repeat(1030)], 0).is_none());
+    }
 
     #[test]
     fn bounded_resize_verb_never_starts_host_and_rejects_unsafe_geometry() {
