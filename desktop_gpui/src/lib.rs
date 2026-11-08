@@ -7,6 +7,8 @@ pub mod editor;
 pub mod editor_search;
 pub mod editor_session;
 pub mod editor_tabs;
+pub mod explorer_drag;
+pub mod explorer_git_badges;
 pub mod explorer_ops;
 pub mod explorer_selection;
 pub mod explorer_visibility;

@@ -59,8 +59,9 @@ editors, Git comparisons or multi-file actions under misleading names.
   consistency with non-Windows hidden-file settings remain unverified.
 - Ctrl/Shift multi-selection and batch Copy/Cut/Paste now have initial
   Native implementations across tree, flat list and filter results. Native
-  uses bounded, workspace-scoped validation and preflight; actual mouse/
-  keyboard acceptance and drag-to-folder / OS drag in/out parity remain.
+  uses bounded, workspace-scoped validation and preflight. In-app dragging
+  onto a folder now uses the same Cut batch guards, while native Shell drag
+  out and exact row-target OS drag in remain. Pointer acceptance is pending.
 - Single-click versus double-click now has an initial implementation in
   the Native tree, flat list, and filtered search results: one replaceable
   read-only preview, with a second click promoting into the editable Native
@@ -152,8 +153,9 @@ this experimental migration without explicit approval.
   consume text-editor or Terminal clipboard commands. Modified clicks and
   Explorer context right-click restore Explorer keyboard focus. Key-routing
   behavior still needs OS-level acceptance and must not be called verified.
-- Remaining: native OS drag/drop, multi-file deletion UX, per-file Git badges,
-  and real Windows pointer acceptance. Those gaps must not be called complete.
+- Remaining: OS Shell drag in/out parity, multi-file deletion UX, complete
+  Git badge coverage when Git's bounded snapshot truncates, and real Windows
+  pointer acceptance. Those gaps must not be called complete.
 
 ## Follow-up: Save All and Explorer visibility (source-level implementation)
 
@@ -176,3 +178,27 @@ this experimental migration without explicit approval.
   visibility options from resurfacing.
 - **No GUI test performed in this slice by request.** Rust unit tests,
   Windows native typecheck and formatting are development checks only.
+
+## Follow-up: guarded in-app drag-to-folder and Git decorations
+
+- All three Explorer projections (filtered results, tree and flat list)
+  attach a typed GPUI drag payload and accept it only on directory rows.
+  An already selected dragged row moves the selected top-level group; a
+  nonselected dragged row moves itself. Selected parent directories subsume
+  their children; each payload carries its workspace generation.
+- The drop handler rechecks target folder and workspace identity, Git
+  metadata/symlink protection, folder cycles, filename collisions, and
+  duplicate targets through the existing batch Cut preflight. It refuses
+  moving a source containing an open Native Editor file, or any move while
+  dirty buffers or an active external import are present. Unexpected
+  mid-batch I/O failure can still produce a partial move; it is explicitly
+  reported and the tree is refreshed rather than claiming rollback.
+- Explorer file and folder rows now display compact U/A/M/R/D/! status
+  labels derived from the existing read-only Git snapshot. Parent folder
+  status aggregates the highest-priority changed descendant. Rendering
+  does not issue per-row Git commands, and an absent/truncated snapshot
+  never creates invented clean statuses. Explicit Explorer Refresh and
+  paste/drag operations also refresh Git snapshot data.
+- Focused Rust unit tests cover safe batch moves, collision/cycle/generation
+  refusal, open-editor identity guards, badge mapping and ancestor priority.
+  No UI/pointer testing or formal release acceptance was performed.

@@ -10,6 +10,8 @@ use alera_gpui_desktop::agent_profiles::{
 use alera_gpui_desktop::edition::NATIVE_APP_NAME;
 use alera_gpui_desktop::editor::EditorDraftStore;
 use alera_gpui_desktop::editor_tabs::{EditorTabs, SaveAllReport, MAX_EDITOR_TABS};
+use alera_gpui_desktop::explorer_drag::ExplorerDragBatch;
+use alera_gpui_desktop::explorer_git_badges::{ExplorerGitBadge, ExplorerGitBadges};
 use alera_gpui_desktop::explorer_ops::{
     ExplorerClipboardBatch, ExplorerClipboardMode, ExplorerFiles,
 };
@@ -114,6 +116,20 @@ impl gpui::Render for TerminalTabDragPreview {
             .py_1()
             .text_sm()
             .child(self.label.clone())
+    }
+}
+
+/// Compact Classic-style Git state indicator; rendering performs no Git I/O.
+fn explorer_status_badge(badge: Option<ExplorerGitBadge>) -> gpui::Div {
+    if let Some(badge) = badge {
+        div()
+            .ml_1()
+            .text_xs()
+            .font_weight(gpui::FontWeight::SEMIBOLD)
+            .text_color(rgb(badge.color()))
+            .child(badge.label())
+    } else {
+        div().h(px(0.0))
     }
 }
 
@@ -631,6 +647,7 @@ impl Workbench {
                 self.persist_session();
                 self.model
                     .set_status(format!("Explorer Paste succeeded: {} item(s)", paths.len()));
+                self.refresh_git(cx);
             }
             Err(error) => {
                 // Batch preflight prevents predictable collisions, but an
@@ -645,8 +662,62 @@ impl Workbench {
                 self.content_matches.clear();
                 self.model
                     .set_status(format!("Explorer Paste refused or stopped: {error}"));
+                self.refresh_git(cx);
             }
         }
+        cx.notify();
+    }
+
+    fn drop_explorer_batch(
+        &mut self,
+        drag: &ExplorerDragBatch,
+        folder: &Path,
+        cx: &mut Context<Self>,
+    ) {
+        if self.explorer_drop_busy || self.editor_dirty(cx) {
+            self.model
+                .set_status("Save dirty editor files and finish imports before dragging items");
+            cx.notify();
+            return;
+        }
+        let open_paths: Vec<PathBuf> = self
+            .all_editor_files_and_active(cx)
+            .0
+            .into_iter()
+            .map(|(_, path)| path)
+            .collect();
+        if drag.affects_open_files(&open_paths) {
+            self.model
+                .set_status("Close open Editor files before moving their paths with Explorer drag");
+            cx.notify();
+            return;
+        }
+        let result = ExplorerFiles::new(self.model.root())
+            .and_then(|files| drag.move_into(&files, folder, self.workspace_generation));
+        // A batch is preflighted against predictable conflicts before the
+        // first mutation; unexpected disk errors may leave a partial move.
+        self.model.refresh_directory();
+        if let Some(tree) = &mut self.tree {
+            let _ = tree.refresh();
+        }
+        self.file_index = None;
+        self.file_index_loading = false;
+        self.file_index_request = self.file_index_request.wrapping_add(1);
+        self.content_matches.clear();
+        match result {
+            Ok(paths) => {
+                self.explorer_multi_selection.clear();
+                self.explorer_selection = paths.last().cloned();
+                self.explorer_context_menu = None;
+                self.persist_session();
+                self.model
+                    .set_status(format!("Moved {} Explorer item(s) to folder", paths.len()));
+            }
+            Err(error) => self.model.set_status(format!(
+                "Explorer drop refused/stopped: {error}; refresh checked for partial disk changes"
+            )),
+        }
+        self.refresh_git(cx);
         cx.notify();
     }
 
@@ -706,7 +777,6 @@ impl Workbench {
                     Ok(imported) => {
                         view.model.refresh_directory();
                         if let Some(tree) = &mut view.tree { let _ = tree.refresh(); }
-                        view.file_index = None;
                         view.explorer_multi_selection.clear();
                         view.explorer_selection = imported.last().cloned();
                         view.model.set_status(format!("Imported {} external file/folder item(s)", imported.len()));
@@ -720,6 +790,10 @@ impl Workbench {
                         if let Some(tree) = &mut view.tree { let _ = tree.refresh(); }
                     }
                 }
+                view.file_index = None;
+                view.file_index_loading = false;
+                view.file_index_request = view.file_index_request.wrapping_add(1);
+                view.refresh_git(cx);
                 cx.notify();
             }).ok();
         }).detach();
@@ -791,6 +865,7 @@ impl Workbench {
                             .set_status(format!("Explorer refresh failed: {error}"));
                     }
                 }
+                self.refresh_git(cx);
                 self.file_index = None;
                 if !self
                     .explorer_filter_input
@@ -5118,11 +5193,15 @@ impl Render for Workbench {
             Vec::new()
         };
         let explorer_filter_empty = explorer_filter_results.is_empty();
+        let explorer_git_badges = ExplorerGitBadges::from_snapshot(self.git_snapshot.as_ref());
         let tree_mode = self.tree_mode && self.tree.is_some();
         let tree_truncated = self.tree.as_ref().is_some_and(WorkspaceTree::truncated);
         let explorer_visibility = self.explorer_visibility;
         let explorer_visibility_menu_open = self.explorer_visibility_menu_open;
         let explorer_multi_selection = self.explorer_multi_selection.clone();
+        let explorer_drag_selection: Arc<Vec<PathBuf>> =
+            Arc::new(explorer_multi_selection.top_level_paths());
+        let explorer_drag_generation = self.workspace_generation;
         let explorer_visible_paths: Arc<Vec<PathBuf>> = Arc::new(if explorer_filter_active {
             explorer_filter_results
                 .iter()
@@ -5830,6 +5909,7 @@ impl Render for Workbench {
                                                                 this.model.set_status(format!("Tree refresh failed: {error}"));
                                                             }
                                                         }
+                                                        this.refresh_git(cx);
                                                         cx.notify();
                                                     })),
                                             ),
@@ -6105,8 +6185,21 @@ impl Render for Workbench {
                                             let label = path.file_name()
                                                 .map(|name| name.to_string_lossy().to_string())
                                                 .unwrap_or_default();
+                                            let drag_payload = ExplorerDragBatch::for_row(
+                                                &workspace_root,
+                                                explorer_drag_generation,
+                                                &path,
+                                                explorer_drag_selection.as_ref(),
+                                            );
+                                            let drag_caption = if drag_payload.len() > 1 {
+                                                format!("Move {} Explorer items", drag_payload.len())
+                                            } else {
+                                                format!("Move {label}")
+                                            };
+                                            let drop_target = path.clone();
                                             let selected = explorer_multi_selection.contains(&path);
                                             let row_icon = explorer_file_icon(&label, hit.is_directory, false);
+                                            let status_badge = explorer_git_badges.get(&path);
                                             div()
                                                 .id(("explorer-filter-result", i))
                                                 .px_2()
@@ -6122,6 +6215,7 @@ impl Render for Workbench {
                                                     .child(div().text_sm().child(label))
                                                     .child(div().text_xs().text_color(rgb(MUTED))
                                                         .child(relative.display().to_string())))
+                                                .child(explorer_status_badge(status_badge))
                                                 .on_mouse_down(gpui::MouseButton::Right, cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
                                                     this.open_explorer_context_menu(Some(context_path.clone()), event, window, cx);
                                                     cx.stop_propagation();
@@ -6154,15 +6248,36 @@ impl Render for Workbench {
                                                     }
                                                     cx.notify();
                                                 }))
+                                                .on_drag(drag_payload, move |_, _, _, cx| {
+                                                    cx.new(|_| TerminalTabDragPreview { label: drag_caption.clone() })
+                                                })
+                                                .when(hit.is_directory, |row| {
+                                                    row.on_drop(cx.listener(move |this, drag: &ExplorerDragBatch, _, cx| {
+                                                        this.drop_explorer_batch(drag, &drop_target, cx);
+                                                    }))
+                                                })
                                         }).collect::<Vec<_>>()
                                     } else if tree_mode {
                                         tree_rows.into_iter().enumerate().map(|(i, item)| {
                                             let relative = item.relative_path.clone();
                                             let row_path = workspace_root.join(&relative);
                                             let context_path = row_path.clone();
+                                            let drag_payload = ExplorerDragBatch::for_row(
+                                                &workspace_root,
+                                                explorer_drag_generation,
+                                                &row_path,
+                                                explorer_drag_selection.as_ref(),
+                                            );
+                                            let drag_caption = if drag_payload.len() > 1 {
+                                                format!("Move {} Explorer items", drag_payload.len())
+                                            } else {
+                                                format!("Move {}", item.name)
+                                            };
+                                            let drop_target = row_path.clone();
                                             let visible_for_click = explorer_visible_paths.clone();
                                             let selected = explorer_multi_selection.contains(&row_path);
                                             let is_directory = item.is_directory;
+                                            let status_badge = explorer_git_badges.get(&row_path);
                                             let row_icon = explorer_file_icon(&item.name, is_directory, item.expanded);
                                             let row_label = item.name;
                                             div()
@@ -6202,6 +6317,7 @@ impl Render for Workbench {
                                                 })
                                                 .child(icon(row_icon, 15.0, if selected { TEXT } else { MUTED }))
                                                 .child(div().flex_1().min_w_0().overflow_hidden().text_sm().child(row_label))
+                                                .child(explorer_status_badge(status_badge))
                                                 .on_mouse_down(gpui::MouseButton::Right, cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
                                                     this.open_explorer_context_menu(Some(context_path.clone()), event, window, cx);
                                                     cx.stop_propagation();
@@ -6234,14 +6350,35 @@ impl Render for Workbench {
                                                     }
                                                     cx.notify();
                                                 }))
+                                                .on_drag(drag_payload, move |_, _, _, cx| {
+                                                    cx.new(|_| TerminalTabDragPreview { label: drag_caption.clone() })
+                                                })
+                                                .when(is_directory, |row| {
+                                                    row.on_drop(cx.listener(move |this, drag: &ExplorerDragBatch, _, cx| {
+                                                        this.drop_explorer_batch(drag, &drop_target, cx);
+                                                    }))
+                                                })
                                         }).collect::<Vec<_>>()
                                     } else {
                                         entries.into_iter().enumerate().map(|(i, item)| {
                                             let is_directory = item.is_directory;
                                             let file_path = item.path.clone();
                                             let context_path = file_path.clone();
+                                            let drag_payload = ExplorerDragBatch::for_row(
+                                                &workspace_root,
+                                                explorer_drag_generation,
+                                                &file_path,
+                                                explorer_drag_selection.as_ref(),
+                                            );
+                                            let drag_caption = if drag_payload.len() > 1 {
+                                                format!("Move {} Explorer items", drag_payload.len())
+                                            } else {
+                                                format!("Move {}", item.name)
+                                            };
+                                            let drop_target = file_path.clone();
                                             let visible_for_click = explorer_visible_paths.clone();
                                             let selected = explorer_multi_selection.contains(&file_path);
+                                            let status_badge = explorer_git_badges.get(&file_path);
                                             let row_icon = explorer_file_icon(&item.name, is_directory, false);
                                             div()
                                                 .id(i)
@@ -6256,6 +6393,7 @@ impl Render for Workbench {
                                                 .hover(|style| style.bg(rgb(ACTIVE)))
                                                 .child(icon(row_icon, 15.0, if selected { TEXT } else { MUTED }))
                                                 .child(div().flex_1().min_w_0().overflow_hidden().text_sm().child(item.name))
+                                                .child(explorer_status_badge(status_badge))
                                                 .on_mouse_down(gpui::MouseButton::Right, cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
                                                     this.open_explorer_context_menu(Some(context_path.clone()), event, window, cx);
                                                     cx.stop_propagation();
@@ -6283,6 +6421,14 @@ impl Render for Workbench {
                                                     }
                                                     cx.notify();
                                                 }))
+                                                .on_drag(drag_payload, move |_, _, _, cx| {
+                                                    cx.new(|_| TerminalTabDragPreview { label: drag_caption.clone() })
+                                                })
+                                                .when(is_directory, |row| {
+                                                    row.on_drop(cx.listener(move |this, drag: &ExplorerDragBatch, _, cx| {
+                                                        this.drop_explorer_batch(drag, &drop_target, cx);
+                                                    }))
+                                                })
                                         }).collect::<Vec<_>>()
                                     })
                                     .when(explorer_filter_active && explorer_filter_empty,
