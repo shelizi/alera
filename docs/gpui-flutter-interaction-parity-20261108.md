@@ -170,3 +170,64 @@ existing `TerminalDock` and `EditorTabs` into a **single ordered strip**:
   `Agent` tab classification does not establish full agent-launch/MCP parity.
 
 No production merge, push, tag or release. GPUI remains `supported=false`.
+
+## Follow-up: Shared pane groups and editor-only durable layout (2026-11-08)
+
+This increment builds on the existing `integrate/gpui-p0p1p2-20261108`
+worktree; **no additional worktree, branch, or changes to production `main`**.
+Independent Devin SWE-2 Flash Max workers owned `workbench_panes.rs` (pane
+model) and `workbench_layout_store.rs` (durable JSON), with all runtime
+composition handled centrally. A third worker stalled on noninteractive
+approvals and its narrow `editor_ui.rs` changes were completed by the
+coordinator instead of weakening the permission policy.
+
+- One `WorkbenchPaneLayout` now owns Primary/Secondary groups containing
+  stable Host Terminal/Agent and native Editor IDs, per-pane active identity,
+  keyboard focus, horizontal/vertical direction, split/move and collapse.
+  Existing Host PTYs and Editor buffers are **not cloned, terminated or
+  replaced** by a pane move. Workspace changes clear the projection.
+- A real native GPUI split container displays both pane surfaces. The primary
+  terminal renders its **own Host target**, not whichever Host was last active
+  in TerminalDock. Pointer focus validates the target before forwarding raw
+  keys; the secondary Host preview checks target identity before input.
+  Secondary editor text is an immutable snapshot; if the primary is a Host,
+  the existing live NativeEditor entity can render in the secondary pane.
+- Mixed tab captions identify the owning pane and the context actions can
+  move any supported tab kind into/out of the secondary pane. Dropping onto
+  the second pane, toggling split axis and unsplitting update local layout.
+  The redundant embedded editor tab row and terminal tab list are hidden,
+  while required terminal VT, auto-poll, read-only preview and recovery
+  controls remain reachable.
+- Editor-only pane layout has a versioned, bounded, atomic JSON store scoped
+  by the workspace's existing deterministic session key. It stores only
+  relative paths of file-backed editor tabs, group order, focus and axis.
+  The schema has **no Host handles, PTY contents, agent credentials or draft
+  text**. On restart/switch, ordinary EditorTabs path guards revalidate
+  restored files; scratch recovery stays in EditorDraftStore. A malformed or
+  unknown-version layout is preserved, not overwritten.
+- The Rust model tests cover pane moves, stale identities, unique ownership,
+  reset, group selection, JSON roundtrip, invalid schemas, normalization and
+  repeated atomic disk replacement on Windows. **215/215 library tests pass**; use
+  `cargo test --manifest-path desktop_gpui/Cargo.toml --no-default-features --lib --locked --offline`.
+- The Windows GPUI native `cargo build --manifest-path desktop_gpui/Cargo.toml --locked --offline`
+  passes, as does `cargo fmt --check` and `git diff --check`. The only
+  build warning is the previously known `proc-macro-error2` future incompatibility.
+
+### Remaining acceptance and explicit limitations
+
+- **Second-pane Host output is not a separate full-color VT renderer** yet;
+  this path shows a text projection with a guarded raw keyboard target.
+  The old Host-only `TerminalPaneLayout` split still exists for transition.
+- Two Editor tabs can share the mixed pane model, but there is only one
+  mutable `NativeEditor` entity. When both pane groups contain editors,
+  the second group uses a read-only content projection until independent
+  editor surfaces/selection/IME focus are available.
+- Legacy read-only preview tabs are not yet unified with editable tabs.
+  The global mixed-strip reorder is not yet persisted as one complete
+  cross-kind tab order. Terminal/Agent Host lifecycle is deliberately not
+  restored from this editor-only layout.
+- Confirm real Windows right/middle click, dragging, Chinese IME, two-pane
+  raw PTY input, editor save/conflict, restart and cross-workspace isolation
+  in the native window. No user acceptance has been claimed from compilation.
+- Keep GPUI `supported=false`; do not merge, push, tag or release until
+  the outstanding runtime GUI gates and core Agent/MCP parity are satisfied.
