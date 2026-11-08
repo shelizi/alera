@@ -110,6 +110,42 @@ enum GitUiAction {
     SwitchBranch(String),
     MergeWithoutConflicts(String),
     Fetch,
+    StashSave,
+    StashApply,
+    PullFfOnly,
+    PushUpstream,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ConfirmGitAction {
+    StashSave,
+    StashApply,
+    PullFfOnly,
+    PushUpstream,
+}
+
+impl ConfirmGitAction {
+    fn action(self) -> GitUiAction {
+        match self {
+            Self::StashSave => GitUiAction::StashSave,
+            Self::StashApply => GitUiAction::StashApply,
+            Self::PullFfOnly => GitUiAction::PullFfOnly,
+            Self::PushUpstream => GitUiAction::PushUpstream,
+        }
+    }
+
+    fn warning(self) -> &'static str {
+        match self {
+            Self::StashSave =>
+                "Confirm Stash: move tracked index/worktree changes into a new stash; untracked files stay",
+            Self::StashApply =>
+                "Confirm Apply: restore the newest stash only into a clean worktree; the stash entry will remain",
+            Self::PullFfOnly =>
+                "Confirm Pull: fetch configured upstream and fast-forward only; never rebase or create a merge commit",
+            Self::PushUpstream =>
+                "Confirm Push: push current branch only to its configured upstream; never force-push",
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -216,6 +252,7 @@ struct Workbench {
     git_history_error: Option<String>,
     git_history_request: u64,
     git_merge_armed: Option<String>,
+    git_sensitive_armed: Option<ConfirmGitAction>,
     git_commit_input: Entity<QuickOpenInput>,
     git_branch_input: Entity<QuickOpenInput>,
     git_action_busy: bool,
@@ -975,6 +1012,7 @@ impl Workbench {
             cx.notify();
             return;
         }
+        self.git_sensitive_armed = None;
         let root = self.model.root().to_path_buf();
         let generation = self.workspace_generation;
         self.git_action_request = self.git_action_request.wrapping_add(1);
@@ -985,7 +1023,7 @@ impl Workbench {
         cx.spawn(async move |view, cx| {
             let result = cx
                 .background_spawn(async move {
-                    let git = GitActions::open(&root)?;
+                    let mut git = GitActions::open(&root)?;
                     match action {
                         GitUiAction::Stage(path) => {
                             git.stage_file(&path)?;
@@ -1009,6 +1047,10 @@ impl Workbench {
                             git.fetch_current_remote()?;
                             Ok("Fetched remote refs; working tree unchanged".to_string())
                         }
+                        GitUiAction::StashSave => git.stash_tracked_changes(),
+                        GitUiAction::StashApply => git.apply_latest_stash(),
+                        GitUiAction::PullFfOnly => git.pull_ff_only(),
+                        GitUiAction::PushUpstream => git.push_current_upstream(),
                     }
                 })
                 .await;
@@ -1018,6 +1060,7 @@ impl Workbench {
                 }
                 view.git_action_busy = false;
                 view.git_merge_armed = None;
+                view.git_sensitive_armed = None;
                 match result {
                     Ok(message) => {
                         view.git_action_status = message;
@@ -1039,6 +1082,23 @@ impl Workbench {
             .ok();
         })
         .detach();
+    }
+
+    /// Explicit two-click opt-in for operations that mutate local changes
+    /// (stash/pull) or contact remote endpoints (pull/push). Switching action
+    /// disarms the previous one; no remote operation is automatically retried.
+    fn confirm_sensitive_git_action(&mut self, action: ConfirmGitAction, cx: &mut Context<Self>) {
+        if self.git_action_busy {
+            self.git_action_status = "Finish the current Git operation first".into();
+        } else if self.git_sensitive_armed == Some(action) {
+            self.git_sensitive_armed = None;
+            self.run_git_action(action.action(), cx);
+        } else {
+            self.git_merge_armed = None;
+            self.git_sensitive_armed = Some(action);
+            self.git_action_status = action.warning().into();
+        }
+        cx.notify();
     }
 
     fn preview_git_change(&mut self, relative: PathBuf, cx: &mut Context<Self>) {
@@ -1749,6 +1809,7 @@ impl Workbench {
         }
         self.git_history_request = self.git_history_request.wrapping_add(1);
         self.git_merge_armed = None;
+        self.git_sensitive_armed = None;
         self.git_action_request = self.git_action_request.wrapping_add(1);
         self.git_action_status.clear();
         self.git_commit_input
@@ -4506,6 +4567,7 @@ impl Render for Workbench {
             .map(|snapshot| snapshot.changed_files.clone())
             .unwrap_or_default();
         let git_action_busy = self.git_action_busy;
+        let git_sensitive_armed = self.git_sensitive_armed;
         let git_action_status = self.git_action_status.clone();
         let git_commit_input = self.git_commit_input.clone();
         let git_branch_input = self.git_branch_input.clone();
@@ -5295,10 +5357,61 @@ impl Render for Workbench {
                                             this.git_merge_armed = None;
                                             this.run_git_action(GitUiAction::MergeWithoutConflicts(branch), cx);
                                         } else {
+                                            this.git_sensitive_armed = None;
                                             this.git_merge_armed = Some(branch.clone());
                                             this.git_action_status = format!("Click Confirm Merge to merge {branch} into the current branch; merge conflicts will be refused without changing files");
                                         }
                                         cx.notify();
+                                    })))
+                            )
+                            .child(div()
+                                .flex()
+                                .flex_wrap()
+                                .items_center()
+                                .gap_3()
+                                .child(div()
+                                    .id("git-stash-save-tracked")
+                                    .cursor_pointer()
+                                    .text_xs()
+                                    .text_color(rgb(if git_action_busy { MUTED } else { TEXT }))
+                                    .child(if git_sensitive_armed == Some(ConfirmGitAction::StashSave) {
+                                        "Confirm Stash"
+                                    } else { "Stash tracked" })
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.confirm_sensitive_git_action(ConfirmGitAction::StashSave, cx);
+                                    })))
+                                .child(div()
+                                    .id("git-stash-apply-latest")
+                                    .cursor_pointer()
+                                    .text_xs()
+                                    .text_color(rgb(if git_action_busy { MUTED } else { TEXT }))
+                                    .child(if git_sensitive_armed == Some(ConfirmGitAction::StashApply) {
+                                        "Confirm Apply"
+                                    } else { "Apply stash" })
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.confirm_sensitive_git_action(ConfirmGitAction::StashApply, cx);
+                                    })))
+                                .child(div()
+                                    .id("git-pull-ff-only")
+                                    .cursor_pointer()
+                                    .text_xs()
+                                    .text_color(rgb(if git_action_busy { MUTED } else { TEXT }))
+                                    .child(if git_sensitive_armed == Some(ConfirmGitAction::PullFfOnly) {
+                                        "Confirm Pull"
+                                    } else { "Pull FF-only" })
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.confirm_sensitive_git_action(ConfirmGitAction::PullFfOnly, cx);
+                                    })))
+                                .child(div()
+                                    .id("git-push-upstream")
+                                    .cursor_pointer()
+                                    .text_xs()
+                                    .text_color(rgb(if git_action_busy { MUTED } else { TEXT }))
+                                    .child(if git_sensitive_armed == Some(ConfirmGitAction::PushUpstream) {
+                                        "Confirm Push"
+                                    } else { "Push" })
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.confirm_sensitive_git_action(ConfirmGitAction::PushUpstream, cx);
                                     })))
                             )
                             .child(div()
@@ -7421,6 +7534,7 @@ fn main() {
                         git_history_error: None,
                         git_history_request: 0,
                         git_merge_armed: None,
+                        git_sensitive_armed: None,
                         git_commit_input: cx
                             .new(|cx| QuickOpenInput::with_placeholder("Commit message", cx)),
                         git_branch_input: cx
