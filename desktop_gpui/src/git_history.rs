@@ -1,0 +1,286 @@
+//! Bounded read-only history, commit preview and local branch comparison.
+//! All repository I/O belongs on a background worker, never in GPUI render.
+use git2::{BranchType, DiffFormat, Oid, Repository, Sort};
+use std::path::Path;
+
+const MAX_HISTORY: usize = 96;
+const MAX_BRANCHES: usize = 80;
+const MAX_PATCH: usize = 24 * 1024;
+
+#[derive(Debug, Clone)]
+pub struct GitBranchRow {
+    pub name: String,
+    pub current: bool,
+    pub tip: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct GitCommitRow {
+    pub oid: String,
+    pub short: String,
+    pub subject: String,
+    pub author: String,
+    pub parents: usize,
+    pub labels: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct GitHistorySnapshot {
+    pub current: String,
+    pub branches: Vec<GitBranchRow>,
+    pub commits: Vec<GitCommitRow>,
+    pub truncated: bool,
+}
+
+fn repo_in(workspace: &Path) -> Result<Repository, String> {
+    let repo = Repository::discover(workspace).map_err(|e| e.to_string())?;
+    if repo.is_bare() {
+        return Err("Bare repositories cannot be viewed in this GPUI workbench".into());
+    }
+    Ok(repo)
+}
+
+fn subject(line: &str, count: usize) -> String {
+    line.chars().take(count).collect()
+}
+
+impl GitHistorySnapshot {
+    pub fn load(workspace: &Path) -> Result<Self, String> {
+        let repo = repo_in(workspace)?;
+        let current = repo
+            .head()
+            .ok()
+            .and_then(|head| head.shorthand().ok().map(str::to_owned))
+            .unwrap_or_else(|| "(detached/unborn)".into());
+        let mut branches = Vec::new();
+        let mut tips = Vec::new();
+        let mut truncated = false;
+        for branch in repo
+            .branches(Some(BranchType::Local))
+            .map_err(|e| e.to_string())?
+        {
+            let (branch, _) = branch.map_err(|e| e.to_string())?;
+            let Some(name) = branch.name().map_err(|e| e.to_string())?.map(str::to_owned) else {
+                continue;
+            };
+            let Ok(commit) = branch.get().peel_to_commit() else {
+                continue;
+            };
+            if branches.len() == MAX_BRANCHES {
+                truncated = true;
+                continue;
+            }
+            let tip = commit.id();
+            tips.push((tip, name.clone()));
+            branches.push(GitBranchRow {
+                current: branch.is_head(),
+                name,
+                tip: tip.to_string()[..8].to_owned(),
+            });
+        }
+        branches.sort_by(|a, b| b.current.cmp(&a.current).then(a.name.cmp(&b.name)));
+        let mut walk = repo.revwalk().map_err(|e| e.to_string())?;
+        walk.set_sorting(Sort::TOPOLOGICAL | Sort::TIME)
+            .map_err(|e| e.to_string())?;
+        for (oid, _) in &tips {
+            walk.push(*oid).map_err(|e| e.to_string())?;
+        }
+        if let Ok(head) = repo.head().and_then(|head| head.peel_to_commit()) {
+            walk.push(head.id()).map_err(|e| e.to_string())?;
+        }
+        let mut commits = Vec::new();
+        for oid in walk {
+            let oid = oid.map_err(|e| e.to_string())?;
+            if commits.len() >= MAX_HISTORY {
+                truncated = true;
+                break;
+            }
+            let commit = repo.find_commit(oid).map_err(|e| e.to_string())?;
+            commits.push(GitCommitRow {
+                oid: oid.to_string(),
+                short: oid.to_string()[..8].to_owned(),
+                subject: subject(
+                    commit.summary().ok().flatten().unwrap_or("(no subject)"),
+                    110,
+                ),
+                author: subject(commit.author().name().unwrap_or("Unknown"), 48),
+                parents: commit.parent_count(),
+                labels: tips
+                    .iter()
+                    .filter(|(tip, _)| *tip == oid)
+                    .take(5)
+                    .map(|(_, branch)| branch.clone())
+                    .collect(),
+            });
+        }
+        Ok(Self {
+            current,
+            branches,
+            commits,
+            truncated,
+        })
+    }
+}
+
+fn bounded_patch(diff: &git2::Diff<'_>) -> Result<String, String> {
+    let mut patch = String::new();
+    diff.print(DiffFormat::Patch, |_, _, line| {
+        if patch.len() < MAX_PATCH {
+            if matches!(line.origin(), '+' | '-' | ' ') {
+                patch.push(line.origin());
+            }
+            let raw = String::from_utf8_lossy(line.content());
+            for ch in raw.chars() {
+                if patch.len() + ch.len_utf8() > MAX_PATCH {
+                    break;
+                }
+                patch.push(ch);
+            }
+        }
+        true
+    })
+    .map_err(|e| e.to_string())?;
+    if patch.len() == MAX_PATCH {
+        patch.push_str("\n... patch preview limited");
+    }
+    Ok(patch)
+}
+
+/// Preview a commit's first-parent patch (merge commits show first-parent).
+pub fn preview_commit(workspace: &Path, sha: &str) -> Result<String, String> {
+    if sha.len() != 40 || !sha.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err("Invalid full commit ID".into());
+    }
+    let repo = repo_in(workspace)?;
+    let oid = Oid::from_str(sha).map_err(|e| e.to_string())?;
+    let commit = repo.find_commit(oid).map_err(|e| e.to_string())?;
+    let current = commit.tree().map_err(|e| e.to_string())?;
+    let parent = if commit.parent_count() > 0 {
+        Some(
+            commit
+                .parent(0)
+                .map_err(|e| e.to_string())?
+                .tree()
+                .map_err(|e| e.to_string())?,
+        )
+    } else {
+        None
+    };
+    let mut opts = git2::DiffOptions::new();
+    opts.context_lines(3);
+    let diff = repo
+        .diff_tree_to_tree(parent.as_ref(), Some(&current), Some(&mut opts))
+        .map_err(|e| e.to_string())?;
+    let patch = bounded_patch(&diff)?;
+    Ok(format!(
+        "Commit {sha}\n{}\nAuthor: {}\nParents: {}\n\n{}",
+        commit.summary().ok().flatten().unwrap_or("(no subject)"),
+        commit.author().name().unwrap_or("Unknown"),
+        commit.parent_count(),
+        if patch.is_empty() {
+            "(no first-parent text changes)"
+        } else {
+            &patch
+        }
+    ))
+}
+
+/// Compare the current local branch with another local branch. No files,
+/// refs, Git index or worktree state are changed by this operation.
+pub fn compare_local_branch(workspace: &Path, branch: &str) -> Result<String, String> {
+    if branch.is_empty() || branch.len() > 255 || branch.contains(['\n', '\r', '\0']) {
+        return Err("Enter a valid local branch to compare".into());
+    }
+    let repo = repo_in(workspace)?;
+    let current = repo
+        .head()
+        .map_err(|e| e.to_string())?
+        .peel_to_commit()
+        .map_err(|e| e.to_string())?;
+    let current_name = repo
+        .head()
+        .ok()
+        .and_then(|h| h.shorthand().ok().map(str::to_owned))
+        .unwrap_or_else(|| "HEAD".into());
+    let other = repo
+        .find_branch(branch, BranchType::Local)
+        .map_err(|e| e.to_string())?
+        .get()
+        .peel_to_commit()
+        .map_err(|e| e.to_string())?;
+    let (ahead, behind) = repo
+        .graph_ahead_behind(other.id(), current.id())
+        .map_err(|e| e.to_string())?;
+    let current_tree = current.tree().map_err(|e| e.to_string())?;
+    let other_tree = other.tree().map_err(|e| e.to_string())?;
+    let diff = repo
+        .diff_tree_to_tree(Some(&current_tree), Some(&other_tree), None)
+        .map_err(|e| e.to_string())?;
+    let patch = bounded_patch(&diff)?;
+    Ok(format!(
+        "Compare {branch} vs {current_name}\n{branch}: {ahead} ahead / {behind} behind\n\n{}",
+        if patch.is_empty() {
+            "(trees are identical)"
+        } else {
+            &patch
+        }
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn history_compare_and_commit_preview_are_read_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        fs::write(dir.path().join("中文.txt"), "first\n").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new("中文.txt")).unwrap();
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let sig = git2::Signature::now("Fixture", "fixture@example.invalid").unwrap();
+        let first = repo
+            .commit(Some("HEAD"), &sig, &sig, "first", &tree, &[])
+            .unwrap();
+        repo.branch("feature", &repo.find_commit(first).unwrap(), false)
+            .unwrap();
+        drop(tree);
+        fs::write(dir.path().join("中文.txt"), "second\n").unwrap();
+        index.add_path(Path::new("中文.txt")).unwrap();
+        let next = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let second = repo
+            .commit(
+                Some("HEAD"),
+                &sig,
+                &sig,
+                "second",
+                &next,
+                &[&repo.find_commit(first).unwrap()],
+            )
+            .unwrap();
+        drop(next);
+        drop(index);
+        let snapshot = GitHistorySnapshot::load(dir.path()).unwrap();
+        assert_eq!(snapshot.commits.len(), 2);
+        assert_eq!(snapshot.branches.len(), 2);
+        assert!(snapshot
+            .commits
+            .iter()
+            .any(|row| row.oid == second.to_string()));
+        assert!(preview_commit(dir.path(), &second.to_string())
+            .unwrap()
+            .contains("+second"));
+        assert!(compare_local_branch(dir.path(), "feature")
+            .unwrap()
+            .contains("0 ahead / 1 behind"));
+        assert!(preview_commit(dir.path(), "../invalid").is_err());
+        assert!(compare_local_branch(dir.path(), "unknown").is_err());
+        assert_eq!(repo.head().unwrap().peel_to_commit().unwrap().id(), second);
+        assert_eq!(
+            fs::read_to_string(dir.path().join("中文.txt")).unwrap(),
+            "second\n"
+        );
+    }
+}

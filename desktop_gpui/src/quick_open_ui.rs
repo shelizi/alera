@@ -77,6 +77,19 @@ impl QuickOpenInput {
         cx.notify();
     }
 
+    /// Select a known local branch from the Git Graph without synthesizing
+    /// keyboard/IME events. A user edit still follows the ordinary handler.
+    pub fn set_query(&mut self, value: &str, cx: &mut Context<Self>) -> bool {
+        if value.len() > 512 || value.contains(['\r', '\n', '\0']) {
+            return false;
+        }
+        self.text = value.to_owned();
+        self.selection = self.text.len()..self.text.len();
+        self.marked = None;
+        cx.notify();
+        true
+    }
+
     fn replace(
         &mut self,
         range: Option<Range<usize>>,

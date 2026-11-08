@@ -7,6 +7,7 @@ pub mod editor_tabs;
 pub mod explorer_ops;
 pub mod file_search;
 pub mod git_actions;
+pub mod git_history;
 pub mod git_inspect;
 pub mod model;
 pub mod project_search;

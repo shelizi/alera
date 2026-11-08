@@ -180,6 +180,71 @@ impl GitActions {
             .map_err(|error| error.to_string())
     }
 
+    /// Move the *currently checked-out local branch* forward to another
+    /// local branch. This is a real merge for fast-forward histories; it
+    /// never creates a conflict index, overwrites dirty files, rebases,
+    /// makes a force update, or changes the currently selected branch name.
+    /// Divergent histories require a separate explicit conflict workflow.
+    pub fn merge_fast_forward(&self, source: &str) -> Result<String, String> {
+        if !valid_branch(source) {
+            return Err("Enter a valid local source branch".into());
+        }
+        let mut options = StatusOptions::new();
+        options.include_untracked(true).recurse_untracked_dirs(true);
+        if !self
+            .repo
+            .statuses(Some(&mut options))
+            .map_err(|e| e.to_string())?
+            .is_empty()
+        {
+            return Err(
+                "Merge refused: working tree/index must be clean (including untracked files)"
+                    .into(),
+            );
+        }
+        let head = self.repo.head().map_err(|e| e.to_string())?;
+        if !head.is_branch() {
+            return Err("Merge requires a checked-out local branch".into());
+        }
+        let name = head
+            .shorthand()
+            .map_err(|_| "Current local branch is unnamed")?
+            .to_string();
+        let current = head.peel_to_commit().map_err(|e| e.to_string())?;
+        let target = self
+            .repo
+            .find_branch(source, BranchType::Local)
+            .map_err(|e| e.to_string())?
+            .get()
+            .peel_to_commit()
+            .map_err(|e| e.to_string())?;
+        if target.id() == current.id() {
+            return Ok(format!("{name} is already up to date with {source}"));
+        }
+        if !self
+            .repo
+            .graph_descendant_of(target.id(), current.id())
+            .map_err(|e| e.to_string())?
+        {
+            return Err(format!("{source} has diverged from {name}; automatic fast-forward is unavailable. Use the existing conflict merge workflow."));
+        }
+        let mut checkout = CheckoutBuilder::new();
+        checkout.safe().recreate_missing(false);
+        self.repo
+            .checkout_tree(target.as_object(), Some(&mut checkout))
+            .map_err(|e| format!("Merge checkout refused: {e}"))?;
+        // HEAD remains symbolic and attached to the same local branch.
+        self.repo
+            .find_reference(&format!("refs/heads/{name}"))
+            .map_err(|e| e.to_string())?
+            .set_target(target.id(), "Alera GPUI explicit fast-forward merge")
+            .map_err(|e| format!("Could not advance branch ref after checkout: {e}"))?;
+        Ok(format!(
+            "Fast-forwarded {name} to {source} ({})",
+            &target.id().to_string()[..8]
+        ))
+    }
+
     /// Explicit user click only. Credentials are never harvested from GPUI;
     /// git2's configured transport handles the remote or reports an error.
     pub fn fetch_current_remote(&self) -> Result<(), String> {
@@ -293,5 +358,96 @@ mod tests {
         fs::write(actions.root().join("a.txt"), "dirty").unwrap();
         assert!(actions.switch_branch("other").is_err());
         assert_ne!(actions.repo.head().unwrap().shorthand().unwrap(), "other");
+    }
+
+    #[test]
+    fn explicit_fast_forward_merge_advances_current_branch_without_switching() {
+        let (dir, actions) = repo_fixture();
+        let first = actions.repo.head().unwrap().peel_to_commit().unwrap();
+        let initial_name = actions.repo.head().unwrap().shorthand().unwrap().to_owned();
+        actions.repo.branch("feature", &first, false).unwrap();
+        actions.repo.set_head("refs/heads/feature").unwrap();
+        // Both local refs start at the same commit: there is no worktree
+        // checkout needed before committing new fixture changes on feature.
+        fs::write(dir.path().join("a.txt"), "feature changes").unwrap();
+        let mut index = actions.repo.index().unwrap();
+        index.add_path(Path::new("a.txt")).unwrap();
+        let tree = actions.repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let signature = Signature::now("Fixture", "fixture@example.invalid").unwrap();
+        let feature_oid = actions
+            .repo
+            .commit(
+                Some("HEAD"),
+                &signature,
+                &signature,
+                "feature",
+                &tree,
+                &[&first],
+            )
+            .unwrap();
+        drop(tree);
+        drop(index);
+        actions
+            .repo
+            .set_head(&format!("refs/heads/{initial_name}"))
+            .unwrap();
+        // Fixture-only reset after switching symbolic HEAD; unlike the
+        // production merge action this disposable checkout may discard the
+        // fixture's previous feature-branch index/workdir contents.
+        actions
+            .repo
+            .checkout_head(Some(CheckoutBuilder::new().force()))
+            .unwrap();
+        assert_eq!(
+            fs::read_to_string(dir.path().join("a.txt")).unwrap(),
+            "before"
+        );
+        let message = actions.merge_fast_forward("feature").unwrap();
+        assert!(message.contains("Fast-forwarded"));
+        assert_eq!(
+            actions.repo.head().unwrap().shorthand().unwrap(),
+            initial_name
+        );
+        assert_eq!(
+            actions.repo.head().unwrap().peel_to_commit().unwrap().id(),
+            feature_oid
+        );
+        assert_eq!(
+            fs::read_to_string(dir.path().join("a.txt")).unwrap(),
+            "feature changes"
+        );
+        assert!(actions
+            .merge_fast_forward("feature")
+            .unwrap()
+            .contains("already up to date"));
+    }
+
+    #[test]
+    fn fast_forward_refuses_dirty_or_divergent_histories() {
+        let (dir, actions) = repo_fixture();
+        let initial = actions.repo.head().unwrap().peel_to_commit().unwrap();
+        actions.repo.branch("feature", &initial, false).unwrap();
+        fs::write(dir.path().join("untracked.txt"), "do not change").unwrap();
+        assert!(actions.merge_fast_forward("feature").is_err());
+        assert_eq!(
+            fs::read_to_string(dir.path().join("untracked.txt")).unwrap(),
+            "do not change"
+        );
+        fs::remove_file(dir.path().join("untracked.txt")).unwrap();
+        // The source is behind HEAD after another commit; it cannot be
+        // fast-forwarded into the new HEAD.
+        fs::write(dir.path().join("a.txt"), "new main").unwrap();
+        actions.stage_file(Path::new("a.txt")).unwrap();
+        actions.commit("main advanced").unwrap();
+        let before = actions.repo.head().unwrap().peel_to_commit().unwrap().id();
+        assert!(actions.merge_fast_forward("feature").is_err());
+        assert_eq!(
+            actions.repo.head().unwrap().peel_to_commit().unwrap().id(),
+            before
+        );
+        assert_eq!(
+            fs::read_to_string(dir.path().join("a.txt")).unwrap(),
+            "new main"
+        );
     }
 }

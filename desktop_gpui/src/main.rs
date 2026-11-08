@@ -7,6 +7,7 @@ use alera_gpui_desktop::editor_tabs::{EditorTabs, MAX_EDITOR_TABS};
 use alera_gpui_desktop::explorer_ops::{ExplorerClipboard, ExplorerClipboardMode, ExplorerFiles};
 use alera_gpui_desktop::file_search::WorkspaceFileIndex;
 use alera_gpui_desktop::git_actions::GitActions;
+use alera_gpui_desktop::git_history::{compare_local_branch, preview_commit, GitHistorySnapshot};
 use alera_gpui_desktop::git_inspect::{read_file_diff, GitSnapshot};
 use alera_gpui_desktop::model::WorkbenchModel;
 use alera_gpui_desktop::project_search::{ContentMatch, ProjectSearch};
@@ -95,7 +96,14 @@ enum GitUiAction {
     Unstage(PathBuf),
     Commit(String),
     SwitchBranch(String),
+    MergeFastForward(String),
     Fetch,
+}
+
+#[derive(Clone)]
+enum GitReadRequest {
+    Commit(String),
+    Compare(String),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -189,6 +197,12 @@ struct Workbench {
     content_searched_query: String,
     content_request: u64,
     git_snapshot: Option<GitSnapshot>,
+    git_history: Option<GitHistorySnapshot>,
+    git_history_open: bool,
+    git_history_loading: bool,
+    git_history_error: Option<String>,
+    git_history_request: u64,
+    git_merge_armed: Option<String>,
     git_commit_input: Entity<QuickOpenInput>,
     git_branch_input: Entity<QuickOpenInput>,
     git_action_busy: bool,
@@ -714,6 +728,82 @@ impl Workbench {
         cx.notify();
     }
 
+    fn refresh_git_history(&mut self, cx: &mut Context<Self>) {
+        if self.git_history_loading {
+            return;
+        }
+        let root = self.model.root().to_path_buf();
+        let generation = self.workspace_generation;
+        self.git_history_request = self.git_history_request.wrapping_add(1);
+        let request = self.git_history_request;
+        self.git_history_loading = true;
+        self.git_history_error = None;
+        cx.spawn(async move |view, cx| {
+            let result = cx
+                .background_spawn(async move { GitHistorySnapshot::load(&root) })
+                .await;
+            view.update(cx, |view, cx| {
+                if view.workspace_generation != generation || view.git_history_request != request {
+                    return;
+                }
+                view.git_history_loading = false;
+                match result {
+                    Ok(history) => {
+                        view.git_history = Some(history);
+                        view.git_history_error = None;
+                    }
+                    Err(error) => {
+                        view.git_history = None;
+                        view.git_history_error = Some(error);
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn toggle_git_history(&mut self, cx: &mut Context<Self>) {
+        self.git_history_open = !self.git_history_open;
+        if self.git_history_open {
+            self.refresh_git_history(cx);
+        }
+        cx.notify();
+    }
+
+    fn preview_git_history(&mut self, request: GitReadRequest, cx: &mut Context<Self>) {
+        let root = self.model.root().to_path_buf();
+        let generation = self.workspace_generation;
+        self.git_diff_request = self.git_diff_request.wrapping_add(1);
+        let ticket = self.git_diff_request;
+        self.git_diff = None;
+        self.git_diff_loading = true;
+        cx.spawn(async move |view, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    match request {
+                        GitReadRequest::Commit(oid) => preview_commit(&root, &oid),
+                        GitReadRequest::Compare(branch) => compare_local_branch(&root, &branch),
+                    }
+                })
+                .await;
+            view.update(cx, |view, cx| {
+                if view.workspace_generation != generation || view.git_diff_request != ticket {
+                    return;
+                }
+                view.git_diff_loading = false;
+                view.git_diff =
+                    Some(result.unwrap_or_else(|error| format!("Git preview refused: {error}")));
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
     fn run_git_action(&mut self, action: GitUiAction, cx: &mut Context<Self>) {
         if self.git_action_busy {
             self.git_action_status = "Finish the current Git operation first".into();
@@ -752,6 +842,7 @@ impl Workbench {
                             git.switch_branch(&branch)?;
                             Ok(format!("Switched to branch {branch}"))
                         }
+                        GitUiAction::MergeFastForward(branch) => git.merge_fast_forward(&branch),
                         GitUiAction::Fetch => {
                             git.fetch_current_remote()?;
                             Ok("Fetched remote refs; working tree unchanged".to_string())
@@ -764,11 +855,17 @@ impl Workbench {
                     return;
                 }
                 view.git_action_busy = false;
+                view.git_merge_armed = None;
                 match result {
                     Ok(message) => {
                         view.git_action_status = message;
                         view.git_snapshot = None;
                         view.refresh_git(cx);
+                        if view.git_history_open {
+                            view.git_history_loading = false;
+                            view.git_history_request = view.git_history_request.wrapping_add(1);
+                            view.refresh_git_history(cx);
+                        }
                         view.refresh_worktrees(cx);
                     }
                     Err(error) => {
@@ -1469,6 +1566,11 @@ impl Workbench {
         self.content_request = self.content_request.wrapping_add(1);
         self.git_snapshot = None;
         self.git_loading = false;
+        self.git_history = None;
+        self.git_history_loading = false;
+        self.git_history_error = None;
+        self.git_history_request = self.git_history_request.wrapping_add(1);
+        self.git_merge_armed = None;
         self.git_action_request = self.git_action_request.wrapping_add(1);
         self.git_action_status.clear();
         self.git_commit_input
@@ -3379,6 +3481,32 @@ impl Render for Workbench {
         let git_action_status = self.git_action_status.clone();
         let git_commit_input = self.git_commit_input.clone();
         let git_branch_input = self.git_branch_input.clone();
+        let git_graph_open = self.git_history_open;
+        let git_history_status = if self.git_history_loading {
+            "Loading commit graph…".to_owned()
+        } else if let Some(history) = &self.git_history {
+            format!(
+                "{} local branch(es), {} commit(s){}",
+                history.branches.len(),
+                history.commits.len(),
+                if history.truncated { " (limited)" } else { "" }
+            )
+        } else {
+            self.git_history_error
+                .clone()
+                .unwrap_or_else(|| "Open Git Graph to load history".into())
+        };
+        let git_branch_rows = self
+            .git_history
+            .as_ref()
+            .map(|history| history.branches.clone())
+            .unwrap_or_default();
+        let git_commit_rows = self
+            .git_history
+            .as_ref()
+            .map(|history| history.commits.clone())
+            .unwrap_or_default();
+        let git_merge_armed = self.git_merge_armed.is_some();
         let git_summary = if self.git_loading {
             "Reading Git status…".to_string()
         } else if let Some(snapshot) = &self.git_snapshot {
@@ -3867,14 +3995,28 @@ impl Render for Workbench {
                                     )
                                     .child(
                                         div()
-                                            .id("git-refresh")
-                                            .cursor_pointer()
-                                            .text_sm()
-                                            .text_color(rgb(TEXT))
-                                            .child("↻")
-                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                this.refresh_git(cx);
-                                            })),
+                                            .flex()
+                                            .items_center()
+                                            .gap_3()
+                                            .child(div()
+                                                .id("git-graph-toggle")
+                                                .cursor_pointer()
+                                                .text_xs()
+                                                .text_color(rgb(TEXT))
+                                                .child(if git_graph_open { "Hide Graph" } else { "Git Graph" })
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.toggle_git_history(cx);
+                                                })))
+                                            .child(div()
+                                                .id("git-refresh")
+                                                .cursor_pointer()
+                                                .text_sm()
+                                                .text_color(rgb(TEXT))
+                                                .child("↻")
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.refresh_git(cx);
+                                                    if this.git_history_open { this.refresh_git_history(cx); }
+                                                }))),
                                     ),
                             )
                             .child(
@@ -3883,6 +4025,60 @@ impl Render for Workbench {
                                     .text_color(rgb(MUTED))
                                     .child(git_summary),
                             )
+                            .child(if git_graph_open {
+                                div()
+                                    .id("git-graph-panel")
+                                    .flex()
+                                    .flex_col()
+                                    .gap_1()
+                                    .child(div().text_xs().text_color(rgb(MUTED)).child(git_history_status))
+                                    .child(div().text_xs().text_color(rgb(TEXT)).child("Local branches · select to compare"))
+                                    .child(div()
+                                        .id("git-graph-branches")
+                                        .max_h(px(85.0))
+                                        .overflow_y_scroll()
+                                        .children(git_branch_rows.into_iter().enumerate().map(|(index, row)| {
+                                            let name = row.name;
+                                            let label = format!("{} {} · {}", if row.current { "●" } else { "○" }, name, row.tip);
+                                            div()
+                                                .id(("git-graph-branch", index))
+                                                .cursor_pointer()
+                                                .text_xs()
+                                                .text_color(rgb(if row.current { TEXT } else { MUTED }))
+                                                .hover(|style| style.bg(rgb(ACTIVE)))
+                                                .child(label)
+                                                .on_click(cx.listener(move |this, _, _, cx| {
+                                                    this.git_merge_armed = None;
+                                                    this.git_branch_input.update(cx, |input, cx| { input.set_query(&name, cx); });
+                                                    this.preview_git_history(GitReadRequest::Compare(name.clone()), cx);
+                                                }))
+                                        })))
+                                    .child(div().text_xs().text_color(rgb(TEXT)).child("Commits · select to preview"))
+                                    .child(div()
+                                        .id("git-graph-commits")
+                                        .max_h(px(160.0))
+                                        .overflow_y_scroll()
+                                        .children(git_commit_rows.into_iter().enumerate().map(|(index, row)| {
+                                            let oid = row.oid;
+                                            let marker = if row.parents > 1 { "◆" } else { "●" };
+                                            let labels = if row.labels.is_empty() { String::new() }
+                                                else { format!(" [{}]", row.labels.join(", ")) };
+                                            let title = format!("{marker} {} {}{} · {}", row.short, row.subject, labels, row.author);
+                                            div()
+                                                .id(("git-graph-commit", index))
+                                                .cursor_pointer()
+                                                .text_xs()
+                                                .text_color(rgb(MUTED))
+                                                .hover(|style| style.bg(rgb(ACTIVE)))
+                                                .child(title)
+                                                .on_click(cx.listener(move |this, _, _, cx| {
+                                                    this.preview_git_history(GitReadRequest::Commit(oid.clone()), cx);
+                                                }))
+                                        })))
+                                    .into_any_element()
+                            } else {
+                                div().h(px(0.0)).into_any_element()
+                            })
                             .child(
                                 div()
                                     .flex()
@@ -3925,6 +4121,42 @@ impl Render for Workbench {
                                         .on_click(cx.listener(|this, _, _, cx| {
                                             this.run_git_action(GitUiAction::Fetch, cx);
                                         }))),
+                            )
+                            .child(div()
+                                .flex()
+                                .items_center()
+                                .gap_3()
+                                .child(div()
+                                    .id("git-compare-local")
+                                    .cursor_pointer()
+                                    .text_xs()
+                                    .text_color(rgb(TEXT))
+                                    .child("Compare branch")
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        let branch = this.git_branch_input.read(cx).query().trim().to_owned();
+                                        this.git_merge_armed = None;
+                                        this.preview_git_history(GitReadRequest::Compare(branch), cx);
+                                    })))
+                                .child(div()
+                                    .id("git-merge-fast-forward")
+                                    .cursor_pointer()
+                                    .text_xs()
+                                    .text_color(rgb(if git_action_busy { MUTED } else { TEXT }))
+                                    .child(if git_merge_armed { "Confirm FF Merge" } else { "Merge FF" })
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        if this.git_action_busy { return; }
+                                        let branch = this.git_branch_input.read(cx).query().trim().to_owned();
+                                        if branch.is_empty() {
+                                            this.git_action_status = "Select a source branch before merging".into();
+                                        } else if this.git_merge_armed.as_deref() == Some(branch.as_str()) {
+                                            this.git_merge_armed = None;
+                                            this.run_git_action(GitUiAction::MergeFastForward(branch), cx);
+                                        } else {
+                                            this.git_merge_armed = Some(branch.clone());
+                                            this.git_action_status = format!("Click Confirm FF Merge to advance the current branch to {branch}; non-FF merges will be refused");
+                                        }
+                                        cx.notify();
+                                    })))
                             )
                             .child(div()
                                 .text_xs()
@@ -5900,6 +6132,12 @@ fn main() {
                         content_searched_query: String::new(),
                         content_request: 0,
                         git_snapshot: None,
+                        git_history: None,
+                        git_history_open: false,
+                        git_history_loading: false,
+                        git_history_error: None,
+                        git_history_request: 0,
+                        git_merge_armed: None,
                         git_commit_input: cx
                             .new(|cx| QuickOpenInput::with_placeholder("Commit message", cx)),
                         git_branch_input: cx
