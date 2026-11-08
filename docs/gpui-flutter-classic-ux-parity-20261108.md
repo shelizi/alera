@@ -29,9 +29,10 @@ icon, a filename, 32-pixel row height and indentation by 16 pixels per level.
 An unexpanded folder must still be discoverable through the filter. Ctrl+P
 Quick Open is a separate feature, not a replacement for the Explorer filter.
 
-The current GPUI parity slice implements the workspace-name header, the
-four global actions that are fully supported (New File, New Folder,
-Collapse All, Refresh), the permanent IME/Unicode filter backed by the
+The current GPUI parity slice implements the workspace-name header,
+New File, New Folder, Save All, Collapse All and Refresh, plus an overflow
+menu for ignored/hidden visibility to avoid overcrowding the sidebar.
+The permanent IME/Unicode filter is backed by the
 existing bounded fuzzy file index (now including nested folder paths),
 folder/file typed Codicon icons, 32 px rows, and a separate chevron that
 does not also activate the row. Filtered folder selection reveals its
@@ -52,8 +53,10 @@ editors, Git comparisons or multi-file actions under misleading names.
 
 - Classic Material Icon Theme SVGs and Git status badges have not yet been
   reproduced exactly (Native currently uses closest bundled Codicons).
-- Classic toggles for ignored/hidden files and **Save All** need a true
-  implementation; never add decorative buttons without a working handler.
+- Native Save All, Gitignored and hidden visibility toggles now have actual
+  file operations/filters. Their precise visual placement differs: visibility
+  is grouped under one overflow icon. Real Windows pointer acceptance and
+  consistency with non-Windows hidden-file settings remain unverified.
 - Ctrl/Shift multi-selection and batch Copy/Cut/Paste now have initial
   Native implementations across tree, flat list and filter results. Native
   uses bounded, workspace-scoped validation and preflight; actual mouse/
@@ -144,6 +147,32 @@ this experimental migration without explicit approval.
   failure, retaining remaining clipboard entries for explicit retry.
 - Changing filter/workspace and successful Explorer mutations invalidates
   stale row selections. This does not implicitly delete user files.
-- Remaining: dedicated Explorer-scoped Ctrl+C/X/V keyboard shortcuts,
-  native OS drag/drop, multi-file deletion UX, per-file Git badges and
-  real Windows pointer acceptance. Those gaps must not be called complete.
+- Native Ctrl/Cmd+C/X/V and Ctrl/Cmd+A are now Explorer-context actions;
+  they require the actual Explorer focus handle and do not intentionally
+  consume text-editor or Terminal clipboard commands. Modified clicks and
+  Explorer context right-click restore Explorer keyboard focus. Key-routing
+  behavior still needs OS-level acceptance and must not be called verified.
+- Remaining: native OS drag/drop, multi-file deletion UX, per-file Git badges,
+  and real Windows pointer acceptance. Those gaps must not be called complete.
+
+## Follow-up: Save All and Explorer visibility (source-level implementation)
+
+- Save All scans every dirty native editor tab in both split panes, not just
+  the selected tab. It saves file-backed documents without switching tabs;
+  untitled documents are never written to a fabricated path, and the first
+  one uses the existing identity-guarded Save As picker. Active IME preedit
+  is skipped rather than accidentally committed; per-file errors are
+  reported without discarding buffers or suppressing later file writes.
+- The same ExplorerVisibility options now drive the lazy folder tree and
+  the bounded fuzzy index (including the permanent filter and Ctrl+P).
+  Show-ignored checks nested Gitignore rules through libgit2, while
+  generated directories are excluded by default and permanently protected
+  Git metadata remains excluded in either mode. On Windows the hidden-item
+  toggle uses FILE_ATTRIBUTE_HIDDEN, not the presence of a leading dot.
+- The Native-only settings JSON persists both visibility preferences with
+  atomic compare-and-set and backward-compatible defaults; no Flutter
+  preferences or Runtime Host API surface is changed. Invalidating an
+  in-flight index scan also invalidates its request ticket to prevent old
+  visibility options from resurfacing.
+- **No GUI test performed in this slice by request.** Rust unit tests,
+  Windows native typecheck and formatting are development checks only.

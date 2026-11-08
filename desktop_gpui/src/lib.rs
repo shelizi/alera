@@ -9,6 +9,7 @@ pub mod editor_session;
 pub mod editor_tabs;
 pub mod explorer_ops;
 pub mod explorer_selection;
+pub mod explorer_visibility;
 pub mod file_search;
 pub mod git_actions;
 pub mod git_history;

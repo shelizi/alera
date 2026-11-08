@@ -1,6 +1,7 @@
 //! Native-only settings owner. Never reads or mutates Flutter's preferences.
 //! The Host permits only these scalar MCP paths; storage uses a separate
 //! versioned JSON file under AleraNative (or an isolated smoke-test state).
+use crate::explorer_visibility::ExplorerVisibilityOptions;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::fs::{self, File, OpenOptions};
@@ -12,6 +13,10 @@ const VERSION: u32 = 1;
 const MAX_BYTES: u64 = 16 * 1024;
 pub const SETTINGS_FILENAME: &str = "native-settings-v1.json";
 
+const fn default_explorer_show_hidden() -> bool {
+    !cfg!(windows)
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NativeSettings {
@@ -21,6 +26,12 @@ pub struct NativeSettings {
     pub terminal_font_size: f64,
     pub editor_autosave_enabled: bool,
     pub editor_tab_size: u64,
+    /// Native Explorer-only preferences. Never exposed to Host MCP setting
+    /// updates and never shared with the Classic Flutter preferences file.
+    #[serde(default = "default_explorer_show_hidden")]
+    pub explorer_show_hidden: bool,
+    #[serde(default)]
+    pub explorer_show_ignored: bool,
     // These three safety controls cannot be changed by an Agent.
     pub confirm_project_removal: bool,
     pub confirm_workspace_removal: bool,
@@ -42,6 +53,8 @@ impl Default for NativeSettings {
             terminal_font_size: 13.0,
             editor_autosave_enabled: false,
             editor_tab_size: 4,
+            explorer_show_hidden: default_explorer_show_hidden(),
+            explorer_show_ignored: false,
             confirm_project_removal: true,
             confirm_workspace_removal: true,
             auto_archive_workspaces_after_days: 0,
@@ -260,6 +273,37 @@ impl NativeSettingsStore {
         if readback.get(path) != settings.get(path) {
             return Err(io::Error::other(
                 "Native settings readback did not match write",
+            ));
+        }
+        Ok(readback)
+    }
+
+    /// Native Explorer preferences use the same atomic file lock as MCP
+    /// settings, but are deliberately not MCP-writable scalar paths.
+    pub fn compare_and_set_explorer_visibility(
+        &self,
+        expected: ExplorerVisibilityOptions,
+        next: ExplorerVisibilityOptions,
+    ) -> io::Result<NativeSettings> {
+        let _lock = self.lock()?;
+        let mut settings = self.read()?;
+        if settings.explorer_show_hidden != expected.show_hidden
+            || settings.explorer_show_ignored != expected.show_ignored
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "Native Explorer visibility was changed by another window",
+            ));
+        }
+        settings.explorer_show_hidden = next.show_hidden;
+        settings.explorer_show_ignored = next.show_ignored;
+        self.persist(&settings)?;
+        let readback = self.read()?;
+        if readback.explorer_show_hidden != next.show_hidden
+            || readback.explorer_show_ignored != next.show_ignored
+        {
+            return Err(io::Error::other(
+                "Native Explorer visibility readback does not match write",
             ));
         }
         Ok(readback)
@@ -498,6 +542,30 @@ mod tests {
         assert!(store
             .compare_and_set_default_agent_profile(Some("managed_codex"), None)
             .is_err());
+    }
+
+    #[test]
+    fn native_explorer_visibility_roundtrips_without_exposing_mcp_write_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = NativeSettingsStore::new(dir.path());
+        let initial = ExplorerVisibilityOptions::default();
+        assert!(!NativeSettings::writable("explorer.showIgnored"));
+        assert!(!NativeSettings::writable("explorer.showHidden"));
+        let next = ExplorerVisibilityOptions {
+            show_ignored: true,
+            show_hidden: !initial.show_hidden,
+        };
+        let result = store
+            .compare_and_set_explorer_visibility(initial, next)
+            .unwrap();
+        assert_eq!(result.explorer_show_hidden, next.show_hidden);
+        assert!(result.explorer_show_ignored);
+        assert!(store
+            .compare_and_set_explorer_visibility(initial, initial)
+            .is_err());
+        let reloaded = store.read().unwrap();
+        assert_eq!(reloaded.explorer_show_hidden, next.show_hidden);
+        assert!(reloaded.explorer_show_ignored);
     }
 
     #[test]

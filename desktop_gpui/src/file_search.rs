@@ -1,6 +1,7 @@
 //! Bounded, read-only project-wide file discovery for native Quick Open.
 //! No project files are read or modified while indexing. Open-time canonical
 //! containment still belongs to WorkbenchModel::open_path.
+use crate::explorer_visibility::{ExplorerVisibility, ExplorerVisibilityOptions};
 
 use std::fs;
 use std::io;
@@ -26,6 +27,10 @@ pub struct ExplorerSearchHit {
 
 impl WorkspaceFileIndex {
     pub fn scan(root: &Path) -> io::Result<Self> {
+        Self::scan_with_options(root, ExplorerVisibilityOptions::default())
+    }
+
+    pub fn scan_with_options(root: &Path, options: ExplorerVisibilityOptions) -> io::Result<Self> {
         let root = dunce::canonicalize(root)?;
         if !root.is_dir() {
             return Err(io::Error::new(
@@ -33,6 +38,7 @@ impl WorkspaceFileIndex {
                 "Not a workspace",
             ));
         }
+        let visibility = ExplorerVisibility::new(&root, options);
         let mut stack = vec![(root.clone(), 0)];
         let mut files = Vec::new();
         let mut directories = Vec::new();
@@ -51,27 +57,14 @@ impl WorkspaceFileIndex {
                     truncated = true;
                     break;
                 }
-                let name = entry.file_name();
-                let name = name.to_string_lossy();
-                if matches!(
-                    name.as_ref(),
-                    ".git"
-                        | ".worktrees"
-                        | "node_modules"
-                        | "target"
-                        | "build"
-                        | "dist"
-                        | ".next"
-                        | ".dart_tool"
-                        | ".venv"
-                        | "vendor"
-                        | ".idea"
-                ) {
-                    continue;
-                }
                 let kind = entry.file_type()?;
                 // Never follow directory or file symlinks out of the workspace.
                 if kind.is_symlink() {
+                    continue;
+                }
+                if (!kind.is_dir() && !kind.is_file())
+                    || !visibility.includes(&entry.path(), kind.is_dir())
+                {
                     continue;
                 }
                 if kind.is_dir() {
@@ -203,6 +196,32 @@ fn is_subsequence(needle: &str, haystack: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn filtered_results_and_quick_open_follow_ignored_visibility_mode() {
+        let root = tempfile::tempdir().unwrap();
+        git2::Repository::init(root.path()).unwrap();
+        fs::write(root.path().join(".gitignore"), "ignored/\n*.tmp\n").unwrap();
+        fs::create_dir(root.path().join("ignored")).unwrap();
+        fs::write(root.path().join("ignored/file.rs"), "ignore").unwrap();
+        fs::write(root.path().join("something.tmp"), "ignore").unwrap();
+        fs::write(root.path().join("kept.rs"), "keep").unwrap();
+        let hidden = WorkspaceFileIndex::scan(root.path()).unwrap();
+        assert_eq!(hidden.search("kept", 20).len(), 1);
+        assert!(hidden.search("file", 20).is_empty());
+        assert!(hidden.search_explorer("ignored", 20).is_empty());
+        let visible = WorkspaceFileIndex::scan_with_options(
+            root.path(),
+            ExplorerVisibilityOptions {
+                show_hidden: true,
+                show_ignored: true,
+            },
+        )
+        .unwrap();
+        assert_eq!(visible.search("file", 20).len(), 1);
+        assert_eq!(visible.search_explorer("ignored", 20).len(), 2);
+        assert!(visible.search_explorer(".git", 200).is_empty());
+    }
 
     #[test]
     fn finds_nested_unicode_and_fuzzy_names_without_indexing_generated_dirs() {

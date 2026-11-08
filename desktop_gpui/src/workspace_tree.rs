@@ -1,5 +1,6 @@
 //! Lazy, read-only workspace tree for the native GPUI Explorer.
 //! The UI owns selection; this model owns expansion and safe visible rows.
+use crate::explorer_visibility::{ExplorerVisibility, ExplorerVisibilityOptions};
 use std::collections::BTreeSet;
 use std::fs;
 use std::io;
@@ -20,6 +21,7 @@ pub struct TreeRow {
 #[derive(Debug)]
 pub struct WorkspaceTree {
     root: PathBuf,
+    visibility: ExplorerVisibility,
     expanded: BTreeSet<PathBuf>,
     rows: Vec<TreeRow>,
     truncated: bool,
@@ -27,6 +29,10 @@ pub struct WorkspaceTree {
 
 impl WorkspaceTree {
     pub fn new(root: &Path) -> io::Result<Self> {
+        Self::new_with_options(root, ExplorerVisibilityOptions::default())
+    }
+
+    pub fn new_with_options(root: &Path, options: ExplorerVisibilityOptions) -> io::Result<Self> {
         let root = dunce::canonicalize(root)?;
         if !root.is_dir() {
             return Err(io::Error::new(
@@ -35,6 +41,7 @@ impl WorkspaceTree {
             ));
         }
         let mut tree = Self {
+            visibility: ExplorerVisibility::new(&root, options),
             root,
             expanded: BTreeSet::new(),
             rows: Vec::new(),
@@ -42,6 +49,21 @@ impl WorkspaceTree {
         };
         tree.refresh()?;
         Ok(tree)
+    }
+
+    pub fn set_visibility_options(&mut self, options: ExplorerVisibilityOptions) -> io::Result<()> {
+        if self.visibility.options() == options {
+            return Ok(());
+        }
+        let previous = std::mem::replace(
+            &mut self.visibility,
+            ExplorerVisibility::new(&self.root, options),
+        );
+        if let Err(error) = self.refresh() {
+            self.visibility = previous;
+            return Err(error);
+        }
+        Ok(())
     }
 
     pub fn root(&self) -> &Path {
@@ -190,11 +212,11 @@ impl WorkspaceTree {
         for entry in directory {
             let entry = entry?;
             let name = entry.file_name().to_string_lossy().into_owned();
-            if is_generated(&name) {
-                continue;
-            }
             let kind = entry.file_type()?;
             if kind.is_symlink() || (!kind.is_dir() && !kind.is_file()) {
+                continue;
+            }
+            if !self.visibility.includes(&entry.path(), kind.is_dir()) {
                 continue;
             }
             entries.push((name, kind.is_dir(), relative.join(entry.file_name())));
@@ -225,26 +247,35 @@ impl WorkspaceTree {
     }
 }
 
-fn is_generated(name: &str) -> bool {
-    matches!(
-        name,
-        ".git"
-            | ".worktrees"
-            | "node_modules"
-            | "target"
-            | "dist"
-            | "build"
-            | ".next"
-            | ".dart_tool"
-            | ".venv"
-            | "vendor"
-            | ".idea"
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn changing_gitignore_visibility_keeps_expanded_folders_and_safe_root() {
+        let root = tempfile::tempdir().unwrap();
+        git2::Repository::init(root.path()).unwrap();
+        fs::write(root.path().join(".gitignore"), "ignored/\n").unwrap();
+        fs::create_dir_all(root.path().join("src/inner")).unwrap();
+        fs::create_dir(root.path().join("ignored")).unwrap();
+        fs::write(root.path().join("ignored/data.txt"), "x").unwrap();
+        fs::write(root.path().join("src/inner/code.rs"), "code").unwrap();
+        let mut tree = WorkspaceTree::new(root.path()).unwrap();
+        tree.reveal(Path::new("src/inner/code.rs")).unwrap();
+        assert!(!tree.rows().iter().any(|row| row.name == "ignored"));
+        tree.set_visibility_options(ExplorerVisibilityOptions {
+            show_ignored: true,
+            show_hidden: true,
+        })
+        .unwrap();
+        assert!(tree.rows().iter().any(|row| row.name == "ignored"));
+        assert!(tree.rows().iter().any(|row| row.name == "code.rs"));
+        assert!(!tree.rows().iter().any(|row| row.name == ".git"));
+        tree.set_visibility_options(ExplorerVisibilityOptions::default())
+            .unwrap();
+        assert!(!tree.rows().iter().any(|row| row.name == "ignored"));
+        assert!(tree.rows().iter().any(|row| row.name == "code.rs"));
+    }
 
     #[test]
     fn lazy_expansion_and_reveal_keep_paths_and_order_stable() {

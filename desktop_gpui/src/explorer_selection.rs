@@ -34,6 +34,22 @@ impl ExplorerMultiSelection {
         self.anchor = None;
     }
 
+    /// Ctrl+A selects only currently visible workspace rows, bounded so a
+    /// large result set cannot silently become an unbounded batch mutation.
+    pub fn select_visible_all(&mut self, visible: &[PathBuf]) -> usize {
+        self.clear();
+        for path in visible {
+            if self.paths.len() >= MAX_SELECTED {
+                break;
+            }
+            if path.starts_with(&self.root) {
+                self.paths.insert(path.clone());
+                self.anchor.get_or_insert_with(|| path.clone());
+            }
+        }
+        self.paths.len()
+    }
+
     /// Return false when the clicked path was not a current, visible row.
     /// Ctrl toggles one row, Shift selects the inclusive visual range, and
     /// a plain click clears the old range. The anchor remains steady for
@@ -113,6 +129,20 @@ impl ExplorerMultiSelection {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn select_all_only_accepts_visible_workspace_rows_and_obeys_cap() {
+        let root = PathBuf::from("C:/safe");
+        let mut visible = vec![PathBuf::from("C:/other/secret")];
+        visible.extend((0..140).map(|i| root.join(format!("file-{i}"))));
+        let mut selection = ExplorerMultiSelection::new(&root);
+        assert_eq!(selection.select_visible_all(&visible), MAX_SELECTED);
+        assert!(!selection.contains(&visible[0]));
+        assert!(selection.contains(&visible[1]));
+        assert!(!selection.contains(visible.last().unwrap()));
+        assert_eq!(selection.select_visible_all(&[]), 0);
+        assert!(selection.top_level_paths().is_empty());
+    }
 
     #[test]
     fn ctrl_shift_selection_follows_visible_order_and_stable_anchor() {

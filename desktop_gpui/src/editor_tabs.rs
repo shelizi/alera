@@ -69,6 +69,56 @@ pub struct CleanCloseReport {
     pub blocked: usize,
 }
 
+/// Save All keeps untitled buffers and incomplete IME compositions untouched.
+/// Errors are reported without preventing later dirty files from saving.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SaveAllReport {
+    pub saved: usize,
+    pub needs_save_as: usize,
+    pub composing: usize,
+    pub failures: Vec<String>,
+}
+
+impl SaveAllReport {
+    pub fn merge(&mut self, other: Self) {
+        self.saved += other.saved;
+        self.needs_save_as += other.needs_save_as;
+        self.composing += other.composing;
+        self.failures.extend(other.failures);
+    }
+
+    pub fn status(&self) -> String {
+        if self.saved == 0
+            && self.needs_save_as == 0
+            && self.composing == 0
+            && self.failures.is_empty()
+        {
+            return "No unsaved editor files".to_owned();
+        }
+        let mut parts = vec![format!("Saved {} editor file(s)", self.saved)];
+        if self.needs_save_as > 0 {
+            parts.push(format!(
+                "{} untitled file(s) need Save As",
+                self.needs_save_as
+            ));
+        }
+        if self.composing > 0 {
+            parts.push(format!(
+                "{} active IME composition(s) skipped",
+                self.composing
+            ));
+        }
+        if !self.failures.is_empty() {
+            parts.push(format!(
+                "{} save error(s): {}",
+                self.failures.len(),
+                self.failures.join("; ")
+            ));
+        }
+        parts.join("; ")
+    }
+}
+
 /// A live editor tab held outside every `EditorTabs` owner while it moves
 /// between per-pane editors. The exact [`EditorSession`] — buffer, undo
 /// history, selection, armed-discard flag and draft-store link — travels
@@ -330,6 +380,45 @@ impl EditorTabs {
                 "No editor is open",
             )),
         }
+    }
+
+    /// Save all dirty file-backed tabs without changing the focused tab.
+    pub fn save_all(&mut self) -> SaveAllReport {
+        let mut report = SaveAllReport::default();
+        for tab in &mut self.tabs {
+            let Some(document) = tab.document() else {
+                continue;
+            };
+            if !document.is_dirty() {
+                continue;
+            }
+            if document.marked().is_some() {
+                report.composing += 1;
+                continue;
+            }
+            let Some(path) = document.path().map(Path::to_path_buf) else {
+                report.needs_save_as += 1;
+                continue;
+            };
+            let commit = tab.save();
+            if commit.wrote_file() {
+                report.saved += 1;
+            }
+            if commit.blocked() || commit.status().contains("draft cleanup failed") {
+                report
+                    .failures
+                    .push(format!("{}: {}", path.display(), commit.status()));
+            }
+        }
+        report
+    }
+
+    pub fn first_dirty_untitled_index(&self) -> Option<usize> {
+        self.tabs.iter().position(|tab| {
+            tab.document().is_some_and(|document| {
+                document.is_dirty() && document.path().is_none() && document.marked().is_none()
+            })
+        })
     }
 
     pub fn save_as(&mut self, destination: &Path, overwrite: bool) -> SaveCommit {
@@ -694,6 +783,39 @@ mod tests {
         assert!(!tabs.close_active(true).closed());
         assert!(tabs.close_active(true).closed());
         assert!(store.restore_scratch(workspace.path()).unwrap().is_empty());
+    }
+
+    #[test]
+    fn save_all_writes_other_dirty_tabs_but_leaves_untitled_and_active_untouched() {
+        let workspace = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let root = workspace.path();
+        let a = root.join("a.txt");
+        let b = root.join("b.txt");
+        fs::write(&a, "a").unwrap();
+        fs::write(&b, "b").unwrap();
+        let mut tabs = EditorTabs::new(Some(EditorDraftStore::new(state.path())));
+        tabs.open_file(root, &a).unwrap();
+        tabs.document_mut().unwrap().replace(None, "!").unwrap();
+        tabs.open_file(root, &b).unwrap();
+        tabs.document_mut().unwrap().replace(None, "?").unwrap();
+        tabs.open_scratch(root).unwrap();
+        tabs.document_mut()
+            .unwrap()
+            .replace(None, "keep me")
+            .unwrap();
+        let current = tabs.active_index();
+        let first = tabs.save_all();
+        assert_eq!(first.saved, 2, "{}", first.status());
+        assert_eq!(first.needs_save_as, 1);
+        assert_eq!(first.failures.len(), 0);
+        assert_eq!(tabs.first_dirty_untitled_index(), current);
+        assert_eq!(tabs.active_index(), current);
+        assert_eq!(tabs.document().unwrap().content(), "keep me");
+        assert_eq!(fs::read_to_string(&a).unwrap(), "a!");
+        assert_eq!(fs::read_to_string(&b).unwrap(), "b?");
+        assert_eq!(tabs.save_all().saved, 0);
+        assert_eq!(tabs.save_all().needs_save_as, 1);
     }
 
     #[test]

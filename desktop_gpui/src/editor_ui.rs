@@ -10,6 +10,7 @@ use alera_gpui_desktop::editor::{
 use alera_gpui_desktop::editor_session::{OpenEffect, RECOVERY_PLAINTEXT_NOTICE};
 use alera_gpui_desktop::editor_tabs::{
     DetachedEditorTab, EditorSaveGuard, EditorTabDragIdentity, EditorTabLabel, EditorTabs,
+    SaveAllReport,
 };
 use alera_gpui_desktop::visible_line_hit::{
     apply_pointer_hit, VisibleLineGeometry, VisibleLineHitSet,
@@ -782,6 +783,24 @@ impl NativeEditor {
         self.status = commit.status();
         cx.notify();
         wrote
+    }
+
+    pub fn save_all(&mut self, cx: &mut Context<Self>) -> SaveAllReport {
+        let report = self.tabs.save_all();
+        self.status = report.status();
+        cx.notify();
+        report
+    }
+
+    /// A bulk save can only finish an untitled file after the user chooses
+    /// its destination. Activate one such tab and use the guarded picker.
+    pub fn prompt_first_dirty_untitled_save_as(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(index) = self.tabs.first_dirty_untitled_index() else {
+            return false;
+        };
+        self.activate_tab(index, cx);
+        self.prompt_save_as(cx);
+        true
     }
 
     /// Flutter-like Save on an untitled tab opens the native Save As dialog.

@@ -9,11 +9,12 @@ use alera_gpui_desktop::agent_profiles::{
 };
 use alera_gpui_desktop::edition::NATIVE_APP_NAME;
 use alera_gpui_desktop::editor::EditorDraftStore;
-use alera_gpui_desktop::editor_tabs::{EditorTabs, MAX_EDITOR_TABS};
+use alera_gpui_desktop::editor_tabs::{EditorTabs, SaveAllReport, MAX_EDITOR_TABS};
 use alera_gpui_desktop::explorer_ops::{
     ExplorerClipboardBatch, ExplorerClipboardMode, ExplorerFiles,
 };
 use alera_gpui_desktop::explorer_selection::ExplorerMultiSelection;
+use alera_gpui_desktop::explorer_visibility::ExplorerVisibilityOptions;
 use alera_gpui_desktop::file_search::WorkspaceFileIndex;
 use alera_gpui_desktop::git_actions::{GitActions, GitConflictChoice, GitConflictPlan};
 use alera_gpui_desktop::git_history::{
@@ -66,7 +67,15 @@ use std::time::{Duration, Instant};
 
 actions!(
     alera_gpui_workbench,
-    [ToggleFileSearch, ToggleContentSearch, SubmitTerminalCommand]
+    [
+        ToggleFileSearch,
+        ToggleContentSearch,
+        SubmitTerminalCommand,
+        ExplorerCopy,
+        ExplorerCut,
+        ExplorerPaste,
+        ExplorerSelectAll
+    ]
 );
 
 /// Deliberately small desktop shell: terminal first, basic editor on demand.
@@ -269,6 +278,8 @@ struct Workbench {
     runtime_details_open: bool,
     tree: Option<WorkspaceTree>,
     tree_mode: bool,
+    explorer_visibility: ExplorerVisibilityOptions,
+    explorer_visibility_menu_open: bool,
     explorer_selection: Option<PathBuf>,
     explorer_multi_selection: ExplorerMultiSelection,
     /// A read-only Explorer preview can cover an editor viewport without
@@ -305,6 +316,7 @@ struct Workbench {
     explorer_filter_input: Entity<QuickOpenInput>,
     file_index: Option<Arc<WorkspaceFileIndex>>,
     file_index_loading: bool,
+    file_index_request: u64,
     content_query: Option<Entity<QuickOpenInput>>,
     content_loading: bool,
     content_matches: Vec<ContentMatch>,
@@ -403,6 +415,7 @@ impl Workbench {
         visible: &[PathBuf],
         ctrl: bool,
         shift: bool,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
         if !self
@@ -413,6 +426,7 @@ impl Workbench {
         }
         self.explorer_selection = Some(path.to_path_buf());
         self.explorer_delete_confirmed = false;
+        window.focus(&self.explorer_keyboard_focus);
         if ctrl || shift {
             self.explorer_context_menu = None;
             self.model.set_status(format!(
@@ -475,6 +489,69 @@ impl Workbench {
             .ok();
         })
         .detach();
+    }
+
+    fn update_explorer_visibility(
+        &mut self,
+        next: ExplorerVisibilityOptions,
+        cx: &mut Context<Self>,
+    ) {
+        let previous = self.explorer_visibility;
+        if previous == next {
+            return;
+        }
+        if let Some(tree) = &mut self.tree {
+            if let Err(error) = tree.set_visibility_options(next) {
+                self.model
+                    .set_status(format!("Explorer visibility update failed: {error}"));
+                cx.notify();
+                return;
+            }
+        }
+        if let Some(store) = &self.native_settings_store {
+            match store.compare_and_set_explorer_visibility(previous, next) {
+                Ok(settings) => self.native_settings = settings,
+                Err(error) => {
+                    if let Some(tree) = &mut self.tree {
+                        let _ = tree.set_visibility_options(previous);
+                    }
+                    self.model.set_status(format!(
+                        "Explorer visibility unchanged; settings could not be saved: {error}"
+                    ));
+                    cx.notify();
+                    return;
+                }
+            }
+        } else {
+            // A missing native state path must not write Flutter preferences.
+            self.native_settings.explorer_show_hidden = next.show_hidden;
+            self.native_settings.explorer_show_ignored = next.show_ignored;
+        }
+        self.explorer_visibility = next;
+        self.explorer_visibility_menu_open = false;
+        self.explorer_multi_selection.clear();
+        self.explorer_selection = None;
+        self.explorer_context_menu = None;
+        self.tree_mode = true;
+        self.file_index = None;
+        self.file_index_loading = false;
+        self.file_index_request = self.file_index_request.wrapping_add(1);
+        if !self
+            .explorer_filter_input
+            .read(cx)
+            .query()
+            .trim()
+            .is_empty()
+            || self.quick_open.is_some()
+        {
+            self.ensure_file_index(cx);
+        }
+        self.model.set_status(format!(
+            "Explorer: {} ignored files, {} hidden items",
+            if next.show_ignored { "show" } else { "hide" },
+            if next.show_hidden { "show" } else { "hide" },
+        ));
+        cx.notify();
     }
 
     fn set_explorer_clipboard(&mut self, mode: ExplorerClipboardMode, cx: &mut Context<Self>) {
@@ -734,7 +811,7 @@ impl Workbench {
         &mut self,
         path: Option<PathBuf>,
         event: &gpui::MouseDownEvent,
-        window: &Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if let Some(path) = &path {
@@ -751,6 +828,7 @@ impl Workbench {
         }
         self.explorer_selection = path.clone();
         self.explorer_delete_confirmed = false;
+        window.focus(&self.explorer_keyboard_focus);
         let viewport = window.viewport_size();
         let left = (f32::from(event.position.x)
             - (f32::from(viewport.width) - RIGHT_SIDEBAR_WIDTH))
@@ -1529,6 +1607,92 @@ impl Workbench {
         cx.notify();
     }
 
+    fn explorer_copy_action(
+        &mut self,
+        _: &ExplorerCopy,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.explorer_keyboard_focus.is_focused(window) {
+            self.set_explorer_clipboard(ExplorerClipboardMode::Copy, cx);
+        }
+    }
+
+    fn explorer_cut_action(
+        &mut self,
+        _: &ExplorerCut,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.explorer_keyboard_focus.is_focused(window) {
+            self.set_explorer_clipboard(ExplorerClipboardMode::Cut, cx);
+        }
+    }
+
+    fn explorer_paste_action(
+        &mut self,
+        _: &ExplorerPaste,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.explorer_keyboard_focus.is_focused(window) {
+            self.paste_explorer_clipboard(cx);
+        }
+    }
+
+    fn explorer_select_all_action(
+        &mut self,
+        _: &ExplorerSelectAll,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.explorer_keyboard_focus.is_focused(window) {
+            return;
+        }
+        let query = self
+            .explorer_filter_input
+            .read(cx)
+            .query()
+            .trim()
+            .to_owned();
+        let visible: Vec<PathBuf> = if !query.is_empty() {
+            self.file_index
+                .as_ref()
+                .map(|index| index.search_explorer(&query, 200))
+                .unwrap_or_default()
+                .into_iter()
+                .map(|hit| hit.path)
+                .collect()
+        } else if self.tree_mode {
+            self.tree
+                .as_ref()
+                .map(|tree| {
+                    tree.rows()
+                        .iter()
+                        .map(|row| self.model.root().join(&row.relative_path))
+                        .collect()
+                })
+                .unwrap_or_default()
+        } else {
+            self.model
+                .entries()
+                .iter()
+                .map(|entry| entry.path.clone())
+                .collect()
+        };
+        let count = self.explorer_multi_selection.select_visible_all(&visible);
+        self.explorer_selection = self
+            .explorer_multi_selection
+            .top_level_paths()
+            .last()
+            .cloned();
+        self.model.set_status(format!(
+            "Selected {count} of {} visible Explorer item(s)",
+            visible.len()
+        ));
+        cx.notify();
+    }
+
     fn toggle_file_search_action(
         &mut self,
         _: &ToggleFileSearch,
@@ -1582,13 +1746,21 @@ impl Workbench {
         {
             let root = self.model.root().to_path_buf();
             let generation = self.workspace_generation;
+            let options = self.explorer_visibility;
+            self.file_index_request = self.file_index_request.wrapping_add(1);
+            let request = self.file_index_request;
             self.file_index_loading = true;
             cx.spawn(async move |view, cx| {
                 let result = cx
-                    .background_spawn(async move { WorkspaceFileIndex::scan(&root) })
+                    .background_spawn(async move {
+                        WorkspaceFileIndex::scan_with_options(&root, options)
+                    })
                     .await;
                 view.update(cx, |view, cx| {
-                    if view.workspace_generation != generation {
+                    if view.workspace_generation != generation
+                        || view.file_index_request != request
+                        || view.explorer_visibility != options
+                    {
                         return;
                     }
                     view.file_index_loading = false;
@@ -1840,6 +2012,42 @@ impl Workbench {
         }
         let status = editor.read(cx).status_text().to_owned();
         self.model.set_status(status);
+        cx.notify();
+    }
+
+    fn save_all_editors(&mut self, cx: &mut Context<Self>) {
+        let mut report = SaveAllReport::default();
+        let mut first_untitled = None;
+        // Each split pane owns distinct live editor documents. Never switch
+        // tabs merely to save file-backed buffers in an inactive pane.
+        for editor in [self.editor.clone(), self.secondary_editor.clone()]
+            .into_iter()
+            .flatten()
+        {
+            let pane_report = editor.update(cx, |editor, cx| editor.save_all(cx));
+            if pane_report.needs_save_as > 0 && first_untitled.is_none() {
+                first_untitled = Some(editor);
+            }
+            report.merge(pane_report);
+        }
+        if report.saved > 0 {
+            self.model.reload_active();
+        }
+        let status = if first_untitled.is_some() {
+            format!(
+                "{}; opening Save As for first untitled file",
+                report.status()
+            )
+        } else {
+            report.status()
+        };
+        self.model.set_status(status);
+        if let Some(editor) = first_untitled {
+            editor.update(cx, |editor, cx| {
+                editor.prompt_first_dirty_untitled_save_as(cx);
+            });
+            self.center_view = CenterView::Editor;
+        }
         cx.notify();
     }
 
@@ -2189,7 +2397,8 @@ impl Workbench {
             .reset(self.workspace_generation.wrapping_add(1));
         self.mixed_panes.reset();
         self.mixed_tab_context = None;
-        self.tree = WorkspaceTree::new(&canonical).ok();
+        self.tree = WorkspaceTree::new_with_options(&canonical, self.explorer_visibility).ok();
+        self.explorer_visibility_menu_open = false;
         self.explorer_multi_selection = ExplorerMultiSelection::new(&canonical);
         self.explorer_preview_active = false;
         self.explorer_filter_input
@@ -2211,6 +2420,7 @@ impl Workbench {
         self.quick_open = None;
         self.file_index = None;
         self.file_index_loading = false;
+        self.file_index_request = self.file_index_request.wrapping_add(1);
         self.content_query = None;
         self.content_loading = false;
         self.content_matches.clear();
@@ -4910,6 +5120,8 @@ impl Render for Workbench {
         let explorer_filter_empty = explorer_filter_results.is_empty();
         let tree_mode = self.tree_mode && self.tree.is_some();
         let tree_truncated = self.tree.as_ref().is_some_and(WorkspaceTree::truncated);
+        let explorer_visibility = self.explorer_visibility;
+        let explorer_visibility_menu_open = self.explorer_visibility_menu_open;
         let explorer_multi_selection = self.explorer_multi_selection.clone();
         let explorer_visible_paths: Arc<Vec<PathBuf>> = Arc::new(if explorer_filter_active {
             explorer_filter_results
@@ -5430,6 +5642,10 @@ impl Render for Workbench {
             .on_action(cx.listener(Self::toggle_file_search_action))
             .on_action(cx.listener(Self::toggle_content_search_action))
             .on_action(cx.listener(Self::submit_terminal_action))
+            .on_action(cx.listener(Self::explorer_copy_action))
+            .on_action(cx.listener(Self::explorer_cut_action))
+            .on_action(cx.listener(Self::explorer_paste_action))
+            .on_action(cx.listener(Self::explorer_select_all_action))
             .flex()
             .flex_col()
             .bg(rgb(BG))
@@ -5540,6 +5756,7 @@ impl Render for Workbench {
                                     .flex_1()
                                     .min_h_0()
                                     .track_focus(&self.explorer_keyboard_focus)
+                                    .key_context("AleraGpuiExplorer")
                                     .relative()
                                     .flex()
                                     .flex_col()
@@ -5580,6 +5797,19 @@ impl Render for Workbench {
                                                     })),
                                             )
                                             .child(
+                                                icon_button("explorer-save-all", UiIcon::Save, "Save all editor files", false)
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.save_all_editors(cx);
+                                                    })),
+                                            )
+                                            .child(
+                                                icon_button("explorer-visibility-options", UiIcon::More, "Show/hide Explorer items", explorer_visibility_menu_open)
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.explorer_visibility_menu_open = !this.explorer_visibility_menu_open;
+                                                        cx.notify();
+                                                    })),
+                                            )
+                                            .child(
                                                 icon_button("explorer-collapse-all", UiIcon::CollapseAll, "Collapse all folders", false)
                                                     .on_click(cx.listener(|this, _, _window, cx| {
                                                         if let Some(tree) = &mut this.tree {
@@ -5603,6 +5833,52 @@ impl Render for Workbench {
                                                         cx.notify();
                                                     })),
                                             ),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .id("explorer-visibility-options-panel")
+                                    .border_b_1()
+                                    .border_color(rgb(BORDER))
+                                    .when(!explorer_visibility_menu_open, |panel| panel.hidden())
+                                    .child(
+                                        div()
+                                            .id("explorer-toggle-ignored")
+                                            .cursor_pointer()
+                                            .px_3()
+                                            .py_2()
+                                            .text_xs()
+                                            .hover(|style| style.bg(rgb(ACTIVE)))
+                                            .child(if explorer_visibility.show_ignored {
+                                                "Hide ignored files"
+                                            } else {
+                                                "Show ignored files"
+                                            })
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                let mut next = this.explorer_visibility;
+                                                next.show_ignored = !next.show_ignored;
+                                                this.update_explorer_visibility(next, cx);
+                                            })),
+                                    )
+                                    .child(
+                                        div()
+                                            .id("explorer-toggle-hidden")
+                                            .cursor_pointer()
+                                            .px_3()
+                                            .py_2()
+                                            .text_xs()
+                                            .hover(|style| style.bg(rgb(ACTIVE)))
+                                            .when(!cfg!(windows), |row| row.hidden())
+                                            .child(if explorer_visibility.show_hidden {
+                                                "Hide hidden items"
+                                            } else {
+                                                "Show hidden items"
+                                            })
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                let mut next = this.explorer_visibility;
+                                                next.show_hidden = !next.show_hidden;
+                                                this.update_explorer_visibility(next, cx);
+                                            })),
                                     ),
                             )
                             .child(
@@ -5858,6 +6134,7 @@ impl Render for Workbench {
                                                         visible_for_click.as_ref(),
                                                         modifiers.control || modifiers.platform,
                                                         modifiers.shift,
+                                                        window,
                                                         cx,
                                                     ) {
                                                         return;
@@ -5938,6 +6215,7 @@ impl Render for Workbench {
                                                         visible_for_click.as_ref(),
                                                         modifiers.control || modifiers.platform,
                                                         modifiers.shift,
+                                                        window,
                                                         cx,
                                                     ) {
                                                         return;
@@ -5990,6 +6268,7 @@ impl Render for Workbench {
                                                         visible_for_click.as_ref(),
                                                         modifiers.control || modifiers.platform,
                                                         modifiers.shift,
+                                                        window,
                                                         cx,
                                                     ) {
                                                         return;
@@ -8535,6 +8814,10 @@ fn main() {
             Some("Native state directory unavailable".into()),
         ),
     };
+    let initial_visibility = ExplorerVisibilityOptions {
+        show_ignored: native_settings.explorer_show_ignored,
+        show_hidden: native_settings.explorer_show_hidden,
+    };
 
     Application::new().run(move |cx: &mut App| {
         // Flutter embeds these licensed typefaces. Without explicitly
@@ -8556,6 +8839,14 @@ fn main() {
         cx.bind_keys([
             KeyBinding::new("ctrl-p", ToggleFileSearch, None),
             KeyBinding::new("cmd-p", ToggleFileSearch, None),
+            KeyBinding::new("ctrl-c", ExplorerCopy, Some("AleraGpuiExplorer")),
+            KeyBinding::new("cmd-c", ExplorerCopy, Some("AleraGpuiExplorer")),
+            KeyBinding::new("ctrl-x", ExplorerCut, Some("AleraGpuiExplorer")),
+            KeyBinding::new("cmd-x", ExplorerCut, Some("AleraGpuiExplorer")),
+            KeyBinding::new("ctrl-v", ExplorerPaste, Some("AleraGpuiExplorer")),
+            KeyBinding::new("cmd-v", ExplorerPaste, Some("AleraGpuiExplorer")),
+            KeyBinding::new("ctrl-a", ExplorerSelectAll, Some("AleraGpuiExplorer")),
+            KeyBinding::new("cmd-a", ExplorerSelectAll, Some("AleraGpuiExplorer")),
             KeyBinding::new("ctrl-shift-f", ToggleContentSearch, None),
             KeyBinding::new("cmd-shift-f", ToggleContentSearch, None),
             KeyBinding::new(
@@ -8593,8 +8884,11 @@ fn main() {
                     })
                     .detach();
                     let mut workbench = Workbench {
-                        tree: WorkspaceTree::new(model.root()).ok(),
+                        tree: WorkspaceTree::new_with_options(model.root(), initial_visibility)
+                            .ok(),
                         tree_mode: true,
+                        explorer_visibility: initial_visibility,
+                        explorer_visibility_menu_open: false,
                         explorer_selection: None,
                         explorer_multi_selection: ExplorerMultiSelection::new(model.root()),
                         explorer_preview_active: false,
@@ -8636,6 +8930,7 @@ fn main() {
                         explorer_filter_input,
                         file_index: None,
                         file_index_loading: false,
+                        file_index_request: 0,
                         content_query: None,
                         content_loading: false,
                         content_matches: Vec::new(),
