@@ -27,7 +27,7 @@ use std::io;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[path = "editor_find_ui.rs"]
 mod editor_find_ui;
@@ -64,6 +64,7 @@ actions!(
         Backspace,
         Delete,
         Newline,
+        InsertIndent,
         SelectAll,
         SaveFile,
         Paste,
@@ -111,6 +112,7 @@ pub fn bind_editor_keys(cx: &mut App) {
         KeyBinding::new("backspace", Backspace, Some("AleraGpuiEditor")),
         KeyBinding::new("delete", Delete, Some("AleraGpuiEditor")),
         KeyBinding::new("enter", Newline, Some("AleraGpuiEditor")),
+        KeyBinding::new("tab", InsertIndent, Some("AleraGpuiEditor")),
         KeyBinding::new("ctrl-a", SelectAll, Some("AleraGpuiEditor")),
         KeyBinding::new("cmd-a", SelectAll, Some("AleraGpuiEditor")),
         KeyBinding::new("ctrl-s", SaveFile, Some("AleraGpuiEditor")),
@@ -168,6 +170,8 @@ pub struct NativeEditor {
     last_drag_position: Option<Point<Pixels>>,
     edge_scroll_running: bool,
     edge_scroll_ticks: u16,
+    tab_size: usize,
+    last_edit: Instant,
 }
 
 /// Geometry is produced by GPUI's actual native font shaper during paint.
@@ -242,6 +246,28 @@ impl NativeEditor {
             last_drag_position: None,
             edge_scroll_running: false,
             edge_scroll_ticks: 0,
+            tab_size: 4,
+            last_edit: Instant::now(),
+        }
+    }
+
+    pub fn set_tab_size(&mut self, tab_size: u64, cx: &mut Context<Self>) {
+        if (1..=16).contains(&tab_size) {
+            self.tab_size = tab_size as usize;
+            cx.notify();
+        }
+    }
+
+    /// Leave untitled drafts in recovery. Autosave only an idle file-backed
+    /// document without any in-progress IME composition.
+    pub fn autosave_if_idle(&mut self, cx: &mut Context<Self>) {
+        if !self.tabs.is_empty()
+            && self.doc().is_dirty()
+            && self.doc().path().is_some()
+            && self.doc().marked().is_none()
+            && self.last_edit.elapsed() >= Duration::from_secs(3)
+        {
+            self.save(cx);
         }
     }
 
@@ -918,6 +944,14 @@ impl NativeEditor {
         let result = self.doc_mut().replace(None, "\n");
         self.edit_result(result, cx);
     }
+    fn insert_indent(&mut self, _: &InsertIndent, _: &mut Window, cx: &mut Context<Self>) {
+        if self.doc_mut().marked().is_some() {
+            return;
+        }
+        let indent = " ".repeat(self.tab_size);
+        let result = self.doc_mut().replace(None, &indent);
+        self.edit_result(result, cx);
+    }
     fn select_all(&mut self, _: &SelectAll, _: &mut Window, cx: &mut Context<Self>) {
         if self.doc_mut().marked().is_some() {
             return;
@@ -963,6 +997,7 @@ impl NativeEditor {
         match result {
             Err(error) => self.status = format!("Edit rejected: {error}"),
             Ok(()) => {
+                self.last_edit = Instant::now();
                 if let Err(error) = self.tabs.persist_draft() {
                     self.status = format!("Local recovery save failed: {error}");
                 }
@@ -1436,6 +1471,7 @@ impl Render for NativeEditor {
             .on_action(cx.listener(Self::backspace))
             .on_action(cx.listener(Self::delete))
             .on_action(cx.listener(Self::newline))
+            .on_action(cx.listener(Self::insert_indent))
             .on_action(cx.listener(Self::select_all))
             .on_action(cx.listener(Self::save_file))
             .on_action(cx.listener(Self::paste))

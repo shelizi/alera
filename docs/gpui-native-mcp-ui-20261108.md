@@ -37,13 +37,41 @@ MCP window ID** action. A copied window ID is a selector, **not** a token.
 | `open_git_graph` | Show Native Git Graph panel | Panel is open; unsupported ref/filter modes are refused |
 | `compare_branches` | Display a merge-base-to-head Git diff in the Native Git preview | Background comparison is read-only, scoped, and installed in the visible pane before receipt |
 | `create_workspace` | Delegate to Host-owned `workspace add` managed Git worktree workflow, then switch Native | New active Host Workspace, Project ID, branch and canonical worktree path independently verified before receipt containing `createdWorkspaceId` |
+| `get_setting` | Read one of the eight Host-allowlisted Native settings from the independent state store | Return the persisted typed scalar as `settingValue` |
+| `update_setting` | Compare `expectedValue`, atomically persist a writable scalar, read it back and update the Native UI owner | Applied only with readback; stale expected values or invalid/corrupt data fail closed |
+| `open_settings` | Show the actual GPUI Native Settings panel and selected section | Visible section and Native settings read must succeed |
 
-Unsupported (Settings operations,
-external editors, `openMode=new`, and unsupported Git filters) return
+Unsupported (external editors, `openMode=new`, and unsupported Git filters) return
 `applied=false`, never a made-up success. Native workbench's existing dirty
 buffer guards can refuse cross-workspace switching. All file targets are
 canonicalized again and required to remain within the target workspace;
 Host authorization alone is not sufficient to open a symlink outside it.
+
+## Native Settings ownership and behavior
+
+The Native preview never reads or writes Flutter Classic's SettingsController
+or preferences. Its own versioned `native-settings-v1.json` file is kept in
+Native state (also honoring the isolated `ALERA_GPUI_STATE_DIR` smoke-test
+override). Missing settings use Native defaults; malformed, oversized, or
+future-version JSON is rejected, **not silently replaced**. Writes perform a
+local exclusive compare-and-set, an atomic replacement, and full readback
+before confirming the Host result. The CLI sidecar forwards `settingValue`
+only for its pending successful get/update command, while Host validates the
+scalar type against its separate allowlist.
+
+Five writable paths now have Native runtime behavior: Git auto-fetch toggle
+and 1–60-minute interval; Terminal text size 8–48 px; Editor idle autosave
+(only a file-backed buffer after 3 seconds without IME composition); Editor
+Tab indentation width 1–16 spaces, applied to both editors. Three destructive
+confirmation/archive controls remain MCP read-only. Native Settings are
+also accessible from the top bar. Agent/Agent Profiles settings sections
+are not implemented yet; their MCP navigation requests correctly return
+`applied=false` rather than showing a placeholder and claiming success.
+
+**Acceptance remains limited:** storage and bridge tests and successful
+Native compilation cannot replace a real Agent→Host→Native GUI settings
+get/update/open/receipt exercise. Keep `supported=false` pending the
+existing full GUI/PTY/IME acceptance gates.
 
 The Native `create_workspace` path **does not** manually call `git worktree add`:
 it delegates Git setup, Project/Workspace registration, setup policies and

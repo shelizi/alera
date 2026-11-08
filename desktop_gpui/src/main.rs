@@ -1,5 +1,6 @@
 //! Experimental Alera desktop shell powered by native GPUI (no Flutter/WebView).
 mod editor_ui;
+mod native_settings_ui;
 mod quick_open_ui;
 
 use alera_gpui_desktop::agent_profiles::{
@@ -20,6 +21,7 @@ use alera_gpui_desktop::mcp_ui_bridge::{
 };
 use alera_gpui_desktop::mcp_workspace_creation::HostManagedWorkspaceRequest;
 use alera_gpui_desktop::model::WorkbenchModel;
+use alera_gpui_desktop::native_settings::{NativeSettings, NativeSettingsStore};
 use alera_gpui_desktop::project_search::{ContentMatch, ProjectSearch};
 use alera_gpui_desktop::project_tree::{collect_project_tree, ProjectTreeGroup};
 use alera_gpui_desktop::runtime_bridge::RuntimeCliBridge;
@@ -54,7 +56,7 @@ use std::borrow::Cow;
 use std::collections::{HashSet, VecDeque};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 actions!(
     alera_gpui_workbench,
@@ -244,6 +246,11 @@ struct Workbench {
     mcp_compare_request: u64,
     mcp_workspace_create_busy: bool,
     mcp_workspace_create_request: u64,
+    native_settings_store: Option<NativeSettingsStore>,
+    native_settings: NativeSettings,
+    native_settings_error: Option<String>,
+    settings_section: Option<String>,
+    last_auto_git_fetch: Instant,
     agent_profiles: Vec<AgentProfileRow>,
     agent_profiles_loading: bool,
     agent_profiles_request: u64,
@@ -700,7 +707,8 @@ impl Workbench {
         }
         let editor = cx.new(|cx| NativeEditor::new(tabs, cx));
         editor.update(cx, |editor, cx| {
-            editor.set_local_tab_strip_visible(false, cx)
+            editor.set_local_tab_strip_visible(false, cx);
+            editor.set_tab_size(self.native_settings.editor_tab_size, cx);
         });
         self.editor = Some(editor.clone());
         (
@@ -713,7 +721,8 @@ impl Workbench {
     fn install_secondary_editor(&mut self, tabs: EditorTabs, cx: &mut Context<Self>) {
         let editor = cx.new(|cx| NativeEditor::new(tabs, cx));
         editor.update(cx, |editor, cx| {
-            editor.set_local_tab_strip_visible(false, cx)
+            editor.set_local_tab_strip_visible(false, cx);
+            editor.set_tab_size(self.native_settings.editor_tab_size, cx);
         });
         self.secondary_editor = Some(editor.clone());
         (
@@ -1778,6 +1787,116 @@ impl Workbench {
         .detach();
     }
 
+    fn install_native_settings(&mut self, settings: NativeSettings, cx: &mut Context<Self>) {
+        if self.native_settings.auto_git_fetch_enabled != settings.auto_git_fetch_enabled
+            || self.native_settings.auto_git_fetch_interval_minutes
+                != settings.auto_git_fetch_interval_minutes
+        {
+            self.last_auto_git_fetch = Instant::now();
+        }
+        let tab_size = settings.editor_tab_size;
+        self.native_settings = settings;
+        self.native_settings_error = None;
+        for editor in [self.editor.clone(), self.secondary_editor.clone()]
+            .into_iter()
+            .flatten()
+        {
+            editor.update(cx, |editor, cx| editor.set_tab_size(tab_size, cx));
+        }
+        cx.notify();
+    }
+
+    /// The Host authenticates the Agent and allowlists the path. Native
+    /// independently rechecks its live Workspace registration and store,
+    /// and replies only with the value actually read from its own JSON file.
+    fn apply_native_mcp_setting(&mut self, command: &NativeMcpUiCommand, cx: &mut Context<Self>) {
+        let result: Result<(NativeSettings, serde_json::Value), &'static str> = (|| {
+            let authorized = self.mcp_host_workspaces.iter().any(|workspace| {
+                workspace.id == command.workspace_id
+                    && dunce::canonicalize(&workspace.path).is_ok_and(|path| path.is_dir())
+            });
+            if !authorized {
+                return Err("workspace_missing");
+            }
+            let store = self.native_settings_store.as_ref().ok_or("ui_not_ready")?;
+            let path = command
+                .arguments
+                .get("path")
+                .and_then(|value| value.as_str())
+                .ok_or("ui_operation_failed")?;
+            let settings = if command.action == "get_setting" {
+                store.read().map_err(|_| "ui_operation_failed")?
+            } else {
+                let expected = command
+                    .arguments
+                    .get("expectedValue")
+                    .ok_or("ui_operation_failed")?;
+                let value = command
+                    .arguments
+                    .get("value")
+                    .ok_or("ui_operation_failed")?;
+                store
+                    .compare_and_set(path, expected, value)
+                    .map_err(|_| "ui_operation_failed")?
+            };
+            let readback = settings.get(path).ok_or("ui_operation_failed")?;
+            Ok((settings, readback))
+        })();
+        match result {
+            Ok((settings, readback)) => {
+                self.install_native_settings(settings, cx);
+                if let Some(bridge) = self.mcp_ui_bridge.as_mut() {
+                    if bridge
+                        .complete_setting(&command.request_id, &readback)
+                        .is_err()
+                    {
+                        self.mcp_ui_status =
+                            "MCP: Native setting applied, but Host receipt failed".into();
+                    } else {
+                        self.mcp_ui_status =
+                            format!("MCP: Native {} readback confirmed", command.action);
+                    }
+                }
+            }
+            Err(code) => {
+                self.mcp_ui_status =
+                    "MCP: Native setting not changed or readback unavailable".into();
+                if let Some(bridge) = self.mcp_ui_bridge.as_mut() {
+                    let _ = bridge.complete(&command.request_id, false, None, Some(code));
+                }
+            }
+        }
+        cx.notify();
+    }
+
+    fn change_native_setting(
+        &mut self,
+        path: &str,
+        value: serde_json::Value,
+        cx: &mut Context<Self>,
+    ) {
+        let result = self
+            .native_settings_store
+            .as_ref()
+            .ok_or_else(|| std::io::Error::other("Native state directory is unavailable"))
+            .and_then(|store| {
+                let expected = store.get(path)?;
+                store.compare_and_set(path, &expected, &value)
+            });
+        match result {
+            Ok(settings) => {
+                self.install_native_settings(settings, cx);
+                self.model
+                    .set_status(format!("Native {path} saved and read back"));
+            }
+            Err(error) => {
+                self.model
+                    .set_status(format!("Native setting unchanged: {error}"));
+            }
+        }
+        cx.notify();
+    }
+
     /// Host has already authorized the target and parameters, but this window
     /// must independently confirm the target exists in its visible Workbench.
     /// Only implemented operations can produce a successful acknowledgment.
@@ -1796,7 +1915,7 @@ impl Workbench {
             return Err("workspace_missing");
         }
 
-        if target_path != self.model.root() {
+        if target_path != self.model.root() && command.action != "open_settings" {
             if !matches!(
                 command.action.as_str(),
                 "focus_workspace" | "open_file" | "reveal_file" | "select_tab" | "focus_agent"
@@ -1811,6 +1930,21 @@ impl Workbench {
 
         let args = command.arguments.as_object().ok_or("ui_not_ready")?;
         match command.action.as_str() {
+            "open_settings" => {
+                let section = args
+                    .get("sectionId")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("application");
+                self.show_native_settings_section(section, cx)?;
+                self.model
+                    .set_status(format!("Native Settings · {section}"));
+                cx.notify();
+                if self.settings_section.as_deref() == Some(section) {
+                    Ok(None)
+                } else {
+                    Err("not_visible")
+                }
+            }
             "focus_workspace" => {
                 if self.model.root() != target_path {
                     return Err("not_visible");
@@ -2148,6 +2282,10 @@ impl Workbench {
                     self.refresh_mcp_host_workspaces(cx);
                 }
                 NativeMcpUiEvent::Command(command) => {
+                    if matches!(command.action.as_str(), "get_setting" | "update_setting") {
+                        self.apply_native_mcp_setting(&command, cx);
+                        continue;
+                    }
                     if command.action == "create_workspace" {
                         self.start_native_mcp_workspace_create(command, cx);
                         continue;
@@ -3772,6 +3910,21 @@ impl Workbench {
                 .update(cx, |view, cx| {
                     view.terminal_tick = view.terminal_tick.wrapping_add(1);
                     view.poll_native_mcp_commands(cx);
+                    if view.native_settings.editor_autosave_enabled && view.terminal_tick % 2 == 0 {
+                        for editor in [view.editor.clone(), view.secondary_editor.clone()].into_iter().flatten() {
+                            editor.update(cx, |editor, cx| editor.autosave_if_idle(cx));
+                        }
+                    }
+                    if view.native_settings.auto_git_fetch_enabled
+                        && view.last_auto_git_fetch.elapsed()
+                            >= Duration::from_secs(view.native_settings.auto_git_fetch_interval_minutes * 60)
+                        && !view.git_action_busy
+                        && !view.mcp_workspace_create_busy
+                        && !view.worktree_busy
+                    {
+                        view.last_auto_git_fetch = Instant::now();
+                        view.run_git_action(GitUiAction::Fetch, cx);
+                    }
                     if view.terminal_tick % 20 == 1 && view.mcp_ui_bridge.is_none() {
                         view.connect_mcp_ui_bridge(cx);
                     }
@@ -3815,6 +3968,8 @@ impl Workbench {
 impl Render for Workbench {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_mixed_tabs(cx);
+        let native_settings_panel = self.render_native_settings_panel(cx);
+        let terminal_font_size = self.native_settings.terminal_font_size as f32;
         let mixed_tabs = self.mixed_tabs.entries().to_vec();
         let mixed_active = self.mixed_tabs.active().cloned();
         let mixed_secondary_tab_ids = self.mixed_panes.tabs_in(PaneSlot::Secondary).to_vec();
@@ -4220,6 +4375,7 @@ impl Render for Workbench {
 
         div()
             .size_full()
+            .relative()
             .on_action(cx.listener(Self::toggle_file_search_action))
             .on_action(cx.listener(Self::submit_terminal_action))
             .flex()
@@ -4236,6 +4392,17 @@ impl Render for Workbench {
                     .items_center()
                     .justify_between()
                     .child(div().font_weight(gpui::FontWeight::BOLD).child("Alera"))
+                    .child(div()
+                        .id("native-settings-open")
+                        .cursor_pointer()
+                        .text_sm()
+                        .child("Settings")
+                        .on_click(cx.listener(|view, _, _, cx| {
+                            if let Err(code) = view.show_native_settings_section("application", cx) {
+                                view.model.set_status(format!("Native settings unavailable: {code}"));
+                                cx.notify();
+                            }
+                        })))
                     .child(
                         div()
                             .text_sm()
@@ -5865,14 +6032,14 @@ impl Render for Workbench {
                                             .px_3()
                                             .py_2()
                                             .font_family("JetBrains Mono")
-                                            .text_sm()
+                                            .text_size(px(terminal_font_size))
                                             .whitespace_nowrap()
                                             .children(terminal_screen_rows.into_iter().enumerate().map(
                                                 |(row_index, row)| {
                                                     div()
                                                         .id(("terminal-colored-row", row_index))
                                                         .whitespace_nowrap()
-                                                        .line_height(px(17.0))
+                                                        .line_height(px(terminal_font_size * 1.3))
                                                         .child(
                                                             gpui::StyledText::new(row.text)
                                                                 .with_highlights(row.spans.into_iter().map(|span| {
@@ -5914,7 +6081,7 @@ impl Render for Workbench {
                                             .px_3()
                                             .py_2()
                                             .font_family("JetBrains Mono")
-                                            .text_sm()
+                                            .text_size(px(terminal_font_size))
                                             .child(if terminal_output.is_empty() {
                                                 "No terminal content yet. Auto updates are enabled by default.".into()
                                             } else {
@@ -5970,7 +6137,7 @@ impl Render for Workbench {
                                                         .px_3()
                                                         .py_2()
                                                         .font_family("JetBrains Mono")
-                                                        .text_sm()
+                                                        .text_size(px(terminal_font_size))
                                                         .child(output))
                                                     .into_any_element()
                                             } else {
@@ -6155,7 +6322,7 @@ impl Render for Workbench {
                                                     .overflow_y_scroll()
                                                     .p_3()
                                                     .font_family("JetBrains Mono")
-                                                    .text_sm()
+                                                    .text_size(px(terminal_font_size))
                                                     .child(if let Some(rows) = mixed_secondary_vt_rows {
                                                         div()
                                                             .id("mixed-secondary-colored-grid")
@@ -6166,7 +6333,7 @@ impl Render for Workbench {
                                                                 div()
                                                                     .id(("mixed-secondary-colored-row", index))
                                                                     .whitespace_nowrap()
-                                                                    .line_height(px(17.0))
+                                                                    .line_height(px(terminal_font_size * 1.3))
                                                                     .child(
                                                                         gpui::StyledText::new(row.text)
                                                                             .with_highlights(row.spans.into_iter().map(|span| {
@@ -6778,6 +6945,7 @@ impl Render for Workbench {
                     .child(status)
                     .child(format!("{} · {}", branch, NATIVE_APP_NAME)),
             )
+            .children(native_settings_panel)
     }
 }
 
@@ -6854,6 +7022,19 @@ fn main() {
         .as_ref()
         .and_then(|store| store.saved_projects().ok())
         .unwrap_or_default();
+    let native_settings_store = session_store
+        .as_ref()
+        .map(|store| NativeSettingsStore::new(store.state_dir()));
+    let (native_settings, native_settings_error) = match native_settings_store.as_ref() {
+        Some(store) => match store.read() {
+            Ok(settings) => (settings, None),
+            Err(error) => (NativeSettings::default(), Some(error.to_string())),
+        },
+        None => (
+            NativeSettings::default(),
+            Some("Native state directory unavailable".into()),
+        ),
+    };
 
     Application::new().run(move |cx: &mut App| {
         // Flutter embeds these licensed typefaces. Without explicitly
@@ -6969,6 +7150,11 @@ fn main() {
                         mcp_compare_request: 0,
                         mcp_workspace_create_busy: false,
                         mcp_workspace_create_request: 0,
+                        native_settings_store,
+                        native_settings,
+                        native_settings_error,
+                        settings_section: None,
+                        last_auto_git_fetch: Instant::now(),
                         agent_profiles: Vec::new(),
                         agent_profiles_loading: false,
                         agent_profiles_request: 0,
