@@ -23,7 +23,7 @@ use gpui::{
 use std::collections::BTreeMap;
 use std::io;
 use std::ops::Range;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -68,7 +68,9 @@ actions!(
         Copy,
         Cut,
         NextEditorTab,
-        PreviousEditorTab
+        PreviousEditorTab,
+        NewUntitledTab,
+        CloseCurrentEditorTab
     ]
 );
 
@@ -121,6 +123,10 @@ pub fn bind_editor_keys(cx: &mut App) {
         KeyBinding::new("ctrl-shift-tab", PreviousEditorTab, Some("AleraGpuiEditor")),
         KeyBinding::new("cmd-alt-right", NextEditorTab, Some("AleraGpuiEditor")),
         KeyBinding::new("cmd-alt-left", PreviousEditorTab, Some("AleraGpuiEditor")),
+        KeyBinding::new("ctrl-n", NewUntitledTab, Some("AleraGpuiEditor")),
+        KeyBinding::new("cmd-n", NewUntitledTab, Some("AleraGpuiEditor")),
+        KeyBinding::new("ctrl-w", CloseCurrentEditorTab, Some("AleraGpuiEditor")),
+        KeyBinding::new("cmd-w", CloseCurrentEditorTab, Some("AleraGpuiEditor")),
     ]);
 }
 
@@ -147,6 +153,7 @@ impl gpui::Render for EditorTabDragPreview {
 pub struct NativeEditor {
     find: EditorFindUi,
     tabs: EditorTabs,
+    workspace_root: PathBuf,
     focus: FocusHandle,
     status: String,
     line_geometry: BTreeMap<usize, EditorLineGeometry>,
@@ -192,6 +199,12 @@ struct EditorLineGeometry {
 
 impl NativeEditor {
     pub fn new(tabs: EditorTabs, cx: &mut Context<Self>) -> Self {
+        // Retain the workspace even after the user closes the final tab.
+        let workspace_root = tabs
+            .document()
+            .expect("native editor requires an initial document")
+            .root()
+            .to_path_buf();
         let recovered = tabs.document().is_some_and(EditorDocument::is_dirty);
         let initial_line = tabs
             .document()
@@ -205,6 +218,7 @@ impl NativeEditor {
         Self {
             find: EditorFindUi::new(cx),
             tabs,
+            workspace_root,
             focus: cx.focus_handle(),
             status: if recovered {
                 "Recovered local unsaved edit; review before saving".into()
@@ -240,6 +254,7 @@ impl NativeEditor {
         cx: &mut Context<Self>,
     ) -> io::Result<OpenEffect> {
         let effect = self.tabs.open_file(root, path)?;
+        self.workspace_root = root.to_path_buf();
         if !matches!(effect, OpenEffect::AlreadyOpen) {
             self.line_geometry.clear();
             self.mouse_selecting = false;
@@ -282,6 +297,7 @@ impl NativeEditor {
 
     pub fn open_scratch(&mut self, root: &Path, cx: &mut Context<Self>) -> io::Result<OpenEffect> {
         let effect = self.tabs.open_scratch(root)?;
+        self.workspace_root = root.to_path_buf();
         self.line_geometry.clear();
         self.mouse_selecting = false;
         self.status = effect.status();
@@ -297,6 +313,39 @@ impl NativeEditor {
             self.status = "Switched editor file".into();
             self.reveal_caret();
             cx.notify();
+        }
+    }
+
+    fn new_untitled_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let root = self.workspace_root.clone();
+        match self.open_scratch(&root, cx) {
+            Ok(_) => window.focus(&self.focus),
+            Err(error) => {
+                self.status = format!("Cannot create new file: {error}");
+                cx.notify();
+            }
+        }
+    }
+
+    fn new_untitled_action(
+        &mut self,
+        _: &NewUntitledTab,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.new_untitled_tab(window, cx);
+    }
+
+    fn close_current_tab_action(
+        &mut self,
+        _: &CloseCurrentEditorTab,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(index) = self.tabs.active_index() {
+            // Ctrl+W closes clean tabs. Dirty drafts are never discarded by
+            // a shortcut; the tab's explicit Close / Confirm remains required.
+            self.close_editor_tab(index, false, cx);
         }
     }
 
@@ -406,7 +455,9 @@ impl NativeEditor {
     }
 
     pub fn has_unsaved_changes(&self) -> bool {
-        self.doc().is_dirty()
+        // Inactive tabs may contain unsaved edits even if the current tab
+        // is clean. Explorer mutations must not overlook their buffers.
+        self.tabs.can_switch_workspace().is_err()
     }
 
     /// GPUI's native uniform list uses absolute source line indices and only
@@ -1067,10 +1118,26 @@ impl Render for NativeEditor {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.tabs.is_empty() {
             return div()
+                .size_full()
+                .bg(rgb(PANEL_BG))
                 .p_4()
                 .text_sm()
                 .text_color(rgb(MUTED_TEXT))
+                .key_context("AleraGpuiEditor")
+                .track_focus(&self.focus)
+                .on_action(cx.listener(Self::new_untitled_action))
                 .child(self.status.clone())
+                .child(
+                    div()
+                        .id("editor-empty-new-file")
+                        .mt_3()
+                        .cursor_pointer()
+                        .text_color(rgb(EDITOR_TEXT))
+                        .child("+ New File")
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.new_untitled_tab(window, cx);
+                        })),
+                )
                 .into_any_element();
         }
         self.line_geometry.clear();
@@ -1145,65 +1212,122 @@ impl Render for NativeEditor {
             .on_action(cx.listener(Self::cut))
             .on_action(cx.listener(Self::next_editor_tab))
             .on_action(cx.listener(Self::previous_editor_tab))
-            .child(div().flex().gap_2().px_3().py_1().children(
-                tab_labels.into_iter().zip(drag_identities).enumerate().map(
-                    |(index, (label, drag_identity))| {
-                        let active = active_tab == Some(index);
-                        let drag_title = label.title.clone();
+            .on_action(cx.listener(Self::new_untitled_action))
+            .on_action(cx.listener(Self::close_current_tab_action))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .px_3()
+                    .py_1()
+                    .child(
                         div()
-                            .id(("editor-file-tab", index))
+                            .id("editor-tab-scroll")
+                            .flex_1()
+                            .min_w_0()
                             .flex()
-                            .items_center()
-                            .gap_1()
+                            .overflow_x_scroll()
+                            .children(tab_labels.into_iter().zip(drag_identities).enumerate().map(
+                                |(index, (label, drag_identity))| {
+                                    let active = active_tab == Some(index);
+                                    let drag_title = label.title.clone();
+                                    div()
+                                        .id(("editor-file-tab", index))
+                                        .flex()
+                                        .items_center()
+                                        .gap_1()
+                                        .child(
+                                            div()
+                                                .id(("editor-file-tab-select", index))
+                                                .cursor_pointer()
+                                                .text_sm()
+                                                .text_color(rgb(if active {
+                                                    EDITOR_TEXT
+                                                } else {
+                                                    MUTED_TEXT
+                                                }))
+                                                .child(format!(
+                                                    "{}{}",
+                                                    label.title,
+                                                    if label.dirty { " ●" } else { "" }
+                                                ))
+                                                .on_click(cx.listener(
+                                                    move |this, _, window, cx| {
+                                                        this.activate_tab(index, cx);
+                                                        window.focus(&this.focus);
+                                                    },
+                                                ))
+                                                .on_drag(
+                                                    EditorTabDrag {
+                                                        identity: drag_identity,
+                                                    },
+                                                    move |_, _, _, cx| {
+                                                        cx.new(|_| EditorTabDragPreview {
+                                                            title: drag_title.clone(),
+                                                        })
+                                                    },
+                                                )
+                                                .on_drop(cx.listener(
+                                                    move |this, payload: &EditorTabDrag, _, cx| {
+                                                        if let Some(identity) = &payload.identity {
+                                                            if this
+                                                                .tabs
+                                                                .move_tab_identity(identity, index)
+                                                            {
+                                                                this.status =
+                                                                    "Editor tab reordered".into();
+                                                                this.on_tab_navigation(cx);
+                                                            }
+                                                        }
+                                                    },
+                                                )),
+                                        )
+                                        .child(
+                                            div()
+                                                .id(("editor-file-tab-close", index))
+                                                .cursor_pointer()
+                                                .text_sm()
+                                                .text_color(rgb(MUTED_TEXT))
+                                                .child(if label.armed {
+                                                    "Confirm"
+                                                } else {
+                                                    "Close"
+                                                })
+                                                .on_click(cx.listener(move |this, _, _, cx| {
+                                                    this.close_editor_tab(index, true, cx);
+                                                })),
+                                        )
+                                },
+                            ))
                             .child(
                                 div()
-                                    .id(("editor-file-tab-select", index))
-                                    .cursor_pointer()
-                                    .text_sm()
-                                    .text_color(rgb(if active { EDITOR_TEXT } else { MUTED_TEXT }))
-                                    .child(format!(
-                                        "{}{}",
-                                        label.title,
-                                        if label.dirty { " ●" } else { "" }
-                                    ))
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.activate_tab(index, cx);
-                                    }))
-                                    .on_drag(
-                                        EditorTabDrag {
-                                            identity: drag_identity,
-                                        },
-                                        move |_, _, _, cx| {
-                                            cx.new(|_| EditorTabDragPreview {
-                                                title: drag_title.clone(),
-                                            })
-                                        },
-                                    )
-                                    .on_drop(cx.listener(
-                                        move |this, payload: &EditorTabDrag, _, cx| {
-                                            if let Some(identity) = &payload.identity {
-                                                if this.tabs.move_tab_identity(identity, index) {
-                                                    this.status = "Editor tab reordered".into();
-                                                    this.on_tab_navigation(cx);
-                                                }
+                                    .id("editor-tab-empty-area")
+                                    .flex_1()
+                                    .min_w(px(40.0))
+                                    .h(px(28.0))
+                                    .on_click(cx.listener(
+                                        |this, event: &gpui::ClickEvent, window, cx| {
+                                            if event.click_count() == 2 {
+                                                this.new_untitled_tab(window, cx);
                                             }
                                         },
                                     )),
-                            )
-                            .child(
-                                div()
-                                    .id(("editor-file-tab-close", index))
-                                    .cursor_pointer()
-                                    .text_sm()
-                                    .text_color(rgb(MUTED_TEXT))
-                                    .child(if label.armed { "Confirm" } else { "Close" })
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.close_editor_tab(index, true, cx);
-                                    })),
-                            )
-                    },
-                ),
-            ))
+                            ),
+                    )
+                    .child(
+                        div()
+                            .id("editor-tab-new-file")
+                            .cursor_pointer()
+                            .px_2()
+                            .py_1()
+                            .text_sm()
+                            .child("+ New File")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.new_untitled_tab(window, cx);
+                            })),
+                    ),
+            )
             .child(
                 div()
                     .flex()

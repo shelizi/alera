@@ -907,6 +907,11 @@ impl Workbench {
         let Some(editor) = &self.editor else {
             return;
         };
+        if editor.read(cx).tabs_empty() {
+            self.model.set_status("Open or create a file before saving");
+            cx.notify();
+            return;
+        }
         let path = editor.read(cx).document().path().map(PathBuf::from);
         let saved = editor.update(cx, |editor, cx| editor.save(cx));
         if saved {
@@ -957,6 +962,16 @@ impl Workbench {
         if self.editor.is_none() || self.picking_save_as {
             return;
         }
+        if self
+            .editor
+            .as_ref()
+            .is_some_and(|editor| editor.read(cx).tabs_empty())
+        {
+            self.model
+                .set_status("Open or create a file before Save As");
+            cx.notify();
+            return;
+        }
         self.picking_save_as = true;
         let selection = cx.prompt_for_paths(PathPromptOptions {
             files: true,
@@ -1002,6 +1017,12 @@ impl Workbench {
         let Some(editor) = &self.editor else {
             return;
         };
+        if editor.read(cx).tabs_empty() {
+            self.editor = None;
+            self.model.set_status("Editor closed");
+            cx.notify();
+            return;
+        }
         let path = editor.read(cx).document().path().map(PathBuf::from);
         let effect = editor.update(cx, |editor, _| editor.close_editor(discard));
         if effect.closed() {
@@ -2925,6 +2946,17 @@ impl Render for Workbench {
                                                 this.create_host_terminal(cx);
                                             })),
                                     )
+                                    .child(
+                                        div()
+                                            .id("center-create-untitled")
+                                            .cursor_pointer()
+                                            .text_sm()
+                                            .text_color(rgb(TEXT))
+                                            .child("+ New File")
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.new_editor(cx);
+                                            })),
+                                    )
                                     .child(if terminal_create_timed_out {
                                         div()
                                             .id("terminal-confirmation-retry")
@@ -3081,7 +3113,19 @@ impl Render for Workbench {
                                                                 },
                                                             )),
                                                     )
-                                            })),
+                                            }))
+                                            .child(
+                                                div()
+                                                    .id("upper-file-tabs-empty-area")
+                                                    .flex_1()
+                                                    .min_w(px(40.0))
+                                                    .h(px(TAB_STRIP_HEIGHT - 1.0))
+                                                    .on_click(cx.listener(|this, event: &gpui::ClickEvent, _, cx| {
+                                                        if event.click_count() == 2 {
+                                                            this.new_editor(cx);
+                                                        }
+                                                    })),
+                                            ),
                                     )
                                     .child(
                                         div()

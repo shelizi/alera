@@ -664,4 +664,46 @@ mod tests {
         assert!(tabs.document().unwrap().is_dirty());
         assert_eq!(fs::read(&paths[1]).unwrap(), b"b.txt");
     }
+
+    #[test]
+    fn inactive_dirty_draft_survives_close_shortcut_and_last_tab_can_reopen() {
+        let workspace = tempfile::tempdir().unwrap();
+        let root = workspace.path();
+        let file = root.join("clean.txt");
+        fs::write(&file, b"saved file").unwrap();
+        let mut tabs = EditorTabs::new(None);
+        tabs.open_scratch(root).unwrap();
+        tabs.document_mut()
+            .unwrap()
+            .replace(None, "keep me")
+            .unwrap();
+        tabs.open_file(root, &file).unwrap();
+        assert_eq!(tabs.tab_labels().len(), 2);
+        assert!(
+            !tabs.document().unwrap().is_dirty(),
+            "selected tab is clean"
+        );
+        assert!(
+            tabs.can_switch_workspace().is_err(),
+            "inactive unsaved scratch must block destructive workspace changes"
+        );
+
+        // Ctrl+W only closes the clean file. The dirty draft remains even
+        // after the final clean tab closes.
+        assert!(tabs.close_active(false).closed());
+        assert_eq!(tabs.tab_labels().len(), 1);
+        assert_eq!(tabs.document().unwrap().content(), "keep me");
+        assert!(!tabs.close_active(false).closed());
+        assert_eq!(tabs.document().unwrap().content(), "keep me");
+
+        // Explicit two-step discard still works; the empty tab strip can
+        // create a new scratch without needing a different workspace.
+        assert!(!tabs.close_active(true).closed());
+        assert!(tabs.close_active(true).closed());
+        assert!(tabs.is_empty());
+        tabs.open_scratch(root).unwrap();
+        assert_eq!(tabs.tab_labels().len(), 1);
+        assert_eq!(tabs.document().unwrap().content(), "");
+        assert_eq!(fs::read(&file).unwrap(), b"saved file");
+    }
 }
