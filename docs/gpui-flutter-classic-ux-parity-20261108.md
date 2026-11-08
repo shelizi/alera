@@ -155,9 +155,10 @@ this experimental migration without explicit approval.
   consume text-editor or Terminal clipboard commands. Modified clicks and
   Explorer context right-click restore Explorer keyboard focus. Key-routing
   behavior still needs OS-level acceptance and must not be called verified.
-- Remaining: OS Shell drag in/out parity, multi-file deletion UX, complete
-  Git badge coverage when Git's bounded snapshot truncates, and real Windows
-  pointer acceptance. Those gaps must not be called complete.
+- Remaining: native Windows Shell drag-out, real Windows pointer/drop
+  acceptance, true recycle-bin (Trash) semantics for deletion, and complete
+  Git badge coverage when Git's bounded snapshot truncates. Those gaps
+  must not be called complete.
 
 ## Follow-up: Save All and Explorer visibility (source-level implementation)
 
@@ -208,3 +209,28 @@ this experimental migration without explicit approval.
   into a real guarded Editor tab) and View current Git changes (switches
   to the preexisting async Git preview). These reuse established
   workspace/path guards and do not open files through a new OS process.
+
+## Follow-up: bounded multi-delete and precise external drop target
+
+- Native Explorer Delete now operates on up to 24 selected items (tree, flat
+  or filtered). Selected parent directories subsume selected children. A
+  two-step UI confirmation captures the exact workspace generation and
+  selected source paths, then validates the same selection before removal.
+  Preflight audits *every* selected directory and rejects any protected
+  Git metadata, symlink/junction, invalid path or overlarge subtree before
+  deleting the first selected item. Source files open in either Native
+  Editor pane and unsaved editor buffers block permanent deletion. Re-check
+  all paths at confirmation to reduce time-of-check/time-of-use risks.
+- The operation is explicitly labeled **Delete permanently**, not the
+  Classic version's **Move to Trash**: Windows recycle-bin integration is
+  pending and irreversible deletion must not be presented as recoverable.
+  Unexpected mid-batch disk errors can still result in partial deletion;
+  refresh the tree, tabs and file index and disclose the partial failure.
+- OS file imports now resolve a *hovered* Explorer row as the target,
+  independently from the last selected file: a folder row imports into
+  that folder, a file row imports into its parent, and only blank Explorer
+  space targets the workspace root. Missing, protected or outside-workspace
+  target paths are refused, never replaced with a guessed root. A row-level
+  GPUI drop handler stops event propagation to avoid duplicate root imports.
+- This is source/compilation and focused Rust-model verification only.
+  No Windows drag pointer or native GUI testing performed by request.

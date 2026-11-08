@@ -13,7 +13,7 @@ use alera_gpui_desktop::editor_tabs::{EditorTabs, SaveAllReport, MAX_EDITOR_TABS
 use alera_gpui_desktop::explorer_drag::ExplorerDragBatch;
 use alera_gpui_desktop::explorer_git_badges::{ExplorerGitBadge, ExplorerGitBadges};
 use alera_gpui_desktop::explorer_ops::{
-    ExplorerClipboardBatch, ExplorerClipboardMode, ExplorerFiles,
+    ExplorerClipboardBatch, ExplorerClipboardMode, ExplorerDeleteBatch, ExplorerFiles,
 };
 use alera_gpui_desktop::explorer_selection::ExplorerMultiSelection;
 use alera_gpui_desktop::explorer_visibility::ExplorerVisibilityOptions;
@@ -229,7 +229,7 @@ impl ExplorerAction {
             Self::Move => "Move into folder",
             Self::Copy => "Copy into folder",
             Self::Duplicate => "Duplicate",
-            Self::Delete => "Delete",
+            Self::Delete => "Delete permanently",
         }
     }
 }
@@ -257,7 +257,7 @@ impl ExplorerMenuAction {
             Self::File(ExplorerAction::Move) => "Move to folder…",
             Self::File(ExplorerAction::Copy) => "Copy into folder…",
             Self::File(ExplorerAction::Duplicate) => "Duplicate",
-            Self::File(ExplorerAction::Delete) => "Delete…",
+            Self::File(ExplorerAction::Delete) => "Delete permanently…",
             Self::File(ExplorerAction::NewFile) => "New file…",
             Self::File(ExplorerAction::NewFolder) => "New folder…",
             Self::Clipboard(ExplorerClipboardMode::Copy) => "Copy selection",
@@ -312,6 +312,7 @@ struct Workbench {
     explorer_action: Option<ExplorerAction>,
     explorer_action_input: Option<Entity<QuickOpenInput>>,
     explorer_delete_confirmed: bool,
+    explorer_delete_pending: Option<ExplorerDeleteBatch>,
     editor: Option<Entity<NativeEditor>>,
     secondary_editor: Option<Entity<NativeEditor>>,
     editor_transfer_in_progress: bool,
@@ -446,6 +447,7 @@ impl Workbench {
         }
         self.explorer_selection = Some(path.to_path_buf());
         self.explorer_delete_confirmed = false;
+        self.explorer_delete_pending = None;
         window.focus(&self.explorer_keyboard_focus);
         if ctrl || shift {
             self.explorer_context_menu = None;
@@ -469,6 +471,7 @@ impl Workbench {
         self.explorer_context_menu = None;
         self.explorer_selection = Some(path.to_path_buf());
         self.explorer_delete_confirmed = false;
+        self.explorer_delete_pending = None;
         if permanent {
             if self.model.open_path(path) {
                 self.explorer_preview_active = false;
@@ -725,7 +728,12 @@ impl Workbench {
         cx.notify();
     }
 
-    fn import_explorer_drop(&mut self, sources: Vec<PathBuf>, cx: &mut Context<Self>) {
+    fn import_explorer_drop(
+        &mut self,
+        sources: Vec<PathBuf>,
+        hovered_row: Option<PathBuf>,
+        cx: &mut Context<Self>,
+    ) {
         if self.explorer_drop_busy {
             self.model
                 .set_status("Finish the previous external file import first");
@@ -745,17 +753,6 @@ impl Workbench {
             return;
         }
         let root = self.model.root().to_path_buf();
-        let destination = self
-            .explorer_selection
-            .as_ref()
-            .map(|path| {
-                if path.is_dir() {
-                    path.clone()
-                } else {
-                    path.parent().unwrap_or(&root).to_path_buf()
-                }
-            })
-            .unwrap_or_else(|| root.clone());
         let generation = self.workspace_generation;
         self.explorer_drop_request = self.explorer_drop_request.wrapping_add(1);
         let request = self.explorer_drop_request;
@@ -766,6 +763,9 @@ impl Workbench {
         cx.spawn(async move |view, cx| {
             let result = cx.background_spawn(async move {
                 let files = ExplorerFiles::new(&root)?;
+                // The target comes from the actual hovered row. Selection
+                // belongs to keyboard operations and is unrelated to OS drop.
+                let destination = files.external_drop_folder(hovered_row.as_deref())?;
                 let mut imported = Vec::new();
                 for path in sources {
                     imported.push(files.import_external(&path, &destination)?);
@@ -925,6 +925,7 @@ impl Workbench {
         }
         self.explorer_selection = path.clone();
         self.explorer_delete_confirmed = false;
+        self.explorer_delete_pending = None;
         window.focus(&self.explorer_keyboard_focus);
         let viewport = window.viewport_size();
         let left = (f32::from(event.position.x)
@@ -961,6 +962,7 @@ impl Workbench {
         }
         self.explorer_action = Some(action);
         self.explorer_delete_confirmed = false;
+        self.explorer_delete_pending = None;
         self.explorer_action_input =
             if matches!(action, ExplorerAction::Delete | ExplorerAction::Duplicate) {
                 None
@@ -984,6 +986,107 @@ impl Workbench {
         self.explorer_action = None;
         self.explorer_action_input = None;
         self.explorer_delete_confirmed = false;
+        self.explorer_delete_pending = None;
+        cx.notify();
+    }
+
+    fn apply_explorer_batch_delete(&mut self, cx: &mut Context<Self>) {
+        if self.explorer_drop_busy || self.editor_dirty(cx) {
+            self.model
+                .set_status("Save editor changes and finish imports before deleting files");
+            cx.notify();
+            return;
+        }
+        let selection = self.explorer_multi_selection.top_level_paths();
+        let selection = if selection.is_empty() {
+            self.explorer_selection.iter().cloned().collect()
+        } else {
+            selection
+        };
+        let files = match ExplorerFiles::new(self.model.root()) {
+            Ok(files) => files,
+            Err(error) => {
+                self.model
+                    .set_status(format!("Explorer delete refused: {error}"));
+                cx.notify();
+                return;
+            }
+        };
+        let open_files: Vec<PathBuf> = self
+            .all_editor_files_and_active(cx)
+            .0
+            .into_iter()
+            .map(|(_, path)| path)
+            .collect();
+        if !self.explorer_delete_confirmed {
+            match ExplorerDeleteBatch::capture(&files, &selection, self.workspace_generation) {
+                Ok(batch) if !batch.affects_open_files(&open_files) => {
+                    self.model.set_status(format!(
+                        "Permanently delete {} selected item(s), including folder contents? This cannot be undone. Press CONFIRM PERMANENT DELETE to proceed.",
+                        batch.len(),
+                    ));
+                    self.explorer_delete_confirmed = true;
+                    self.explorer_delete_pending = Some(batch);
+                }
+                Ok(_) => self.model.set_status(
+                    "Close any Native Editor files inside the selection before permanent deletion",
+                ),
+                Err(error) => self
+                    .model
+                    .set_status(format!("Explorer delete preflight refused: {error}")),
+            }
+            cx.notify();
+            return;
+        }
+
+        // The second click is a separate user gesture. Re-audit the exact
+        // originally armed selection, Editor paths and workspace generation.
+        self.explorer_delete_confirmed = false;
+        let Some(batch) = self.explorer_delete_pending.take() else {
+            self.model
+                .set_status("Delete confirmation expired; choose the items again");
+            cx.notify();
+            return;
+        };
+        if !batch.matches_selection(&files, &selection, self.workspace_generation)
+            || batch.affects_open_files(&open_files)
+        {
+            self.model
+                .set_status("Delete selection or workspace changed; no files were deleted");
+            cx.notify();
+            return;
+        }
+        let result = batch.execute(&files, self.workspace_generation);
+        // An unexpected I/O error can occur after a successful earlier
+        // removal. Never claim rollback; reconcile actual disk state.
+        for target in batch.paths() {
+            if !target.exists() {
+                self.model.forget_path_and_children(target);
+            }
+        }
+        self.model.refresh_directory();
+        if let Some(tree) = &mut self.tree {
+            let _ = tree.refresh();
+        }
+        self.file_index = None;
+        self.file_index_loading = false;
+        self.file_index_request = self.file_index_request.wrapping_add(1);
+        self.content_matches.clear();
+        self.content_searched_query.clear();
+        self.explorer_multi_selection.clear();
+        self.explorer_selection = None;
+        match result {
+            Ok(count) => {
+                self.cancel_explorer_action(cx);
+                self.persist_session();
+                self.model
+                    .set_status(format!("Permanently deleted {count} Explorer item(s)"));
+            }
+            Err(error) => self.model.set_status(format!(
+                "Explorer delete refused or partially completed: {error}. Check refreshed files."
+            )),
+        }
+        self.refresh_git(cx);
         cx.notify();
     }
 
@@ -991,6 +1094,10 @@ impl Workbench {
         let Some(action) = self.explorer_action else {
             return;
         };
+        if action == ExplorerAction::Delete {
+            self.apply_explorer_batch_delete(cx);
+            return;
+        }
         let selected = self.explorer_selection.clone();
         let root = self.model.root().to_path_buf();
         let input = self
@@ -1016,14 +1123,6 @@ impl Workbench {
             cx.notify();
             return;
         }
-        if action == ExplorerAction::Delete && !self.explorer_delete_confirmed {
-            self.explorer_delete_confirmed = true;
-            self.model.set_status(
-                "Confirm permanent deletion. Nonempty folders and their contents will be removed.",
-            );
-            cx.notify();
-            return;
-        }
         let source = selected.unwrap_or_else(|| self.model.directory().to_path_buf());
         let parent = if source.is_dir() {
             source.clone()
@@ -1046,7 +1145,7 @@ impl Workbench {
                 files.copy_into(&source, &destination).map(Some)
             }
             ExplorerAction::Duplicate => files.duplicate(&source).map(Some),
-            ExplorerAction::Delete => files.delete(&source, true).map(|_| None),
+            ExplorerAction::Delete => unreachable!("delete batch is handled above"),
         });
         match result {
             Ok(target) => {
@@ -2501,6 +2600,8 @@ impl Workbench {
         self.explorer_filter_input
             .update(cx, |input, cx| input.clear(cx));
         self.explorer_selection = None;
+        self.explorer_delete_confirmed = false;
+        self.explorer_delete_pending = None;
         self.explorer_context_menu = None;
         self.explorer_clipboard = None;
         self.explorer_drop_request = self.explorer_drop_request.wrapping_add(1);
@@ -5244,6 +5345,11 @@ impl Render for Workbench {
         let explorer_action = self.explorer_action;
         let explorer_action_input = self.explorer_action_input.clone();
         let explorer_delete_confirmed = self.explorer_delete_confirmed;
+        let explorer_delete_count = self
+            .explorer_delete_pending
+            .as_ref()
+            .map(ExplorerDeleteBatch::len)
+            .unwrap_or_default();
         let tabs: Vec<_> = self
             .model
             .tabs()
@@ -6029,11 +6135,11 @@ impl Render for Workbench {
                                                             .text_sm()
                                                             .text_color(rgb(TEXT))
                                                             .child(if explorer_delete_confirmed {
-                                                                "CONFIRM DELETE"
+                                                                format!("CONFIRM PERMANENT DELETE ({explorer_delete_count})")
                                                             } else if action == ExplorerAction::Delete {
-                                                                "Delete…"
+                                                                "Delete permanently…".to_owned()
                                                             } else {
-                                                                "Apply"
+                                                                "Apply".to_owned()
                                                             })
                                                             .on_click(cx.listener(|this, _, _, cx| {
                                                                 this.apply_explorer_action(cx);
@@ -6186,7 +6292,7 @@ impl Render for Workbench {
                                     .min_h_0()
                                     .id("explorer-scroll")
                                     .on_drop(cx.listener(|this, paths: &gpui::ExternalPaths, _, cx| {
-                                        this.import_explorer_drop(paths.paths().to_vec(), cx);
+                                        this.import_explorer_drop(paths.paths().to_vec(), None, cx);
                                     }))
                                     .on_mouse_down(gpui::MouseButton::Right, cx.listener(|this, event: &gpui::MouseDownEvent, window, cx| {
                                         this.open_explorer_context_menu(None, event, window, cx);
@@ -6219,6 +6325,7 @@ impl Render for Workbench {
                                                 format!("Move {label}")
                                             };
                                             let drop_target = path.clone();
+                                            let external_drop_target = path.clone();
                                             let selected = explorer_multi_selection.contains(&path);
                                             let row_icon = explorer_file_icon(&label, hit.is_directory, false);
                                             let status_badge = explorer_git_badges.get(&path);
@@ -6278,6 +6385,10 @@ impl Render for Workbench {
                                                         this.drop_explorer_batch(drag, &drop_target, cx);
                                                     }))
                                                 })
+                                                .on_drop(cx.listener(move |this, paths: &gpui::ExternalPaths, _, cx| {
+                                                    cx.stop_propagation();
+                                                    this.import_explorer_drop(paths.paths().to_vec(), Some(external_drop_target.clone()), cx);
+                                                }))
                                         }).collect::<Vec<_>>()
                                     } else if tree_mode {
                                         tree_rows.into_iter().enumerate().map(|(i, item)| {
@@ -6296,6 +6407,7 @@ impl Render for Workbench {
                                                 format!("Move {}", item.name)
                                             };
                                             let drop_target = row_path.clone();
+                                            let external_drop_target = row_path.clone();
                                             let visible_for_click = explorer_visible_paths.clone();
                                             let selected = explorer_multi_selection.contains(&row_path);
                                             let is_directory = item.is_directory;
@@ -6380,6 +6492,10 @@ impl Render for Workbench {
                                                         this.drop_explorer_batch(drag, &drop_target, cx);
                                                     }))
                                                 })
+                                                .on_drop(cx.listener(move |this, paths: &gpui::ExternalPaths, _, cx| {
+                                                    cx.stop_propagation();
+                                                    this.import_explorer_drop(paths.paths().to_vec(), Some(external_drop_target.clone()), cx);
+                                                }))
                                         }).collect::<Vec<_>>()
                                     } else {
                                         entries.into_iter().enumerate().map(|(i, item)| {
@@ -6398,6 +6514,7 @@ impl Render for Workbench {
                                                 format!("Move {}", item.name)
                                             };
                                             let drop_target = file_path.clone();
+                                            let external_drop_target = file_path.clone();
                                             let visible_for_click = explorer_visible_paths.clone();
                                             let selected = explorer_multi_selection.contains(&file_path);
                                             let status_badge = explorer_git_badges.get(&file_path);
@@ -6451,6 +6568,10 @@ impl Render for Workbench {
                                                         this.drop_explorer_batch(drag, &drop_target, cx);
                                                     }))
                                                 })
+                                                .on_drop(cx.listener(move |this, paths: &gpui::ExternalPaths, _, cx| {
+                                                    cx.stop_propagation();
+                                                    this.import_explorer_drop(paths.paths().to_vec(), Some(external_drop_target.clone()), cx);
+                                                }))
                                         }).collect::<Vec<_>>()
                                     })
                                     .when(explorer_filter_active && explorer_filter_empty,
@@ -9069,6 +9190,7 @@ fn main() {
                         explorer_action: None,
                         explorer_action_input: None,
                         explorer_delete_confirmed: false,
+                        explorer_delete_pending: None,
                         model,
                         center_view: CenterView::Terminal,
                         right_sidebar_view: RightSidebarView::Explorer,

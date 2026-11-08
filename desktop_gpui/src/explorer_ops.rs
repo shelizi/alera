@@ -65,6 +65,28 @@ impl ExplorerFiles {
         Ok(path)
     }
 
+    /// Resolve a native OS drop from the actual row under the pointer.
+    /// Blank space is root; a file row means its parent; a folder means
+    /// itself. A stale, outside or protected path is an error, not a root
+    /// fallback or the last unrelated Explorer selection.
+    pub fn external_drop_folder(&self, hovered_row: Option<&Path>) -> io::Result<PathBuf> {
+        let Some(row) = hovered_row else {
+            return Ok(self.root.clone());
+        };
+        let canonical = self.existing(row)?;
+        if canonical.is_dir() {
+            return Ok(canonical);
+        }
+        if canonical.is_file() {
+            return self.folder(
+                canonical
+                    .parent()
+                    .ok_or_else(|| invalid("Dropped file has no parent directory"))?,
+            );
+        }
+        Err(invalid("Explorer drop target must be a file or directory"))
+    }
+
     fn destination(&self, parent: &Path, name: &str) -> io::Result<PathBuf> {
         check_name(name)?;
         let parent = self.folder(parent)?;
@@ -323,14 +345,16 @@ impl ExplorerFiles {
     /// confirmation first. By default only files and empty folders are allowed.
     /// For explicit recursive deletion, perform a bounded, symlink-free audit.
     pub fn delete(&self, original: &Path, recursive: bool) -> io::Result<()> {
-        let path = self.existing(original)?;
+        let path = if recursive {
+            self.preflight_recursive_delete(original)?
+        } else {
+            self.existing(original)?
+        };
         let file_type = fs::symlink_metadata(&path)?.file_type();
         if file_type.is_file() {
             fs::remove_file(path)
         } else if file_type.is_dir() {
             if recursive {
-                let mut remaining = MAX_RECURSIVE_ENTRIES;
-                self.audit_tree(&path, &mut remaining)?;
                 fs::remove_dir_all(path)
             } else {
                 fs::remove_dir(path)
@@ -338,6 +362,19 @@ impl ExplorerFiles {
         } else {
             Err(invalid("Unsupported filesystem entry"))
         }
+    }
+
+    /// Inspect the whole target tree before any destructive batch mutation.
+    fn preflight_recursive_delete(&self, original: &Path) -> io::Result<PathBuf> {
+        let path = self.existing(original)?;
+        let file_type = fs::symlink_metadata(&path)?.file_type();
+        if file_type.is_dir() {
+            let mut remaining = MAX_RECURSIVE_ENTRIES;
+            self.audit_tree(&path, &mut remaining)?;
+        } else if !file_type.is_file() {
+            return Err(forbidden("Unsupported filesystem entry in delete batch"));
+        }
+        Ok(path)
     }
 
     /// Bounded, iterative audit run before recursive deletion. Every entry is
@@ -574,6 +611,104 @@ impl ExplorerClipboardBatch {
     }
 }
 
+/// An armed, bounded delete from the Explorer's current visual selection.
+/// Requires an independent confirmation in the UI before execute() is called.
+/// Permanent deletion is explicitly named; it is NOT the OS recycle bin.
+#[derive(Debug, Clone)]
+pub struct ExplorerDeleteBatch {
+    workspace_root: PathBuf,
+    generation: u64,
+    targets: Vec<PathBuf>,
+}
+
+impl ExplorerDeleteBatch {
+    pub fn capture(files: &ExplorerFiles, paths: &[PathBuf], generation: u64) -> io::Result<Self> {
+        if paths.is_empty() || paths.len() > 24 {
+            return Err(invalid("Choose between 1 and 24 Explorer items to delete"));
+        }
+        let mut canonical = paths
+            .iter()
+            .map(|path| files.existing(path))
+            .collect::<io::Result<Vec<_>>>()?;
+        canonical.sort();
+        canonical.dedup();
+        let targets: Vec<PathBuf> = canonical
+            .iter()
+            .filter(|path| {
+                !canonical
+                    .iter()
+                    .any(|parent| path != &parent && path.starts_with(parent.as_path()))
+            })
+            .cloned()
+            .collect();
+        // Do not remove even the first target if a later target is a Git
+        // control folder, symlink, large recursive tree, or unsafe path.
+        for path in &targets {
+            files.preflight_recursive_delete(path)?;
+        }
+        Ok(Self {
+            workspace_root: files.root().to_path_buf(),
+            generation,
+            targets,
+        })
+    }
+
+    pub fn len(&self) -> usize {
+        self.targets.len()
+    }
+
+    pub fn paths(&self) -> &[PathBuf] {
+        &self.targets
+    }
+
+    pub fn affects_open_files(&self, open_files: &[PathBuf]) -> bool {
+        self.targets
+            .iter()
+            .any(|target| open_files.iter().any(|open| open.starts_with(target)))
+    }
+
+    /// The user must confirm exactly the same live selection and workspace.
+    pub fn matches_selection(
+        &self,
+        files: &ExplorerFiles,
+        current_selection: &[PathBuf],
+        generation: u64,
+    ) -> bool {
+        if files.root() != self.workspace_root || generation != self.generation {
+            return false;
+        }
+        Self::capture(files, current_selection, generation)
+            .is_ok_and(|updated| updated.targets == self.targets)
+    }
+
+    pub fn execute(&self, files: &ExplorerFiles, current_generation: u64) -> io::Result<usize> {
+        if files.root() != self.workspace_root || self.generation != current_generation {
+            return Err(forbidden(
+                "Delete confirmation belongs to a previous workspace",
+            ));
+        }
+        // Re-audit every target before the first file is deleted. Another
+        // process can change the contents after arming the confirmation.
+        for path in &self.targets {
+            files.preflight_recursive_delete(path)?;
+        }
+        let mut removed = 0;
+        for path in &self.targets {
+            if let Err(error) = files.delete(path, true) {
+                return Err(io::Error::new(
+                    error.kind(),
+                    format!(
+                        "Delete stopped after {removed} of {} item(s): {error}",
+                        self.targets.len()
+                    ),
+                ));
+            }
+            removed += 1;
+        }
+        Ok(removed)
+    }
+}
+
 fn forbidden(message: &str) -> io::Error {
     io::Error::new(ErrorKind::PermissionDenied, message)
 }
@@ -581,6 +716,87 @@ fn forbidden(message: &str) -> io::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn batch_delete_requires_exact_reconfirmed_selection_and_workspace() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = dunce::canonicalize(temp.path()).unwrap();
+        let files = ExplorerFiles::new(&root).unwrap();
+        let parent = files.create_folder(&root, "parent").unwrap();
+        let child = files.create_file(&parent, "child.txt").unwrap();
+        let other = files.create_file(&root, "other.txt").unwrap();
+        let selection = vec![child.clone(), other.clone(), parent.clone()];
+        let batch = ExplorerDeleteBatch::capture(&files, &selection, 17).unwrap();
+        assert_eq!(batch.len(), 2, "the parent must subsume its child");
+        assert!(batch.matches_selection(&files, &selection, 17));
+        assert!(!batch.matches_selection(&files, &[child.clone()], 17));
+        assert!(!batch.matches_selection(&files, &selection, 18));
+        assert!(batch.affects_open_files(&[child.clone()]));
+        assert!(!batch.affects_open_files(&[root.join("unrelated.txt")]));
+        assert!(batch.execute(&files, 18).is_err());
+        assert!(child.exists() && other.exists());
+        assert_eq!(batch.execute(&files, 17).unwrap(), 2);
+        assert!(!parent.exists() && !other.exists());
+    }
+
+    #[test]
+    fn batch_delete_preflight_refuses_protected_child_before_any_deletion() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = dunce::canonicalize(temp.path()).unwrap();
+        let files = ExplorerFiles::new(&root).unwrap();
+        let normal = files.create_file(&root, "normal.txt").unwrap();
+        let forbidden_parent = files.create_folder(&root, "protected").unwrap();
+        fs::create_dir(forbidden_parent.join(".git")).unwrap();
+        assert!(
+            ExplorerDeleteBatch::capture(&files, &[normal.clone(), forbidden_parent], 1).is_err()
+        );
+        assert!(normal.exists(), "preflight must never partially delete");
+    }
+
+    #[test]
+    fn batch_delete_revalidates_disk_changes_after_arming() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = dunce::canonicalize(temp.path()).unwrap();
+        let files = ExplorerFiles::new(&root).unwrap();
+        let first = files.create_file(&root, "a.txt").unwrap();
+        let second = files.create_folder(&root, "b").unwrap();
+        let batch =
+            ExplorerDeleteBatch::capture(&files, &[first.clone(), second.clone()], 3).unwrap();
+        fs::create_dir(second.join(".git")).unwrap();
+        assert!(batch.execute(&files, 3).is_err());
+        assert!(
+            first.exists(),
+            "a second target changed before confirmation"
+        );
+        assert!(second.exists());
+        assert!(ExplorerDeleteBatch::capture(&files, &[], 3).is_err());
+    }
+
+    #[test]
+    fn os_drop_routes_by_hovered_row_without_using_stale_selection() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = dunce::canonicalize(temp.path()).unwrap();
+        let files = ExplorerFiles::new(&root).unwrap();
+        let folder_a = files.create_folder(&root, "a").unwrap();
+        let folder_b = files.create_folder(&root, "b").unwrap();
+        let file_a = files.create_file(&folder_a, "note.txt").unwrap();
+        assert_eq!(files.external_drop_folder(None).unwrap(), root);
+        assert_eq!(
+            files.external_drop_folder(Some(&folder_b)).unwrap(),
+            folder_b
+        );
+        assert_eq!(files.external_drop_folder(Some(&file_a)).unwrap(), folder_a);
+        assert!(files
+            .external_drop_folder(Some(&root.join("missing.txt")))
+            .is_err());
+        assert!(files
+            .external_drop_folder(Some(&root.join("../outside")))
+            .is_err());
+        fs::create_dir(root.join(".git")).unwrap();
+        assert!(files
+            .external_drop_folder(Some(&root.join(".git")))
+            .is_err());
+    }
 
     #[test]
     fn batch_clipboard_preflights_collision_and_preserves_sources() {
