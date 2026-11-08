@@ -3,7 +3,7 @@ mod editor_ui;
 mod quick_open_ui;
 
 use alera_gpui_desktop::editor::EditorDraftStore;
-use alera_gpui_desktop::editor_tabs::EditorTabs;
+use alera_gpui_desktop::editor_tabs::{EditorTabs, MAX_EDITOR_TABS};
 use alera_gpui_desktop::explorer_ops::{ExplorerClipboard, ExplorerClipboardMode, ExplorerFiles};
 use alera_gpui_desktop::file_search::WorkspaceFileIndex;
 use alera_gpui_desktop::git_actions::GitActions;
@@ -23,6 +23,10 @@ use alera_gpui_desktop::visual_tokens::{
     ACTIVE, BG, BORDER, MUTED, PANEL, PROJECTS_SIDEBAR_WIDTH, RIGHT_SIDEBAR_WIDTH,
     SECTION_HEADER_HEIGHT, STATUS_BAR_HEIGHT, TAB_STRIP_HEIGHT, TEXT, TOOLBAR, TOP_BAR_HEIGHT,
 };
+use alera_gpui_desktop::workbench_layout_store::{
+    SavedWorkbenchAxis, SavedWorkbenchLayoutV1, SavedWorkbenchPane, WORKBENCH_LAYOUT_VERSION,
+};
+use alera_gpui_desktop::workbench_panes::{PaneAxis, PaneSlot, WorkbenchPaneLayout};
 use alera_gpui_desktop::workbench_tabs::{
     WorkbenchTab, WorkbenchTabIdentity, WorkbenchTabKind, WorkbenchTabs,
 };
@@ -36,7 +40,7 @@ use gpui::{
 use quick_open_ui::{bind_quick_open_keys, QuickOpenInput};
 use std::borrow::Cow;
 use std::collections::{HashSet, VecDeque};
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -124,6 +128,7 @@ enum MixedContextAction {
     MoveLeft,
     MoveRight,
     SecondPane,
+    FirstPane,
 }
 
 impl ExplorerAction {
@@ -192,6 +197,9 @@ struct Workbench {
     workspace_generation: u64,
     editor_epoch: u64,
     mixed_tabs: WorkbenchTabs,
+    mixed_panes: WorkbenchPaneLayout,
+    mixed_layout_restore: Option<SavedWorkbenchLayoutV1>,
+    mixed_layout_read_only: bool,
     mixed_tab_context: Option<WorkbenchTabIdentity>,
     runtime_bridge: Option<RuntimeCliBridge>,
     runtime_status: String,
@@ -558,6 +566,9 @@ impl Workbench {
     fn install_editor(&mut self, tabs: EditorTabs, cx: &mut Context<Self>) {
         self.editor_epoch = self.editor_epoch.wrapping_add(1);
         let editor = cx.new(|cx| NativeEditor::new(tabs, cx));
+        editor.update(cx, |editor, cx| {
+            editor.set_local_tab_strip_visible(false, cx)
+        });
         cx.observe(&editor, |workbench, _, cx| {
             if workbench
                 .editor
@@ -1292,11 +1303,13 @@ impl Workbench {
         };
         // Preserve only tab identities/display mode, never PTY output or
         // credentials. Other workspaces never inherit this local layout.
+        self.save_mixed_pane_layout(cx);
         self.save_terminal_layout();
         self.model = next;
         self.center_view = CenterView::Terminal;
         self.mixed_tabs
             .reset(self.workspace_generation.wrapping_add(1));
+        self.mixed_panes.reset();
         self.mixed_tab_context = None;
         self.tree = WorkspaceTree::new(&canonical).ok();
         self.explorer_selection = None;
@@ -1306,6 +1319,8 @@ impl Workbench {
         self.cancel_explorer_action(cx);
         self.editor = None;
         self.restore_scratch_tabs(cx);
+        self.load_mixed_pane_layout();
+        self.restore_file_tabs_from_pane_layout(cx);
         self.quick_open = None;
         self.file_index = None;
         self.file_index_loading = false;
@@ -1951,6 +1966,219 @@ impl Workbench {
         .detach();
     }
 
+    fn valid_editor_layout_key(relative: &Path) -> bool {
+        relative.components().next().is_some()
+            && relative
+                .components()
+                .all(|component| matches!(component, Component::Normal(_)))
+    }
+
+    /// Only existing, file-backed editor tabs have a cross-launch identity.
+    /// Keep their keys workspace-relative and treat saved strings as inert;
+    /// unsaved drafts are recovered separately by EditorDraftStore.
+    fn editor_layout_keys(&self, cx: &Context<Self>) -> Vec<(WorkbenchTabIdentity, String)> {
+        let Some(editor) = self.editor.as_ref() else {
+            return Vec::new();
+        };
+        editor
+            .read(cx)
+            .file_backed_tab_instances()
+            .into_iter()
+            .filter_map(|(instance, path)| {
+                let relative = path.strip_prefix(self.model.root()).ok()?;
+                Self::valid_editor_layout_key(relative).then(|| {
+                    (
+                        WorkbenchTabIdentity::Editor {
+                            editor_epoch: self.editor_epoch,
+                            instance,
+                        },
+                        relative.to_string_lossy().into_owned(),
+                    )
+                })
+            })
+            .collect()
+    }
+
+    fn load_mixed_pane_layout(&mut self) {
+        self.mixed_layout_restore = None;
+        self.mixed_layout_read_only = false;
+        let Some(store) = self.session_store.as_ref() else {
+            return;
+        };
+        let result = store
+            .workbench_layout_path(self.model.root())
+            .and_then(|path| SavedWorkbenchLayoutV1::load_from_path(&path));
+        match result {
+            Ok(Some(saved)) => {
+                if saved.axis == SavedWorkbenchAxis::Vertical
+                    && self.mixed_panes.axis() != PaneAxis::Vertical
+                {
+                    self.mixed_panes.toggle_axis();
+                }
+                self.mixed_layout_restore = Some(saved);
+            }
+            Ok(None) => {}
+            Err(error) => {
+                // Do not overwrite a malformed or unknown-version snapshot.
+                self.mixed_layout_read_only = true;
+                eprintln!("Alera GPUI: mixed pane layout recovery kept: {error}");
+            }
+        }
+    }
+
+    fn save_mixed_pane_layout(&mut self, cx: &Context<Self>) {
+        if self.mixed_layout_read_only {
+            return;
+        }
+        let Some(store) = self.session_store.as_ref() else {
+            return;
+        };
+        let Ok(path) = store.workbench_layout_path(self.model.root()) else {
+            return;
+        };
+        let keys = self.editor_layout_keys(cx);
+        let key_for = |identity: &WorkbenchTabIdentity| {
+            keys.iter()
+                .find(|(id, _)| id == identity)
+                .map(|(_, key)| key.clone())
+        };
+        let pane_keys = |slot: PaneSlot| {
+            self.mixed_panes
+                .tabs_in(slot)
+                .iter()
+                .filter_map(&key_for)
+                .collect::<Vec<_>>()
+        };
+        let saved = SavedWorkbenchLayoutV1 {
+            version: WORKBENCH_LAYOUT_VERSION,
+            split_enabled: self.mixed_panes.has_secondary(),
+            axis: if self.mixed_panes.axis() == PaneAxis::Horizontal {
+                SavedWorkbenchAxis::Horizontal
+            } else {
+                SavedWorkbenchAxis::Vertical
+            },
+            focused_pane: if self.mixed_panes.focused_pane() == PaneSlot::Primary {
+                SavedWorkbenchPane::Primary
+            } else {
+                SavedWorkbenchPane::Secondary
+            },
+            primary_editors: pane_keys(PaneSlot::Primary),
+            secondary_editors: pane_keys(PaneSlot::Secondary),
+            primary_active_editor: self
+                .mixed_panes
+                .active_in(PaneSlot::Primary)
+                .and_then(&key_for),
+            secondary_active_editor: self
+                .mixed_panes
+                .active_in(PaneSlot::Secondary)
+                .and_then(&key_for),
+        };
+        if let Err(error) = saved.save_to_path(&path) {
+            eprintln!("Alera GPUI: could not save mixed pane layout: {error}");
+        } else {
+            self.mixed_layout_restore = None;
+        }
+    }
+
+    /// Recover only files that are validated by the ordinary EditorTabs
+    /// path guard. A saved relative key never authorizes reading outside
+    /// this workspace and never restores a Host session.
+    fn restore_file_tabs_from_pane_layout(&mut self, cx: &mut Context<Self>) {
+        let Some(saved) = self.mixed_layout_restore.clone() else {
+            return;
+        };
+        let root = self.model.root().to_path_buf();
+        let mut restored = 0_usize;
+        for key in saved
+            .primary_editors
+            .iter()
+            .chain(saved.secondary_editors.iter())
+            .take(MAX_EDITOR_TABS)
+        {
+            let relative = Path::new(key);
+            if !Self::valid_editor_layout_key(relative) {
+                eprintln!("Alera GPUI: refused unsafe persisted editor path");
+                continue;
+            }
+            let path = root.join(relative);
+            if let Some(editor) = self.editor.clone() {
+                if editor
+                    .update(cx, |editor, cx| editor.open_in_place(&root, &path, cx))
+                    .is_ok()
+                {
+                    restored += 1;
+                }
+            } else {
+                let mut tabs = EditorTabs::new(self.draft_store());
+                if tabs.open_file(&root, &path).is_ok() {
+                    self.install_editor(tabs, cx);
+                    restored += 1;
+                }
+            }
+        }
+        if restored > 0 {
+            let desired = if saved.focused_pane == SavedWorkbenchPane::Secondary {
+                saved
+                    .secondary_active_editor
+                    .as_ref()
+                    .or(saved.primary_active_editor.as_ref())
+            } else {
+                saved
+                    .primary_active_editor
+                    .as_ref()
+                    .or(saved.secondary_active_editor.as_ref())
+            };
+            if let Some((WorkbenchTabIdentity::Editor { instance, .. }, _)) = self
+                .editor_layout_keys(cx)
+                .into_iter()
+                .find(|(_, key)| desired.is_some_and(|wanted| wanted == key))
+            {
+                if let Some(editor) = self.editor.clone() {
+                    editor.update(cx, |editor, cx| {
+                        editor.activate_tab_instance(instance, cx);
+                    });
+                }
+            }
+            self.center_view = CenterView::Editor;
+        }
+    }
+
+    fn apply_restored_mixed_panes(&mut self, cx: &Context<Self>) {
+        let Some(saved) = self.mixed_layout_restore.take() else {
+            return;
+        };
+        let keys = self.editor_layout_keys(cx);
+        if keys.is_empty()
+            && (!saved.primary_editors.is_empty() || !saved.secondary_editors.is_empty())
+        {
+            self.mixed_layout_restore = Some(saved);
+            return;
+        }
+        for (id, key) in &keys {
+            if saved.secondary_editors.contains(key) {
+                self.mixed_panes.move_to(id, PaneSlot::Secondary);
+            }
+        }
+        for wanted in [
+            saved.primary_active_editor.as_ref(),
+            saved.secondary_active_editor.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if let Some((id, _)) = keys.iter().find(|(_, key)| key == wanted) {
+                self.mixed_panes.activate(id);
+            }
+        }
+        if !saved.split_enabled {
+            self.mixed_panes.close_secondary();
+        } else if saved.focused_pane == SavedWorkbenchPane::Primary {
+            self.mixed_panes.focus_pane(PaneSlot::Primary);
+        } else {
+            self.mixed_panes.focus_pane(PaneSlot::Secondary);
+        }
+    }
+
     /// Project both original state owners into one stable, mixed-order tab
     /// strip. The original editor buffers and Host PTYs remain authoritative.
     fn sync_mixed_tabs(&mut self, cx: &mut Context<Self>) {
@@ -2005,6 +2233,14 @@ impl Workbench {
         }
         self.mixed_tabs
             .reconcile(self.workspace_generation, observed, preferred);
+        let live_tabs: Vec<_> = self
+            .mixed_tabs
+            .entries()
+            .iter()
+            .map(|tab| tab.identity.clone())
+            .collect();
+        self.mixed_panes.reconcile(&live_tabs);
+        self.apply_restored_mixed_panes(cx);
         if !self
             .mixed_tab_context
             .as_ref()
@@ -2044,6 +2280,7 @@ impl Workbench {
             return;
         }
         self.mixed_tab_context = None;
+        self.mixed_panes.activate(id);
         match id {
             WorkbenchTabIdentity::Host(target) => {
                 if let Some(index) = self.terminals.index_for_context(target) {
@@ -2063,6 +2300,29 @@ impl Workbench {
                 }
             }
         }
+        self.save_mixed_pane_layout(cx);
+        cx.notify();
+    }
+
+    /// Pointer focus on the primary terminal must select that pane's
+    /// authenticated Host target before raw keys enter TerminalDock.
+    fn focus_primary_mixed_terminal(&mut self, cx: &mut Context<Self>) {
+        if !self.mixed_panes.has_secondary() {
+            return;
+        }
+        let Some(WorkbenchTabIdentity::Host(target)) =
+            self.mixed_panes.active_in(PaneSlot::Primary).cloned()
+        else {
+            return;
+        };
+        let Some(index) = self.terminals.index_for_context(&target) else {
+            return;
+        };
+        self.mixed_panes.focus_pane(PaneSlot::Primary);
+        self.terminals.activate(index);
+        self.center_view = CenterView::Terminal;
+        self.refresh_terminal_output(cx);
+        self.save_mixed_pane_layout(cx);
         cx.notify();
     }
 
@@ -2104,6 +2364,8 @@ impl Workbench {
                 }
             }
         }
+        self.sync_mixed_tabs(cx);
+        self.save_mixed_pane_layout(cx);
         cx.notify();
     }
 
@@ -2178,13 +2440,15 @@ impl Workbench {
                 }
             }
             MixedContextAction::SecondPane => {
-                if let WorkbenchTabIdentity::Host(target) = id {
-                    self.terminal_tab_context = Some(target);
-                    self.apply_terminal_context(TerminalContextAction::SplitToSecondary, cx);
-                    self.center_view = CenterView::Terminal;
-                }
+                // Pane membership is a local projection. Neither Host PTYs
+                // nor dirty Editor buffers change ownership when moved.
+                self.mixed_panes.split_with(&id);
+            }
+            MixedContextAction::FirstPane => {
+                self.mixed_panes.move_to(&id, PaneSlot::Primary);
             }
         }
+        self.save_mixed_pane_layout(cx);
         cx.notify();
     }
 
@@ -2406,8 +2670,51 @@ impl Render for Workbench {
         self.sync_mixed_tabs(cx);
         let mixed_tabs = self.mixed_tabs.entries().to_vec();
         let mixed_active = self.mixed_tabs.active().cloned();
+        let mixed_secondary_tab_ids = self.mixed_panes.tabs_in(PaneSlot::Secondary).to_vec();
+        let mixed_secondary_active = self.mixed_panes.active_in(PaneSlot::Secondary).cloned();
         let mixed_context = self.mixed_tab_context.clone();
-        let mixed_context_is_host = matches!(mixed_context, Some(WorkbenchTabIdentity::Host(_)));
+        let mixed_context_in_second = mixed_context
+            .as_ref()
+            .is_some_and(|id| self.mixed_panes.tabs_in(PaneSlot::Secondary).contains(id));
+        let mixed_has_secondary = self.mixed_panes.has_secondary();
+        let mixed_split_horizontal = self.mixed_panes.axis() == PaneAxis::Horizontal;
+        let mixed_secondary_identity = self.mixed_panes.active_in(PaneSlot::Secondary).cloned();
+        let mixed_secondary_host = mixed_secondary_identity.as_ref().and_then(|id| match id {
+            WorkbenchTabIdentity::Host(target) => Some(target.clone()),
+            WorkbenchTabIdentity::Editor { .. } => None,
+        });
+        let mixed_secondary_key_target = mixed_secondary_host.clone();
+        let mixed_secondary_preview = mixed_secondary_identity.as_ref().and_then(|identity| {
+            let tab = self
+                .mixed_tabs
+                .entries()
+                .iter()
+                .find(|tab| &tab.identity == identity)?;
+            let label = tab.title.clone();
+            let preview = match identity {
+                WorkbenchTabIdentity::Host(target) => {
+                    let index = self.terminals.index_for_context(target)?;
+                    let session = self.terminals.tabs.get(index)?;
+                    match self.terminals.view_mode {
+                        TerminalViewMode::Screen => session.screen.contents(),
+                        TerminalViewMode::Transcript => session.output.clone(),
+                    }
+                }
+                WorkbenchTabIdentity::Editor {
+                    editor_epoch,
+                    instance,
+                } => {
+                    if *editor_epoch != self.editor_epoch {
+                        return None;
+                    }
+                    self.editor
+                        .as_ref()
+                        .and_then(|editor| editor.read(cx).tab_content_snapshot(*instance))
+                        .unwrap_or_else(|| "Editor buffer no longer available".to_owned())
+                }
+            };
+            Some((label, preview))
+        });
         let mixed_drag_generation = self.workspace_generation;
         let folder_name = self
             .model
@@ -2446,8 +2753,46 @@ impl Render for Workbench {
             .map(|(index, tab)| (index, tab.title.clone()))
             .collect();
         let active_tab = self.model.active_tab();
-        let center_is_editor = self.center_view == CenterView::Editor;
+        let primary_is_editor = matches!(
+            self.mixed_panes.active_in(PaneSlot::Primary),
+            Some(WorkbenchTabIdentity::Editor { .. })
+        );
+        // One NativeEditor owns all buffers; render it in the focused Editor
+        // pane and show the other Editor tab's immutable content in the other.
+        let mixed_editor_in_secondary = mixed_has_secondary
+            && matches!(
+                self.mixed_panes.active_in(PaneSlot::Secondary),
+                Some(WorkbenchTabIdentity::Editor { .. })
+            )
+            && (!primary_is_editor || self.mixed_panes.focused_pane() == PaneSlot::Secondary);
+        let center_is_editor = if mixed_has_secondary {
+            primary_is_editor
+        } else {
+            self.center_view == CenterView::Editor
+        };
+        let content = if mixed_editor_in_secondary && primary_is_editor {
+            self.mixed_panes
+                .active_in(PaneSlot::Primary)
+                .and_then(|id| match id {
+                    WorkbenchTabIdentity::Editor {
+                        editor_epoch,
+                        instance,
+                    } if *editor_epoch == self.editor_epoch => self
+                        .editor
+                        .as_ref()
+                        .and_then(|editor| editor.read(cx).tab_content_snapshot(*instance)),
+                    _ => None,
+                })
+                .unwrap_or(content)
+        } else {
+            content
+        };
         let editor = self.editor.clone();
+        let secondary_native_editor = if mixed_editor_in_secondary {
+            editor.clone()
+        } else {
+            None
+        };
         let editor_dirty = self.editor_dirty(cx);
         let discard_pending = self
             .editor
@@ -2546,9 +2891,22 @@ impl Render for Workbench {
         let terminal_create_timed_out = self.terminal_create_flow.is_timed_out();
         let terminal_create_waiting = self.terminal_create_flow.is_waiting();
         let terminal_creating = self.terminal_create_flow.is_creating();
-        let terminal_output = self
-            .terminals
-            .active()
+        // The primary pane renders its own Host identity, even when the
+        // second pane currently owns keyboard focus. The global TerminalDock
+        // selection alone cannot identify two simultaneous pane contents.
+        let primary_terminal_index = if mixed_has_secondary {
+            self.mixed_panes
+                .active_in(PaneSlot::Primary)
+                .and_then(|identity| match identity {
+                    WorkbenchTabIdentity::Host(target) => self.terminals.index_for_context(target),
+                    WorkbenchTabIdentity::Editor { .. } => None,
+                })
+        } else {
+            self.terminals.active_tab
+        };
+        let primary_terminal =
+            primary_terminal_index.and_then(|index| self.terminals.tabs.get(index));
+        let terminal_output = primary_terminal
             .map(|tab| match self.terminals.view_mode {
                 TerminalViewMode::Screen => tab.screen.contents(),
                 TerminalViewMode::Transcript => tab.output.clone(),
@@ -2571,22 +2929,21 @@ impl Render for Workbench {
         let terminal_split_horizontal =
             self.terminal_panes.direction == TerminalSplitDirection::Horizontal;
         let terminal_status = self.terminals.status.clone();
-        let has_terminal_preview = self.terminals.active().is_some();
+        let has_terminal_preview = primary_terminal.is_some();
         let terminal_input = self.terminal_input.clone();
         let terminal_keyboard_focus = self.terminal_keyboard_focus.clone();
         let terminal_send_loading = self.terminal_send_loading;
         let terminal_auto = self.terminal_poll.enabled();
         let terminal_is_vt = self.terminals.view_mode == TerminalViewMode::Screen;
         let terminal_screen_rows = if terminal_is_vt {
-            self.terminals
-                .active()
+            primary_terminal
                 .map(|tab| tab.screen.styled_rows())
                 .unwrap_or_default()
         } else {
             Vec::new()
         };
         let terminal_status = if terminal_is_vt {
-            if let Some(tab) = self.terminals.active() {
+            if let Some(tab) = primary_terminal {
                 let (rows, cols) = tab.screen.dimensions();
                 let (cursor_row, cursor_col) = tab.screen.cursor();
                 format!(
@@ -3394,13 +3751,15 @@ impl Render for Workbench {
                                             .overflow_x_scroll()
                                             .children(mixed_tabs.into_iter().enumerate().map(|(index, tab)| {
                                                 let identity = tab.identity;
-                                                let selected = mixed_active.as_ref() == Some(&identity);
+                                                let in_secondary = mixed_secondary_tab_ids.contains(&identity);
+                                                let selected = mixed_active.as_ref() == Some(&identity)
+                                                    || mixed_secondary_active.as_ref() == Some(&identity);
                                                 let icon = match tab.kind {
                                                     WorkbenchTabKind::Terminal => "T",
                                                     WorkbenchTabKind::Agent => "A",
                                                     WorkbenchTabKind::Editor => "E",
                                                 };
-                                                let caption = format!("{icon} {}{}{}", tab.title,
+                                                let caption = format!("{} {icon} {}{}{}", if in_secondary { "②" } else { "①" }, tab.title,
                                                     if tab.dirty { " ●" } else { "" },
                                                     if !tab.running { " ○" } else { "" });
                                                 let for_click = identity.clone();
@@ -3503,10 +3862,16 @@ impl Render for Workbench {
                                                 .on_click(cx.listener(|this, _, window, cx| {
                                                     this.apply_mixed_tab_context(MixedContextAction::MoveRight, window, cx);
                                                 })))
-                                            .when(mixed_context_is_host, |menu| menu.child(
+                                            .when(!mixed_context_in_second, |menu| menu.child(
                                                 div().id("mixed-second-pane").cursor_pointer().child("Second Pane")
                                                     .on_click(cx.listener(|this, _, window, cx| {
                                                         this.apply_mixed_tab_context(MixedContextAction::SecondPane, window, cx);
+                                                    }))
+                                            ))
+                                            .when(mixed_context_in_second, |menu| menu.child(
+                                                div().id("mixed-first-pane").cursor_pointer().child("First Pane")
+                                                    .on_click(cx.listener(|this, _, window, cx| {
+                                                        this.apply_mixed_tab_context(MixedContextAction::FirstPane, window, cx);
                                                     }))
                                             ))
                                             .child(div().id("mixed-cancel").cursor_pointer().text_color(rgb(MUTED)).child("Cancel")
@@ -3733,7 +4098,24 @@ impl Render for Workbench {
                                     ),
                             )
                             .child(
-                                if let Some(editor) = editor {
+                                div()
+                                    .id("mixed-pane-layout")
+                                    .flex_1()
+                                    .min_w_0()
+                                    .min_h_0()
+                                    .flex()
+                                    .when(mixed_has_secondary && mixed_split_horizontal, |pane| pane.flex_row())
+                                    .when(!mixed_has_secondary || !mixed_split_horizontal, |pane| pane.flex_col())
+                                    .child(
+                                        div()
+                                            .id("mixed-primary-pane")
+                                            .flex_1()
+                                            .min_w_0()
+                                            .min_h_0()
+                                            .flex()
+                                            .flex_col()
+                            .child(
+                                if let Some(editor) = editor.filter(|_| !mixed_editor_in_secondary) {
                                     div()
                                         .flex_1()
                                         .min_h_0()
@@ -3773,6 +4155,10 @@ impl Render for Workbench {
                                             .child(
                                                 div()
                                                     .id("terminal-preview-tabs")
+                                                    // The mixed Workbench strip is authoritative.
+                                                    // Keep the legacy handlers compiled while
+                                                    // retaining VT/auto-poll controls beside them.
+                                                    .hidden()
                                                     .flex_1()
                                                     .min_w_0()
                                                     .flex()
@@ -3870,6 +4256,7 @@ impl Render for Workbench {
                                             .child(
                                                 div()
                                                     .id("terminal-tab-context-actions")
+                                                    .hidden()
                                                     .when(terminal_context_open, |menu| {
                                                         menu.flex()
                                                             .items_center()
@@ -4160,7 +4547,8 @@ impl Render for Workbench {
                                             .id("terminal-colored-grid")
                                             .key_context("AleraGpuiTerminalRaw")
                                             .track_focus(&terminal_keyboard_focus)
-                                            .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, window, _| {
+                                            .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, window, cx| {
+                                                this.focus_primary_mixed_terminal(cx);
                                                 window.focus(&this.terminal_keyboard_focus);
                                             }))
                                             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
@@ -4209,7 +4597,8 @@ impl Render for Workbench {
                                             .id("terminal-output-scroll")
                                             .key_context("AleraGpuiTerminalRaw")
                                             .track_focus(&terminal_keyboard_focus)
-                                            .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, window, _| {
+                                            .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, window, cx| {
+                                                this.focus_primary_mixed_terminal(cx);
                                                 window.focus(&this.terminal_keyboard_focus);
                                             }))
                                             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
@@ -4347,6 +4736,115 @@ impl Render for Workbench {
                                     )
                                     .into_any_element()
                             }),
+                                    )
+                                    .child(if let Some((label, preview)) = mixed_secondary_preview {
+                                        div()
+                                            .id("mixed-secondary-pane")
+                                            .flex_1()
+                                            .min_w_0()
+                                            .min_h_0()
+                                            .flex()
+                                            .flex_col()
+                                            .border_l_1()
+                                            .border_color(rgb(BORDER))
+                                            .child(
+                                                div()
+                                                    .id("mixed-secondary-toolbar")
+                                                    .h(px(TAB_STRIP_HEIGHT))
+                                                    .px_2()
+                                                    .flex()
+                                                    .items_center()
+                                                    .gap_3()
+                                                    .bg(rgb(PANEL))
+                                                    .child(
+                                                        div()
+                                                            .flex_1()
+                                                            .min_w_0()
+                                                            .text_sm()
+                                                            .child(format!("Second · {label} · preview"))
+                                                            .on_drop(cx.listener(|this, drag: &MixedTabDrag, _, cx| {
+                                                                if drag.workspace_generation == this.workspace_generation
+                                                                    && this.mixed_tab_is_current(&drag.identity, cx)
+                                                                    && this.mixed_panes.move_to(&drag.identity, PaneSlot::Secondary)
+                                                                {
+                                                                    this.save_mixed_pane_layout(cx);
+                                                                    cx.notify();
+                                                                }
+                                                            })),
+                                                    )
+                                                    .child(
+                                                        div()
+                                                            .id("mixed-split-axis")
+                                                            .cursor_pointer()
+                                                            .text_xs()
+                                                            .child(if mixed_split_horizontal { "Stack" } else { "Side by side" })
+                                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                                this.mixed_panes.toggle_axis();
+                                                                this.save_mixed_pane_layout(cx);
+                                                                cx.notify();
+                                                            })),
+                                                    )
+                                                    .child(
+                                                        div()
+                                                            .id("mixed-split-close")
+                                                            .cursor_pointer()
+                                                            .text_xs()
+                                                            .child("Unsplit")
+                                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                                this.mixed_panes.close_secondary();
+                                                                this.save_mixed_pane_layout(cx);
+                                                                cx.notify();
+                                                            })),
+                                                    ),
+                                            )
+                                            .child(if let Some(editor) = secondary_native_editor {
+                                                div()
+                                                    .id("mixed-secondary-editor")
+                                                    .flex_1()
+                                                    .min_h_0()
+                                                    .child(editor)
+                                                    .into_any_element()
+                                            } else {
+                                                div()
+                                                    .id("mixed-secondary-content")
+                                                    .flex_1()
+                                                    .min_h_0()
+                                                    .key_context("AleraGpuiTerminalRaw")
+                                                    .track_focus(&terminal_keyboard_focus)
+                                                    .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |this, _, window, cx| {
+                                                        if let Some(target) = mixed_secondary_host.as_ref() {
+                                                            if let Some(index) = this.terminals.index_for_context(target) {
+                                                                this.mixed_panes.focus_pane(PaneSlot::Secondary);
+                                                                this.terminals.activate(index);
+                                                                this.refresh_terminal_output(cx);
+                                                                this.save_mixed_pane_layout(cx);
+                                                                window.focus(&this.terminal_keyboard_focus);
+                                                                cx.notify();
+                                                            }
+                                                        }
+                                                    }))
+                                                    .on_key_down(cx.listener(move |this, event: &gpui::KeyDownEvent, _, cx| {
+                                                        let authorized = mixed_secondary_key_target.as_ref().is_some_and(|target| {
+                                                            this.terminals.context_target_is_live(target)
+                                                                && this.terminals.index_for_context(target) == this.terminals.active_tab
+                                                        });
+                                                        if authorized && this.send_terminal_key(event, cx) {
+                                                            cx.stop_propagation();
+                                                        }
+                                                    }))
+                                                    .overflow_x_scroll()
+                                                    .overflow_y_scroll()
+                                                    .p_3()
+                                                    .font_family("JetBrains Mono")
+                                                    .text_sm()
+                                                    .child(preview)
+                                                    .into_any_element()
+                                            })
+                                            .into_any_element()
+                                    } else {
+                                        div().h(px(0.0)).into_any_element()
+                                    }),
+                            )
                     )
                     .child(
                         div()
@@ -4976,6 +5474,9 @@ fn main() {
                         workspace_generation: 0,
                         editor_epoch: 0,
                         mixed_tabs: WorkbenchTabs::for_workspace(0),
+                        mixed_panes: WorkbenchPaneLayout::default(),
+                        mixed_layout_restore: None,
+                        mixed_layout_read_only: false,
                         mixed_tab_context: None,
                         runtime_bridge,
                         runtime_status,
@@ -5000,6 +5501,8 @@ fn main() {
                     };
                     workbench.restore_scratch_tabs(cx);
                     workbench.load_terminal_layout();
+                    workbench.load_mixed_pane_layout();
+                    workbench.restore_file_tabs_from_pane_layout(cx);
                     workbench
                 });
                 view.update(cx, |view, cx| {

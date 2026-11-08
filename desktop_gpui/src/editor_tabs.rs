@@ -146,6 +146,31 @@ impl EditorTabs {
         self.tab_instances.iter().position(|id| *id == instance)
     }
 
+    /// Read-only snapshot for the Workbench's secondary pane. This never
+    /// switches the active editor tab or writes to its file/draft.
+    pub fn content_for_instance(&self, instance: u64) -> Option<&str> {
+        let index = self.index_for_instance(instance)?;
+        self.tabs
+            .get(index)?
+            .document()
+            .map(EditorDocument::content)
+    }
+
+    /// File-backed tabs alone can be restored by path on another launch.
+    /// Unsaved scratch buffers remain exclusively in EditorDraftStore.
+    pub fn file_backed_instances(&self) -> Vec<(u64, PathBuf)> {
+        self.tabs
+            .iter()
+            .zip(self.tab_instances.iter().copied())
+            .filter_map(|(session, instance)| {
+                session
+                    .document()?
+                    .path()
+                    .map(|path| (instance, path.to_path_buf()))
+            })
+            .collect()
+    }
+
     fn allocate_instance(&mut self) -> u64 {
         self.next_instance = self.next_instance.wrapping_add(1);
         self.next_instance

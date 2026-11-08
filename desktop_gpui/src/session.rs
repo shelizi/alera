@@ -160,6 +160,24 @@ impl PreviewSessionStore {
             .join(name.replacen("workspace-", "terminal-layout-", 1))
     }
 
+    /// Scoped to the same canonical workspace key as preview sessions but
+    /// stored separately, so a mixed pane layout cannot overwrite drafts,
+    /// terminal Host identities or the shipping RuntimeStore.
+    pub fn workbench_layout_path(&self, root: &Path) -> io::Result<PathBuf> {
+        let canonical = dunce::canonicalize(root)?;
+        if canonical != root || !canonical.is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Workbench layout requires a canonical existing workspace",
+            ));
+        }
+        let file = self.session_path(root);
+        let name = file.file_name().unwrap_or_default().to_string_lossy();
+        Ok(self
+            .state_dir
+            .join(name.replacen("workspace-", "workbench-layout-", 1)))
+    }
+
     pub fn new(state_dir: impl Into<PathBuf>) -> Self {
         Self {
             state_dir: state_dir.into(),

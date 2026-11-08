@@ -155,6 +155,7 @@ impl gpui::Render for EditorTabDragPreview {
 pub struct NativeEditor {
     find: EditorFindUi,
     tabs: EditorTabs,
+    show_local_tab_strip: bool,
     tab_context: Option<EditorSaveGuard>,
     workspace_root: PathBuf,
     picking_save_as: bool,
@@ -222,6 +223,9 @@ impl NativeEditor {
         Self {
             find: EditorFindUi::new(cx),
             tabs,
+            // Workbench owns the only visible mixed Editor/Terminal/Agent
+            // strip. Keep the legacy local row opt-in for standalone views.
+            show_local_tab_strip: false,
             tab_context: None,
             workspace_root,
             picking_save_as: false,
@@ -247,6 +251,31 @@ impl NativeEditor {
 
     pub fn status_text(&self) -> &str {
         &self.status
+    }
+
+    /// For a standalone native editor without the Workbench's common strip.
+    pub fn set_local_tab_strip_visible(&mut self, visible: bool, cx: &mut Context<Self>) {
+        if self.show_local_tab_strip != visible {
+            self.show_local_tab_strip = visible;
+            if !visible {
+                self.tab_context = None;
+            }
+            cx.notify();
+        }
+    }
+
+    /// File-backed tabs can be restored across restarts by their checked
+    /// workspace paths; scratch buffers stay under draft recovery ownership.
+    pub fn file_backed_tab_instances(&self) -> Vec<(u64, PathBuf)> {
+        self.tabs.file_backed_instances()
+    }
+
+    /// An immutable content snapshot for a second-pane read-only projection.
+    /// The returned text never becomes part of the saved pane layout.
+    pub fn tab_content_snapshot(&self, instance: u64) -> Option<String> {
+        self.tabs
+            .content_for_instance(instance)
+            .map(ToOwned::to_owned)
     }
 
     pub fn discard_armed(&self) -> bool {
@@ -1300,6 +1329,7 @@ impl Render for NativeEditor {
                 )
                 .into_any_element();
         }
+        let show_local_tab_strip = self.show_local_tab_strip;
         self.line_geometry.clear();
         let line_offsets = Arc::new(EditorLineIndex::new(self.doc().content()));
         let line_count = line_offsets.line_count();
@@ -1380,6 +1410,7 @@ impl Render for NativeEditor {
             .on_action(cx.listener(Self::close_current_tab_action))
             .child(
                 div()
+                    .when(!show_local_tab_strip, |row| row.hidden())
                     .flex()
                     .items_center()
                     .gap_2()
@@ -1508,59 +1539,58 @@ impl Render for NativeEditor {
             // They do not change the active editor and never force-close a
             // dirty tab. Unlike a platform popup this slim inline menu stays
             // within GPUI's own tab surface.
-            .child(
-                div()
-                    .id("editor-tab-context-actions")
-                    .when(context_target.is_some(), |menu| {
-                        menu.flex()
-                            .items_center()
-                            .gap_3()
-                            .px_3()
-                            .py_2()
-                            .border_b_1()
-                            .border_color(rgb(MUTED_TEXT))
-                            .bg(rgb(PANEL_BG))
-                            .text_sm()
-                            .child(
-                                div()
-                                    .id("editor-tab-context-close")
-                                    .cursor_pointer()
-                                    .child("Close")
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.close_context_tab(cx);
-                                    })),
-                            )
-                            .child(
-                                div()
-                                    .id("editor-tab-context-close-others")
-                                    .cursor_pointer()
-                                    .child("Close Others")
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.close_context_other_tabs(cx);
-                                    })),
-                            )
-                            .child(
-                                div()
-                                    .id("editor-tab-context-close-right")
-                                    .cursor_pointer()
-                                    .child("Close to Right")
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.close_context_tabs_to_right(cx);
-                                    })),
-                            )
-                            .child(
-                                div()
-                                    .id("editor-tab-context-cancel")
-                                    .cursor_pointer()
-                                    .text_color(rgb(MUTED_TEXT))
-                                    .child("Cancel")
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.tab_context = None;
-                                        cx.notify();
-                                    })),
-                            )
-                    }),
-            )
+            .child(div().id("editor-tab-context-actions").when(
+                context_target.is_some() && show_local_tab_strip,
+                |menu| {
+                    menu.flex()
+                        .items_center()
+                        .gap_3()
+                        .px_3()
+                        .py_2()
+                        .border_b_1()
+                        .border_color(rgb(MUTED_TEXT))
+                        .bg(rgb(PANEL_BG))
+                        .text_sm()
+                        .child(
+                            div()
+                                .id("editor-tab-context-close")
+                                .cursor_pointer()
+                                .child("Close")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.close_context_tab(cx);
+                                })),
+                        )
+                        .child(
+                            div()
+                                .id("editor-tab-context-close-others")
+                                .cursor_pointer()
+                                .child("Close Others")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.close_context_other_tabs(cx);
+                                })),
+                        )
+                        .child(
+                            div()
+                                .id("editor-tab-context-close-right")
+                                .cursor_pointer()
+                                .child("Close to Right")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.close_context_tabs_to_right(cx);
+                                })),
+                        )
+                        .child(
+                            div()
+                                .id("editor-tab-context-cancel")
+                                .cursor_pointer()
+                                .text_color(rgb(MUTED_TEXT))
+                                .child("Cancel")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.tab_context = None;
+                                    cx.notify();
+                                })),
+                        )
+                },
+            ))
             .child(
                 div()
                     .flex()
