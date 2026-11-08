@@ -54,6 +54,8 @@ enum CenterView {
 struct TerminalTabDrag {
     handle: String,
     workspace_generation: u64,
+    /// The drag must never select a newer Host tab that recycled this handle.
+    target: Option<TerminalTabContextTarget>,
 }
 
 struct TerminalTabDragPreview {
@@ -2250,7 +2252,15 @@ impl Render for Workbench {
             .tabs
             .iter()
             .enumerate()
-            .map(|(i, tab)| (i, tab.title.clone(), tab.running, tab.handle.clone()))
+            .map(|(i, tab)| {
+                (
+                    i,
+                    tab.title.clone(),
+                    tab.running,
+                    tab.handle.clone(),
+                    self.terminals.context_target_at(i),
+                )
+            })
             .collect();
         let terminal_context_open = self
             .terminal_tab_context
@@ -3355,7 +3365,8 @@ impl Render for Workbench {
                                                     .flex()
                                                     .overflow_x_scroll()
                                                     .children(terminal_tabs.into_iter().map(
-                                                        |(index, title, running, handle)| {
+                                                        |(index, title, running, handle, identity)| {
+                                                            let destination = identity.clone();
                                                             div()
                                                                 .flex()
                                                                 .items_center()
@@ -3402,6 +3413,7 @@ impl Render for Workbench {
                                                                             TerminalTabDrag {
                                                                                 handle: handle.clone(),
                                                                                 workspace_generation: terminal_drag_generation,
+                                                                                target: identity,
                                                                             },
                                                                             |drag, _, _, cx| {
                                                                                 cx.new(|_| TerminalTabDragPreview {
@@ -3413,10 +3425,13 @@ impl Render for Workbench {
                                                                             if payload.workspace_generation != this.workspace_generation {
                                                                                 return;
                                                                             }
-                                                                            let Some(from) = this.terminals.tabs.iter().position(|tab| tab.handle == payload.handle) else {
+                                                                            let Some(from) = payload.target.as_ref().and_then(|target| this.terminals.index_for_context(target)) else {
                                                                                 return;
                                                                             };
-                                                                            if this.terminals.move_tab(from, index) {
+                                                                            let Some(to) = destination.as_ref().and_then(|target| this.terminals.index_for_context(target)) else {
+                                                                                return;
+                                                                            };
+                                                                            if this.terminals.move_tab(from, to) {
                                                                                 this.save_terminal_layout();
                                                                                 cx.notify();
                                                                             }
@@ -3823,6 +3838,12 @@ impl Render for Workbench {
                                                         }))
                                                         .on_drop(cx.listener(|this, drag: &TerminalTabDrag, _, cx| {
                                                             if drag.workspace_generation != this.workspace_generation {
+                                                                return;
+                                                            }
+                                                            if !drag.target.as_ref().is_some_and(|target| {
+                                                                target.handle == drag.handle &&
+                                                                this.terminals.context_target_is_live(target)
+                                                            }) {
                                                                 return;
                                                             }
                                                             if this.terminal_panes.drop_tab_on_secondary(&mut this.terminals, &drag.handle) {

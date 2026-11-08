@@ -111,11 +111,16 @@ placement, drag between pane groups, and GUI acceptance on high-DPI Windows.
   identity exactly matches the authenticated session list. It delegates to
   the existing pane-preview assignment, without creating, terminating or
   attaching a Host PTY.
+- Existing Terminal tab drag-to-reorder and drop-to-secondary now carry that
+  same context identity, not just the opaque handle. Both drag source and
+  destination are revalidated at drop time, and split drop additionally
+  requires a still-live Host session.
 - Two Rust TDD cases cover reorder, close/reopen, handle reuse, stopped Host,
   cross-workspace stale context and preservation of the session inventory.
-- Final Windows GPUI native build and 189-test Rust regression results must
-  be checked independently; compilation does not establish real right-click
-  or middle-click behavior on Windows.
+- Windows GPUI native `cargo build --locked --offline` passed (only the
+  pre-existing `proc-macro-error2` future-incompatibility warning).
+  Full Rust regression verification: **189/189 passed**. Compilation does
+  **not** establish real right-click or middle-click behavior on Windows.
 
 Still missing compared to Flutter: one mixed Terminal/Editor/Agent tab strip,
 full pointer-anchored popup menus and detached-window workflows. No attempt
