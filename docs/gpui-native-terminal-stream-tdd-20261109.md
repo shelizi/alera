@@ -70,3 +70,16 @@ Windows 編譯注意：原正式 `alera.exe` 正被其他程序使用而無法�
 上述 6/6 是真實 Host 與 CLI 的隔離整合測試，**不代表** GPUI 視窗的視覺/IME、長輸出 TUI、實機延遲或所有 Rust Host unit tests 均已通過。Native `supported=false` 維持不變。
 
 Native 進一步執行 `cargo test --manifest-path desktop_gpui/Cargo.toml --no-default-features --lib --offline --locked terminal`：**77/77 通過**（含 View Lease 封包、Host Snapshot 尺寸、中文分塊、錯誤恢復、雙分割 pane、16ms/50ms 喚醒條件）。Windows 原生 `cargo check` 也通過。實際 UI 尺寸及延遲仍待機器驗收。
+
+## 2026-11-09：真正 Windows GPUI 視窗輸入驗證
+
+已使用隔離的 GPUI 執行檔／Host／CLI／Runtime／Native State／HOME 完成實際視窗煙霧測試。CLI 配對採用 `ALERA_CLI_PATH`，Runtime 使用 `ALERA_RUNTIME_DIR`，Native 狀態使用 `ALERA_GPUI_STATE_DIR`，全都指向新的臨時目錄，不覆寫 Classic／使用者 Host；測試視窗結束時只回收自己的子程序。既有 Smoke 指令可加 `--native-app PATH_TO_GPUI_EXE --hold-seconds 40`，以臨時 Terminal 佈局在視窗開啟後顯示實際的 Windows Shell。
+
+實機找到並修正兩個只有單元測試無法發現的問題：
+
+1. 原 `QuickOpenInput` 把**所有純 ASCII TextInput Commit 丟棄**，以為文字一定從 KeyDown 到 Host，造成文字注入／貼上類輸入遺失。新 `TerminalTextCommitGate` 只對**真的送達 KeyDown 輸入佇列**的最近 ASCII 做去重，其餘 ASCII／Unicode Commit 照常送入 Host；gate 在 Tab／Workspace 清空時重置。
+2. 終端內容列選取與 GPUI 的滑鼠預設聚焦可能覆蓋 1px 隱藏 IME 輸入元件焦點。現在在彩色 VT 與純文字 Transcript 的 MouseUp 後重新聚焦該 IME sink，維持無多餘文字輸入框；滑鼠選取仍可完成。另在視窗啟動時直接向 CLI `--no-start` 查 Host Session，無須等待背景 1.5s 清單 tick。
+
+**實機正向證據**：視窗成功還原既有測試 PTY 的 Shell 輸出，實際逐鍵 `dir` 能列出檔案；修正後以文字提交輸入並執行 `echo FOCUS_AND_TEXT_OK`、`echo 測試中文貓`，GPUI 顯示成功。再由另一支 CLI 讀取同一 Host PTY retained scrollback，確認 `has_live_ascii_echo=True`、`has_live_chinese=True`。測試時曾使用**只記錄 Focus 與文字長度、不記錄任何實際按鍵內容**的環境變數追蹤，定位後已將所有診斷程式碼移除。Windows Native `cargo test --no-default-features --lib` **318/318 通過**。
+
+**未完成／不過度聲稱**：實體注音組字候選與多組漢字長時間切換、兩個 Terminal pane 各自 IME、長輸出/backpressure、Host 斷線自動重連、真實 UI p50/p95 延遲與完整 TUI 壓測仍待驗收；只驗證目前隔離版本，沒有替換正式 Alera，`supported=false` 不變。

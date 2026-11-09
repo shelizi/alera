@@ -2,6 +2,7 @@
 """Isolated real Host -> CLI stream -> PTY smoke, never the user's live Host.
 
 Usage: python desktop_gpui/tests/terminal_stream_isolated_smoke.py PATH_TO_NEW_ALERA_EXE
+       [--native-app PATH_TO_GPUI_EXE --hold-seconds 40]
 
 The test creates one temporary Runtime profile, project, workspace, and PTY,
 asserts that GPUI's narrow stream protocol works with a real Host, and shuts
@@ -10,6 +11,7 @@ application window is accessed.
 """
 
 import base64
+import argparse
 import json
 import os
 from pathlib import Path
@@ -166,7 +168,32 @@ def wait_host_control(path, process, timeout=25):
     raise SmokeError("Isolated Host did not publish a control file")
 
 
-def run_smoke(executable):
+def prepare_native_preview_state(state_dir, root, session_id, workspace_id, tab_id):
+    """Seed exactly one scoped, display-only preview tab for real UI replay."""
+    state_dir.mkdir(parents=True, exist_ok=True)
+    root = root.resolve()
+    hash64 = 0xCBF29CE484222325
+    for byte in str(root).encode("utf-8"):
+        hash64 ^= byte
+        hash64 = (hash64 * 0x100000001B3) & ((1 << 64) - 1)
+    saved = {
+        "version": 1,
+        "root": str(root),
+        "layout": {
+            "tabs": [{
+                "handle": session_id, "workspace_id": workspace_id,
+                "tab_id": tab_id,
+            }],
+            "active_handle": session_id,
+            "transcript_view": False,
+        },
+    }
+    path = state_dir / f"terminal-layout-{hash64:016x}.json"
+    path.write_text(json.dumps(saved, ensure_ascii=False), encoding="utf-8")
+    return path
+
+
+def run_smoke(executable, native_app=None, hold_seconds=25):
     run_marker = uuid.uuid4().hex[:14]
     checks = []
     with tempfile.TemporaryDirectory(prefix="alera_gpui_stream_isolated_") as temp:
@@ -202,6 +229,7 @@ def run_smoke(executable):
         session_id = None
         stream = None
         control = None
+        native_process = None
         try:
             control = wait_host_control(control_file, host)
             project_id = "project-" + run_marker
@@ -328,6 +356,48 @@ def run_smoke(executable):
             if read.get("running") is not True:
                 raise SmokeError("Closing Native stream unexpectedly killed its Host PTY")
             checks.append("closing CLI stream preserves Host PTY")
+            if native_app is not None:
+                native_state = root / "gpui-state"
+                prepare_native_preview_state(
+                    native_state, workspace, session_id, workspace_id, tab_id
+                )
+                native_home = root / "native-home"
+                native_home.mkdir()
+                native_stderr_path = root / "isolated-native.stderr.log"
+                with native_stderr_path.open("wb") as native_stderr:
+                    native_env = {
+                        **os.environ,
+                        "ALERA_CLI_PATH": str(executable),
+                        "ALERA_RUNTIME_DIR": str(profile),
+                        "ALERA_GPUI_STATE_DIR": str(native_state),
+                        "HOME": str(native_home),
+                        "USERPROFILE": str(native_home),
+                        "APPDATA": str(native_home / "AppData" / "Roaming"),
+                        "LOCALAPPDATA": str(native_home / "AppData" / "Local"),
+                    }
+                    native_process = subprocess.Popen(
+                        [str(native_app), str(workspace.resolve())],
+                        cwd=workspace,
+                        env=native_env,
+                        stdin=subprocess.DEVNULL,
+                        stdout=subprocess.DEVNULL,
+                        stderr=native_stderr,
+                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                    )
+                    print(
+                        f"ISOLATED_NATIVE_UI_READY pid={native_process.pid} "
+                        f"workspace={workspace} seconds={hold_seconds}",
+                        flush=True,
+                    )
+                    until = time.monotonic() + hold_seconds
+                    while time.monotonic() < until:
+                        if native_process.poll() is not None:
+                            raise SmokeError(
+                                f"isolated GPUI window exited unexpectedly: "
+                                f"code={native_process.returncode}"
+                            )
+                        time.sleep(0.2)
+                checks.append("isolated Native GPUI window remained alive")
             return checks
         except Exception as error:
             host_stderr.flush()
@@ -343,6 +413,13 @@ def run_smoke(executable):
                 f"isolated_host_stderr={diagnostics or '(none)'}"
             ) from error
         finally:
+            if native_process is not None and native_process.poll() is None:
+                native_process.terminate()
+                try:
+                    native_process.wait(timeout=4)
+                except subprocess.TimeoutExpired:
+                    native_process.kill()
+                    native_process.wait(timeout=3)
             if stream is not None:
                 stream.close()
             if control is not None:
@@ -369,11 +446,21 @@ def run_smoke(executable):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2 or not Path(sys.argv[1]).is_file():
-        print("Usage: terminal_stream_isolated_smoke.py PATH_TO_COMPILED_ALERA_EXE", file=sys.stderr)
-        sys.exit(2)
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("cli", type=Path, help="compiled Alera CLI (experimental)")
+    parser.add_argument("--native-app", type=Path, help="optional GPUI exe to launch with an isolated preview tab")
+    parser.add_argument("--hold-seconds", type=int, default=25)
+    args = parser.parse_args()
+    if not args.cli.is_file() or (args.native_app is not None and not args.native_app.is_file()):
+        parser.error("CLI and optional Native app paths must be existing executable files")
+    if not 1 <= args.hold_seconds <= 180:
+        parser.error("--hold-seconds must be between 1 and 180")
     try:
-        results = run_smoke(Path(sys.argv[1]).resolve())
+        results = run_smoke(
+            args.cli.resolve(), native_app=args.native_app.resolve()
+            if args.native_app is not None else None,
+            hold_seconds=args.hold_seconds,
+        )
     except (SmokeError, OSError, KeyError, ValueError, subprocess.TimeoutExpired) as error:
         print(f"FAIL: isolated Terminal stream smoke: {error}", file=sys.stderr)
         sys.exit(1)
