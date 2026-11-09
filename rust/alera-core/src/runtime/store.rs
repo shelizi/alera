@@ -2202,6 +2202,69 @@ mod tests {
         assert!(pinned.updated_at > previous.updated_at);
     }
 
+    #[tokio::test]
+    async fn concurrent_classic_native_pin_writers_cannot_overwrite_each_other() {
+        let (dir, classic) = store().await;
+        // Separate RuntimeStore instances represent two real UI clients
+        // backed by distinct SQLite pools, not merely two calls on one lock.
+        let native = RuntimeStore::open(dir.path()).await.unwrap();
+        let created = Utc::now();
+        classic
+            .upsert_workspace_tab(WorkspaceTabRecord {
+                id: "tab-concurrent".into(),
+                workspace_id: "ws-concurrent".into(),
+                kind: "terminal".into(),
+                title: "shared agent".into(),
+                created_at: created,
+                updated_at: created,
+                payload: serde_json::json!({
+                    "terminalSessionId": "host-pty-1",
+                    "agentTitleRevision": "keep-this-revision",
+                }),
+            })
+            .await
+            .unwrap();
+        let current = classic
+            .find_workspace_tab("tab-concurrent")
+            .await
+            .unwrap()
+            .unwrap();
+        let (classic_result, native_result) = tokio::join!(
+            classic.compare_and_set_workspace_tab_pin(
+                "ws-concurrent",
+                "tab-concurrent",
+                current.updated_at,
+                false,
+                true,
+                Some("host-pty-1")
+            ),
+            native.compare_and_set_workspace_tab_pin(
+                "ws-concurrent",
+                "tab-concurrent",
+                current.updated_at,
+                false,
+                true,
+                Some("host-pty-1")
+            ),
+        );
+        assert_eq!(
+            usize::from(classic_result.is_ok()) + usize::from(native_result.is_ok()),
+            1,
+            "exactly one of two simultaneous revision-matched writes may succeed"
+        );
+        let committed = classic
+            .find_workspace_tab("tab-concurrent")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(committed.payload["pinned"], true);
+        assert_eq!(committed.payload["terminalSessionId"], "host-pty-1");
+        assert_eq!(
+            committed.payload["agentTitleRevision"],
+            "keep-this-revision"
+        );
+    }
+
     async fn store() -> (tempfile::TempDir, RuntimeStore) {
         let dir = tempfile::tempdir().unwrap();
         let store = RuntimeStore::open(dir.path()).await.unwrap();
