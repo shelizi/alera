@@ -4190,11 +4190,14 @@ impl Workbench {
         };
         let handle = ticket.handle.clone();
         let cursor = ticket.cursor;
+        let max_bytes = ticket.max_bytes;
         let generation = self.workspace_generation;
         self.terminal_read_loading = Some(handle.clone());
         cx.spawn(async move |view, cx| {
             let result = cx
-                .background_spawn(async move { bridge.read_terminal(&handle, cursor) })
+                .background_spawn(async move {
+                    bridge.read_terminal_bounded(&handle, cursor, max_bytes)
+                })
                 .await;
             view.update(cx, |view, cx| {
                 if view.terminals.workspace_generation() != generation {
@@ -4952,8 +4955,11 @@ impl Workbench {
         cx.spawn(async move |view, cx| {
             let handle = ticket.handle.clone();
             let cursor = ticket.cursor;
+            let max_bytes = ticket.max_bytes;
             let result = cx
-                .background_spawn(async move { bridge.read_terminal(&handle, cursor) })
+                .background_spawn(async move {
+                    bridge.read_terminal_bounded(&handle, cursor, max_bytes)
+                })
                 .await;
             view.update(cx, |view, cx| {
                 if view.workspace_generation != generation {

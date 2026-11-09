@@ -3,6 +3,7 @@
 //! the existing Alera Runtime Host; this frontend uses CLI --no-start only.
 use crate::runtime_bridge::RuntimeCliBridge;
 use crate::session::TerminalLayout;
+use crate::terminal_output_budget::TerminalParseBudget;
 use crate::vt_screen::VtScreen;
 use serde_json::Value;
 use std::ffi::OsString;
@@ -82,17 +83,31 @@ pub fn list_terminal_verb() -> Vec<OsString> {
 }
 
 pub fn read_terminal_verb(handle: &str, cursor: Option<u64>) -> io::Result<Vec<OsString>> {
+    read_terminal_verb_bounded(handle, cursor, TERMINAL_READ_BYTES)
+}
+
+pub fn read_terminal_verb_bounded(
+    handle: &str,
+    cursor: Option<u64>,
+    max_bytes: u64,
+) -> io::Result<Vec<OsString>> {
     if !valid_handle(handle) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "Invalid terminal handle",
         ));
     }
+    if !(4 * 1024..=TERMINAL_READ_BYTES).contains(&max_bytes) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Terminal read budget must be 4–64 KiB",
+        ));
+    }
     let mut args = vec![
         OsString::from("read"),
         OsString::from(format!("--handle={handle}")),
         OsString::from("--max-bytes"),
-        OsString::from(TERMINAL_READ_BYTES.to_string()),
+        OsString::from(max_bytes.to_string()),
     ];
     if let Some(cursor) = cursor {
         args.push(OsString::from("--cursor"));
@@ -108,7 +123,16 @@ impl RuntimeCliBridge {
     }
 
     pub fn read_terminal(&self, handle: &str, cursor: Option<u64>) -> io::Result<TerminalChunk> {
-        let args = read_terminal_verb(handle, cursor)?;
+        self.read_terminal_bounded(handle, cursor, TERMINAL_READ_BYTES)
+    }
+
+    pub fn read_terminal_bounded(
+        &self,
+        handle: &str,
+        cursor: Option<u64>,
+        max_bytes: u64,
+    ) -> io::Result<TerminalChunk> {
+        let args = read_terminal_verb_bounded(handle, cursor, max_bytes)?;
         let response = self.terminal_json(&args)?;
         parse_terminal_chunk(&response, handle)
     }
@@ -697,6 +721,7 @@ pub struct TerminalTab {
     pub output: String,
     pub next_cursor: Option<u64>,
     pub screen: VtScreen,
+    parse_budget: TerminalParseBudget,
     generation: u64,
     decoder: TextDecoder,
 }
@@ -929,6 +954,7 @@ impl TerminalTab {
             output: String::new(),
             next_cursor: None,
             screen: VtScreen::default(),
+            parse_budget: TerminalParseBudget::default(),
             generation,
             decoder: TextDecoder::default(),
         }
@@ -945,6 +971,7 @@ impl TerminalTab {
                 self.output.clear();
                 self.decoder = TextDecoder::default();
                 self.screen.reset();
+                self.parse_budget = TerminalParseBudget::default();
                 self.next_cursor = None;
                 self.running = chunk.running;
                 return true;
@@ -957,13 +984,17 @@ impl TerminalTab {
         if chunk.truncated {
             self.decoder = TextDecoder::default();
             self.screen.reset();
+            self.parse_budget = TerminalParseBudget::default();
             self.output
                 .push_str("\n[Earlier terminal scrollback was truncated]\n");
         }
         // Replay exactly the Host bytes returned in this chunk into the VT
         // screen before stripping escapes from the optional text transcript.
+        let parse_started = Instant::now();
         self.screen.feed(&chunk.text);
         self.decoder.append(&mut self.output, &chunk.text);
+        self.parse_budget
+            .observe(Instant::now(), chunk.text.len(), parse_started.elapsed());
         self.next_cursor = Some(chunk.next_cursor);
         self.running = chunk.running;
         true
@@ -982,6 +1013,7 @@ pub enum TerminalViewMode {
 pub struct TerminalReadTicket {
     pub handle: String,
     pub cursor: Option<u64>,
+    pub max_bytes: u64,
     generation: u64,
 }
 
@@ -1460,6 +1492,7 @@ impl TerminalDock {
         Some(TerminalReadTicket {
             handle: tab.handle.clone(),
             cursor: tab.next_cursor,
+            max_bytes: tab.parse_budget.max_read_bytes(),
             generation: tab.generation,
         })
     }
@@ -1918,6 +1951,55 @@ mod tests {
             assert!(write_terminal_verb("term-1", text, true).is_err());
         }
         assert!(write_terminal_verb("term-1", &"a".repeat(4097), true).is_err());
+    }
+
+    #[test]
+    fn native_terminal_read_budget_is_scoped_to_the_active_host_tab() {
+        use crate::runtime_bridge::terminal_cli_arguments;
+        use std::path::Path;
+
+        let mut dock = TerminalDock::for_workspace(6);
+        assert!(dock.apply_session_list(6, vec![session("term-1")]));
+        assert!(dock.open("term-1"));
+        let ticket = dock.active_ticket().expect("confirmed Host session");
+        assert_eq!(ticket.max_bytes, 16 * 1024);
+        let args = read_terminal_verb_bounded(&ticket.handle, ticket.cursor, ticket.max_bytes)
+            .expect("Host read within adaptive budget");
+        assert!(args.iter().any(|argument| argument == "16384"));
+        assert!(terminal_cli_arguments(Path::new("C:/runtime"), &args)
+            .iter()
+            .any(|argument| argument == "--no-start"));
+        assert!(read_terminal_verb_bounded("term-1", None, 4095).is_err());
+        assert!(read_terminal_verb_bounded("term-1", None, 65_537).is_err());
+        assert!(read_terminal_verb_bounded("bad\nhandle", None, 8192).is_err());
+        assert!(read_terminal_verb("term-1", None)
+            .unwrap()
+            .iter()
+            .any(|argument| argument == "65536"));
+    }
+
+    #[test]
+    fn native_parse_budget_restarts_after_host_cursor_reset_or_truncation() {
+        let s = session("pty-1");
+        let started = Instant::now();
+        let mut rewind_tab = TerminalTab::new(&s, 1);
+        rewind_tab
+            .parse_budget
+            .observe(started, 16 * 1024, Duration::from_millis(1));
+        assert_eq!(rewind_tab.parse_budget.max_read_bytes(), 24 * 1024);
+        rewind_tab.next_cursor = Some(500);
+        assert!(rewind_tab.apply(chunk("pty-1", 0, 10, "reset")));
+        assert_eq!(rewind_tab.parse_budget.max_read_bytes(), 16 * 1024);
+
+        let mut truncated_tab = TerminalTab::new(&s, 2);
+        truncated_tab
+            .parse_budget
+            .observe(started, 16 * 1024, Duration::from_millis(1));
+        assert_eq!(truncated_tab.parse_budget.max_read_bytes(), 24 * 1024);
+        let mut truncated = chunk("pty-1", 0, 10, "snapshot");
+        truncated.truncated = true;
+        assert!(truncated_tab.apply(truncated));
+        assert_eq!(truncated_tab.parse_budget.max_read_bytes(), 16 * 1024);
     }
 
     fn session(handle: &str) -> TerminalSession {
