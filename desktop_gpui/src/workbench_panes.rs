@@ -206,6 +206,18 @@ impl WorkbenchPaneLayout {
         self.focused_host_target_for_input(slot) == Some(active_target)
     }
 
+    /// Native Windows TextInput can deliver a delayed IME completion after
+    /// focus moved to Explorer, Settings or a different Terminal. A selected
+    /// Host tab alone is not permission to forward that completion to a PTY.
+    pub fn authorizes_native_terminal_commit(
+        &self,
+        slot: PaneSlot,
+        active_target: &TerminalTabContextTarget,
+        input_has_os_focus: bool,
+    ) -> bool {
+        input_has_os_focus && self.authorizes_terminal_input(slot, active_target)
+    }
+
     /// Whether the optional secondary pane currently holds at least one tab.
     pub fn has_secondary(&self) -> bool {
         !self.secondary.is_empty()
@@ -671,6 +683,24 @@ mod tests {
         assert!(panes.authorizes_terminal_input(PaneSlot::Secondary, target(&secondary)));
         panes.close_secondary();
         assert!(!panes.authorizes_terminal_input(PaneSlot::Secondary, target(&secondary)));
+    }
+
+    #[test]
+    fn delayed_native_ime_commit_requires_os_focus_not_just_selected_host_tab() {
+        let active = host("pty-zhu-yin");
+        let other = host("pty-second-pane");
+        let mut panes = WorkbenchPaneLayout::new();
+        panes.reconcile(&[active.clone(), other.clone()]);
+        let WorkbenchTabIdentity::Host(target) = &active else {
+            unreachable!();
+        };
+        // Clicking Explorer leaves the last selected Host in TerminalDock,
+        // but a delayed IME callback from that Host must not type into it.
+        assert!(!panes.authorizes_native_terminal_commit(PaneSlot::Primary, target, false));
+        assert!(panes.authorizes_native_terminal_commit(PaneSlot::Primary, target, true));
+        assert!(panes.split_with(&other));
+        assert!(!panes.authorizes_native_terminal_commit(PaneSlot::Primary, target, true));
+        assert!(!panes.authorizes_native_terminal_commit(PaneSlot::Secondary, target, true));
     }
 
     #[test]

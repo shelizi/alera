@@ -4079,6 +4079,38 @@ impl Workbench {
         self.enqueue_terminal_text(encoded, cx)
     }
 
+    /// Native IME callbacks are asynchronous. The pane and Host identity
+    /// can remain selected even after actual OS keyboard focus moved into
+    /// Explorer, Settings, or another app. Never forward those stale commits.
+    fn enqueue_terminal_ime_text_for_pane(
+        &mut self,
+        pane: PaneSlot,
+        input_has_os_focus: bool,
+        encoded: String,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !input_has_os_focus {
+            return false;
+        }
+        if self.mixed_panes.has_secondary() {
+            let Some(active_target) = self
+                .terminals
+                .active_tab
+                .and_then(|index| self.terminals.context_target_at(index))
+            else {
+                return false;
+            };
+            if !self.mixed_panes.authorizes_native_terminal_commit(
+                pane,
+                &active_target,
+                input_has_os_focus,
+            ) {
+                return false;
+            }
+        }
+        self.enqueue_terminal_text_for_pane(pane, encoded, cx)
+    }
+
     fn send_terminal_key(
         &mut self,
         pane: PaneSlot,
@@ -4824,6 +4856,9 @@ impl Workbench {
                 }
             }
             WorkbenchTabIdentity::Editor { instance, .. } => {
+                // A focused Editor has a different native text input owner;
+                // cancel any leftover Terminal phonetic composition first.
+                self.clear_terminal_text_inputs(cx);
                 if let Some((_, editor)) = self.editor_for_instance(*instance, cx) {
                     if editor.update(cx, |editor, cx| editor.activate_tab_instance(*instance, cx)) {
                         self.center_view = CenterView::Editor;
@@ -7370,6 +7405,9 @@ impl Render for Workbench {
                                             .key_context("AleraGpuiTerminalRaw")
                                             .track_focus(&terminal_keyboard_focus)
                                             .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, window, cx| {
+                                                if !this.terminal_input.read(cx).focus_handle(cx).is_focused(window) {
+                                                    this.clear_terminal_text_inputs(cx);
+                                                }
                                                 this.focus_primary_mixed_terminal(cx);
                                                 let focus = this.terminal_input.read(cx).focus_handle(cx);
                                                 window.focus(&focus, cx);
@@ -7651,6 +7689,9 @@ impl Render for Workbench {
                                                     .key_context("AleraGpuiTerminalRaw")
                                                     .track_focus(&secondary_terminal_keyboard_focus)
                                                     .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |this, _, window, cx| {
+                                                        if !this.secondary_terminal_input.read(cx).focus_handle(cx).is_focused(window) {
+                                                            this.clear_terminal_text_inputs(cx);
+                                                        }
                                                         if let Some(target) = mixed_secondary_host.as_ref() {
                                                             if this.terminals.context_target_is_live(target) {
                                                                 if let Some(index) = this.terminals.index_for_context(target) {
@@ -8509,26 +8550,33 @@ fn main() {
                     ..Default::default()
                 },
                 cx,
-                |_, cx| {
+                |window, cx| {
                     let view = cx.new(|cx| {
                         let terminal_input = cx.new(QuickOpenInput::terminal);
                         let secondary_terminal_input = cx.new(QuickOpenInput::terminal);
-                        cx.observe(&terminal_input, |view: &mut Workbench, input, cx| {
+                        cx.observe_in(&terminal_input, window, |view: &mut Workbench, input, window, cx| {
                             // GPUI TextInput delivers ASCII and finalized IME
                             // characters here. Composing text never enters a
-                            // Host until native input has committed it.
+                            // Host until its native input has committed while
+                            // still owning the actual window keyboard focus.
+                            let has_os_focus = input.read(cx).focus_handle(cx).is_focused(window);
                             let committed =
                                 input.update(cx, |input, _| input.take_terminal_committed());
                             for text in committed {
-                                view.enqueue_terminal_text_for_pane(PaneSlot::Primary, text, cx);
+                                view.enqueue_terminal_ime_text_for_pane(
+                                    PaneSlot::Primary, has_os_focus, text, cx,
+                                );
                             }
                         })
                         .detach();
-                        cx.observe(&secondary_terminal_input, |view: &mut Workbench, input, cx| {
+                        cx.observe_in(&secondary_terminal_input, window, |view: &mut Workbench, input, window, cx| {
+                            let has_os_focus = input.read(cx).focus_handle(cx).is_focused(window);
                             let committed =
                                 input.update(cx, |input, _| input.take_terminal_committed());
                             for text in committed {
-                                view.enqueue_terminal_text_for_pane(PaneSlot::Secondary, text, cx);
+                                view.enqueue_terminal_ime_text_for_pane(
+                                    PaneSlot::Secondary, has_os_focus, text, cx,
+                                );
                             }
                         })
                         .detach();
