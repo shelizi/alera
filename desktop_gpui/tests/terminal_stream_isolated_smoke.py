@@ -537,9 +537,27 @@ def run_smoke(executable, native_app=None, hold_seconds=25):
                         host_rpc(control, "terminate", {"sessionId": terminal_id})
                     except (OSError, KeyError, SmokeError):
                         pass
+                if os.name != "nt":
+                    try:
+                        host_rpc(control, "host.shutdown", {})
+                    except (OSError, KeyError, SmokeError):
+                        pass
+            if os.name == "nt" and host.poll() is None:
+                # PTY workers can deliberately outlive a graceful Host
+                # shutdown for crash recovery. This Host is disposable:
+                # stop ONLY the exact process tree we just created, while
+                # its parent is still alive so taskkill /T can find the
+                # worker and its ConPTY bootstrap grandchildren.
                 try:
-                    host_rpc(control, "host.shutdown", {})
-                except (OSError, KeyError, SmokeError):
+                    subprocess.run(
+                        ["taskkill", "/T", "/F", "/PID", str(host.pid)],
+                        stdin=subprocess.DEVNULL,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        timeout=12,
+                        check=False,
+                    )
+                except (OSError, subprocess.TimeoutExpired):
                     pass
             if host.poll() is None:
                 try:

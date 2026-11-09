@@ -96,3 +96,5 @@ Native 進一步執行 `cargo test --manifest-path desktop_gpui/Cargo.toml --no-
 **驗證：**隔離真實 Host／CLI 回歸 **10/10 PASS**，其中包含「重連新 Lease」、「雙 PTY 輸出分流」、「超過 64 KiB 的真實輸出」；Native Rust 單元測試 **320/320 PASS**，包含 late CLI read 的 RED→GREEN 重現與修正。
 
 這裡的自動重連是 Native 客戶端策略及純邏輯測試；端對端已驗證*新 CLI stream 重新附著仍存在的 Host PTY*，但尚未直接驗證**Host 進程意外退出並重啟後的整個 GPUI 自動恢復路徑**、真實 TUI p95 畫面延遲、長時間背壓/IME 候選窗。Native `supported=false` 與 Classic/正式 Host 隔離維持不變。
+
+**隔離測試清理補強：**首次加入第二個 PTY 的壓測雖然 10/10 通過，但檢查發現兩個**測試執行檔** `__alera-terminal-pty-worker`／`__pty-job-bootstrap` 意外留在背景。只依精確 PID、執行檔路徑及 worker 參數關閉了這兩個測試程序，未碰 Classic 或正式 Host。Smoke teardown 已調整為先對兩個 Test Session 發出 terminate，然後在**該臨時 Host 父程序仍存活時**，Windows 只對 `Popen` 取得的測試 Host PID 執行 `taskkill /T /F /PID`，以回收其整棵臨時 PTY Worker 樹，絕不按映像檔名稱或全域搜尋關閉。修正後重新執行：**10/10 PASS，測試執行檔剩餘程序 0 個**。
