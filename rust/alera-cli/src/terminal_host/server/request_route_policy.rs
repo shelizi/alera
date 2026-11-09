@@ -286,6 +286,7 @@ pub(super) fn request_route_policy(request_type: &str) -> RequestRoutePolicy {
         | "workbenchViewPrefs.update"
         | "workspace.rename"
         | "workspace.setPinned"
+        | "workspace.setArchived"
         | "workspaceRelation.link"
         | "workspaceRelation.unlink"
         | "workspaceSection.create"

@@ -956,6 +956,7 @@ impl ServerActor {
             | "workspace.upsert"
             | "workspace.rename"
             | "workspace.setPinned"
+            | "workspace.setArchived"
             | "workspaceCascade.preview" => {
                 self.require_auth(client_id)?;
                 let outcome = WorkspaceRequestHandler::new(&self.runtime_store)

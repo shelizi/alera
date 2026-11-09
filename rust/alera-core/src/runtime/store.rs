@@ -443,6 +443,31 @@ impl RuntimeStore {
         })
     }
 
+    /// Toggle archive state atomically without replacing concurrent workspace
+    /// metadata, Git path, branch, tags, pin status, or parent relationships.
+    pub async fn set_workspace_archived(
+        &self,
+        workspace_id: &str,
+        archived: bool,
+    ) -> Result<Workspace> {
+        let timestamp = format_timestamp(Utc::now());
+        let archived_at = if archived { Some(timestamp.clone()) } else { None };
+        let result = sqlx::query(
+            "UPDATE workspaces SET archivedAt = ?, updatedAt = ? WHERE id = ? AND status != 'removed'",
+        )
+        .bind(archived_at)
+        .bind(timestamp)
+        .bind(workspace_id)
+        .execute(&self.pool)
+        .await?;
+        if result.rows_affected() == 0 {
+            anyhow::bail!("Workspace not found or removed: {workspace_id}");
+        }
+        self.find_workspace(workspace_id).await?.ok_or_else(|| {
+            RuntimeStoreError::Message(format!("Workspace not found: {workspace_id}")).into()
+        })
+    }
+
     pub async fn mobile_access_settings(&self) -> Result<MobileAccessSettings> {
         let row = sqlx::query(
             "SELECT enabled, remoteAccessEnabled, bindHost, port, endpointMode, netbirdEndpoint, \

@@ -15,9 +15,9 @@ mod cli_orchestration;
 mod cli_orchestration_runs;
 mod cli_orchestration_terminal;
 mod cli_orchestration_timeouts;
-mod desktop_settings_commands;
 #[cfg(test)]
 mod cli_tests;
+mod desktop_settings_commands;
 mod host_tools;
 mod hosted_review_retention;
 mod login_shell_environment;
@@ -416,6 +416,87 @@ async fn run_project_command(command: ProjectCommand) -> i32 {
                 Err(error) => return print_error(error),
             }
         }
+        ProjectAction::Rename(args) => {
+            let payload = json!({ "id": args.id, "name": args.name });
+            let id = args.id;
+            let name = args.name;
+            match runtime_host_or_store(&runtime, "project.rename", &payload, |store| async move {
+                project_management::rename_project(&store, &id, &name).await
+            })
+            .await
+            {
+                Ok(project) => print_value(&project, json_output, "project renamed"),
+                Err(error) => return print_error(error),
+            }
+        }
+        ProjectAction::ConfigShow(IdArgs { id }) => {
+            let store = match open_store(&runtime).await {
+                Ok(store) => store,
+                Err(error) => return print_error(error),
+            };
+            match store.find_project(&id).await {
+                Ok(Some(_)) => {}
+                Ok(None) => return print_error(format!("Project not found: {id}")),
+                Err(error) => return print_error(error),
+            }
+            match store.find_project_config(&id).await {
+                Ok(config) => print_value(
+                    &json!({"kind": "projectConfig", "projectId": id,
+                        "config": config.unwrap_or_default()}),
+                    json_output,
+                    "project settings listed",
+                ),
+                Err(error) => return print_error(error),
+            }
+        }
+        ProjectAction::ConfigSet(args) => {
+            if args.config_json.len() > 32 * 1024 {
+                return print_error("Project config JSON exceeds 32 KiB.");
+            }
+            let config: alera_core::runtime::ProjectConfig =
+                match serde_json::from_str(&args.config_json) {
+                    Ok(config) => config,
+                    Err(error) => return print_error(format!("Invalid project config: {error}")),
+                };
+            let id = args.id;
+            let store = match open_store(&runtime).await {
+                Ok(store) => store,
+                Err(error) => return print_error(error),
+            };
+            match store.find_project(&id).await {
+                Ok(Some(_)) => {}
+                Ok(None) => return print_error(format!("Project not found: {id}")),
+                Err(error) => return print_error(error),
+            }
+            let updated_at = Utc::now();
+            let payload = json!({"projectId": id, "config": config,
+                "updatedAt": updated_at});
+            match runtime_host_or_store(
+                &runtime,
+                "projectConfig.upsert",
+                &payload,
+                |store| async move { store.upsert_project_config(&id, config, updated_at).await },
+            )
+            .await
+            {
+                Ok(config) => print_value(&config, json_output, "project settings updated"),
+                Err(error) => return print_error(error),
+            }
+        }
+        ProjectAction::RemovePreview(IdArgs { id }) => {
+            let payload = json!({"id": id});
+            let value: Value = match runtime_host_required(&runtime).await {
+                Ok(mut client) => match client
+                    .request_value("project.remove.preview", &payload)
+                    .await
+                {
+                    Ok(value) => value,
+                    Err(error) => return print_error(error),
+                },
+                Err(error) => return print_error(error),
+            };
+            print_value(&value, json_output, "project remove preview ready");
+        }
         ProjectAction::Remove(IdArgs { id }) => {
             let payload = json!({ "id": id });
             let removed_id = id.clone();
@@ -458,6 +539,22 @@ async fn run_workspace_command(command: WorkspaceCommand) -> i32 {
                     json_output,
                     "workspaces listed",
                 ),
+                Err(error) => return print_error(error),
+            }
+        }
+        WorkspaceAction::Rename(args) => {
+            let payload = json!({ "workspaceId": args.id, "name": args.name });
+            let id = args.id;
+            let name = args.name;
+            match runtime_host_or_store(
+                &runtime,
+                "workspace.rename",
+                &payload,
+                |store| async move { Ok(store.rename_workspace(&id, &name).await?) },
+            )
+            .await
+            {
+                Ok(workspace) => print_value(&workspace, json_output, "workspace renamed"),
                 Err(error) => return print_error(error),
             }
         }
@@ -555,6 +652,91 @@ async fn run_workspace_command(command: WorkspaceCommand) -> i32 {
         WorkspaceAction::Unpin(IdArgs { id }) => {
             return workspace_pinning::run(runtime_dir(&runtime), json_output, id, false).await
         }
+        WorkspaceAction::Sleep(IdArgs { id }) => {
+            let payload = json!({"workspaceId": id});
+            let value: Value = match runtime_host_required(&runtime).await {
+                Ok(mut client) => match client.request_value("workspace.sleep", &payload).await {
+                    Ok(value) => value,
+                    Err(error) => return print_error(error),
+                },
+                Err(error) => return print_error(error),
+            };
+            print_value(&value, json_output, "workspace slept");
+        }
+        WorkspaceAction::Archive(IdArgs { id }) => {
+            return set_workspace_archive_command(&runtime, json_output, id, true).await;
+        }
+        WorkspaceAction::Restore(IdArgs { id }) => {
+            return set_workspace_archive_command(&runtime, json_output, id, false).await;
+        }
+        WorkspaceAction::SectionList => {
+            let store = match open_store(&runtime).await {
+                Ok(store) => store,
+                Err(error) => return print_error(error),
+            };
+            match store.list_workspace_sections().await {
+                Ok(items) => print_value(
+                    &json!({"kind": "workspaceSections", "items": items, "filters": {}}),
+                    json_output,
+                    "workspace sections listed",
+                ),
+                Err(error) => return print_error(error),
+            }
+        }
+        WorkspaceAction::SectionCreate(args) => {
+            let payload = json!({"name": args.name, "workspaceId": args.workspace_id});
+            match runtime_host_or_store(
+                &runtime,
+                "workspaceSection.create",
+                &payload,
+                |store| async move {
+                    store
+                        .create_workspace_section(&args.name, &args.workspace_id)
+                        .await
+                },
+            )
+            .await
+            {
+                Ok(section) => print_value(&section, json_output, "workspace section created"),
+                Err(error) => return print_error(error),
+            }
+        }
+        WorkspaceAction::SectionSet(args) => {
+            if args.section_id.is_none() == !args.clear {
+                eprintln!("Specify exactly one of --section-id or --clear.");
+                return USAGE_EXIT_CODE;
+            }
+            let payload = json!({"workspaceId": args.workspace_id, "sectionId": args.section_id});
+            match runtime_host_or_store_unit(
+                &runtime,
+                "workspaceSection.setForWorkspace",
+                &payload,
+                |store| async move {
+                    store
+                        .set_workspace_section(&args.workspace_id, args.section_id.as_deref())
+                        .await
+                },
+            )
+            .await
+            {
+                Ok(()) => print_value(&payload, json_output, "workspace section changed"),
+                Err(error) => return print_error(error),
+            }
+        }
+        WorkspaceAction::SectionRemove(IdArgs { id }) => {
+            let payload = json!({"id": id});
+            match runtime_host_or_store_unit(
+                &runtime,
+                "workspaceSection.remove",
+                &payload,
+                |store| async move { store.remove_workspace_section(&id).await },
+            )
+            .await
+            {
+                Ok(()) => print_value(&payload, json_output, "workspace section removed"),
+                Err(error) => return print_error(error),
+            }
+        }
         WorkspaceAction::Link(args) => {
             let payload = json!({
                 "parentWorkspaceId": args.parent_workspace_id,
@@ -639,6 +821,35 @@ async fn run_workspace_command(command: WorkspaceCommand) -> i32 {
     0
 }
 
+async fn set_workspace_archive_command(
+    runtime: &RuntimeDirArgs,
+    json_output: bool,
+    id: String,
+    archived: bool,
+) -> i32 {
+    let payload = json!({"id": id, "archived": archived});
+    match runtime_host_or_store(
+        runtime,
+        "workspace.setArchived",
+        &payload,
+        |store| async move { store.set_workspace_archived(&id, archived).await },
+    )
+    .await
+    {
+        Ok(workspace) => print_value(
+            &workspace,
+            json_output,
+            if archived {
+                "workspace archived"
+            } else {
+                "workspace restored"
+            },
+        ),
+        Err(error) => return print_error(error),
+    }
+    0
+}
+
 async fn run_tag_command(command: crate::cli::TagCommand) -> i32 {
     let runtime = command.runtime;
     let json_output = command.output.json;
@@ -654,6 +865,22 @@ async fn run_tag_command(command: crate::cli::TagCommand) -> i32 {
             },
             Err(error) => return print_error(error),
         },
+        crate::cli::TagAction::Create(args) => {
+            let name = args.name.trim();
+            if name.is_empty() || name.len() > 64 {
+                return print_error("Tag name must have 1 to 64 characters.");
+            }
+            let payload = json!({"name": name});
+            let value: Value = match runtime_host_required(&runtime).await {
+                Ok(mut client) => match client.request_value("workspaceTag.create", &payload).await
+                {
+                    Ok(value) => value,
+                    Err(error) => return print_error(error),
+                },
+                Err(error) => return print_error(error),
+            };
+            print_value(&value, json_output, "workspace tag created");
+        }
         crate::cli::TagAction::Upsert(args) => {
             let now = Utc::now();
             let tag = WorkspaceTag {

@@ -50,6 +50,14 @@ struct SavedProjects {
     roots: Vec<PathBuf>,
 }
 
+/// UI-only fold state. This is deliberately separate from the RuntimeStore
+/// project and workspace catalog (which remains authoritative).
+#[derive(Debug, Serialize, Deserialize)]
+struct SavedProjectTreeFolds {
+    version: u32,
+    roots: Vec<PathBuf>,
+}
+
 /// Only public Host session identities, never PTY text or credentials.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TerminalLayoutTab {
@@ -369,6 +377,73 @@ impl PreviewSessionStore {
             }
         }
         Ok(recent)
+    }
+
+    /// Clear an inactive Classic project from native recent hints without
+    /// deleting project files, Git worktrees, or local preview sessions.
+    pub fn forget_recent_workspace(&self, path: &Path) -> io::Result<()> {
+        let canonical = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        let roots = self
+            .recent_workspaces()?
+            .into_iter()
+            .filter(|root| root != &canonical)
+            .collect();
+        self.write_json(
+            &self.state_dir.join("recent.json"),
+            &RecentWorkspaces {
+                version: VERSION,
+                roots,
+            },
+        )
+    }
+
+    pub fn collapsed_project_roots(&self) -> io::Result<Vec<PathBuf>> {
+        let saved =
+            self.read_json::<SavedProjectTreeFolds>(&self.state_dir.join("project-folds.json"))?;
+        let Some(saved) = saved else {
+            return Ok(Vec::new());
+        };
+        if saved.version != VERSION {
+            return Ok(Vec::new());
+        }
+        let mut roots = Vec::new();
+        for path in saved.roots.into_iter().take(64) {
+            if let Ok(canonical) = dunce::canonicalize(&path) {
+                if canonical.is_dir() && canonical == path && !roots.contains(&canonical) {
+                    roots.push(canonical);
+                }
+            }
+        }
+        Ok(roots)
+    }
+
+    pub fn save_collapsed_project_roots(&self, roots: &[PathBuf]) -> io::Result<()> {
+        if roots.len() > 64 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Too many folded projects",
+            ));
+        }
+        let mut valid = Vec::new();
+        for path in roots {
+            let canonical = dunce::canonicalize(path)?;
+            if canonical != *path || !canonical.is_dir() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "Folded project root is invalid",
+                ));
+            }
+            if !valid.contains(&canonical) {
+                valid.push(canonical);
+            }
+        }
+        self.write_json(
+            &self.state_dir.join("project-folds.json"),
+            &SavedProjectTreeFolds {
+                version: VERSION,
+                roots: valid,
+            },
+        )
     }
 
     /// Pinned project roots, independent from most-recently-opened history.
@@ -860,6 +935,26 @@ mod tests {
         assert_eq!(reopened.active_tab(), Some(0));
         assert_eq!(reopened.content(), "modified on disk");
         assert!(reopened.directory().ends_with("src"));
+    }
+
+    #[test]
+    fn collapsed_project_roots_persist_across_restart_without_touching_runtime() {
+        let state = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        let root = dunce::canonicalize(project.path()).unwrap();
+        let store = PreviewSessionStore::new(state.path());
+        assert!(store.collapsed_project_roots().unwrap().is_empty());
+        store
+            .save_collapsed_project_roots(std::slice::from_ref(&root))
+            .unwrap();
+        let reopened = PreviewSessionStore::new(state.path());
+        assert_eq!(
+            reopened.collapsed_project_roots().unwrap(),
+            vec![root.clone()]
+        );
+        reopened.save_collapsed_project_roots(&[]).unwrap();
+        assert!(reopened.collapsed_project_roots().unwrap().is_empty());
+        assert!(root.is_dir());
     }
 
     #[test]

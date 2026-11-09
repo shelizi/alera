@@ -100,7 +100,32 @@ impl WorktreeManager {
     }
 
     pub fn create(&self, branch: &str) -> io::Result<PathBuf> {
+        self.create_for_branch(branch, false)
+    }
+
+    /// Check out an existing local branch without creating or resetting it.
+    /// Remote-tracking branches are never selected implicitly.
+    pub fn create_existing(&self, branch: &str) -> io::Result<PathBuf> {
+        self.create_for_branch(branch, true)
+    }
+
+    fn create_for_branch(&self, branch: &str, existing: bool) -> io::Result<PathBuf> {
         validate_branch(branch)?;
+        let repo = git2::Repository::discover(&self.repo_root)
+            .map_err(|error| io::Error::other(error.to_string()))?;
+        let branch_exists = repo.find_reference(&format!("refs/heads/{branch}")).is_ok();
+        if existing && !branch_exists {
+            return Err(io::Error::new(
+                ErrorKind::NotFound,
+                "The selected local branch does not exist",
+            ));
+        }
+        if !existing && branch_exists {
+            return Err(io::Error::new(
+                ErrorKind::AlreadyExists,
+                "Branch already exists; use the existing-branch option",
+            ));
+        }
         let entries = self.list()?;
         let primary = primary_worktree(&entries)?;
         if entries
@@ -138,14 +163,23 @@ impl WorktreeManager {
                 "Managed worktree folder already exists",
             ));
         }
-        self.git_args(&[
-            OsStr::new("worktree"),
-            OsStr::new("add"),
-            OsStr::new("-b"),
-            OsStr::new(branch),
-            path.as_os_str(),
-            OsStr::new("HEAD"),
-        ])?;
+        if existing {
+            self.git_args(&[
+                OsStr::new("worktree"),
+                OsStr::new("add"),
+                path.as_os_str(),
+                OsStr::new(branch),
+            ])?;
+        } else {
+            self.git_args(&[
+                OsStr::new("worktree"),
+                OsStr::new("add"),
+                OsStr::new("-b"),
+                OsStr::new(branch),
+                path.as_os_str(),
+                OsStr::new("HEAD"),
+            ])?;
+        }
         dunce::canonicalize(path)
     }
 
@@ -157,6 +191,20 @@ impl WorktreeManager {
         if !confirmed {
             return Err(forbidden("Worktree removal requires confirmation"));
         }
+        let target = self.preflight_remove(target)?;
+        // No --force: git itself also refuses dirty or locked worktrees, and
+        // the branch is intentionally left behind.
+        self.git_args(&[
+            OsStr::new("worktree"),
+            OsStr::new("remove"),
+            target.as_os_str(),
+        ])?;
+        Ok(())
+    }
+
+    /// Shared non-destructive safety gate for local and Host-managed removals.
+    /// Protect the primary/active worktree, out-of-tree paths and all changes.
+    pub fn preflight_remove(&self, target: &Path) -> io::Result<PathBuf> {
         let target = dunce::canonicalize(target)?;
         let entries = self.list()?;
         let primary = primary_worktree(&entries)?;
@@ -204,14 +252,7 @@ impl WorktreeManager {
         if !clean.trim().is_empty() {
             return Err(forbidden("Worktree has uncommitted or untracked files"));
         }
-        // No --force: git itself also refuses dirty or locked worktrees, and
-        // the branch is intentionally left behind.
-        self.git_args(&[
-            OsStr::new("worktree"),
-            OsStr::new("remove"),
-            target.as_os_str(),
-        ])?;
-        Ok(())
+        Ok(target)
     }
 
     fn git(&self, args: &[&str]) -> io::Result<String> {
@@ -405,7 +446,7 @@ fn is_windows_device_name(name: &str) -> bool {
     )
 }
 
-fn validate_branch(name: &str) -> io::Result<()> {
+pub(crate) fn validate_branch(name: &str) -> io::Result<()> {
     let valid = !name.is_empty()
         && name.len() <= 80
         && name != "@"
@@ -462,6 +503,24 @@ mod tests {
     }
 
     #[test]
+    fn host_removal_preflight_is_non_destructive_and_refuses_dirty_worktrees() {
+        let (_dir, manager) = initialized_repo();
+        let target = manager.create("test/preflight").unwrap();
+        assert_eq!(manager.preflight_remove(&target).unwrap(), target);
+        assert!(target.is_dir());
+        fs::write(target.join("UNTRACKED"), "keep my data").unwrap();
+        assert_eq!(
+            manager.preflight_remove(&target).unwrap_err().kind(),
+            ErrorKind::PermissionDenied
+        );
+        assert!(target.join("UNTRACKED").exists());
+        assert_eq!(
+            manager.preflight_remove(manager.root()).unwrap_err().kind(),
+            ErrorKind::PermissionDenied
+        );
+    }
+
+    #[test]
     fn lists_creates_and_removes_only_clean_managed_worktrees() {
         let (_dir, manager) = initialized_repo();
         let initial = manager.list().unwrap();
@@ -482,6 +541,43 @@ mod tests {
             .unwrap();
         assert!(branches.contains("feature/new-native"));
         assert_eq!(manager.list().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn existing_local_branch_checkout_reuses_branch_without_mutating_it() {
+        let (_dir, manager) = initialized_repo();
+        let repo = Repository::open(manager.root()).unwrap();
+        let head = repo.head().unwrap().peel_to_commit().unwrap();
+        let original_commit = head.id();
+        repo.branch("feature/existing", &head, false).unwrap();
+        drop(head);
+        drop(repo);
+
+        assert_eq!(
+            manager
+                .create_existing("feature/missing")
+                .unwrap_err()
+                .kind(),
+            ErrorKind::NotFound
+        );
+        assert_eq!(
+            manager.create("feature/existing").unwrap_err().kind(),
+            ErrorKind::AlreadyExists
+        );
+        let path = manager.create_existing("feature/existing").unwrap();
+        assert!(manager.list().unwrap().iter().any(|entry| {
+            entry.path == path && entry.branch.as_deref() == Some("feature/existing")
+        }));
+        assert!(manager.create_existing("feature/existing").is_err());
+        manager.remove(&path, true).unwrap();
+
+        let repo = Repository::open(manager.root()).unwrap();
+        assert_eq!(
+            repo.find_reference("refs/heads/feature/existing")
+                .unwrap()
+                .target(),
+            Some(original_commit)
+        );
     }
 
     #[test]

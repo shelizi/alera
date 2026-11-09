@@ -4,9 +4,10 @@ mod native_action_dialog_ui;
 mod native_components;
 mod native_git_favorites_ui;
 mod native_popup_ui;
+mod native_project_sidebar_ui;
 mod native_settings_catalog_ui;
-mod native_shared_settings_ui;
 mod native_settings_ui;
+mod native_shared_settings_ui;
 mod native_ui_icons;
 mod native_ui_theme;
 mod quick_open_ui;
@@ -40,19 +41,22 @@ use alera_gpui_desktop::mcp_ui_bridge::{
 };
 use alera_gpui_desktop::mcp_workspace_creation::HostManagedWorkspaceRequest;
 use alera_gpui_desktop::model::WorkbenchModel;
-use alera_gpui_desktop::native_modal::NativeModalSize;
 use alera_gpui_desktop::native_i18n::UiLocale;
+use alera_gpui_desktop::native_modal::NativeModalSize;
 use alera_gpui_desktop::native_settings::{NativeSettings, NativeSettingsStore};
 use alera_gpui_desktop::project_search::{ContentMatch, ProjectSearch};
-use alera_gpui_desktop::project_tree::{collect_project_tree, ProjectTreeGroup};
+use alera_gpui_desktop::project_tree::{
+    collect_project_tree_with_registered, sidebar_workspaces_for_group, ProjectTreeGroup,
+};
 use alera_gpui_desktop::runtime_bridge::RuntimeCliBridge;
+use alera_gpui_desktop::runtime_catalog::RuntimeCatalog;
 use alera_gpui_desktop::session::{PreviewSessionStore, TerminalLayout, TerminalLayoutTab};
 use alera_gpui_desktop::terminal::{
     encode_terminal_key, estimate_terminal_viewport_with_line_height, raw_key_reply_may_drain,
     select_registered_host_workspace, terminal_ime_anchor_with_line_height, TerminalAutoResizeGate,
-    TerminalCreateFlow,
-    TerminalCreateTick, TerminalDock, TerminalLineSelection, TerminalPollCadence, TerminalPollGate,
-    TerminalTabContextTarget, TerminalViewMode, TerminalViewportProposal, HOST_SESSION_LIST_SCOPE,
+    TerminalCreateFlow, TerminalCreateTick, TerminalDock, TerminalLineSelection,
+    TerminalPollCadence, TerminalPollGate, TerminalTabContextTarget, TerminalViewMode,
+    TerminalViewportProposal, HOST_SESSION_LIST_SCOPE,
 };
 use alera_gpui_desktop::terminal_panes::{TerminalPaneLayout, TerminalSplitDirection};
 use alera_gpui_desktop::terminal_stream_bridge::{
@@ -71,6 +75,7 @@ use alera_gpui_desktop::workbench_panes::{PaneAxis, PaneSlot, WorkbenchPaneLayou
 use alera_gpui_desktop::workbench_tabs::{
     WorkbenchTab, WorkbenchTabIdentity, WorkbenchTabKind, WorkbenchTabs,
 };
+use alera_gpui_desktop::workspace_sidebar_order::order_worktree_rows;
 use alera_gpui_desktop::workspace_tree::WorkspaceTree;
 use alera_gpui_desktop::worktree_manager::{WorktreeEntry, WorktreeManager};
 use editor_ui::{bind_editor_keys, NativeEditor};
@@ -332,6 +337,9 @@ struct Workbench {
     recent_workspaces: Vec<PathBuf>,
     saved_projects: Vec<PathBuf>,
     project_tree_groups: Vec<ProjectTreeGroup>,
+    runtime_catalog: Option<RuntimeCatalog>,
+    runtime_catalog_error: Option<String>,
+    sidebar_pending_action: Option<String>,
     collapsed_project_roots: HashSet<PathBuf>,
     project_tree_loading: bool,
     project_tree_request: u64,
@@ -341,6 +349,8 @@ struct Workbench {
     worktree_loading: bool,
     worktree_busy: bool,
     worktree_create_input: Option<Entity<QuickOpenInput>>,
+    worktree_create_root: Option<PathBuf>,
+    worktree_create_from_existing: bool,
     worktree_delete_pending: Option<PathBuf>,
     picking_workspace: bool,
     quick_open: Option<Entity<QuickOpenInput>>,
@@ -530,19 +540,50 @@ impl Workbench {
         let saved = self.saved_projects.clone();
         let recent = self.recent_workspaces.clone();
         let active = self.model.root().to_path_buf();
+        let bridge = self.runtime_bridge.clone();
         let generation = self.workspace_generation;
         self.project_tree_request = self.project_tree_request.wrapping_add(1);
         let request = self.project_tree_request;
         self.project_tree_loading = true;
         cx.spawn(async move |view, cx| {
-            let groups = cx
-                .background_spawn(async move { collect_project_tree(&saved, &recent, &active) })
+            let (groups, runtime_result) = cx
+                .background_spawn(async move {
+                    let runtime_result = bridge.map(|bridge| bridge.list_runtime_catalog());
+                    let registered = runtime_result
+                        .as_ref()
+                        .and_then(|result| result.as_ref().ok())
+                        .map(|catalog| {
+                            catalog
+                                .projects
+                                .iter()
+                                .map(|project| project.root.clone())
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default();
+                    let groups =
+                        collect_project_tree_with_registered(&saved, &recent, &registered, &active);
+                    (groups, runtime_result)
+                })
                 .await;
             view.update(cx, |view, cx| {
                 if view.workspace_generation != generation || view.project_tree_request != request {
                     return;
                 }
                 view.project_tree_groups = groups;
+                match runtime_result {
+                    Some(Ok(catalog)) => {
+                        view.runtime_catalog = Some(catalog);
+                        view.runtime_catalog_error = None;
+                    }
+                    Some(Err(error)) => {
+                        view.runtime_catalog = None;
+                        view.runtime_catalog_error = Some(error.to_string());
+                    }
+                    None => {
+                        view.runtime_catalog = None;
+                        view.runtime_catalog_error = Some("Classic Alera CLI unavailable".into());
+                    }
+                }
                 view.project_tree_loading = false;
                 cx.notify();
             })
@@ -562,10 +603,9 @@ impl Workbench {
         }
         // Explorer preferences are shared with Classic. Never optimistically
         // mutate the tree or write Native JSON before Host CAS acknowledges.
-        if previous.show_hidden != next.show_hidden
-            && previous.show_ignored != next.show_ignored
-        {
-            self.model.set_status("Change one Explorer visibility option at a time");
+        if previous.show_hidden != next.show_hidden && previous.show_ignored != next.show_ignored {
+            self.model
+                .set_status("Change one Explorer visibility option at a time");
             cx.notify();
             return;
         }
@@ -2372,12 +2412,40 @@ impl Workbench {
     }
 
     fn toggle_worktree_creator(&mut self, cx: &mut Context<Self>) {
-        self.worktree_create_input = if self.worktree_create_input.is_some() {
-            None
+        if self.worktree_create_input.is_some() {
+            self.worktree_create_input = None;
+            self.worktree_create_root = None;
+            self.worktree_create_from_existing = false;
         } else {
-            Some(cx.new(|cx| QuickOpenInput::with_placeholder("feature/new-branch", cx)))
-        };
+            self.begin_worktree_for_project(self.model.root().to_path_buf(), cx);
+        }
         self.worktree_delete_pending = None;
+        cx.notify();
+    }
+
+    fn begin_worktree_for_project(&mut self, root: PathBuf, cx: &mut Context<Self>) {
+        if self.worktree_busy || self.mcp_workspace_create_busy {
+            return;
+        }
+        let project_root = self
+            .project_tree_groups
+            .iter()
+            .find(|group| {
+                group.root == root || group.worktrees.iter().any(|entry| entry.path == root)
+            })
+            .map(|group| group.root.clone())
+            .unwrap_or(root);
+        if WorktreeManager::discover(&project_root).is_err() {
+            self.model
+                .set_status("Only Git projects can create a Worktree");
+            cx.notify();
+            return;
+        }
+        self.worktree_create_root = Some(project_root);
+        self.worktree_create_from_existing = false;
+        self.worktree_create_input =
+            Some(cx.new(|cx| QuickOpenInput::with_placeholder("feature/new-branch", cx)));
+        self.show_project_management = true;
         cx.notify();
     }
 
@@ -2392,13 +2460,46 @@ impl Workbench {
             return;
         };
         let branch = input.read(cx).query().trim().to_owned();
-        let root = self.model.root().to_path_buf();
+        let root = self
+            .worktree_create_root
+            .clone()
+            .unwrap_or_else(|| self.model.root().to_path_buf());
+        let use_existing = self.worktree_create_from_existing;
+        let registered = self
+            .runtime_catalog
+            .as_ref()
+            .and_then(|catalog| catalog.projects.iter().find(|project| project.root == root))
+            .map(|project| project.id.clone());
+        if self.runtime_bridge.is_some() && self.runtime_catalog.is_none() {
+            self.model.set_status(
+                "Cannot verify Classic registry; refresh projects before creating a Worktree",
+            );
+            cx.notify();
+            return;
+        }
+        let bridge = self.runtime_bridge.clone();
         let generation = self.workspace_generation;
         self.worktree_busy = true;
         cx.spawn(async move |view, cx| {
             let result = cx
                 .background_spawn(async move {
-                    WorktreeManager::discover(&root).and_then(|manager| manager.create(&branch))
+                    if let Some(project_id) = registered {
+                        let bridge = bridge.ok_or_else(|| {
+                            std::io::Error::new(
+                                std::io::ErrorKind::NotConnected,
+                                "Classic Host required for managed worktree",
+                            )
+                        })?;
+                        bridge.create_managed_workspace(&project_id, &root, &branch, use_existing)
+                    } else {
+                        WorktreeManager::discover(&root).and_then(|manager| {
+                            if use_existing {
+                                manager.create_existing(&branch)
+                            } else {
+                                manager.create(&branch)
+                            }
+                        })
+                    }
                 })
                 .await;
             view.update(cx, |view, cx| {
@@ -2409,6 +2510,8 @@ impl Workbench {
                 match result {
                     Ok(path) => {
                         view.worktree_create_input = None;
+                        view.worktree_create_root = None;
+                        view.worktree_create_from_existing = false;
                         view.switch_workspace(path, cx);
                         view.refresh_worktrees(cx);
                     }
@@ -2793,7 +2896,12 @@ impl Workbench {
             self.file_index = None;
             self.file_index_loading = false;
             self.file_index_request = self.file_index_request.wrapping_add(1);
-            if !self.explorer_filter_input.read(cx).query().trim().is_empty()
+            if !self
+                .explorer_filter_input
+                .read(cx)
+                .query()
+                .trim()
+                .is_empty()
                 || self.quick_open.is_some()
             {
                 self.ensure_file_index(cx);
@@ -3932,8 +4040,11 @@ impl Workbench {
             // Same opt-in as Classic. Identity/stale-output checks remain in
             // copy_primary_terminal_text, so a changed Host frame cannot
             // leak an old selection into the OS clipboard.
-            if self.settings_extra_values.get("terminal.clipboardOnSelect")
-                .and_then(serde_json::Value::as_bool) == Some(true)
+            if self
+                .settings_extra_values
+                .get("terminal.clipboardOnSelect")
+                .and_then(serde_json::Value::as_bool)
+                == Some(true)
             {
                 self.copy_primary_terminal_text(true, cx);
             } else {
@@ -4059,7 +4170,9 @@ impl Workbench {
             else {
                 return false;
             };
-            if !self.mixed_panes.authorizes_terminal_input(pane, &active_target)
+            if !self
+                .mixed_panes
+                .authorizes_terminal_input(pane, &active_target)
                 || !self.terminals.context_target_is_live(&active_target)
             {
                 return false;
@@ -5224,7 +5337,11 @@ impl Workbench {
         let mut disconnected = false;
         for update in updates {
             match update {
-                StreamViewUpdate::RecoveryReady { session_id, workspace_id, tab_id } => {
+                StreamViewUpdate::RecoveryReady {
+                    session_id,
+                    workspace_id,
+                    tab_id,
+                } => {
                     // Only this still-open, same-workspace preview can
                     // authorize an inventory refresh after Host recovery.
                     // Do not mark a tab running or send input on the basis
@@ -5466,12 +5583,14 @@ impl Render for Workbench {
             });
         }
         let terminal_font_size = self.native_settings.terminal_font_size as f32;
-        let terminal_font_family = self.settings_extra_values
+        let terminal_font_family = self
+            .settings_extra_values
             .get("terminal.fontFamily")
             .and_then(serde_json::Value::as_str)
             .unwrap_or("JetBrains Mono")
             .to_owned();
-        let terminal_line_height = self.settings_extra_values
+        let terminal_line_height = self
+            .settings_extra_values
             .get("terminal.lineHeight")
             .and_then(serde_json::Value::as_f64)
             .unwrap_or(1.3) as f32;
@@ -5677,6 +5796,9 @@ impl Render for Workbench {
             })
             .collect();
         let project_tree_loading = self.project_tree_loading;
+        let runtime_catalog = self.runtime_catalog.clone();
+        let runtime_catalog_error = self.runtime_catalog_error.clone();
+        let sidebar_pending_action = self.sidebar_pending_action.clone();
         let worktree_rows: Vec<_> = self
             .worktrees
             .iter()
@@ -5688,6 +5810,8 @@ impl Render for Workbench {
         let worktree_loading = self.worktree_loading;
         let worktree_busy = self.worktree_busy;
         let worktree_create_input = self.worktree_create_input.clone();
+        let worktree_create_root = self.worktree_create_root.clone();
+        let worktree_create_from_existing = self.worktree_create_from_existing;
         let worktree_delete_pending = self.worktree_delete_pending.clone();
         let runtime_status = self.runtime_status.clone();
         let runtime_loading = self.runtime_loading;
@@ -5827,8 +5951,10 @@ impl Render for Workbench {
             .and_then(|index| self.terminals.tabs.get(index))
             .and_then(|tab| {
                 terminal_ime_anchor_with_line_height(
-                    tab.screen.cursor(), primary_width,
-                    (primary_height - TAB_STRIP_HEIGHT).max(24.0), terminal_font_size,
+                    tab.screen.cursor(),
+                    primary_width,
+                    (primary_height - TAB_STRIP_HEIGHT).max(24.0),
+                    terminal_font_size,
                     terminal_line_height,
                 )
             })
@@ -5849,9 +5975,12 @@ impl Render for Workbench {
                         } else {
                             1.0
                         };
-                    if let Some((cols, rows)) =
-                        estimate_terminal_viewport_with_line_height(width, height, terminal_font_size, terminal_line_height)
-                    {
+                    if let Some((cols, rows)) = estimate_terminal_viewport_with_line_height(
+                        width,
+                        height,
+                        terminal_font_size,
+                        terminal_line_height,
+                    ) {
                         proposed_viewports.push(TerminalViewportProposal {
                             target: target.clone(),
                             cols,
@@ -5874,9 +6003,12 @@ impl Render for Workbench {
                         let height = primary_height
                             / if terminal_split_horizontal { 1.0 } else { 2.0 }
                             - 28.0;
-                        if let Some((cols, rows)) =
-                            estimate_terminal_viewport_with_line_height(width, height, terminal_font_size, terminal_line_height)
-                        {
+                        if let Some((cols, rows)) = estimate_terminal_viewport_with_line_height(
+                            width,
+                            height,
+                            terminal_font_size,
+                            terminal_line_height,
+                        ) {
                             proposed_viewports.push(TerminalViewportProposal {
                                 target,
                                 cols,
@@ -5901,9 +6033,12 @@ impl Render for Workbench {
                         let width = content_width / if split_width { 2.0 } else { 1.0 };
                         let height = content_height / if split_height { 2.0 } else { 1.0 }
                             - TAB_STRIP_HEIGHT;
-                        if let Some((cols, rows)) =
-                            estimate_terminal_viewport_with_line_height(width, height, terminal_font_size, terminal_line_height)
-                        {
+                        if let Some((cols, rows)) = estimate_terminal_viewport_with_line_height(
+                            width,
+                            height,
+                            terminal_font_size,
+                            terminal_line_height,
+                        ) {
                             proposed_viewports.push(TerminalViewportProposal {
                                 target: target.clone(),
                                 cols,
@@ -7938,6 +8073,14 @@ impl Render for Workbench {
                                                         }))),
                                             ),
                                     )
+                                    .child(if let Some(error) = runtime_catalog_error {
+                                        div().text_xs().text_color(rgb(MUTED))
+                                            .child(format!("Local fallback · {error}"))
+                                            .into_any_element()
+                                    } else {
+                                        div().text_xs().text_color(rgb(MUTED))
+                                            .child("Classic RuntimeStore · synced").into_any_element()
+                                    })
                                     .child(
                                         div()
                                             .id("project-tree-scroll")
@@ -7949,7 +8092,16 @@ impl Render for Workbench {
                                                 let fold_root = group.root.clone();
                                                 let current = group.is_active;
                                                 let pinned = group.is_saved;
-                                                let title = group.label;
+                                                let project_context_root = group.root.clone();
+                                                let worktree_project_root = group.root.clone();
+                                                let title = runtime_catalog.as_ref()
+                                                    .and_then(|catalog| catalog.projects.iter().find(|project| project.root == group.root))
+                                                    .map(|project| project.name.clone())
+                                                    .unwrap_or_else(|| group.label.clone());
+                                                let rows = order_worktree_rows(
+                                                    &sidebar_workspaces_for_group(&group, runtime_catalog.as_ref()),
+                                                    runtime_catalog.as_ref(),
+                                                );
                                                 let error = group.error;
                                                 div()
                                                     .id(("project-tree-group", index))
@@ -7989,18 +8141,45 @@ impl Render for Workbench {
                                                                     .child(format!("{}{}", if pinned { "★ " } else { "" }, title))
                                                                     .on_click(cx.listener(move |this, _, _, cx| {
                                                                         this.switch_workspace(root.clone(), cx);
-                                                                    })),
+                                                                    }))
+                                                                    .context_menu(Self::sidebar_project_context_menu(
+                                                                        cx.entity().downgrade(), project_context_root, pinned,
+                                                                    )),
                                                             ),
                                                     )
-                                                    .children(group.worktrees.into_iter().take(if collapsed { 0 } else { 14 }).enumerate().map(|(child_index, entry)| {
+                                                    .children(rows.into_iter().take(if collapsed { 0 } else { 96 }).enumerate().map(|(child_index, row)| {
+                                                        let entry = row.entry;
+                                                        let section_header = row.section_header;
+                                                        let depth = row.depth;
                                                         let target = entry.path.clone();
-                                                        let active = workspace_root.starts_with(&target);
-                                                        let label = entry.branch.unwrap_or_else(|| {
+                                                        let active = workspace_root == target;
+                                                        let menu_root = worktree_project_root.clone();
+                                                        let menu_path = target.clone();
+                                                        let menu_catalog = runtime_catalog.clone();
+                                                        let menu_confirmation = sidebar_pending_action.clone();
+                                                        let metadata = runtime_catalog.as_ref().and_then(|catalog|
+                                                            catalog.workspaces.iter().find(|workspace| workspace.path == target)
+                                                        );
+                                                        let label = metadata.map(|workspace| {
+                                                            let mut text = workspace.name.clone();
+                                                            if workspace.is_pinned { text.push_str(" ★"); }
+                                                            if workspace.is_archived { text.push_str(" (archived)"); }
+                                                            if !workspace.tag_names.is_empty() { text.push_str(&format!(" [{}]", workspace.tag_names.join(", "))); }
+                                                            text
+                                                        }).unwrap_or_else(|| entry.branch.unwrap_or_else(|| {
                                                             if entry.detached { "Detached HEAD".into() } else { "Unnamed".into() }
-                                                        });
+                                                        }));
                                                         div()
-                                                            .id(("project-tree-worktree", index * 16 + child_index))
-                                                            .pl_4()
+                                                            .id(("project-tree-worktree-container", index * 128 + child_index))
+                                                            .flex().flex_col()
+                                                            .child(if let Some(section) = section_header {
+                                                                div().pl_3().pt_1().text_xs()
+                                                                    .text_color(rgb(MUTED))
+                                                                    .child(section).into_any_element()
+                                                            } else { div().h(px(0.0)).into_any_element() })
+                                                            .child(div()
+                                                            .id(("project-tree-worktree", index * 128 + child_index))
+                                                            .pl(px(16.0 + depth.min(8) as f32 * 14.0))
                                                             .py_1()
                                                             .bg(rgb(if active { ACTIVE } else { PANEL }))
                                                             .hover(|style| style.bg(rgb(ACTIVE)))
@@ -8010,12 +8189,16 @@ impl Render for Workbench {
                                                             .child(format!(
                                                                 "{} {} {}",
                                                                 if active { "●" } else { "○" },
-                                                                if entry.is_primary { "main:" } else { "worktree:" },
+                                                                if depth > 0 { "↳" } else if entry.is_primary { "main:" } else { "worktree:" },
                                                                 label
                                                             ))
                                                             .on_click(cx.listener(move |this, _, _, cx| {
                                                                 this.switch_workspace(target.clone(), cx);
                                                             }))
+                                                            .context_menu(Self::sidebar_workspace_context_menu(
+                                                                cx.entity().downgrade(), menu_root, menu_path,
+                                                                metadata.cloned(), menu_catalog, menu_confirmation, active,
+                                                            )))
                                                     }))
                                                     .child(if let Some(error) = error {
                                                         div().text_xs().text_color(rgb(MUTED))
@@ -8173,14 +8356,32 @@ impl Render for Workbench {
                                     .flex()
                                     .flex_col()
                                     .gap_1()
+                                    .child(div().text_xs().text_color(rgb(MUTED))
+                                        .child(format!("Project: {}", worktree_create_root.as_deref()
+                                            .unwrap_or(workspace_root.as_path()).display())))
                                     .child(input)
+                                    .child(
+                                        div().id("worktree-create-branch-mode")
+                                            .cursor_pointer().text_xs().text_color(rgb(MUTED))
+                                            .child(if worktree_create_from_existing {
+                                                "Use existing local branch · change"
+                                            } else {
+                                                "Create new local branch · change"
+                                            })
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.worktree_create_from_existing = !this.worktree_create_from_existing;
+                                                cx.notify();
+                                            }))
+                                    )
                                     .child(
                                         div()
                                             .id("worktree-create-confirm")
                                             .cursor_pointer()
                                             .text_sm()
                                             .text_color(rgb(TEXT))
-                                            .child(if worktree_busy { "Creating…" } else { "Create branch + worktree" })
+                                            .child(if worktree_busy { "Creating…" } else if worktree_create_from_existing {
+                                                "Checkout existing branch into Worktree"
+                                            } else { "Create branch + Worktree" })
                                             .on_click(cx.listener(|this, _, _, cx| {
                                                 this.create_worktree(cx);
                                             })),
@@ -8617,31 +8818,47 @@ fn main() {
                     let view = cx.new(|cx| {
                         let terminal_input = cx.new(QuickOpenInput::terminal);
                         let secondary_terminal_input = cx.new(QuickOpenInput::terminal);
-                        cx.observe_in(&terminal_input, window, |view: &mut Workbench, input, window, cx| {
-                            // GPUI TextInput delivers ASCII and finalized IME
-                            // characters here. Composing text never enters a
-                            // Host until its native input has committed while
-                            // still owning the actual window keyboard focus.
-                            let has_os_focus = input.read(cx).focus_handle(cx).is_focused(window);
-                            let committed =
-                                input.update(cx, |input, _| input.take_terminal_committed());
-                            for text in committed {
-                                view.enqueue_terminal_ime_text_for_pane(
-                                    PaneSlot::Primary, has_os_focus, text, cx,
-                                );
-                            }
-                        })
+                        cx.observe_in(
+                            &terminal_input,
+                            window,
+                            |view: &mut Workbench, input, window, cx| {
+                                // GPUI TextInput delivers ASCII and finalized IME
+                                // characters here. Composing text never enters a
+                                // Host until its native input has committed while
+                                // still owning the actual window keyboard focus.
+                                let has_os_focus =
+                                    input.read(cx).focus_handle(cx).is_focused(window);
+                                let committed =
+                                    input.update(cx, |input, _| input.take_terminal_committed());
+                                for text in committed {
+                                    view.enqueue_terminal_ime_text_for_pane(
+                                        PaneSlot::Primary,
+                                        has_os_focus,
+                                        text,
+                                        cx,
+                                    );
+                                }
+                            },
+                        )
                         .detach();
-                        cx.observe_in(&secondary_terminal_input, window, |view: &mut Workbench, input, window, cx| {
-                            let has_os_focus = input.read(cx).focus_handle(cx).is_focused(window);
-                            let committed =
-                                input.update(cx, |input, _| input.take_terminal_committed());
-                            for text in committed {
-                                view.enqueue_terminal_ime_text_for_pane(
-                                    PaneSlot::Secondary, has_os_focus, text, cx,
-                                );
-                            }
-                        })
+                        cx.observe_in(
+                            &secondary_terminal_input,
+                            window,
+                            |view: &mut Workbench, input, window, cx| {
+                                let has_os_focus =
+                                    input.read(cx).focus_handle(cx).is_focused(window);
+                                let committed =
+                                    input.update(cx, |input, _| input.take_terminal_committed());
+                                for text in committed {
+                                    view.enqueue_terminal_ime_text_for_pane(
+                                        PaneSlot::Secondary,
+                                        has_os_focus,
+                                        text,
+                                        cx,
+                                    );
+                                }
+                            },
+                        )
                         .detach();
                         let explorer_filter_input =
                             cx.new(|cx| QuickOpenInput::with_placeholder("Filter files…", cx));
@@ -8664,11 +8881,16 @@ fn main() {
                         .detach();
                         let settings_menu_search =
                             cx.new(|cx| QuickOpenInput::with_placeholder("Search settings", cx));
-                        cx.observe(&settings_menu_search, |_, _, cx| cx.notify()).detach();
+                        cx.observe(&settings_menu_search, |_, _, cx| cx.notify())
+                            .detach();
                         let settings_exclusion_input = cx.new(|cx| {
-                            QuickOpenInput::with_placeholder("Add directory name (e.g. generated)", cx)
+                            QuickOpenInput::with_placeholder(
+                                "Add directory name (e.g. generated)",
+                                cx,
+                            )
                         });
-                        cx.observe(&settings_exclusion_input, |_, _, cx| cx.notify()).detach();
+                        cx.observe(&settings_exclusion_input, |_, _, cx| cx.notify())
+                            .detach();
                         let mut workbench = Workbench {
                             tree: WorkspaceTree::new_with_options(model.root(), initial_visibility)
                                 .ok(),
@@ -8701,6 +8923,9 @@ fn main() {
                             recent_workspaces,
                             saved_projects,
                             project_tree_groups: Vec::new(),
+                            runtime_catalog: None,
+                            runtime_catalog_error: None,
+                            sidebar_pending_action: None,
                             project_tree_loading: false,
                             project_tree_request: 0,
                             collapsed_project_roots: HashSet::new(),
@@ -8710,6 +8935,8 @@ fn main() {
                             worktree_loading: false,
                             worktree_busy: false,
                             worktree_create_input: None,
+                            worktree_create_root: None,
+                            worktree_create_from_existing: false,
                             worktree_delete_pending: None,
                             picking_workspace: false,
                             quick_open: None,

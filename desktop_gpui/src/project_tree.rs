@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 /// pass longer slices and scanning still stays bounded.
 const MAX_SAVED_PROJECTS: usize = 32;
 const MAX_RECENT_WORKSPACES: usize = 12;
+const MAX_REGISTERED_PROJECTS: usize = 64;
 
 /// One left-sidebar project row: a repository (or plain directory) plus all
 /// of its registered Git worktrees.
@@ -49,15 +50,58 @@ pub fn collect_project_tree(
     recent: &[PathBuf],
     active: &Path,
 ) -> Vec<ProjectTreeGroup> {
+    collect_project_tree_with_registered(saved, recent, &[], active)
+}
+
+/// Merge the canonical RuntimeStore registry without treating all registered
+/// projects as pinned; the native preview's saved set remains independent.
+pub fn collect_project_tree_with_registered(
+    saved: &[PathBuf],
+    recent: &[PathBuf],
+    registered: &[PathBuf],
+    active: &Path,
+) -> Vec<ProjectTreeGroup> {
     let mut state = State::default();
     for path in saved.iter().take(MAX_SAVED_PROJECTS) {
         collect_candidate(path, true, false, &mut state);
+    }
+    for path in registered.iter().take(MAX_REGISTERED_PROJECTS) {
+        collect_candidate(path, false, false, &mut state);
     }
     for path in recent.iter().take(MAX_RECENT_WORKSPACES) {
         collect_candidate(path, false, false, &mut state);
     }
     collect_candidate(active, false, true, &mut state);
     state.groups
+}
+
+/// Folder projects do not have Git worktree metadata, but their registered
+/// primary workspace still needs Classic workspace actions in Native.
+/// This view-only synthetic row can never be removed as a Git checkout.
+pub fn sidebar_workspaces_for_group(
+    group: &ProjectTreeGroup,
+    catalog: Option<&crate::runtime_catalog::RuntimeCatalog>,
+) -> Vec<WorktreeEntry> {
+    if !group.worktrees.is_empty() {
+        return group.worktrees.clone();
+    }
+    let has_registered_primary = catalog.is_some_and(|catalog| {
+        catalog
+            .workspaces
+            .iter()
+            .any(|workspace| workspace.path == group.root)
+    });
+    if !has_registered_primary {
+        return Vec::new();
+    }
+    vec![WorktreeEntry {
+        path: group.root.clone(),
+        branch: None,
+        detached: false,
+        locked: false,
+        prunable: false,
+        is_primary: true,
+    }]
 }
 
 #[derive(Default)]
@@ -184,6 +228,42 @@ mod tests {
         dunce::canonicalize(path).unwrap()
     }
 
+    #[test]
+    fn registered_plain_folder_has_primary_workspace_row_without_git() {
+        use crate::runtime_catalog::{RuntimeCatalog, RuntimeWorkspace};
+        let root = PathBuf::from("X:/plain-folder");
+        let group = ProjectTreeGroup {
+            root: root.clone(),
+            label: "plain-folder".into(),
+            is_saved: false,
+            is_active: false,
+            worktrees: Vec::new(),
+            error: None,
+        };
+        assert!(sidebar_workspaces_for_group(&group, None).is_empty());
+        let catalog = RuntimeCatalog {
+            workspaces: vec![RuntimeWorkspace {
+                id: "ws1".into(),
+                project_id: "p".into(),
+                name: "Folder".into(),
+                path: root.clone(),
+                branch: None,
+                is_pinned: false,
+                tag_names: vec![],
+                tag_ids: vec![],
+                section_id: None,
+                parent_workspace_id: None,
+                is_archived: false,
+            }],
+            ..Default::default()
+        };
+        let rows = sidebar_workspaces_for_group(&group, Some(&catalog));
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].path, root);
+        assert!(rows[0].is_primary);
+        assert!(!rows[0].locked);
+    }
+
     fn init_repo(dir: &Path) -> WorktreeManager {
         fs::create_dir_all(dir).unwrap();
         let repo = Repository::init(dir).unwrap();
@@ -269,6 +349,19 @@ mod tests {
         assert!(plain_group.error.is_none());
         assert_eq!(plain_group.label, "plain");
         assert!(!groups.iter().any(|group| group.root == linked));
+    }
+
+    #[test]
+    fn runtime_registered_projects_show_without_becoming_pinned() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = plain_dir(&temp.path().join("registered"));
+        let active = plain_dir(&temp.path().join("active"));
+        let groups = collect_project_tree_with_registered(&[], &[], &[root.clone()], &active);
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0].root, root);
+        assert!(!groups[0].is_saved);
+        assert!(!groups[0].is_active);
+        assert!(groups[1].is_active);
     }
 
     #[test]

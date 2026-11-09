@@ -485,8 +485,32 @@ pub enum ProjectAction {
     List,
     /// Register a local project path.
     Add(ProjectAddArgs),
+    /// Rename a registered project without changing its repository path.
+    Rename(ProjectRenameArgs),
+    /// Read existing shared project settings, or defaults if not configured.
+    ConfigShow(IdArgs),
+    /// Replace the shared project settings with validated JSON.
+    ConfigSet(ProjectConfigSetArgs),
+    /// Preview Classic Host project removal impact before confirmation.
+    RemovePreview(IdArgs),
     /// Remove a project and runtime-owned child records.
     Remove(IdArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct ProjectConfigSetArgs {
+    #[arg(long)]
+    pub id: String,
+    #[arg(long = "config-json")]
+    pub config_json: String,
+}
+
+#[derive(Debug, Args)]
+pub struct ProjectRenameArgs {
+    #[arg(long)]
+    pub id: String,
+    #[arg(long)]
+    pub name: String,
 }
 
 #[derive(Debug, Args)]
@@ -520,8 +544,16 @@ pub struct TagCommand {
 #[derive(Debug, Subcommand)]
 pub enum TagAction {
     List,
+    /// Create a new named shared tag, refusing a case-insensitive duplicate.
+    Create(TagCreateArgs),
     Upsert(TagUpsertArgs),
     Remove(IdArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct TagCreateArgs {
+    #[arg(long)]
+    pub name: String,
 }
 
 #[derive(Debug, Args)]

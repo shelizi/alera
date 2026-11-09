@@ -4,7 +4,7 @@
 use alera_core::child_process::windowless_command;
 use serde_json::Value;
 use std::ffi::OsString;
-use std::io::{self, Read, Write};
+use std::io::{self, ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Stdio};
 use std::thread;
@@ -23,6 +23,14 @@ pub fn terminal_cli_arguments(runtime_dir: &Path, args: &[OsString]) -> Vec<OsSt
     command.push(runtime_dir.as_os_str().to_os_string());
     command.extend(args.iter().cloned());
     command
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectRemovalPreview {
+    pub workspace_count: u64,
+    pub tab_count: u64,
+    pub active_session_count: u64,
+    pub has_config_override: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -364,6 +372,782 @@ impl RuntimeCliBridge {
         Ok(response)
     }
 
+    /// Query Classic's persistent RuntimeStore using the existing CLI.
+    /// Read-only; does not create an RPC session or start any Host.
+    pub fn list_runtime_catalog(&self) -> io::Result<crate::runtime_catalog::RuntimeCatalog> {
+        let projects = self.catalog_list_json("project")?;
+        let workspaces = self.catalog_list_json("workspace")?;
+        let tags = self.catalog_list_json("tag")?;
+        let sections = self.catalog_list_json("workspace-section")?;
+        let mut catalog = crate::runtime_catalog::parse_runtime_catalog(&projects, &workspaces)?;
+        crate::runtime_catalog::attach_runtime_tags(&mut catalog, &tags)?;
+        crate::runtime_catalog::attach_runtime_sections(&mut catalog, &sections)?;
+        Ok(catalog)
+    }
+
+    fn catalog_list_json(&self, noun: &str) -> io::Result<Value> {
+        if !matches!(noun, "project" | "workspace" | "tag" | "workspace-section") {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "Only read-only project/workspace listings are allowed",
+            ));
+        }
+        let mut command = windowless_command(&self.executable);
+        command
+            .arg(if noun == "workspace-section" {
+                "workspace"
+            } else {
+                noun
+            })
+            .arg("--json")
+            .arg("--runtime-dir")
+            .arg(&self.runtime_dir)
+            .arg(if noun == "workspace-section" {
+                "section-list"
+            } else {
+                "list"
+            });
+        if noun == "workspace" {
+            command.arg("--all");
+        }
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        let mut child = command.spawn()?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| io::Error::other("CLI catalog stdout pipe unavailable"))?;
+        const LIMIT: u64 = 512 * 1024;
+        let reader = thread::spawn(move || -> io::Result<Vec<u8>> {
+            let mut bytes = Vec::new();
+            stdout.take(LIMIT + 1).read_to_end(&mut bytes)?;
+            Ok(bytes)
+        });
+        let status = match wait_with_timeout(&mut child, PROBE_TIMEOUT) {
+            Ok(status) => status,
+            Err(error) => {
+                let _ = reader.join();
+                return Err(error);
+            }
+        };
+        let bytes = reader
+            .join()
+            .map_err(|_| io::Error::other("Catalog reader panicked"))??;
+        if bytes.len() as u64 > LIMIT {
+            return Err(io::Error::new(
+                ErrorKind::InvalidData,
+                "CLI catalog output too large",
+            ));
+        }
+        if !status.success() {
+            return Err(io::Error::other("Alera CLI catalog query failed"));
+        }
+        serde_json::from_slice(&bytes)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+    }
+
+    /// Use Classic's Host-managed create flow for registered projects.
+    /// The Host owns Git, workspace registration and setup; GPUI never falls
+    /// back to an unregistered Git checkout after a Host error.
+    pub fn create_managed_workspace(
+        &self,
+        project_id: &str,
+        project_root: &Path,
+        branch: &str,
+        reuse_existing_branch: bool,
+    ) -> io::Result<PathBuf> {
+        if project_id.is_empty()
+            || project_id.starts_with('-')
+            || project_id.len() > 128
+            || !project_id.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':')
+            })
+        {
+            return Err(io::Error::new(
+                ErrorKind::InvalidInput,
+                "Invalid project ID",
+            ));
+        }
+        crate::worktree_manager::validate_branch(branch)?;
+
+        let mut command = windowless_command(&self.executable);
+        command
+            .arg("workspace")
+            .arg("--json")
+            .arg("--runtime-dir")
+            .arg(&self.runtime_dir)
+            .arg("add")
+            .arg("--project-id")
+            .arg(project_id)
+            .arg("--branch")
+            .arg(branch);
+        if reuse_existing_branch {
+            command.arg("--reuse-existing-branch");
+        }
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        let mut child = command.spawn()?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| io::Error::other("Managed workspace create output unavailable"))?;
+        const LIMIT: u64 = 512 * 1024;
+        let reader = thread::spawn(move || -> io::Result<Vec<u8>> {
+            let mut bytes = Vec::new();
+            stdout.take(LIMIT + 1).read_to_end(&mut bytes)?;
+            Ok(bytes)
+        });
+        let status = match wait_with_timeout(&mut child, Duration::from_secs(180)) {
+            Ok(status) => status,
+            Err(error) => {
+                let _ = reader.join();
+                return Err(error);
+            }
+        };
+        let bytes = reader
+            .join()
+            .map_err(|_| io::Error::other("Managed workspace output reader panicked"))??;
+        if !status.success() {
+            return Err(io::Error::other(
+                "Classic Host rejected managed workspace creation",
+            ));
+        }
+        if bytes.len() as u64 > LIMIT {
+            return Err(io::Error::new(
+                ErrorKind::InvalidData,
+                "Managed workspace response too large",
+            ));
+        }
+        let result: Value = serde_json::from_slice(&bytes)
+            .map_err(|error| io::Error::new(ErrorKind::InvalidData, error))?;
+        let path = result
+            .pointer("/workspace/path")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                io::Error::new(ErrorKind::InvalidData, "Host omitted new workspace path")
+            })?;
+        let path = dunce::canonicalize(path)?;
+        let manager = crate::worktree_manager::WorktreeManager::discover(project_root)?;
+        if !manager
+            .list()?
+            .iter()
+            .any(|entry| entry.path == path && !entry.is_primary)
+        {
+            return Err(io::Error::new(
+                ErrorKind::InvalidData,
+                "Host response is not a registered linked Git worktree",
+            ));
+        }
+        Ok(path)
+    }
+
+    /// Sleep an inactive Classic workspace, closing Host-managed tabs/sessions
+    /// without deleting its branch, worktree or files. UI must confirm first.
+    pub fn sleep_registered_workspace(&self, workspace_id: &str) -> io::Result<()> {
+        validate_catalog_identifier(workspace_id)?;
+        let mut command = windowless_command(&self.executable);
+        command
+            .arg("workspace")
+            .arg("--json")
+            .arg("--runtime-dir")
+            .arg(&self.runtime_dir)
+            .arg("sleep")
+            .arg("--id")
+            .arg(workspace_id)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let mut child = command.spawn()?;
+        if !wait_with_timeout(&mut child, Duration::from_secs(60))?.success() {
+            return Err(io::Error::other("Classic Host workspace sleep refused"));
+        }
+        Ok(())
+    }
+
+    /// Archive/restore only the registered metadata; Git branch and files
+    /// are kept intact by Classic RuntimeStore.
+    pub fn set_workspace_archived(&self, workspace_id: &str, archived: bool) -> io::Result<()> {
+        validate_catalog_identifier(workspace_id)?;
+        let mut command = windowless_command(&self.executable);
+        command
+            .arg("workspace")
+            .arg("--json")
+            .arg("--runtime-dir")
+            .arg(&self.runtime_dir)
+            .arg(if archived { "archive" } else { "restore" })
+            .arg("--id")
+            .arg(workspace_id)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let mut child = command.spawn()?;
+        if !wait_with_timeout(&mut child, PROBE_TIMEOUT)?.success() {
+            return Err(io::Error::other("Classic workspace archive/restore failed"));
+        }
+        Ok(())
+    }
+
+    /// Move a registered workspace into an existing Classic section, or into
+    /// Others when section_id is None. Never create a duplicate local section.
+    pub fn set_workspace_section(
+        &self,
+        workspace_id: &str,
+        section_id: Option<&str>,
+    ) -> io::Result<()> {
+        validate_catalog_identifier(workspace_id)?;
+        if let Some(id) = section_id {
+            validate_catalog_identifier(id)?;
+        }
+        let mut command = windowless_command(&self.executable);
+        command
+            .arg("workspace")
+            .arg("--json")
+            .arg("--runtime-dir")
+            .arg(&self.runtime_dir)
+            .arg("section-set")
+            .arg("--workspace-id")
+            .arg(workspace_id);
+        if let Some(id) = section_id {
+            command.arg("--section-id").arg(id);
+        } else {
+            command.arg("--clear");
+        }
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let mut child = command.spawn()?;
+        if !wait_with_timeout(&mut child, PROBE_TIMEOUT)?.success() {
+            return Err(io::Error::other("Classic workspace section update failed"));
+        }
+        Ok(())
+    }
+
+    pub fn remove_workspace_section(&self, section_id: &str) -> io::Result<()> {
+        validate_catalog_identifier(section_id)?;
+        let mut command = windowless_command(&self.executable);
+        command
+            .arg("workspace")
+            .arg("--json")
+            .arg("--runtime-dir")
+            .arg(&self.runtime_dir)
+            .arg("section-remove")
+            .arg("--id")
+            .arg(section_id)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let mut child = command.spawn()?;
+        if !wait_with_timeout(&mut child, PROBE_TIMEOUT)?.success() {
+            return Err(io::Error::other("Classic section removal refused"));
+        }
+        Ok(())
+    }
+
+    pub fn create_workspace_section(&self, workspace_id: &str, name: &str) -> io::Result<()> {
+        validate_catalog_identifier(workspace_id)?;
+        validate_display_name(name)?;
+        if name.eq_ignore_ascii_case("Others") {
+            return Err(io::Error::new(
+                ErrorKind::InvalidInput,
+                "Others is a reserved section",
+            ));
+        }
+        let mut command = windowless_command(&self.executable);
+        command
+            .arg("workspace")
+            .arg("--json")
+            .arg("--runtime-dir")
+            .arg(&self.runtime_dir)
+            .arg("section-create")
+            .arg("--workspace-id")
+            .arg(workspace_id)
+            .arg("--name")
+            .arg(name)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let mut child = command.spawn()?;
+        if !wait_with_timeout(&mut child, PROBE_TIMEOUT)?.success() {
+            return Err(io::Error::other(
+                "Classic workspace section creation failed",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Change one registered RuntimeStore workspace only after a user action.
+    /// No direct SQLite writes, no Host startup, no Git worktree mutation.
+    pub fn set_workspace_pinned(&self, workspace_id: &str, pinned: bool) -> io::Result<()> {
+        if workspace_id.is_empty()
+            || workspace_id.starts_with('-')
+            || workspace_id.len() > 128
+            || !workspace_id.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':')
+            })
+        {
+            return Err(io::Error::new(
+                ErrorKind::InvalidInput,
+                "Invalid workspace ID",
+            ));
+        }
+        let mut command = windowless_command(&self.executable);
+        command
+            .arg("workspace")
+            .arg("--json")
+            .arg("--runtime-dir")
+            .arg(&self.runtime_dir)
+            .arg(if pinned { "pin" } else { "unpin" })
+            .arg("--id")
+            .arg(workspace_id)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let mut child = command.spawn()?;
+        let status = wait_with_timeout(&mut child, PROBE_TIMEOUT)?;
+        if !status.success() {
+            return Err(io::Error::other("Alera CLI workspace pin/unpin failed"));
+        }
+        Ok(())
+    }
+
+    /// Link or unlink existing Classic RuntimeStore workspaces without
+    /// moving their Git paths, Git branches, or native PTY ownership.
+    pub fn set_workspace_parent(
+        &self,
+        parent_id: &str,
+        child_id: &str,
+        link: bool,
+    ) -> io::Result<()> {
+        validate_catalog_identifier(parent_id)?;
+        validate_catalog_identifier(child_id)?;
+        if parent_id == child_id {
+            return Err(io::Error::new(
+                ErrorKind::InvalidInput,
+                "A workspace cannot be its own parent",
+            ));
+        }
+        let mut command = windowless_command(&self.executable);
+        command
+            .arg("workspace")
+            .arg("--json")
+            .arg("--runtime-dir")
+            .arg(&self.runtime_dir)
+            .arg(if link { "link" } else { "unlink" })
+            .arg("--parent-workspace-id")
+            .arg(parent_id)
+            .arg("--child-workspace-id")
+            .arg(child_id)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let mut child = command.spawn()?;
+        if !wait_with_timeout(&mut child, PROBE_TIMEOUT)?.success() {
+            return Err(io::Error::other(
+                "Classic workspace relation change rejected",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Create a globally shared Classic tag using Host uniqueness checks.
+    pub fn create_workspace_tag(&self, name: &str) -> io::Result<String> {
+        validate_display_name(name)?;
+        if name.len() > 64 {
+            return Err(io::Error::new(ErrorKind::InvalidInput, "Tag name too long"));
+        }
+        let mut command = windowless_command(&self.executable);
+        command
+            .arg("tag")
+            .arg("--json")
+            .arg("--runtime-dir")
+            .arg(&self.runtime_dir)
+            .arg("create")
+            .arg("--name")
+            .arg(name)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        let mut child = command.spawn()?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| io::Error::other("Tag creation output unavailable"))?;
+        const LIMIT: u64 = 16 * 1024;
+        let reader = thread::spawn(move || -> io::Result<Vec<u8>> {
+            let mut bytes = Vec::new();
+            stdout.take(LIMIT + 1).read_to_end(&mut bytes)?;
+            Ok(bytes)
+        });
+        let status = match wait_with_timeout(&mut child, PROBE_TIMEOUT) {
+            Ok(status) => status,
+            Err(error) => {
+                let _ = reader.join();
+                return Err(error);
+            }
+        };
+        let bytes = reader
+            .join()
+            .map_err(|_| io::Error::other("Tag reader panicked"))??;
+        if !status.success() || bytes.len() as u64 > LIMIT {
+            return Err(io::Error::other("Classic tag creation refused"));
+        }
+        let value: Value = serde_json::from_slice(&bytes)
+            .map_err(|error| io::Error::new(ErrorKind::InvalidData, error))?;
+        let id = value
+            .get("id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| io::Error::new(ErrorKind::InvalidData, "Created tag missing ID"))?;
+        validate_catalog_identifier(id)?;
+        Ok(id.to_string())
+    }
+
+    /// Remove a globally shared Classic tag only after native UI double confirmation.
+    /// Classic Host clears all workspace assignments in the same registry.
+    pub fn remove_global_tag(&self, tag_id: &str) -> io::Result<()> {
+        validate_catalog_identifier(tag_id)?;
+        let mut command = windowless_command(&self.executable);
+        command
+            .arg("tag")
+            .arg("--json")
+            .arg("--runtime-dir")
+            .arg(&self.runtime_dir)
+            .arg("remove")
+            .arg("--id")
+            .arg(tag_id)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let mut child = command.spawn()?;
+        if !wait_with_timeout(&mut child, PROBE_TIMEOUT)?.success() {
+            return Err(io::Error::other("Classic Host refused global tag removal"));
+        }
+        Ok(())
+    }
+
+    /// Assign or remove a Classic RuntimeStore workspace tag.
+    pub fn set_workspace_tag(
+        &self,
+        workspace_id: &str,
+        tag_id: &str,
+        assign: bool,
+    ) -> io::Result<()> {
+        validate_catalog_identifier(workspace_id)?;
+        validate_catalog_identifier(tag_id)?;
+        let mut command = windowless_command(&self.executable);
+        command
+            .arg("workspace")
+            .arg("--json")
+            .arg("--runtime-dir")
+            .arg(&self.runtime_dir)
+            .arg(if assign { "tag" } else { "untag" })
+            .arg("--workspace-id")
+            .arg(workspace_id)
+            .arg("--tag-id")
+            .arg(tag_id)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let mut child = command.spawn()?;
+        if !wait_with_timeout(&mut child, PROBE_TIMEOUT)?.success() {
+            return Err(io::Error::other("Classic workspace tag change rejected"));
+        }
+        Ok(())
+    }
+
+    /// Query Classic Host for removal impact, without modifying any project.
+    pub fn preview_project_removal(&self, project_id: &str) -> io::Result<ProjectRemovalPreview> {
+        validate_catalog_identifier(project_id)?;
+        let mut command = windowless_command(&self.executable);
+        command
+            .arg("project")
+            .arg("--json")
+            .arg("--runtime-dir")
+            .arg(&self.runtime_dir)
+            .arg("remove-preview")
+            .arg("--id")
+            .arg(project_id)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        let mut child = command.spawn()?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| io::Error::other("Remove preview stdout unavailable"))?;
+        const LIMIT: u64 = 16 * 1024;
+        let reader = thread::spawn(move || -> io::Result<Vec<u8>> {
+            let mut bytes = Vec::new();
+            stdout.take(LIMIT + 1).read_to_end(&mut bytes)?;
+            Ok(bytes)
+        });
+        let status = match wait_with_timeout(&mut child, PROBE_TIMEOUT) {
+            Ok(status) => status,
+            Err(error) => {
+                let _ = reader.join();
+                return Err(error);
+            }
+        };
+        let bytes = reader
+            .join()
+            .map_err(|_| io::Error::other("Remove preview reader panicked"))??;
+        if !status.success() || bytes.len() as u64 > LIMIT {
+            return Err(io::Error::other(
+                "Classic project remove preview unavailable",
+            ));
+        }
+        let value: Value = serde_json::from_slice(&bytes)
+            .map_err(|error| io::Error::new(ErrorKind::InvalidData, error))?;
+        if value.get("projectId").and_then(Value::as_str) != Some(project_id) {
+            return Err(io::Error::new(
+                ErrorKind::InvalidData,
+                "Removal preview identity mismatch",
+            ));
+        }
+        Ok(ProjectRemovalPreview {
+            workspace_count: value
+                .get("workspaceCount")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| io::Error::new(ErrorKind::InvalidData, "Missing workspace count"))?,
+            tab_count: value
+                .get("tabCount")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| io::Error::new(ErrorKind::InvalidData, "Missing tab count"))?,
+            active_session_count: value
+                .get("activeSessionCount")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| io::Error::new(ErrorKind::InvalidData, "Missing session count"))?,
+            has_config_override: value
+                .get("hasConfigOverride")
+                .and_then(Value::as_bool)
+                .ok_or_else(|| io::Error::new(ErrorKind::InvalidData, "Missing config flag"))?,
+        })
+    }
+
+    /// Forget an inactive Classic project record only, after preview has
+    /// been shown and repeated. Never remove project files or Git worktrees.
+    pub fn remove_project_record(
+        &self,
+        project_id: &str,
+        project_root: &Path,
+        preview: &ProjectRemovalPreview,
+    ) -> io::Result<()> {
+        validate_catalog_identifier(project_id)?;
+        if preview.active_session_count > 0 {
+            return Err(io::Error::new(
+                ErrorKind::PermissionDenied,
+                "Project has live Host sessions",
+            ));
+        }
+        if let Ok(manager) = crate::worktree_manager::WorktreeManager::discover(project_root) {
+            if manager.list()?.iter().any(|entry| !entry.is_primary) {
+                return Err(io::Error::new(
+                    ErrorKind::PermissionDenied,
+                    "Project has linked Git worktrees; remove these before forgetting the project",
+                ));
+            }
+        }
+        if &self.preview_project_removal(project_id)? != preview {
+            return Err(io::Error::new(
+                ErrorKind::WouldBlock,
+                "Project impact changed; review removal preview again",
+            ));
+        }
+        let mut command = windowless_command(&self.executable);
+        command
+            .arg("project")
+            .arg("--json")
+            .arg("--runtime-dir")
+            .arg(&self.runtime_dir)
+            .arg("remove")
+            .arg("--id")
+            .arg(project_id)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let mut child = command.spawn()?;
+        if !wait_with_timeout(&mut child, PROBE_TIMEOUT)?.success() {
+            return Err(io::Error::other("Classic Host refused project removal"));
+        }
+        Ok(())
+    }
+
+    /// Fetch Classic's entire project config for a first-class shared editor.
+    pub fn read_project_settings(&self, project_id: &str) -> io::Result<Value> {
+        validate_catalog_identifier(project_id)?;
+        let mut command = windowless_command(&self.executable);
+        command
+            .arg("project")
+            .arg("--json")
+            .arg("--runtime-dir")
+            .arg(&self.runtime_dir)
+            .arg("config-show")
+            .arg("--id")
+            .arg(project_id)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        let mut child = command.spawn()?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| io::Error::other("Config stdout unavailable"))?;
+        const LIMIT: u64 = 64 * 1024;
+        let reader = thread::spawn(move || -> io::Result<Vec<u8>> {
+            let mut bytes = Vec::new();
+            stdout.take(LIMIT + 1).read_to_end(&mut bytes)?;
+            Ok(bytes)
+        });
+        let status = match wait_with_timeout(&mut child, PROBE_TIMEOUT) {
+            Ok(status) => status,
+            Err(error) => {
+                let _ = reader.join();
+                return Err(error);
+            }
+        };
+        let bytes = reader
+            .join()
+            .map_err(|_| io::Error::other("Config reader panicked"))??;
+        if !status.success() {
+            return Err(io::Error::other("Classic project settings unavailable"));
+        }
+        if bytes.len() as u64 > LIMIT {
+            return Err(io::Error::new(
+                ErrorKind::InvalidData,
+                "Project config too large",
+            ));
+        }
+        let response: Value = serde_json::from_slice(&bytes)
+            .map_err(|error| io::Error::new(ErrorKind::InvalidData, error))?;
+        if response.get("kind").and_then(Value::as_str) != Some("projectConfig")
+            || response.get("projectId").and_then(Value::as_str) != Some(project_id)
+        {
+            return Err(io::Error::new(
+                ErrorKind::InvalidData,
+                "Project config response mismatched",
+            ));
+        }
+        response
+            .get("config")
+            .cloned()
+            .filter(Value::is_object)
+            .ok_or_else(|| io::Error::new(ErrorKind::InvalidData, "Project config JSON missing"))
+    }
+
+    pub fn write_project_settings(&self, project_id: &str, json: &str) -> io::Result<()> {
+        validate_catalog_identifier(project_id)?;
+        if json.is_empty() || json.len() > 32 * 1024 {
+            return Err(io::Error::new(
+                ErrorKind::InvalidInput,
+                "Invalid project config length",
+            ));
+        }
+        let parsed: Value = serde_json::from_str(json)
+            .map_err(|error| io::Error::new(ErrorKind::InvalidInput, error))?;
+        if !parsed.is_object() {
+            return Err(io::Error::new(
+                ErrorKind::InvalidInput,
+                "Project settings must be a JSON object",
+            ));
+        }
+        // The Alera CLI validates against the complete ProjectConfig type.
+        // Avoid enabling RuntimeStore/SQLx in the standalone GPUI binary.
+        let mut command = windowless_command(&self.executable);
+        command
+            .arg("project")
+            .arg("--json")
+            .arg("--runtime-dir")
+            .arg(&self.runtime_dir)
+            .arg("config-set")
+            .arg("--id")
+            .arg(project_id)
+            .arg("--config-json")
+            .arg(json)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let mut child = command.spawn()?;
+        if !wait_with_timeout(&mut child, PROBE_TIMEOUT)?.success() {
+            return Err(io::Error::other("Classic project config update refused"));
+        }
+        Ok(())
+    }
+
+    /// Rename an existing RuntimeStore record. Neither Git path nor branch is changed.
+    pub fn rename_catalog_record(&self, noun: &str, record_id: &str, name: &str) -> io::Result<()> {
+        if !matches!(noun, "project" | "workspace") {
+            return Err(io::Error::new(
+                ErrorKind::InvalidInput,
+                "Invalid catalog record kind",
+            ));
+        }
+        validate_catalog_identifier(record_id)?;
+        validate_display_name(name)?;
+        let mut command = windowless_command(&self.executable);
+        command
+            .arg(noun)
+            .arg("--json")
+            .arg("--runtime-dir")
+            .arg(&self.runtime_dir)
+            .arg("rename")
+            .arg("--id")
+            .arg(record_id)
+            .arg("--name")
+            .arg(name)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let mut child = command.spawn()?;
+        let status = wait_with_timeout(&mut child, PROBE_TIMEOUT)?;
+        if !status.success() {
+            return Err(io::Error::other(format!(
+                "Classic {noun} rename was rejected"
+            )));
+        }
+        Ok(())
+    }
+
+    /// Host-managed cleanup of a *registered* worktree, never a direct Git
+    /// prune. A local clean check is mandatory because Host removal uses a
+    /// force-capable Git API internally. Branches are always kept.
+    pub fn remove_registered_worktree(
+        &self,
+        workspace_id: &str,
+        project_root: &Path,
+        target: &Path,
+    ) -> io::Result<()> {
+        validate_catalog_identifier(workspace_id)?;
+        let manager = crate::worktree_manager::WorktreeManager::discover(project_root)?;
+        // Require the exact managed checkout under primary/.worktrees, a clean
+        // status, and no locked/stale checkout, without deleting anything yet.
+        manager.preflight_remove(target)?;
+        let mut command = windowless_command(&self.executable);
+        command
+            .arg("workspace")
+            .arg("--json")
+            .arg("--runtime-dir")
+            .arg(&self.runtime_dir)
+            .arg("remove")
+            .arg("--id")
+            .arg(workspace_id)
+            .arg("--keep-branch")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let mut child = command.spawn()?;
+        let status = wait_with_timeout(&mut child, Duration::from_secs(120))?;
+        if !status.success() {
+            return Err(io::Error::other(
+                "Classic Host refused managed Worktree removal",
+            ));
+        }
+        Ok(())
+    }
+
     /// Never start a host on behalf of the GPUI preview, and never read its
     /// control file's token. The CLI itself performs authenticated requests.
     pub fn probe(&self) -> io::Result<RuntimeStatus> {
@@ -418,6 +1202,36 @@ impl RuntimeCliBridge {
         }
         parse_status(&bytes)
     }
+}
+
+fn validate_catalog_identifier(id: &str) -> io::Result<()> {
+    if id.is_empty()
+        || id.starts_with('-')
+        || id.len() > 128
+        || !id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':'))
+    {
+        return Err(io::Error::new(
+            ErrorKind::InvalidInput,
+            "Invalid catalog record ID",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_display_name(name: &str) -> io::Result<()> {
+    if name.is_empty()
+        || name.len() > 256
+        || name.trim() != name
+        || name.chars().any(char::is_control)
+    {
+        return Err(io::Error::new(
+            ErrorKind::InvalidInput,
+            "Invalid catalog display name",
+        ));
+    }
+    Ok(())
 }
 
 /// `create` reaches the CLI only in the exact two-argument form produced by
