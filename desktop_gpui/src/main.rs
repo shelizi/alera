@@ -4043,7 +4043,21 @@ impl Workbench {
         ) else {
             return false;
         };
-        self.enqueue_terminal_text(encoded, cx)
+        let raw_ascii = !event.keystroke.modifiers.control
+            && !event.keystroke.modifiers.alt
+            && !event.keystroke.modifiers.platform
+            && encoded.len() == 1
+            && (encoded.as_bytes()[0].is_ascii_graphic() || encoded == " ");
+        let sent = self.enqueue_terminal_text(encoded.clone(), cx);
+        if sent && raw_ascii {
+            // A subsequent Windows TextInput callback may duplicate this
+            // exact KeyDown. Do not suppress TextInput unless KeyDown really
+            // reached the selected Host input queue.
+            self.terminal_input.update(cx, |input, _| {
+                input.note_terminal_ascii_key(&encoded);
+            });
+        }
+        sent
     }
 
     /// Do not let both native pane surfaces forward keys via the shared
@@ -7277,10 +7291,16 @@ impl Render for Workbench {
                                             .track_focus(&terminal_keyboard_focus)
                                             .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, window, cx| {
                                                 this.focus_primary_mixed_terminal(cx);
-                                                window.focus(&this.terminal_input.read(cx).focus_handle(cx), cx);
+                                                let focus = this.terminal_input.read(cx).focus_handle(cx);
+                                                window.focus(&focus, cx);
                                             }))
-                                            .on_mouse_up(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
+                                            .on_mouse_up(gpui::MouseButton::Left, cx.listener(|this, _, window, cx| {
                                                 this.finish_terminal_line_selection(cx);
+                                                // On Windows GPUI the pointer's default focus
+                                                // may win after MouseDown. Reassert the hidden
+                                                // IME sink once the click/selection completes.
+                                                let focus = this.terminal_input.read(cx).focus_handle(cx);
+                                                window.focus(&focus, cx);
                                             }))
                                             .on_mouse_up_out(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
                                                 this.finish_terminal_line_selection(cx);
@@ -7351,6 +7371,10 @@ impl Render for Workbench {
                                             .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, window, cx| {
                                                 this.focus_primary_mixed_terminal(cx);
                                                 window.focus(&this.terminal_input.read(cx).focus_handle(cx), cx);
+                                            }))
+                                            .on_mouse_up(gpui::MouseButton::Left, cx.listener(|this, _, window, cx| {
+                                                let focus = this.terminal_input.read(cx).focus_handle(cx);
+                                                window.focus(&focus, cx);
                                             }))
                                             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
                                                 if event.keystroke.modifiers.control
@@ -8572,6 +8596,11 @@ fn main() {
                     });
                     view.update(cx, |view, cx| {
                         view.start_terminal_polling(cx);
+                        // Restore saved Host tab previews immediately after
+                        // Native window startup, rather than waiting for the
+                        // first 1.5s housekeeping session-list tick.
+                        // Uses authenticated CLI --no-start; no PTY is minted.
+                        view.refresh_terminals(cx);
                         view.refresh_project_tree(cx);
                         view.refresh_worktrees(cx);
                         view.refresh_git(cx);

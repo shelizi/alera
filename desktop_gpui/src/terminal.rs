@@ -6,6 +6,7 @@ use crate::session::TerminalLayout;
 use crate::terminal_output_budget::TerminalParseBudget;
 use crate::vt_screen::VtScreen;
 use serde_json::Value;
+use std::collections::VecDeque;
 use std::ffi::OsString;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -273,9 +274,100 @@ pub fn is_text_input_keystroke(
         || (key.chars().count() == 1 && key.chars().any(|ch| !ch.is_ascii()))
 }
 
+/// Only suppresses recently forwarded KeyDown ASCII. Paste, unicode
+/// injection and Windows IME can deliver text without any preceding KeyDown,
+/// which must still reach Host. Owned by the single Native input surface.
+#[derive(Debug, Default)]
+pub struct TerminalTextCommitGate {
+    recent_raw_keys: VecDeque<(String, Instant)>,
+}
+
+impl TerminalTextCommitGate {
+    const RECENT_WINDOW: Duration = Duration::from_millis(160);
+    const MAX_RECENT_KEYS: usize = 64;
+
+    fn expire(&mut self, now: Instant) {
+        while self
+            .recent_raw_keys
+            .front()
+            .is_some_and(|(_, time)| now.saturating_duration_since(*time) > Self::RECENT_WINDOW)
+        {
+            self.recent_raw_keys.pop_front();
+        }
+    }
+
+    pub fn note_raw_ascii_key(&mut self, text: &str, now: Instant) {
+        if text.len() != 1 || !(text.as_bytes()[0].is_ascii_graphic() || text == " ") {
+            return;
+        }
+        self.expire(now);
+        if self.recent_raw_keys.len() >= Self::MAX_RECENT_KEYS {
+            self.recent_raw_keys.pop_front();
+        }
+        self.recent_raw_keys.push_back((text.to_owned(), now));
+    }
+
+    pub fn should_forward(&mut self, text: &str, was_marked: bool, now: Instant) -> bool {
+        self.expire(now);
+        if text.is_empty() {
+            return false;
+        }
+        if was_marked || !text.is_ascii() {
+            return true;
+        }
+        // TextInput may batch characters. Match only exact previously sent
+        // sequences, never suppress arbitrary ASCII text without KeyDown.
+        for start in 0..self.recent_raw_keys.len() {
+            let mut joined = String::new();
+            for end in start..self.recent_raw_keys.len() {
+                joined.push_str(&self.recent_raw_keys[end].0);
+                if joined == text {
+                    for _ in start..=end {
+                        self.recent_raw_keys.remove(start);
+                    }
+                    return false;
+                }
+                if !text.starts_with(&joined) {
+                    break;
+                }
+            }
+        }
+        true
+    }
+}
+
 #[cfg(test)]
 mod direct_text_input_tests {
     use super::*;
+
+    #[test]
+    fn ascii_text_commit_without_keydown_reaches_host_but_duplicate_keydown_does_not() {
+        let now = Instant::now();
+        let mut gate = TerminalTextCommitGate::default();
+        // Unicode SendInput, paste and some Windows IMEs deliver characters
+        // through TextInput without a matching KeyDown.
+        assert!(gate.should_forward("echo GPUI_NATIVE_OK", false, now));
+        assert!(gate.should_forward("a", false, now));
+        gate.note_raw_ascii_key("a", now);
+        assert!(!gate.should_forward("a", false, now + Duration::from_millis(5)));
+        // A later unrelated text event is no longer a duplicate.
+        assert!(gate.should_forward("a", false, now + Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn unicode_commits_and_multi_character_keydown_coalescing_preserve_order() {
+        let now = Instant::now();
+        let mut gate = TerminalTextCommitGate::default();
+        gate.note_raw_ascii_key("e", now);
+        gate.note_raw_ascii_key("c", now);
+        gate.note_raw_ascii_key("h", now);
+        gate.note_raw_ascii_key("o", now);
+        assert!(!gate.should_forward("echo", false, now + Duration::from_millis(8)));
+        assert!(gate.should_forward("echo", false, now + Duration::from_millis(9)));
+        gate.note_raw_ascii_key("x", now);
+        assert!(gate.should_forward("貓", true, now + Duration::from_millis(10)));
+        assert!(!gate.should_forward("x", false, now + Duration::from_millis(12)));
+    }
 
     #[test]
     fn ascii_keys_reach_raw_host_while_unicode_uses_ime_commit() {

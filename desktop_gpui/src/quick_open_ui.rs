@@ -2,6 +2,7 @@
 //! This field never edits source files; opening a result is handled by the
 //! existing canonical-path-checked WorkbenchModel.
 use alera_gpui_desktop::editor::{byte_to_utf16, utf16_to_byte};
+use alera_gpui_desktop::terminal::TerminalTextCommitGate;
 use gpui::{
     actions, div, prelude::*, px, relative, rgb, App, Bounds, Context, Element, ElementId,
     ElementInputHandler, Entity, EntityInputHandler, FocusHandle, Focusable, GlobalElementId,
@@ -10,6 +11,7 @@ use gpui::{
 };
 use std::collections::VecDeque;
 use std::ops::Range;
+use std::time::Instant;
 use unicode_segmentation::UnicodeSegmentation;
 
 actions!(
@@ -35,6 +37,7 @@ pub struct QuickOpenInput {
     selection: Range<usize>,
     marked: Option<Range<usize>>,
     terminal_committed: VecDeque<String>,
+    terminal_commit_gate: TerminalTextCommitGate,
 }
 
 impl QuickOpenInput {
@@ -51,6 +54,7 @@ impl QuickOpenInput {
             selection: 0..0,
             marked: None,
             terminal_committed: VecDeque::new(),
+            terminal_commit_gate: TerminalTextCommitGate::default(),
         }
     }
 
@@ -75,10 +79,23 @@ impl QuickOpenInput {
         self.terminal_committed.drain(..).collect()
     }
 
+    /// Called only after an ordinary printable ASCII KeyDown was actually
+    /// forwarded to the Host input queue. It prevents a duplicate Windows
+    /// TextInput event for that one key from being echoed twice.
+    pub fn note_terminal_ascii_key(&mut self, text: &str) {
+        if self.terminal_mode {
+            self.terminal_commit_gate
+                .note_raw_ascii_key(text, Instant::now());
+        }
+    }
+
     pub fn clear(&mut self, cx: &mut Context<Self>) {
         self.text.clear();
         self.selection = 0..0;
         self.marked = None;
+        // A new tab/workspace must never consume a stale KeyDown/TextInput
+        // duplicate marker from the previous Host session.
+        self.terminal_commit_gate = TerminalTextCommitGate::default();
         cx.notify();
     }
 
@@ -127,9 +144,13 @@ impl QuickOpenInput {
         self.marked = mark.then_some(range.start..end).filter(|r| !r.is_empty());
         if self.terminal_mode && !mark && !self.text.is_empty() {
             let committed = std::mem::take(&mut self.text);
-            // ASCII is routed through KeyDown. Windows may also call
-            // TextInput for the same key, so avoid echoing it twice.
-            if was_marked || !committed.is_ascii() {
+            // KeyDown and TextInput are both valid input sources. Only drop
+            // ASCII that the same focused input already sent via KeyDown;
+            // pasted / Unicode-injected ASCII with no KeyDown must survive.
+            if self
+                .terminal_commit_gate
+                .should_forward(&committed, was_marked, Instant::now())
+            {
                 self.terminal_committed.push_back(committed);
             }
             self.selection = 0..0;
