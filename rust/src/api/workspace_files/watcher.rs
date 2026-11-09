@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use notify::{RecursiveMode, Watcher};
 
@@ -14,7 +14,8 @@ use super::{
     WorkspaceExplorerWatcherHandle, WorkspaceFileError, WorkspaceFileErrorKind,
 };
 
-const WATCH_DEBOUNCE_MILLIS: u64 = 180;
+const WATCH_DEBOUNCE_MILLIS: u64 = 90;
+const WATCH_MAX_BATCH_MILLIS: u64 = 350;
 const WATCH_IDLE_POLL_MILLIS: u64 = 100;
 
 static NEXT_WATCHER_ID: AtomicU64 = AtomicU64::new(1);
@@ -197,20 +198,32 @@ fn event_loop(
             Err(mpsc::RecvTimeoutError::Disconnected) => return,
         };
         let mut events = Vec::new();
-        let mut coalesced_event_count = 0;
-        if let Ok(event) = first_event {
-            events.push(event);
+        let mut coalesced_event_count = 1;
+        let deadline = Instant::now() + Duration::from_millis(WATCH_MAX_BATCH_MILLIS);
+        match first_event {
+            Ok(event) => events.push(event),
+            Err(_) => {
+                events.push(notify::Event::new(notify::EventKind::Any).add_path(root.clone()))
+            }
         }
 
         loop {
             if shutdown_rx.try_recv().is_ok() {
                 return;
             }
-            match event_rx.recv_timeout(Duration::from_millis(WATCH_DEBOUNCE_MILLIS)) {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            match event_rx.recv_timeout(remaining.min(Duration::from_millis(WATCH_DEBOUNCE_MILLIS)))
+            {
                 Ok(result) => {
                     coalesced_event_count += 1;
-                    if let Ok(event) = result {
-                        events.push(event);
+                    match result {
+                        Ok(event) => events.push(event),
+                        Err(_) => events.push(
+                            notify::Event::new(notify::EventKind::Any).add_path(root.clone()),
+                        ),
                     }
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => break,

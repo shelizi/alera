@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use notify::{RecursiveMode, Watcher};
 
@@ -13,7 +13,8 @@ use super::{
     WorkspaceFileErrorKind,
 };
 
-const WATCH_DEBOUNCE_MILLIS: u64 = 180;
+const WATCH_DEBOUNCE_MILLIS: u64 = 90;
+const WATCH_MAX_BATCH_MILLIS: u64 = 350;
 const WATCH_IDLE_POLL_MILLIS: u64 = 100;
 
 static NEXT_WATCHER_ID: AtomicU64 = AtomicU64::new(1);
@@ -112,7 +113,7 @@ fn path_is_relevant(root: &std::path::Path, path: &std::path::Path) -> bool {
     }
     matches!(
         components.get(1).copied(),
-        Some("HEAD" | "index" | "packed-refs" | "config" | "refs" | "worktrees")
+        None | Some("HEAD" | "index" | "packed-refs" | "config" | "refs" | "worktrees")
     )
 }
 
@@ -177,21 +178,26 @@ fn collect_signal(
     if shutdown_rx.try_recv().is_ok() {
         return CollectOutcome::Shutdown;
     }
-    let first_event = match event_rx.recv_timeout(Duration::from_millis(WATCH_IDLE_POLL_MILLIS)) {
+    let _first_event = match event_rx.recv_timeout(Duration::from_millis(WATCH_IDLE_POLL_MILLIS)) {
         Ok(result) => result,
         Err(mpsc::RecvTimeoutError::Timeout) => return CollectOutcome::Idle,
         Err(mpsc::RecvTimeoutError::Disconnected) => return CollectOutcome::Shutdown,
     };
-    let mut coalesced_event_count = u32::from(first_event.is_ok());
+    let mut coalesced_event_count = 1u32;
+    let deadline = Instant::now() + Duration::from_millis(WATCH_MAX_BATCH_MILLIS);
 
     loop {
         if shutdown_rx.try_recv().is_ok() {
             return CollectOutcome::Shutdown;
         }
-        match event_rx.recv_timeout(Duration::from_millis(WATCH_DEBOUNCE_MILLIS)) {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        match event_rx.recv_timeout(remaining.min(Duration::from_millis(WATCH_DEBOUNCE_MILLIS))) {
             Ok(result) => {
                 if result.is_ok() {
-                    coalesced_event_count += 1;
+                    coalesced_event_count = coalesced_event_count.saturating_add(1);
                 }
             }
             Err(mpsc::RecvTimeoutError::Timeout) => break,
@@ -256,6 +262,19 @@ mod tests {
                 assert_eq!(signal.coalesced_event_count, 4);
             }
             _ => panic!("expected a coalesced signal"),
+        }
+    }
+
+    #[test]
+    fn watcher_errors_still_trigger_reconciliation() {
+        let (event_tx, event_rx) = mpsc::channel::<notify::Result<Event>>();
+        let (_shutdown_tx, shutdown_rx) = mpsc::channel::<()>();
+        event_tx
+            .send(Err(notify::Error::generic("watch overflow")))
+            .unwrap();
+        match collect_signal(&event_rx, &shutdown_rx) {
+            CollectOutcome::Signal(signal) => assert_eq!(signal.coalesced_event_count, 1),
+            _ => panic!("watcher errors must refresh status"),
         }
     }
 

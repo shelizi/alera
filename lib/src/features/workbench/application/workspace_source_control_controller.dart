@@ -78,7 +78,8 @@ enum WorkspaceSourceControlAction {
 @riverpod
 class WorkspaceSourceControlController
     extends _$WorkspaceSourceControlController {
-  static const Duration _watcherReloadDebounce = Duration(milliseconds: 250);
+  static const Duration _watcherReloadDebounce = Duration(milliseconds: 120);
+  static const Duration _watcherReloadCooldown = Duration(milliseconds: 250);
 
   SourceControlWatcher? _watcher;
   StreamSubscription<native.SourceControlWatchSignal>? _watchSubscription;
@@ -473,7 +474,11 @@ class WorkspaceSourceControlController
       _watcherHandle = handle;
       _watchSubscription = watcher
           .events(handle: handle)
-          .listen((_) => _scheduleWatcherReload(), onError: (_) {});
+          .listen(
+            (_) => _scheduleWatcherReload(),
+            onError: (_) => _scheduleWatcherReload(),
+            onDone: _scheduleWatcherReload,
+          );
     } catch (_) {
       // File watching is best-effort; explicit refresh still works.
     }
@@ -560,7 +565,7 @@ class WorkspaceSourceControlController
     // not pin a full status scan every few hundred milliseconds. The floor
     // also gates fresh signals, otherwise they would shortcut the cooldown.
     final delay =
-        _watcherReloadDebounce * (1 << _queuedWatcherReloads.clamp(0, 3));
+        _watcherReloadCooldown * (1 << _queuedWatcherReloads.clamp(0, 3));
     _queuedWatcherReloads += 1;
     _watcherReloadNotBefore = DateTime.now().add(delay);
     _scheduleWatcherReload();
