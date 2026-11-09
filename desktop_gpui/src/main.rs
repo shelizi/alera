@@ -47,8 +47,8 @@ use alera_gpui_desktop::native_settings::{NativeSettings, NativeSettingsStore};
 use alera_gpui_desktop::project_search::{ContentMatch, ProjectSearch};
 use alera_gpui_desktop::project_tree::{
     collect_project_tree_with_registered, project_group_matches_search,
-    project_title_matches_search, sidebar_workspaces_for_group,
-    worktree_matches_search, ProjectTreeGroup,
+    project_title_matches_search, sidebar_workspaces_for_group, worktree_matches_search,
+    ProjectTreeGroup,
 };
 use alera_gpui_desktop::runtime_bridge::{ProjectRemovalPreview, RuntimeCliBridge};
 use alera_gpui_desktop::runtime_catalog::RuntimeCatalog;
@@ -107,7 +107,10 @@ actions!(
         ExplorerCopy,
         ExplorerCut,
         ExplorerPaste,
-        ExplorerSelectAll
+        ExplorerSelectAll,
+        ExplorerRename,
+        ExplorerDelete,
+        ExplorerRefresh
     ]
 );
 
@@ -262,6 +265,7 @@ enum ExplorerMenuAction {
     Clipboard(ExplorerClipboardMode),
     Paste,
     OpenInAlera,
+    RevealInFileManager,
     ViewCurrentGitDiff,
     CopyAbsolutePath,
     CopyRelativePath,
@@ -284,6 +288,7 @@ impl ExplorerMenuAction {
             Self::Clipboard(ExplorerClipboardMode::Cut) => "Cut selection",
             Self::Paste => "Paste",
             Self::OpenInAlera => "Open in Alera",
+            Self::RevealInFileManager => "Show in file manager",
             Self::ViewCurrentGitDiff => "View current Git changes",
             Self::CopyAbsolutePath => "Copy path",
             Self::CopyRelativePath => "Copy relative path",
@@ -869,6 +874,25 @@ impl Workbench {
                 if let Some(path) = self.explorer_selection.clone() {
                     self.click_explorer_file(&path, true, window, cx);
                 }
+            }
+            ExplorerMenuAction::RevealInFileManager => {
+                let result = self
+                    .explorer_selection
+                    .as_ref()
+                    .ok_or_else(|| {
+                        std::io::Error::new(
+                            std::io::ErrorKind::InvalidInput,
+                            "Select a file or folder first",
+                        )
+                    })
+                    .and_then(|path| {
+                        ExplorerFiles::new(self.model.root())?.reveal_in_file_manager(path)
+                    });
+                self.model.set_status(match result {
+                    Ok(()) => "Opened system file manager".to_owned(),
+                    Err(error) => format!("Cannot reveal selected item: {error}"),
+                });
+                cx.notify();
             }
             ExplorerMenuAction::ViewCurrentGitDiff => {
                 if let Some(path) = self
@@ -1836,6 +1860,40 @@ impl Workbench {
     ) {
         if self.explorer_keyboard_focus.is_focused(window) {
             self.paste_explorer_clipboard(cx);
+        }
+    }
+
+    fn explorer_rename_action(
+        &mut self,
+        _: &ExplorerRename,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.explorer_keyboard_focus.is_focused(window) {
+            self.begin_explorer_action(ExplorerAction::Rename, window, cx);
+        }
+    }
+
+    fn explorer_delete_action(
+        &mut self,
+        _: &ExplorerDelete,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.explorer_keyboard_focus.is_focused(window) {
+            // Existing explicit confirmation still protects deletion.
+            self.begin_explorer_action(ExplorerAction::Delete, window, cx);
+        }
+    }
+
+    fn explorer_refresh_action(
+        &mut self,
+        _: &ExplorerRefresh,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.explorer_keyboard_focus.is_focused(window) {
+            self.run_explorer_menu_action(ExplorerMenuAction::Refresh, window, cx);
         }
     }
 
@@ -5796,13 +5854,17 @@ impl Render for Workbench {
             .take(45)
             .enumerate()
             .filter(|(_, group)| {
-                project_group_matches_search(group, self.runtime_catalog.as_ref(), &sidebar_search_query)
+                project_group_matches_search(
+                    group,
+                    self.runtime_catalog.as_ref(),
+                    &sidebar_search_query,
+                )
             })
             .map(|(index, group)| {
                 // Searching temporarily expands matching descendants without
                 // modifying the user's persisted collapse preference.
-                let collapsed = !sidebar_search_active
-                    && self.collapsed_project_roots.contains(&group.root);
+                let collapsed =
+                    !sidebar_search_active && self.collapsed_project_roots.contains(&group.root);
                 (index, group.clone(), collapsed)
             })
             .collect();
@@ -6220,6 +6282,9 @@ impl Render for Workbench {
             .on_action(cx.listener(Self::explorer_cut_action))
             .on_action(cx.listener(Self::explorer_paste_action))
             .on_action(cx.listener(Self::explorer_select_all_action))
+            .on_action(cx.listener(Self::explorer_rename_action))
+            .on_action(cx.listener(Self::explorer_delete_action))
+            .on_action(cx.listener(Self::explorer_refresh_action))
             .flex()
             .flex_col()
             .bg(rgb(BG))
@@ -8891,6 +8956,9 @@ fn main() {
                 KeyBinding::new("cmd-v", ExplorerPaste, Some("AleraGpuiExplorer")),
                 KeyBinding::new("ctrl-a", ExplorerSelectAll, Some("AleraGpuiExplorer")),
                 KeyBinding::new("cmd-a", ExplorerSelectAll, Some("AleraGpuiExplorer")),
+                KeyBinding::new("f2", ExplorerRename, Some("AleraGpuiExplorer")),
+                KeyBinding::new("delete", ExplorerDelete, Some("AleraGpuiExplorer")),
+                KeyBinding::new("f5", ExplorerRefresh, Some("AleraGpuiExplorer")),
                 KeyBinding::new("ctrl-shift-f", ToggleContentSearch, None),
                 KeyBinding::new("cmd-shift-f", ToggleContentSearch, None),
             ]);
@@ -8969,7 +9037,8 @@ fn main() {
                         let sidebar_search_input = cx.new(|cx| {
                             QuickOpenInput::with_placeholder("Search projects / worktrees…", cx)
                         });
-                        cx.observe(&sidebar_search_input, |_, _, cx| cx.notify()).detach();
+                        cx.observe(&sidebar_search_input, |_, _, cx| cx.notify())
+                            .detach();
                         let settings_menu_search =
                             cx.new(|cx| QuickOpenInput::with_placeholder("Search settings", cx));
                         cx.observe(&settings_menu_search, |_, _, cx| cx.notify())

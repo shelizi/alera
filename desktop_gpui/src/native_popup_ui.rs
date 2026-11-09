@@ -401,6 +401,7 @@ impl Workbench {
                 ExplorerMenuAction::Paste,
                 ExplorerMenuAction::CopyAbsolutePath,
                 ExplorerMenuAction::CopyRelativePath,
+                ExplorerMenuAction::RevealInFileManager,
                 ExplorerMenuAction::File(ExplorerAction::Duplicate),
                 ExplorerMenuAction::File(ExplorerAction::Move),
                 ExplorerMenuAction::File(ExplorerAction::Copy),
