@@ -252,3 +252,13 @@ CLI `terminal_stream::tests` 私有 recover 指令白名單 **2/2 PASS**，確�
 **效能 Gate 未關**：目前整合工作樹只找到 Native Debug exe，未找到 Classic Windows Release 或 Native Release exe，故不能用之前的 Native Debug ~92ms p50 與 Classic Release 做不公平比較。待同機同解析度／工作負載、兩個 Release 版本與同一輸入至像素量測方法才建立 p50/p95 基準。
 
 本輪保留 `supported=false`，不合併 main、不推送、不發布。原 `.gpui-smoke-20261108/` 不修改、不提交。
+
+## 2026-11-09：Windows IMM 組字取消修復實機初驗（RED → GREEN）
+
+核心根因：GPUI 0.2.2 Windows 的 `WM_IME_STARTCOMPOSITION` 會呼叫 `ImmSetCompositionWindow`／`ImmSetCandidateWindow`，但平台的 `update_ime_position()` 為空操作；同一 HWND 內由 Terminal 切到 Explorer 沒有 Windows 視窗失焦訊息。先前僅清 `QuickOpenInput.marked`，OS 候選字仍未取消。
+
+此輪在每個 Terminal `TextInput` FocusHandle 的 GPUI `on_blur` 上執行 Windows `ImmNotifyIME(NI_COMPOSITIONSTR, CPS_CANCEL)`，然後呼叫 `NI_CLOSECANDIDATE`，再清本地臨時文字。原生操作僅限目前 UI 執行緒的 foreground 根視窗、由 `GetFocus` 取得的 HWND 和它的 `HIMC`；沒有向 PTY 寫入文字，不碰其他程序視窗。僅在明確開啟 `ALERA_GPUI_TSF_TRACE` 時記錄取消結果。
+
+隔離 Windows Debug GPUI 實機：Terminal 以繁中注音 `S U 3` 確實顯示「你」候選窗；滑鼠點 Explorer `Filter files…` 後，舊候選窗立即消失；在 Explorer 繼續輸入，新候選窗出現在 Explorer 搜尋框旁，不再遺留 Terminal caret 旁。Native stderr 記錄 `Alera GPUI TSF: blur cancel=Cancelled`。OS 視覺重現案例從 RED 轉 GREEN。另 Native 獨立 Runtime Smoke 結束 `exit_code=0`，既有 Rust Library 325/325 及合併後 `cargo check --all-targets --locked` 通過，獨立 Windows helper 1/1 通過。
+
+來源提交：設定／i18n 同步變更先落在 `edef09ff8`（包含 `main.rs` 的 TSF 呼叫處）；獨立 IMM 輔助模組隨 `7e978ad16` 提交，未把其他修改混入。注意這是**核心候選窗取消與位置重定錨初驗**，不是完整 TSF 結案：仍須多次 Primary／Secondary／Explorer 循環、正式中文 Commit/UTF-8 Shell、失焦遲到 Commit 安全性及高頻操作重測。Classic／Native Release 同場 p50/p95 效能比較尚缺 Release binaries。正式支援仍 `supported=false`，不合併 main、不推送、不發布，原未追蹤 Smoke 目錄保留。
