@@ -27,9 +27,13 @@ use alera_gpui_desktop::explorer_selection::ExplorerMultiSelection;
 use alera_gpui_desktop::explorer_visibility::ExplorerVisibilityOptions;
 use alera_gpui_desktop::file_search::WorkspaceFileIndex;
 use alera_gpui_desktop::git_actions::{GitActions, GitConflictChoice, GitConflictPlan};
+use alera_gpui_desktop::git_branch_compare::{
+    compare_branch_files, diff_compared_file, original_compared_file, BranchFileComparison,
+    CompareDirection,
+};
 use alera_gpui_desktop::git_graph_layout::{layout_git_graph, GraphCommit};
 use alera_gpui_desktop::git_history::{
-    compare_git_refs, compare_local_branch, preview_commit, GitHistoryOptions, GitHistorySnapshot,
+    compare_git_refs, preview_commit, GitHistoryOptions, GitHistorySnapshot,
 };
 use alera_gpui_desktop::git_inspect::{read_file_diff, GitSnapshot};
 use alera_gpui_desktop::mcp_ui_bridge::{
@@ -165,6 +169,8 @@ enum GitUiAction {
     SwitchBranch(String),
     MergeWithoutConflicts(String),
     Fetch,
+    PullSelected(String),
+    PushSelected(String),
     StashSave,
     StashApply,
     PullFfOnly,
@@ -207,7 +213,6 @@ impl ConfirmGitAction {
 #[derive(Clone)]
 enum GitReadRequest {
     Commit(String),
-    Compare(String),
 }
 
 /// Shared actions for branch context menus in the Native Git Graph.
@@ -215,6 +220,9 @@ enum GitReadRequest {
 enum GitGraphBranchMenuAction {
     History,
     Compare,
+    CompareReverse,
+    PullBranch,
+    PushBranch,
     OpenWorktree,
     Switch,
     Merge,
@@ -376,6 +384,7 @@ struct Workbench {
     git_history_error: Option<String>,
     git_history_request: u64,
     git_merge_armed: Option<String>,
+    git_graph_remote_armed: Option<(String, bool)>, // true = Pull, false = Push
     git_sensitive_armed: Option<ConfirmGitAction>,
     git_conflict_preview: Option<GitConflictPlan>,
     git_conflict_choices: HashMap<String, GitConflictChoice>,
@@ -392,6 +401,8 @@ struct Workbench {
     git_loading: bool,
     git_error: Option<String>,
     git_diff: Option<String>,
+    git_branch_comparison: Option<BranchFileComparison>,
+    git_branch_compare_loading: bool,
     git_diff_loading: bool,
     git_diff_request: u64,
     workspace_generation: u64,
@@ -1595,6 +1606,12 @@ impl Workbench {
             cx.notify();
             return;
         }
+        if !matches!(
+            action,
+            GitGraphBranchMenuAction::PullBranch | GitGraphBranchMenuAction::PushBranch
+        ) {
+            self.git_graph_remote_armed = None;
+        }
         let reference = if remote {
             format!("refs/remotes/{branch}")
         } else {
@@ -1606,13 +1623,39 @@ impl Workbench {
                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(branch));
             }
             GitGraphBranchMenuAction::Compare => {
-                if remote {
-                    self.git_action_status = "Remote comparison: select ref in Git Graph; local comparison requires a local branch".into();
-                    cx.notify();
+                if !remote {
+                    self.compare_git_branch_files(branch, CompareDirection::CurrentToSelected, cx);
+                }
+            }
+            GitGraphBranchMenuAction::CompareReverse => {
+                if !remote {
+                    self.compare_git_branch_files(branch, CompareDirection::SelectedToCurrent, cx);
+                }
+            }
+            GitGraphBranchMenuAction::PullBranch | GitGraphBranchMenuAction::PushBranch => {
+                if remote || self.git_action_busy {
+                    return;
+                }
+                let pull = action == GitGraphBranchMenuAction::PullBranch;
+                let pending = (branch.clone(), pull);
+                if self.git_graph_remote_armed.as_ref() == Some(&pending) {
+                    self.git_graph_remote_armed = None;
+                    self.run_git_action(
+                        if pull {
+                            GitUiAction::PullSelected(branch)
+                        } else {
+                            GitUiAction::PushSelected(branch)
+                        },
+                        cx,
+                    );
                 } else {
-                    self.git_branch_input
-                        .update(cx, |input, cx| input.set_query(&branch, cx));
-                    self.preview_git_history(GitReadRequest::Compare(branch), cx);
+                    self.git_graph_remote_armed = Some(pending);
+                    self.git_action_status = format!(
+                        "Confirm {} for {branch}: reopen its Git Graph menu and select Confirm {}. Only its configured upstream is used; no checkout, force push or merge.",
+                        if pull { "Pull" } else { "Push" },
+                        if pull { "Pull" } else { "Push" },
+                    );
+                    cx.notify();
                 }
             }
             GitGraphBranchMenuAction::OpenWorktree => {
@@ -1675,7 +1718,92 @@ impl Workbench {
         cx.notify();
     }
 
+    fn compare_git_branch_files(
+        &mut self,
+        selected: String,
+        direction: CompareDirection,
+        cx: &mut Context<Self>,
+    ) {
+        if self.git_action_busy {
+            self.git_action_status = "Finish current Git action before comparing branches".into();
+            cx.notify();
+            return;
+        }
+        let root = self.model.root().to_path_buf();
+        let generation = self.workspace_generation;
+        self.git_diff_request = self.git_diff_request.wrapping_add(1);
+        let ticket = self.git_diff_request;
+        self.git_branch_comparison = None;
+        self.git_branch_compare_loading = true;
+        self.git_diff = None;
+        self.git_diff_loading = true;
+        self.git_history_open = true;
+        cx.spawn(async move |view, cx| {
+            let result = cx
+                .background_spawn(async move { compare_branch_files(&root, &selected, direction) })
+                .await;
+            view.update(cx, |view, cx| {
+                if view.workspace_generation != generation || view.git_diff_request != ticket {
+                    return;
+                }
+                view.git_branch_compare_loading = false;
+                view.git_diff_loading = false;
+                match result {
+                    Ok(comparison) => {
+                        view.git_diff = Some(comparison.summary());
+                        view.git_branch_comparison = Some(comparison);
+                    }
+                    Err(error) => {
+                        view.git_diff = Some(format!("Branch comparison refused: {error}"));
+                        view.git_branch_comparison = None;
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn preview_git_compared_file(&mut self, index: usize, original: bool, cx: &mut Context<Self>) {
+        let Some(comparison) = self.git_branch_comparison.clone() else {
+            return;
+        };
+        let root = self.model.root().to_path_buf();
+        let generation = self.workspace_generation;
+        self.git_diff_request = self.git_diff_request.wrapping_add(1);
+        let ticket = self.git_diff_request;
+        self.git_diff_loading = true;
+        cx.spawn(async move |view, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    if original {
+                        original_compared_file(&root, &comparison, index)
+                    } else {
+                        diff_compared_file(&root, &comparison, index)
+                    }
+                })
+                .await;
+            view.update(cx, |view, cx| {
+                if view.workspace_generation != generation || view.git_diff_request != ticket {
+                    return;
+                }
+                view.git_diff_loading = false;
+                view.git_diff = Some(result.unwrap_or_else(|error| {
+                    format!("Git comparison file preview refused: {error}")
+                }));
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
     fn preview_git_history(&mut self, request: GitReadRequest, cx: &mut Context<Self>) {
+        self.git_branch_comparison = None;
+        self.git_branch_compare_loading = false;
         let root = self.model.root().to_path_buf();
         let generation = self.workspace_generation;
         self.git_diff_request = self.git_diff_request.wrapping_add(1);
@@ -1687,7 +1815,6 @@ impl Workbench {
                 .background_spawn(async move {
                     match request {
                         GitReadRequest::Commit(oid) => preview_commit(&root, &oid),
-                        GitReadRequest::Compare(branch) => compare_local_branch(&root, &branch),
                     }
                 })
                 .await;
@@ -1738,6 +1865,9 @@ impl Workbench {
         self.git_action_request = self.git_action_request.wrapping_add(1);
         let ticket = self.git_action_request;
         self.git_action_busy = true;
+        self.git_graph_remote_armed = None;
+        self.git_branch_comparison = None;
+        self.git_branch_compare_loading = false;
         self.git_action_status = "Running explicit Git operation…".into();
         cx.notify();
         cx.spawn(async move |view, cx| {
@@ -1772,6 +1902,12 @@ impl Workbench {
                         GitUiAction::Fetch => {
                             git.fetch_current_remote()?;
                             Ok("Fetched remote refs; working tree unchanged".to_string())
+                        }
+                        GitUiAction::PullSelected(branch) => {
+                            git.pull_branch_without_switch(&branch)
+                        }
+                        GitUiAction::PushSelected(branch) => {
+                            git.push_branch_without_switch(&branch)
                         }
                         GitUiAction::StashSave => git.stash_tracked_changes(),
                         GitUiAction::StashApply => git.apply_latest_stash(),
@@ -2826,6 +2962,7 @@ impl Workbench {
         }
         self.git_history_request = self.git_history_request.wrapping_add(1);
         self.git_merge_armed = None;
+        self.git_graph_remote_armed = None;
         self.git_sensitive_armed = None;
         self.git_conflict_preview = None;
         self.git_conflict_choices.clear();
@@ -2842,6 +2979,8 @@ impl Workbench {
         self.git_branch_input
             .update(cx, |input, cx| input.clear(cx));
         self.git_diff = None;
+        self.git_branch_comparison = None;
+        self.git_branch_compare_loading = false;
         self.git_diff_loading = false;
         self.git_diff_request = self.git_diff_request.wrapping_add(1);
         // Agent profiles are Host-owned, but selection and an in-flight
@@ -6173,6 +6312,8 @@ impl Render for Workbench {
         let git_graph_selected_ref = self.git_history_options.selected_ref.clone();
         let git_graph_file = self.git_history_options.file_path.clone();
         let git_graph_scope = self.git_history_options.git_diff_root.clone();
+        let git_branch_compare = self.git_branch_comparison.clone();
+        let git_branch_compare_loading = self.git_branch_compare_loading;
         let git_history_status = if self.git_history_loading {
             "Loading commit graph…".to_owned()
         } else if let Some(history) = &self.git_history {
@@ -7028,14 +7169,56 @@ impl Render for Workbench {
                                                         this.set_git_history_ref(Some(reference.clone()), cx);
                                                         if !remote {
                                                             this.git_branch_input.update(cx, |input, cx| { input.set_query(&name, cx); });
-                                                            this.preview_git_history(GitReadRequest::Compare(name.clone()), cx);
+                                                            this.compare_git_branch_files(name.clone(), CompareDirection::CurrentToSelected, cx);
                                                         }
                                                     }))
                                                     .context_menu(Self::kit_git_graph_branch_menu(
                                                         cx.entity().downgrade(), context_branch,
                                                         remote, row.current, has_worktree,
+                                                        self.git_graph_remote_armed.clone(),
                                                     )))
                                         })))
+                                    .when(git_branch_compare_loading, |panel| panel.child(
+                                        div().text_xs().text_color(rgb(MUTED)).child("Comparing branch files…")
+                                    ))
+                                    .when_some(git_branch_compare, |panel, comparison| {
+                                        let target = comparison.selected_branch.clone();
+                                        let reverse = comparison.direction == CompareDirection::SelectedToCurrent;
+                                        panel.child(div()
+                                            .flex().flex_col().gap_1()
+                                            .child(div().flex().items_center().gap_2()
+                                                .child(div().flex_1().min_w_0().text_xs()
+                                                    .text_color(rgb(TEXT)).child(comparison.title()))
+                                                .child(icon_button("git-compare-flip", UiIcon::History,
+                                                    "Reverse comparison direction (merge-base to other branch)", false)
+                                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                                        let next = if reverse {
+                                                            CompareDirection::CurrentToSelected
+                                                        } else {
+                                                            CompareDirection::SelectedToCurrent
+                                                        };
+                                                        this.compare_git_branch_files(target.clone(), next, cx);
+                                                    }))))
+                                            .child(div().id("git-compare-files").max_h(px(150.0))
+                                                .overflow_y_scroll().flex().flex_col()
+                                                .children(comparison.files.into_iter().enumerate().map(|(index, file)| {
+                                                    div().id(("git-compare-file", index))
+                                                        .flex().items_center().gap_1().text_xs()
+                                                        .child(div().flex_1().min_w_0()
+                                                            .text_color(rgb(MUTED))
+                                                            .child(format!("{} {}", file.status, file.display_path())))
+                                                        .child(icon_button(("git-compare-preview", index), UiIcon::Edit,
+                                                            "Preview committed file differences", false)
+                                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                                this.preview_git_compared_file(index, false, cx);
+                                                            })))
+                                                        .child(icon_button(("git-compare-original", index), UiIcon::Open,
+                                                            "View original at merge-base (read-only)", false)
+                                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                                this.preview_git_compared_file(index, true, cx);
+                                                            })))
+                                                }))))
+                                    })
                                     .child(div().text_xs().text_color(rgb(TEXT)).child("Commits · graph lanes represent actual parent commits"))
                                     .when_some(git_graph_topology_note, |panel, note| {
                                         panel.child(div().text_xs().text_color(rgb(MUTED)).child(note))
@@ -7133,7 +7316,7 @@ impl Render for Workbench {
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         let branch = this.git_branch_input.read(cx).query().trim().to_owned();
                                         this.git_merge_armed = None;
-                                        this.preview_git_history(GitReadRequest::Compare(branch), cx);
+                                        this.compare_git_branch_files(branch, CompareDirection::CurrentToSelected, cx);
                                     })))
                                 .child(icon_button("git-merge-auto", if git_merge_armed { UiIcon::Check } else { UiIcon::GitMerge }, "Merge selected branch into HEAD (click twice to confirm)", git_merge_armed)
                                     .on_click(cx.listener(|this, _, _, cx| {
@@ -9053,6 +9236,7 @@ fn main() {
                             git_history_error: None,
                             git_history_request: 0,
                             git_merge_armed: None,
+                            git_graph_remote_armed: None,
                             git_sensitive_armed: None,
                             git_conflict_preview: None,
                             git_conflict_choices: HashMap::new(),
@@ -9072,6 +9256,8 @@ fn main() {
                             git_loading: false,
                             git_error: None,
                             git_diff: None,
+                            git_branch_comparison: None,
+                            git_branch_compare_loading: false,
                             git_diff_loading: false,
                             git_diff_request: 0,
                             workspace_generation: 0,

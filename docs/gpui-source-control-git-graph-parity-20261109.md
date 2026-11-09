@@ -19,10 +19,10 @@
 | Source Control commits | Message validation, commit staged, amend / suggested message | Commit staged supported | P1 amend and optional AI if configured |
 | Git refresh | Timely repository / FS watcher updates, manual refresh reliable | Native refresh click and async snapshot | P0 bounded refresh on Git operations; P1 watcher |
 | Git Graph ref list | Current ref first, favorites, local/remote/tag tabs; filters | Local+remote refs, favorites, current ordering adjusted | P0 ordering; P1 tags / search |
-| Git Graph branch right-click | Switch or open checked-out worktree, compare, rename, pull, push, merge, rebase, archive, delete | Native context menu first safe subset: History/Compare/Worktree/Switch/Merge prepare/Copy | P0 safe subset; P1 pull/push/rename; P2 history rewriting |
+| Git Graph branch right-click | Switch/worktree, compare, rename, pull, push, merge, rebase, archive, delete | Native History/Compare both directions/Worktree/Switch/Merge prepare/Copy plus guarded selected Pull/Push | P1 implemented except rename; P2 rewrite operations |
 | Git Graph commit right-click | Preview, copy SHA/subject, branch/tag/worktree at commit, cherry-pick/revert/merge, resets etc. | Native read-only preview + copy SHA/subject | P0 safe subset; P1 branch/tag/worktree; P2 destructive writes |
 | Existing worktree navigation | For branches checked out elsewhere, offer open corresponding workspace instead of duplicate checkout | Native branch context menu identifies matching worktree and revalidates branch before switching | P0; finish with tests |
-| Branch compare | Current vs selected with explicit direction and original-file opening | Read-only local compare and `compare_git_refs` infrastructure | P1 diff file list and compare dialog |
+| Branch compare | Current vs selected with explicit direction and original-file opening | Structured merge-base-to-target file list; direction toggle; per-file committed diff/original in read-only preview | P1 implemented, Windows UI acceptance pending |
 | Git Graph topology | Commit lanes/parents, merges, graph scrolling; inspect commit diff | Native exact parent SHA + bounded Unicode lanes and connectors, fallback for invalid history | P1 completed code, Native visual acceptance still pending |
 | History scope | All branches, favorites, selected ref, file/folder history | Implemented as bounded Native history options | P0 keep; P1 persistence of view state |
 
@@ -41,10 +41,11 @@
 - [x] Current branch and favorite refs sorted ahead of ordinary branches.
 - [x] GPUI Kit popup menu for graph branches: show history, compare local branch, open existing worktree, switch branch, prepare merge, copy name.
 - [x] GPUI Kit popup menu for graph commits: preview, copy hash and subject.
-- [ ] Add explicit file-level branch comparison (merge-base..HEAD direction explained), open original file from diff, compare two selected refs.
+- [x] Add explicit file-level current-vs-selected branch comparison (merge-base..target), direction toggle, per-file committed patch and original blob preview. Arbitrary two-ref selection is still a later UI task.
 - [x] Render bounded actual commit parent lanes with parent IDs, Unicode lane connectors, branch labels and scrolling; explicit fallback when full topology cannot be represented. Windows native visual acceptance remains pending.
 - [ ] Search and filter commits, tags, local/remote refs, favorites, per-file history.
-- [ ] Add "Pull branch without switching", "Push selected branch", "Merge branch into current without switching" to Graph and bottom branch switcher. Reuse one secure Git service, do not interpolate ref names into shell.
+- [x] Add guarded "Pull branch without switching" (non-checked-out fast-forward with CAS) and "Push selected branch" (exact tracked upstream, no force) to Git Graph right-click. Reuse existing Git service and two-step confirmation.
+- [ ] Add those actions to the bottom branch switcher, including a shared UX for the existing merge-into-current action without switching.
 - [ ] Add guarded rename/delete/ref creation, tag/branch-at-commit, cherry-pick/revert/worktree-at-commit.
 - [ ] Put reset/rebase/drop/force/destructive operations behind their own later explicit preview + confirmation; do not implement them as unconfirmed right-click actions.
 

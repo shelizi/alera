@@ -366,8 +366,14 @@ impl GitActions {
         let current = head
             .shorthand()
             .map_err(|_| "Current Git branch name unavailable")?;
+        self.tracking_for_branch(current)
+    }
+
+    /// Only an exact local branch with an established remote-tracking ref is
+    /// eligible for push/pull without checkout. No arbitrary remote/refspec.
+    fn tracking_for_branch(&self, current: &str) -> Result<(String, String, String), String> {
         if !valid_branch(current) {
-            return Err("Current Git branch name is unsafe".into());
+            return Err("Git branch name is unsafe".into());
         }
         let branch = self
             .repo
@@ -407,6 +413,105 @@ impl GitActions {
             .find_remote(&remote)
             .map_err(|_| "Configured Git remote unavailable".to_string())?;
         Ok((current.to_owned(), remote, remote_branch.to_owned()))
+    }
+
+    /// Fetch and advance a local *non-checked-out* branch with an atomic
+    /// compare-and-swap ref update. This does not change HEAD or any worktree.
+    /// Fail closed if any linked worktree checks out the requested branch.
+    pub fn pull_branch_without_switch(&self, selected: &str) -> Result<String, String> {
+        let (branch, remote, upstream) = self.tracking_for_branch(selected)?;
+        let manager = crate::worktree_manager::WorktreeManager::discover(&self.root)
+            .map_err(|error| format!("Cannot inspect worktree owners: {error}"))?;
+        if manager
+            .list()
+            .map_err(|error| error.to_string())?
+            .iter()
+            .any(|entry| entry.branch.as_deref() == Some(branch.as_str()))
+        {
+            return Err(
+                "Branch is checked out in a worktree. Open that worktree to pull instead".into(),
+            );
+        }
+        let old = self
+            .repo
+            .find_branch(&branch, BranchType::Local)
+            .and_then(|branch| branch.get().peel_to_commit())
+            .map_err(|error| error.to_string())?
+            .id();
+        let remote_ref = format!("refs/heads/{upstream}");
+        git_in_dir(
+            &self.root,
+            &["fetch", "--no-tags", "--", &remote, &remote_ref],
+        )
+        .map_err(|_| "Fetch of selected branch failed; no local branch moved".to_string())?;
+        let updated = self
+            .repo
+            .find_reference(&format!("refs/remotes/{remote}/{upstream}"))
+            .and_then(|reference| reference.peel_to_commit())
+            .map_err(|_| {
+                "Updated remote tracking ref unavailable; local branch unchanged".to_string()
+            })?
+            .id();
+        if old == updated {
+            return Ok(format!(
+                "{branch} already up-to-date with {remote}/{upstream}"
+            ));
+        }
+        if !self
+            .repo
+            .graph_descendant_of(updated, old)
+            .map_err(|error| error.to_string())?
+        {
+            return Err("Selected branch has diverged from upstream; fast-forward refused".into());
+        }
+        // git update-ref <name> <new> <old> is an atomic CAS. It fails if the
+        // local branch moved concurrently; it never checks out worktree files.
+        let local_ref = format!("refs/heads/{branch}");
+        let new_id = updated.to_string();
+        let expected_old = old.to_string();
+        git_in_dir(
+            &self.root,
+            &["update-ref", &local_ref, &new_id, &expected_old],
+        )
+        .map_err(|_| "Selected branch advanced concurrently; update-ref refused".to_string())?;
+        Ok(format!(
+            "Fast-forwarded {branch} from {remote}/{upstream} without switching"
+        ))
+    }
+
+    /// Push a specifically chosen local branch to its exact configured
+    /// upstream without switching HEAD, force flags, or remote inference.
+    pub fn push_branch_without_switch(&self, selected: &str) -> Result<String, String> {
+        let (branch, remote, upstream) = self.tracking_for_branch(selected)?;
+        let local = self
+            .repo
+            .find_branch(&branch, BranchType::Local)
+            .and_then(|branch| branch.get().peel_to_commit())
+            .map_err(|error| error.to_string())?
+            .id();
+        let tracking = self
+            .repo
+            .find_reference(&format!("refs/remotes/{remote}/{upstream}"))
+            .and_then(|reference| reference.peel_to_commit())
+            .map_err(|_| "Upstream tracking ref unavailable; Fetch before Push".to_string())?
+            .id();
+        if local != tracking
+            && !self
+                .repo
+                .graph_descendant_of(local, tracking)
+                .map_err(|error| error.to_string())?
+        {
+            return Err("Push refused: selected branch diverged from fetched upstream".into());
+        }
+        let refspec = format!("refs/heads/{branch}:refs/heads/{upstream}");
+        git_in_dir(
+            &self.root,
+            &["push", "--porcelain", "--", &remote, &refspec],
+        )
+        .map_err(|_| "Selected-branch Push failed; no force attempted".to_string())?;
+        Ok(format!(
+            "Pushed {branch} to {remote}/{upstream} without switching"
+        ))
     }
 
     /// Safe default: git CLI uses the user's existing credential helper
@@ -1449,6 +1554,115 @@ mod tests {
             "remote update"
         );
         assert!(actions.repo.statuses(None).unwrap().is_empty());
+    }
+
+    #[test]
+    fn selected_branch_fetch_fast_forwards_ref_without_switching_or_touching_files() {
+        let (work, remote, actions, current) = bare_remote_fixture();
+        let original = actions.repo.head().unwrap().peel_to_commit().unwrap().id();
+        actions
+            .repo
+            .branch("topic", &actions.repo.find_commit(original).unwrap(), false)
+            .unwrap();
+        git_in_dir(
+            actions.root(),
+            &["push", "-u", "origin", "refs/heads/topic"],
+        )
+        .unwrap();
+        let clone_dir = tempfile::tempdir().unwrap();
+        let clone = clone_dir.path().join("clone");
+        git_in_dir(
+            clone_dir.path(),
+            &[
+                "clone",
+                remote.path().to_str().unwrap(),
+                clone.to_str().unwrap(),
+            ],
+        )
+        .unwrap();
+        git_in_dir(
+            &clone,
+            &["checkout", "-b", "topic", "--track", "origin/topic"],
+        )
+        .unwrap();
+        let clone_actions = GitActions::open(&dunce::canonicalize(&clone).unwrap()).unwrap();
+        let upstream_oid =
+            fixture_commit(&clone_actions, "topic.txt", "branch update", "topic new");
+        git_in_dir(&clone, &["push", "origin", "refs/heads/topic"]).unwrap();
+        let before_file = fs::read(work.path().join("a.txt")).unwrap();
+        assert!(
+            actions.pull_branch_without_switch(&current).is_err(),
+            "checked-out current branch must not be advanced without updating its worktree"
+        );
+        assert!(actions
+            .pull_branch_without_switch("topic")
+            .unwrap()
+            .contains("without switching"));
+        assert_eq!(
+            actions
+                .repo
+                .find_branch("topic", BranchType::Local)
+                .unwrap()
+                .get()
+                .peel_to_commit()
+                .unwrap()
+                .id(),
+            upstream_oid
+        );
+        assert_eq!(
+            actions.repo.head().unwrap().peel_to_commit().unwrap().id(),
+            original
+        );
+        assert_eq!(actions.repo.head().unwrap().shorthand().unwrap(), current);
+        assert_eq!(fs::read(work.path().join("a.txt")).unwrap(), before_file);
+        assert!(!work.path().join("topic.txt").exists());
+    }
+
+    #[test]
+    fn selected_branch_push_uses_exact_upstream_and_never_moves_head() {
+        let (work, remote, actions, _current) = bare_remote_fixture();
+        let head = actions.repo.head().unwrap().peel_to_commit().unwrap();
+        let original = head.id();
+        actions.repo.branch("topic", &head, false).unwrap();
+        git_in_dir(
+            actions.root(),
+            &["push", "-u", "origin", "refs/heads/topic"],
+        )
+        .unwrap();
+        let tree = head.tree().unwrap();
+        let signature = Signature::now("Test", "test@example.invalid").unwrap();
+        let new = actions
+            .repo
+            .commit(None, &signature, &signature, "topic only", &tree, &[&head])
+            .unwrap();
+        actions
+            .repo
+            .find_reference("refs/heads/topic")
+            .unwrap()
+            .set_target(new, "test fixture advances non-checked-out topic")
+            .unwrap();
+        assert!(actions
+            .push_branch_without_switch("topic")
+            .unwrap()
+            .contains("without switching"));
+        assert_eq!(
+            Repository::open_bare(remote.path())
+                .unwrap()
+                .find_reference("refs/heads/topic")
+                .unwrap()
+                .target()
+                .unwrap(),
+            new
+        );
+        assert_eq!(
+            actions.repo.head().unwrap().peel_to_commit().unwrap().id(),
+            original
+        );
+        assert_eq!(
+            fs::read_to_string(work.path().join("a.txt")).unwrap(),
+            "before"
+        );
+        assert!(actions.push_branch_without_switch("../unsafe").is_err());
     }
 
     #[test]

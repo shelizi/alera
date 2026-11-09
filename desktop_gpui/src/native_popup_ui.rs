@@ -438,6 +438,7 @@ impl Workbench {
         remote: bool,
         current: bool,
         has_worktree: bool,
+        armed_remote: Option<(String, bool)>,
     ) -> impl Fn(
         gpui_kit::component::menu::PopupMenu,
         &mut Window,
@@ -455,8 +456,12 @@ impl Workbench {
             let mut actions = vec![("Show branch history", GitGraphBranchMenuAction::History)];
             if !remote && !current {
                 actions.push((
-                    "Compare with current branch",
+                    "Compare: changes on selected branch",
                     GitGraphBranchMenuAction::Compare,
+                ));
+                actions.push((
+                    "Compare: changes on current branch",
+                    GitGraphBranchMenuAction::CompareReverse,
                 ));
                 if has_worktree {
                     actions.push((
@@ -466,6 +471,22 @@ impl Workbench {
                 } else {
                     actions.push(("Switch to branch", GitGraphBranchMenuAction::Switch));
                 }
+                actions.push((
+                    if armed_remote.as_ref() == Some(&(branch.clone(), true)) {
+                        "Confirm Pull branch without checkout"
+                    } else {
+                        "Pull branch without checkout (confirm)"
+                    },
+                    GitGraphBranchMenuAction::PullBranch,
+                ));
+                actions.push((
+                    if armed_remote.as_ref() == Some(&(branch.clone(), false)) {
+                        "Confirm Push branch without checkout"
+                    } else {
+                        "Push branch without checkout (confirm)"
+                    },
+                    GitGraphBranchMenuAction::PushBranch,
+                ));
                 actions.push((
                     "Merge into current branch (confirm)",
                     GitGraphBranchMenuAction::Merge,
