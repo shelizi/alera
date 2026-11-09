@@ -46,7 +46,9 @@ use alera_gpui_desktop::native_modal::NativeModalSize;
 use alera_gpui_desktop::native_settings::{NativeSettings, NativeSettingsStore};
 use alera_gpui_desktop::project_search::{ContentMatch, ProjectSearch};
 use alera_gpui_desktop::project_tree::{
-    collect_project_tree_with_registered, sidebar_workspaces_for_group, ProjectTreeGroup,
+    collect_project_tree_with_registered, project_group_matches_search,
+    project_title_matches_search, sidebar_workspaces_for_group,
+    worktree_matches_search, ProjectTreeGroup,
 };
 use alera_gpui_desktop::runtime_bridge::{ProjectRemovalPreview, RuntimeCliBridge};
 use alera_gpui_desktop::runtime_catalog::RuntimeCatalog;
@@ -350,6 +352,7 @@ struct Workbench {
     project_tree_loading: bool,
     project_tree_request: u64,
     show_recent_workspaces: bool,
+    sidebar_search_input: Entity<QuickOpenInput>,
     worktrees: Vec<WorktreeEntry>,
     worktree_error: Option<String>,
     worktree_loading: bool,
@@ -5653,12 +5656,6 @@ impl Render for Workbench {
             Some((label, preview))
         });
         let mixed_drag_generation = self.workspace_generation;
-        let folder_name = self
-            .model
-            .directory()
-            .file_name()
-            .map(|name| name.to_string_lossy().to_string())
-            .unwrap_or_else(|| self.model.directory().display().to_string());
         let filename = self
             .model
             .selected_path()
@@ -5780,6 +5777,9 @@ impl Render for Workbench {
         let status = self.model.status().to_owned();
         let branch = self.model.branch().to_owned();
         let show_recent_workspaces = self.show_recent_workspaces;
+        let sidebar_search_input = self.sidebar_search_input.clone();
+        let sidebar_search_query = self.sidebar_search_input.read(cx).query().trim().to_owned();
+        let sidebar_search_active = !sidebar_search_query.is_empty();
         let picking_workspace = self.picking_workspace;
         let workspace_root = self.model.root().to_path_buf();
         let recent_workspaces: Vec<_> = self
@@ -5794,13 +5794,19 @@ impl Render for Workbench {
             .project_tree_groups
             .iter()
             .take(45)
-            .cloned()
             .enumerate()
+            .filter(|(_, group)| {
+                project_group_matches_search(group, self.runtime_catalog.as_ref(), &sidebar_search_query)
+            })
             .map(|(index, group)| {
-                let collapsed = self.collapsed_project_roots.contains(&group.root);
-                (index, group, collapsed)
+                // Searching temporarily expands matching descendants without
+                // modifying the user's persisted collapse preference.
+                let collapsed = !sidebar_search_active
+                    && self.collapsed_project_roots.contains(&group.root);
+                (index, group.clone(), collapsed)
             })
             .collect();
+        let sidebar_search_empty = sidebar_search_active && project_tree_rows.is_empty();
         let project_tree_loading = self.project_tree_loading;
         let runtime_catalog = self.runtime_catalog.clone();
         let runtime_catalog_error = self.runtime_catalog_error.clone();
@@ -6232,7 +6238,7 @@ impl Render for Workbench {
                         div()
                             .text_xs()
                             .text_color(rgb(MUTED))
-                            .child("NATIVE PREVIEW"),
+                            .child("Native"),
                     )
                     .child(div().flex_1())
                     .child(div()
@@ -6345,12 +6351,6 @@ impl Render for Workbench {
                                                         this.begin_explorer_action(ExplorerAction::NewFolder, window, cx);
                                                     })),
                                             )
-                                            .child(
-                                                icon_button("explorer-save-all", UiIcon::Save, "Save all editor files", false)
-                                                    .on_click(cx.listener(|this, _, _, cx| {
-                                                        this.save_all_editors(cx);
-                                                    })),
-                                            )
                                             .child({
                                                 let owner = cx.entity().downgrade();
                                                 let ignored = self.explorer_visibility.show_ignored;
@@ -6392,21 +6392,26 @@ impl Render for Workbench {
                                                                 }),
                                                             );
                                                         }
-                                                        menu
+                                                        let save_owner = owner.clone();
+                                                        menu = menu.item(PopupMenuItem::new("Save all editor files")
+                                                            .on_click(move |_, _, cx| {
+                                                                let _ = save_owner.update(cx, |view, cx| view.save_all_editors(cx));
+                                                            }));
+                                                        let collapse_owner = owner.clone();
+                                                        menu.item(PopupMenuItem::new("Collapse all folders")
+                                                            .on_click(move |_, _, cx| {
+                                                                let _ = collapse_owner.update(cx, |view, cx| {
+                                                                    if let Some(tree) = &mut view.tree {
+                                                                        if let Err(error) = tree.collapse_all() {
+                                                                            view.model.set_status(format!("Collapse All failed: {error}"));
+                                                                        }
+                                                                    }
+                                                                    view.tree_mode = true;
+                                                                    cx.notify();
+                                                                });
+                                                            }))
                                                     })
                                             })
-                                            .child(
-                                                icon_button("explorer-collapse-all", UiIcon::CollapseAll, "Collapse all folders", false)
-                                                    .on_click(cx.listener(|this, _, _window, cx| {
-                                                        if let Some(tree) = &mut this.tree {
-                                                            if let Err(error) = tree.collapse_all() {
-                                                                this.model.set_status(format!("Collapse All failed: {error}"));
-                                                            }
-                                                        }
-                                                        this.tree_mode = true;
-                                                        cx.notify();
-                                                    })),
-                                            )
                                             .child(
                                                 icon_button("explorer-refresh", UiIcon::Refresh, "Refresh Explorer", false)
                                                     .on_click(cx.listener(|this, _, _, cx| {
@@ -8037,7 +8042,7 @@ impl Render for Workbench {
                                             .id("projects-toggle")
                                             .cursor_pointer()
                                             .font_weight(gpui::FontWeight::BOLD)
-                                            .child(if show_recent_workspaces { "Projects ▾" } else { "Projects ▸" })
+                                            .child(if show_recent_workspaces { "Recent ▾" } else { "Recent ▸" })
                                             .on_click(cx.listener(|this, _, _, cx| {
                                                 this.show_recent_workspaces = !this.show_recent_workspaces;
                                                 cx.notify();
@@ -8052,9 +8057,8 @@ impl Render for Workbench {
                             )
                             .child(
                                 div()
-                                    .text_xs()
-                                    .text_color(rgb(MUTED))
-                                    .child(format!("Active workspace · {folder_name}")),
+                                    .id("projects-sidebar-search")
+                                    .child(sidebar_search_input),
                             )
                             .child(
                                 div()
@@ -8093,11 +8097,10 @@ impl Render for Workbench {
                                     )
                                     .child(if let Some(error) = runtime_catalog_error {
                                         div().text_xs().text_color(rgb(MUTED))
-                                            .child(format!("Local fallback · {error}"))
+                                            .child(format!("Project catalog unavailable · {error}"))
                                             .into_any_element()
                                     } else {
-                                        div().text_xs().text_color(rgb(MUTED))
-                                            .child("Classic RuntimeStore · synced").into_any_element()
+                                        div().h(px(0.0)).into_any_element()
                                     })
                                     .child(if let Some(input) = sidebar_rename_input {
                                         div().flex().flex_col().gap_1().p_2()
@@ -8137,6 +8140,18 @@ impl Render for Workbench {
                                     } else {
                                         div().h(px(0.0)).into_any_element()
                                     })
+                                    .child(if sidebar_search_empty {
+                                        div()
+                                            .id("project-search-empty")
+                                            .px_2()
+                                            .py_3()
+                                            .text_sm()
+                                            .text_color(rgb(MUTED))
+                                            .child("No matching projects or worktrees")
+                                            .into_any_element()
+                                    } else {
+                                        div().h(px(0.0)).into_any_element()
+                                    })
                                     .child(
                                         div()
                                             .id("project-tree-scroll")
@@ -8159,6 +8174,9 @@ impl Render for Workbench {
                                                     .and_then(|catalog| catalog.projects.iter().find(|project| project.root == group.root))
                                                     .map(|project| project.name.clone())
                                                     .unwrap_or_else(|| group.label.clone());
+                                                let show_all_worktrees = project_title_matches_search(
+                                                    &group, runtime_catalog.as_ref(), &sidebar_search_query,
+                                                );
                                                 let rows = order_worktree_rows(
                                                     &sidebar_workspaces_for_group(&group, runtime_catalog.as_ref()),
                                                     runtime_catalog.as_ref(),
@@ -8210,7 +8228,11 @@ impl Render for Workbench {
                                                                     )),
                                                             ),
                                                     )
-                                                    .children(rows.into_iter().take(if collapsed { 0 } else { 96 }).enumerate().map(|(child_index, row)| {
+                                                    .children(rows.into_iter()
+                                                        .filter(|row| !sidebar_search_active || show_all_worktrees
+                                                            || worktree_matches_search(&row.entry, runtime_catalog.as_ref(), &sidebar_search_query))
+                                                        .take(if collapsed { 0 } else { 96 })
+                                                        .enumerate().map(|(child_index, row)| {
                                                         let entry = row.entry;
                                                         let section_header = row.section_header;
                                                         let depth = row.depth;
@@ -8944,6 +8966,10 @@ fn main() {
                             cx.notify();
                         })
                         .detach();
+                        let sidebar_search_input = cx.new(|cx| {
+                            QuickOpenInput::with_placeholder("Search projects / worktrees…", cx)
+                        });
+                        cx.observe(&sidebar_search_input, |_, _, cx| cx.notify()).detach();
                         let settings_menu_search =
                             cx.new(|cx| QuickOpenInput::with_placeholder("Search settings", cx));
                         cx.observe(&settings_menu_search, |_, _, cx| cx.notify())
@@ -9000,7 +9026,8 @@ fn main() {
                             project_tree_loading: false,
                             project_tree_request: 0,
                             collapsed_project_roots: HashSet::new(),
-                            show_recent_workspaces: true,
+                            show_recent_workspaces: false,
+                            sidebar_search_input,
                             worktrees: Vec::new(),
                             worktree_error: None,
                             worktree_loading: false,

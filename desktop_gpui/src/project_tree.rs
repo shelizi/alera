@@ -218,6 +218,78 @@ fn label_for(root: &Path) -> String {
         .unwrap_or_else(|| root.to_string_lossy().into_owned())
 }
 
+/// Project-list search uses Classic display names in addition to Git roots.
+/// Keep filtering entirely read-only: searching must never enumerate or create
+/// worktrees or mutate the RuntimeStore registry.
+pub fn project_title_matches_search(
+    group: &ProjectTreeGroup,
+    catalog: Option<&crate::runtime_catalog::RuntimeCatalog>,
+    query: &str,
+) -> bool {
+    let query = query.trim().to_lowercase();
+    if query.is_empty() {
+        return true;
+    }
+    group.label.to_lowercase().contains(&query)
+        || group.root.to_string_lossy().to_lowercase().contains(&query)
+        || catalog.is_some_and(|catalog| {
+            catalog.projects.iter().any(|project| {
+                project.root == group.root && project.name.to_lowercase().contains(&query)
+            })
+        })
+}
+
+/// Search worktree branch, registered display name, tags, section and path.
+/// Do not search internal IDs or hidden metadata not shown in the UI.
+pub fn worktree_matches_search(
+    entry: &WorktreeEntry,
+    catalog: Option<&crate::runtime_catalog::RuntimeCatalog>,
+    query: &str,
+) -> bool {
+    let query = query.trim().to_lowercase();
+    if query.is_empty() {
+        return true;
+    }
+    entry.path.to_string_lossy().to_lowercase().contains(&query)
+        || entry
+            .branch
+            .as_deref()
+            .is_some_and(|branch| branch.to_lowercase().contains(&query))
+        || catalog.is_some_and(|catalog| {
+            catalog.workspaces.iter().any(|workspace| {
+                workspace.path == entry.path
+                    && (workspace.name.to_lowercase().contains(&query)
+                        || workspace
+                            .branch
+                            .as_deref()
+                            .is_some_and(|branch| branch.to_lowercase().contains(&query))
+                        || workspace
+                            .tag_names
+                            .iter()
+                            .any(|tag| tag.to_lowercase().contains(&query))
+                        || workspace.section_id.as_deref().is_some_and(|section_id| {
+                            catalog.sections.iter().any(|section| {
+                                section.id == section_id
+                                    && section.name.to_lowercase().contains(&query)
+                            })
+                        }))
+            })
+        })
+}
+
+/// A matching branch must keep its parent project visible even when its
+/// project name does not match, as in Classic's sidebar workspace search.
+pub fn project_group_matches_search(
+    group: &ProjectTreeGroup,
+    catalog: Option<&crate::runtime_catalog::RuntimeCatalog>,
+    query: &str,
+) -> bool {
+    project_title_matches_search(group, catalog, query)
+        || sidebar_workspaces_for_group(group, catalog)
+            .iter()
+            .any(|entry| worktree_matches_search(entry, catalog, query))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -226,6 +298,64 @@ mod tests {
 
     fn canonical(path: &Path) -> PathBuf {
         dunce::canonicalize(path).unwrap()
+    }
+
+    #[test]
+    fn sidebar_search_finds_classic_project_workspace_branch_tag_and_section() {
+        use crate::runtime_catalog::{
+            RuntimeCatalog, RuntimeProject, RuntimeSection, RuntimeWorkspace,
+        };
+        let root = PathBuf::from("C:/repo/main");
+        let linked = PathBuf::from("C:/worktrees/feature");
+        let group = ProjectTreeGroup {
+            root: root.clone(),
+            label: "main".into(),
+            is_saved: true,
+            is_active: false,
+            worktrees: vec![WorktreeEntry {
+                path: linked.clone(),
+                branch: Some("feature/sidebar-ui".into()),
+                detached: false,
+                locked: false,
+                prunable: false,
+                is_primary: false,
+            }],
+            error: None,
+        };
+        let catalog = RuntimeCatalog {
+            projects: vec![RuntimeProject {
+                id: "p1".into(),
+                name: "使用者專案".into(),
+                root,
+            }],
+            workspaces: vec![RuntimeWorkspace {
+                id: "w1".into(),
+                project_id: "p1".into(),
+                name: "設計工作區".into(),
+                path: linked.clone(),
+                branch: Some("feature/sidebar-ui".into()),
+                is_pinned: true,
+                tag_names: vec!["重要".into()],
+                tag_ids: vec!["t1".into()],
+                section_id: Some("s1".into()),
+                parent_workspace_id: None,
+                is_archived: false,
+            }],
+            sections: vec![RuntimeSection {
+                id: "s1".into(),
+                name: "設計分類".into(),
+            }],
+            ..Default::default()
+        };
+        assert!(project_title_matches_search(&group, Some(&catalog), "使用者"));
+        for term in ["sidebar-UI", "設計工作", "重要", "設計分類", "WORKTREES"] {
+            assert!(project_group_matches_search(&group, Some(&catalog), term), "{term}");
+        }
+        assert!(!project_title_matches_search(&group, Some(&catalog), "sidebar-UI"));
+        assert!(worktree_matches_search(&group.worktrees[0], Some(&catalog), "重要"));
+        assert!(project_group_matches_search(&group, Some(&catalog), "  "));
+        assert!(!project_group_matches_search(&group, Some(&catalog), "no-such-name"));
+        assert!(!worktree_matches_search(&group.worktrees[0], None, "重要"));
     }
 
     #[test]

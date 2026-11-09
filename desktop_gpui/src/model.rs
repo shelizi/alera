@@ -53,7 +53,7 @@ impl WorkbenchModel {
             entries: Vec::new(),
             tabs: Vec::new(),
             active_tab: None,
-            status: "Native GPUI preview: file browsing is read-only".into(),
+            status: "Ready · open a file or Terminal tab".into(),
         };
         model.refresh()?;
         Ok(model)
