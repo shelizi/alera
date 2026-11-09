@@ -98,3 +98,14 @@ Native 進一步執行 `cargo test --manifest-path desktop_gpui/Cargo.toml --no-
 這裡的自動重連是 Native 客戶端策略及純邏輯測試；端對端已驗證*新 CLI stream 重新附著仍存在的 Host PTY*，但尚未直接驗證**Host 進程意外退出並重啟後的整個 GPUI 自動恢復路徑**、真實 TUI p95 畫面延遲、長時間背壓/IME 候選窗。Native `supported=false` 與 Classic/正式 Host 隔離維持不變。
 
 **隔離測試清理補強：**首次加入第二個 PTY 的壓測雖然 10/10 通過，但檢查發現兩個**測試執行檔** `__alera-terminal-pty-worker`／`__pty-job-bootstrap` 意外留在背景。只依精確 PID、執行檔路徑及 worker 參數關閉了這兩個測試程序，未碰 Classic 或正式 Host。Smoke teardown 已調整為先對兩個 Test Session 發出 terminate，然後在**該臨時 Host 父程序仍存活時**，Windows 只對 `Popen` 取得的測試 Host PID 執行 `taskkill /T /F /PID`，以回收其整棵臨時 PTY Worker 樹，絕不按映像檔名稱或全域搜尋關閉。修正後重新執行：**10/10 PASS，測試執行檔剩餘程序 0 個**。
+
+## 2026-11-09：雙窗格輸入身份與 Host 暫時中斷畫面保留
+
+對 Native 視窗與模型檢查後，發現兩個會阻礙驗收的實際缺口，均已先加入失敗測試再修正：
+
+1. **第二個 mixed Terminal 缺少 IME TextInput**：原本只有主窗格持有 `QuickOpenInput::terminal` 的隱藏 `EntityInputHandler`，第二窗格僅有焦點把手和 `KeyDown`，因此注音組字提交可能遺失或被當成原始按鍵重複送出。新增第二個獨立 IME capture 與 commit observer；兩窗格的 Unicode KeyDown 均改交由 TextInput，ASCII 去重各自獨立。每次提交重新核對目前焦點窗格與現行 Host Session／workspace／tab 身分，不允許切到 Editor、其他窗格或其他 PTY 後的遲到輸入誤送。切換 Host 或 Workspace 時清空兩份組字與待送 Commit。第二窗格滑鼠放開後重新取得 IME sink 焦點，候選窗仍需要實際 Windows 注音互動驗收。
+2. **短暫 CLI Session list 失敗被誤判為 PTY 全部停止**：原來 `refresh_terminals` 將失敗套用成成功的空清單，使預覽被標記停止、串流恢復無可觀察目標。新增 `session_list_stale` 狀態；失敗時保留既有 Terminal 列表、VT 畫面和 PTY 預覽，但不再允許基於過期名單對 Host 寫入。重新取得有效 Host Session 清單後自動解除 stale、恢復原 Session 身分檢查。收到**成功**空清單時仍正確視為 Session 已消失，不會憑舊畫面重新建立 Shell。
+
+TDD：`delayed_ime_commit_must_match_focused_pane_and_active_host_identity` 首先因缺少身份核對方法而 RED，修正後 GREEN；`transient_host_inventory_failure_preserves_preview_until_authenticated_recovery` 先 RED 再 GREEN。Windows `cargo test --manifest-path desktop_gpui/Cargo.toml --no-default-features --lib --offline --locked` 已完成、exit 0（原 320 項 + 2 項新測試）。`cargo check` 用於額外驗證 UI 實際主程式連結的可編譯性。
+
+**尚未驗收**：Windows 注音真實候選窗／兩窗格連續輸入、真正 Host 進程意外退出再恢復的 GUI 端對端流程、真實 p50/p95、長時間 TUI 壓測。這次只修改 GPUI Native 整合工作樹，不更動 Classic／正式 Host，不代表 `supported=true`，不合併、推送或發布。

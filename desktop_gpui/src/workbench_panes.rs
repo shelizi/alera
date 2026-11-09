@@ -195,6 +195,17 @@ impl WorkbenchPaneLayout {
         }
     }
 
+    /// TextInput/IME commits can arrive after a mouse click moved focus.
+    /// Recheck the *exact* Host identity before accepting any delayed text;
+    /// a former pane or an Editor must never inherit the global PTY target.
+    pub fn authorizes_terminal_input(
+        &self,
+        slot: PaneSlot,
+        active_target: &TerminalTabContextTarget,
+    ) -> bool {
+        self.focused_host_target_for_input(slot) == Some(active_target)
+    }
+
     /// Whether the optional secondary pane currently holds at least one tab.
     pub fn has_secondary(&self) -> bool {
         !self.secondary.is_empty()
@@ -634,6 +645,32 @@ mod tests {
             panes.focused_host_target_for_input(PaneSlot::Secondary),
             None
         );
+    }
+
+    #[test]
+    fn delayed_ime_commit_must_match_focused_pane_and_active_host_identity() {
+        let primary = host("pty-primary");
+        let secondary = host("pty-secondary");
+        let editor = editor(99, 1);
+        let mut panes = WorkbenchPaneLayout::new();
+        panes.reconcile(&[primary.clone(), secondary.clone(), editor.clone()]);
+        fn target(id: &WorkbenchTabIdentity) -> &TerminalTabContextTarget {
+            match id {
+                WorkbenchTabIdentity::Host(target) => target,
+                _ => unreachable!(),
+            }
+        }
+        assert!(panes.authorizes_terminal_input(PaneSlot::Primary, target(&primary)));
+        assert!(panes.split_with(&secondary));
+        assert!(!panes.authorizes_terminal_input(PaneSlot::Primary, target(&primary)));
+        assert!(panes.authorizes_terminal_input(PaneSlot::Secondary, target(&secondary)));
+        assert!(!panes.authorizes_terminal_input(PaneSlot::Secondary, target(&primary)));
+        assert!(panes.activate(&editor));
+        assert!(!panes.authorizes_terminal_input(PaneSlot::Primary, target(&primary)));
+        assert!(panes.focus_pane(PaneSlot::Secondary));
+        assert!(panes.authorizes_terminal_input(PaneSlot::Secondary, target(&secondary)));
+        panes.close_secondary();
+        assert!(!panes.authorizes_terminal_input(PaneSlot::Secondary, target(&secondary)));
     }
 
     #[test]

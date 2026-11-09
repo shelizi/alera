@@ -1467,6 +1467,7 @@ pub struct TerminalDock {
     pub active_tab: Option<usize>,
     pub status: String,
     pub view_mode: TerminalViewMode,
+    session_list_stale: bool,
     next_generation: u64,
     workspace_generation: u64,
 }
@@ -1481,6 +1482,17 @@ impl TerminalDock {
 
     pub fn workspace_generation(&self) -> u64 {
         self.workspace_generation
+    }
+
+    /// A failed CLI inventory is not authoritative evidence of a terminated
+    /// Host session. Keep the current preview and running state for display,
+    /// but reject new identity-sensitive actions until the Host confirms it.
+    pub fn note_session_list_failure(&mut self) {
+        self.session_list_stale = true;
+    }
+
+    pub fn session_list_is_stale(&self) -> bool {
+        self.session_list_stale
     }
 
     /// Preserve the old screen until a safe CLI read arrives, but force that
@@ -1599,7 +1611,8 @@ impl TerminalDock {
     /// Host-owned split pane assignment requires the same still-running
     /// session in the last authenticated Host list.
     pub fn context_target_is_live(&self, target: &TerminalTabContextTarget) -> bool {
-        self.index_for_context(target).is_some()
+        !self.session_list_stale
+            && self.index_for_context(target).is_some()
             && self.sessions.iter().any(|session| {
                 session.running
                     && session.handle == target.handle
@@ -1638,6 +1651,7 @@ impl TerminalDock {
     }
 
     pub fn update_sessions(&mut self, sessions: Vec<TerminalSession>) {
+        self.session_list_stale = false;
         for tab in &mut self.tabs {
             if let Some(session) = sessions.iter().find(|item| {
                 item.handle == tab.handle
@@ -3232,6 +3246,34 @@ mod tests {
         assert!(dock.open("term-1"));
         assert!(dock.index_for_context(&context).is_none());
         assert_eq!(dock.sessions.len(), 2);
+    }
+
+    #[test]
+    fn transient_host_inventory_failure_preserves_preview_until_authenticated_recovery() {
+        let original = session("pty-recover");
+        let mut dock = TerminalDock::for_workspace(7);
+        dock.update_sessions(vec![original.clone()]);
+        assert!(dock.open("pty-recover"));
+        dock.tabs[0].screen.feed("before disconnect");
+        let previous_screen = dock.tabs[0].screen.contents();
+        let target = dock.context_target_at(0).unwrap();
+        assert!(dock.context_target_is_live(&target));
+
+        // A failed CLI list is NOT proof that Host terminated the PTY.
+        dock.note_session_list_failure();
+        assert_eq!(dock.sessions.len(), 1);
+        assert!(dock.tabs[0].running);
+        assert_eq!(dock.tabs[0].screen.contents(), previous_screen);
+        assert!(!dock.context_target_is_live(&target)); // no stale writes
+
+        assert!(dock.apply_session_list(7, vec![original]));
+        assert!(dock.context_target_is_live(&target));
+        assert_eq!(dock.tabs[0].screen.contents(), previous_screen);
+
+        // A successful empty Host inventory is definitive; do not resurrect.
+        assert!(dock.apply_session_list(7, vec![]));
+        assert!(!dock.tabs[0].running);
+        assert!(!dock.context_target_is_live(&target));
     }
 
     #[test]

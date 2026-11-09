@@ -93,6 +93,7 @@ impl QuickOpenInput {
         self.text.clear();
         self.selection = 0..0;
         self.marked = None;
+        self.terminal_committed.clear();
         // A new tab/workspace must never consume a stale KeyDown/TextInput
         // duplicate marker from the previous Host session.
         self.terminal_commit_gate = TerminalTextCommitGate::default();

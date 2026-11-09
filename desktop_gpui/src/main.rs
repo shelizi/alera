@@ -414,6 +414,7 @@ struct Workbench {
     terminals: TerminalDock,
     terminal_panes: TerminalPaneLayout,
     terminal_input: Entity<QuickOpenInput>,
+    secondary_terminal_input: Entity<QuickOpenInput>,
     terminal_keyboard_focus: gpui::FocusHandle,
     secondary_terminal_keyboard_focus: gpui::FocusHandle,
     terminal_key_queue: VecDeque<String>,
@@ -435,6 +436,14 @@ struct Workbench {
 }
 
 impl Workbench {
+    /// A pending composition or ASCII duplicate marker belongs to the
+    /// previous Host tab, not the next pane/Workspace selection.
+    fn clear_terminal_text_inputs(&mut self, cx: &mut Context<Self>) {
+        self.terminal_input.update(cx, |input, cx| input.clear(cx));
+        self.secondary_terminal_input
+            .update(cx, |input, cx| input.clear(cx));
+    }
+
     /// Returns true when this was a multi-selection gesture, which must not
     /// also open or expand the clicked row. All views share visible ordering.
     fn select_explorer_row(
@@ -2672,7 +2681,7 @@ impl Workbench {
         self.terminal_key_queue.clear();
         self.terminal_key_queue_target = None;
         self.terminal_key_sending = false;
-        self.terminal_input.update(cx, |input, cx| input.clear(cx));
+        self.clear_terminal_text_inputs(cx);
         self.terminal_poll = TerminalPollGate::default();
         self.terminal_poll_cadence = TerminalPollCadence::default();
         self.terminal_stream = None;
@@ -3707,7 +3716,7 @@ impl Workbench {
             self.runtime_bridge = RuntimeCliBridge::discover().ok();
         }
         let Some(bridge) = self.runtime_bridge.clone() else {
-            self.terminals.update_sessions(Vec::new());
+            self.terminals.note_session_list_failure();
             self.terminals.status = "Cannot list sessions: install experimental Alera CLI".into();
             cx.notify();
             return;
@@ -3727,7 +3736,8 @@ impl Workbench {
                 view.terminal_list_loading = false;
                 match result {
                     Ok(sessions) => {
-                        let was_disconnected = view.terminals.sessions.is_empty();
+                        let was_disconnected = view.terminals.session_list_is_stale()
+                            || view.terminals.sessions.is_empty();
                         if view.terminals.apply_session_list(generation, sessions) {
                             if was_disconnected && !view.terminals.sessions.is_empty() {
                                 view.terminal_poll.reset();
@@ -3761,7 +3771,10 @@ impl Workbench {
                         }
                     }
                     Err(error) => {
-                        view.terminals.apply_session_list(generation, Vec::new());
+                        // A failed list must not mark every PTY stopped or
+                        // erase the old VT preview. The Host may restart
+                        // and re-expose the same running Session later.
+                        view.terminals.note_session_list_failure();
                         view.terminals.status = if error.kind() == std::io::ErrorKind::NotConnected {
                             "Runtime Host is offline · use + → New Terminal to start one".into()
                         } else {
@@ -3781,7 +3794,7 @@ impl Workbench {
             self.explorer_preview_active = false;
             self.terminal_line_selection = None;
             self.center_view = CenterView::Terminal;
-            self.terminal_input.update(cx, |input, cx| input.clear(cx));
+            self.clear_terminal_text_inputs(cx);
             self.save_terminal_layout();
             self.refresh_terminal_output(cx);
         } else {
@@ -4009,6 +4022,9 @@ impl Workbench {
         else {
             return false;
         };
+        if !self.terminals.context_target_is_live(&target) {
+            return false;
+        }
         if encoded.is_empty() {
             return false;
         }
@@ -4035,7 +4051,39 @@ impl Workbench {
         true
     }
 
-    fn send_terminal_key(&mut self, event: &gpui::KeyDownEvent, cx: &mut Context<Self>) -> bool {
+    /// Native TextInput callbacks may be delayed until after focus has moved.
+    /// The focused pane and globally active Host identity must still agree.
+    fn enqueue_terminal_text_for_pane(
+        &mut self,
+        pane: PaneSlot,
+        encoded: String,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.mixed_panes.has_secondary() {
+            let Some(active_target) = self
+                .terminals
+                .active_tab
+                .and_then(|index| self.terminals.context_target_at(index))
+            else {
+                return false;
+            };
+            if !self.mixed_panes.authorizes_terminal_input(pane, &active_target)
+                || !self.terminals.context_target_is_live(&active_target)
+            {
+                return false;
+            }
+        } else if pane != PaneSlot::Primary {
+            return false;
+        }
+        self.enqueue_terminal_text(encoded, cx)
+    }
+
+    fn send_terminal_key(
+        &mut self,
+        pane: PaneSlot,
+        event: &gpui::KeyDownEvent,
+        cx: &mut Context<Self>,
+    ) -> bool {
         let Some(encoded) = encode_terminal_key(
             &event.keystroke.key,
             event.keystroke.key_char.as_deref(),
@@ -4050,14 +4098,16 @@ impl Workbench {
             && !event.keystroke.modifiers.platform
             && encoded.len() == 1
             && (encoded.as_bytes()[0].is_ascii_graphic() || encoded == " ");
-        let sent = self.enqueue_terminal_text(encoded.clone(), cx);
+        let sent = self.enqueue_terminal_text_for_pane(pane, encoded.clone(), cx);
         if sent && raw_ascii {
             // A subsequent Windows TextInput callback may duplicate this
             // exact KeyDown. Do not suppress TextInput unless KeyDown really
             // reached the selected Host input queue.
-            self.terminal_input.update(cx, |input, _| {
-                input.note_terminal_ascii_key(&encoded);
-            });
+            let input = match pane {
+                PaneSlot::Primary => &self.terminal_input,
+                PaneSlot::Secondary => &self.secondary_terminal_input,
+            };
+            input.update(cx, |input, _| input.note_terminal_ascii_key(&encoded));
         }
         sent
     }
@@ -4083,29 +4133,27 @@ impl Workbench {
         } else if pane != PaneSlot::Primary {
             return false;
         }
-        if pane == PaneSlot::Primary {
-            if event.keystroke.modifiers.control
-                && !event.keystroke.modifiers.shift
-                && event.keystroke.key.eq_ignore_ascii_case("v")
-            {
-                if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-                    return self.enqueue_terminal_text(text, cx);
-                }
-                return true;
+        if event.keystroke.modifiers.control
+            && !event.keystroke.modifiers.shift
+            && event.keystroke.key.eq_ignore_ascii_case("v")
+        {
+            if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
+                return self.enqueue_terminal_text_for_pane(pane, text, cx);
             }
-            // GPUI may deliver both a native text commit and a KeyDown for
-            // the same printable character. Never duplicate it in the PTY.
-            if alera_gpui_desktop::terminal::is_text_input_keystroke(
-                &event.keystroke.key,
-                event.keystroke.key_char.as_deref(),
-                event.keystroke.modifiers.control,
-                event.keystroke.modifiers.alt,
-                event.keystroke.modifiers.platform,
-            ) {
-                return false;
-            }
+            return true;
         }
-        self.send_terminal_key(event, cx)
+        // KeyDown and the native IME/TextInput commit are two paths to the
+        // same Host. This must apply to BOTH panes, not just primary.
+        if alera_gpui_desktop::terminal::is_text_input_keystroke(
+            &event.keystroke.key,
+            event.keystroke.key_char.as_deref(),
+            event.keystroke.modifiers.control,
+            event.keystroke.modifiers.alt,
+            event.keystroke.modifiers.platform,
+        ) {
+            return false;
+        }
+        self.send_terminal_key(pane, event, cx)
     }
 
     fn flush_terminal_key_queue(&mut self, cx: &mut Context<Self>) {
@@ -4761,13 +4809,14 @@ impl Workbench {
                     if self.terminals.active_tab != Some(index) {
                         self.terminal_key_queue.clear();
                         self.terminal_key_queue_target = None;
+                        self.clear_terminal_text_inputs(cx);
                     }
                     self.terminals.activate(index);
                     self.center_view = CenterView::Terminal;
                     self.save_terminal_layout();
                     self.refresh_terminal_output(cx);
                     if self.mixed_panes.focused_pane() == PaneSlot::Secondary {
-                        window.focus(&self.secondary_terminal_keyboard_focus, cx);
+                        window.focus(&self.secondary_terminal_input.read(cx).focus_handle(cx), cx);
                     } else {
                         window.focus(&self.terminal_input.read(cx).focus_handle(cx), cx);
                     }
@@ -4807,6 +4856,7 @@ impl Workbench {
         if self.terminals.active_tab != Some(index) {
             self.terminal_key_queue.clear();
             self.terminal_key_queue_target = None;
+            self.clear_terminal_text_inputs(cx);
         }
         self.terminals.activate(index);
         self.explorer_preview_active = false;
@@ -5602,6 +5652,7 @@ impl Render for Workbench {
         let terminal_status = self.terminals.status.clone();
         let has_terminal_preview = primary_terminal.is_some();
         let terminal_input = self.terminal_input.clone();
+        let secondary_terminal_input = self.secondary_terminal_input.clone();
         let terminal_keyboard_focus = self.terminal_keyboard_focus.clone();
         let secondary_terminal_keyboard_focus = self.secondary_terminal_keyboard_focus.clone();
         let terminal_is_vt = self.terminals.view_mode == TerminalViewMode::Screen;
@@ -7573,16 +7624,22 @@ impl Render for Workbench {
                                                                 if this.terminals.active_tab != Some(index) {
                                                                     this.terminal_key_queue.clear();
                                                                     this.terminal_key_queue_target = None;
+                                                                    this.clear_terminal_text_inputs(cx);
                                                                 }
                                                                 this.mixed_panes.focus_pane(PaneSlot::Secondary);
                                                                 this.terminals.activate(index);
                                                                 this.center_view = CenterView::Terminal;
                                                                 this.refresh_terminal_output(cx);
                                                                 this.save_mixed_pane_layout(cx);
-                                                                window.focus(&this.secondary_terminal_keyboard_focus, cx);
+                                                                window.focus(&this.secondary_terminal_input.read(cx).focus_handle(cx), cx);
                                                                 cx.notify();
                                                                 }
                                                             }
+                                                        }
+                                                    }))
+                                                    .on_mouse_up(gpui::MouseButton::Left, cx.listener(|this, _, window, cx| {
+                                                        if this.mixed_panes.focused_pane() == PaneSlot::Secondary {
+                                                            window.focus(&this.secondary_terminal_input.read(cx).focus_handle(cx), cx);
                                                         }
                                                     }))
                                                     .on_key_down(cx.listener(move |this, event: &gpui::KeyDownEvent, _, cx| {
@@ -7599,6 +7656,7 @@ impl Render for Workbench {
                                                     .p_3()
                                                     .font_family("JetBrains Mono")
                                                     .text_size(px(terminal_font_size))
+                                                    .child(secondary_terminal_input)
                                                     .child(if let Some(rows) = mixed_secondary_vt_rows {
                                                         div()
                                                             .id("mixed-secondary-colored-grid")
@@ -8415,6 +8473,7 @@ fn main() {
                 |_, cx| {
                     let view = cx.new(|cx| {
                         let terminal_input = cx.new(QuickOpenInput::terminal);
+                        let secondary_terminal_input = cx.new(QuickOpenInput::terminal);
                         cx.observe(&terminal_input, |view: &mut Workbench, input, cx| {
                             // GPUI TextInput delivers ASCII and finalized IME
                             // characters here. Composing text never enters a
@@ -8422,7 +8481,15 @@ fn main() {
                             let committed =
                                 input.update(cx, |input, _| input.take_terminal_committed());
                             for text in committed {
-                                view.enqueue_terminal_text(text, cx);
+                                view.enqueue_terminal_text_for_pane(PaneSlot::Primary, text, cx);
+                            }
+                        })
+                        .detach();
+                        cx.observe(&secondary_terminal_input, |view: &mut Workbench, input, cx| {
+                            let committed =
+                                input.update(cx, |input, _| input.take_terminal_committed());
+                            for text in committed {
+                                view.enqueue_terminal_text_for_pane(PaneSlot::Secondary, text, cx);
                             }
                         })
                         .detach();
@@ -8572,6 +8639,7 @@ fn main() {
                             terminals: TerminalDock::for_workspace(0),
                             terminal_panes: TerminalPaneLayout::default(),
                             terminal_input,
+                            secondary_terminal_input,
                             terminal_keyboard_focus: cx.focus_handle(),
                             secondary_terminal_keyboard_focus: cx.focus_handle(),
                             terminal_key_queue: VecDeque::new(),
