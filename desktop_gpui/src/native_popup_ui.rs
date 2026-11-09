@@ -703,17 +703,24 @@ impl Workbench {
                     });
                 }));
             }
-            let reset_owner = owner.clone();
-            let reset_oid = oid.clone();
-            menu = menu.item(
-                PopupMenuItem::new("Soft reset current branch here (preview)...").on_click(
-                    move |_, _, cx| {
-                        let _ = reset_owner.update(cx, |view, cx| {
-                            view.preview_git_soft_reset(reset_oid.clone(), cx);
-                        });
-                    },
+            for (label, mode) in [
+                (
+                    "Soft Reset current branch here (preview)...",
+                    NativeResetMode::Soft,
                 ),
-            );
+                (
+                    "Mixed Reset current branch here (preview)...",
+                    NativeResetMode::Mixed,
+                ),
+            ] {
+                let reset_owner = owner.clone();
+                let reset_oid = oid.clone();
+                menu = menu.item(PopupMenuItem::new(label).on_click(move |_, _, cx| {
+                    let _ = reset_owner.update(cx, |view, cx| {
+                        view.preview_git_soft_reset(reset_oid.clone(), mode, cx);
+                    });
+                }));
+            }
             let create_worktree = owner.clone();
             let worktree_sha = oid.clone();
             menu = menu.item(PopupMenuItem::new("Create Worktree at commit…").on_click(

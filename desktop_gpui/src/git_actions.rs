@@ -534,6 +534,64 @@ impl GitActions {
         ))
     }
 
+    /// Reset HEAD and the index to a reviewed unpublished ancestor while
+    /// leaving all working files untouched. A recovery ref is retained in
+    /// case Git fails after beginning its own mixed-reset transaction.
+    pub fn apply_mixed_reset(&self, plan: &GitSoftResetPreview) -> Result<String, String> {
+        let fresh = self.preview_soft_reset(&plan.target_oid)?;
+        if &fresh != plan {
+            return Err("Mixed Reset preview is stale; refresh and review again".into());
+        }
+        let previous = Oid::from_str(&plan.current_oid).map_err(|error| error.to_string())?;
+        let target = self
+            .repo
+            .find_commit(Oid::from_str(&plan.target_oid).map_err(|error| error.to_string())?)
+            .map_err(|error| error.to_string())?;
+        let backup = format!("refs/alera/native-mixed-reset-backup/{}", plan.current_oid);
+        match self.repo.find_reference(&backup) {
+            Ok(existing) if existing.target() == Some(previous) => {}
+            Ok(_) => return Err("Mixed Reset backup already points to a different commit".into()),
+            Err(error) if error.code() == git2::ErrorCode::NotFound => {
+                self.repo
+                    .reference(&backup, previous, false, "alera native mixed reset safety")
+                    .map_err(|error| format!("Cannot create Mixed Reset recovery ref: {error}"))?;
+            }
+            Err(error) => return Err(format!("Cannot validate Mixed Reset recovery ref: {error}")),
+        }
+        self.repo
+            .reset(target.as_object(), git2::ResetType::Mixed, None)
+            .map_err(|error| {
+                format!(
+                    "Mixed Reset failed: {error}. Review Git state; original HEAD is at {backup}"
+                )
+            })?;
+        let head = self.repo.head().map_err(|error| {
+            format!("Cannot verify HEAD after Mixed Reset: {error}; backup {backup}")
+        })?;
+        let tree = self
+            .repo
+            .index()
+            .and_then(|mut index| index.write_tree())
+            .map_err(|error| {
+                format!("Cannot verify Index after Mixed Reset: {error}; backup {backup}")
+            })?;
+        if head.shorthand().ok() != Some(plan.current_branch.as_str())
+            || head.target() != Some(target.id())
+            || tree != target.tree_id()
+        {
+            return Err(format!(
+                "Mixed Reset ended in an unexpected state. Review before further changes; backup {backup}"
+            ));
+        }
+        Ok(format!(
+            "Mixed Reset {} from {} to {}; Index updated and working files preserved. Backup: {}",
+            plan.current_branch,
+            &plan.current_oid[..8],
+            &plan.target_oid[..8],
+            backup
+        ))
+    }
+
     fn conflicting_merge_index(&self, source: &str) -> Result<(String, Oid, Oid, Index), String> {
         if !valid_branch(source) {
             return Err("Enter a valid local source branch".into());
@@ -2305,6 +2363,70 @@ mod tests {
             .unwrap();
         actions.repo.set_head("refs/heads/main").unwrap();
         assert!(actions.preview_soft_reset(&first.to_string()).is_err());
+    }
+
+    #[test]
+    fn mixed_reset_moves_head_and_index_but_preserves_working_file_bytes() {
+        let (_dir, actions, first, second) = soft_reset_fixture();
+        let before = fs::read(actions.root.join("a.txt")).unwrap();
+        let plan = actions.preview_soft_reset(&first.to_string()).unwrap();
+        let result = actions.apply_mixed_reset(&plan).unwrap();
+        assert!(result.contains("working files preserved"));
+        assert_eq!(actions.repo.head().unwrap().target(), Some(first));
+        assert_eq!(
+            actions.repo.index().unwrap().write_tree().unwrap(),
+            actions.repo.find_commit(first).unwrap().tree_id()
+        );
+        assert_eq!(fs::read(actions.root.join("a.txt")).unwrap(), before);
+        assert!(actions
+            .repo
+            .status_file(Path::new("a.txt"))
+            .unwrap()
+            .contains(git2::Status::WT_MODIFIED));
+        assert_eq!(
+            actions
+                .repo
+                .find_reference(&format!("refs/alera/native-mixed-reset-backup/{second}"))
+                .unwrap()
+                .target(),
+            Some(second)
+        );
+        assert_eq!(actions.repo.state(), git2::RepositoryState::Clean);
+    }
+
+    #[test]
+    fn mixed_reset_revalidates_dirty_and_published_state_without_backup() {
+        let (_dir, actions, first, second) = soft_reset_fixture();
+        let plan = actions.preview_soft_reset(&first.to_string()).unwrap();
+        fs::write(actions.root.join("extra.tmp"), "untracked").unwrap();
+        assert!(actions.apply_mixed_reset(&plan).is_err());
+        fs::remove_file(actions.root.join("extra.tmp")).unwrap();
+        actions
+            .repo
+            .remote("origin", "https://example.invalid/repo.git")
+            .unwrap();
+        actions
+            .repo
+            .reference("refs/remotes/origin/feature/reset", second, true, "fixture")
+            .unwrap();
+        actions
+            .repo
+            .config()
+            .unwrap()
+            .set_str("branch.feature/reset.remote", "origin")
+            .unwrap();
+        actions
+            .repo
+            .config()
+            .unwrap()
+            .set_str("branch.feature/reset.merge", "refs/heads/feature/reset")
+            .unwrap();
+        assert!(actions.apply_mixed_reset(&plan).is_err());
+        assert_eq!(actions.repo.head().unwrap().target(), Some(second));
+        assert!(actions
+            .repo
+            .find_reference(&format!("refs/alera/native-mixed-reset-backup/{second}"))
+            .is_err());
     }
 
     fn rebase_fixture(conflicting: bool) -> (tempfile::TempDir, GitActions, Oid, Oid) {
