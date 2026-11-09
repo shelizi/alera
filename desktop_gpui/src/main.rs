@@ -45,9 +45,9 @@ use alera_gpui_desktop::session::{PreviewSessionStore, TerminalLayout, TerminalL
 use alera_gpui_desktop::terminal::{
     encode_terminal_key, estimate_terminal_viewport, raw_key_reply_may_drain,
     select_registered_host_workspace, terminal_ime_anchor_px, TerminalAutoResizeGate,
-    TerminalCreateFlow,
-    TerminalCreateTick, TerminalDock, TerminalLineSelection, TerminalPollCadence, TerminalPollGate,
-    TerminalTabContextTarget, TerminalViewMode, TerminalViewportProposal, HOST_SESSION_LIST_SCOPE,
+    TerminalCreateFlow, TerminalCreateTick, TerminalDock, TerminalLineSelection,
+    TerminalPollCadence, TerminalPollGate, TerminalTabContextTarget, TerminalViewMode,
+    TerminalViewportProposal, HOST_SESSION_LIST_SCOPE,
 };
 use alera_gpui_desktop::terminal_panes::{TerminalPaneLayout, TerminalSplitDirection};
 use alera_gpui_desktop::terminal_stream_bridge::{
@@ -365,6 +365,7 @@ struct Workbench {
     git_conflict_loading: bool,
     git_conflict_request: u64,
     git_conflict_confirm_armed: bool,
+    git_filter_input: Entity<QuickOpenInput>,
     git_commit_input: Entity<QuickOpenInput>,
     git_branch_input: Entity<QuickOpenInput>,
     git_action_busy: bool,
@@ -2640,6 +2641,8 @@ impl Workbench {
         self.git_conflict_request = self.git_conflict_request.wrapping_add(1);
         self.git_action_request = self.git_action_request.wrapping_add(1);
         self.git_action_status.clear();
+        self.git_filter_input
+            .update(cx, |input, cx| input.clear(cx));
         self.git_commit_input
             .update(cx, |input, cx| input.clear(cx));
         self.git_branch_input
@@ -4068,7 +4071,9 @@ impl Workbench {
             else {
                 return false;
             };
-            if !self.mixed_panes.authorizes_terminal_input(pane, &active_target)
+            if !self
+                .mixed_panes
+                .authorizes_terminal_input(pane, &active_target)
                 || !self.terminals.context_target_is_live(&active_target)
             {
                 return false;
@@ -5233,7 +5238,11 @@ impl Workbench {
         let mut disconnected = false;
         for update in updates {
             match update {
-                StreamViewUpdate::RecoveryReady { session_id, workspace_id, tab_id } => {
+                StreamViewUpdate::RecoveryReady {
+                    session_id,
+                    workspace_id,
+                    tab_id,
+                } => {
                     // Only this still-open, same-workspace preview can
                     // authorize an inventory refresh after Host recovery.
                     // Do not mark a tab running or send input on the basis
@@ -5806,8 +5815,10 @@ impl Render for Workbench {
             .and_then(|index| self.terminals.tabs.get(index))
             .and_then(|tab| {
                 terminal_ime_anchor_px(
-                    tab.screen.cursor(), primary_width,
-                    (primary_height - TAB_STRIP_HEIGHT).max(24.0), terminal_font_size,
+                    tab.screen.cursor(),
+                    primary_width,
+                    (primary_height - TAB_STRIP_HEIGHT).max(24.0),
+                    terminal_font_size,
                 )
             })
             .unwrap_or((12.0, 8.0));
@@ -5927,10 +5938,12 @@ impl Render for Workbench {
                 }
             )
         };
+        let git_filter_input = self.git_filter_input.clone();
+        let git_filter = self.git_filter_input.read(cx).query().to_owned();
         let git_changes = self
             .git_snapshot
             .as_ref()
-            .map(|snapshot| snapshot.changed_files.clone())
+            .map(|snapshot| snapshot.visible_rows(&git_filter))
             .unwrap_or_default();
         let git_action_busy = self.git_action_busy;
         let git_sensitive_armed = self.git_sensitive_armed;
@@ -7041,13 +7054,16 @@ impl Render for Workbench {
                                 .text_xs()
                                 .text_color(rgb(MUTED))
                                 .child(if git_action_busy { "Git operation running…".to_owned() } else { git_action_status }))
+                            .child(git_filter_input)
                             .child(
                                 div()
                                     .id("git-change-list")
                                     .max_h(px(135.0))
                                     .overflow_y_scroll()
                                     .children(git_changes.into_iter().enumerate().map(|(i, change)| {
-                                        let label = format!("{} {}", change.label, change.relative.display());
+                                        let label = format!("{} {} {}", change.area.title(), change.label, change.relative.display());
+                                        let can_stage = change.area.can_stage();
+                                        let can_unstage = change.area.can_unstage();
                                         let relative = change.relative;
                                         let stage_path = relative.clone();
                                         let unstage_path = relative.clone();
@@ -7068,14 +7084,14 @@ impl Render for Workbench {
                                                 .on_click(cx.listener(move |this, _, _, cx| {
                                                     this.preview_git_change(relative.clone(), cx);
                                                 })))
-                                            .child(icon_button(("git-stage-file", i), UiIcon::GitStage, "Stage this file for commit", false)
+                                            .when(can_stage, |row| row.child(icon_button(("git-stage-file", i), UiIcon::GitStage, "Stage this file for commit", false)
                                                 .on_click(cx.listener(move |this, _, _, cx| {
                                                     this.run_git_action(GitUiAction::Stage(stage_path.clone()), cx);
-                                                })))
-                                            .child(icon_button(("git-unstage-file", i), UiIcon::GitUnstage, "Unstage this file (keep working edits)", false)
+                                                }))))
+                                            .when(can_unstage, |row| row.child(icon_button(("git-unstage-file", i), UiIcon::GitUnstage, "Unstage this file (keep working edits)", false)
                                                 .on_click(cx.listener(move |this, _, _, cx| {
                                                     this.run_git_action(GitUiAction::Unstage(unstage_path.clone()), cx);
-                                                })))
+                                                }))))
                                     })),
                             )
                             .child(
@@ -8608,31 +8624,47 @@ fn main() {
                     let view = cx.new(|cx| {
                         let terminal_input = cx.new(QuickOpenInput::terminal);
                         let secondary_terminal_input = cx.new(QuickOpenInput::terminal);
-                        cx.observe_in(&terminal_input, window, |view: &mut Workbench, input, window, cx| {
-                            // GPUI TextInput delivers ASCII and finalized IME
-                            // characters here. Composing text never enters a
-                            // Host until its native input has committed while
-                            // still owning the actual window keyboard focus.
-                            let has_os_focus = input.read(cx).focus_handle(cx).is_focused(window);
-                            let committed =
-                                input.update(cx, |input, _| input.take_terminal_committed());
-                            for text in committed {
-                                view.enqueue_terminal_ime_text_for_pane(
-                                    PaneSlot::Primary, has_os_focus, text, cx,
-                                );
-                            }
-                        })
+                        cx.observe_in(
+                            &terminal_input,
+                            window,
+                            |view: &mut Workbench, input, window, cx| {
+                                // GPUI TextInput delivers ASCII and finalized IME
+                                // characters here. Composing text never enters a
+                                // Host until its native input has committed while
+                                // still owning the actual window keyboard focus.
+                                let has_os_focus =
+                                    input.read(cx).focus_handle(cx).is_focused(window);
+                                let committed =
+                                    input.update(cx, |input, _| input.take_terminal_committed());
+                                for text in committed {
+                                    view.enqueue_terminal_ime_text_for_pane(
+                                        PaneSlot::Primary,
+                                        has_os_focus,
+                                        text,
+                                        cx,
+                                    );
+                                }
+                            },
+                        )
                         .detach();
-                        cx.observe_in(&secondary_terminal_input, window, |view: &mut Workbench, input, window, cx| {
-                            let has_os_focus = input.read(cx).focus_handle(cx).is_focused(window);
-                            let committed =
-                                input.update(cx, |input, _| input.take_terminal_committed());
-                            for text in committed {
-                                view.enqueue_terminal_ime_text_for_pane(
-                                    PaneSlot::Secondary, has_os_focus, text, cx,
-                                );
-                            }
-                        })
+                        cx.observe_in(
+                            &secondary_terminal_input,
+                            window,
+                            |view: &mut Workbench, input, window, cx| {
+                                let has_os_focus =
+                                    input.read(cx).focus_handle(cx).is_focused(window);
+                                let committed =
+                                    input.update(cx, |input, _| input.take_terminal_committed());
+                                for text in committed {
+                                    view.enqueue_terminal_ime_text_for_pane(
+                                        PaneSlot::Secondary,
+                                        has_os_focus,
+                                        text,
+                                        cx,
+                                    );
+                                }
+                            },
+                        )
                         .detach();
                         let explorer_filter_input =
                             cx.new(|cx| QuickOpenInput::with_placeholder("Filter files…", cx));
@@ -8726,6 +8758,8 @@ fn main() {
                             git_conflict_loading: false,
                             git_conflict_request: 0,
                             git_conflict_confirm_armed: false,
+                            git_filter_input: cx
+                                .new(|cx| QuickOpenInput::with_placeholder("Filter files…", cx)),
                             git_commit_input: cx
                                 .new(|cx| QuickOpenInput::with_placeholder("Commit message", cx)),
                             git_branch_input: cx

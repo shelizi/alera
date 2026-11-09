@@ -11,6 +11,39 @@ const MAX_PATCH_BYTES: usize = 32 * 1024;
 pub struct GitChange {
     pub relative: PathBuf,
     pub label: &'static str,
+    pub status: git2::Status,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum GitChangeArea {
+    Conflicts,
+    Staged,
+    Changes,
+    Untracked,
+}
+
+impl GitChangeArea {
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::Conflicts => "MERGE CONFLICTS",
+            Self::Staged => "STAGED CHANGES",
+            Self::Changes => "CHANGES",
+            Self::Untracked => "UNTRACKED",
+        }
+    }
+    pub fn can_stage(self) -> bool {
+        matches!(self, Self::Changes | Self::Untracked)
+    }
+    pub fn can_unstage(self) -> bool {
+        self == Self::Staged
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct GitChangeRow {
+    pub relative: PathBuf,
+    pub label: &'static str,
+    pub area: GitChangeArea,
 }
 
 #[derive(Debug, Clone)]
@@ -44,6 +77,7 @@ impl GitSnapshot {
             changed_files.push(GitChange {
                 relative,
                 label: classify(item.status()),
+                status: item.status(),
             });
             if changed_files.len() >= MAX_CHANGES {
                 truncated = true;
@@ -62,6 +96,86 @@ impl GitSnapshot {
             truncated,
             repository_root: root,
         })
+    }
+
+    /// A file staged and edited again appears in both areas, like Classic.
+    pub fn visible_rows(&self, filter: &str) -> Vec<GitChangeRow> {
+        use git2::Status;
+        let filter = filter.trim().to_lowercase();
+        let mut rows = Vec::new();
+        for change in &self.changed_files {
+            if !filter.is_empty()
+                && !change
+                    .relative
+                    .to_string_lossy()
+                    .to_lowercase()
+                    .contains(&filter)
+            {
+                continue;
+            }
+            let status = change.status;
+            let mut push = |area, label| {
+                rows.push(GitChangeRow {
+                    relative: change.relative.clone(),
+                    label,
+                    area,
+                })
+            };
+            if status.contains(Status::CONFLICTED) {
+                push(GitChangeArea::Conflicts, "!");
+                continue;
+            }
+            if status.intersects(
+                Status::INDEX_NEW
+                    | Status::INDEX_MODIFIED
+                    | Status::INDEX_DELETED
+                    | Status::INDEX_RENAMED
+                    | Status::INDEX_TYPECHANGE,
+            ) {
+                push(GitChangeArea::Staged, area_label(status, true));
+            }
+            if status.contains(Status::WT_NEW) {
+                push(GitChangeArea::Untracked, "?");
+            } else if status.intersects(
+                Status::WT_MODIFIED
+                    | Status::WT_DELETED
+                    | Status::WT_RENAMED
+                    | Status::WT_TYPECHANGE,
+            ) {
+                push(GitChangeArea::Changes, area_label(status, false));
+            }
+        }
+        rows.sort_by(|a, b| {
+            a.area
+                .cmp(&b.area)
+                .then_with(|| a.relative.cmp(&b.relative))
+        });
+        rows
+    }
+}
+
+fn area_label(status: git2::Status, index: bool) -> &'static str {
+    use git2::Status;
+    if index {
+        if status.contains(Status::INDEX_DELETED) {
+            "D"
+        } else if status.contains(Status::INDEX_NEW) {
+            "A"
+        } else if status.contains(Status::INDEX_RENAMED) {
+            "R"
+        } else if status.contains(Status::INDEX_TYPECHANGE) {
+            "T"
+        } else {
+            "M"
+        }
+    } else if status.contains(Status::WT_DELETED) {
+        "D"
+    } else if status.contains(Status::WT_RENAMED) {
+        "R"
+    } else if status.contains(Status::WT_TYPECHANGE) {
+        "T"
+    } else {
+        "M"
     }
 }
 
@@ -150,6 +264,40 @@ fn append_diff(diff: &git2::Diff<'_>, out: &mut String) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn staged_and_working_changes_are_distinct_and_filterable() {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(temp.path()).unwrap();
+        fs::write(temp.path().join("shared.txt"), "base\n").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new("shared.txt")).unwrap();
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let signature = git2::Signature::now("Test", "test@example.invalid").unwrap();
+        repo.commit(Some("HEAD"), &signature, &signature, "base", &tree, &[])
+            .unwrap();
+        drop(tree);
+        fs::write(temp.path().join("shared.txt"), "staged\n").unwrap();
+        index.add_path(Path::new("shared.txt")).unwrap();
+        index.write().unwrap();
+        drop(index);
+        fs::write(temp.path().join("shared.txt"), "working\n").unwrap();
+        fs::write(temp.path().join("new.txt"), "untracked\n").unwrap();
+        let snapshot = GitSnapshot::load(temp.path()).unwrap();
+        let rows = snapshot.visible_rows("");
+        assert_eq!(rows.len(), 3);
+        assert!(rows
+            .iter()
+            .any(|r| r.area == GitChangeArea::Staged && r.relative == Path::new("shared.txt")));
+        assert!(rows
+            .iter()
+            .any(|r| r.area == GitChangeArea::Changes && r.relative == Path::new("shared.txt")));
+        assert!(rows
+            .iter()
+            .any(|r| r.area == GitChangeArea::Untracked && r.relative == Path::new("new.txt")));
+        assert_eq!(snapshot.visible_rows("SHARED").len(), 2);
+        assert!(snapshot.visible_rows("nonexistent").is_empty());
+    }
 
     #[test]
     fn read_only_git_status_and_unified_diff_support_unicode_paths() {

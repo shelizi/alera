@@ -116,18 +116,22 @@ mod tests {
                 GitChange {
                     relative: PathBuf::from("src/new.rs"),
                     label: "?",
+                    status: git2::Status::WT_NEW,
                 },
                 GitChange {
                     relative: PathBuf::from("src/modified.rs"),
                     label: "M",
+                    status: git2::Status::WT_MODIFIED,
                 },
                 GitChange {
                     relative: PathBuf::from("src/deleted.rs"),
                     label: "D",
+                    status: git2::Status::WT_DELETED,
                 },
                 GitChange {
                     relative: PathBuf::from("docs/readme.md"),
                     label: "A",
+                    status: git2::Status::INDEX_NEW,
                 },
             ],
         };
@@ -165,14 +169,17 @@ mod tests {
                 GitChange {
                     relative: PathBuf::from("../outside"),
                     label: "M",
+                    status: git2::Status::WT_MODIFIED,
                 },
                 GitChange {
                     relative: PathBuf::from("safe"),
                     label: "?",
+                    status: git2::Status::WT_NEW,
                 },
                 GitChange {
                     relative: PathBuf::from("clean"),
                     label: "·",
+                    status: git2::Status::CURRENT,
                 },
             ],
         };
