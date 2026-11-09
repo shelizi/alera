@@ -1252,11 +1252,12 @@ impl RuntimeStore {
             Utc::now(),
             tab.updated_at + chrono::Duration::milliseconds(1),
         );
+        let persisted_at = format_timestamp(updated_at);
         let updated = sqlx::query(
             "UPDATE workspaceTabs SET updatedAt = ?, payloadJson = ? \
              WHERE id = ? AND workspaceId = ? AND updatedAt = ?",
         )
-        .bind(format_timestamp(updated_at))
+        .bind(&persisted_at)
         .bind(serde_json::to_string(&tab.payload)?)
         .bind(tab_id)
         .bind(workspace_id)
@@ -1268,7 +1269,9 @@ impl RuntimeStore {
             "workspace_tab_pin_revision_conflict"
         );
         tx.commit().await?;
-        tab.updated_at = updated_at;
+        // SQLite stores milliseconds. Return the persisted revision, not
+        // Utc::now's nanos, so a follow-up pin/unpin CAS can round-trip.
+        tab.updated_at = parse_timestamp(&persisted_at);
         Ok(tab)
     }
 
@@ -2079,6 +2082,16 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(first.payload["pinned"], true);
+        assert_eq!(
+            first.updated_at,
+            store
+                .find_workspace_tab("tab-1")
+                .await
+                .unwrap()
+                .unwrap()
+                .updated_at,
+            "Pin CAS readback revision must match actual SQLite milliseconds"
+        );
         assert!(first.payload.get("preview").is_none());
         assert_eq!(first.payload["agentTitleRevision"], "agent-title-1");
         assert_eq!(first.payload["customHostField"]["status"], "running");
