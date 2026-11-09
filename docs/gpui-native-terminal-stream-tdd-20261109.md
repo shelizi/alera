@@ -282,3 +282,12 @@ Validation on Windows: new quick_open_ui::tests::terminal_rejects_delayed_ime_af
 使用隔離 Native Debug 視窗、一次性 Host profile 及兩個獨立 PTY，啟用 `ALERA_GPUI_TSF_TRACE`。畫面上確實出現 Windows 繁中注音 `S U 3` 的「你」候選清單；離開候選後清單消失，但 Explorer 輸入、第二 Terminal Tab 的焦點切換及真實中文 Commit 均未取得可確認證據。桌面輸入橋接器後來報告座標換算後 `SetPhysicalCursorPos failed with Win32 error 0`，故該次 GUI 點擊不可靠，**不得**聲稱跨欄位/跨窗格 Gate 通過，也不能據此判定 UI 有回歸缺陷。
 
 隔離 Smoke 完整結束 `12/12 PASS`，包含先前新增的 PowerShell UTF-8 CJK/Emoji 34-byte 回合與第二 PTY 隔離；這個結果只能涵蓋 Host/CLI/ConPTY 的 UTF-8 與 Native 視窗存活，不能代表 GPUI 真實 IME Commit 正確。為定位焦點轉移問題，在 `quick_open_ui.rs` 補上需明確啟用 trace 才輸出的 `commit/preedit` 事件、terminal/focused 布林值、字元數與輸入 click 的聚焦前狀態，不記錄實際文字。Native bin 專項測試 `5/5 PASS` 且 Debug build PASS，尚待使用可用的桌面橋接器重測並檢視 trace。Classic/Native Release p50/p95 仍未完成；`supported=false` 不變。
+## 2026-11-09：Windows 輸入桌面可用性預檢（第四輪）
+
+跨 Terminal / Explorer 的注音候選窗與正式 Commit 仍未達可採信的自動化實機覆蓋；前輪桌面橋接器曾回報 `SetPhysicalCursorPos failed`。本輪以 Windows Win32 原生 API 在相同位置直接呼叫 `SetCursorPos`、`SetPhysicalCursorPos`，兩者都回報失敗（偵錯時 GetLastError 曾為 203，預檢自身回報 0；錯誤碼不穩定，不臆測底層原因）。顯示器可截圖、`GetCursorPos` 可讀，不等於有能力輸入滑鼠。
+
+為避免日後再次把 UI 自動化未實際作用誤判為成功，隔離腳本 `desktop_gpui/tests/terminal_stream_isolated_smoke.py` 新增 opt-in `--require-interactive-desktop`。必須同時提供 `--native-app`；在**建立任何隔離 Runtime Host 之前**，對邏輯與實體座標各做一次「取得目前游標座標 → 將游標設回相同座標 → 核對沒有位移」。不點擊、不輸入文字、不操作正式 Host。預檢失敗則 argparse 以 code 2 停止並輸出 `Windows IME UI acceptance BLOCKED`，避免被誤判為測試成功；預檢成功只代表可進行 GUI 操作，**不代表**注音焦點與 Commit Gate 已驗收。
+
+新增兩項純測試（含同座標不位移、物理 API 失敗、邏輯 API 失敗、非 Windows 拒絕）：`python -m unittest discover -s desktop_gpui/tests -p test_terminal_load_probes.py -v` **17/17 PASS**。實際工作階段預檢如預期回報 `SetCursorPos failed (win32=0)` 並在 Host 啟動前退出，屬預檢成功攔截、**不是**注音功能測試 PASS。未開啟該 opt-in 的既有隔離 Host/CLI/Native UTF-8 Smoke 再次 **12/12 PASS**，包括 CJK/Emoji 34 bytes 與第二 PTY 未污染；因此沒有回歸一般串流。後續需先恢復可用的 Windows 互動桌面，再執行 Primary → Secondary → Explorer 多輪注音、晚到 Commit 防污染、真正 UTF-8 文字 Commit 及 Release 同機 p50/p95。
+
+保持 `supported=false`，不合併 main、不推送、不發布；保留 `.gpui-smoke-20261108/`，不碰 Classic 或正式 Host。

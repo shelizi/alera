@@ -32,6 +32,50 @@ class SmokeError(Exception):
     pass
 
 
+def probe_windows_interactive_desktop(os_name=None, user32=None):
+    """Side-effect-free cursor write-permission preflight for manual IME tests.
+
+    Both Win32 APIs are asked to restore their *own current* pointer position.
+    This does not click, type, focus a window, or interact with any Host.
+    A screenshot alone is not proof that input can be delivered to this desktop.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    if (os_name or os.name) != "nt":
+        return False, "Windows desktop is required"
+
+    class Point(ctypes.Structure):
+        _fields_ = [("x", wintypes.LONG), ("y", wintypes.LONG)]
+
+    if user32 is None:
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        for name in ("GetCursorPos", "GetPhysicalCursorPos"):
+            fn = getattr(user32, name)
+            fn.argtypes = [ctypes.POINTER(Point)]
+            fn.restype = wintypes.BOOL
+        for name in ("SetCursorPos", "SetPhysicalCursorPos"):
+            fn = getattr(user32, name)
+            fn.argtypes = [ctypes.c_int, ctypes.c_int]
+            fn.restype = wintypes.BOOL
+
+    for getter, setter in (
+        ("GetCursorPos", "SetCursorPos"),
+        ("GetPhysicalCursorPos", "SetPhysicalCursorPos"),
+    ):
+        position = Point()
+        if not getattr(user32, getter)(ctypes.byref(position)):
+            return False, f"{getter} failed (win32={ctypes.get_last_error()})"
+        if not getattr(user32, setter)(position.x, position.y):
+            return False, f"{setter} failed (win32={ctypes.get_last_error()})"
+        observed = Point()
+        if not getattr(user32, getter)(ctypes.byref(observed)):
+            return False, f"{getter} verification failed"
+        if (position.x, position.y) != (observed.x, observed.y):
+            return False, f"{setter} unexpectedly moved cursor"
+    return True, "both logical and physical same-position cursor probes succeeded"
+
+
 def checked_cli(executable, profile, *args, timeout=20):
     result = subprocess.run(
         [str(executable), *args[:1], "--runtime-dir", str(profile), "--json", *args[1:]],
@@ -1508,6 +1552,8 @@ if __name__ == "__main__":
                         default="primary", help="real less.exe in first viewport or both verified split panes")
     parser.add_argument("--native-real-tui-rounds", type=int, default=6,
                         help="1..20 interleaved top/end real pager redraw rounds per visible pane")
+    parser.add_argument("--require-interactive-desktop", action="store_true",
+                        help="fail before creating a Host if Win32 cursor input is unavailable; does not assert IME success")
     parser.add_argument("--unicode-shell-gate", action="store_true",
                         help="opt-in strict UTF-8 PowerShell CJK ingress/egress and second-PTY isolation")
     parser.add_argument("--hold-seconds", type=int, default=25)
@@ -1518,6 +1564,13 @@ if __name__ == "__main__":
         parser.error("--hold-seconds must be between 1 and 180")
     if (args.native_reconnect or args.native_host_restart) and args.native_app is None:
         parser.error("Native fault injection requires --native-app")
+    if args.require_interactive_desktop:
+        if args.native_app is None:
+            parser.error("--require-interactive-desktop needs --native-app")
+        available, detail = probe_windows_interactive_desktop()
+        if not available:
+            parser.error(f"Windows IME UI acceptance BLOCKED: {detail}")
+        print(f"WINDOWS_IME_DESKTOP_INPUT_READY: {detail}", flush=True)
     if args.native_reconnect and args.native_host_restart:
         parser.error("Use only one Native fault injection mode per isolated run")
     if args.native_split_gate and not args.native_host_restart:
