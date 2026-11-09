@@ -487,6 +487,8 @@ struct Workbench {
     git_filter_input: Entity<QuickOpenInput>,
     git_graph_search_input: Entity<QuickOpenInput>,
     git_commit_input: Entity<QuickOpenInput>,
+    git_commit_draft_loading: bool,
+    git_commit_draft_request: u64,
     git_amend_preview: Option<GitAmendPreview>,
     git_amend_loading: bool,
     git_amend_request: u64,
@@ -3000,6 +3002,8 @@ impl Workbench {
         let generation = self.workspace_generation;
         self.git_action_request = self.git_action_request.wrapping_add(1);
         let ticket = self.git_action_request;
+        self.git_commit_draft_request = self.git_commit_draft_request.wrapping_add(1);
+        self.git_commit_draft_loading = false;
         self.git_action_busy = true;
         self.git_graph_remote_armed = None;
         self.git_branch_comparison = None;
@@ -3133,6 +3137,64 @@ impl Workbench {
             .ok();
         })
         .detach();
+    }
+
+    /// A deliberately offline fallback. Classic's AI Assist is configured in
+    /// Flutter and must not be silently replaced with an unapproved agent.
+    /// This only suggests an editable draft from staged Git metadata.
+    fn prepare_offline_commit_draft(&mut self, cx: &mut Context<Self>) {
+        if self.git_action_busy {
+            self.git_action_status = "Finish the current Git operation first".into();
+            cx.notify();
+            return;
+        }
+        if self.git_commit_draft_loading {
+            self.git_commit_draft_request = self.git_commit_draft_request.wrapping_add(1);
+            self.git_commit_draft_loading = false;
+            self.git_action_status = "Discarded pending offline commit draft".into();
+            cx.notify();
+            return;
+        }
+        let initial = self.git_commit_input.read(cx).query().to_owned();
+        let root = self.model.root().to_path_buf();
+        let generation = self.workspace_generation;
+        self.git_commit_draft_request = self.git_commit_draft_request.wrapping_add(1);
+        let request = self.git_commit_draft_request;
+        self.git_commit_draft_loading = true;
+        self.git_action_status = "Preparing offline commit draft from staged files only...".into();
+        cx.spawn(async move |view, cx| {
+            let result = cx.background_spawn(async move {
+                GitActions::open(&root)?.draft_commit_message()
+            }).await;
+            view.update(cx, |view, cx| {
+                if view.workspace_generation != generation
+                    || view.git_commit_draft_request != request
+                {
+                    return;
+                }
+                view.git_commit_draft_loading = false;
+                match result {
+                    Ok(draft) if view.git_commit_input.read(cx).query() == initial => {
+                        view.git_commit_input.update(cx, |input, cx| {
+                            input.set_query(&draft.text, cx);
+                        });
+                        view.git_action_status = format!(
+                            "Offline draft based on {} staged file(s). Review and edit it before committing; no AI was used.",
+                            draft.staged_files
+                        );
+                    }
+                    Ok(_) => {
+                        view.git_action_status =
+                            "Draft not applied because the commit message field changed".into();
+                    }
+                    Err(error) => {
+                        view.git_action_status = format!("Offline commit draft unavailable: {error}");
+                    }
+                }
+                cx.notify();
+            }).ok();
+        }).detach();
+        cx.notify();
     }
 
     fn prepare_or_confirm_git_amend(&mut self, cx: &mut Context<Self>) {
@@ -4385,6 +4447,8 @@ impl Workbench {
             .update(cx, |input, cx| input.clear(cx));
         self.git_commit_input
             .update(cx, |input, cx| input.clear(cx));
+        self.git_commit_draft_request = self.git_commit_draft_request.wrapping_add(1);
+        self.git_commit_draft_loading = false;
         self.git_branch_input
             .update(cx, |input, cx| input.clear(cx));
         self.git_rename_input
@@ -7762,6 +7826,7 @@ impl Render for Workbench {
         let git_sensitive_armed = self.git_sensitive_armed;
         let git_action_status = self.git_action_status.clone();
         let git_commit_input = self.git_commit_input.clone();
+        let git_commit_draft_loading = self.git_commit_draft_loading;
         let git_amend_ready = self.git_amend_preview.is_some();
         let git_amend_loading = self.git_amend_loading;
         let git_branch_input = self.git_branch_input.clone();
@@ -9097,6 +9162,18 @@ impl Render for Workbench {
                                     .items_center()
                                     .gap_1()
                                     .child(git_commit_input)
+                                    .child(icon_button(
+                                        "git-commit-offline-draft",
+                                        if git_commit_draft_loading { UiIcon::Close } else { UiIcon::Edit },
+                                        if git_commit_draft_loading {
+                                            "Discard pending local commit draft"
+                                        } else {
+                                            "Draft commit message from staged file names (offline, not AI)"
+                                        },
+                                        git_commit_draft_loading,
+                                    ).on_click(cx.listener(|this, _, _, cx| {
+                                        this.prepare_offline_commit_draft(cx);
+                                    })))
                                     .child(icon_button("git-commit-submit", UiIcon::GitCommit, "Commit staged changes using this message", false)
                                         .on_click(cx.listener(|this, _, _, cx| {
                                             let message = this.git_commit_input.read(cx).query().trim().to_owned();
@@ -11263,6 +11340,8 @@ fn main() {
                             git_amend_request: 0,
                             git_commit_input: cx
                                 .new(|cx| QuickOpenInput::with_placeholder("Commit message", cx)),
+                            git_commit_draft_loading: false,
+                            git_commit_draft_request: 0,
                             git_branch_input: cx
                                 .new(|cx| QuickOpenInput::with_placeholder("Existing branch", cx)),
                             git_rename_input: cx

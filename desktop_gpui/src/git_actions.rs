@@ -5,7 +5,7 @@
 //! A soft reset uses atomic compare-and-swap to preserve the index/worktree.
 //! Merges use explicit local git2 operations and refuse unresolved conflicts.
 use alera_core::git_cli::git_in_dir;
-use git2::{build::CheckoutBuilder, BranchType, Index, Oid, Repository, StatusOptions};
+use git2::{build::CheckoutBuilder, BranchType, Delta, Index, Oid, Repository, StatusOptions};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
@@ -91,6 +91,15 @@ pub struct GitAmendPreview {
     pub staged_tree_oid: String,
     pub current_message: String,
     pub replacement_message: String,
+}
+
+/// Local, offline draft based only on staged filenames and change kinds.
+/// This is not AI-generated and must not inspect unstaged or untracked data.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GitCommitMessageDraft {
+    pub text: String,
+    pub staged_files: usize,
+    pub head_oid: String,
 }
 
 /// Rewinds only the selected, checked-out local branch ref. A soft reset
@@ -214,6 +223,72 @@ pub struct GitActions {
 }
 
 impl GitActions {
+    pub fn draft_commit_message(&self) -> Result<GitCommitMessageDraft, String> {
+        if self.repo.state() != git2::RepositoryState::Clean {
+            return Err("Resolve the in-progress Git operation before drafting a commit".into());
+        }
+        let head = self.repo.head().map_err(|error| error.to_string())?;
+        if !head.is_branch() {
+            return Err("Commit drafts require an active local branch".into());
+        }
+        let commit = head.peel_to_commit().map_err(|error| error.to_string())?;
+        let tree = commit.tree().map_err(|error| error.to_string())?;
+        let index = self.repo.index().map_err(|error| error.to_string())?;
+        if index.has_conflicts() {
+            return Err("Resolve staged conflicts before drafting a commit".into());
+        }
+        let diff = self
+            .repo
+            .diff_tree_to_index(Some(&tree), Some(&index), None)
+            .map_err(|error| error.to_string())?;
+        let mut changes = Vec::new();
+        for change in diff.deltas() {
+            if changes.len() == 256 {
+                return Err("Offline commit draft supports at most 256 staged files".into());
+            }
+            let path = if change.status() == Delta::Deleted {
+                change.old_file().path()
+            } else {
+                change.new_file().path()
+            }
+            .ok_or("Staged change has no usable path")?;
+            let display = path
+                .to_string_lossy()
+                .chars()
+                .map(|ch| if ch.is_control() { ' ' } else { ch })
+                .take(80)
+                .collect::<String>();
+            changes.push((change.status(), display.trim().to_string()));
+        }
+        if changes.is_empty() {
+            return Err("Stage at least one file before drafting a commit message".into());
+        }
+        let text = if changes.len() == 1 {
+            let (status, path) = &changes[0];
+            let action = match status {
+                Delta::Added => "Add",
+                Delta::Deleted => "Remove",
+                Delta::Renamed => "Rename",
+                _ => "Update",
+            };
+            format!("{action} {path}")
+        } else {
+            let verb = if changes.iter().all(|(status, _)| *status == Delta::Added) {
+                "Add"
+            } else if changes.iter().all(|(status, _)| *status == Delta::Deleted) {
+                "Remove"
+            } else {
+                "Update"
+            };
+            format!("{verb} {} staged files", changes.len())
+        };
+        Ok(GitCommitMessageDraft {
+            text,
+            staged_files: changes.len(),
+            head_oid: commit.id().to_string(),
+        })
+    }
+
     pub fn preview_rebase_onto_branch(&self, target: &str) -> Result<GitRebasePreview, String> {
         if !valid_branch(target) {
             return Err("Rebase target must be an exact local branch name".into());
@@ -2677,6 +2752,48 @@ mod tests {
             .unwrap()
             .get_path(Path::new("extra.txt"), 0)
             .is_none());
+    }
+
+    #[test]
+    fn offline_commit_draft_uses_staged_changes_only_and_never_moves_head() {
+        let (_dir, actions) = repo_fixture();
+        let before = actions.repo.head().unwrap().target();
+        assert!(actions.draft_commit_message().is_err());
+        fs::write(actions.root.join("a.txt"), "after").unwrap();
+        fs::write(actions.root.join("private-untracked.txt"), "SECRET").unwrap();
+        assert!(actions.draft_commit_message().is_err());
+        actions.stage_file(Path::new("a.txt")).unwrap();
+        let draft = actions.draft_commit_message().unwrap();
+        assert_eq!(draft.text, "Update a.txt");
+        assert_eq!(draft.staged_files, 1);
+        assert_eq!(draft.head_oid, before.unwrap().to_string());
+        assert!(!draft.text.contains("private"));
+        assert_eq!(actions.repo.head().unwrap().target(), before);
+        assert_eq!(
+            fs::read(actions.root.join("private-untracked.txt")).unwrap(),
+            b"SECRET"
+        );
+        fs::write(actions.root.join("second.txt"), "second").unwrap();
+        actions.stage_file(Path::new("second.txt")).unwrap();
+        let draft = actions.draft_commit_message().unwrap();
+        assert_eq!(draft.text, "Update 2 staged files");
+        assert_eq!(draft.staged_files, 2);
+        assert_eq!(actions.repo.head().unwrap().target(), before);
+    }
+
+    #[test]
+    fn offline_commit_draft_distinguishes_added_and_deleted_files() {
+        let (_dir, actions) = repo_fixture();
+        fs::write(actions.root.join("added.txt"), "new").unwrap();
+        actions.stage_file(Path::new("added.txt")).unwrap();
+        assert_eq!(
+            actions.draft_commit_message().unwrap().text,
+            "Add added.txt"
+        );
+        actions.unstage_file(Path::new("added.txt")).unwrap();
+        fs::remove_file(actions.root.join("a.txt")).unwrap();
+        actions.stage_file(Path::new("a.txt")).unwrap();
+        assert_eq!(actions.draft_commit_message().unwrap().text, "Remove a.txt");
     }
 
     #[test]
