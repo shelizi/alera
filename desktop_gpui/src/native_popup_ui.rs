@@ -525,6 +525,12 @@ impl Workbench {
                 "Local branch"
             });
             let mut actions = vec![("Show branch history", GitGraphBranchMenuAction::History)];
+            if current && !remote {
+                actions.push((
+                    "Rename current worktree branch…",
+                    GitGraphBranchMenuAction::PrepareRename,
+                ));
+            }
             if !remote && !current {
                 actions.push((
                     "Compare: changes on selected branch",

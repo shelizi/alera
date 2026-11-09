@@ -187,6 +187,7 @@ enum GitUiAction {
     MergeWithoutConflicts(String),
     Fetch,
     RenameInactiveBranch(String, String),
+    RenameOwnedBranch(String, String),
     CreateCommitRef(GitCommitRefKind, String, String),
     ApplyCommitPreview(GitCommitApplyPreview),
     CreateWorktreeAtCommit(String, String),
@@ -2040,15 +2041,20 @@ impl Workbench {
                 }
             }
             GitGraphBranchMenuAction::PrepareRename => {
-                if remote
-                    || self.git_action_busy
-                    || self
-                        .worktrees
-                        .iter()
-                        .any(|entry| entry.branch.as_deref() == Some(branch.as_str()))
-                {
+                let owning_worktree = self
+                    .worktrees
+                    .iter()
+                    .find(|entry| entry.branch.as_deref() == Some(branch.as_str()));
+                let current_owner = owning_worktree.is_some_and(|entry| {
+                    entry.path == self.model.root()
+                        && !entry.locked
+                        && !entry.prunable
+                        && !entry.detached
+                });
+                if remote || self.git_action_busy || (owning_worktree.is_some() && !current_owner) {
                     self.git_action_status =
-                        "Only inactive local branches can be renamed from Git Graph".into();
+                        "A checked-out branch can only be renamed from its own live worktree"
+                            .into();
                     cx.notify();
                     return;
                 }
@@ -2404,14 +2410,29 @@ impl Workbench {
         let pending = (old.clone(), new.clone());
         if self.git_rename_armed.as_ref() != Some(&pending) {
             self.git_rename_armed = Some(pending);
-            self.git_action_status = format!(
-                "Confirm renaming inactive branch {old} to {new}. Click Confirm Rename again. Remote branches and worktrees will not be renamed."
-            );
+            let owned = self.worktrees.iter().any(|entry| {
+                entry.path == self.model.root() && entry.branch.as_deref() == Some(old.as_str())
+            });
+            self.git_action_status = if owned {
+                format!("Confirm renaming current branch {old} to {new}. Git will update this worktree's HEAD; no checkout, remote rename or file changes. Click Confirm Rename again.")
+            } else {
+                format!("Confirm renaming inactive branch {old} to {new}. Remote branches and worktrees stay unchanged. Click Confirm Rename again.")
+            };
             cx.notify();
             return;
         }
         self.git_rename_armed = None;
-        self.run_git_action(GitUiAction::RenameInactiveBranch(old, new), cx);
+        let current = self.worktrees.iter().any(|entry| {
+            entry.path == self.model.root() && entry.branch.as_deref() == Some(old.as_str())
+        });
+        self.run_git_action(
+            if current {
+                GitUiAction::RenameOwnedBranch(old, new)
+            } else {
+                GitUiAction::RenameInactiveBranch(old, new)
+            },
+            cx,
+        );
     }
 
     fn cancel_graph_branch_rename(&mut self, cx: &mut Context<Self>) {
@@ -2680,6 +2701,9 @@ impl Workbench {
                         }
                         GitUiAction::RenameInactiveBranch(old, new) => {
                             git.rename_inactive_branch(&old, &new)
+                        }
+                        GitUiAction::RenameOwnedBranch(old, new) => {
+                            git.rename_owned_branch(&old, &new)
                         }
                         GitUiAction::CreateCommitRef(kind, oid, name) => {
                             git.create_ref_at_commit(kind, &oid, &name)

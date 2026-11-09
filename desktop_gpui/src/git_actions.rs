@@ -1461,6 +1461,58 @@ impl GitActions {
         Ok(format!("Renamed local branch {source} to {destination}; upstream and remote branches unchanged"))
     }
 
+    /// Rename only the checked-out branch owned by this exact worktree.
+    /// Git CLI updates the proper linked-worktree HEAD, reflog and branch
+    /// configuration together; never edit common refs or another worktree's
+    /// HEAD directly. No force overwrite, no checkout and no file changes.
+    pub fn rename_owned_branch(&self, source: &str, destination: &str) -> Result<String, String> {
+        if !valid_branch(source) || !valid_branch(destination) || source == destination {
+            return Err("Provide distinct valid local branch names".into());
+        }
+        let head = self.repo.head().map_err(|e| e.to_string())?;
+        if !head.is_branch() || head.shorthand().map_err(|e| e.to_string())? != source {
+            return Err("Branch is not checked out in the current worktree".into());
+        }
+        let original = head.peel_to_commit().map_err(|e| e.to_string())?.id();
+        let manager = crate::worktree_manager::WorktreeManager::discover(&self.root)
+            .map_err(|e| e.to_string())?;
+        let entries = manager.list().map_err(|e| e.to_string())?;
+        let owners = entries
+            .iter()
+            .filter(|entry| entry.branch.as_deref() == Some(source))
+            .collect::<Vec<_>>();
+        if owners.len() != 1
+            || owners[0].path != self.root
+            || owners[0].locked
+            || owners[0].prunable
+            || owners[0].detached
+        {
+            return Err("Only the owning, live worktree may rename its checked-out branch".into());
+        }
+        if self
+            .repo
+            .find_branch(destination, BranchType::Local)
+            .is_ok()
+            || entries
+                .iter()
+                .any(|entry| entry.branch.as_deref() == Some(destination))
+        {
+            return Err("Destination branch already exists or is checked out".into());
+        }
+        // A managed Git command (never a shell) knows how to update HEAD for
+        // linked worktrees; libgit2 ref-only rename would risk stale HEAD.
+        git_in_dir(&self.root, &["branch", "-m", "--", source, destination])
+            .map_err(|e| format!("Checked-out branch rename refused: {e}"))?;
+        let moved = self.repo.head().map_err(|e| e.to_string())?;
+        if !moved.is_branch()
+            || moved.shorthand().map_err(|e| e.to_string())? != destination
+            || moved.peel_to_commit().map_err(|e| e.to_string())?.id() != original
+        {
+            return Err("Branch moved but HEAD validation failed; refresh worktrees before further Git operations".into());
+        }
+        Ok(format!("Renamed checked-out branch {source} to {destination} in its owning worktree; no checkout or worktree file changes"))
+    }
+
     pub fn switch_branch(&self, branch: &str) -> Result<(), String> {
         if !valid_branch(branch) {
             return Err("Invalid local branch name".into());
@@ -2325,6 +2377,71 @@ mod tests {
             actions.repo.head().unwrap().peel_to_commit().unwrap().id(),
             head_id
         );
+    }
+
+    #[test]
+    fn current_branch_rename_preserves_head_and_refuses_other_worktree_ownership() {
+        let (_dir, actions) = repo_fixture();
+        let prior = actions.repo.head().unwrap().shorthand().unwrap().to_owned();
+        let oid = actions.repo.head().unwrap().peel_to_commit().unwrap().id();
+        assert!(actions
+            .rename_owned_branch("not-current", "renamed")
+            .is_err());
+        assert!(actions.rename_owned_branch(&prior, "../unsafe").is_err());
+        assert!(actions
+            .rename_owned_branch(&prior, "renamed-current")
+            .is_ok());
+        assert_eq!(
+            actions.repo.head().unwrap().shorthand().unwrap(),
+            "renamed-current"
+        );
+        assert_eq!(actions.repo.head().unwrap().target(), Some(oid));
+        assert!(actions.repo.find_branch(&prior, BranchType::Local).is_err());
+        assert!(actions.rename_owned_branch(&prior, "again").is_err());
+        assert_eq!(
+            fs::read_to_string(actions.root().join("a.txt")).unwrap(),
+            "before"
+        );
+    }
+
+    #[test]
+    fn linked_worktree_branch_rename_only_from_owning_checkout() {
+        let (_dir, actions) = repo_fixture();
+        let manager = crate::worktree_manager::WorktreeManager::discover(actions.root()).unwrap();
+        let current = actions.repo.head().unwrap().shorthand().unwrap().to_owned();
+        let original = actions.repo.head().unwrap().target();
+        let linked = manager.create("linked-owned").unwrap();
+        assert!(actions
+            .rename_owned_branch("linked-owned", "not-allowed")
+            .is_err());
+        let owner = GitActions::open(&linked).unwrap();
+        assert!(owner
+            .rename_owned_branch("linked-owned", "linked-renamed")
+            .is_ok());
+        assert_eq!(
+            owner.repo.head().unwrap().shorthand().unwrap(),
+            "linked-renamed"
+        );
+        assert!(actions
+            .repo
+            .find_branch("linked-renamed", BranchType::Local)
+            .is_ok());
+        assert!(actions
+            .repo
+            .find_branch("linked-owned", BranchType::Local)
+            .is_err());
+        assert_eq!(actions.repo.head().unwrap().target(), original);
+        assert_eq!(actions.repo.head().unwrap().shorthand().unwrap(), current);
+        assert!(
+            manager
+                .list()
+                .unwrap()
+                .iter()
+                .any(|entry| entry.path == linked
+                    && entry.branch.as_deref() == Some("linked-renamed"))
+        );
+        drop(owner);
+        manager.remove(&linked, true).unwrap();
     }
 
     #[test]
