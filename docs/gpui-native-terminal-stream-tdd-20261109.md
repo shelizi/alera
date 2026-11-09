@@ -235,3 +235,20 @@ CLI `terminal_stream::tests` 私有 recover 指令白名單 **2/2 PASS**，確�
 `python desktop_gpui/tests/terminal_stream_isolated_smoke.py D:/c/t/debug/alera.exe --native-app D:/c/t/debug/alera-gpui-desktop.exe --native-host-restart --native-split-gate --native-real-tui-pager "C:/Program Files/Git/usr/bin/less.exe" --native-real-tui-target both --native-real-tui-rounds 12 --hold-seconds 3`
 
 **尚未關 Gate**：Windows TSF 注音「未完成組字」在左右窗格與 Explorer 切換的真實候選窗取消／遲到 Commit 檢查仍缺完整 OS 證據；Classic／Native Release 同場輸入至像素 p50/p95、實際高頻全螢幕編輯器超長時間壓測也尚未完成。這次只修改測試工具／文件，`supported=false`；不改 Classic 或正式 Host、不合併 main、不推送、不發布。保留原始未追蹤 `.gpui-smoke-20261108/`。
+
+## 2026-11-09：Windows TSF 繁中實機焦點切換結果（未關 Gate）
+
+原 Windows 設定中有繁體中文注音輸入法。在隔離 Native GUI、獨立 Runtime／兩個原 Host PTY（每輪皆使用新建的臨時目錄）實測：
+
+- **Terminal 左右切換取消：部分通過。** 左側實際輸入 `S U 3`（`ㄋㄧˇ`），可看見 Windows 注音「你／妳」候選清單；候選未完成時點選右側，清單消失，兩個原 Host cursor 不變（左 2295、右 214683），未見 preedit 流入錯誤 PTY。
+- **右側原生候選及正式 Commit：部分通過。** 右側切回注音中文模式後，也能叫出真實「你」候選字；Enter 正式提交後，右側 Host cursor 增加 3 bytes（214656→214659），左側仍 2295 不變。右側 `cmd.exe` 的回顯增量解碼出替代字元與 `A`（不是可讀的「你」），**只能認證路由與輸出活動，無法認證完整 Unicode 正確性**；另需 UTF-8 Shell／PowerShell 實測。
+- **Terminal → Explorer filter：RED，可重現。** 正在 Terminal `ㄋㄧˇ` 候選時直接點右側 `Filter files…`，舊候選字視窗**沒有取消，仍停在 Terminal caret 旁**；接著在 Explorer 打字會改變搜尋文字／候選內容，但舊候選視窗 anchor 未移到 Explorer。兩個 Host 沒有出現誤送的中文，但視覺／焦點行為不符合 Classic 預期。
+- 嘗試①在 `explorer-classic-filter` 父層 mouse down 呼叫 `clear_terminal_text_inputs`，Windows 重建 Debug Native、Rust 325/325、`cargo check --all-targets` 均通過，**OS 實測仍 RED**。
+- 嘗試②改用 GPUI `cx.on_blur` 監控原兩個 Terminal `TextInput` FocusHandle，並在 blur 清除 composition，`cargo check --all-targets` 與 Windows rebuild 通過，**OS 候選視窗仍殘留**；修正兩版已全部撤回，沒有把未完成修復提交。
+- 第二次隔離測試的 Windows Temp stderr log 一度遭 `WinError 32` 檔案鎖定，測試結束非 PASS；下一輪獨立 Runtime 標準 Smoke 恢復 **11/11 PASS**。未修改 Classic 或正式 Host。
+
+**下一步技術修復範圍**：查清 GPUI Windows 平台的 TSF／IME composition cancel、focused input handler 更換與 caret bounds 刷新契約；需要由 Windows 原生 IME 取消／重定錨，而不是只清 `QuickOpenInput.marked`。修正完成後應以真實候選字視窗實測「Primary → Secondary → Explorer → Terminal」、「取消／正式 Commit／Escape」、「焦點之外延遲 Commit 不污染任何 Host」、中文 UTF-8、以及 Native／Classic 同場比較。不要以 Rust unit tests、ASCII 或 Host cursor 一致性代替 OS TSF 驗收。
+
+**效能 Gate 未關**：目前整合工作樹只找到 Native Debug exe，未找到 Classic Windows Release 或 Native Release exe，故不能用之前的 Native Debug ~92ms p50 與 Classic Release 做不公平比較。待同機同解析度／工作負載、兩個 Release 版本與同一輸入至像素量測方法才建立 p50/p95 基準。
+
+本輪保留 `supported=false`，不合併 main、不推送、不發布。原 `.gpui-smoke-20261108/` 不修改、不提交。
