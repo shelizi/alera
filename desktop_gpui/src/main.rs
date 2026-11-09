@@ -27,8 +27,8 @@ use alera_gpui_desktop::explorer_selection::ExplorerMultiSelection;
 use alera_gpui_desktop::explorer_visibility::ExplorerVisibilityOptions;
 use alera_gpui_desktop::file_search::WorkspaceFileIndex;
 use alera_gpui_desktop::git_actions::{
-    GitActions, GitCommitApplyKind, GitCommitApplyPreview, GitCommitRefKind, GitConflictChoice,
-    GitConflictPlan,
+    GitActions, GitAmendPreview, GitCommitApplyKind, GitCommitApplyPreview, GitCommitRefKind,
+    GitConflictChoice, GitConflictPlan,
 };
 use alera_gpui_desktop::git_branch_compare::{
     compare_branch_files, diff_compared_file, original_compared_file, BranchFileComparison,
@@ -180,6 +180,7 @@ enum GitUiAction {
     UnstageMany(Vec<PathBuf>),
     DiscardTracked(Vec<PathBuf>),
     Commit(String),
+    Amend(GitAmendPreview),
     SwitchBranch(String),
     MergeWithoutConflicts(String),
     Fetch,
@@ -444,6 +445,9 @@ struct Workbench {
     git_filter_input: Entity<QuickOpenInput>,
     git_graph_search_input: Entity<QuickOpenInput>,
     git_commit_input: Entity<QuickOpenInput>,
+    git_amend_preview: Option<GitAmendPreview>,
+    git_amend_loading: bool,
+    git_amend_request: u64,
     git_branch_input: Entity<QuickOpenInput>,
     git_rename_input: Entity<QuickOpenInput>,
     git_commit_ref_input: Entity<QuickOpenInput>,
@@ -2578,6 +2582,7 @@ impl Workbench {
                         GitUiAction::Commit(message) => {
                             git.commit(&message).map(|id| format!("Committed {id}"))
                         }
+                        GitUiAction::Amend(plan) => git.apply_amend_preview(&plan),
                         GitUiAction::SwitchBranch(branch) => {
                             git.switch_branch(&branch)?;
                             Ok(format!("Switched to branch {branch}"))
@@ -2629,6 +2634,7 @@ impl Workbench {
                 match result {
                     Ok(message) => {
                         view.git_action_status = message;
+                        view.git_amend_preview = None;
                         view.git_commit_ref_target = None;
                         view.git_commit_ref_armed = None;
                         view.git_commit_apply_preview = None;
@@ -2664,6 +2670,69 @@ impl Workbench {
             .ok();
         })
         .detach();
+    }
+
+    fn prepare_or_confirm_git_amend(&mut self, cx: &mut Context<Self>) {
+        let message = self.git_commit_input.read(cx).query().trim().to_owned();
+        if self.git_action_busy || self.git_amend_loading {
+            self.git_action_status = "Wait for the active Git operation or amend preview".into();
+            cx.notify();
+            return;
+        }
+        if let Some(plan) = self.git_amend_preview.clone() {
+            if plan.replacement_message == message {
+                if self.editor_dirty(cx) {
+                    self.git_action_status =
+                        "Save unsaved editor buffers before amending HEAD".into();
+                    cx.notify();
+                    return;
+                }
+                self.git_amend_preview = None;
+                self.run_git_action(GitUiAction::Amend(plan), cx);
+                return;
+            }
+            self.git_amend_preview = None;
+        }
+        if message.is_empty() {
+            self.git_action_status = "Enter a commit message before preparing Amend".into();
+            cx.notify();
+            return;
+        }
+        if self.editor_dirty(cx) {
+            self.git_action_status = "Save unsaved editor buffers before preparing Amend".into();
+            cx.notify();
+            return;
+        }
+        self.git_amend_request = self.git_amend_request.wrapping_add(1);
+        let request = self.git_amend_request;
+        let generation = self.workspace_generation;
+        let root = self.model.root().to_path_buf();
+        self.git_amend_loading = true;
+        cx.spawn(async move |view, cx| {
+            let result = cx.background_spawn(async move {
+                GitActions::open(&root)?.preview_amend_commit(&message)
+            }).await;
+            view.update(cx, |view, cx| {
+                if view.workspace_generation != generation || view.git_amend_request != request {
+                    return;
+                }
+                view.git_amend_loading = false;
+                match result {
+                    Ok(plan) => {
+                        view.git_action_status = format!(
+                            "Amend warning: replace local HEAD {} with message '{}'. Click Amend again to confirm. Never force-push automatically.",
+                            &plan.head_oid[..8], plan.replacement_message);
+                        view.git_amend_preview = Some(plan);
+                    }
+                    Err(error) => {
+                        view.git_amend_preview = None;
+                        view.git_action_status = format!("Amend preview refused: {error}");
+                    }
+                }
+                cx.notify();
+            }).ok();
+        }).detach();
+        cx.notify();
     }
 
     /// Explicit two-click opt-in for operations that mutate local changes
@@ -3759,6 +3828,9 @@ impl Workbench {
             }
         }
         self.git_history_request = self.git_history_request.wrapping_add(1);
+        self.git_amend_preview = None;
+        self.git_amend_loading = false;
+        self.git_amend_request = self.git_amend_request.wrapping_add(1);
         self.git_merge_armed = None;
         self.git_graph_remote_armed = None;
         self.git_commit_ref_target = None;
@@ -7165,6 +7237,8 @@ impl Render for Workbench {
         let git_sensitive_armed = self.git_sensitive_armed;
         let git_action_status = self.git_action_status.clone();
         let git_commit_input = self.git_commit_input.clone();
+        let git_amend_ready = self.git_amend_preview.is_some();
+        let git_amend_loading = self.git_amend_loading;
         let git_branch_input = self.git_branch_input.clone();
         let git_rename_source = self.git_rename_source.clone();
         let git_rename_input = self.git_rename_input.clone();
@@ -8320,6 +8394,13 @@ impl Render for Workbench {
                                         .on_click(cx.listener(|this, _, _, cx| {
                                             let message = this.git_commit_input.read(cx).query().trim().to_owned();
                                             this.run_git_action(GitUiAction::Commit(message), cx);
+                                        })))
+                                    .child(icon_button("git-amend-confirm",
+                                        if git_amend_ready { UiIcon::Check } else { UiIcon::Edit },
+                                        if git_amend_loading { "Calculating amend preview…" } else if git_amend_ready { "Confirm replacing last local commit" } else { "Prepare Amend: preview current HEAD/index; confirm twice" },
+                                        git_amend_ready)
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.prepare_or_confirm_git_amend(cx);
                                         }))),
                             )
                             .child(
@@ -10450,6 +10531,9 @@ fn main() {
                             git_filter_input: cx
                                 .new(|cx| QuickOpenInput::with_placeholder("Filter files…", cx)),
                             git_graph_search_input,
+                            git_amend_preview: None,
+                            git_amend_loading: false,
+                            git_amend_request: 0,
                             git_commit_input: cx
                                 .new(|cx| QuickOpenInput::with_placeholder("Commit message", cx)),
                             git_branch_input: cx

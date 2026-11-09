@@ -79,6 +79,16 @@ pub struct GitCommitApplyPreview {
     pub changed_paths: Vec<String>,
 }
 
+/// Exact amend plan: HEAD, staged index tree and message are revalidated
+/// before rewriting the current local HEAD. Never rewrite an upstream tip.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GitAmendPreview {
+    pub head_oid: String,
+    pub staged_tree_oid: String,
+    pub current_message: String,
+    pub replacement_message: String,
+}
+
 pub struct GitActions {
     repo: Repository,
     root: PathBuf,
@@ -899,6 +909,95 @@ impl GitActions {
         Ok(oid.to_string())
     }
 
+    pub fn preview_amend_commit(&self, replacement: &str) -> Result<GitAmendPreview, String> {
+        let replacement = replacement.trim();
+        if replacement.is_empty() || replacement.len() > 4096 || replacement.contains('\0') {
+            return Err("Amend message must be nonempty, NUL-free and at most 4096 bytes".into());
+        }
+        let head = self.repo.head().map_err(|e| e.to_string())?;
+        if !head.is_branch() {
+            return Err("Cannot amend detached HEAD".into());
+        }
+        let branch_name = head
+            .shorthand()
+            .map_err(|_| "Cannot identify current branch")?;
+        let commit = head.peel_to_commit().map_err(|e| e.to_string())?;
+        if commit.parent_count() > 1 {
+            return Err("Merge commits cannot be amended from Native Source Control".into());
+        }
+        // Refuse rewriting the commit reachable from the configured upstream.
+        let local_branch = self
+            .repo
+            .find_branch(branch_name, BranchType::Local)
+            .map_err(|e| e.to_string())?;
+        if let Ok(upstream) = local_branch.upstream() {
+            if let Some(remote_tip) = upstream.get().target() {
+                if remote_tip == commit.id()
+                    || self
+                        .repo
+                        .graph_descendant_of(remote_tip, commit.id())
+                        .unwrap_or(false)
+                {
+                    return Err(
+                        "HEAD is already on the tracked upstream; refusing history rewrite".into(),
+                    );
+                }
+            }
+        }
+        let mut index = self.repo.index().map_err(|e| e.to_string())?;
+        if index.has_conflicts() {
+            return Err("Cannot amend with index conflicts".into());
+        }
+        let tree = index.write_tree().map_err(|e| e.to_string())?;
+        let current_message = commit
+            .message()
+            .map_err(|_| "Current commit message is not UTF-8")?
+            .to_owned();
+        if tree == commit.tree_id() && replacement == current_message.trim() {
+            return Err("No staged changes or message differences to amend".into());
+        }
+        Ok(GitAmendPreview {
+            head_oid: commit.id().to_string(),
+            staged_tree_oid: tree.to_string(),
+            current_message,
+            replacement_message: replacement.to_owned(),
+        })
+    }
+
+    pub fn apply_amend_preview(&self, preview: &GitAmendPreview) -> Result<String, String> {
+        let fresh = self.preview_amend_commit(&preview.replacement_message)?;
+        if &fresh != preview {
+            return Err("Amend preview is stale: HEAD, index or message changed".into());
+        }
+        let head = self
+            .repo
+            .find_commit(Oid::from_str(&preview.head_oid).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?;
+        let tree = self
+            .repo
+            .find_tree(Oid::from_str(&preview.staged_tree_oid).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?;
+        let committer = self
+            .repo
+            .signature()
+            .map_err(|_| "Configure Git committer identity before amend".to_string())?;
+        let id = head
+            .amend(
+                Some("HEAD"),
+                None,
+                Some(&committer),
+                None,
+                Some(&preview.replacement_message),
+                Some(&tree),
+            )
+            .map_err(|e| format!("Amend refused: {e}"))?;
+        Ok(format!(
+            "Amended local HEAD {} to {}; upstream unchanged",
+            &preview.head_oid[..8],
+            &id.to_string()[..8]
+        ))
+    }
+
     /// Preview a single-parent commit against the current HEAD in memory.
     /// Reject conflicts, empty results and all merge commits. No real index,
     /// HEAD or worktree mutation; Git may store the proposed tree object.
@@ -1619,6 +1718,60 @@ mod tests {
         assert!(GitActions::open(&child).is_err());
         assert!(actions.switch_branch("missing").is_err());
         assert!(actions.commit(" ").is_err());
+    }
+
+    #[test]
+    fn amend_requires_exact_head_index_and_replaces_only_local_commit() {
+        let (_dir, actions) = repo_fixture();
+        let old = actions.repo.head().unwrap().target().unwrap();
+        let path = actions.root().join("a.txt");
+        fs::write(&path, "amended content").unwrap();
+        actions.stage_file(Path::new("a.txt")).unwrap();
+        let preview = actions
+            .preview_amend_commit("replace commit message")
+            .unwrap();
+        assert_eq!(preview.head_oid, old.to_string());
+        assert_eq!(actions.repo.head().unwrap().target(), Some(old));
+        let message = actions.apply_amend_preview(&preview).unwrap();
+        assert!(message.contains("Amended"));
+        let new_oid = actions.repo.head().unwrap().target().unwrap();
+        assert_ne!(new_oid, old);
+        assert_eq!(
+            actions
+                .repo
+                .find_commit(new_oid)
+                .unwrap()
+                .message()
+                .unwrap(),
+            "replace commit message"
+        );
+        assert_eq!(fs::read_to_string(path).unwrap(), "amended content");
+        assert!(actions.repo.statuses(None).unwrap().is_empty());
+        assert!(actions.apply_amend_preview(&preview).is_err());
+    }
+
+    #[test]
+    fn amend_refuses_stale_index_and_no_op() {
+        let (_dir, actions) = repo_fixture();
+        let original = actions
+            .repo
+            .head()
+            .unwrap()
+            .peel_to_commit()
+            .unwrap()
+            .message()
+            .unwrap()
+            .to_owned();
+        assert!(actions.preview_amend_commit(&original).is_err());
+        assert!(actions.preview_amend_commit("").is_err());
+        let preview = actions.preview_amend_commit("message-only amend").unwrap();
+        fs::write(actions.root().join("a.txt"), "changed after preview").unwrap();
+        actions.stage_file(Path::new("a.txt")).unwrap();
+        assert!(actions.apply_amend_preview(&preview).is_err());
+        assert_eq!(
+            actions.repo.head().unwrap().target().unwrap().to_string(),
+            preview.head_oid
+        );
     }
 
     #[test]
