@@ -37,7 +37,8 @@ use alera_gpui_desktop::git_branch_compare::{
 use alera_gpui_desktop::git_graph_layout::{layout_git_graph, GraphCommit};
 use alera_gpui_desktop::git_graph_search::{GitGraphRefTab, GitGraphSearch};
 use alera_gpui_desktop::git_history::{
-    compare_git_refs, preview_commit, GitHistoryOptions, GitHistorySnapshot,
+    compare_git_refs, preview_commit, GitHistoryOptions, GitHistorySnapshot, HISTORY_PAGE_STEP,
+    MAX_HISTORY_PAGE,
 };
 use alera_gpui_desktop::git_inspect::{
     read_file_diff, read_file_diff_for_area, read_git_original_for_area, GitChangeArea,
@@ -1796,6 +1797,26 @@ impl Workbench {
         })
         .detach();
         cx.notify();
+    }
+
+    fn load_more_git_history(&mut self, cx: &mut Context<Self>) {
+        if self.git_history_loading
+            || !self.git_history_open
+            || !self
+                .git_history
+                .as_ref()
+                .is_some_and(|history| history.truncated)
+        {
+            return;
+        }
+        let current = self.git_history_options.max_commits.max(HISTORY_PAGE_STEP);
+        if current >= MAX_HISTORY_PAGE {
+            self.git_action_status = "Maximum bounded Git Graph history reached".into();
+            cx.notify();
+            return;
+        }
+        self.git_history_options.max_commits = (current + HISTORY_PAGE_STEP).min(MAX_HISTORY_PAGE);
+        self.refresh_git_history(cx);
     }
 
     fn select_git_graph_ref_tab(&mut self, tab: GitGraphRefTab, cx: &mut Context<Self>) {
@@ -7261,6 +7282,12 @@ impl Render for Workbench {
         let git_graph_scope = self.git_history_options.git_diff_root.clone();
         let git_branch_compare = self.git_branch_comparison.clone();
         let git_branch_compare_loading = self.git_branch_compare_loading;
+        let git_history_more_available = !self.git_history_loading
+            && self
+                .git_history
+                .as_ref()
+                .is_some_and(|history| history.truncated)
+            && self.git_history_options.max_commits.max(HISTORY_PAGE_STEP) < MAX_HISTORY_PAGE;
         let git_history_status = if self.git_history_loading {
             "Loading commit graph…".to_owned()
         } else if let Some(history) = &self.git_history {
@@ -8334,7 +8361,16 @@ impl Render for Workbench {
                                                             })))
                                                 }))))
                                     })
-                                    .child(div().text_xs().text_color(rgb(TEXT)).child("Commits · graph lanes represent actual parent commits"))
+                                    .child(div().flex().items_center().gap_2()
+                                        .child(div().flex_1().text_xs().text_color(rgb(TEXT))
+                                            .child("Commits · graph lanes represent actual parent commits"))
+                                        .when(git_history_more_available, |row| row.child(
+                                            icon_button("git-graph-load-more", UiIcon::Add,
+                                                "Load 96 more commits (bounded maximum 512)", false)
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.load_more_git_history(cx);
+                                                }))
+                                        )))
                                     .when_some(git_graph_topology_note, |panel, note| {
                                         panel.child(div().text_xs().text_color(rgb(MUTED)).child(note))
                                     })

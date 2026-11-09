@@ -6,6 +6,8 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 
 const MAX_HISTORY: usize = 96;
+pub const MAX_HISTORY_PAGE: usize = 512;
+pub const HISTORY_PAGE_STEP: usize = 96;
 const MAX_BRANCHES: usize = 80;
 const MAX_TAGS: usize = 80;
 const MAX_PATCH: usize = 24 * 1024;
@@ -57,6 +59,9 @@ pub struct GitHistorySnapshot {
 pub struct GitHistoryOptions {
     pub all_branches: bool,
     pub favorites_only: bool,
+    /// Zero uses the original 96-commit default; explicit requests are
+    /// clamped to a bounded 512-commit maximum.
+    pub max_commits: usize,
     pub selected_ref: Option<String>,
     pub favorites: Vec<String>,
     /// Host-validated Workspace-relative paths, checked independently again
@@ -476,7 +481,12 @@ impl GitHistorySnapshot {
                     continue;
                 }
             }
-            if commits.len() >= MAX_HISTORY {
+            let requested = if options.max_commits == 0 {
+                MAX_HISTORY
+            } else {
+                options.max_commits.clamp(MAX_HISTORY, MAX_HISTORY_PAGE)
+            };
+            if commits.len() >= requested {
                 truncated = true;
                 break;
             }
@@ -705,6 +715,50 @@ pub fn compare_git_refs(
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn bounded_history_load_more_includes_older_commits_without_moving_head() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        let sig = git2::Signature::now("History", "history@example.invalid").unwrap();
+        let mut index = repo.index().unwrap();
+        let mut parent: Option<git2::Oid> = None;
+        for n in 0..110 {
+            fs::write(dir.path().join("history.txt"), format!("revision {n}\n")).unwrap();
+            index.add_path(Path::new("history.txt")).unwrap();
+            let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+            let parents = parent
+                .map(|oid| vec![repo.find_commit(oid).unwrap()])
+                .unwrap_or_default();
+            parent = Some(
+                repo.commit(
+                    Some("HEAD"),
+                    &sig,
+                    &sig,
+                    &format!("revision {n}"),
+                    &tree,
+                    &parents.iter().collect::<Vec<_>>(),
+                )
+                .unwrap(),
+            );
+        }
+        let before = repo.head().unwrap().target();
+        let normal = GitHistorySnapshot::load(dir.path()).unwrap();
+        assert_eq!(normal.commits.len(), MAX_HISTORY);
+        assert!(normal.truncated);
+        let expanded = GitHistorySnapshot::load_filtered(
+            dir.path(),
+            &GitHistoryOptions {
+                max_commits: 192,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(expanded.commits.len(), 110);
+        assert!(!expanded.truncated);
+        assert_eq!(normal.commits[0].oid, expanded.commits[0].oid);
+        assert_eq!(repo.head().unwrap().target(), before);
+    }
 
     #[test]
     fn history_compare_and_commit_preview_are_read_only() {
