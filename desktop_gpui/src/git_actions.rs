@@ -1,7 +1,8 @@
 //! Explicit, worktree-scoped Git writers. The GPUI render path never calls
 //! this module; a native click starts a bounded background operation.
-//! No command invokes reset --hard, rebase, shell or force push. A guarded
-//! soft reset uses atomic compare-and-swap to preserve the index/worktree.
+//! No command invokes reset --hard, shell or force push. Guarded history
+//! operations preserve a preflighted backup and refuse published rewrites.
+//! A soft reset uses atomic compare-and-swap to preserve the index/worktree.
 //! Merges use explicit local git2 operations and refuse unresolved conflicts.
 use alera_core::git_cli::git_in_dir;
 use git2::{build::CheckoutBuilder, BranchType, Index, Oid, Repository, StatusOptions};
@@ -105,6 +106,21 @@ pub struct GitSoftResetPreview {
     pub upstream_oid: Option<String>,
 }
 
+/// Preview of an unpublished, linear current branch replay onto a different
+/// local branch. No repository refs or files change while building a plan.
+/// Merge conflicts are not predicted; on failure the replay must abort.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GitRebasePreview {
+    pub current_branch: String,
+    pub current_oid: String,
+    pub onto_branch: String,
+    pub onto_oid: String,
+    pub merge_base_oid: String,
+    pub upstream_oid: Option<String>,
+    /// Topologically ordered, oldest-first linear commits to replay.
+    pub commits: Vec<(String, String)>,
+}
+
 /// An explicitly selected untracked regular file's immutable content check.
 /// Revalidate every item before any OS recycle-bin operation.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -198,6 +214,192 @@ pub struct GitActions {
 }
 
 impl GitActions {
+    pub fn preview_rebase_onto_branch(&self, target: &str) -> Result<GitRebasePreview, String> {
+        if !valid_branch(target) {
+            return Err("Rebase target must be an exact local branch name".into());
+        }
+        if self.repo.state() != git2::RepositoryState::Clean {
+            return Err("Finish or abort the in-progress Git operation before Rebase".into());
+        }
+        self.require_clean_worktree().map_err(|_| {
+            "Rebase requires a clean index and worktree, including untracked files".to_string()
+        })?;
+        let head = self.repo.head().map_err(|error| error.to_string())?;
+        if !head.is_branch() {
+            return Err("Rebase requires a checked-out local branch".into());
+        }
+        let current_branch = head
+            .shorthand()
+            .map_err(|_| "Cannot identify the current local branch")?
+            .to_owned();
+        if !valid_branch(&current_branch)
+            || matches!(
+                current_branch.as_str(),
+                "main" | "master" | "develop" | "development"
+            )
+        {
+            return Err("Rebase is disabled for protected or invalid current branches".into());
+        }
+        if target == current_branch {
+            return Err("Select a different local branch to Rebase onto".into());
+        }
+        let current_oid = head
+            .peel_to_commit()
+            .map_err(|error| error.to_string())?
+            .id();
+        let onto_oid = self
+            .repo
+            .find_branch(target, BranchType::Local)
+            .map_err(|_| "Selected local Rebase target is missing".to_string())?
+            .get()
+            .peel_to_commit()
+            .map_err(|error| error.to_string())?
+            .id();
+        let base = self
+            .repo
+            .merge_base(current_oid, onto_oid)
+            .map_err(|_| "Rebase requires a common ancestor".to_string())?;
+        if base == onto_oid {
+            return Err(
+                "Current branch already contains the selected branch; Rebase is unnecessary".into(),
+            );
+        }
+        if base == current_oid {
+            return Err(
+                "Selected branch already contains current HEAD; use Fast-forward, not Rebase"
+                    .into(),
+            );
+        }
+        let local = self
+            .repo
+            .find_branch(&current_branch, BranchType::Local)
+            .map_err(|error| error.to_string())?;
+        let upstream = match local.upstream() {
+            Ok(branch) => Some(
+                branch
+                    .get()
+                    .peel_to_commit()
+                    .map_err(|_| "Configured upstream is not a commit".to_string())?
+                    .id(),
+            ),
+            Err(error) if error.code() == git2::ErrorCode::NotFound => None,
+            Err(error) => return Err(format!("Cannot validate the configured upstream: {error}")),
+        };
+        if let Some(published) = upstream {
+            let current_contains = published == current_oid
+                || self
+                    .repo
+                    .graph_descendant_of(current_oid, published)
+                    .map_err(|error| error.to_string())?;
+            let base_contains = published == base
+                || self
+                    .repo
+                    .graph_descendant_of(base, published)
+                    .map_err(|error| error.to_string())?;
+            if !current_contains || !base_contains {
+                return Err(
+                    "Rebase would replay commits already published upstream; refusing rewrite"
+                        .into(),
+                );
+            }
+        }
+        let mut walk = self.repo.revwalk().map_err(|error| error.to_string())?;
+        walk.set_sorting(git2::Sort::TOPOLOGICAL | git2::Sort::REVERSE)
+            .map_err(|error| error.to_string())?;
+        walk.push(current_oid).map_err(|error| error.to_string())?;
+        walk.hide(base).map_err(|error| error.to_string())?;
+        let mut commits = Vec::new();
+        for oid in walk {
+            let oid = oid.map_err(|error| error.to_string())?;
+            let commit = self
+                .repo
+                .find_commit(oid)
+                .map_err(|error| error.to_string())?;
+            if commit.parent_count() != 1 {
+                return Err(
+                    "Rebase of merge commits or roots requires an external Git tool".into(),
+                );
+            }
+            if commits.len() >= 64 {
+                return Err("Native Rebase is limited to at most 64 local linear commits".into());
+            }
+            commits.push((
+                oid.to_string(),
+                commit
+                    .summary()
+                    .ok()
+                    .flatten()
+                    .unwrap_or("(no subject)")
+                    .chars()
+                    .take(110)
+                    .collect(),
+            ));
+        }
+        if commits.is_empty() {
+            return Err("There are no local commits to Rebase".into());
+        }
+        self.repo
+            .signature()
+            .map_err(|_| "Configure Git user.name and user.email before Rebase".to_string())?;
+        Ok(GitRebasePreview {
+            current_branch,
+            current_oid: current_oid.to_string(),
+            onto_branch: target.to_owned(),
+            onto_oid: onto_oid.to_string(),
+            merge_base_oid: base.to_string(),
+            upstream_oid: upstream.map(|oid| oid.to_string()),
+            commits,
+        })
+    }
+
+    /// Before any replay, retain a reachable original HEAD in a namespaced
+    /// recovery ref. Revalidate both branch tips and upstream immediately
+    /// before execution. The existing Rust Core rebase aborts on conflict.
+    pub fn apply_rebase_preview(&self, plan: &GitRebasePreview) -> Result<String, String> {
+        let fresh = self.preview_rebase_onto_branch(&plan.onto_branch)?;
+        if &fresh != plan {
+            return Err(
+                "Rebase preview is stale: HEAD, target, upstream or worktree changed".into(),
+            );
+        }
+        let backup = format!("refs/alera/native-rebase-backup/{}", plan.current_oid);
+        let previous = Oid::from_str(&plan.current_oid).map_err(|error| error.to_string())?;
+        match self.repo.find_reference(&backup) {
+            Ok(existing) if existing.target() == Some(previous) => {}
+            Ok(_) => return Err("Rebase backup name already exists with a different commit".into()),
+            Err(error) if error.code() == git2::ErrorCode::NotFound => {
+                self.repo
+                    .reference(&backup, previous, false, "alera native rebase safety")
+                    .map_err(|error| format!("Cannot create Rebase recovery reference: {error}"))?;
+            }
+            Err(error) => return Err(format!("Cannot validate Rebase backup: {error}")),
+        }
+        let workspace = self
+            .root
+            .to_str()
+            .ok_or("Rebase requires a Unicode workspace path")?;
+        // Pin the reviewed commit ID, not a branch name that can move
+        // between preflight and libgit2's rebase initialization.
+        alera_core::git::rebase_onto(workspace, &plan.onto_oid).map_err(|error| {
+            format!("Rebase stopped: {error}. Original HEAD is saved at {backup}")
+        })?;
+        let current = self.repo.head().map_err(|error| {
+            format!("Rebase finished but HEAD cannot be verified: {error}; backup {backup}")
+        })?;
+        if current.shorthand().ok() != Some(plan.current_branch.as_str())
+            || self.repo.state() != git2::RepositoryState::Clean
+        {
+            return Err(format!("Rebase finished in an unexpected state; review before further changes. Backup: {backup}"));
+        }
+        Ok(format!(
+            "Rebased {} onto {} ({} local commit(s)); original tip kept in {}",
+            plan.current_branch,
+            plan.onto_branch,
+            plan.commits.len(),
+            backup
+        ))
+    }
+
     pub fn preview_soft_reset(&self, sha: &str) -> Result<GitSoftResetPreview, String> {
         if sha.len() != 40 || !sha.bytes().all(|byte| byte.is_ascii_hexdigit()) {
             return Err("Soft reset requires a full 40-character commit hash".into());
@@ -2103,6 +2305,232 @@ mod tests {
             .unwrap();
         actions.repo.set_head("refs/heads/main").unwrap();
         assert!(actions.preview_soft_reset(&first.to_string()).is_err());
+    }
+
+    fn rebase_fixture(conflicting: bool) -> (tempfile::TempDir, GitActions, Oid, Oid) {
+        let (dir, actions) = repo_fixture();
+        let root = actions.root.clone();
+        drop(actions);
+        let repo = Repository::open(&root).unwrap();
+        repo.config()
+            .unwrap()
+            .set_str("user.name", "Fixture")
+            .unwrap();
+        repo.config()
+            .unwrap()
+            .set_str("user.email", "fixture@example.invalid")
+            .unwrap();
+        let base = repo.head().unwrap().peel_to_commit().unwrap();
+        let tree = base.tree().unwrap();
+        let mut builder = repo.treebuilder(Some(&tree)).unwrap();
+        let target_file = if conflicting { "a.txt" } else { "target.txt" };
+        let blob = repo.blob(b"target content").unwrap();
+        builder.insert(target_file, blob, 0o100644).unwrap();
+        let target_tree = repo.find_tree(builder.write().unwrap()).unwrap();
+        let sig = Signature::now("Fixture", "fixture@example.invalid").unwrap();
+        let target_oid = repo
+            .commit(
+                Some("refs/heads/target"),
+                &sig,
+                &sig,
+                "target change",
+                &target_tree,
+                &[&base],
+            )
+            .unwrap();
+        repo.branch("feature/rebase", &base, false).unwrap();
+        repo.set_head("refs/heads/feature/rebase").unwrap();
+        let mut previous = base.id();
+        for n in 0..2 {
+            let name = if conflicting && n == 0 {
+                "a.txt".to_owned()
+            } else {
+                format!("feature{n}.txt")
+            };
+            fs::write(root.join(&name), format!("feature content {n}")).unwrap();
+            let mut index = repo.index().unwrap();
+            index.add_path(Path::new(&name)).unwrap();
+            index.write().unwrap();
+            let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+            let parent = repo.find_commit(previous).unwrap();
+            previous = repo
+                .commit(
+                    Some("HEAD"),
+                    &sig,
+                    &sig,
+                    &format!("feature change {n}"),
+                    &tree,
+                    &[&parent],
+                )
+                .unwrap();
+        }
+        drop(target_tree);
+        drop(builder);
+        drop(tree);
+        drop(base);
+        drop(repo);
+        (dir, GitActions::open(&root).unwrap(), previous, target_oid)
+    }
+
+    #[test]
+    fn rebase_preview_and_apply_replay_local_linear_commits_with_backup() {
+        let (_dir, actions, old_head, target) = rebase_fixture(false);
+        let plan = actions.preview_rebase_onto_branch("target").unwrap();
+        assert_eq!(plan.current_oid, old_head.to_string());
+        assert_eq!(plan.onto_oid, target.to_string());
+        assert_eq!(plan.commits.len(), 2);
+        assert_eq!(plan.commits[0].1, "feature change 0");
+        assert_eq!(actions.repo.head().unwrap().target(), Some(old_head));
+        let status = actions.apply_rebase_preview(&plan).unwrap();
+        assert!(status.contains("original tip kept"));
+        let updated = actions.repo.head().unwrap().peel_to_commit().unwrap();
+        assert_ne!(updated.id(), old_head);
+        assert!(actions
+            .repo
+            .graph_descendant_of(updated.id(), target)
+            .unwrap());
+        let tree = updated.tree().unwrap();
+        for name in ["target.txt", "feature0.txt", "feature1.txt"] {
+            assert!(tree.get_name(name).is_some(), "missing {name}");
+        }
+        let backup = format!("refs/alera/native-rebase-backup/{old_head}");
+        assert_eq!(
+            actions.repo.find_reference(&backup).unwrap().target(),
+            Some(old_head)
+        );
+        assert_eq!(actions.repo.state(), git2::RepositoryState::Clean);
+        assert!(actions.require_clean_worktree().is_ok());
+    }
+
+    #[test]
+    fn rebase_conflict_aborts_and_keeps_original_branch_and_backup() {
+        let (_dir, actions, old_head, _target) = rebase_fixture(true);
+        let original_file = fs::read(actions.root.join("a.txt")).unwrap();
+        let plan = actions.preview_rebase_onto_branch("target").unwrap();
+        assert!(actions.apply_rebase_preview(&plan).is_err());
+        assert_eq!(actions.repo.head().unwrap().target(), Some(old_head));
+        assert_eq!(fs::read(actions.root.join("a.txt")).unwrap(), original_file);
+        assert_eq!(actions.repo.state(), git2::RepositoryState::Clean);
+        assert!(actions.require_clean_worktree().is_ok());
+        let backup = format!("refs/alera/native-rebase-backup/{old_head}");
+        assert_eq!(
+            actions.repo.find_reference(&backup).unwrap().target(),
+            Some(old_head)
+        );
+    }
+
+    #[test]
+    fn rebase_rejects_changed_target_before_creating_backup() {
+        let (_dir, actions, old_head, target) = rebase_fixture(false);
+        let plan = actions.preview_rebase_onto_branch("target").unwrap();
+        let target_commit = actions.repo.find_commit(target).unwrap();
+        let tree = target_commit.tree().unwrap();
+        let sig = Signature::now("Fixture", "fixture@example.invalid").unwrap();
+        actions
+            .repo
+            .commit(
+                Some("refs/heads/target"),
+                &sig,
+                &sig,
+                "target moved",
+                &tree,
+                &[&target_commit],
+            )
+            .unwrap();
+        assert!(actions.apply_rebase_preview(&plan).is_err());
+        assert_eq!(actions.repo.head().unwrap().target(), Some(old_head));
+        assert!(actions
+            .repo
+            .find_reference(&format!("refs/alera/native-rebase-backup/{old_head}"))
+            .is_err());
+        assert!(actions.require_clean_worktree().is_ok());
+    }
+
+    #[test]
+    fn rebase_accepts_published_common_base_but_rejects_protected_current_branch() {
+        let (_dir, actions, old_head, target) = rebase_fixture(false);
+        let base = actions.repo.merge_base(old_head, target).unwrap();
+        actions
+            .repo
+            .remote("origin", "https://example.invalid/repo.git")
+            .unwrap();
+        actions
+            .repo
+            .reference("refs/remotes/origin/feature/rebase", base, true, "fixture")
+            .unwrap();
+        actions
+            .repo
+            .config()
+            .unwrap()
+            .set_str("branch.feature/rebase.remote", "origin")
+            .unwrap();
+        actions
+            .repo
+            .config()
+            .unwrap()
+            .set_str("branch.feature/rebase.merge", "refs/heads/feature/rebase")
+            .unwrap();
+        let plan = actions.preview_rebase_onto_branch("target").unwrap();
+        assert_eq!(plan.upstream_oid, Some(base.to_string()));
+        actions
+            .repo
+            .reference("refs/heads/main", old_head, true, "fixture")
+            .unwrap();
+        actions.repo.set_head("refs/heads/main").unwrap();
+        assert!(actions.preview_rebase_onto_branch("target").is_err());
+        assert!(actions.apply_rebase_preview(&plan).is_err());
+        assert!(actions
+            .repo
+            .find_reference(&format!("refs/alera/native-rebase-backup/{old_head}"))
+            .is_err());
+    }
+
+    #[test]
+    fn rebase_rejects_dirty_stale_and_published_replay() {
+        let (_dir, actions, old_head, _target) = rebase_fixture(false);
+        let plan = actions.preview_rebase_onto_branch("target").unwrap();
+        assert!(actions
+            .preview_rebase_onto_branch("feature/rebase")
+            .is_err());
+        assert!(actions
+            .preview_rebase_onto_branch("refs/remotes/origin/main")
+            .is_err());
+        fs::write(actions.root.join("untracked.txt"), "must stay").unwrap();
+        assert!(actions.preview_rebase_onto_branch("target").is_err());
+        assert!(actions.apply_rebase_preview(&plan).is_err());
+        fs::remove_file(actions.root.join("untracked.txt")).unwrap();
+        actions
+            .repo
+            .remote("origin", "https://example.invalid/repo.git")
+            .unwrap();
+        actions
+            .repo
+            .reference(
+                "refs/remotes/origin/feature/rebase",
+                old_head,
+                true,
+                "fixture",
+            )
+            .unwrap();
+        actions
+            .repo
+            .config()
+            .unwrap()
+            .set_str("branch.feature/rebase.remote", "origin")
+            .unwrap();
+        actions
+            .repo
+            .config()
+            .unwrap()
+            .set_str("branch.feature/rebase.merge", "refs/heads/feature/rebase")
+            .unwrap();
+        assert!(actions.preview_rebase_onto_branch("target").is_err());
+        assert!(actions.apply_rebase_preview(&plan).is_err());
+        assert_eq!(actions.repo.head().unwrap().target(), Some(old_head));
+        assert!(actions
+            .repo
+            .find_reference(&format!("refs/alera/native-rebase-backup/{old_head}"))
+            .is_err());
     }
 
     #[test]

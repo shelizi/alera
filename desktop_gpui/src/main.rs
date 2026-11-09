@@ -28,7 +28,8 @@ use alera_gpui_desktop::explorer_visibility::ExplorerVisibilityOptions;
 use alera_gpui_desktop::file_search::WorkspaceFileIndex;
 use alera_gpui_desktop::git_actions::{
     GitActions, GitAmendPreview, GitCommitApplyKind, GitCommitApplyPreview, GitCommitRefKind,
-    GitConflictChoice, GitConflictPlan, GitSoftResetPreview, GitUntrackedTrashCandidate,
+    GitConflictChoice, GitConflictPlan, GitRebasePreview, GitSoftResetPreview,
+    GitUntrackedTrashCandidate,
 };
 use alera_gpui_desktop::git_branch_compare::{
     compare_branch_files, diff_compared_file, original_compared_file, BranchFileComparison,
@@ -192,6 +193,7 @@ enum GitUiAction {
     CreateCommitRef(GitCommitRefKind, String, String),
     ApplyCommitPreview(GitCommitApplyPreview),
     ApplySoftReset(GitSoftResetPreview),
+    ApplyRebase(GitRebasePreview),
     CreateWorktreeAtCommit(String, String),
     PullSelected(String),
     PushSelected(String),
@@ -245,6 +247,7 @@ enum GitGraphBranchMenuAction {
     History,
     Compare,
     CompareReverse,
+    PreviewRebase,
     PrepareRename,
     DeleteMerged,
     PullBranch,
@@ -445,6 +448,10 @@ struct Workbench {
     git_soft_reset_armed: bool,
     git_soft_reset_loading: bool,
     git_soft_reset_request: u64,
+    git_rebase_preview: Option<GitRebasePreview>,
+    git_rebase_armed: bool,
+    git_rebase_loading: bool,
+    git_rebase_request: u64,
     git_worktree_commit_target: Option<String>,
     git_worktree_commit_armed: Option<(String, String)>,
     git_worktree_commit_input: Entity<QuickOpenInput>,
@@ -2074,6 +2081,11 @@ impl Workbench {
                     self.compare_git_branch_files(branch, CompareDirection::SelectedToCurrent, cx);
                 }
             }
+            GitGraphBranchMenuAction::PreviewRebase => {
+                if !remote {
+                    self.preview_git_rebase(branch, cx);
+                }
+            }
             GitGraphBranchMenuAction::PrepareRename => {
                 let owning_worktree = self
                     .worktrees
@@ -2299,6 +2311,10 @@ impl Workbench {
         self.git_soft_reset_preview = None;
         self.git_soft_reset_armed = false;
         self.git_soft_reset_loading = false;
+        self.git_rebase_request = self.git_rebase_request.wrapping_add(1);
+        self.git_rebase_preview = None;
+        self.git_rebase_armed = false;
+        self.git_rebase_loading = false;
         self.git_commit_ref_target = None;
         self.git_commit_ref_armed = None;
         self.git_worktree_commit_target = None;
@@ -2411,6 +2427,10 @@ impl Workbench {
         self.git_commit_apply_preview = None;
         self.git_commit_apply_armed = false;
         self.git_commit_apply_request = self.git_commit_apply_request.wrapping_add(1);
+        self.git_rebase_request = self.git_rebase_request.wrapping_add(1);
+        self.git_rebase_preview = None;
+        self.git_rebase_armed = false;
+        self.git_rebase_loading = false;
         cx.spawn(async move |view, cx| {
             let result = cx
                 .background_spawn(async move {
@@ -2486,6 +2506,108 @@ impl Workbench {
         self.git_soft_reset_preview = None;
         self.git_soft_reset_loading = false;
         self.git_soft_reset_armed = false;
+        cx.notify();
+    }
+
+    fn preview_git_rebase(&mut self, branch: String, cx: &mut Context<Self>) {
+        if self.git_action_busy {
+            self.git_action_status = "Finish the current Git operation first".into();
+            cx.notify();
+            return;
+        }
+        if self.editor_dirty(cx) {
+            self.git_action_status = "Save unsaved editor buffers before Rebase preview".into();
+            cx.notify();
+            return;
+        }
+        let root = self.model.root().to_path_buf();
+        let generation = self.workspace_generation;
+        self.git_rebase_request = self.git_rebase_request.wrapping_add(1);
+        let request = self.git_rebase_request;
+        self.git_rebase_preview = None;
+        self.git_rebase_armed = false;
+        self.git_rebase_loading = true;
+        self.git_soft_reset_request = self.git_soft_reset_request.wrapping_add(1);
+        self.git_soft_reset_preview = None;
+        self.git_soft_reset_armed = false;
+        self.git_commit_apply_request = self.git_commit_apply_request.wrapping_add(1);
+        self.git_commit_apply_preview = None;
+        self.git_commit_apply_armed = false;
+        cx.spawn(async move |view, cx| {
+            let result = cx.background_spawn(async move {
+                GitActions::open(&root)?.preview_rebase_onto_branch(&branch)
+            }).await;
+            view.update(cx, |view, cx| {
+                if view.workspace_generation != generation
+                    || view.git_rebase_request != request
+                {
+                    return;
+                }
+                view.git_rebase_loading = false;
+                match result {
+                    Ok(plan) => {
+                        view.git_action_status = format!(
+                            "Rebase preview: replay {} unpublished commit(s) from {} onto {}. Review and confirm twice; conflicts abort.",
+                            plan.commits.len(), plan.current_branch, plan.onto_branch
+                        );
+                        view.git_rebase_preview = Some(plan);
+                    }
+                    Err(error) => {
+                        view.git_rebase_preview = None;
+                        view.git_action_status = format!("Rebase preview refused: {error}");
+                    }
+                }
+                cx.notify();
+            }).ok();
+        }).detach();
+        cx.notify();
+    }
+
+    fn confirm_git_rebase(&mut self, cx: &mut Context<Self>) {
+        let Some(plan) = self.git_rebase_preview.clone() else {
+            return;
+        };
+        if self.git_action_busy || self.git_rebase_loading {
+            self.git_action_status = "Finish the current Git operation first".into();
+            cx.notify();
+            return;
+        }
+        if self.editor_dirty(cx) {
+            self.git_action_status = "Save unsaved editor buffers before running Rebase".into();
+            cx.notify();
+            return;
+        }
+        if !self.git_history.as_ref().is_some_and(|history| {
+            history
+                .branches
+                .iter()
+                .any(|row| !row.remote && row.name == plan.onto_branch)
+        }) {
+            self.cancel_git_rebase(cx);
+            self.git_action_status =
+                "Git Graph target is stale; refresh and preview Rebase again".into();
+            cx.notify();
+            return;
+        }
+        if !self.git_rebase_armed {
+            self.git_rebase_armed = true;
+            self.git_action_status = format!(
+                "Confirm Rebase {} at {} onto {} at {} ({} commit(s)). Conflicts will abort; a recovery ref is created. Click Confirm again.",
+                plan.current_branch, &plan.current_oid[..8],
+                plan.onto_branch, &plan.onto_oid[..8], plan.commits.len()
+            );
+            cx.notify();
+            return;
+        }
+        self.git_rebase_armed = false;
+        self.run_git_action(GitUiAction::ApplyRebase(plan), cx);
+    }
+
+    fn cancel_git_rebase(&mut self, cx: &mut Context<Self>) {
+        self.git_rebase_request = self.git_rebase_request.wrapping_add(1);
+        self.git_rebase_preview = None;
+        self.git_rebase_loading = false;
+        self.git_rebase_armed = false;
         cx.notify();
     }
 
@@ -2818,6 +2940,10 @@ impl Workbench {
         self.git_soft_reset_preview = None;
         self.git_soft_reset_loading = false;
         self.git_soft_reset_armed = false;
+        self.git_rebase_request = self.git_rebase_request.wrapping_add(1);
+        self.git_rebase_preview = None;
+        self.git_rebase_loading = false;
+        self.git_rebase_armed = false;
         self.git_conflict_confirm_armed = false;
         self.git_conflict_loading = false;
         self.git_conflict_request = self.git_conflict_request.wrapping_add(1);
@@ -2882,6 +3008,7 @@ impl Workbench {
                         }
                         GitUiAction::ApplyCommitPreview(preview) => git.apply_commit_preview(&preview),
                         GitUiAction::ApplySoftReset(plan) => git.apply_soft_reset(&plan),
+                        GitUiAction::ApplyRebase(plan) => git.apply_rebase_preview(&plan),
                         GitUiAction::CreateWorktreeAtCommit(oid, branch) => {
                             let manager = alera_gpui_desktop::worktree_manager::WorktreeManager::discover(&root)
                                 .map_err(|error| error.to_string())?;
@@ -2923,6 +3050,8 @@ impl Workbench {
                         view.git_commit_apply_armed = false;
                         view.git_soft_reset_preview = None;
                         view.git_soft_reset_armed = false;
+                        view.git_rebase_preview = None;
+                        view.git_rebase_armed = false;
                         view.git_worktree_commit_target = None;
                         view.git_worktree_commit_armed = None;
                         view.git_worktree_commit_input.update(cx, |input, cx| input.clear(cx));
@@ -4180,6 +4309,10 @@ impl Workbench {
         self.git_soft_reset_armed = false;
         self.git_soft_reset_loading = false;
         self.git_soft_reset_request = self.git_soft_reset_request.wrapping_add(1);
+        self.git_rebase_preview = None;
+        self.git_rebase_armed = false;
+        self.git_rebase_loading = false;
+        self.git_rebase_request = self.git_rebase_request.wrapping_add(1);
         self.git_worktree_commit_target = None;
         self.git_worktree_commit_armed = None;
         self.git_worktree_commit_input
@@ -7592,6 +7725,9 @@ impl Render for Workbench {
         let git_soft_reset_preview = self.git_soft_reset_preview.clone();
         let git_soft_reset_armed = self.git_soft_reset_armed;
         let git_soft_reset_loading = self.git_soft_reset_loading;
+        let git_rebase_preview = self.git_rebase_preview.clone();
+        let git_rebase_armed = self.git_rebase_armed;
+        let git_rebase_loading = self.git_rebase_loading;
         let git_worktree_commit_target = self.git_worktree_commit_target.clone();
         let git_worktree_commit_input = self.git_worktree_commit_input.clone();
         let git_worktree_commit_armed = self.git_worktree_commit_armed.is_some();
@@ -8546,6 +8682,46 @@ impl Render for Workbench {
                                                         this.cancel_git_soft_reset(cx);
                                                     }))))
                                     ))
+                                    .when(git_rebase_loading, |panel| panel.child(
+                                        div().text_xs().text_color(rgb(MUTED))
+                                            .child("Checking local Rebase history and upstream safety...")
+                                    ))
+                                    .when_some(git_rebase_preview, |panel, preview| {
+                                        let count = preview.commits.len();
+                                        panel.child(div().flex().flex_col().gap_1()
+                                            .child(div().text_xs().text_color(rgb(TEXT))
+                                                .child(format!(
+                                                    "Rebase {} ({}) onto {} ({})",
+                                                    preview.current_branch, &preview.current_oid[..8],
+                                                    preview.onto_branch, &preview.onto_oid[..8]
+                                                )))
+                                            .child(div().text_xs().text_color(rgb(MUTED))
+                                                .child(format!(
+                                                    "Replay {} unpublished commit(s). Conflicts abort; original HEAD is backed up before execution.",
+                                                    count
+                                                )))
+                                            .child(div().id("git-rebase-commit-list")
+                                                .max_h(px(92.0)).overflow_y_scroll().flex().flex_col()
+                                                .children(preview.commits.into_iter().take(10).enumerate().map(|(i, (oid, subject))| {
+                                                    div().id(("git-rebase-commit", i))
+                                                        .text_xs().text_color(rgb(MUTED))
+                                                        .child(format!("{} {}", &oid[..8], subject))
+                                                })))
+                                            .child(div().flex().items_center().gap_1()
+                                                .child(icon_button("git-rebase-confirm",
+                                                    if git_rebase_armed { UiIcon::Check } else { UiIcon::History },
+                                                    if git_rebase_armed { "Confirm Rebase now" } else { "Review Rebase and confirm twice" },
+                                                    git_rebase_armed)
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.confirm_git_rebase(cx);
+                                                    })))
+                                                .child(icon_button("git-rebase-cancel", UiIcon::Close,
+                                                    "Cancel Rebase preview without changing Git", false)
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.cancel_git_rebase(cx);
+                                                    }))))
+                                        )
+                                    })
                                     .when_some(git_commit_ref_target, |panel, (oid, kind)| panel.child(
                                         div().flex().flex_col().gap_1()
                                             .child(div().text_xs().text_color(rgb(TEXT))
@@ -10998,6 +11174,10 @@ fn main() {
                             git_soft_reset_armed: false,
                             git_soft_reset_loading: false,
                             git_soft_reset_request: 0,
+                            git_rebase_preview: None,
+                            git_rebase_armed: false,
+                            git_rebase_loading: false,
+                            git_rebase_request: 0,
                             git_worktree_commit_target: None,
                             git_worktree_commit_armed: None,
                             git_worktree_commit_input: cx.new(|cx| {

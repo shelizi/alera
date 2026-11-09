@@ -541,6 +541,10 @@ impl Workbench {
                     "Compare: changes on current branch",
                     GitGraphBranchMenuAction::CompareReverse,
                 ));
+                actions.push((
+                    "Rebase current branch onto this branch (preview)...",
+                    GitGraphBranchMenuAction::PreviewRebase,
+                ));
                 if has_worktree {
                     actions.push((
                         "Open existing worktree",
