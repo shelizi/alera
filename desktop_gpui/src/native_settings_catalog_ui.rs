@@ -52,6 +52,137 @@ fn render_unavailable_row(
 }
 
 impl Workbench {
+    fn render_project_management_setting(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        div()
+            .p_3()
+            .bg(rgb(PANEL))
+            .flex()
+            .items_center()
+            .justify_between()
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_sm()
+                            .child(tr(self.settings_menu_locale, "Projects")),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(rgb(MUTED))
+                            .child("Open the existing native project and worktree manager."),
+                    ),
+            )
+            .child(
+                native_components::action_button(
+                    "native-settings-open-projects",
+                    "Manage Projects",
+                    false,
+                    false,
+                )
+                .on_click(cx.listener(|view, _, window, cx| {
+                    view.show_project_management = true;
+                    view.dismiss_native_settings(window, cx);
+                })),
+            )
+            .into_any_element()
+    }
+
+    fn render_settings_excluded_directories(
+        &self,
+        items: &[serde_json::Value],
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        const PATH: &str = "editor.quickOpenExcludedDirectories";
+        let names = items
+            .iter()
+            .filter_map(|value| value.as_str().map(str::to_owned))
+            .collect::<Vec<_>>();
+        let count = names.len();
+        div()
+            .rounded_lg()
+            .bg(rgb(PANEL))
+            .p_3()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(div().text_sm().child(tr(self.settings_menu_locale, "Excluded Directories")))
+            .child(div().text_xs().text_color(rgb(MUTED)).child(
+                "Ctrl+P excludes matching directory names regardless of Git ignored visibility. Explorer search is unchanged.",
+            ))
+            .child(
+                div().flex().flex_wrap().gap_2()
+                    .children(names.iter().cloned().enumerate().map(|(index, name)| {
+                        let next = names.iter()
+                            .filter(|item| item.as_str() != name)
+                            .cloned().collect::<Vec<_>>();
+                        div()
+                            .id(("quick-open-exclusion-remove", index))
+                            .cursor_pointer()
+                            .rounded_md()
+                            .border_1()
+                            .border_color(rgb(BORDER))
+                            .bg(rgb(TOOLBAR))
+                            .px_2()
+                            .py_1()
+                            .text_xs()
+                            .child(format!("{name}  ×"))
+                            .on_click(cx.listener(move |view, _, _, cx| {
+                                view.change_shared_desktop_setting(
+                                    PATH, serde_json::json!(next), cx,
+                                );
+                            }))
+                    })),
+            )
+            .child(
+                div().flex().items_center().gap_2()
+                    .child(div().flex_1().min_w_0().rounded_md().border_1()
+                        .border_color(rgb(BORDER)).bg(rgb(TOOLBAR)).p_2()
+                        .child(self.settings_exclusion_input.clone()))
+                    .child(native_components::action_button(
+                        "quick-open-exclusion-add", "Add", false, false
+                    ).on_click(cx.listener(|view, _, _, cx| {
+                        let name = view.settings_exclusion_input.read(cx).query().trim().to_owned();
+                        if !alera_core::desktop_settings_contract::valid_excluded_directory_name(&name) {
+                            view.model.set_status("Use one directory name without slashes, spaces at the ends or control characters");
+                            cx.notify();
+                            return;
+                        }
+                        let Some(existing) = view.settings_extra_values.get(PATH)
+                            .and_then(serde_json::Value::as_array) else {
+                            view.model.set_status("Rust Host Quick Open exclusion list unavailable");
+                            cx.notify();
+                            return;
+                        };
+                        let mut next = existing.iter()
+                            .filter_map(|value| value.as_str().map(str::to_owned))
+                            .collect::<Vec<_>>();
+                        if next.iter().any(|entry| entry.eq_ignore_ascii_case(&name)) {
+                            view.model.set_status("Directory is already excluded");
+                            cx.notify();
+                            return;
+                        }
+                        next.push(name);
+                        view.change_shared_desktop_setting(PATH, serde_json::json!(next), cx);
+                    })))
+                    .child(native_components::action_button(
+                        "quick-open-exclusion-reset", "Restore Defaults", false, false,
+                    ).on_click(cx.listener(|view, _, _, cx| {
+                        view.change_shared_desktop_setting(
+                            PATH,
+                            alera_core::desktop_settings_contract::quick_open_default_excluded_directories_json(),
+                            cx,
+                        );
+                    }))),
+            )
+            .child(div().text_xs().text_color(rgb(MUTED))
+                .child(format!("{count} excluded directory names · .git, .hg and .svn remain protected")))
+            .into_any_element()
+    }
+
     fn render_settings_readonly_row(
         &self,
         section: &'static str,
@@ -224,6 +355,9 @@ impl Workbench {
         row_index: usize,
         cx: &mut Context<Self>,
     ) -> Option<gpui::AnyElement> {
+        if section == "projects" && row.title == "Projects" {
+            return Some(self.render_project_management_setting(cx));
+        }
         let path = shared_setting_row_path(section, row.title)?;
         if !self.settings_native_profile_migrated {
             return Some(
@@ -248,6 +382,11 @@ impl Workbench {
             .native_settings
             .get(path)
             .or_else(|| self.settings_extra_values.get(path).cloned())?;
+        if path == "editor.quickOpenExcludedDirectories" {
+            return value
+                .as_array()
+                .map(|items| self.render_settings_excluded_directories(items, cx));
+        }
         if let Some(checked) = value.as_bool() {
             return Some(self.native_settings_bool_row(row.title, path, checked, cx));
         }

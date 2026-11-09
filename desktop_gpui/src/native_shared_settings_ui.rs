@@ -301,6 +301,10 @@ impl Workbench {
                                 view.agent_selected_profile =
                                     view.native_settings.default_agent_profile_id.clone();
                             }
+                            if path_for_status == "editor.quickOpenExcludedDirectories" {
+                                view.settings_exclusion_input
+                                    .update(cx, |input, cx| input.clear(cx));
+                            }
                             view.model.set_status(format!(
                                 "Shared {path_for_status} saved in Rust Runtime Store"
                             ));

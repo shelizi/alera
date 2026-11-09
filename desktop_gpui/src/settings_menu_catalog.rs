@@ -270,6 +270,7 @@ pub fn shared_setting_row_path(section: &str, title: &str) -> Option<&'static st
         ("editor", "Tab Size") => "editor.tabSize",
         ("editor", "Autosave") => "editor.autosaveEnabled",
         ("editor", "Autosave Delay") => "editor.autosaveDelaySeconds",
+        ("editor", "Excluded Directories") => "editor.quickOpenExcludedDirectories",
         ("agents", "Show Tab Titles in Sidebar") => "agents.showTabTitlesInSidebar",
         ("agents", "Agent Status Notifications") => "agents.agentStatusNotificationsEnabled",
         ("agents", "Agent Finished Notifications") => {

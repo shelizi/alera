@@ -105,10 +105,26 @@ impl Workbench {
         if self.settings_section.is_some() || self.explorer_action.is_some() {
             return None;
         }
+        let excluded = self
+            .settings_extra_values
+            .get("editor.quickOpenExcludedDirectories")
+            .and_then(serde_json::Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| item.as_str().map(str::to_owned))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_else(|| {
+                alera_core::desktop_settings_contract::QUICK_OPEN_DEFAULT_EXCLUDED_DIRECTORIES
+                    .iter()
+                    .map(|name| (*name).to_owned())
+                    .collect()
+            });
         let matches = self
             .file_index
             .as_ref()
-            .map(|index| index.search(input.read(cx).query(), 18))
+            .map(|index| index.search_with_exclusions(input.read(cx).query(), 18, &excluded))
             .unwrap_or_default();
         let first_match = matches.first().cloned();
         let count = matches.len();
@@ -120,7 +136,7 @@ impl Workbench {
         let indexed = if self.file_index_loading {
             "Indexing workspace files…".to_owned()
         } else {
-            format!("{total} files indexed · {count} matches")
+            format!("{total} files scanned · {count} matches (Quick Open exclusions applied)")
         };
         let workspace = self.model.root().to_path_buf();
         let content = div()

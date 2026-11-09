@@ -95,7 +95,7 @@ impl Workbench {
         Ok(())
     }
 
-    fn dismiss_native_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn dismiss_native_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.settings_section = None;
         self.settings_kit_dialog_open = false;
         window.close_dialog(cx);

@@ -147,7 +147,9 @@ class RuntimeSettingsRepository({
     for (final path in _sharedDesktopPaths) {
       final expected = _sharedDesktopValue(previous, path);
       final value = _sharedDesktopValue(next, path);
-      if (expected == value) continue;
+      // List-valued shared fields (Quick Open excluded names) must use
+      // structural comparison, not Dart List identity.
+      if (jsonEncode(expected) == jsonEncode(value)) continue;
       changes.add({'path': path, 'expectedValue': expected, 'value': value});
     }
     if (changes.isNotEmpty) {
@@ -307,6 +309,7 @@ const _sharedDesktopPaths = <String>[
   'agents.agentStatusNotificationsEnabled',
   'agents.agentStatusFinishedNotificationsEnabled',
   'agents.showTabTitlesInSidebar',
+  'editor.quickOpenExcludedDirectories',
 ];
 
 Object? _sharedDesktopValue(
@@ -343,6 +346,8 @@ Object? _sharedDesktopValue(
   'agents.agentStatusFinishedNotificationsEnabled' =>
     settings.agents.agentStatusFinishedNotificationsEnabled,
   'agents.showTabTitlesInSidebar' => settings.agents.showTabTitlesInSidebar,
+  'editor.quickOpenExcludedDirectories' =>
+    settings.editor.quickOpenExcludedDirectories,
   _ => throw ArgumentError.value(path, 'path', 'Unsupported desktop setting'),
 };
 
@@ -408,6 +413,7 @@ Map<String, Object?> _changedPortableFields(
             'agents.agentStatusNotificationsEnabled',
             'agents.agentStatusFinishedNotificationsEnabled',
             'agents.showTabTitlesInSidebar',
+            'editor.quickOpenExcludedDirectories',
           }.contains(path)) {
         continue;
       }
@@ -443,6 +449,7 @@ AleraSettings _applySharedDesktopValues(
   final backgroundOpacity = values['terminal.backgroundOpacity'];
   final scrollSensitivity = values['terminal.tuiScrollSensitivity'];
   final autosaveDelay = values['editor.autosaveDelaySeconds'];
+  final excludedDirs = values['editor.quickOpenExcludedDirectories'];
   final cursorShape = values['terminal.cursorShape'];
   return current.copyWith(
     general: current.general.copyWith(
@@ -526,6 +533,10 @@ AleraSettings _applySharedDesktopValues(
           autosaveDelay is int && autosaveDelay >= 1 && autosaveDelay <= 60
           ? autosaveDelay
           : current.editor.autosaveDelaySeconds,
+      quickOpenExcludedDirectories:
+          excludedDirs is List && excludedDirs.every((item) => item is String)
+          ? List<String>.from(excludedDirs)
+          : current.editor.quickOpenExcludedDirectories,
     ),
     agents: current.agents
         .copyWith(

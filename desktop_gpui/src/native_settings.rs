@@ -503,7 +503,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn shared_host_snapshot_validates_all_twenty_eight_fields_without_erasing_native_only_data() {
+    fn shared_host_snapshot_validates_all_twenty_nine_fields_without_erasing_native_only_data() {
         let mut state = NativeSettings::default();
         state.explorer_show_ignored = true;
         state.default_agent_profile_id = Some("managed_codex".to_owned());
@@ -535,7 +535,8 @@ mod tests {
             "editor.autosaveDelaySeconds":7,
             "agents.agentStatusNotificationsEnabled":true,
             "agents.agentStatusFinishedNotificationsEnabled":false,
-            "agents.showTabTitlesInSidebar":true
+            "agents.showTabTitlesInSidebar":true,
+            "editor.quickOpenExcludedDirectories":["node_modules","target","Generated"]
         }});
         assert_eq!(
             state.apply_shared_snapshot(&snapshot).unwrap(),
@@ -557,6 +558,10 @@ mod tests {
         let mut invalid_extended = snapshot.clone();
         invalid_extended["values"]["terminal.cursorShape"] = json!("unexpected");
         assert!(state.apply_shared_snapshot(&invalid_extended).is_err());
+        let mut invalid_exclusions = snapshot.clone();
+        invalid_exclusions["values"]["editor.quickOpenExcludedDirectories"] =
+            json!(["target", "TARGET"]);
+        assert!(state.apply_shared_snapshot(&invalid_exclusions).is_err());
         assert_eq!(
             state, previous,
             "Invalid extended settings must not partially install"

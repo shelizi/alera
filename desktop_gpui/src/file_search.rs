@@ -105,11 +105,44 @@ impl WorkspaceFileIndex {
     /// A case-insensitive Unicode filename/path fuzzy matcher. Prefer exact
     /// filename, prefix, word-boundary, then subsequence matches.
     pub fn search(&self, query: &str, limit: usize) -> Vec<PathBuf> {
+        let default =
+            alera_core::desktop_settings_contract::QUICK_OPEN_DEFAULT_EXCLUDED_DIRECTORIES
+                .iter()
+                .map(|name| (*name).to_owned())
+                .collect::<Vec<_>>();
+        self.search_with_exclusions(query, limit, &default)
+    }
+
+    /// Ctrl+P exclusions must not hide items from the Explorer's independent
+    /// fuzzy filter, which intentionally uses the very same bounded index.
+    pub fn search_with_exclusions(
+        &self,
+        query: &str,
+        limit: usize,
+        excluded_directory_names: &[String],
+    ) -> Vec<PathBuf> {
         let query = query.trim().to_lowercase().replace('\\', "/");
         let words: Vec<_> = query.split_whitespace().filter(|s| !s.is_empty()).collect();
+        let excluded = excluded_directory_names
+            .iter()
+            .map(|name| name.to_lowercase())
+            .collect::<std::collections::HashSet<_>>();
         let mut matches: Vec<_> = self
             .files
             .iter()
+            .filter(|relative| {
+                !relative.parent().is_some_and(|parent| {
+                    parent.components().any(|component| {
+                        if let std::path::Component::Normal(name) = component {
+                            let lowercase = name.to_string_lossy().to_lowercase();
+                            excluded.contains(&lowercase)
+                                || matches!(lowercase.as_str(), ".git" | ".hg" | ".svn")
+                        } else {
+                            false
+                        }
+                    })
+                })
+            })
             .filter_map(|relative| {
                 let path = relative.to_string_lossy().replace('\\', "/").to_lowercase();
                 let name = relative.file_name()?.to_string_lossy().to_lowercase();
@@ -223,7 +256,9 @@ mod tests {
         // When hidden files are explicitly enabled, .gitignore is a valid
         // searchable file. Only .git control metadata must stay excluded.
         let git_hits = visible.search_explorer(".git", 200);
-        assert!(git_hits.iter().any(|entry| entry.path.ends_with(".gitignore")));
+        assert!(git_hits
+            .iter()
+            .any(|entry| entry.path.ends_with(".gitignore")));
         assert!(git_hits.iter().all(|entry| {
             entry
                 .path
@@ -232,6 +267,49 @@ mod tests {
                 .components()
                 .all(|component| component.as_os_str() != std::ffi::OsStr::new(".git"))
         }));
+    }
+
+    #[test]
+    fn ctrl_p_excludes_host_names_but_explorer_search_still_finds_visible_files() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir_all(root.path().join("packages/MyNested")).unwrap();
+        fs::create_dir_all(root.path().join("src")).unwrap();
+        fs::create_dir_all(root.path().join("generated")).unwrap();
+        fs::create_dir_all(root.path().join(".svn/private")).unwrap();
+        fs::write(root.path().join("packages/MyNested/find.rs"), "code").unwrap();
+        fs::write(root.path().join("src/find.rs"), "code").unwrap();
+        fs::write(root.path().join("generated/find.rs"), "code").unwrap();
+        fs::write(root.path().join(".svn/private/find.rs"), "code").unwrap();
+        let index = WorkspaceFileIndex::scan_with_options(
+            root.path(),
+            ExplorerVisibilityOptions {
+                show_hidden: true,
+                show_ignored: true,
+            },
+        )
+        .unwrap();
+        let excluded = vec!["PACKAGES".to_owned(), "generated".to_owned()];
+        let matches = index.search_with_exclusions("find", 18, &excluded);
+        assert_eq!(matches.len(), 1);
+        assert!(matches[0].ends_with("src/find.rs"));
+        // Explorer's independent search is not filtered by Ctrl+P exclusions.
+        let explorer = index.search_explorer("find", 40);
+        assert!(explorer
+            .iter()
+            .any(|hit| hit.path.ends_with("packages/MyNested/find.rs")));
+        assert!(explorer
+            .iter()
+            .any(|hit| hit.path.ends_with("generated/find.rs")));
+        let cleared = index.search_with_exclusions("find", 18, &[]);
+        assert_eq!(cleared.len(), 3);
+        assert!(cleared
+            .iter()
+            .all(|path| !path.to_string_lossy().contains(".svn")));
+        // Config changes take effect without rescanning Explorer's index.
+        assert!(index
+            .search_with_exclusions("find", 18, &["src".to_owned()])
+            .iter()
+            .any(|path| path.ends_with("generated/find.rs")));
     }
 
     #[test]

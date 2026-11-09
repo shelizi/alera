@@ -421,6 +421,7 @@ struct Workbench {
     settings_shared_last_refresh: Instant,
     settings_shared_error: Option<String>,
     settings_menu_search: Entity<QuickOpenInput>,
+    settings_exclusion_input: Entity<QuickOpenInput>,
     last_auto_git_fetch: Instant,
     agent_profiles: Vec<AgentProfileRow>,
     agent_profiles_loading: bool,
@@ -8664,6 +8665,10 @@ fn main() {
                         let settings_menu_search =
                             cx.new(|cx| QuickOpenInput::with_placeholder("Search settings", cx));
                         cx.observe(&settings_menu_search, |_, _, cx| cx.notify()).detach();
+                        let settings_exclusion_input = cx.new(|cx| {
+                            QuickOpenInput::with_placeholder("Add directory name (e.g. generated)", cx)
+                        });
+                        cx.observe(&settings_exclusion_input, |_, _, cx| cx.notify()).detach();
                         let mut workbench = Workbench {
                             tree: WorkspaceTree::new_with_options(model.root(), initial_visibility)
                                 .ok(),
@@ -8791,6 +8796,7 @@ fn main() {
                                 .unwrap_or_else(Instant::now),
                             settings_shared_error: None,
                             settings_menu_search,
+                            settings_exclusion_input,
                             last_auto_git_fetch: Instant::now(),
                             agent_profiles: Vec::new(),
                             agent_profiles_loading: false,

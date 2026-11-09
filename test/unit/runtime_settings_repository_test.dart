@@ -470,6 +470,10 @@ void main() {
         'terminal.clipboardOnSelect': true,
         'editor.themeName': 'Tokyo Night Dark',
         'editor.autosaveDelaySeconds': 7,
+        'editor.quickOpenExcludedDirectories': <String>[
+          'node_modules',
+          'generated',
+        ],
         'general.showTrayIcon': false,
         'general.showDockBadge': false,
         'general.showTrayBadge': true,
@@ -493,11 +497,34 @@ void main() {
     expect(loaded.terminal.clipboardOnSelect, isTrue);
     expect(loaded.editor.themeName, 'Tokyo Night Dark');
     expect(loaded.editor.autosaveDelaySeconds, 7);
+    expect(loaded.editor.quickOpenExcludedDirectories, [
+      'node_modules',
+      'generated',
+    ]);
     expect(loaded.general.showTrayIcon, isFalse);
     expect(loaded.agents.showTabTitlesInSidebar, isTrue);
+    await repo.compareAndSetSharedDesktopChanges(
+      loaded,
+      loaded.copyWith(
+        editor: loaded.editor.copyWith(
+          quickOpenExcludedDirectories: [
+            ...loaded.editor.quickOpenExcludedDirectories,
+          ],
+        ),
+      ),
+    );
+    expect(
+      host.payloads['desktopSettings.compareAndSetBatch'],
+      isNull,
+      reason:
+          'Structurally identical List values must not generate spurious CAS',
+    );
     final changed = loaded.copyWith(
       terminal: loaded.terminal.copyWith(lineHeight: 2.0),
-      editor: loaded.editor.copyWith(autosaveDelaySeconds: 10),
+      editor: loaded.editor.copyWith(
+        autosaveDelaySeconds: 10,
+        quickOpenExcludedDirectories: ['node_modules', 'vendor'],
+      ),
     );
     await repo.compareAndSetSharedDesktopChanges(loaded, changed);
     expect(host.payloads['desktopSettings.compareAndSetBatch'], [
@@ -508,6 +535,11 @@ void main() {
             'path': 'editor.autosaveDelaySeconds',
             'expectedValue': 7,
             'value': 10,
+          },
+          {
+            'path': 'editor.quickOpenExcludedDirectories',
+            'expectedValue': ['node_modules', 'generated'],
+            'value': ['node_modules', 'vendor'],
           },
         ],
       },

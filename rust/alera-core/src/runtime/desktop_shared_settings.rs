@@ -71,6 +71,9 @@ fn default_value(path: &str) -> Result<Value> {
         "terminal.clipboardOnSelect" => json!(false),
         "editor.themeName" => json!("Alera"),
         "editor.autosaveDelaySeconds" => json!(1),
+        "editor.quickOpenExcludedDirectories" => {
+            crate::desktop_settings_contract::quick_open_default_excluded_directories_json()
+        }
         "agents.agentStatusNotificationsEnabled" => json!(false),
         "agents.agentStatusFinishedNotificationsEnabled" => json!(false),
         "agents.showTabTitlesInSidebar" => json!(false),
@@ -716,9 +719,13 @@ mod tests {
         let classic = RuntimeStore::open(temp.path()).await.unwrap();
         let native = RuntimeStore::open(temp.path()).await.unwrap();
         let defaults = native.desktop_shared_settings_snapshot().await.unwrap();
-        assert_eq!(defaults["values"].as_object().unwrap().len(), 28);
+        assert_eq!(defaults["values"].as_object().unwrap().len(), 29);
         assert_eq!(defaults["values"]["terminal.fontFamily"], "JetBrains Mono");
         assert_eq!(defaults["values"]["editor.autosaveDelaySeconds"], 1);
+        assert_eq!(
+            defaults["values"]["editor.quickOpenExcludedDirectories"][0],
+            "node_modules"
+        );
         native
             .desktop_shared_compare_and_set_batch(&[
                 change(
@@ -780,6 +787,37 @@ mod tests {
         assert_eq!(classic_config["terminal"]["fontFamily"], "Cascadia Code");
         assert_eq!(classic_config["terminal"]["cursorShape"], "underline");
         assert_eq!(classic_config["editor"]["autosaveDelaySeconds"], 7);
+        let old_excluded = defaults["values"]["editor.quickOpenExcludedDirectories"].clone();
+        let new_excluded = json!(["node_modules", "generated"]);
+        native
+            .desktop_shared_compare_and_set(
+                "editor.quickOpenExcludedDirectories",
+                &old_excluded,
+                &new_excluded,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            classic.configuration_settings().await.unwrap()["editor"]
+                ["quickOpenExcludedDirectories"],
+            new_excluded
+        );
+        assert!(classic
+            .desktop_shared_compare_and_set(
+                "editor.quickOpenExcludedDirectories",
+                &old_excluded,
+                &json!(["vendor"]),
+            )
+            .await
+            .is_err());
+        assert!(classic
+            .desktop_shared_compare_and_set(
+                "editor.quickOpenExcludedDirectories",
+                &new_excluded,
+                &json!(["vendor", "VENDOR"]),
+            )
+            .await
+            .is_err());
         assert_eq!(classic_config["agents"]["showTabTitlesInSidebar"], true);
         assert_eq!(classic_config["general"]["showTrayIcon"], false);
         assert!(classic
@@ -804,6 +842,13 @@ mod tests {
                 .await
                 .unwrap(),
             "Tokyo Night Dark"
+        );
+        assert_eq!(
+            restart
+                .desktop_shared_setting("editor.quickOpenExcludedDirectories")
+                .await
+                .unwrap(),
+            new_excluded
         );
     }
 
