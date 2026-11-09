@@ -278,6 +278,46 @@ async fn observe_existing_terminal_never_mints_a_pty_and_checks_owner_before_sub
 }
 
 #[tokio::test]
+async fn native_observe_recovery_refuses_absent_worker_even_if_tab_and_launch_are_valid() {
+    let dir = tempfile::tempdir().unwrap();
+    let (handle, _receiver) = ClientHandle::test_channels();
+    let mut actor = test_actor(
+        &dir,
+        HashMap::from([(1, local_client(handle))]),
+        HashMap::new(),
+    )
+    .await;
+    let mut stored = terminal_tab("tab-recover", "workspace");
+    stored.payload["terminalSessionId"] = json!("s-recover");
+    actor
+        .runtime_store
+        .upsert_workspace_tab(stored)
+        .await
+        .unwrap();
+    let attempted = actor
+        .observe_existing_terminal(
+            1,
+            &json!({
+                "sessionId": "s-recover",
+                "workspaceId": "workspace",
+                "tabId": "tab-recover",
+                "viewLeaseId": "native-recover-no-spawn",
+                "workingDirectory": ".",
+                "launch": {"shell": "cmd.exe", "arguments": ["/c", "echo SHOULD_NOT_SPAWN"]},
+            }),
+        )
+        .await;
+    assert!(
+        attempted.is_err(),
+        "a registered tab alone is not a live Worker"
+    );
+    assert!(
+        actor.sessions.is_empty(),
+        "Native observation may never mint a PTY"
+    );
+}
+
+#[tokio::test]
 async fn observe_existing_terminal_resumes_delta_on_same_output_lane() {
     let dir = tempfile::tempdir().unwrap();
     let (control_tx, _control_rx) = tokio::sync::mpsc::unbounded_channel();

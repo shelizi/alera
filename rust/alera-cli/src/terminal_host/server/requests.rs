@@ -362,6 +362,10 @@ impl ServerActor {
                 self.require_auth(client_id)?;
                 self.observe_existing_terminal(client_id, payload).await
             }
+            "terminal.recoverExistingWorker" => {
+                self.require_auth(client_id)?;
+                self.recover_existing_worker(client_id, payload).await
+            }
             "write" => {
                 self.require_auth(client_id)?;
                 Ok(json!({}))

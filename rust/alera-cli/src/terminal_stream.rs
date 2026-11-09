@@ -20,6 +20,7 @@ const MAX_INPUT_BYTES: usize = 4 * 1024;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StreamCommandKind {
     Observe,
+    Recover,
     Write,
 }
 
@@ -125,6 +126,12 @@ fn parse_command(value: &Value) -> Result<StreamCommand> {
             }
             (StreamCommandKind::Observe, "terminal.observeExisting")
         }
+        "recover" => {
+            field(payload, "workspaceId", 256)?;
+            field(payload, "tabId", 256)?;
+            field(payload, "viewLeaseId", 128)?;
+            (StreamCommandKind::Recover, "terminal.recoverExistingWorker")
+        }
         "write" => {
             field(payload, "workspaceId", 256)?;
             field(payload, "tabId", 256)?;
@@ -153,6 +160,11 @@ fn parse_command(value: &Value) -> Result<StreamCommand> {
             "tabId": field(payload, "tabId", 256)?,
             "viewLeaseId": field(payload, "viewLeaseId", 128)?,
             "resumeCursor": payload.get("resumeCursor").cloned().unwrap_or(Value::Null),
+        }),
+        StreamCommandKind::Recover => json!({
+            "sessionId": session_id,
+            "workspaceId": field(payload, "workspaceId", 256)?,
+            "tabId": field(payload, "tabId", 256)?,
         }),
         StreamCommandKind::Write => json!({
             "sessionId": session_id,
@@ -223,7 +235,7 @@ async fn run_stream(client: RuntimeHostRpcClient) -> Result<()> {
                     emit_line(&mut stdout, &json!({"id": command.request_id, "ok": false, "error": "terminal stream request queue full"})).await?;
                     continue;
                 }
-                if command.kind != StreamCommandKind::Observe
+                if command.kind == StreamCommandKind::Write
                     && !sessions.active.contains(&command.session_id)
                 {
                     emit_line(&mut stdout, &json!({"id": command.request_id, "ok": false, "error": "terminal session not observed"})).await?;
@@ -299,6 +311,23 @@ mod tests {
         assert_eq!(observe.host_verb, "terminal.observeExisting");
         assert_eq!(observe.session_id, "pty-1");
         assert_eq!(observe.request_id, 1);
+        let recover = parse_command(&json!({
+            "id": 2, "type": "recover",
+            "payload": {
+                "sessionId": "pty-2", "workspaceId": "ws-1", "tabId": "tab-2",
+                "viewLeaseId": "gpui-window-1", "launch": {"shell": "malicious"},
+                "workingDirectory": "C:/untrusted", "force": true
+            }
+        }))
+        .expect("bounded recovery-only request");
+        assert_eq!(recover.kind, StreamCommandKind::Recover);
+        assert_eq!(recover.host_verb, "terminal.recoverExistingWorker");
+        assert_eq!(
+            recover.payload,
+            json!({
+                "sessionId": "pty-2", "workspaceId": "ws-1", "tabId": "tab-2"
+            })
+        );
         let write = parse_command(&json!({
             "id": 3, "type": "write",
             "payload": {

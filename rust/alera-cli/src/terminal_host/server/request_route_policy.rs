@@ -469,6 +469,7 @@ pub(super) fn request_route_policy(request_type: &str) -> RequestRoutePolicy {
 
         "createOrAttach"
         | "terminal.observeExisting"
+        | "terminal.recoverExistingWorker"
         | "layout.remove"
         | "layout.upsert"
         | "linkedReview.remove"
