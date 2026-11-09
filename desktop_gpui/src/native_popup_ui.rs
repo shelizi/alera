@@ -638,6 +638,15 @@ impl Workbench {
                     });
                 }));
             }
+            let create_worktree = owner.clone();
+            let worktree_sha = oid.clone();
+            menu = menu.item(PopupMenuItem::new("Create Worktree at commit…").on_click(
+                move |_, _, cx| {
+                    let _ = create_worktree.update(cx, |view, cx| {
+                        view.prepare_git_worktree_at_commit(worktree_sha.clone(), cx);
+                    });
+                },
+            ));
             let hash = oid.clone();
             menu = menu.item(
                 PopupMenuItem::new("Copy commit hash").on_click(move |_, _, cx| {

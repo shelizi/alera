@@ -20,7 +20,7 @@
 | Git refresh | Timely repository / FS watcher updates, manual refresh reliable | Async snapshot + coalesced extra read when refresh pressed during in-flight scan; guards old workspace generation | P0 manual refresh queue implemented; P1 filesystem watcher and Windows smoke pending |
 | Git Graph ref list | Current ref first, favorites, local/remote/tag tabs; filters | Local/remote branches with favorites and selectable Git tags (lightweight + annotated), current ref sorted first | P1 tag listing implemented; filtering and dedicated tabs remain |
 | Git Graph branch right-click | Switch/worktree, compare, rename, pull, push, merge, rebase, archive, delete | Native History/Compare both directions/Worktree/Switch/Merge prepare/Copy, selected Pull/Push and safe inactive-local-branch rename | P1 core implemented; active-branch rename and destructive actions remain later |
-| Git Graph commit right-click | Preview, copy SHA/subject, branch/tag/worktree at commit, cherry-pick/revert/merge, resets etc. | Preview/copy, exact-commit branch/tag creation, single-parent conflict-free Cherry-pick/Revert with full-tree preview and double confirmation | P1 commit apply implemented, merge-commit mainline and worktree-at-commit pending |
+| Git Graph commit right-click | Preview, copy SHA/subject, branch/tag/worktree at commit, cherry-pick/revert/merge, resets etc. | Preview/copy, exact-commit branch/tag creation, single-parent conflict-free Cherry-pick/Revert with full-tree preview and double confirmation | P1 commit apply and worktree-at-commit implemented; merge-commit mainline and destructive actions pending |
 | Existing worktree navigation | For branches checked out elsewhere, offer open corresponding workspace instead of duplicate checkout | Native branch context menu identifies matching worktree and revalidates branch before switching | P0; finish with tests |
 | Branch compare | Current vs selected with explicit direction and original-file opening | Structured merge-base-to-target file list; direction toggle; per-file committed diff/original in read-only preview | P1 implemented, Windows UI acceptance pending |
 | Git Graph topology | Commit lanes/parents, merges, graph scrolling; inspect commit diff | Native exact parent SHA + bounded Unicode lanes and connectors, fallback for invalid history | P1 completed code, Native visual acceptance still pending |
@@ -53,7 +53,8 @@
 - [x] Guarded rename of inactive local branch: GPUI Kit input, two-step confirmation, refuse checked-out worktree and existing destination; preserve HEAD and other worktrees.
 - [x] Create branch and lightweight tag at exact selected commit; validate refs, refuse collision, never move HEAD/index/worktree; show tags in selectable Git Graph list.
 - [x] Implement single-parent Cherry-pick/Revert with conflict-free in-memory preview, exact HEAD/source revalidation and two-step confirmation. Dirty worktree, merge/root commit, conflict and stale preview must be refused.
-- [ ] Add worktree-at-commit, guarded delete and merge-commit mainline Cherry-pick/Revert. Active-branch rename needs a separate explicit worktree-aware operation.
+- [x] Create a new managed Worktree from an exact Commit SHA with new local branch and two-step confirmation; preserve current HEAD, index and files; refuse ref/folder collisions.
+- [ ] Add guarded delete and merge-commit mainline Cherry-pick/Revert. Active-branch rename needs a separate explicit worktree-aware operation.
 - [ ] Put reset/rebase/drop/force/destructive operations behind their own later explicit preview + confirmation; do not implement them as unconfirmed right-click actions.
 
 ## Tests / gates

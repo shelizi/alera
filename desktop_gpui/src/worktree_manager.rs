@@ -117,6 +117,25 @@ impl WorktreeManager {
     }
 
     pub fn create(&self, branch: &str) -> io::Result<PathBuf> {
+        self.create_at_ref(branch, "HEAD")
+    }
+
+    /// Create one managed worktree and new local branch at an exact commit,
+    /// leaving this worktree's HEAD, index and files untouched. Existing
+    /// refs or target folders are never overwritten.
+    pub fn create_at_commit(&self, branch: &str, commit_sha: &str) -> io::Result<PathBuf> {
+        if commit_sha.len() != 40 || !commit_sha.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(invalid("Git Graph Worktree requires an exact commit SHA"));
+        }
+        let repo = git2::Repository::discover(&self.repo_root)
+            .map_err(|_| invalid("Cannot inspect Git repository for selected commit"))?;
+        let oid = git2::Oid::from_str(commit_sha).map_err(|_| invalid("Invalid Git commit ID"))?;
+        repo.find_commit(oid)
+            .map_err(|_| invalid("Selected Git commit does not exist"))?;
+        self.create_at_ref(branch, commit_sha)
+    }
+
+    fn create_at_ref(&self, branch: &str, source_ref: &str) -> io::Result<PathBuf> {
         validate_branch(branch)?;
         let entries = self.list()?;
         let primary = primary_worktree(&entries)?;
@@ -161,7 +180,7 @@ impl WorktreeManager {
             OsStr::new("-b"),
             OsStr::new(branch),
             path.as_os_str(),
-            OsStr::new("HEAD"),
+            OsStr::new(source_ref),
         ])?;
         dunce::canonicalize(path)
     }
@@ -526,6 +545,37 @@ mod tests {
             ..base.clone()
         }];
         assert!(matching_branch_worktree(&prunable, "feature").is_none());
+    }
+
+    #[test]
+    fn create_at_commit_starts_new_managed_branch_without_moving_current_head() {
+        let (_dir, manager) = initialized_repo();
+        let repo = git2::Repository::discover(manager.root()).unwrap();
+        let head = repo.head().unwrap().peel_to_commit().unwrap();
+        let original_oid = head.id();
+        let original_branch = repo.head().unwrap().shorthand().unwrap().to_owned();
+        let original_file = fs::read(manager.root().join("tracked.txt")).ok();
+        let sha = original_oid.to_string();
+        let worktree = manager.create_at_commit("from-history", &sha).unwrap();
+        let linked = git2::Repository::discover(&worktree).unwrap();
+        assert_eq!(
+            linked.head().unwrap().peel_to_commit().unwrap().id(),
+            original_oid
+        );
+        assert_eq!(linked.head().unwrap().shorthand().unwrap(), "from-history");
+        assert_eq!(repo.head().unwrap().target(), Some(original_oid));
+        assert_eq!(repo.head().unwrap().shorthand().unwrap(), original_branch);
+        assert_eq!(
+            fs::read(manager.root().join("tracked.txt")).ok(),
+            original_file
+        );
+        assert!(manager.create_at_commit("from-history", &sha).is_err());
+        assert!(manager.create_at_commit("another", "abcdef").is_err());
+        assert!(manager.create_at_commit("../escape", &sha).is_err());
+        assert!(manager
+            .create_at_commit("missing", &"0".repeat(40))
+            .is_err());
+        manager.remove(&worktree, true).unwrap();
     }
 
     #[test]

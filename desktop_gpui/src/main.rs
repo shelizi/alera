@@ -183,6 +183,7 @@ enum GitUiAction {
     RenameInactiveBranch(String, String),
     CreateCommitRef(GitCommitRefKind, String, String),
     ApplyCommitPreview(GitCommitApplyPreview),
+    CreateWorktreeAtCommit(String, String),
     PullSelected(String),
     PushSelected(String),
     StashSave,
@@ -418,6 +419,9 @@ struct Workbench {
     git_commit_apply_armed: bool,
     git_commit_apply_loading: bool,
     git_commit_apply_request: u64,
+    git_worktree_commit_target: Option<String>,
+    git_worktree_commit_armed: Option<(String, String)>,
+    git_worktree_commit_input: Entity<QuickOpenInput>,
     git_rename_source: Option<String>,
     git_rename_armed: Option<(String, String)>,
     git_sensitive_armed: Option<ConfirmGitAction>,
@@ -1933,6 +1937,80 @@ impl Workbench {
         self.refresh_git_history(cx);
     }
 
+    fn prepare_git_worktree_at_commit(&mut self, oid: String, cx: &mut Context<Self>) {
+        if self.git_action_busy
+            || !self
+                .git_history
+                .as_ref()
+                .is_some_and(|history| history.commits.iter().any(|row| row.oid == oid))
+        {
+            self.git_action_status = "Commit is stale or Git is busy; refresh Graph".into();
+            cx.notify();
+            return;
+        }
+        self.git_commit_apply_preview = None;
+        self.git_commit_apply_armed = false;
+        self.git_commit_apply_loading = false;
+        self.git_commit_apply_request = self.git_commit_apply_request.wrapping_add(1);
+        self.git_commit_ref_target = None;
+        self.git_commit_ref_armed = None;
+        self.git_rename_source = None;
+        self.git_rename_armed = None;
+        self.git_worktree_commit_target = Some(oid.clone());
+        self.git_worktree_commit_armed = None;
+        self.git_worktree_commit_input
+            .update(cx, |input, cx| input.clear(cx));
+        self.git_action_status = format!(
+            "New Worktree at {}: enter a new branch name and confirm twice.",
+            &oid[..8]
+        );
+        cx.notify();
+    }
+
+    fn confirm_git_worktree_at_commit(&mut self, cx: &mut Context<Self>) {
+        let Some(oid) = self.git_worktree_commit_target.clone() else {
+            return;
+        };
+        let branch = self
+            .git_worktree_commit_input
+            .read(cx)
+            .query()
+            .trim()
+            .to_owned();
+        if self.git_action_busy || branch.is_empty() {
+            self.git_action_status = "Enter a new Worktree branch name before confirming".into();
+            cx.notify();
+            return;
+        }
+        if !self
+            .git_history
+            .as_ref()
+            .is_some_and(|history| history.commits.iter().any(|row| row.oid == oid))
+        {
+            self.git_worktree_commit_armed = None;
+            self.git_action_status = "Commit is stale; refresh and select again".into();
+            cx.notify();
+            return;
+        }
+        let pending = (oid.clone(), branch.clone());
+        if self.git_worktree_commit_armed.as_ref() != Some(&pending) {
+            self.git_worktree_commit_armed = Some(pending);
+            self.git_action_status = format!("Confirm creating managed Worktree '{branch}' at {}. Click Confirm again; current workspace is untouched.", &oid[..8]);
+            cx.notify();
+            return;
+        }
+        self.git_worktree_commit_armed = None;
+        self.run_git_action(GitUiAction::CreateWorktreeAtCommit(oid, branch), cx);
+    }
+
+    fn cancel_git_worktree_at_commit(&mut self, cx: &mut Context<Self>) {
+        self.git_worktree_commit_target = None;
+        self.git_worktree_commit_armed = None;
+        self.git_worktree_commit_input
+            .update(cx, |input, cx| input.clear(cx));
+        cx.notify();
+    }
+
     fn preview_git_commit_apply(
         &mut self,
         oid: String,
@@ -1965,6 +2043,8 @@ impl Workbench {
         self.git_commit_apply_loading = true;
         self.git_commit_ref_target = None;
         self.git_commit_ref_armed = None;
+        self.git_worktree_commit_target = None;
+        self.git_worktree_commit_armed = None;
         self.git_rename_source = None;
         self.git_rename_armed = None;
         cx.spawn(async move |view, cx| {
@@ -2066,6 +2146,10 @@ impl Workbench {
         self.git_rename_source = None;
         self.git_rename_armed = None;
         self.git_graph_remote_armed = None;
+        self.git_worktree_commit_target = None;
+        self.git_worktree_commit_armed = None;
+        self.git_commit_apply_preview = None;
+        self.git_commit_apply_armed = false;
         self.git_commit_ref_target = Some((oid.clone(), kind));
         self.git_commit_ref_armed = None;
         self.git_commit_ref_input
@@ -2409,6 +2493,13 @@ impl Workbench {
                             git.create_ref_at_commit(kind, &oid, &name)
                         }
                         GitUiAction::ApplyCommitPreview(preview) => git.apply_commit_preview(&preview),
+                        GitUiAction::CreateWorktreeAtCommit(oid, branch) => {
+                            let manager = alera_gpui_desktop::worktree_manager::WorktreeManager::discover(&root)
+                                .map_err(|error| error.to_string())?;
+                            let created = manager.create_at_commit(&branch, &oid)
+                                .map_err(|error| error.to_string())?;
+                            Ok(format!("Created Worktree {} at {}. Select it in Projects.", created.display(), &oid[..8]))
+                        }
                         GitUiAction::PullSelected(branch) => {
                             git.pull_branch_without_switch(&branch)
                         }
@@ -2439,6 +2530,9 @@ impl Workbench {
                         view.git_commit_ref_armed = None;
                         view.git_commit_apply_preview = None;
                         view.git_commit_apply_armed = false;
+                        view.git_worktree_commit_target = None;
+                        view.git_worktree_commit_armed = None;
+                        view.git_worktree_commit_input.update(cx, |input, cx| input.clear(cx));
                         view.git_commit_ref_input.update(cx, |input, cx| input.clear(cx));
                         view.git_rename_source = None;
                         view.git_rename_armed = None;
@@ -3502,6 +3596,10 @@ impl Workbench {
         self.git_commit_apply_armed = false;
         self.git_commit_apply_loading = false;
         self.git_commit_apply_request = self.git_commit_apply_request.wrapping_add(1);
+        self.git_worktree_commit_target = None;
+        self.git_worktree_commit_armed = None;
+        self.git_worktree_commit_input
+            .update(cx, |input, cx| input.clear(cx));
         self.git_rename_source = None;
         self.git_rename_armed = None;
         self.git_sensitive_armed = None;
@@ -6879,6 +6977,9 @@ impl Render for Workbench {
         let git_commit_apply_preview = self.git_commit_apply_preview.clone();
         let git_commit_apply_armed = self.git_commit_apply_armed;
         let git_commit_apply_loading = self.git_commit_apply_loading;
+        let git_worktree_commit_target = self.git_worktree_commit_target.clone();
+        let git_worktree_commit_input = self.git_worktree_commit_input.clone();
+        let git_worktree_commit_armed = self.git_worktree_commit_armed.is_some();
         let git_rename_armed = self.git_rename_armed.is_some();
         let git_graph_open = self.git_history_open;
         let git_graph_all_branches = self.git_history_options.all_branches;
@@ -7636,6 +7737,22 @@ impl Render for Workbench {
                                     .flex_col()
                                     .gap_1()
                                     .child(div().text_xs().text_color(rgb(MUTED)).child(git_history_status))
+                                    .when_some(git_worktree_commit_target, |panel, oid| panel.child(
+                                        div().flex().flex_col().gap_1()
+                                            .child(div().text_xs().text_color(rgb(TEXT))
+                                                .child(format!("New Worktree at {}", &oid[..8])))
+                                            .child(div().flex().items_center().gap_1()
+                                                .child(div().flex_1().min_w_0().child(git_worktree_commit_input))
+                                                .child(icon_button("git-worktree-commit-confirm",
+                                                    if git_worktree_commit_armed { UiIcon::Check } else { UiIcon::Add },
+                                                    if git_worktree_commit_armed { "Confirm creating managed Worktree" } else { "Prepare Worktree creation (confirm twice)" },
+                                                    git_worktree_commit_armed)
+                                                    .on_click(cx.listener(|this, _, _, cx| this.confirm_git_worktree_at_commit(cx))))
+                                                .child(icon_button("git-worktree-commit-cancel", UiIcon::Close,
+                                                    "Cancel creating Worktree", false)
+                                                    .on_click(cx.listener(|this, _, _, cx| this.cancel_git_worktree_at_commit(cx))))
+                                            )
+                                    ))
                                     .when(git_commit_apply_loading, |panel| panel.child(
                                         div().text_xs().text_color(rgb(MUTED))
                                             .child("Calculating Cherry-pick/Revert preview (no files changed)…")
@@ -10001,6 +10118,11 @@ fn main() {
                             git_commit_apply_armed: false,
                             git_commit_apply_loading: false,
                             git_commit_apply_request: 0,
+                            git_worktree_commit_target: None,
+                            git_worktree_commit_armed: None,
+                            git_worktree_commit_input: cx.new(|cx| {
+                                QuickOpenInput::with_placeholder("New worktree branch", cx)
+                            }),
                             git_rename_source: None,
                             git_rename_armed: None,
                             git_sensitive_armed: None,
