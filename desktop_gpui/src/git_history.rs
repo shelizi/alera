@@ -29,6 +29,8 @@ pub struct GitCommitRow {
     pub subject: String,
     pub author: String,
     pub parents: usize,
+    /// Exact parent commit hashes for Native graph edges.
+    pub parent_ids: Vec<String>,
     pub labels: Vec<String>,
 }
 
@@ -439,6 +441,7 @@ impl GitHistorySnapshot {
                 ),
                 author: subject(commit.author().name().unwrap_or("Unknown"), 48),
                 parents: commit.parent_count(),
+                parent_ids: commit.parent_ids().map(|id| id.to_string()).collect(),
                 labels: tips
                     .iter()
                     .filter(|(tip, _, _)| *tip == oid)
@@ -697,7 +700,7 @@ mod tests {
         assert!(snapshot
             .commits
             .iter()
-            .any(|row| row.oid == second.to_string()));
+            .any(|row| row.oid == second.to_string() && row.parent_ids == vec![first.to_string()]));
         let all = GitHistorySnapshot::load_filtered(
             dir.path(),
             &GitHistoryOptions {

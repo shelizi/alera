@@ -27,6 +27,7 @@ use alera_gpui_desktop::explorer_selection::ExplorerMultiSelection;
 use alera_gpui_desktop::explorer_visibility::ExplorerVisibilityOptions;
 use alera_gpui_desktop::file_search::WorkspaceFileIndex;
 use alera_gpui_desktop::git_actions::{GitActions, GitConflictChoice, GitConflictPlan};
+use alera_gpui_desktop::git_graph_layout::{layout_git_graph, GraphCommit};
 use alera_gpui_desktop::git_history::{
     compare_git_refs, compare_local_branch, preview_commit, GitHistoryOptions, GitHistorySnapshot,
 };
@@ -6196,6 +6197,22 @@ impl Render for Workbench {
             .as_ref()
             .map(|history| history.commits.clone())
             .unwrap_or_default();
+        let git_graph_topology = layout_git_graph(
+            &git_commit_rows
+                .iter()
+                .map(|commit| GraphCommit {
+                    oid: commit.oid.clone(),
+                    parents: commit.parent_ids.clone(),
+                })
+                .collect::<Vec<_>>(),
+        );
+        let git_graph_topology_note = git_graph_topology.as_ref().err().map(|error| {
+            format!(
+                "Topology unavailable: {} · showing commit list",
+                error.message()
+            )
+        });
+        let git_graph_topology_rows = git_graph_topology.ok().map(|layout| layout.rows);
         let git_merge_armed = self.git_merge_armed.is_some();
         let git_conflict_armed = self.git_conflict_confirm_armed;
         let git_conflict_count = self
@@ -7019,10 +7036,13 @@ impl Render for Workbench {
                                                         remote, row.current, has_worktree,
                                                     )))
                                         })))
-                                    .child(div().text_xs().text_color(rgb(TEXT)).child("Commits · select to preview"))
+                                    .child(div().text_xs().text_color(rgb(TEXT)).child("Commits · graph lanes represent actual parent commits"))
+                                    .when_some(git_graph_topology_note, |panel, note| {
+                                        panel.child(div().text_xs().text_color(rgb(MUTED)).child(note))
+                                    })
                                     .child(div()
                                         .id("git-graph-commits")
-                                        .max_h(px(160.0))
+                                        .max_h(px(220.0))
                                         .overflow_y_scroll()
                                         .children(git_commit_rows.into_iter().enumerate().map(|(index, row)| {
                                             let oid = row.oid;
@@ -7031,14 +7051,30 @@ impl Render for Workbench {
                                             let marker = if row.parents > 1 { "◆" } else { "●" };
                                             let labels = if row.labels.is_empty() { String::new() }
                                                 else { format!(" [{}]", row.labels.join(", ")) };
-                                            let title = format!("{marker} {} {}{} · {}", row.short, row.subject, labels, row.author);
+                                            let title = format!("{} {}{} · {}", row.short, row.subject, labels, row.author);
+                                            let topology = git_graph_topology_rows.as_ref().and_then(|rows| rows.get(index));
+                                            let node_line = topology.map(|item| item.node_line.clone())
+                                                .unwrap_or_else(|| marker.to_string());
+                                            let connector = topology.map(|item| item.connector_line.clone())
+                                                .unwrap_or_default();
+                                            let rail_width = topology.map(|item| item.node_line.chars().count())
+                                                .unwrap_or(1) as f32 * 8.0;
                                             div()
                                                 .id(("git-graph-commit", index))
+                                                .flex()
+                                                .flex_col()
                                                 .cursor_pointer()
                                                 .text_xs()
                                                 .text_color(rgb(MUTED))
                                                 .hover(|style| style.bg(rgb(ACTIVE)))
-                                                .child(title)
+                                                .child(div().flex().items_center().gap_2()
+                                                    .child(div().font_family("JetBrains Mono")
+                                                        .min_w(px(rail_width)).text_color(rgb(TEXT)).child(node_line))
+                                                    .child(div().min_w_0().flex_1().child(title)))
+                                                .when(!connector.trim().is_empty(), |item| item.child(
+                                                    div().font_family("JetBrains Mono")
+                                                        .text_color(rgb(MUTED)).child(connector)
+                                                ))
                                                 .on_click(cx.listener(move |this, _, _, cx| {
                                                     this.preview_git_history(GitReadRequest::Commit(oid.clone()), cx);
                                                 }))

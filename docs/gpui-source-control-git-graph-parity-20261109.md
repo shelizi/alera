@@ -23,7 +23,7 @@
 | Git Graph commit right-click | Preview, copy SHA/subject, branch/tag/worktree at commit, cherry-pick/revert/merge, resets etc. | Native read-only preview + copy SHA/subject | P0 safe subset; P1 branch/tag/worktree; P2 destructive writes |
 | Existing worktree navigation | For branches checked out elsewhere, offer open corresponding workspace instead of duplicate checkout | Native branch context menu identifies matching worktree and revalidates branch before switching | P0; finish with tests |
 | Branch compare | Current vs selected with explicit direction and original-file opening | Read-only local compare and `compare_git_refs` infrastructure | P1 diff file list and compare dialog |
-| Git Graph topology | Commit lanes/parents, merges, graph scrolling; inspect commit diff | Native only linear rows with merge marker; no true lanes | P1 draw topology with parent OIDs, bounded graph, line connectors |
+| Git Graph topology | Commit lanes/parents, merges, graph scrolling; inspect commit diff | Native exact parent SHA + bounded Unicode lanes and connectors, fallback for invalid history | P1 completed code, Native visual acceptance still pending |
 | History scope | All branches, favorites, selected ref, file/folder history | Implemented as bounded Native history options | P0 keep; P1 persistence of view state |
 
 ## Phase 1 — P0 source-control day-to-day parity
@@ -42,7 +42,7 @@
 - [x] GPUI Kit popup menu for graph branches: show history, compare local branch, open existing worktree, switch branch, prepare merge, copy name.
 - [x] GPUI Kit popup menu for graph commits: preview, copy hash and subject.
 - [ ] Add explicit file-level branch comparison (merge-base..HEAD direction explained), open original file from diff, compare two selected refs.
-- [ ] Render actual commit parent lanes, not a misleading linear list. Include merge edges, branch labels, scroll bounds and filters.
+- [x] Render bounded actual commit parent lanes with parent IDs, Unicode lane connectors, branch labels and scrolling; explicit fallback when full topology cannot be represented. Windows native visual acceptance remains pending.
 - [ ] Search and filter commits, tags, local/remote refs, favorites, per-file history.
 - [ ] Add "Pull branch without switching", "Push selected branch", "Merge branch into current without switching" to Graph and bottom branch switcher. Reuse one secure Git service, do not interpolate ref names into shell.
 - [ ] Add guarded rename/delete/ref creation, tag/branch-at-commit, cherry-pick/revert/worktree-at-commit.
@@ -59,4 +59,4 @@
 
 ## Known implementation gap at this checkpoint
 
-Native graph's `GitCommitRow.parents` currently carries a count, not parent edges. The row bullets (●/◆) are **not** a complete Git graph. A true topology requires collecting parent SHA IDs and assigning stable bounded lanes.
+Native graph now also carries `GitCommitRow.parent_ids` and renders bounded Unicode lanes instead of just the old ●/◆ markers. The current output is a functional textual rail layout, not a polished vector graph. The render is limited to 96 commits and 12 lanes; when topology cannot be represented, Native explicitly shows the simplified commit list. A Windows GPUI UI acceptance test, refined graph geometry/interaction, and file-filter history edge cases are still outstanding.
