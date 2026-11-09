@@ -875,6 +875,16 @@ pub struct TerminalTabContextTarget {
     workspace_generation: u64,
 }
 
+impl TerminalTabContextTarget {
+    pub fn workspace_id(&self) -> &str {
+        &self.workspace_id
+    }
+
+    pub fn tab_id(&self) -> &str {
+        &self.tab_id
+    }
+}
+
 /// An auto-resize request is bound to one exact still-live Host tab, not to
 /// whichever terminal happens to be selected when the background task runs.
 #[derive(Clone, Debug, PartialEq, Eq)]

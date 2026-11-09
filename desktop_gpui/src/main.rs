@@ -3,6 +3,7 @@ mod editor_ui;
 mod native_action_dialog_ui;
 mod native_components;
 mod native_git_favorites_ui;
+mod native_host_pins_ui;
 mod native_popup_ui;
 mod native_project_sidebar_ui;
 mod native_settings_catalog_ui;
@@ -36,6 +37,7 @@ use alera_gpui_desktop::git_history::{
     compare_git_refs, compare_local_branch, preview_commit, GitHistoryOptions, GitHistorySnapshot,
 };
 use alera_gpui_desktop::git_inspect::{read_file_diff, GitSnapshot};
+use alera_gpui_desktop::host_tab_pins::HostTabPinSnapshot;
 use alera_gpui_desktop::mcp_ui_bridge::{
     matching_host_tab_handle, NativeMcpUiBridge, NativeMcpUiCommand, NativeMcpUiEvent,
 };
@@ -432,6 +434,11 @@ struct Workbench {
     workspace_generation: u64,
     editor_epoch: u64,
     mixed_tabs: WorkbenchTabs,
+    host_pin_snapshots: HashMap<(String, String), HostTabPinSnapshot>,
+    host_pins_loading: bool,
+    host_pins_busy: bool,
+    host_pins_request: u64,
+    host_pins_error: Option<String>,
     mixed_panes: WorkbenchPaneLayout,
     mixed_layout_restore: Option<SavedWorkbenchLayoutV1>,
     mixed_layout_read_only: bool,
@@ -3047,6 +3054,11 @@ impl Workbench {
         self.mcp_host_workspaces_loading = false;
         self.mcp_host_workspaces_request = self.mcp_host_workspaces_request.wrapping_add(1);
         self.workspace_generation = self.workspace_generation.wrapping_add(1);
+        self.host_pin_snapshots.clear();
+        self.host_pins_loading = false;
+        self.host_pins_busy = false;
+        self.host_pins_request = self.host_pins_request.wrapping_add(1);
+        self.host_pins_error = None;
         self.project_tree_loading = false;
         self.project_tree_groups.clear();
         self.project_tree_request = self.project_tree_request.wrapping_add(1);
@@ -4212,6 +4224,7 @@ impl Workbench {
                                 view.terminal_poll.reset();
                             }
                             view.restore_terminal_layout_from_host(cx);
+                            view.refresh_host_tab_pins(cx);
                             if let Some(created) = view
                                 .terminal_create_flow
                                 .confirm_sessions(&view.terminals.sessions)
@@ -5748,12 +5761,17 @@ impl Workbench {
         }
         match action {
             MixedContextAction::Focus => self.focus_mixed_tab(&id, window, cx),
-            MixedContextAction::TogglePin => {
-                let next = !self.mixed_tabs.is_pinned(&id);
-                if self.mixed_tabs.set_pinned(&id, next) {
-                    self.save_mixed_pane_layout(cx);
+            MixedContextAction::TogglePin => match &id {
+                WorkbenchTabIdentity::Host(target) => {
+                    self.toggle_host_tab_pinned(target.clone(), cx);
                 }
-            }
+                WorkbenchTabIdentity::Editor { .. } => {
+                    let next = !self.mixed_tabs.is_pinned(&id);
+                    if self.mixed_tabs.set_pinned(&id, next) {
+                        self.save_mixed_pane_layout(cx);
+                    }
+                }
+            },
             MixedContextAction::Close => self.close_mixed_tab(&id, cx),
             MixedContextAction::CloseOthers | MixedContextAction::CloseToRight => {
                 for target in self.mixed_panes.close_unpinned_candidates(
@@ -9824,6 +9842,11 @@ fn main() {
                             workspace_generation: 0,
                             editor_epoch: 0,
                             mixed_tabs: WorkbenchTabs::for_workspace(0),
+                            host_pin_snapshots: HashMap::new(),
+                            host_pins_loading: false,
+                            host_pins_busy: false,
+                            host_pins_request: 0,
+                            host_pins_error: None,
                             mixed_panes: WorkbenchPaneLayout::default(),
                             mixed_layout_restore: None,
                             mixed_layout_read_only: false,

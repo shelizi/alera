@@ -451,7 +451,11 @@ impl RuntimeStore {
         archived: bool,
     ) -> Result<Workspace> {
         let timestamp = format_timestamp(Utc::now());
-        let archived_at = if archived { Some(timestamp.clone()) } else { None };
+        let archived_at = if archived {
+            Some(timestamp.clone())
+        } else {
+            None
+        };
         let result = sqlx::query(
             "UPDATE workspaces SET archivedAt = ?, updatedAt = ? WHERE id = ? AND status != 'removed'",
         )
@@ -1105,6 +1109,26 @@ impl RuntimeStore {
         .await?;
         if let Some(row) = current {
             let stored = tab_from_row(row)?;
+            // Never move a revision backwards after a stale title/status
+            // upsert: pin CAS needs monotonically changing timestamps.
+            if format_timestamp(tab.updated_at) <= format_timestamp(stored.updated_at) {
+                tab.updated_at = std::cmp::max(
+                    Utc::now(),
+                    stored.updated_at + chrono::Duration::milliseconds(1),
+                );
+            }
+            // Ordinary title/status upserts may carry an older pin snapshot.
+            // Only the guarded pin transaction below may change this key.
+            if let Some(payload) = tab.payload.as_object_mut() {
+                if stored.payload.get("pinned") == Some(&serde_json::json!(true)) {
+                    payload.insert("pinned".into(), serde_json::json!(true));
+                    // A stale preview payload must not make a pinned Tab
+                    // replaceable again during a title/status refresh.
+                    payload.remove("preview");
+                } else {
+                    payload.remove("pinned");
+                }
+            }
             let protected_evidence = ["lastTerminalTabTransfer", "lastTerminalTabExit"];
             let has_evidence = protected_evidence
                 .iter()
@@ -1159,6 +1183,92 @@ impl RuntimeStore {
         .execute(&mut *tx)
         .await?;
         tx.commit().await?;
+        Ok(tab)
+    }
+
+    /// Change only pinned/preview inside a single SQLite write transaction.
+    /// Fail closed when a delayed UI action refers to an old Tab, Workspace,
+    /// Terminal session, or revision. Other Host-owned payload survives.
+    pub async fn compare_and_set_workspace_tab_pin(
+        &self,
+        workspace_id: &str,
+        tab_id: &str,
+        expected_updated_at: DateTime<Utc>,
+        expected_pinned: bool,
+        pinned: bool,
+        expected_terminal_session_id: Option<&str>,
+    ) -> Result<WorkspaceTabRecord> {
+        ensure!(
+            !workspace_id.is_empty() && !tab_id.is_empty(),
+            "workspace_tab_pin_invalid_identity"
+        );
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        let row = sqlx::query(
+            "SELECT id, workspaceId, kind, title, createdAt, updatedAt, payloadJson \
+             FROM workspaceTabs WHERE id = ?",
+        )
+        .bind(tab_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("workspace_tab_pin_not_found"))?;
+        // Preserve the literal SQLite revision in the guarded UPDATE:
+        // legacy rows may use a valid RFC3339 encoding without millisecond
+        // digits. Reformatting that timestamp would falsely fail the CAS.
+        let stored_revision: String = row.try_get("updatedAt")?;
+        let mut tab = tab_from_row(row)?;
+        ensure!(
+            tab.workspace_id == workspace_id,
+            "workspace_tab_pin_identity_conflict"
+        );
+        ensure!(
+            tab.updated_at == expected_updated_at
+                && (tab.payload.get("pinned") == Some(&serde_json::json!(true))) == expected_pinned,
+            "workspace_tab_pin_revision_conflict"
+        );
+        ensure!(
+            tab.payload
+                .get("pinned")
+                .is_none_or(serde_json::Value::is_boolean),
+            "workspace_tab_pin_invalid_payload"
+        );
+        ensure!(
+            tab.payload
+                .get("terminalSessionId")
+                .and_then(serde_json::Value::as_str)
+                == expected_terminal_session_id,
+            "workspace_tab_pin_identity_conflict"
+        );
+        let payload = tab
+            .payload
+            .as_object_mut()
+            .ok_or_else(|| anyhow::anyhow!("workspace_tab_pin_invalid_payload"))?;
+        if pinned {
+            payload.insert("pinned".into(), serde_json::json!(true));
+            payload.remove("preview");
+        } else {
+            payload.remove("pinned");
+        }
+        let updated_at = std::cmp::max(
+            Utc::now(),
+            tab.updated_at + chrono::Duration::milliseconds(1),
+        );
+        let updated = sqlx::query(
+            "UPDATE workspaceTabs SET updatedAt = ?, payloadJson = ? \
+             WHERE id = ? AND workspaceId = ? AND updatedAt = ?",
+        )
+        .bind(format_timestamp(updated_at))
+        .bind(serde_json::to_string(&tab.payload)?)
+        .bind(tab_id)
+        .bind(workspace_id)
+        .bind(stored_revision)
+        .execute(&mut *tx)
+        .await?;
+        ensure!(
+            updated.rows_affected() == 1,
+            "workspace_tab_pin_revision_conflict"
+        );
+        tx.commit().await?;
+        tab.updated_at = updated_at;
         Ok(tab)
     }
 
@@ -1937,6 +2047,146 @@ mod tests {
             store.pool.options().get_max_connections(),
             RUNTIME_STORE_MAX_CONNECTIONS
         );
+    }
+
+    #[tokio::test]
+    async fn tab_pin_cas_preserves_host_payload_and_rejects_recycled_or_stale_tabs() {
+        let (_dir, store) = store().await;
+        let now = Utc::now();
+        let original = WorkspaceTabRecord {
+            id: "tab-1".into(),
+            workspace_id: "ws-1".into(),
+            kind: "terminal".into(),
+            title: "Agent".into(),
+            created_at: now,
+            updated_at: now,
+            payload: serde_json::json!({
+                "terminalSessionId": "session-1",
+                "agentTitleRevision": "agent-title-1",
+                "preview": true,
+                "customHostField": {"status": "running"}
+            }),
+        };
+        store.upsert_workspace_tab(original.clone()).await.unwrap();
+        let now = store
+            .find_workspace_tab("tab-1")
+            .await
+            .unwrap()
+            .unwrap()
+            .updated_at;
+        let first = store
+            .compare_and_set_workspace_tab_pin("ws-1", "tab-1", now, false, true, Some("session-1"))
+            .await
+            .unwrap();
+        assert_eq!(first.payload["pinned"], true);
+        assert!(first.payload.get("preview").is_none());
+        assert_eq!(first.payload["agentTitleRevision"], "agent-title-1");
+        assert_eq!(first.payload["customHostField"]["status"], "running");
+        assert!(first.updated_at > now);
+
+        for (workspace, revision, session) in [
+            ("ws-2", first.updated_at, "session-1"),
+            ("ws-1", now, "session-1"),
+            ("ws-1", first.updated_at, "recycled-session"),
+        ] {
+            assert!(store
+                .compare_and_set_workspace_tab_pin(
+                    workspace,
+                    "tab-1",
+                    revision,
+                    true,
+                    false,
+                    Some(session),
+                )
+                .await
+                .is_err());
+        }
+        // Ordinary Host title/status upserts may be based on the old view,
+        // but must not resurrect its obsolete pinned/preview state.
+        let mut stale_upsert = original.clone();
+        stale_upsert.title = "New title".into();
+        stale_upsert.payload["preview"] = serde_json::json!(true);
+        let saved = store.upsert_workspace_tab(stale_upsert).await.unwrap();
+        assert_eq!(saved.payload["pinned"], true);
+        assert!(saved.payload.get("preview").is_none());
+        assert_eq!(
+            store
+                .find_workspace_tab("tab-1")
+                .await
+                .unwrap()
+                .unwrap()
+                .payload["pinned"],
+            true
+        );
+        // A fresh read may legitimately unpin while preserving unrelated
+        // fields, and a repeat of its old revision must fail.
+        let current = store.find_workspace_tab("tab-1").await.unwrap().unwrap();
+        let unpinned = store
+            .compare_and_set_workspace_tab_pin(
+                "ws-1",
+                "tab-1",
+                current.updated_at,
+                true,
+                false,
+                Some("session-1"),
+            )
+            .await
+            .unwrap();
+        assert!(unpinned.payload.get("pinned").is_none());
+        assert_eq!(unpinned.payload["customHostField"]["status"], "running");
+        assert!(store
+            .compare_and_set_workspace_tab_pin(
+                "ws-1",
+                "tab-1",
+                current.updated_at,
+                true,
+                true,
+                Some("session-1"),
+            )
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn tab_pin_cas_accepts_legacy_rfc3339_revision_without_milliseconds() {
+        let (_dir, store) = store().await;
+        let now = Utc::now();
+        store
+            .upsert_workspace_tab(WorkspaceTabRecord {
+                id: "tab-legacy".into(),
+                workspace_id: "ws-legacy".into(),
+                kind: "terminal".into(),
+                title: "Legacy".into(),
+                created_at: now,
+                updated_at: now,
+                payload: serde_json::json!({"terminalSessionId":"session-legacy"}),
+            })
+            .await
+            .unwrap();
+        sqlx::query("UPDATE workspaceTabs SET updatedAt = ? WHERE id = ?")
+            .bind("2026-11-09T14:00:00Z")
+            .bind("tab-legacy")
+            .execute(&store.pool)
+            .await
+            .unwrap();
+        let previous = store
+            .find_workspace_tab("tab-legacy")
+            .await
+            .unwrap()
+            .unwrap();
+        let pinned = store
+            .compare_and_set_workspace_tab_pin(
+                "ws-legacy",
+                "tab-legacy",
+                previous.updated_at,
+                false,
+                true,
+                Some("session-legacy"),
+            )
+            .await
+            .unwrap();
+        assert_eq!(pinned.payload["pinned"], true);
+        assert!(pinned.updated_at > previous.updated_at);
     }
 
     async fn store() -> (tempfile::TempDir, RuntimeStore) {

@@ -399,6 +399,26 @@ pub enum DesktopSettingsAction {
         #[arg(long, action = clap::ArgAction::Set)]
         enabled: bool,
     },
+    /// Read only pinned/revision/session metadata for one Host workspace.
+    PinList {
+        #[arg(long)]
+        workspace_id: String,
+    },
+    /// Compare-and-set a Host Terminal pin; never accept an entire payload.
+    PinSet {
+        #[arg(long)]
+        workspace_id: String,
+        #[arg(long)]
+        id: String,
+        #[arg(long)]
+        expected_updated_at: String,
+        #[arg(long, action = clap::ArgAction::Set)]
+        expected_pinned: bool,
+        #[arg(long, action = clap::ArgAction::Set)]
+        pinned: bool,
+        #[arg(long)]
+        expected_terminal_session_id: String,
+    },
     Set {
         #[arg(long)]
         path: String,

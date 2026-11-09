@@ -139,10 +139,33 @@ instead of the stale legacy `center_view` flag after session restore.
   to its surviving original pane. Closing/recreating that pane instead
   leaves the Host Agent alive for explicit Attach.
 
-**Remaining parity:** Classic's pin state is Runtime Host-owned whereas
-Native Host/Agent pins here are view-local and not synchronized across
-Classic and GPUI or app restart. The two-row *preference*, unlike those
-Host/Agent pin identities, is now a reviewed shared Rust Core scalar.
+### Shared Host Terminal / Agent pins (integration branch, pending live acceptance)
+
+- Rust Core now owns an atomic `tab.pin.cas` mutation. The Host checks the
+  exact Workspace, Tab ID, timestamp revision, previous pin value and
+  Terminal session identity in the same SQLite write transaction. It changes
+  only `pinned` and, when newly pinned, clears the old `preview` flag.
+  Generic Tab upserts preserve the latest Host pin rather than replaying a
+  stale Classic snapshot.
+- Classic RuntimeWorkbenchRepository uses this CAS instead of full Tab
+  upsert for Pin/Unpin. Local Drift/fake repositories retain their prior
+  implementation. The Host broadcasts scoped `workspaceTabsChanged`.
+- Native resolves its current root from the authenticated Host catalog,
+  reads only a minimal `tab.pin.list` projection and validates Host
+  Workspace/Tab/PTY identity. The right-click action waits for verified Host
+  readback before updating the chip, and rejects workspace switches,
+  closed/recycled sessions, stale revisions and unsupported older Hosts.
+  No secret Agent command or PTY receipt is exposed by the CLI projection.
+- File-backed Native Editor pins remain Native layout-owned, because
+  Native Editor buffers are not the same Host-backed Editor Tab records
+  used by Classic. They must not be conflated by file path alone.
+
+**Remaining parity:** Host/Agent pin sync requires compatible rebuilt
+Runtime Host and CLI binaries and a real Windows Classic/GPUI acceptance
+pass; the production Host is unchanged. Pins for manually attached Host tabs
+belonging to a different workspace than the current root are not yet
+projected by the root-scoped Native pin refresh. The two-row *preference*
+is already a reviewed shared Rust Core scalar.
 Classic seeds its old local value only when absent and uses field-scoped CAS;
 GPUI migrates a previously persisted Native JSON value only if the old
 file exists, then reads/writes through the same Host owner. An offline or

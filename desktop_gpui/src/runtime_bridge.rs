@@ -1,6 +1,7 @@
 //! Optional bridge to the *existing* Alera CLI Runtime Host.
 //! No RPC token parsing, direct SQLite access, host startup, or PTY spawning.
 //! The CLI owns authentication, version negotiation and request semantics.
+use crate::host_tab_pins::{parse_pin_readback, parse_pin_snapshot, HostTabPinSnapshot};
 use alera_core::child_process::windowless_command;
 use serde_json::Value;
 use std::ffi::OsString;
@@ -284,6 +285,49 @@ impl RuntimeCliBridge {
             OsString::from("--enabled"),
             OsString::from(enabled.to_string()),
         ])
+    }
+
+    /// Read secret-free pin/revision metadata through the authenticated Host.
+    pub fn host_tab_pin_list(&self, workspace_id: &str) -> io::Result<Vec<HostTabPinSnapshot>> {
+        if workspace_id.is_empty() || workspace_id.len() > 256 {
+            return Err(io::Error::new(
+                ErrorKind::InvalidInput,
+                "Invalid Host workspace",
+            ));
+        }
+        let value = self.desktop_settings_command(&[
+            OsString::from("pin-list"),
+            OsString::from("--workspace-id"),
+            OsString::from(workspace_id),
+        ])?;
+        parse_pin_snapshot(&value, workspace_id)
+    }
+
+    /// Never accept a stale/recycled Terminal or persist an optimistic pin.
+    pub fn host_tab_pin_compare_and_set(
+        &self,
+        observed: &HostTabPinSnapshot,
+        pinned: bool,
+    ) -> io::Result<HostTabPinSnapshot> {
+        let session = observed.terminal_session_id.as_deref().ok_or_else(|| {
+            io::Error::new(ErrorKind::InvalidInput, "Tab has no Host Terminal session")
+        })?;
+        let value = self.desktop_settings_command(&[
+            OsString::from("pin-set"),
+            OsString::from("--workspace-id"),
+            OsString::from(&observed.workspace_id),
+            OsString::from("--id"),
+            OsString::from(&observed.id),
+            OsString::from("--expected-updated-at"),
+            OsString::from(&observed.updated_at),
+            OsString::from("--expected-pinned"),
+            OsString::from(observed.pinned.to_string()),
+            OsString::from("--pinned"),
+            OsString::from(pinned.to_string()),
+            OsString::from("--expected-terminal-session-id"),
+            OsString::from(session),
+        ])?;
+        parse_pin_readback(&value, observed, pinned)
     }
 
     pub fn desktop_settings_compare_and_set(

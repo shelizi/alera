@@ -29,7 +29,7 @@ use super::workspace_artifact_requests::{
 };
 use super::workspace_relation_requests::WorkspaceRelationRequestHandler;
 use super::workspace_requests::WorkspaceRequestHandler;
-use super::workspace_tab_requests::WorkspaceTabStoreHandler;
+use super::workspace_tab_requests::{TabPinCasRequest, WorkspaceTabStoreHandler};
 use super::{ClientKind, ServerActor, ServerCommand};
 
 use self::idempotency_receipts::{
@@ -989,6 +989,30 @@ impl ServerActor {
                     .await?
                     .and_then(|tab| self.workspace_tab_for_client(client_id, tab));
                 Ok(json!(tab))
+            }
+            "tab.pin.list" => {
+                self.require_auth(client_id)?;
+                self.require_request_allowed(client_id, request_type)?;
+                let workspace_id = require_string_key(payload, "workspaceId")?;
+                WorkspaceTabStoreHandler::new(&self.runtime_store)
+                    .list_pins(&workspace_id)
+                    .await
+            }
+            "tab.pin.cas" => {
+                self.require_auth(client_id)?;
+                self.require_request_allowed(client_id, request_type)?;
+                // Require an explicit session guard, including null for
+                // non-Terminal tabs.
+                if payload.get("expectedTerminalSessionId").is_none() {
+                    return Err(HostError::state("Missing Tab session identity guard"));
+                }
+                let request: TabPinCasRequest = parse_payload(payload)?;
+                let workspace_id = request.workspace_id.clone();
+                let tab = WorkspaceTabStoreHandler::new(&self.runtime_store)
+                    .set_pin(request)
+                    .await?;
+                self.broadcast_workspace_tabs_changed(Some(&workspace_id));
+                Ok(json!(self.workspace_tab_for_client(client_id, tab)))
             }
             "tab.upsert" => {
                 self.require_auth(client_id)?;

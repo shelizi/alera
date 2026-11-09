@@ -18,6 +18,7 @@ pub mod file_search;
 pub mod git_actions;
 pub mod git_history;
 pub mod git_inspect;
+pub mod host_tab_pins;
 pub mod mcp_ui_bridge;
 pub mod mcp_workspace_creation;
 pub mod model;

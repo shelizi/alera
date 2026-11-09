@@ -1,0 +1,139 @@
+//! Secret-free, identity-checked Host Tab pin metadata. Never owns a PTY.
+use crate::terminal::{TerminalSession, TerminalTabContextTarget};
+use serde::Deserialize;
+use serde_json::Value;
+use std::collections::HashSet;
+use std::io::{self, ErrorKind};
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HostTabPinSnapshot {
+    pub workspace_id: String,
+    pub id: String,
+    pub updated_at: String,
+    pub pinned: bool,
+    pub terminal_session_id: Option<String>,
+}
+
+impl HostTabPinSnapshot {
+    pub fn matches_session(&self, session: &TerminalSession) -> bool {
+        self.workspace_id == session.workspace_id
+            && self.id == session.tab_id
+            && self.terminal_session_id.as_deref() == Some(session.handle.as_str())
+    }
+
+    pub fn matches_target(&self, target: &TerminalTabContextTarget) -> bool {
+        self.workspace_id == target.workspace_id()
+            && self.id == target.tab_id()
+            && self.terminal_session_id.as_deref() == Some(target.handle.as_str())
+    }
+
+    fn valid(&self) -> bool {
+        let safe = |value: &str| {
+            !value.is_empty() && value.len() <= 256 && !value.chars().any(char::is_control)
+        };
+        safe(&self.workspace_id)
+            && safe(&self.id)
+            && self.terminal_session_id.as_deref().is_none_or(safe)
+            && (16..=64).contains(&self.updated_at.len())
+            && self.updated_at.is_ascii()
+            && self.updated_at.contains('T')
+    }
+}
+
+pub fn parse_pin_snapshot(value: &Value, workspace: &str) -> io::Result<Vec<HostTabPinSnapshot>> {
+    let items = value
+        .as_array()
+        .filter(|items| items.len() <= 256)
+        .ok_or_else(|| io::Error::new(ErrorKind::InvalidData, "Invalid Host pin list"))?;
+    let mut seen = HashSet::new();
+    let mut result = Vec::with_capacity(items.len());
+    for item in items {
+        let pin: HostTabPinSnapshot = serde_json::from_value(item.clone())
+            .map_err(|error| io::Error::new(ErrorKind::InvalidData, error))?;
+        if !pin.valid() || pin.workspace_id != workspace || !seen.insert(pin.id.clone()) {
+            return Err(io::Error::new(
+                ErrorKind::InvalidData,
+                "Host pin has invalid or duplicate identity",
+            ));
+        }
+        result.push(pin);
+    }
+    Ok(result)
+}
+
+pub fn parse_pin_readback(
+    value: &Value,
+    original: &HostTabPinSnapshot,
+    next: bool,
+) -> io::Result<HostTabPinSnapshot> {
+    let pin: HostTabPinSnapshot = serde_json::from_value(value.clone())
+        .map_err(|error| io::Error::new(ErrorKind::InvalidData, error))?;
+    if !pin.valid()
+        || pin.workspace_id != original.workspace_id
+        || pin.id != original.id
+        || pin.terminal_session_id != original.terminal_session_id
+        || pin.pinned != next
+        || pin.updated_at == original.updated_at
+    {
+        return Err(io::Error::new(
+            ErrorKind::InvalidData,
+            "Host pin readback mismatch",
+        ));
+    }
+    Ok(pin)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn only_secret_free_workspace_scoped_pin_snapshots_are_accepted() {
+        let item = json!({"workspaceId":"ws","id":"tab",
+            "updatedAt":"2026-11-09T14:00:00.000Z",
+            "pinned":true,"terminalSessionId":"pty-1"});
+        assert!(parse_pin_snapshot(&json!([item.clone()]), "ws").is_ok());
+        assert!(parse_pin_snapshot(&json!([item.clone()]), "other").is_err());
+        assert!(parse_pin_snapshot(&json!([item.clone(), item.clone()]), "ws").is_err());
+        let mut unsafe_item = item.clone();
+        unsafe_item["payload"] = json!({"initialCommand":"sensitive"});
+        assert!(parse_pin_snapshot(&json!([unsafe_item]), "ws").is_err());
+        let session = TerminalSession {
+            handle: "pty-1".into(),
+            workspace_id: "ws".into(),
+            tab_id: "tab".into(),
+            running: true,
+            agent_type: Some("Codex".into()),
+        };
+        let pin = parse_pin_snapshot(&json!([item]), "ws").unwrap().remove(0);
+        assert!(pin.matches_session(&session));
+        assert!(!pin.matches_session(&TerminalSession {
+            handle: "recycled".into(),
+            ..session
+        }));
+    }
+
+    #[test]
+    fn pin_readback_refuses_stale_revision_or_recycled_session() {
+        let old = parse_pin_snapshot(
+            &json!([{"workspaceId":"ws","id":"tab",
+            "updatedAt":"2026-11-09T14:00:00.000Z",
+            "pinned":false,"terminalSessionId":"pty-1"}]),
+            "ws",
+        )
+        .unwrap()
+        .remove(0);
+        let next = json!({"workspaceId":"ws","id":"tab",
+            "updatedAt":"2026-11-09T14:00:00.001Z",
+            "pinned":true,"terminalSessionId":"pty-1"});
+        assert!(parse_pin_readback(&next, &old, true).is_ok());
+        let mut stale = next.clone();
+        stale["updatedAt"] = json!(old.updated_at);
+        assert!(parse_pin_readback(&stale, &old, true).is_err());
+        let mut recycled = next;
+        recycled["terminalSessionId"] = json!("pty-2");
+        assert!(parse_pin_readback(&recycled, &old, true).is_err());
+    }
+}
