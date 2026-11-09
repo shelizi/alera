@@ -620,6 +620,24 @@ impl Workbench {
                     });
                 }));
             }
+            for (title, kind) in [
+                (
+                    "Cherry-pick commit (preview and confirm)…",
+                    alera_gpui_desktop::git_actions::GitCommitApplyKind::CherryPick,
+                ),
+                (
+                    "Revert commit (preview and confirm)…",
+                    alera_gpui_desktop::git_actions::GitCommitApplyKind::Revert,
+                ),
+            ] {
+                let owner = owner.clone();
+                let commit_id = oid.clone();
+                menu = menu.item(PopupMenuItem::new(title).on_click(move |_, _, cx| {
+                    let _ = owner.update(cx, |view, cx| {
+                        view.preview_git_commit_apply(commit_id.clone(), kind, cx);
+                    });
+                }));
+            }
             let hash = oid.clone();
             menu = menu.item(
                 PopupMenuItem::new("Copy commit hash").on_click(move |_, _, cx| {

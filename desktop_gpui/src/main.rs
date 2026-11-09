@@ -27,7 +27,8 @@ use alera_gpui_desktop::explorer_selection::ExplorerMultiSelection;
 use alera_gpui_desktop::explorer_visibility::ExplorerVisibilityOptions;
 use alera_gpui_desktop::file_search::WorkspaceFileIndex;
 use alera_gpui_desktop::git_actions::{
-    GitActions, GitCommitRefKind, GitConflictChoice, GitConflictPlan,
+    GitActions, GitCommitApplyKind, GitCommitApplyPreview, GitCommitRefKind, GitConflictChoice,
+    GitConflictPlan,
 };
 use alera_gpui_desktop::git_branch_compare::{
     compare_branch_files, diff_compared_file, original_compared_file, BranchFileComparison,
@@ -181,6 +182,7 @@ enum GitUiAction {
     Fetch,
     RenameInactiveBranch(String, String),
     CreateCommitRef(GitCommitRefKind, String, String),
+    ApplyCommitPreview(GitCommitApplyPreview),
     PullSelected(String),
     PushSelected(String),
     StashSave,
@@ -412,6 +414,10 @@ struct Workbench {
     git_graph_remote_armed: Option<(String, bool)>, // true = Pull, false = Push
     git_commit_ref_target: Option<(String, GitCommitRefKind)>,
     git_commit_ref_armed: Option<(String, GitCommitRefKind, String)>,
+    git_commit_apply_preview: Option<GitCommitApplyPreview>,
+    git_commit_apply_armed: bool,
+    git_commit_apply_loading: bool,
+    git_commit_apply_request: u64,
     git_rename_source: Option<String>,
     git_rename_armed: Option<(String, String)>,
     git_sensitive_armed: Option<ConfirmGitAction>,
@@ -1927,6 +1933,120 @@ impl Workbench {
         self.refresh_git_history(cx);
     }
 
+    fn preview_git_commit_apply(
+        &mut self,
+        oid: String,
+        kind: GitCommitApplyKind,
+        cx: &mut Context<Self>,
+    ) {
+        if self.git_action_busy
+            || self.git_commit_apply_loading
+            || !self
+                .git_history
+                .as_ref()
+                .is_some_and(|history| history.commits.iter().any(|row| row.oid == oid))
+        {
+            self.git_action_status = "Git Graph commit selection is stale or Git is busy".into();
+            cx.notify();
+            return;
+        }
+        if self.editor_dirty(cx) {
+            self.git_action_status =
+                "Save unsaved editor buffers before previewing a commit operation".into();
+            cx.notify();
+            return;
+        }
+        let root = self.model.root().to_path_buf();
+        let generation = self.workspace_generation;
+        self.git_commit_apply_request = self.git_commit_apply_request.wrapping_add(1);
+        let ticket = self.git_commit_apply_request;
+        self.git_commit_apply_preview = None;
+        self.git_commit_apply_armed = false;
+        self.git_commit_apply_loading = true;
+        self.git_commit_ref_target = None;
+        self.git_commit_ref_armed = None;
+        self.git_rename_source = None;
+        self.git_rename_armed = None;
+        cx.spawn(async move |view, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    let git = GitActions::open(&root)?;
+                    git.preview_commit_apply(&oid, kind)
+                })
+                .await;
+            view.update(cx, |view, cx| {
+                if view.workspace_generation != generation
+                    || view.git_commit_apply_request != ticket
+                {
+                    return;
+                }
+                view.git_commit_apply_loading = false;
+                match result {
+                    Ok(plan) => {
+                        view.git_action_status = format!(
+                            "{} preview: {} file(s) on {}. Review paths then confirm twice.",
+                            kind.label(),
+                            plan.changed_paths.len(),
+                            plan.current_branch
+                        );
+                        view.git_commit_apply_preview = Some(plan);
+                    }
+                    Err(error) => {
+                        view.git_commit_apply_preview = None;
+                        view.git_action_status =
+                            format!("{} preview refused: {error}", kind.label());
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn confirm_git_commit_apply(&mut self, cx: &mut Context<Self>) {
+        let Some(preview) = self.git_commit_apply_preview.clone() else {
+            return;
+        };
+        if self.git_action_busy || self.git_commit_apply_loading {
+            self.git_action_status = "Finish the current Git operation first".into();
+            cx.notify();
+            return;
+        }
+        if !self.git_history.as_ref().is_some_and(|history| {
+            history
+                .commits
+                .iter()
+                .any(|row| row.oid == preview.source_oid)
+        }) {
+            self.git_commit_apply_preview = None;
+            self.git_commit_apply_armed = false;
+            self.git_action_status = "Git Graph commit is stale; refresh and preview again".into();
+            cx.notify();
+            return;
+        }
+        if !self.git_commit_apply_armed {
+            self.git_commit_apply_armed = true;
+            self.git_action_status = format!(
+                "Confirm {} of {} onto {} ({} changed files). Click Confirm again to create a commit.",
+                preview.kind.label(), &preview.source_oid[..8],
+                preview.current_branch, preview.changed_paths.len());
+            cx.notify();
+            return;
+        }
+        self.git_commit_apply_armed = false;
+        self.run_git_action(GitUiAction::ApplyCommitPreview(preview), cx);
+    }
+
+    fn cancel_git_commit_apply(&mut self, cx: &mut Context<Self>) {
+        self.git_commit_apply_request = self.git_commit_apply_request.wrapping_add(1);
+        self.git_commit_apply_preview = None;
+        self.git_commit_apply_loading = false;
+        self.git_commit_apply_armed = false;
+        cx.notify();
+    }
+
     fn prepare_git_commit_ref(
         &mut self,
         oid: String,
@@ -2288,6 +2408,7 @@ impl Workbench {
                         GitUiAction::CreateCommitRef(kind, oid, name) => {
                             git.create_ref_at_commit(kind, &oid, &name)
                         }
+                        GitUiAction::ApplyCommitPreview(preview) => git.apply_commit_preview(&preview),
                         GitUiAction::PullSelected(branch) => {
                             git.pull_branch_without_switch(&branch)
                         }
@@ -2316,6 +2437,8 @@ impl Workbench {
                         view.git_action_status = message;
                         view.git_commit_ref_target = None;
                         view.git_commit_ref_armed = None;
+                        view.git_commit_apply_preview = None;
+                        view.git_commit_apply_armed = false;
                         view.git_commit_ref_input.update(cx, |input, cx| input.clear(cx));
                         view.git_rename_source = None;
                         view.git_rename_armed = None;
@@ -3375,6 +3498,10 @@ impl Workbench {
         self.git_graph_remote_armed = None;
         self.git_commit_ref_target = None;
         self.git_commit_ref_armed = None;
+        self.git_commit_apply_preview = None;
+        self.git_commit_apply_armed = false;
+        self.git_commit_apply_loading = false;
+        self.git_commit_apply_request = self.git_commit_apply_request.wrapping_add(1);
         self.git_rename_source = None;
         self.git_rename_armed = None;
         self.git_sensitive_armed = None;
@@ -6749,6 +6876,9 @@ impl Render for Workbench {
         let git_commit_ref_target = self.git_commit_ref_target.clone();
         let git_commit_ref_input = self.git_commit_ref_input.clone();
         let git_commit_ref_armed = self.git_commit_ref_armed.is_some();
+        let git_commit_apply_preview = self.git_commit_apply_preview.clone();
+        let git_commit_apply_armed = self.git_commit_apply_armed;
+        let git_commit_apply_loading = self.git_commit_apply_loading;
         let git_rename_armed = self.git_rename_armed.is_some();
         let git_graph_open = self.git_history_open;
         let git_graph_all_branches = self.git_history_options.all_branches;
@@ -7506,6 +7636,38 @@ impl Render for Workbench {
                                     .flex_col()
                                     .gap_1()
                                     .child(div().text_xs().text_color(rgb(MUTED)).child(git_history_status))
+                                    .when(git_commit_apply_loading, |panel| panel.child(
+                                        div().text_xs().text_color(rgb(MUTED))
+                                            .child("Calculating Cherry-pick/Revert preview (no files changed)…")
+                                    ))
+                                    .when_some(git_commit_apply_preview, |panel, preview| panel.child(
+                                        div().flex().flex_col().gap_1()
+                                            .child(div().text_xs().text_color(rgb(TEXT))
+                                                .child(format!("{} {} → {} · {} file(s)",
+                                                    preview.kind.label(),
+                                                    &preview.source_oid[..8],
+                                                    preview.current_branch,
+                                                    preview.changed_paths.len())))
+                                            .child(div().id("git-commit-apply-files").max_h(px(92.0))
+                                                .overflow_y_scroll().flex().flex_col()
+                                                .children(preview.changed_paths.into_iter().enumerate().map(|(i, path)| {
+                                                    div().id(("git-commit-apply-file", i))
+                                                        .text_xs().text_color(rgb(MUTED)).child(path)
+                                                })))
+                                            .child(div().flex().items_center().gap_1()
+                                                .child(icon_button("git-commit-apply-confirm",
+                                                    if git_commit_apply_armed { UiIcon::Check } else { UiIcon::Edit },
+                                                    if git_commit_apply_armed { "Confirm commit apply now" } else { "Prepare Cherry-pick/Revert (confirm twice)" },
+                                                    git_commit_apply_armed)
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.confirm_git_commit_apply(cx);
+                                                    })))
+                                                .child(icon_button("git-commit-apply-cancel", UiIcon::Close,
+                                                    "Cancel commit preview; nothing changed", false)
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.cancel_git_commit_apply(cx);
+                                                    }))))
+                                    ))
                                     .when_some(git_commit_ref_target, |panel, (oid, kind)| panel.child(
                                         div().flex().flex_col().gap_1()
                                             .child(div().text_xs().text_color(rgb(TEXT))
@@ -9835,6 +9997,10 @@ fn main() {
                             git_graph_remote_armed: None,
                             git_commit_ref_target: None,
                             git_commit_ref_armed: None,
+                            git_commit_apply_preview: None,
+                            git_commit_apply_armed: false,
+                            git_commit_apply_loading: false,
+                            git_commit_apply_request: 0,
                             git_rename_source: None,
                             git_rename_armed: None,
                             git_sensitive_armed: None,

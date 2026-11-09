@@ -53,6 +53,32 @@ impl GitCommitRefKind {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GitCommitApplyKind {
+    CherryPick,
+    Revert,
+}
+
+impl GitCommitApplyKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::CherryPick => "Cherry-pick",
+            Self::Revert => "Revert",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GitCommitApplyPreview {
+    pub kind: GitCommitApplyKind,
+    pub source_oid: String,
+    pub source_subject: String,
+    pub current_branch: String,
+    pub current_oid: String,
+    pub resulting_tree: String,
+    pub changed_paths: Vec<String>,
+}
+
 pub struct GitActions {
     repo: Repository,
     root: PathBuf,
@@ -873,6 +899,175 @@ impl GitActions {
         Ok(oid.to_string())
     }
 
+    /// Preview a single-parent commit against the current HEAD in memory.
+    /// Reject conflicts, empty results and all merge commits. No real index,
+    /// HEAD or worktree mutation; Git may store the proposed tree object.
+    pub fn preview_commit_apply(
+        &self,
+        sha: &str,
+        kind: GitCommitApplyKind,
+    ) -> Result<GitCommitApplyPreview, String> {
+        self.require_clean_worktree()?;
+        if sha.len() != 40 || !sha.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err("Select an exact 40-character commit SHA".into());
+        }
+        let target = self
+            .repo
+            .find_commit(Oid::from_str(sha).map_err(|e| e.to_string())?)
+            .map_err(|_| "Selected Git commit does not exist".to_string())?;
+        if target.parent_count() != 1 {
+            return Err("Root and merge commits need explicit mainline selection; Native only handles one-parent commits".into());
+        }
+        let head = self.repo.head().map_err(|e| e.to_string())?;
+        if !head.is_branch() {
+            return Err("Checkout a local branch before applying a commit".into());
+        }
+        let branch = head.shorthand().map_err(|e| e.to_string())?.to_owned();
+        let current = head.peel_to_commit().map_err(|e| e.to_string())?;
+        if kind == GitCommitApplyKind::CherryPick && target.id() == current.id() {
+            return Err("Cannot cherry-pick the active HEAD".into());
+        }
+        let mut index = match kind {
+            GitCommitApplyKind::CherryPick => {
+                self.repo.cherrypick_commit(&target, &current, 0, None)
+            }
+            GitCommitApplyKind::Revert => self.repo.revert_commit(&target, &current, 0, None),
+        }
+        .map_err(|e| format!("Cannot calculate {}: {e}", kind.label()))?;
+        if index.has_conflicts() {
+            return Err(format!(
+                "{} would create conflicts; no worktree or HEAD changes applied",
+                kind.label()
+            ));
+        }
+        let tree_oid = index.write_tree_to(&self.repo).map_err(|e| e.to_string())?;
+        let head_tree = current.tree().map_err(|e| e.to_string())?;
+        if head_tree.id() == tree_oid {
+            return Err(format!(
+                "{} has no changes against current HEAD",
+                kind.label()
+            ));
+        }
+        let proposed = self.repo.find_tree(tree_oid).map_err(|e| e.to_string())?;
+        let diff = self
+            .repo
+            .diff_tree_to_tree(Some(&head_tree), Some(&proposed), None)
+            .map_err(|e| e.to_string())?;
+        if diff.deltas().len() > 80 {
+            return Err("Commit changes more than 80 files".into());
+        }
+        let mut paths = Vec::new();
+        for delta in diff.deltas() {
+            let path = delta
+                .new_file()
+                .path()
+                .or_else(|| delta.old_file().path())
+                .ok_or("Git delta has no file path")?;
+            if path.is_absolute()
+                || path
+                    .components()
+                    .any(|c| !matches!(c, Component::Normal(_)))
+            {
+                return Err("Commit contains an unsafe path".into());
+            }
+            paths.push(path.to_string_lossy().into_owned());
+        }
+        if paths.is_empty() {
+            return Err("Commit produces no changed files".into());
+        }
+        Ok(GitCommitApplyPreview {
+            kind,
+            source_oid: sha.to_owned(),
+            source_subject: target
+                .summary()
+                .ok()
+                .flatten()
+                .unwrap_or("(untitled)")
+                .to_owned(),
+            current_branch: branch,
+            current_oid: current.id().to_string(),
+            resulting_tree: tree_oid.to_string(),
+            changed_paths: paths,
+        })
+    }
+
+    /// Recompute the full preview before any checkout; only conflict-free
+    /// exact matches are applied. A late commit error leaves changes staged
+    /// rather than force resetting or deleting user content.
+    pub fn apply_commit_preview(&self, preview: &GitCommitApplyPreview) -> Result<String, String> {
+        let fresh = self.preview_commit_apply(&preview.source_oid, preview.kind)?;
+        if &fresh != preview {
+            return Err("Git Graph preview is stale; inspect the commit again".into());
+        }
+        let current = self
+            .repo
+            .find_commit(Oid::from_str(&preview.current_oid).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?;
+        let source = self
+            .repo
+            .find_commit(Oid::from_str(&preview.source_oid).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?;
+        let new_tree = self
+            .repo
+            .find_tree(Oid::from_str(&preview.resulting_tree).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?;
+        let identity = self
+            .repo
+            .signature()
+            .map_err(|_| "Set Git user.name and user.email before applying commits".to_string())?;
+        let mut dry_run = CheckoutBuilder::new();
+        dry_run.safe().dry_run();
+        self.repo
+            .checkout_tree(new_tree.as_object(), Some(&mut dry_run))
+            .map_err(|e| format!("Checkout preflight refused: {e}"))?;
+        self.require_clean_worktree()?;
+        let head = self.repo.head().map_err(|e| e.to_string())?;
+        if !head.is_branch()
+            || head.shorthand().ok() != Some(preview.current_branch.as_str())
+            || head.target() != Some(current.id())
+        {
+            return Err("HEAD moved since preview; no files modified".into());
+        }
+        let mut checkout = CheckoutBuilder::new();
+        checkout.safe().recreate_missing(false);
+        self.repo
+            .checkout_tree(new_tree.as_object(), Some(&mut checkout))
+            .map_err(|e| format!("Checkout refused; branch ref unchanged: {e}"))?;
+        let mut index = self.repo.index().map_err(|e| e.to_string())?;
+        index.read_tree(&new_tree).map_err(|e| e.to_string())?;
+        index.write().map_err(|e| e.to_string())?;
+        let message = match preview.kind {
+            GitCommitApplyKind::CherryPick => format!(
+                "{}\n\n(cherry picked from commit {})",
+                source.message().unwrap_or("Cherry-picked commit"),
+                source.id()
+            ),
+            GitCommitApplyKind::Revert => format!(
+                "Revert \"{}\"\n\nThis reverts commit {}.",
+                preview.source_subject,
+                source.id()
+            ),
+        };
+        let id = self
+            .repo
+            .commit(
+                Some("HEAD"),
+                &identity,
+                &identity,
+                &message,
+                &new_tree,
+                &[&current],
+            )
+            .map_err(|e| format!("Commit creation failed; changes remain staged: {e}"))?;
+        Ok(format!(
+            "{} succeeded on {} as {} ({} file(s))",
+            preview.kind.label(),
+            preview.current_branch,
+            &id.to_string()[..8],
+            preview.changed_paths.len()
+        ))
+    }
+
     /// Create a branch or lightweight tag at the exact selected Git Graph
     /// commit. No shell invocation, checkout, Git index update or force flag.
     /// All names are validated as complete Git refs before libgit2 writes.
@@ -1424,6 +1619,115 @@ mod tests {
         assert!(GitActions::open(&child).is_err());
         assert!(actions.switch_branch("missing").is_err());
         assert!(actions.commit(" ").is_err());
+    }
+
+    #[test]
+    fn commit_apply_preview_and_confirm_cherry_pick_and_revert() {
+        let (_dir, actions) = repo_fixture();
+        let base = actions.repo.head().unwrap().peel_to_commit().unwrap().id();
+        let old_branch = actions.repo.head().unwrap().shorthand().unwrap().to_owned();
+        actions
+            .repo
+            .branch("topic", &actions.repo.find_commit(base).unwrap(), false)
+            .unwrap();
+        actions.switch_branch("topic").unwrap();
+        fs::write(actions.root().join("topic.txt"), "topic content\n").unwrap();
+        actions.stage_file(Path::new("topic.txt")).unwrap();
+        let topic_commit = actions.commit("topic change").unwrap();
+        actions.switch_branch(&old_branch).unwrap();
+        let initial = actions.repo.head().unwrap().peel_to_commit().unwrap().id();
+        let cherry = actions
+            .preview_commit_apply(&topic_commit, GitCommitApplyKind::CherryPick)
+            .unwrap();
+        assert_eq!(cherry.current_oid, initial.to_string());
+        assert!(cherry.changed_paths.iter().any(|path| path == "topic.txt"));
+        assert!(!actions.root().join("topic.txt").exists());
+        assert_eq!(actions.repo.head().unwrap().target(), Some(initial));
+        actions.apply_commit_preview(&cherry).unwrap();
+        let cherry_oid = actions.repo.head().unwrap().peel_to_commit().unwrap().id();
+        assert_ne!(cherry_oid, initial);
+        assert_eq!(
+            fs::read_to_string(actions.root().join("topic.txt")).unwrap(),
+            "topic content\n"
+        );
+        let revert = actions
+            .preview_commit_apply(&cherry_oid.to_string(), GitCommitApplyKind::Revert)
+            .unwrap();
+        assert_eq!(actions.repo.head().unwrap().target(), Some(cherry_oid));
+        actions.apply_commit_preview(&revert).unwrap();
+        assert!(!actions.root().join("topic.txt").exists());
+        assert_ne!(
+            actions.repo.head().unwrap().peel_to_commit().unwrap().id(),
+            cherry_oid
+        );
+        assert!(actions.repo.statuses(None).unwrap().is_empty());
+    }
+
+    #[test]
+    fn commit_apply_conflicts_and_stale_preview_never_overwrite_user_work() {
+        let (_dir, actions) = repo_fixture();
+        let current_name = actions.repo.head().unwrap().shorthand().unwrap().to_owned();
+        let head = actions.repo.head().unwrap().peel_to_commit().unwrap();
+        actions.repo.branch("conflicting", &head, false).unwrap();
+        drop(head);
+        actions.switch_branch("conflicting").unwrap();
+        fs::write(actions.root().join("a.txt"), "theirs").unwrap();
+        actions.stage_file(Path::new("a.txt")).unwrap();
+        let conflicting = actions.commit("theirs").unwrap();
+        actions.switch_branch(&current_name).unwrap();
+        fs::write(actions.root().join("a.txt"), "ours").unwrap();
+        actions.stage_file(Path::new("a.txt")).unwrap();
+        actions.commit("ours").unwrap();
+        let before_head = actions.repo.head().unwrap().target().unwrap();
+        assert!(actions
+            .preview_commit_apply(&conflicting, GitCommitApplyKind::CherryPick)
+            .is_err());
+        assert_eq!(actions.repo.head().unwrap().target(), Some(before_head));
+        assert_eq!(
+            fs::read_to_string(actions.root().join("a.txt")).unwrap(),
+            "ours"
+        );
+        assert!(actions.repo.statuses(None).unwrap().is_empty());
+
+        let commit = actions.repo.find_commit(before_head).unwrap();
+        actions.repo.branch("separate", &commit, false).unwrap();
+        drop(commit);
+        actions.switch_branch("separate").unwrap();
+        fs::write(actions.root().join("extra.txt"), "extra").unwrap();
+        actions.stage_file(Path::new("extra.txt")).unwrap();
+        let extra = actions.commit("extra").unwrap();
+        actions.switch_branch(&current_name).unwrap();
+        let stale = actions
+            .preview_commit_apply(&extra, GitCommitApplyKind::CherryPick)
+            .unwrap();
+        fs::write(actions.root().join("a.txt"), "changed again").unwrap();
+        actions.stage_file(Path::new("a.txt")).unwrap();
+        actions.commit("advance current").unwrap();
+        let advanced = actions.repo.head().unwrap().target().unwrap();
+        assert!(actions.apply_commit_preview(&stale).is_err());
+        assert_eq!(actions.repo.head().unwrap().target(), Some(advanced));
+        assert!(!actions.root().join("extra.txt").exists());
+        assert_eq!(
+            fs::read_to_string(actions.root().join("a.txt")).unwrap(),
+            "changed again"
+        );
+    }
+
+    #[test]
+    fn commit_apply_refuses_dirty_stale_and_invalid_preview() {
+        let (_dir, actions) = repo_fixture();
+        let base = actions.repo.head().unwrap().peel_to_commit().unwrap().id();
+        assert!(actions
+            .preview_commit_apply(&base.to_string(), GitCommitApplyKind::CherryPick)
+            .is_err());
+        assert!(actions
+            .preview_commit_apply("abc", GitCommitApplyKind::Revert)
+            .is_err());
+        fs::write(actions.root().join("untracked.txt"), "private").unwrap();
+        assert!(actions
+            .preview_commit_apply(&base.to_string(), GitCommitApplyKind::Revert)
+            .is_err());
+        assert!(fs::read_to_string(actions.root().join("untracked.txt")).is_ok());
     }
 
     #[test]
