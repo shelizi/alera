@@ -276,3 +276,9 @@ Validation on Windows: new quick_open_ui::tests::terminal_rejects_delayed_ime_af
 第一輪使用較舊 `D:/c/cli/debug/alera.exe` 時，原始基準測試與新 Unicode 測試都在 CLI stream IPC 初始化結束（RED），沒有進入 UTF-8 測項；改用現有的 `D:/c/cli/debug/deps/alera.exe` 後，隔離 Host / CLI 版本 11/11 PASS。再加入隔離 Native Debug GUI `D:/c/t/debug/alera-gpui-desktop.exe`，得到 12/12 PASS，包含 Unicode roundtrip 34 bytes、第二 PTY 未污染、超過 64 KiB stream 與視窗存活。Python AST parse 與 `git diff --check` 通過。
 
 驗證邊界：此測試證明 CLI / Host / ConPTY / PowerShell 的文字編碼鏈路，不代表透過 Windows 注音候選窗進行 GPUI 鍵盤輸入已有完整驗收。仍待真實 Primary → Secondary → Explorer 多次候選窗切換、正式注音 Commit 在 Native UI 端路由、失焦後 OS 延遲 Commit，以及 Classic / Native Release 同場 p50/p95。保持 `supported=false`，不合併 main、不推送、不發布，不修改 Classic / 正式 Host，保留 `.gpui-smoke-20261108/`。
+
+## 2026-11-09：實體注音焦點驗收第三輪與診斷補強
+
+使用隔離 Native Debug 視窗、一次性 Host profile 及兩個獨立 PTY，啟用 `ALERA_GPUI_TSF_TRACE`。畫面上確實出現 Windows 繁中注音 `S U 3` 的「你」候選清單；離開候選後清單消失，但 Explorer 輸入、第二 Terminal Tab 的焦點切換及真實中文 Commit 均未取得可確認證據。桌面輸入橋接器後來報告座標換算後 `SetPhysicalCursorPos failed with Win32 error 0`，故該次 GUI 點擊不可靠，**不得**聲稱跨欄位/跨窗格 Gate 通過，也不能據此判定 UI 有回歸缺陷。
+
+隔離 Smoke 完整結束 `12/12 PASS`，包含先前新增的 PowerShell UTF-8 CJK/Emoji 34-byte 回合與第二 PTY 隔離；這個結果只能涵蓋 Host/CLI/ConPTY 的 UTF-8 與 Native 視窗存活，不能代表 GPUI 真實 IME Commit 正確。為定位焦點轉移問題，在 `quick_open_ui.rs` 補上需明確啟用 trace 才輸出的 `commit/preedit` 事件、terminal/focused 布林值、字元數與輸入 click 的聚焦前狀態，不記錄實際文字。Native bin 專項測試 `5/5 PASS` 且 Debug build PASS，尚待使用可用的桌面橋接器重測並檢視 trace。Classic/Native Release p50/p95 仍未完成；`supported=false` 不變。

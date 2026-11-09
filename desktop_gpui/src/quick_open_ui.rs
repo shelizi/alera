@@ -250,7 +250,15 @@ impl EntityInputHandler for QuickOpenInput {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !accepts_native_text_event(self.terminal_mode, self.focus.is_focused(window)) {
+        let focused = self.focus.is_focused(window);
+        if std::env::var_os("ALERA_GPUI_TSF_TRACE").is_some() {
+            // Never print user input, only focus/length metadata.
+            eprintln!(
+                "Alera GPUI TSF: input event=commit terminal={} focused={} chars={}",
+                self.terminal_mode, focused, text.chars().count()
+            );
+        }
+        if !accepts_native_text_event(self.terminal_mode, focused) {
             if std::env::var_os("ALERA_GPUI_TSF_TRACE").is_some() {
                 eprintln!("Alera GPUI TSF: drop unfocused Terminal text commit");
             }
@@ -267,7 +275,14 @@ impl EntityInputHandler for QuickOpenInput {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !accepts_native_text_event(self.terminal_mode, self.focus.is_focused(window)) {
+        let focused = self.focus.is_focused(window);
+        if std::env::var_os("ALERA_GPUI_TSF_TRACE").is_some() {
+            eprintln!(
+                "Alera GPUI TSF: input event=preedit terminal={} focused={} chars={}",
+                self.terminal_mode, focused, text.chars().count()
+            );
+        }
+        if !accepts_native_text_event(self.terminal_mode, focused) {
             if std::env::var_os("ALERA_GPUI_TSF_TRACE").is_some() {
                 eprintln!("Alera GPUI TSF: drop unfocused Terminal preedit");
             }
@@ -383,6 +398,12 @@ impl Render for QuickOpenInput {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, window, cx| {
+                    if std::env::var_os("ALERA_GPUI_TSF_TRACE").is_some() {
+                        eprintln!(
+                            "Alera GPUI TSF: input click terminal={} focused_before={}",
+                            this.terminal_mode, this.focus.is_focused(window)
+                        );
+                    }
                     window.focus(&this.focus, cx);
                 }),
             )
