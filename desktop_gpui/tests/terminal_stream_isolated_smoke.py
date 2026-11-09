@@ -522,6 +522,16 @@ def exercise_native_two_pty_sustained_load(executable, profile, native_process,
     )
 
 
+def real_tui_read_after_cursor(executable, profile, handle, cursor):
+    """Only data emitted AFTER the action may satisfy a new TUI redraw."""
+    if cursor < 0:
+        raise ValueError("Incremental TUI cursor must not be negative")
+    return checked_cli(
+        executable, profile, "terminal", "--no-start", "read", "--handle", handle,
+        "--cursor", str(cursor), timeout=6,
+    )
+
+
 def exercise_native_real_tui(executable, profile, native_process, handle,
                              workspace, run_marker, pager):
     """Prove real full-screen less navigation and return to the ORIGINAL PTY Shell."""
@@ -536,11 +546,14 @@ def exercise_native_real_tui(executable, profile, native_process, handle,
     command = real_tui_less_command(pager, document)
     started = time.monotonic()
 
-    def read_cursor():
+    def read_cursor(after=None):
         if native_process.poll() is not None:
             raise SmokeError("Isolated GPUI window exited during real TUI interaction")
-        state = checked_cli(executable, profile, "terminal", "--no-start",
-                            "read", "--handle", handle, timeout=6)
+        if after is None:
+            state = checked_cli(executable, profile, "terminal", "--no-start",
+                                "read", "--handle", handle, timeout=6)
+        else:
+            state = real_tui_read_after_cursor(executable, profile, handle, after)
         if state.get("running") is not True:
             raise SmokeError("Original Host PTY stopped during real TUI interaction")
         return state, int(state.get("nextCursor", 0))
@@ -548,7 +561,10 @@ def exercise_native_real_tui(executable, profile, native_process, handle,
     def wait_redraw(older, expected, action):
         deadline = time.monotonic() + 18
         while time.monotonic() < deadline:
-            state, cursor = read_cursor()
+            # The ordinary Host read can return retained scrollback containing
+            # the initial file header. Explicit cursor reads must show this
+            # action's new screen content, not a previous navigation frame.
+            state, cursor = read_cursor(after=older)
             if cursor >= older + 100 and expected in str(state.get("text", "")):
                 return cursor
             time.sleep(0.25)

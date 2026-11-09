@@ -2,6 +2,7 @@
 
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from native_terminal_visible_activity_probe import changed_pixels, pane_content_crops
 from native_terminal_visual_latency_probe import percentile
@@ -11,6 +12,7 @@ from terminal_stream_isolated_smoke import (
     native_primary_cursor_from_diagnostic,
     paced_load_command,
     real_tui_less_command,
+    real_tui_read_after_cursor,
 )
 
 
@@ -87,6 +89,19 @@ class IsolatedTerminalLoadProbeTests(unittest.TestCase):
             r'"C:\Program Files\Git\usr\bin\less.exe" -R -- "C:\temp\isolated gui\input.txt"',
         )
         self.assertNotIn("REAL_TUI_ROW_240", command)
+
+    def test_real_tui_redraw_reads_only_output_after_previous_cursor(self):
+        reply = {"running": True, "nextCursor": 810, "text": "NEW_SCREEN_ROW"}
+        with patch("terminal_stream_isolated_smoke.checked_cli",
+                   return_value=reply) as cli:
+            actual = real_tui_read_after_cursor("isolated.exe", "runtime", "pty-id", 502)
+        self.assertIs(actual, reply)
+        args = cli.call_args.args
+        self.assertEqual(args[args.index("--cursor") + 1], "502")
+        self.assertEqual(args[args.index("--handle") + 1], "pty-id")
+        self.assertNotIn("--start", args)
+        with self.assertRaises(ValueError):
+            real_tui_read_after_cursor("isolated.exe", "runtime", "pty-id", -1)
 
     def test_real_tui_rejects_other_programs_and_shell_metacharacters(self):
         document = Path(r"C:\temp\isolated\input.txt")

@@ -208,3 +208,11 @@ CLI `terminal_stream::tests` 私有 recover 指令白名單 **2/2 PASS**，確�
 - 重複執行指令（對照實際可執行檔路徑調整）：
   `python desktop_gpui/tests/terminal_stream_isolated_smoke.py D:/c/t/debug/alera.exe --native-app D:/c/t/debug/alera-gpui-desktop.exe --native-host-restart --native-real-tui-pager "C:/Program Files/Git/usr/bin/less.exe" --hold-seconds 3`。
 - 證據邊界：此輪驗的是**第一個可見 Terminal**，Host 事件和 Native 消費進度，不是每個按鍵的 GPU Present 時戳；也不是兩個真實 TUI 同時高頻重繪、TSF 注音未完成組字切窗、Classic／Native Release 同場比較。以上仍待驗收，Native `supported=false` 不變；不合併 main、不推送或發布，不修改 Classic、正式 Host，也不清除／提交 `.gpui-smoke-20261108/`。
+
+### 真實 TUI 增量重繪門檻加嚴、TSF 驗收界線
+
+原始 `terminal read` 可能返回累積的 retained scrollback，故 `g` 回檔首時，即使沒有真正重繪，只要後續 cursor 增加，舊的 `ROW_000` 仍可能使測試誤判成功。新增 `real_tui_read_after_cursor`，每次導航後明確要求 CLI `terminal read --cursor <上一個動作的輸出游標>`，**只從該次操作之後的新增輸出**匹配頁首或頁尾標記。新增負游標拒絕及命令列 cursor 正確傳遞回歸。原來雙窗格游標檢查不放寬。
+
+重新以隔離 Windows GUI／Runtime Host 真正崩潰重啟／雙原 Worker 測試：**14/14 Host／CLI／Native PASS**、Python **11/11 PASS**，最終 Native／Host output cursor **20028／20028**。測試專用 Host／PTY／Native 及臨時資料在結束時清理，沒有動正式 Host。
+
+另外曾在獨立 GPUI GUI 目視將第二個既有 PTY 透過 Tab 右鍵移至第二窗格，兩個 PTY 同時顯示；該輪隔離標準 Smoke **11/11 PASS**。但實體鍵盤輸入未取得**已確定進入注音組字候選模式**的證據，也未完整確認未完成組字切窗取消，所以 Windows TSF 跨 Pane **仍未通過完整驗收**。此輪不修改 TSF 程式碼，不把純 ASCII 輸入當成注音驗證。Classic／Native Release 同場效能比較與兩個真實高頻 TUI 同時互動亦未完成；`supported=false`、不合併 main、不推送、不發布。
