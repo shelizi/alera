@@ -199,22 +199,30 @@ def wait_host_control(path, process, timeout=25):
     raise SmokeError("Isolated Host did not publish a control file")
 
 
-def prepare_native_preview_state(state_dir, root, session_id, workspace_id, tab_id):
-    """Seed exactly one scoped, display-only preview tab for real UI replay."""
+def prepare_native_preview_state(state_dir, root, session_id, workspace_id, tab_id,
+                                 second_session_id=None, second_tab_id=None):
+    """Seed isolated Host previews without recreating Shells or Host identities."""
     state_dir.mkdir(parents=True, exist_ok=True)
     root = root.resolve()
     hash64 = 0xCBF29CE484222325
     for byte in str(root).encode("utf-8"):
         hash64 ^= byte
         hash64 = (hash64 * 0x100000001B3) & ((1 << 64) - 1)
+    tabs = [{
+        "handle": session_id, "workspace_id": workspace_id, "tab_id": tab_id,
+    }]
+    if second_session_id is not None:
+        if not second_tab_id or second_session_id == session_id:
+            raise SmokeError("Invalid independent secondary Native test tab")
+        tabs.append({
+            "handle": second_session_id, "workspace_id": workspace_id,
+            "tab_id": second_tab_id,
+        })
     saved = {
         "version": 1,
         "root": str(root),
         "layout": {
-            "tabs": [{
-                "handle": session_id, "workspace_id": workspace_id,
-                "tab_id": tab_id,
-            }],
+            "tabs": tabs,
             "active_handle": session_id,
             "transcript_view": False,
         },
@@ -224,7 +232,63 @@ def prepare_native_preview_state(state_dir, root, session_id, workspace_id, tab_
     return path
 
 
-def run_smoke(executable, native_app=None, hold_seconds=25):
+def interrupt_only_native_private_stream(native_process, executable, profile,
+                                         timeout=18):
+    """Kill only this test Native window's scoped CLI stream child, not the Host.
+
+    This tests Native's automatic 1/2/4/... retry without touching any other
+    Alera/Classic process. Both the executable path and temporary runtime
+    argument must match, and the child must descend from this Native PID.
+    """
+    import psutil  # Optional dependency; only required by --native-reconnect.
+
+    executable = os.path.normcase(str(executable.resolve()))
+    profile = os.path.normcase(str(profile.resolve()))
+    owner = psutil.Process(native_process.pid)
+
+    def find_scoped_streams():
+        matches = []
+        for child in owner.children(recursive=True):
+            try:
+                cmdline = child.cmdline()
+                if (os.path.normcase(child.exe()) == executable
+                        and "terminal" in cmdline and "stream" in cmdline
+                        and "--no-start" in cmdline
+                        and any(os.path.normcase(arg) == profile for arg in cmdline)):
+                    matches.append(child)
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+        return matches
+
+    deadline = time.monotonic() + timeout
+    original = None
+    while time.monotonic() < deadline:
+        matches = find_scoped_streams()
+        if len(matches) == 1:
+            original = matches[0]
+            break
+        if native_process.poll() is not None:
+            raise SmokeError("Native GUI exited before scoped stream appeared")
+        time.sleep(0.2)
+    if original is None:
+        raise SmokeError("Native never started exactly one private CLI stream")
+
+    first_pid = original.pid
+    original.kill()
+    original.wait(timeout=5)
+    while time.monotonic() < deadline:
+        matches = [child for child in find_scoped_streams()
+                   if child.pid != first_pid]
+        if len(matches) == 1:
+            return first_pid, matches[0].pid
+        if native_process.poll() is not None:
+            raise SmokeError("Native exited after private stream interruption")
+        time.sleep(0.2)
+    raise SmokeError("Native did not respawn the private Host stream after interruption")
+
+
+def run_smoke(executable, native_app=None, hold_seconds=25,
+              native_reconnect=False):
     run_marker = uuid.uuid4().hex[:14]
     checks = []
     with tempfile.TemporaryDirectory(prefix="alera_gpui_stream_isolated_") as temp:
@@ -473,7 +537,8 @@ def run_smoke(executable, native_app=None, hold_seconds=25):
             if native_app is not None:
                 native_state = root / "gpui-state"
                 prepare_native_preview_state(
-                    native_state, workspace, session_id, workspace_id, tab_id
+                    native_state, workspace, session_id, workspace_id, tab_id,
+                    second_session_id, second_identity["tabId"],
                 )
                 native_home = root / "native-home"
                 native_home.mkdir()
@@ -503,6 +568,24 @@ def run_smoke(executable, native_app=None, hold_seconds=25):
                         f"workspace={workspace} seconds={hold_seconds}",
                         flush=True,
                     )
+                    if native_reconnect:
+                        old_pid, new_pid = interrupt_only_native_private_stream(
+                            native_process, executable, profile
+                        )
+                        for terminal_id in (session_id, second_session_id):
+                            state = checked_cli(
+                                executable, profile, "terminal", "--no-start",
+                                "read", "--handle", terminal_id,
+                            )
+                            if state.get("running") is not True:
+                                raise SmokeError(
+                                    "Native private relay restart terminated a Host PTY"
+                                )
+                        checks.append("Native private CLI stream automatically respawned; both Host PTYs survived")
+                        print(
+                            f"ISOLATED_NATIVE_STREAM_RECONNECTED old={old_pid} new={new_pid}",
+                            flush=True,
+                        )
                     until = time.monotonic() + hold_seconds
                     while time.monotonic() < until:
                         if native_process.poll() is not None:
@@ -575,17 +658,22 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("cli", type=Path, help="compiled Alera CLI (experimental)")
     parser.add_argument("--native-app", type=Path, help="optional GPUI exe to launch with an isolated preview tab")
+    parser.add_argument("--native-reconnect", action="store_true",
+                        help="kill only this Native GUI's scoped private relay and verify automatic respawn")
     parser.add_argument("--hold-seconds", type=int, default=25)
     args = parser.parse_args()
     if not args.cli.is_file() or (args.native_app is not None and not args.native_app.is_file()):
         parser.error("CLI and optional Native app paths must be existing executable files")
     if not 1 <= args.hold_seconds <= 180:
         parser.error("--hold-seconds must be between 1 and 180")
+    if args.native_reconnect and args.native_app is None:
+        parser.error("--native-reconnect requires --native-app")
     try:
         results = run_smoke(
             args.cli.resolve(), native_app=args.native_app.resolve()
             if args.native_app is not None else None,
             hold_seconds=args.hold_seconds,
+            native_reconnect=args.native_reconnect,
         )
     except (SmokeError, OSError, KeyError, ValueError, subprocess.TimeoutExpired) as error:
         print(f"FAIL: isolated Terminal stream smoke: {error}", file=sys.stderr)
