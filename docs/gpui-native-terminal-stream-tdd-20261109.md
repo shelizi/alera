@@ -172,3 +172,27 @@ CLI `terminal_stream::tests` 私有 recover 指令白名單 **2/2 PASS**，確�
 **修正後真正持續輸出 GREEN。**在隔離 Host 真實 crash/restart 後持續兩個原 PTY 各輸出每秒 40 行，20 秒負載的驗收總耗時 **26.4 秒**（含 CLI 啟動／查詢），Host end cursors `[111116, 323849]`，獨立 Native debug-only 游標紀錄最終也是 `[111116, 323849]`，串流 `active=2` 且事件佇列清空；Native RSS **95.8→97.0 MiB（+1.2 MiB）**，測試期間 Native process CPU time **2.14 秒**。再次改成 10 秒負載，真正耗時 **12.3 秒**，Native CPU **1.19 秒**、RSS **93.3→96.8 MiB（+3.5 MiB）**，最後以新 `native_visible_cursors_from_diagnostic()` 比對 Host 的新鮮授權讀取游標，兩邊為 `[56457, 268831]`、串流 `active=2`，全部追上且 **14/14 隔離測試 PASS**。正式驗收條件新增「已存在的兩個可見 PTY 的 Native 游標不得小於 Host 最終游標」，不再只看 Shell 完成標記。儀表僅 `debug_assertions` + `ALERA_GPUI_ISOLATED_STREAM_DIAGNOSTICS` opt-in，每秒輸出數值、訂閱數和 cursor，不輸出 Host token／命令／PTY 內容；release 不含偵錯列印。
 
 **目前 Gate**：同時雙 Pane / Host crash / 輸入路由 / 忽略逾期 IME 提交與短時負載的記錄更完整，但 Native 仍 `supported=false`。剩餘的是真正超過 30–60 秒的穩態負載多輪比較、量測不同 TUI（全螢幕互動／ANSI 變化）、跨 Windows TSF 候選組字階段的系統級驗收、Classic 對照 p50/p95 與 Native release 版效能；不合併 `main`、不推送／發布，不改 Classic 或正式 Host。
+
+## 2026-11-09 延長驗收：30/60 秒 ANSI TUI、雙 Pane 可視更新及背景輸出延遲
+
+在既有隔離 Windows Host／Worker／GPUI 測試架構加入：
+
+- `--native-load-style ansi`：PowerShell 使用 `[char]27` 從*測試 PTY 內部*產生 ANSI 控制序列，進入／離開 alternate screen、隱藏／恢復 cursor、游標定位到 18 行、SGR 彩色文字、清除行尾。測試仍是合成 TUI，並非真實第三方全螢幕編輯器。原 `plain` 持續輸出維持不變。
+- `--native-load-target secondary`：只對隔離的第二個 Host PTY 注入受限長度 TUI，保留第一個 PTY 的 `cmd.exe` 互動權限，以實測「右側負載／左側正常鍵盤輸入」。只對真正送負載的 PTY 查核完成 sentinel，不誤稱兩個 PTY 都送了壓力輸出；最終的 Native／Host 輸出 cursor 仍對**兩個可見窗格**逐一比對。
+- `native_terminal_visible_activity_probe.py`：只允許目前前景且啟動參數包含隔離 smoke profile 的 GPUI PID；DWM 確認 Native 實體視窗，MSS 各取左右 Pane 的內容區域；18 組每 500ms 像素差異，過濾游標閃爍等小變化，不存圖片、畫面文字或 Host token。這是「兩個窗格實際有更新」的偵測，**不是 FPS 或持續零延遲的證明**。只有在 shell 確實輸出的時間窗執行才有效。
+- `test_terminal_load_probes.py`：7 個純函式回歸測試，涵蓋 plain/ANSI 送出的 shell 命令永遠不含完整完成 sentinel、ANSI enter/exit 訊號、拒絕未知負載模式、兩個訂閱／游標驗證、裁切不重疊、像素差異與 percentile。
+
+### 實測（全部為隔離 Host 實際 crash/restart 後、左右 GPUI 同時顯示原 Worker PTY）
+
+| 工作負載 | 實際負載完成時間 | Native RSS 峰值增加 | Native CPU 累積時間 | Host／Native cursor | 契約 |
+|---|---:|---:|---:|---|---|
+| 雙 PTY、30 秒 ANSI/alternate-screen | 35.0 秒 | +0.7 MiB | 2.42 秒 | `[35153,243844]` 一致 | 14/14 PASS |
+| 雙 PTY、60 秒 ANSI/alternate-screen | 61.6 秒 | +0.4 MiB | 4.23 秒 | `[57470,270422]` 一致 | 14/14 PASS |
+| 雙 PTY、60 秒 plain 大量輸出 | 61.6 秒 | +0.7 MiB | 5.39 秒 | `[325932,538439]` 一致 | 14/14 PASS |
+| 第二 PTY、45 秒 ANSI（第一 PTY 保持互動） | 45.4 秒 | +0.0 MiB | 1.97 秒 | `[2427,256350]` 一致 | 14/14 PASS |
+
+**畫面確實更新**：兩窗格同時執行 60 秒 ANSI 的實際中段，18 個相鄰截圖間隔中左 **8/18**、右 **11/18** 次有顯著內容差異；60 秒 plain 中左 **10/18**、右 **8/18** 次有顯著差異。因負載本身每 900ms 一輪、截圖每 500ms，此更新率為預期；不能以之推算 FPS。所有端到端測試須看到完整（非 cmd 輸入回顯）的 sentinel、至少 80% 配置時長，以及最終兩個原 VT cursor 都趕上 Host，才算 PASS；沒有發現 Worker 身分更換、訂閱斷線或測試窗口崩潰。
+
+**單窗格忙碌時另一個正常輸入的可見延遲（同一測試 Native PID、同一 Windows 畫面）**：右側 45 秒 ANSI TUI 運作期間，左側 20 個英文字鍵輸入樣本 **p50 92.14ms／p95 94.94ms**，截圖 median **16.46ms**；右側負載結束後，同窗格／同環境 20 個樣本 **p50 92.20ms／p95 93.17ms**，截圖 median **16.68ms**。本次未觀察到可分辨的忙碌窗格拖慢互動窗格；量測是鍵盤事件到第一個視覺差異，**不代表每個鍵都已由 Host 確認、不是 GPU 精確 present 時間**，且樣本數小、需 Classic 同場對照與高頻真實 TUI 重複測量。
+
+**更新後仍未關 Gate**：`supported=false`，不合併 `main`、不推送／發布。不再缺「60 秒雙 PTY 合成 ANSI/文字負載」與「忙碌時另一窗格輸入基準」，但仍缺真實高頻全螢幕 TUI app、Windows TSF 注音候選半組字取消的全面系統測試、Classic 同場延遲及 release build 的效能與回歸。保留原 `.gpui-smoke-20261108/` 未追蹤實驗資料，不清除、不加入提交。

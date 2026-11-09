@@ -367,7 +367,7 @@ def isolated_worker_process_alive(executable, pid):
         return False
 
 
-def paced_load_command(run_marker, index, seconds):
+def paced_load_command(run_marker, index, seconds, style="plain"):
     """Return an end sentinel NEVER present in the echoed input command.
 
     cmd.exe echoes the entire PowerShell command before executing it. A
@@ -376,13 +376,33 @@ def paced_load_command(run_marker, index, seconds):
     *inside* PowerShell after all loops are complete.
     """
     marker = f"LOAD_DONE_{run_marker}_{index}"
+    if style == "plain":
+        body = (
+            f'for($i=0;$i -lt {seconds};$i++){{'
+            'for($j=0;$j -lt 40;$j++){'
+            f"Write-Output ('LOAD_{run_marker}_{index}_'+$i+'_'+$j+'_'+('x'*72))"
+            '};Start-Sleep -Milliseconds 900}'
+        )
+    elif style == "ansi":
+        # Exercise the actual VT emulator rather than a plain scrollback log:
+        # alternate screen, cursor visibility, 18 cursor-addressed rows,
+        # SGR color, erase-to-end-of-line, and restore original screen.
+        # Escape is generated *inside* the disposable PowerShell process;
+        # no control escapes enter cmd.exe's echoed command line.
+        body = (
+            "$e=[char]27;[Console]::Write($e+'[?1049h'+$e+'[?25l');"
+            f'for($i=0;$i -lt {seconds};$i++){{'
+            'for($j=0;$j -lt 40;$j++){'
+            f"[Console]::Write($e+'['+(($j%18)+1)+';1H'+$e+'[3'+(($j%7)+1)+'m'+('ANSI_{run_marker}_{index}_'+$i+'_'+$j+'_'+('x'*72))+$e+'[0m'+$e+'[K')"
+            '};Start-Sleep -Milliseconds 900}'
+            ";[Console]::Write($e+'[?25h'+$e+'[?1049l')"
+        )
+    else:
+        raise ValueError(f"Unknown isolated load style: {style}")
     command = (
         'powershell.exe -NoLogo -NoProfile -NonInteractive -Command "'
-        f'for($i=0;$i -lt {seconds};$i++){{'
-        'for($j=0;$j -lt 40;$j++){'
-        f"Write-Output ('LOAD_{run_marker}_{index}_'+$i+'_'+$j+'_'+('x'*72))"
-        '};Start-Sleep -Milliseconds 900'
-        f"}};Write-Output ('LOAD_'+'DONE_{run_marker}_{index}')\""
+        + body
+        + f";Write-Output ('LOAD_'+'DONE_{run_marker}_{index}')\""
     )
     assert marker not in command, "Shell input echo must not pass the completion gate"
     return marker, command
@@ -402,8 +422,9 @@ def native_visible_cursors_from_diagnostic(line, expected_count):
 
 
 def exercise_native_two_pty_sustained_load(executable, profile, native_process,
-                                           handles, run_marker, seconds):
-    """Run bounded concurrent output in only the two disposable cmd PTYs.
+                                           handles, run_marker, seconds, style="plain",
+                                           target="both"):
+    """Run bounded output in one or both disposable cmd PTYs.
 
     40 lines per second per PTY for `seconds`: intentionally greater than the
     default 64 KiB stream read budget, but bounded and paced so this tests
@@ -417,26 +438,31 @@ def exercise_native_two_pty_sustained_load(executable, profile, native_process,
     initial_rss = native.memory_info().rss
     cpu = native.cpu_times()
     initial_cpu = cpu.user + cpu.system
-    markers = []
+    if target not in ("both", "secondary") or len(handles) != 2:
+        raise SmokeError("TUI load target must be both or second of two isolated PTYs")
+    emitting_indices = (0, 1) if target == "both" else (1,)
+    markers = {}
     started = time.monotonic()
-    for index, handle in enumerate(handles):
-        marker, command = paced_load_command(run_marker, index, seconds)
-        markers.append(marker)
+    for index in emitting_indices:
+        handle = handles[index]
+        marker, command = paced_load_command(run_marker, index, seconds, style=style)
+        markers[index] = marker
         # No project scripts, network, secrets, or process replacement: the
         # one temporary cmd PTY runs its own bounded PowerShell generator.
         checked_cli(executable, profile, "terminal", "--no-start", "write",
                     "--handle", handle, "--text", command, "--enter", timeout=12)
 
-    print(f"ISOLATED_NATIVE_DUAL_TUI_LOAD_STARTED seconds={seconds}", flush=True)
+    print(f"ISOLATED_NATIVE_TUI_LOAD_STARTED seconds={seconds} style={style} target={target}", flush=True)
     rss_peak = initial_rss
     observed = set()
     host_cursors = [0] * len(handles)
     deadline = time.monotonic() + seconds + 25
-    while time.monotonic() < deadline and len(observed) < len(handles):
+    while time.monotonic() < deadline and len(observed) < len(markers):
         if native_process.poll() is not None:
             raise SmokeError("GPUI crashed during dual PTY sustained output")
         rss_peak = max(rss_peak, native.memory_info().rss)
-        for index, handle in enumerate(handles):
+        for index in emitting_indices:
+            handle = handles[index]
             if index in observed:
                 continue
             state = checked_cli(executable, profile, "terminal", "--no-start",
@@ -446,10 +472,12 @@ def exercise_native_two_pty_sustained_load(executable, profile, native_process,
             host_cursors[index] = max(host_cursors[index], int(state.get("nextCursor", 0)))
             if markers[index] in str(state.get("text", "")):
                 observed.add(index)
-        if len(observed) < len(handles):
+        if len(observed) < len(markers):
             time.sleep(1)
-    if len(observed) != len(handles):
-        raise SmokeError(f"Dual TUI load did not complete: {len(observed)}/2 output markers")
+    if len(observed) != len(markers):
+        raise SmokeError(
+            f"TUI load did not complete: {len(observed)}/{len(markers)} output markers"
+        )
     elapsed = time.monotonic() - started
     if elapsed < seconds * 0.8:
         raise SmokeError(
@@ -462,7 +490,8 @@ def exercise_native_two_pty_sustained_load(executable, profile, native_process,
     if rss_growth > 256 * 1024 * 1024:
         raise SmokeError(f"Native RSS grew too far under bounded dual TUI load: {rss_growth}")
     print(
-        f"ISOLATED_NATIVE_DUAL_TUI_LOAD_PASS seconds={seconds} elapsed={elapsed:.1f} "
+        f"ISOLATED_NATIVE_TUI_LOAD_PASS seconds={seconds} style={style} "
+        f"target={target} elapsed={elapsed:.1f} "
         f"markers={len(observed)} rss_start_mib={initial_rss/1048576:.1f} "
         f"rss_peak_mib={rss_peak/1048576:.1f} "
         f"rss_growth_mib={rss_growth/1048576:.1f} "
@@ -494,7 +523,8 @@ def await_isolated_split_inspection(native_process, gate, timeout=75):
 
 def run_smoke(executable, native_app=None, hold_seconds=25,
               native_reconnect=False, native_host_restart=False,
-              native_split_gate=False, native_load_seconds=0):
+              native_split_gate=False, native_load_seconds=0, native_load_style="plain",
+              native_load_target="both"):
     run_marker = uuid.uuid4().hex[:14]
     checks = []
     gate_path = None
@@ -908,11 +938,17 @@ def run_smoke(executable, native_app=None, hold_seconds=25,
                         exercise_native_two_pty_sustained_load(
                             executable, profile, native_process,
                             (session_id, second_session_id), run_marker,
-                            native_load_seconds,
+                            native_load_seconds, style=native_load_style,
+                            target=native_load_target,
                         )
-                        checks.append(
-                            "simultaneous paced dual-PTY TUI output completed with bounded Native RSS"
-                        )
+                        if native_load_target == "both":
+                            checks.append(
+                                "simultaneous paced dual-PTY TUI output completed with bounded Native RSS"
+                            )
+                        else:
+                            checks.append(
+                                "background second-PTY TUI output completed while first terminal remained interactive"
+                            )
                     until = time.monotonic() + hold_seconds
                     while time.monotonic() < until:
                         if native_process.poll() is not None:
@@ -1024,6 +1060,10 @@ if __name__ == "__main__":
                         help="pause before isolated Host crash for actual GPUI dual-pane visual/focus inspection")
     parser.add_argument("--native-load-seconds", type=int, default=0,
                         help="run 10-60s of paced, concurrent output in both disposable PTYs")
+    parser.add_argument("--native-load-style", choices=("plain", "ansi"), default="plain",
+                        help="plain scrollback or ANSI/alternate-screen cursor-addressed TUI stress")
+    parser.add_argument("--native-load-target", choices=("both", "secondary"), default="both",
+                        help="emit in both PTYs or leave primary idle for foreground key latency testing")
     parser.add_argument("--hold-seconds", type=int, default=25)
     args = parser.parse_args()
     if not args.cli.is_file() or (args.native_app is not None and not args.native_app.is_file()):
@@ -1048,6 +1088,8 @@ if __name__ == "__main__":
             native_host_restart=args.native_host_restart,
             native_split_gate=args.native_split_gate,
             native_load_seconds=args.native_load_seconds,
+            native_load_style=args.native_load_style,
+            native_load_target=args.native_load_target,
         )
     except (SmokeError, OSError, KeyError, ValueError, subprocess.TimeoutExpired) as error:
         print(f"FAIL: isolated Terminal stream smoke: {error}", file=sys.stderr)
