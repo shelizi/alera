@@ -22,6 +22,12 @@ pub(super) enum SidebarWorkspaceAction {
         id: String,
         section_id: Option<String>,
     },
+    DeleteTag {
+        id: String,
+    },
+    DeleteSection {
+        id: String,
+    },
     Sleep {
         id: String,
     },
@@ -53,6 +59,8 @@ impl Workbench {
         let key = match &action {
             SidebarWorkspaceAction::Sleep { id } => Some(format!("sleep:{id}")),
             SidebarWorkspaceAction::Remove { id, .. } => Some(format!("remove:{id}")),
+            SidebarWorkspaceAction::DeleteTag { id } => Some(format!("tag:{id}")),
+            SidebarWorkspaceAction::DeleteSection { id } => Some(format!("section:{id}")),
             _ => None,
         };
         if let Some(key) = &key {
@@ -60,6 +68,10 @@ impl Workbench {
                 self.sidebar_pending_action = Some(key.clone());
                 self.model.set_status(if key.starts_with("sleep:") {
                     "Sleep closes Host sessions and tabs. Right-click and confirm Sleep again."
+                } else if key.starts_with("tag:") {
+                    "Deleting this shared tag affects all assigned Workspaces. Right-click to confirm."
+                } else if key.starts_with("section:") {
+                    "Deleting this section moves its members to Others. Right-click to confirm."
                 } else {
                     "Remove Worktree keeps the branch but removes its checkout. Right-click and confirm again."
                 });
@@ -92,6 +104,10 @@ impl Workbench {
                         SidebarWorkspaceAction::Section { id, section_id } => {
                             bridge.set_workspace_section(&id, section_id.as_deref())
                         }
+                        SidebarWorkspaceAction::DeleteTag { id } => bridge.remove_global_tag(&id),
+                        SidebarWorkspaceAction::DeleteSection { id } => {
+                            bridge.remove_workspace_section(&id)
+                        }
                         SidebarWorkspaceAction::Sleep { id } => {
                             bridge.sleep_registered_workspace(&id)
                         }
@@ -116,6 +132,76 @@ impl Workbench {
                     Err(error) => view
                         .model
                         .set_status(format!("Classic workspace change refused: {error}")),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn begin_sidebar_create(&mut self, kind: &str, workspace_id: String, cx: &mut Context<Self>) {
+        if !matches!(kind, "tag" | "section") {
+            return;
+        }
+        self.sidebar_create_target = Some((kind.to_owned(), workspace_id));
+        self.sidebar_create_input =
+            Some(cx.new(|cx| QuickOpenInput::with_placeholder("Name…", cx)));
+        self.show_project_management = true;
+        cx.notify();
+    }
+
+    pub(super) fn submit_sidebar_create(&mut self, cx: &mut Context<Self>) {
+        let (Some((kind, workspace_id)), Some(input)) = (
+            self.sidebar_create_target.clone(),
+            self.sidebar_create_input.as_ref(),
+        ) else {
+            return;
+        };
+        let name = input.read(cx).query().trim().to_owned();
+        let Some(bridge) = self.runtime_bridge.clone() else {
+            self.model
+                .set_status("Classic Host unavailable; catalog unchanged");
+            cx.notify();
+            return;
+        };
+        if self.worktree_busy {
+            return;
+        }
+        self.worktree_busy = true;
+        let generation = self.workspace_generation;
+        cx.spawn(async move |view, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    match kind.as_str() {
+                        "tag" => {
+                            let tag_id = bridge.create_workspace_tag(&name)?;
+                            bridge.set_workspace_tag(&workspace_id, &tag_id, true)
+                        }
+                        "section" => bridge.create_workspace_section(&workspace_id, &name),
+                        _ => Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidInput,
+                            "Invalid catalog action",
+                        )),
+                    }
+                })
+                .await;
+            view.update(cx, |view, cx| {
+                if view.workspace_generation != generation {
+                    return;
+                }
+                view.worktree_busy = false;
+                match result {
+                    Ok(()) => {
+                        view.sidebar_create_target = None;
+                        view.sidebar_create_input = None;
+                        view.model
+                            .set_status("Classic catalog entry created and assigned");
+                        view.refresh_project_tree(cx);
+                    }
+                    Err(error) => view
+                        .model
+                        .set_status(format!("Classic catalog creation refused: {error}")),
                 }
                 cx.notify();
             })
@@ -563,6 +649,19 @@ impl Workbench {
             }));
             if let Some(workspace) = metadata.clone() {
                 let id = workspace.id.clone();
+                for (kind, label) in [
+                    ("tag", "New shared tag…"),
+                    ("section", "New workspace section…"),
+                ] {
+                    let owner_create = owner.clone();
+                    let workspace_id = id.clone();
+                    menu = menu.item(PopupMenuItem::new(label).on_click(move |_, _, cx| {
+                        let _ = owner_create.update(cx, |view, cx| {
+                            view.begin_sidebar_create(kind, workspace_id.clone(), cx);
+                        });
+                    }));
+                }
+
                 let rename_owner = owner.clone();
                 let rename_id = id.clone();
                 menu = menu.item(PopupMenuItem::new("Rename Workspace…").on_click(
@@ -693,6 +792,49 @@ impl Workbench {
                                 let action = action.clone();
                                 let _ = call_owner.update(cx, |view, cx| {
                                     view.begin_sidebar_workspace_action(action, cx)
+                                });
+                            }),
+                        );
+                    }
+                    if let Some(tag) = catalog
+                        .tags
+                        .iter()
+                        .find(|tag| workspace.tag_ids.contains(&tag.id))
+                    {
+                        let tag_id = tag.id.clone();
+                        let key = format!("tag:{tag_id}");
+                        let confirmed = confirmation.as_deref() == Some(key.as_str());
+                        let remove_owner = owner.clone();
+                        let action = SidebarWorkspaceAction::DeleteTag { id: tag_id };
+                        menu = menu.item(
+                            PopupMenuItem::new(if confirmed {
+                                "Confirm delete assigned tag globally"
+                            } else {
+                                "Delete assigned tag globally…"
+                            })
+                            .on_click(move |_, _, cx| {
+                                let action = action.clone();
+                                let _ = remove_owner.update(cx, |view, cx| {
+                                    view.begin_sidebar_workspace_action(action, cx);
+                                });
+                            }),
+                        );
+                    }
+                    if let Some(section_id) = workspace.section_id.clone() {
+                        let key = format!("section:{section_id}");
+                        let confirmed = confirmation.as_deref() == Some(key.as_str());
+                        let remove_owner = owner.clone();
+                        let action = SidebarWorkspaceAction::DeleteSection { id: section_id };
+                        menu = menu.item(
+                            PopupMenuItem::new(if confirmed {
+                                "Confirm delete current section"
+                            } else {
+                                "Delete current section…"
+                            })
+                            .on_click(move |_, _, cx| {
+                                let action = action.clone();
+                                let _ = remove_owner.update(cx, |view, cx| {
+                                    view.begin_sidebar_workspace_action(action, cx);
                                 });
                             }),
                         );

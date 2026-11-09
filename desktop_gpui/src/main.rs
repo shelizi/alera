@@ -344,6 +344,8 @@ struct Workbench {
     sidebar_rename_input: Option<Entity<QuickOpenInput>>,
     sidebar_selected_parent: Option<(String, String)>,
     sidebar_project_remove_pending: Option<(String, ProjectRemovalPreview)>,
+    sidebar_create_target: Option<(String, String)>,
+    sidebar_create_input: Option<Entity<QuickOpenInput>>,
     collapsed_project_roots: HashSet<PathBuf>,
     project_tree_loading: bool,
     project_tree_request: u64,
@@ -5804,6 +5806,7 @@ impl Render for Workbench {
         let runtime_catalog_error = self.runtime_catalog_error.clone();
         let sidebar_pending_action = self.sidebar_pending_action.clone();
         let sidebar_rename_input = self.sidebar_rename_input.clone();
+        let sidebar_create_input = self.sidebar_create_input.clone();
         let selected_sidebar_parent = self.sidebar_selected_parent.clone();
         let sidebar_project_remove_id = self
             .sidebar_project_remove_pending
@@ -8110,6 +8113,25 @@ impl Render for Workbench {
                                     } else {
                                         div().h(px(0.0)).into_any_element()
                                     })
+                                    .child(if let Some(input) = sidebar_create_input {
+                                        div().flex().flex_col().gap_1().p_2()
+                                            .child(div().text_xs().text_color(rgb(MUTED)).child("New Classic tag / workspace section"))
+                                            .child(input)
+                                            .child(div().flex().gap_3()
+                                                .child(div().id("sidebar-create-confirm").cursor_pointer().text_sm()
+                                                    .child("Create")
+                                                    .on_click(cx.listener(|this, _, _, cx| this.submit_sidebar_create(cx))))
+                                                .child(div().id("sidebar-create-cancel").cursor_pointer().text_sm()
+                                                    .child("Cancel")
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.sidebar_create_target = None;
+                                                        this.sidebar_create_input = None;
+                                                        cx.notify();
+                                                    }))))
+                                            .into_any_element()
+                                    } else {
+                                        div().h(px(0.0)).into_any_element()
+                                    })
                                     .child(
                                         div()
                                             .id("project-tree-scroll")
@@ -8968,6 +8990,8 @@ fn main() {
                             sidebar_rename_input: None,
                             sidebar_selected_parent: None,
                             sidebar_project_remove_pending: None,
+                            sidebar_create_target: None,
+                            sidebar_create_input: None,
                             project_tree_loading: false,
                             project_tree_request: 0,
                             collapsed_project_roots: HashSet::new(),

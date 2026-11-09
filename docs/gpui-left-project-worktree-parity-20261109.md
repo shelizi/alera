@@ -22,6 +22,14 @@
 - The mainline shared Classic/GPUI settings Core, settings modal, Git favorites and Terminal/Editor implementation remain unchanged.
 - Checks: Native GPUI `cargo check` passed after these changes; the 349/349 Native library suite passed before the final project removal menu, which is also covered by the subsequent native compilation check. A full Windows GUI acceptance remains pending.
 
+## GPUI mainline continuation: Classic tag/section lifecycle
+
+- Added Native GPUI Kit menu entries to create a shared Workspace tag, create a Workspace section, assign new entries immediately to the chosen Workspace, and remove the selected tag/section with **two separate confirmations**.
+- The existing Classic `workspaceTag.create`, `tag remove`, `workspace section-create`, and `workspace section-remove` CLI/Host contracts remain authoritative. GPUI only holds transient edit/confirm UI state.
+- Shared tag creation is two Host mutations (create then assign). If assignment fails after successful creation, an unassigned shared tag may remain; error is reported and user can retry the assignment. This remains a follow-up for transactional Host workflow.
+- The global Classic/GPUI Settings feature is not duplicated or altered. Dedicated field-structured per-project settings and Windows UI acceptance remain outstanding.
+- GPUI native `cargo check` passed after these additions; full library regression is recorded in the final verification result.
+
 ## Scope and baseline
 
 - Working tree: `.worktrees/fix-gpui-smoke-navigation-terminal-20261108` (no recent MCP activity at selection time).
