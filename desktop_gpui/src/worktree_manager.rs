@@ -27,6 +27,23 @@ pub struct WorktreeEntry {
     pub is_primary: bool,
 }
 
+/// Exact, safe branch-to-worktree resolution shared by Projects and Git Graph.
+/// Never pick a detached, locked or prunable checkout as a navigation target.
+pub fn matching_branch_worktree<'a>(
+    entries: &'a [WorktreeEntry],
+    branch: &str,
+) -> Option<&'a WorktreeEntry> {
+    if branch.is_empty() {
+        return None;
+    }
+    entries.iter().find(|entry| {
+        !entry.detached
+            && !entry.locked
+            && !entry.prunable
+            && entry.branch.as_deref() == Some(branch)
+    })
+}
+
 #[derive(Debug, Clone)]
 pub struct WorktreeManager {
     repo_root: PathBuf,
@@ -459,6 +476,56 @@ mod tests {
         drop(repo);
         let manager = WorktreeManager::discover(&root).unwrap();
         (temp, manager)
+    }
+
+    #[test]
+    fn graph_branch_navigation_requires_exact_live_worktree() {
+        let base = WorktreeEntry {
+            path: PathBuf::from("C:/repo/.worktrees/feature"),
+            branch: Some("feature".into()),
+            detached: false,
+            locked: false,
+            prunable: false,
+            is_primary: false,
+        };
+        let refs = vec![
+            WorktreeEntry {
+                path: PathBuf::from("C:/repo/.worktrees/stale"),
+                branch: Some("feature".into()),
+                locked: true,
+                ..base.clone()
+            },
+            base.clone(),
+            WorktreeEntry {
+                path: PathBuf::from("C:/repo/.worktrees/feat"),
+                branch: Some("feat".into()),
+                ..base.clone()
+            },
+            WorktreeEntry {
+                path: PathBuf::from("C:/repo/.worktrees/detached"),
+                detached: true,
+                ..base.clone()
+            },
+        ];
+        assert_eq!(
+            matching_branch_worktree(&refs, "feature").unwrap().path,
+            base.path
+        );
+        assert_eq!(
+            matching_branch_worktree(&refs, "feat")
+                .unwrap()
+                .branch
+                .as_deref(),
+            Some("feat")
+        );
+        assert!(matching_branch_worktree(&refs, "").is_none());
+        assert!(matching_branch_worktree(&refs, "Feature").is_none());
+        assert!(matching_branch_worktree(&refs, "other").is_none());
+        let prunable = [WorktreeEntry {
+            prunable: true,
+            ..base.clone()
+        }];
+        assert!(matching_branch_worktree(&prunable, "feature").is_none());
     }
 
     #[test]

@@ -430,6 +430,111 @@ impl Workbench {
         }
     }
 
+    /// Classic-style Git Graph branch context menu. Keep presentation in
+    /// GPUI Kit and route every action through Workbench's existing handlers.
+    pub(super) fn kit_git_graph_branch_menu(
+        owner: gpui::WeakEntity<Self>,
+        branch: String,
+        remote: bool,
+        current: bool,
+        has_worktree: bool,
+    ) -> impl Fn(
+        gpui_kit::component::menu::PopupMenu,
+        &mut Window,
+        &mut Context<gpui_kit::component::menu::PopupMenu>,
+    ) -> gpui_kit::component::menu::PopupMenu
+           + 'static {
+        move |mut menu, _, _| {
+            menu = menu.label(if remote {
+                "Remote branch"
+            } else if current {
+                "Current branch"
+            } else {
+                "Local branch"
+            });
+            let mut actions = vec![("Show branch history", GitGraphBranchMenuAction::History)];
+            if !remote && !current {
+                actions.push((
+                    "Compare with current branch",
+                    GitGraphBranchMenuAction::Compare,
+                ));
+                if has_worktree {
+                    actions.push((
+                        "Open existing worktree",
+                        GitGraphBranchMenuAction::OpenWorktree,
+                    ));
+                } else {
+                    actions.push(("Switch to branch", GitGraphBranchMenuAction::Switch));
+                }
+                actions.push((
+                    "Merge into current branch (confirm)",
+                    GitGraphBranchMenuAction::Merge,
+                ));
+            }
+            actions.push(("Copy branch name", GitGraphBranchMenuAction::CopyName));
+            for (title, action) in actions {
+                let owner = owner.clone();
+                let branch = branch.clone();
+                menu = menu.item(PopupMenuItem::new(title).on_click(move |_, _, cx| {
+                    let _ = owner.update(cx, |view, cx| {
+                        view.run_git_graph_branch_menu(branch.clone(), remote, action, cx);
+                    });
+                }));
+            }
+            menu
+        }
+    }
+
+    /// Read-only commit actions: no checkout, reset, cherry-pick, or index
+    /// mutation is reachable from this menu.
+    pub(super) fn kit_git_graph_commit_menu(
+        owner: gpui::WeakEntity<Self>,
+        oid: String,
+        subject: String,
+    ) -> impl Fn(
+        gpui_kit::component::menu::PopupMenu,
+        &mut Window,
+        &mut Context<gpui_kit::component::menu::PopupMenu>,
+    ) -> gpui_kit::component::menu::PopupMenu
+           + 'static {
+        move |mut menu, _, _| {
+            let preview = owner.clone();
+            let preview_oid = oid.clone();
+            menu = menu.item(PopupMenuItem::new("Preview commit changes").on_click(
+                move |_, _, cx| {
+                    let _ = preview.update(cx, |view, cx| {
+                        let exists = view.git_history.as_ref().is_some_and(|graph| {
+                            graph.commits.iter().any(|commit| commit.oid == preview_oid)
+                        });
+                        if exists {
+                            view.preview_git_history(
+                                GitReadRequest::Commit(preview_oid.clone()),
+                                cx,
+                            );
+                        } else {
+                            view.model
+                                .set_status("Commit list changed; refresh Git Graph");
+                            cx.notify();
+                        }
+                    });
+                },
+            ));
+            let hash = oid.clone();
+            menu = menu.item(
+                PopupMenuItem::new("Copy commit hash").on_click(move |_, _, cx| {
+                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(hash.clone()));
+                }),
+            );
+            let copy_subject = subject.clone();
+            menu = menu.item(PopupMenuItem::new("Copy commit subject").on_click(
+                move |_, _, cx| {
+                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(copy_subject.clone()));
+                },
+            ));
+            menu
+        }
+    }
+
     fn native_branch_choices(&self) -> Vec<String> {
         let Some(graph) = &self.git_history else {
             return Vec::new();

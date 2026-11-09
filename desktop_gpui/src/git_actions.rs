@@ -687,6 +687,21 @@ impl GitActions {
         if !valid_branch(branch) {
             return Err("Invalid local branch name".into());
         }
+        // This guard must run in the Git worker, not only in the GPUI
+        // selection handler: worktrees can change after a menu is displayed.
+        let checkout = crate::worktree_manager::WorktreeManager::discover(&self.root)
+            .map_err(|error| format!("Cannot inspect Git worktrees: {error}"))?;
+        let worktrees = checkout
+            .list()
+            .map_err(|error| format!("Cannot inspect Git worktrees: {error}"))?;
+        if worktrees
+            .iter()
+            .any(|entry| entry.branch.as_deref() == Some(branch) && entry.path != self.root)
+        {
+            return Err(format!(
+                "Branch {branch} is already checked out in another worktree; open its workspace instead"
+            ));
+        }
         let mut options = StatusOptions::new();
         options.include_untracked(true).recurse_untracked_dirs(true);
         if !self
@@ -1048,6 +1063,22 @@ mod tests {
         assert!(GitActions::open(&child).is_err());
         assert!(actions.switch_branch("missing").is_err());
         assert!(actions.commit(" ").is_err());
+    }
+
+    #[test]
+    fn branch_switch_cannot_checkout_branch_owned_by_linked_worktree() {
+        let (_dir, actions) = repo_fixture();
+        let manager = crate::worktree_manager::WorktreeManager::discover(actions.root()).unwrap();
+        let linked = manager.create("occupied").unwrap();
+        let initial = actions.repo.head().unwrap().peel_to_commit().unwrap().id();
+        let failure = actions.switch_branch("occupied").unwrap_err();
+        assert!(failure.contains("another worktree"), "{failure}");
+        assert_eq!(
+            actions.repo.head().unwrap().peel_to_commit().unwrap().id(),
+            initial
+        );
+        assert!(linked.exists());
+        manager.remove(&linked, true).unwrap();
     }
 
     #[test]

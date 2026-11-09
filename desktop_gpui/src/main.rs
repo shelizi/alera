@@ -67,7 +67,9 @@ use alera_gpui_desktop::workbench_tabs::{
     WorkbenchTab, WorkbenchTabIdentity, WorkbenchTabKind, WorkbenchTabs,
 };
 use alera_gpui_desktop::workspace_tree::WorkspaceTree;
-use alera_gpui_desktop::worktree_manager::{WorktreeEntry, WorktreeManager};
+use alera_gpui_desktop::worktree_manager::{
+    matching_branch_worktree, WorktreeEntry, WorktreeManager,
+};
 use editor_ui::{bind_editor_keys, NativeEditor};
 use gpui::{
     actions, div, prelude::*, px, rgb, size, App, Bounds, Context, Entity, Focusable, KeyBinding,
@@ -205,6 +207,17 @@ impl ConfirmGitAction {
 enum GitReadRequest {
     Commit(String),
     Compare(String),
+}
+
+/// Shared actions for branch context menus in the Native Git Graph.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GitGraphBranchMenuAction {
+    History,
+    Compare,
+    OpenWorktree,
+    Switch,
+    Merge,
+    CopyName,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1519,6 +1532,119 @@ impl Workbench {
         cx.notify();
     }
 
+    /// A branch checked out in another linked worktree must be opened there
+    /// rather than checked out in this worktree. Recheck Git HEAD on click to
+    /// reject stale context-menu targets before switching the workspace.
+    fn open_graph_branch_worktree(&mut self, branch: &str, cx: &mut Context<Self>) -> bool {
+        let Some(target) =
+            matching_branch_worktree(&self.worktrees, branch).map(|entry| entry.path.clone())
+        else {
+            // A locked/prunable worktree still owns this branch. Do not
+            // silently try a second checkout when navigation is unavailable.
+            if self
+                .worktrees
+                .iter()
+                .any(|entry| entry.branch.as_deref() == Some(branch))
+            {
+                self.model.set_status(
+                    "Branch is checked out in an unavailable worktree; refresh worktrees",
+                );
+                cx.notify();
+                return true;
+            }
+            return false;
+        };
+        let actual = git2::Repository::discover(&target).ok().and_then(|repo| {
+            repo.head().ok().and_then(|head| {
+                if head.is_branch() {
+                    head.shorthand().ok().map(str::to_owned)
+                } else {
+                    None
+                }
+            })
+        });
+        if actual.as_deref() != Some(branch) {
+            self.model
+                .set_status("Branch worktree changed; refresh worktrees before opening");
+            self.refresh_worktrees(cx);
+            cx.notify();
+            return true;
+        }
+        self.switch_workspace(target, cx);
+        true
+    }
+
+    fn run_git_graph_branch_menu(
+        &mut self,
+        branch: String,
+        remote: bool,
+        action: GitGraphBranchMenuAction,
+        cx: &mut Context<Self>,
+    ) {
+        // The action belongs to the graph snapshot that rendered its menu.
+        let exists = self.git_history.as_ref().is_some_and(|graph| {
+            graph
+                .branches
+                .iter()
+                .any(|row| row.name == branch && row.remote == remote)
+        });
+        if !exists {
+            self.model
+                .set_status("Git Graph branch selection is stale; refresh Graph");
+            cx.notify();
+            return;
+        }
+        let reference = if remote {
+            format!("refs/remotes/{branch}")
+        } else {
+            branch.clone()
+        };
+        match action {
+            GitGraphBranchMenuAction::History => self.set_git_history_ref(Some(reference), cx),
+            GitGraphBranchMenuAction::CopyName => {
+                cx.write_to_clipboard(gpui::ClipboardItem::new_string(branch));
+            }
+            GitGraphBranchMenuAction::Compare => {
+                if remote {
+                    self.git_action_status = "Remote comparison: select ref in Git Graph; local comparison requires a local branch".into();
+                    cx.notify();
+                } else {
+                    self.git_branch_input
+                        .update(cx, |input, cx| input.set_query(&branch, cx));
+                    self.preview_git_history(GitReadRequest::Compare(branch), cx);
+                }
+            }
+            GitGraphBranchMenuAction::OpenWorktree => {
+                if remote || !self.open_graph_branch_worktree(&branch, cx) {
+                    self.model.set_status(
+                        "No existing local worktree for this branch; refresh worktrees",
+                    );
+                    cx.notify();
+                }
+            }
+            GitGraphBranchMenuAction::Switch => {
+                if remote {
+                    return;
+                }
+                if !self.open_graph_branch_worktree(&branch, cx) {
+                    self.run_git_action(GitUiAction::SwitchBranch(branch), cx);
+                }
+            }
+            GitGraphBranchMenuAction::Merge => {
+                if remote {
+                    return;
+                }
+                self.git_branch_input
+                    .update(cx, |input, cx| input.set_query(&branch, cx));
+                self.git_merge_armed = Some(branch.clone());
+                self.git_action_status = format!(
+                    "Merge prepared for {branch}. Review source branch, then press Confirm Merge in Source Control."
+                );
+                cx.notify();
+            }
+        }
+    }
+
     fn set_git_history_ref(&mut self, selected: Option<String>, cx: &mut Context<Self>) {
         self.git_history_options.selected_ref = selected;
         self.refresh_git_history(cx);
@@ -1584,6 +1710,18 @@ impl Workbench {
             self.git_action_status = "Finish the current Git operation first".into();
             cx.notify();
             return;
+        }
+        // Classic routing: when another worktree already owns this branch,
+        // opening that workspace replaces checkout in the current worktree.
+        if let GitUiAction::SwitchBranch(branch) = &action {
+            if self
+                .worktrees
+                .iter()
+                .any(|entry| entry.branch.as_deref() == Some(branch))
+            {
+                self.open_graph_branch_worktree(branch, cx);
+                return;
+            }
         }
         if self.editor_dirty(cx) {
             self.git_action_status = "Save unsaved editor buffers before changing Git".into();
@@ -6843,6 +6981,9 @@ impl Render for Workbench {
                                                 if row.current { "●" } else { "○" },
                                                 if remote { "☁ " } else { "" }, name, row.tip);
                                             let favorite_name = reference.clone();
+                                            let context_branch = name.clone();
+                                            let has_worktree = !remote && self.worktrees.iter()
+                                                .any(|entry| entry.branch.as_deref() == Some(name.as_str()));
                                             div()
                                                 .id(("git-graph-branch", index))
                                                 .flex()
@@ -6872,7 +7013,11 @@ impl Render for Workbench {
                                                             this.git_branch_input.update(cx, |input, cx| { input.set_query(&name, cx); });
                                                             this.preview_git_history(GitReadRequest::Compare(name.clone()), cx);
                                                         }
-                                                    })))
+                                                    }))
+                                                    .context_menu(Self::kit_git_graph_branch_menu(
+                                                        cx.entity().downgrade(), context_branch,
+                                                        remote, row.current, has_worktree,
+                                                    )))
                                         })))
                                     .child(div().text_xs().text_color(rgb(TEXT)).child("Commits · select to preview"))
                                     .child(div()
@@ -6881,6 +7026,8 @@ impl Render for Workbench {
                                         .overflow_y_scroll()
                                         .children(git_commit_rows.into_iter().enumerate().map(|(index, row)| {
                                             let oid = row.oid;
+                                            let menu_oid = oid.clone();
+                                            let menu_subject = row.subject.clone();
                                             let marker = if row.parents > 1 { "◆" } else { "●" };
                                             let labels = if row.labels.is_empty() { String::new() }
                                                 else { format!(" [{}]", row.labels.join(", ")) };
@@ -6895,6 +7042,9 @@ impl Render for Workbench {
                                                 .on_click(cx.listener(move |this, _, _, cx| {
                                                     this.preview_git_history(GitReadRequest::Commit(oid.clone()), cx);
                                                 }))
+                                                .context_menu(Self::kit_git_graph_commit_menu(
+                                                    cx.entity().downgrade(), menu_oid, menu_subject,
+                                                ))
                                         })))
                                     .into_any_element()
                             } else {

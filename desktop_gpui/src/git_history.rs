@@ -315,7 +315,14 @@ impl GitHistorySnapshot {
                 favorite,
             });
         }
-        branches.sort_by(|a, b| b.current.cmp(&a.current).then(a.name.cmp(&b.name)));
+        // Like Classic: keep HEAD first, then favorite branches ahead of
+        // ordinary refs. Equal-priority refs remain alphabetical.
+        branches.sort_by(|a, b| {
+            b.current
+                .cmp(&a.current)
+                .then(b.favorite.cmp(&a.favorite))
+                .then_with(|| a.name.cmp(&b.name))
+        });
         if let Some(requested) = options.selected_ref.as_deref() {
             // Host references are accepted only after resolving an exact,
             // visible branch. Do not interpret arbitrary revspec operators.
@@ -709,6 +716,11 @@ mod tests {
             .branches
             .iter()
             .any(|row| row.favorite && row.name == "feature"));
+        assert!(all.branches[0].current, "current ref must lead Git Graph");
+        assert_eq!(
+            all.branches[1].name, "feature",
+            "starred branch follows HEAD before other refs"
+        );
         let focused = GitHistorySnapshot::load_filtered(
             dir.path(),
             &GitHistoryOptions {
