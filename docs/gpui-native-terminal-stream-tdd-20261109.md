@@ -83,3 +83,16 @@ Native 進一步執行 `cargo test --manifest-path desktop_gpui/Cargo.toml --no-
 **實機正向證據**：視窗成功還原既有測試 PTY 的 Shell 輸出，實際逐鍵 `dir` 能列出檔案；修正後以文字提交輸入並執行 `echo FOCUS_AND_TEXT_OK`、`echo 測試中文貓`，GPUI 顯示成功。再由另一支 CLI 讀取同一 Host PTY retained scrollback，確認 `has_live_ascii_echo=True`、`has_live_chinese=True`。測試時曾使用**只記錄 Focus 與文字長度、不記錄任何實際按鍵內容**的環境變數追蹤，定位後已將所有診斷程式碼移除。Windows Native `cargo test --no-default-features --lib` **318/318 通過**。
 
 **未完成／不過度聲稱**：實體注音組字候選與多組漢字長時間切換、兩個 Terminal pane 各自 IME、長輸出/backpressure、Host 斷線自動重連、真實 UI p50/p95 延遲與完整 TUI 壓測仍待驗收；只驗證目前隔離版本，沒有替換正式 Alera，`supported=false` 不變。
+
+## 2026-11-09：Host 推播自動恢復、雙 PTY 與長輸出
+
+再補兩項 Native TDD：
+
+1. **Native 推播重新連線**：原來只要一次 Host Socket 中斷／View Lease 拒絕就永久把 `terminal_stream_unavailable` 設為 true，直到關閉/開新 Tab 才會再試。改用純 `TerminalStreamRetryGate`：失敗後延遲 1、2、4、8、16、32 秒，最多 32 秒，僅在仍有運作中 Host tab 可觀察時重試；收到正確 Snapshot 就重置。等待期間原 CLI retained-scrollback fallback 繼續運作，**不會啟動 Host 或重新建立 PTY**。單元測試確認時間邊界及重置。
+2. **遲到 CLI read 的畫面覆蓋競態**：舊 CLI read 進行中，Host 推播 Snapshot 也到達時，兩者的 cursor 可能恰好相同，舊讀取就會覆蓋新 VT 畫面。先新增 failing test 實際重現，再讓 `TerminalDock::apply_ticket_chunk` 在 Host stream still attached 時拒絕舊讀取，僅在 `invalidate_stream_observers` 之後允許 Host retained-scrollback fallback，保留舊的斷線重建與 Unicode 分段測試。
+
+擴展 `desktop_gpui/tests/terminal_stream_isolated_smoke.py`，使用同一獨立 Host 的**實際兩個不同 PTY、同一常駐 CLI Socket**。一個 PTY 完全斷開 Native stream 後，新的 View Lease 可以重接同一 Session（`created=false`）；雙 PTY 的命令及輸出按 Host Session ID 分隔；以真實 Windows `cmd.exe` 產生超過 64KiB 的連續 Shell 輸出，確認尾端標記到達而非提早匹配指令回顯；最後斷開 Native 觀察，兩個 Host PTY 仍各自運作。測試子程序與 Host stderr 使用有界記憶體紀錄並回收測試 PTY，避免 Windows 殘留 lock 住臨時 log。
+
+**驗證：**隔離真實 Host／CLI 回歸 **10/10 PASS**，其中包含「重連新 Lease」、「雙 PTY 輸出分流」、「超過 64 KiB 的真實輸出」；Native Rust 單元測試 **320/320 PASS**，包含 late CLI read 的 RED→GREEN 重現與修正。
+
+這裡的自動重連是 Native 客戶端策略及純邏輯測試；端對端已驗證*新 CLI stream 重新附著仍存在的 Host PTY*，但尚未直接驗證**Host 進程意外退出並重啟後的整個 GPUI 自動恢復路徑**、真實 TUI p95 畫面延遲、長時間背壓/IME 候選窗。Native `supported=false` 與 Classic/正式 Host 隔離維持不變。

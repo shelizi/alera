@@ -14,6 +14,7 @@ import base64
 import argparse
 import json
 import os
+from collections import deque
 from pathlib import Path
 import queue
 import socket
@@ -123,6 +124,36 @@ class StreamClient:
                 self.process.wait(timeout=3)
 
 
+def write_and_expect_host_output(stream, request_id, identity, command, marker, timeout=25):
+    """Verify real scoped Host ACK and pushed output, never matching another PTY."""
+    stream.send(
+        request_id,
+        "write",
+        {**identity, "dataBase64": base64.b64encode(command.encode("utf-8")).decode()},
+    )
+    output = bytearray()
+    acknowledged = False
+    deadline = time.monotonic() + timeout
+    expected = marker.encode("utf-8")
+    while time.monotonic() < deadline:
+        event = stream.until(lambda _: True, timeout=max(0.1, deadline - time.monotonic()))
+        if event.get("id") == request_id:
+            if not event.get("ok"):
+                raise SmokeError("Host rejected scoped PTY input")
+            acknowledged = True
+        if event.get("event") in ("outputResyncRequired", "exit", "error") and (
+            event.get("payload", {}).get("sessionId") == identity["sessionId"]
+        ):
+            raise SmokeError("Observed PTY exited or requested output resynchronization")
+        if event.get("event") == "output":
+            payload = event.get("payload", {})
+            if payload.get("sessionId") == identity["sessionId"]:
+                output.extend(base64.b64decode(payload["dataBase64"], validate=True))
+        if acknowledged and expected in output:
+            return len(output)
+    raise SmokeError("Native stream did not deliver scoped Host output before deadline")
+
+
 def host_rpc(control, verb, payload):
     # The control file exists *only* inside the random temporary profile.
     with socket.create_connection(("127.0.0.1", int(control["port"])), timeout=3) as client:
@@ -204,8 +235,6 @@ def run_smoke(executable, native_app=None, hold_seconds=25):
         workspace.mkdir()
         control_file = profile / "runtime-host.json"
         token = uuid.uuid4().hex + uuid.uuid4().hex
-        host_stderr_file = root / "isolated-host.stderr.log"
-        host_stderr = host_stderr_file.open("wb")
         host = subprocess.Popen(
             [
                 str(executable),
@@ -221,12 +250,20 @@ def run_smoke(executable, native_app=None, hold_seconds=25):
                 "false",
             ],
             stdout=subprocess.DEVNULL,
-            stderr=host_stderr,
+            stderr=subprocess.PIPE,
             stdin=subprocess.DEVNULL,
             env={**os.environ, "ALERA_RUNTIME_DIR": str(profile)},
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
+        # Never leave a Windows stderr file locked by an inherited PTY worker.
+        # Keep only bounded, token-redacted in-memory diagnostics on failure.
+        host_diagnostics = deque(maxlen=24)
+        def collect_host_stderr():
+            for line in iter(host.stderr.readline, b""):
+                host_diagnostics.append(line.decode("utf-8", errors="replace"))
+        threading.Thread(target=collect_host_stderr, daemon=True).start()
         session_id = None
+        second_session_id = None
         stream = None
         control = None
         native_process = None
@@ -356,6 +393,83 @@ def run_smoke(executable, native_app=None, hold_seconds=25):
             if read.get("running") is not True:
                 raise SmokeError("Closing Native stream unexpectedly killed its Host PTY")
             checks.append("closing CLI stream preserves Host PTY")
+
+            # Reattach A on a *new* Host TCP connection/CLI child, with a fresh
+            # view lease. A stale view lease must never be reusable across
+            # Native window closes, but the Host PTY must remain running.
+            stream = StreamClient(executable, profile)
+            fresh = {**observe, "viewLeaseId": "reconnected-" + run_marker}
+            stream.send(11, "observe", fresh)
+            fresh_ack = stream.until(lambda item: item.get("id") == 11)
+            if not fresh_ack.get("ok") or fresh_ack.get("payload", {}).get("created") is not False:
+                raise SmokeError("Existing Host PTY was not re-observable after stream close")
+            write_and_expect_host_output(
+                stream, 12, fresh,
+                "echo REATTACHED_" + run_marker + "\r",
+                "REATTACHED_" + run_marker,
+            )
+            checks.append("fresh Native view lease reconnects same Host PTY without remint")
+
+            second = checked_cli(
+                executable, profile, "terminal", "--no-start", "create",
+                "--workspace-id", workspace_id,
+            )
+            second_session_id = second["attachment"]["sessionId"]
+            second_identity = {
+                "sessionId": second_session_id,
+                "workspaceId": workspace_id,
+                "tabId": second["tab"]["id"],
+                "viewLeaseId": "second-pane-" + run_marker,
+            }
+            if second_identity["sessionId"] == session_id or second_identity["tabId"] == tab_id:
+                raise SmokeError("Second PTY reused the first session or tab identity")
+            stream.send(13, "observe", second_identity)
+            second_ack = stream.until(lambda item: item.get("id") == 13)
+            if not second_ack.get("ok") or second_ack.get("payload", {}).get("created") is not False:
+                raise SmokeError("Second Native pane did not observe its own running PTY")
+            write_and_expect_host_output(
+                stream, 14, second_identity,
+                "echo SECOND_PANE_" + run_marker + "\r",
+                "SECOND_PANE_" + run_marker,
+            )
+            write_and_expect_host_output(
+                stream, 15, fresh,
+                "echo FIRST_PANE_" + run_marker + "\r",
+                "FIRST_PANE_" + run_marker,
+            )
+            checks.append("two distinct PTYs share one CLI stream with scoped input/output")
+
+            # More than a default 64KiB Host read window, from a real
+            # interactive Windows cmd.exe. The terminal must deliver the
+            # final line without a resync event or deadlocked private pipe.
+            bulk_line = "BULK_" + run_marker + "_" + ("x" * 64)
+            # The last line is not present in the *input* command text, so
+            # detecting it proves the loop completed rather than matching
+            # an echoed command prompt before its output arrives.
+            bulk_marker = bulk_line + "_950"
+            bulk = f"for /L %i in (1,1,950) do @echo {bulk_line}_%i\r"
+            count = write_and_expect_host_output(
+                stream, 16, second_identity, bulk, bulk_marker, timeout=40,
+            )
+            if count < 64 * 1024:
+                raise SmokeError(
+                    f"High-volume Host stream was shorter than 64KiB: {count} bytes"
+                )
+            checks.append("sustained >64KiB real PTY output arrives without resync")
+
+            # Releasing one private Native connection must preserve both
+            # Host-owned PTYs. The independent CLI read remains available.
+            stream.close()
+            stream = None
+            for terminal_id in [session_id, second_identity["sessionId"]]:
+                remaining = checked_cli(
+                    executable, profile, "terminal", "--no-start", "read",
+                    "--handle", terminal_id,
+                )
+                if remaining.get("running") is not True:
+                    raise SmokeError("Closing multi-pane stream terminated a Host PTY")
+            checks.append("closing dual-session Native stream preserves both Host PTYs")
+
             if native_app is not None:
                 native_state = root / "gpui-state"
                 prepare_native_preview_state(
@@ -400,14 +514,7 @@ def run_smoke(executable, native_app=None, hold_seconds=25):
                 checks.append("isolated Native GPUI window remained alive")
             return checks
         except Exception as error:
-            host_stderr.flush()
-            try:
-                diagnostics = host_stderr_file.read_text(
-                    encoding="utf-8", errors="replace"
-                )[-900:]
-            except OSError:
-                diagnostics = ""
-            diagnostics = diagnostics.replace(token, "[redacted]").strip()
+            diagnostics = "".join(host_diagnostics)[-900:].replace(token, "[redacted]").strip()
             raise SmokeError(
                 f"{error}; isolated_host_exit={host.poll()}; "
                 f"isolated_host_stderr={diagnostics or '(none)'}"
@@ -423,9 +530,11 @@ def run_smoke(executable, native_app=None, hold_seconds=25):
             if stream is not None:
                 stream.close()
             if control is not None:
-                if session_id is not None:
+                for terminal_id in (session_id, second_session_id):
+                    if terminal_id is None:
+                        continue
                     try:
-                        host_rpc(control, "terminate", {"sessionId": session_id})
+                        host_rpc(control, "terminate", {"sessionId": terminal_id})
                     except (OSError, KeyError, SmokeError):
                         pass
                 try:
@@ -442,7 +551,6 @@ def run_smoke(executable, native_app=None, hold_seconds=25):
                     except subprocess.TimeoutExpired:
                         host.kill()
                         host.wait(timeout=3)
-            host_stderr.close()
 
 
 if __name__ == "__main__":
