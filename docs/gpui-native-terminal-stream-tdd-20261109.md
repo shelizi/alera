@@ -196,3 +196,15 @@ CLI `terminal_stream::tests` 私有 recover 指令白名單 **2/2 PASS**，確�
 **單窗格忙碌時另一個正常輸入的可見延遲（同一測試 Native PID、同一 Windows 畫面）**：右側 45 秒 ANSI TUI 運作期間，左側 20 個英文字鍵輸入樣本 **p50 92.14ms／p95 94.94ms**，截圖 median **16.46ms**；右側負載結束後，同窗格／同環境 20 個樣本 **p50 92.20ms／p95 93.17ms**，截圖 median **16.68ms**。本次未觀察到可分辨的忙碌窗格拖慢互動窗格；量測是鍵盤事件到第一個視覺差異，**不代表每個鍵都已由 Host 確認、不是 GPU 精確 present 時間**，且樣本數小、需 Classic 同場對照與高頻真實 TUI 重複測量。
 
 **更新後仍未關 Gate**：`supported=false`，不合併 `main`、不推送／發布。不再缺「60 秒雙 PTY 合成 ANSI/文字負載」與「忙碌時另一窗格輸入基準」，但仍缺真實高頻全螢幕 TUI app、Windows TSF 注音候選半組字取消的全面系統測試、Classic 同場延遲及 release build 的效能與回歸。保留原 `.gpui-smoke-20261108/` 未追蹤實驗資料，不清除、不加入提交。
+
+## 2026-11-09：真實全螢幕 less.exe 互動與 Host 重啟後恢復驗收
+
+在原有隔離 Host／CLI／Native 測試工具加入 opt-in `--native-real-tui-pager`，只接受安全的絕對路徑與唯讀 `less.exe`，實測使用 Git for Windows 的 `C:/Program Files/Git/usr/bin/less.exe`。這是**真實第三方全螢幕應用**，不是 PowerShell 合成 ANSI/TUI 輸出。
+
+- 每次在隨機 TemporaryDirectory 的測試 Workspace 產生唯一 240 行文字檔；透過測試 Host 既有 PTY 啟動 pager，等待 Host 真正輸出第一行；輸入 `G` 跳檔尾，確認最後行出現在 Host 原始輸出且 cursor 增加；輸入 `g` 回檔首並要求新輸出；輸入 `q` 後由**同一個 Shell**建立另一個不屬於 pager 的檔案，確保不是指令回顯造成假陽性。測試不修改原檔、不呼叫使用者正式 Host。
+- 初輪真正執行 `less.exe` 的三階段輸出已發生，Shell 也已恢復；但隔離 Smoke 最後因**驗收工具**將 `active=1`（單一可見 viewport）且 `tabs=[(cursor,true),(0,true)]`（第二個仍存在的背景 Tab）誤判為兩個可見窗格而 RED。新 `native_primary_cursor_from_diagnostic` 明確要求單一活躍串流與第一個 Host Tab running，允許背景 Tab 仍存在；兩窗格原 `native_visible_cursors_from_diagnostic` 的嚴格檢核維持。新增正反向回歸。
+- 修正後 **Python 10/10 PASS**；不 crash 的真實 Windows Host／CLI／GPUI **13/13 PASS**：pager 首頁新輸出 1929 bytes、`G` 至最後行新增 1284 bytes、`g` 回首頁新增 1240 bytes，原 Shell 回應成功，Host／Native 最終游標 **7618／7618**，且 Native 子程序未結束。
+- 使用**真正隔離 Host 強制退出／重啟**再跑相同真實 TUI：**14/14 PASS**。Host PID 更換、原兩個 Worker／Shell 未更換；後續 Native／Host 最終游標 **14854／14854**，說明 Host 恢復後仍能開啟、導航、退出全螢幕 pager，未用新 Shell 偽造恢復。
+- 重複執行指令（對照實際可執行檔路徑調整）：
+  `python desktop_gpui/tests/terminal_stream_isolated_smoke.py D:/c/t/debug/alera.exe --native-app D:/c/t/debug/alera-gpui-desktop.exe --native-host-restart --native-real-tui-pager "C:/Program Files/Git/usr/bin/less.exe" --hold-seconds 3`。
+- 證據邊界：此輪驗的是**第一個可見 Terminal**，Host 事件和 Native 消費進度，不是每個按鍵的 GPU Present 時戳；也不是兩個真實 TUI 同時高頻重繪、TSF 注音未完成組字切窗、Classic／Native Release 同場比較。以上仍待驗收，Native `supported=false` 不變；不合併 main、不推送或發布，不修改 Classic、正式 Host，也不清除／提交 `.gpui-smoke-20261108/`。

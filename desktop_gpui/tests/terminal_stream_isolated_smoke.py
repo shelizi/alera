@@ -408,6 +408,17 @@ def paced_load_command(run_marker, index, seconds, style="plain"):
     return marker, command
 
 
+def real_tui_less_command(pager, document):
+    """Limit the real full-screen TUI smoke to a read-only pager and safe paths."""
+    pager, document = Path(pager), Path(document)
+    for item in (pager, document):
+        if not item.is_absolute() or any(char in str(item) for char in '"&|<>^%!\r\n'):
+            raise ValueError("Real TUI requires absolute, shell-safe local paths")
+    if pager.name.casefold() != "less.exe":
+        raise ValueError("Only the read-only less.exe pager is allowed for real TUI smoke")
+    return f'"{pager}" -R -- "{document}"'
+
+
 def native_visible_cursors_from_diagnostic(line, expected_count):
     """Parse only cursor positions, not PTY content, from isolated debug log."""
     if not line.startswith("GPUI_STREAM_DIAG "):
@@ -419,6 +430,17 @@ def native_visible_cursors_from_diagnostic(line, expected_count):
     if any(running != "true" for _, running in matches):
         raise SmokeError("A visible Native Terminal is not running")
     return [int(cursor) for cursor, _ in matches]
+
+
+def native_primary_cursor_from_diagnostic(line):
+    """The seed can have two tabs but only the primary viewport attached."""
+    if not line.startswith("GPUI_STREAM_DIAG "):
+        raise SmokeError("Not an isolated Native stream diagnostic")
+    active = re.search(r"\bactive=(\d+)\b", line)
+    matches = re.findall(r"\((\d+), (true|false)\)", line)
+    if not active or int(active.group(1)) != 1 or not matches or matches[0][1] != "true":
+        raise SmokeError("Primary Native Terminal is not the sole visible live stream")
+    return int(matches[0][0])
 
 
 def exercise_native_two_pty_sustained_load(executable, profile, native_process,
@@ -500,6 +522,76 @@ def exercise_native_two_pty_sustained_load(executable, profile, native_process,
     )
 
 
+def exercise_native_real_tui(executable, profile, native_process, handle,
+                             workspace, run_marker, pager):
+    """Prove real full-screen less navigation and return to the ORIGINAL PTY Shell."""
+    document = workspace / f"real-tui-{run_marker}.txt"
+    completion = workspace / f"real-tui-finished-{run_marker}.txt"
+    document.write_text(
+        "".join(
+            f"REAL_TUI_{run_marker}_ROW_{index:03d} " + ("#" * 66) + "\n"
+            for index in range(240)
+        ), encoding="utf-8",
+    )
+    command = real_tui_less_command(pager, document)
+    started = time.monotonic()
+
+    def read_cursor():
+        if native_process.poll() is not None:
+            raise SmokeError("Isolated GPUI window exited during real TUI interaction")
+        state = checked_cli(executable, profile, "terminal", "--no-start",
+                            "read", "--handle", handle, timeout=6)
+        if state.get("running") is not True:
+            raise SmokeError("Original Host PTY stopped during real TUI interaction")
+        return state, int(state.get("nextCursor", 0))
+
+    def wait_redraw(older, expected, action):
+        deadline = time.monotonic() + 18
+        while time.monotonic() < deadline:
+            state, cursor = read_cursor()
+            if cursor >= older + 100 and expected in str(state.get("text", "")):
+                return cursor
+            time.sleep(0.25)
+        raise SmokeError(f"Real less.exe did not repaint after {action}")
+
+    _, initial = read_cursor()
+    checked_cli(executable, profile, "terminal", "--no-start", "write",
+                "--handle", handle, "--text", command, "--enter", timeout=12)
+    first = wait_redraw(initial, f"REAL_TUI_{run_marker}_ROW_000", "opening")
+    checked_cli(executable, profile, "terminal", "--no-start", "write",
+                "--handle", handle, "--text", "G", timeout=8)
+    last = wait_redraw(first, f"REAL_TUI_{run_marker}_ROW_239", "jump to file end")
+    checked_cli(executable, profile, "terminal", "--no-start", "write",
+                "--handle", handle, "--text", "g", timeout=8)
+    top = wait_redraw(last, f"REAL_TUI_{run_marker}_ROW_000", "return to file start")
+
+    # Do not infer pager exit from echoed 'q': the real cmd.exe must write a
+    # new file OUTSIDE the pager's read-only input file.
+    checked_cli(executable, profile, "terminal", "--no-start", "write",
+                "--handle", handle, "--text", "q", timeout=8)
+    time.sleep(0.6)
+    checked_cli(executable, profile, "terminal", "--no-start", "write",
+                "--handle", handle, "--text", f'echo restored> "{completion}"',
+                "--enter", timeout=8)
+    deadline = time.monotonic() + 12
+    while time.monotonic() < deadline and not completion.is_file():
+        read_cursor()
+        time.sleep(0.25)
+    if not completion.is_file() or completion.read_text(encoding="utf-8").strip() != "restored":
+        raise SmokeError("Full-screen pager did not return input to its original Shell")
+    _, final = read_cursor()
+    if final <= top:
+        raise SmokeError("No Shell output reached Host after the pager exited")
+    print(
+        f"ISOLATED_NATIVE_REAL_TUI_PASS app=less.exe "
+        f"open_bytes={first-initial} end_redraw_bytes={last-first} "
+        f"top_redraw_bytes={top-last} original_shell_restored=true "
+        f"elapsed={time.monotonic()-started:.1f}s host_end_cursor={final}",
+        flush=True,
+    )
+    return final
+
+
 def await_isolated_split_inspection(native_process, gate, timeout=75):
     """Optional human/UI-automation checkpoint before the disposable crash.
 
@@ -524,7 +616,7 @@ def await_isolated_split_inspection(native_process, gate, timeout=75):
 def run_smoke(executable, native_app=None, hold_seconds=25,
               native_reconnect=False, native_host_restart=False,
               native_split_gate=False, native_load_seconds=0, native_load_style="plain",
-              native_load_target="both"):
+              native_load_target="both", native_real_tui_pager=None):
     run_marker = uuid.uuid4().hex[:14]
     checks = []
     gate_path = None
@@ -806,7 +898,7 @@ def run_smoke(executable, native_app=None, hold_seconds=25,
                         "APPDATA": str(native_home / "AppData" / "Roaming"),
                         "LOCALAPPDATA": str(native_home / "AppData" / "Local"),
                     }
-                    if native_load_seconds:
+                    if native_load_seconds or native_real_tui_pager is not None:
                         # Compile-time debug-only, opt-in cursor and queue
                         # counters; never logs PTY text or Host credentials.
                         native_env["ALERA_GPUI_ISOLATED_STREAM_DIAGNOSTICS"] = "1"
@@ -949,6 +1041,14 @@ def run_smoke(executable, native_app=None, hold_seconds=25,
                             checks.append(
                                 "background second-PTY TUI output completed while first terminal remained interactive"
                             )
+                    if native_real_tui_pager is not None:
+                        exercise_native_real_tui(
+                            executable, profile, native_process, session_id,
+                            workspace, run_marker, native_real_tui_pager,
+                        )
+                        checks.append(
+                            "real full-screen pager repainted top/end/top and returned to same Host Shell"
+                        )
                     until = time.monotonic() + hold_seconds
                     while time.monotonic() < until:
                         if native_process.poll() is not None:
@@ -958,7 +1058,7 @@ def run_smoke(executable, native_app=None, hold_seconds=25,
                             )
                         time.sleep(0.2)
                 checks.append("isolated Native GPUI window remained alive")
-                if native_load_seconds:
+                if native_load_seconds or native_real_tui_pager is not None:
                     diagnostic_lines = [line.strip() for line in
                                         native_stderr_path.read_text(encoding="utf-8", errors="replace").splitlines()
                                         if line.startswith("GPUI_STREAM_DIAG ")]
@@ -984,6 +1084,26 @@ def run_smoke(executable, native_app=None, hold_seconds=25,
                         print(
                             f"ISOLATED_NATIVE_STREAM_CAUGHT_UP native={native_cursors} "
                             f"host={final_host_cursors}", flush=True,
+                        )
+                    if native_real_tui_pager is not None and not native_split_gate:
+                        if not diagnostic_lines:
+                            raise SmokeError("No Native debug cursors to check real TUI repaint")
+                        native_cursor = native_primary_cursor_from_diagnostic(
+                            diagnostic_lines[-1],
+                        )
+                        host_cursor = int(checked_cli(
+                            executable, profile, "terminal", "--no-start", "read",
+                            "--handle", session_id,
+                        ).get("nextCursor", 0))
+                        if native_cursor < host_cursor:
+                            raise SmokeError(
+                                "Real TUI output did not reach visible Native viewport: "
+                                f"Native={native_cursor}, Host={host_cursor}"
+                            )
+                        checks.append("Native visible VT caught up after real TUI navigation")
+                        print(
+                            f"ISOLATED_NATIVE_REAL_TUI_CAUGHT_UP native={native_cursor} "
+                            f"host={host_cursor}", flush=True,
                         )
             return checks
         except Exception as error:
@@ -1064,6 +1184,8 @@ if __name__ == "__main__":
                         help="plain scrollback or ANSI/alternate-screen cursor-addressed TUI stress")
     parser.add_argument("--native-load-target", choices=("both", "secondary"), default="both",
                         help="emit in both PTYs or leave primary idle for foreground key latency testing")
+    parser.add_argument("--native-real-tui-pager", type=Path,
+                        help="opt-in actual full-screen, read-only less.exe (absolute Windows path)")
     parser.add_argument("--hold-seconds", type=int, default=25)
     args = parser.parse_args()
     if not args.cli.is_file() or (args.native_app is not None and not args.native_app.is_file()):
@@ -1079,6 +1201,14 @@ if __name__ == "__main__":
     if args.native_load_seconds and not (args.native_app and
                                          10 <= args.native_load_seconds <= 60):
         parser.error("--native-load-seconds requires --native-app and 10..60 seconds")
+    if args.native_real_tui_pager is not None:
+        if args.native_app is None or not args.native_real_tui_pager.is_file():
+            parser.error("--native-real-tui-pager requires --native-app and an installed less.exe")
+        try:
+            real_tui_less_command(args.native_real_tui_pager.resolve(),
+                                  Path.cwd().resolve() / "isolated-tui-input.txt")
+        except ValueError as error:
+            parser.error(str(error))
     try:
         results = run_smoke(
             args.cli.resolve(), native_app=args.native_app.resolve()
@@ -1090,6 +1220,8 @@ if __name__ == "__main__":
             native_load_seconds=args.native_load_seconds,
             native_load_style=args.native_load_style,
             native_load_target=args.native_load_target,
+            native_real_tui_pager=args.native_real_tui_pager.resolve()
+            if args.native_real_tui_pager is not None else None,
         )
     except (SmokeError, OSError, KeyError, ValueError, subprocess.TimeoutExpired) as error:
         print(f"FAIL: isolated Terminal stream smoke: {error}", file=sys.stderr)
