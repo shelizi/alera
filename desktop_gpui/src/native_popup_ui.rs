@@ -474,6 +474,12 @@ impl Workbench {
             if row.area.can_unstage() {
                 actions.push(("Unstage selected", GitChangeMenuAction::Unstage));
             }
+            if row.area == alera_gpui_desktop::git_inspect::GitChangeArea::Untracked {
+                actions.push((
+                    "Move untracked file(s) to Recycle Bin (confirm)",
+                    GitChangeMenuAction::TrashUntracked,
+                ));
+            }
             if row.area == alera_gpui_desktop::git_inspect::GitChangeArea::Changes {
                 actions.push((
                     if discard_armed {
@@ -582,6 +588,7 @@ impl Workbench {
         owner: gpui::WeakEntity<Self>,
         oid: String,
         subject: String,
+        parents: usize,
     ) -> impl Fn(
         gpui_kit::component::menu::PopupMenu,
         &mut Window,
@@ -628,21 +635,51 @@ impl Workbench {
                     });
                 }));
             }
-            for (title, kind) in [
-                (
-                    "Cherry-pick commit (preview and confirm)…",
-                    alera_gpui_desktop::git_actions::GitCommitApplyKind::CherryPick,
-                ),
-                (
-                    "Revert commit (preview and confirm)…",
-                    alera_gpui_desktop::git_actions::GitCommitApplyKind::Revert,
-                ),
-            ] {
+            let apply_choices = if parents == 2 {
+                vec![
+                    (
+                        "Cherry-pick merge (mainline parent 1)…",
+                        alera_gpui_desktop::git_actions::GitCommitApplyKind::CherryPick,
+                        1,
+                    ),
+                    (
+                        "Cherry-pick merge (mainline parent 2)…",
+                        alera_gpui_desktop::git_actions::GitCommitApplyKind::CherryPick,
+                        2,
+                    ),
+                    (
+                        "Revert merge (mainline parent 1)…",
+                        alera_gpui_desktop::git_actions::GitCommitApplyKind::Revert,
+                        1,
+                    ),
+                    (
+                        "Revert merge (mainline parent 2)…",
+                        alera_gpui_desktop::git_actions::GitCommitApplyKind::Revert,
+                        2,
+                    ),
+                ]
+            } else if parents == 1 {
+                vec![
+                    (
+                        "Cherry-pick commit (preview and confirm)…",
+                        alera_gpui_desktop::git_actions::GitCommitApplyKind::CherryPick,
+                        0,
+                    ),
+                    (
+                        "Revert commit (preview and confirm)…",
+                        alera_gpui_desktop::git_actions::GitCommitApplyKind::Revert,
+                        0,
+                    ),
+                ]
+            } else {
+                Vec::new()
+            };
+            for (title, kind, mainline) in apply_choices {
                 let owner = owner.clone();
                 let commit_id = oid.clone();
                 menu = menu.item(PopupMenuItem::new(title).on_click(move |_, _, cx| {
                     let _ = owner.update(cx, |view, cx| {
-                        view.preview_git_commit_apply(commit_id.clone(), kind, cx);
+                        view.preview_git_commit_apply(commit_id.clone(), kind, mainline, cx);
                     });
                 }));
             }

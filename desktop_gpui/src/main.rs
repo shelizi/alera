@@ -28,7 +28,7 @@ use alera_gpui_desktop::explorer_visibility::ExplorerVisibilityOptions;
 use alera_gpui_desktop::file_search::WorkspaceFileIndex;
 use alera_gpui_desktop::git_actions::{
     GitActions, GitAmendPreview, GitCommitApplyKind, GitCommitApplyPreview, GitCommitRefKind,
-    GitConflictChoice, GitConflictPlan,
+    GitConflictChoice, GitConflictPlan, GitUntrackedTrashCandidate,
 };
 use alera_gpui_desktop::git_branch_compare::{
     compare_branch_files, diff_compared_file, original_compared_file, BranchFileComparison,
@@ -180,6 +180,7 @@ enum GitUiAction {
     StageMany(Vec<PathBuf>),
     UnstageMany(Vec<PathBuf>),
     DiscardTracked(Vec<PathBuf>),
+    TrashUntracked(Vec<GitUntrackedTrashCandidate>),
     Commit(String),
     Amend(GitAmendPreview),
     SwitchBranch(String),
@@ -270,6 +271,7 @@ enum GitChangeMenuAction {
     Stage,
     Unstage,
     Discard,
+    TrashUntracked,
     CopyPath,
 }
 
@@ -414,6 +416,9 @@ struct Workbench {
     git_selected_changes: HashSet<alera_gpui_desktop::git_inspect::GitChangeRow>,
     git_selection_anchor: Option<alera_gpui_desktop::git_inspect::GitChangeRow>,
     git_discard_armed: Option<Vec<PathBuf>>,
+    git_trash_preview: Option<Vec<GitUntrackedTrashCandidate>>,
+    git_trash_loading: bool,
+    git_trash_request: u64,
     git_sidebar_options: GitSidebarOptions,
     git_history: Option<GitHistorySnapshot>,
     git_history_open: bool,
@@ -1527,6 +1532,58 @@ impl Workbench {
         }
     }
 
+    fn confirm_trash_git_untracked(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
+        let mut paths = paths;
+        paths.sort();
+        paths.dedup();
+        if self.git_action_busy || self.git_trash_loading || paths.is_empty() || paths.len() > 80 {
+            self.git_action_status = "Select 1–80 untracked regular files for Recycle Bin".into();
+            cx.notify();
+            return;
+        }
+        if let Some(plan) = self.git_trash_preview.take() {
+            let planned = plan
+                .iter()
+                .map(|candidate| candidate.relative.clone())
+                .collect::<Vec<_>>();
+            if paths == planned {
+                self.run_git_action(GitUiAction::TrashUntracked(plan), cx);
+                return;
+            }
+        }
+        self.git_trash_request = self.git_trash_request.wrapping_add(1);
+        let request = self.git_trash_request;
+        let generation = self.workspace_generation;
+        let root = self.model.root().to_path_buf();
+        self.git_trash_loading = true;
+        cx.spawn(async move |view, cx| {
+            let result = cx.background_spawn(async move {
+                GitActions::open(&root)?.preview_untracked_trash(&paths)
+            }).await;
+            view.update(cx, |view, cx| {
+                if view.workspace_generation != generation || view.git_trash_request != request {
+                    return;
+                }
+                view.git_trash_loading = false;
+                match result {
+                    Ok(plan) => {
+                        let total = plan.iter().map(|item| item.size).sum::<u64>();
+                        view.git_action_status = format!(
+                            "Move {} untracked file(s), {} bytes, to the OS Recycle Bin? Confirm Trash again. Original content fingerprints will be verified again.",
+                            plan.len(), total);
+                        view.git_trash_preview = Some(plan);
+                    }
+                    Err(error) => {
+                        view.git_trash_preview = None;
+                        view.git_action_status = format!("Trash preview refused: {error}");
+                    }
+                }
+                cx.notify();
+            }).ok();
+        }).detach();
+        cx.notify();
+    }
+
     fn run_git_change_menu_action(
         &mut self,
         row: alera_gpui_desktop::git_inspect::GitChangeRow,
@@ -1626,6 +1683,9 @@ impl Workbench {
             }
             GitChangeMenuAction::Unstage if row.area.can_unstage() => {
                 self.run_git_action(GitUiAction::UnstageMany(selected), cx);
+            }
+            GitChangeMenuAction::TrashUntracked if row.area == GitChangeArea::Untracked => {
+                self.confirm_trash_git_untracked(selected, cx);
             }
             GitChangeMenuAction::Discard
                 if row.area == alera_gpui_desktop::git_inspect::GitChangeArea::Changes =>
@@ -2143,6 +2203,7 @@ impl Workbench {
         &mut self,
         oid: String,
         kind: GitCommitApplyKind,
+        mainline: u32,
         cx: &mut Context<Self>,
     ) {
         if self.git_action_busy
@@ -2179,7 +2240,7 @@ impl Workbench {
             let result = cx
                 .background_spawn(async move {
                     let git = GitActions::open(&root)?;
-                    git.preview_commit_apply(&oid, kind)
+                    git.preview_commit_apply_with_mainline(&oid, kind, mainline)
                 })
                 .await;
             view.update(cx, |view, cx| {
@@ -2600,6 +2661,8 @@ impl Workbench {
                         GitUiAction::DiscardTracked(paths) => git
                             .discard_unstaged_tracked(&paths)
                             .map(|count| format!("Restored {count} tracked file(s) from index; staged changes preserved")),
+                        GitUiAction::TrashUntracked(plan) => git.apply_untracked_trash(&plan)
+                            .map(|count| format!("Moved {count} untracked file(s) to OS Trash / Recycle Bin")),
                         GitUiAction::Commit(message) => {
                             git.commit(&message).map(|id| format!("Committed {id}"))
                         }
@@ -3829,6 +3892,9 @@ impl Workbench {
         self.git_selected_changes.clear();
         self.git_selection_anchor = None;
         self.git_discard_armed = None;
+        self.git_trash_preview = None;
+        self.git_trash_loading = false;
+        self.git_trash_request = self.git_trash_request.wrapping_add(1);
         self.git_sidebar_options.collapsed_sections.clear();
         self.git_sidebar_options.collapsed_folders.clear();
         self.git_loading = false;
@@ -8413,7 +8479,7 @@ impl Render for Workbench {
                                                     this.preview_git_history(GitReadRequest::Commit(oid.clone()), cx);
                                                 }))
                                                 .context_menu(Self::kit_git_graph_commit_menu(
-                                                    cx.entity().downgrade(), menu_oid, menu_subject,
+                                                    cx.entity().downgrade(), menu_oid, menu_subject, row.parents,
                                                 ))
                                         })))
                                     .into_any_element()
@@ -10530,6 +10596,9 @@ fn main() {
                             git_selected_changes: HashSet::new(),
                             git_selection_anchor: None,
                             git_discard_armed: None,
+                            git_trash_preview: None,
+                            git_trash_loading: false,
+                            git_trash_request: 0,
                             git_sidebar_options: GitSidebarOptions::default(),
                             git_history: None,
                             git_history_open: false,

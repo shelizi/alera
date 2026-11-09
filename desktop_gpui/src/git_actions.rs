@@ -71,6 +71,8 @@ impl GitCommitApplyKind {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GitCommitApplyPreview {
     pub kind: GitCommitApplyKind,
+    /// Zero for ordinary single-parent commits; 1 or 2 selects merge mainline.
+    pub mainline: u32,
     pub source_oid: String,
     pub source_subject: String,
     pub current_branch: String,
@@ -87,6 +89,93 @@ pub struct GitAmendPreview {
     pub staged_tree_oid: String,
     pub current_message: String,
     pub replacement_message: String,
+}
+
+/// An explicitly selected untracked regular file's immutable content check.
+/// Revalidate every item before any OS recycle-bin operation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GitUntrackedTrashCandidate {
+    pub relative: PathBuf,
+    pub size: u64,
+    pub blob_oid: String,
+}
+
+const MAX_TRASH_FILES: usize = 80;
+const MAX_TRASH_BYTES: u64 = 32 * 1024 * 1024;
+
+/// Delegate to the platform trash/recycle bin. Never fall back to permanent
+/// deletion if the trash provider is missing or refuses the operation.
+fn send_file_to_os_trash(path: &Path) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::ffi::c_void;
+        use std::os::windows::ffi::OsStrExt;
+        #[repr(C)]
+        struct FileOperation {
+            hwnd: isize,
+            function: u32,
+            from: *const u16,
+            to: *const u16,
+            flags: u16,
+            aborted: i32,
+            name_mappings: *mut c_void,
+            progress_title: *const u16,
+        }
+        #[link(name = "shell32")]
+        unsafe extern "system" {
+            fn SHFileOperationW(operation: *mut FileOperation) -> i32;
+        }
+        let names: Vec<u16> = path.as_os_str().encode_wide().chain([0, 0]).collect();
+        let mut operation = FileOperation {
+            hwnd: 0,
+            function: 3, // FO_DELETE, with FOF_ALLOWUNDO -> recycle bin
+            from: names.as_ptr(),
+            to: std::ptr::null(),
+            flags: 0x0040 | 0x0010 | 0x0400, // ALLOWUNDO, NOCONFIRMATION, NOERRORUI
+            aborted: 0,
+            name_mappings: std::ptr::null_mut(),
+            progress_title: std::ptr::null(),
+        };
+        let result = unsafe { SHFileOperationW(&mut operation) };
+        if result != 0 || operation.aborted != 0 {
+            return Err(format!(
+                "Windows Recycle Bin refused operation (code {result}, aborted {})",
+                operation.aborted
+            ));
+        }
+        Ok(())
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let output = std::process::Command::new("osascript")
+            .args([
+                "-e",
+                "on run argv",
+                "-e",
+                "tell application \"Finder\" to delete (POSIX file (item 1 of argv))",
+                "-e",
+                "end run",
+            ])
+            .arg(path)
+            .output()
+            .map_err(|e| e.to_string())?;
+        if !output.status.success() {
+            return Err("macOS Finder refused to move file to Trash".into());
+        }
+        Ok(())
+    }
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    {
+        let output = std::process::Command::new("gio")
+            .arg("trash")
+            .arg(path)
+            .output()
+            .map_err(|e| format!("GIO Trash unavailable: {e}"))?;
+        if !output.status.success() {
+            return Err("Linux Trash provider refused file; nothing permanently deleted".into());
+        }
+        Ok(())
+    }
 }
 
 pub struct GitActions {
@@ -708,6 +797,99 @@ impl GitActions {
         Ok(path.to_path_buf())
     }
 
+    fn validate_untracked_trash_paths(
+        &self,
+        paths: &[PathBuf],
+    ) -> Result<Vec<GitUntrackedTrashCandidate>, String> {
+        if paths.is_empty() || paths.len() > MAX_TRASH_FILES {
+            return Err("Select between 1 and 80 untracked files for Trash".into());
+        }
+        let index = self.repo.index().map_err(|e| e.to_string())?;
+        let mut unique = std::collections::BTreeSet::new();
+        for path in paths {
+            unique.insert(self.relative(path, false)?);
+        }
+        let mut selected = Vec::new();
+        let mut total = 0u64;
+        for path in unique {
+            if index.get_path(&path, 0).is_some() {
+                return Err(format!(
+                    "{} is staged/tracked; only untracked files can move to Trash",
+                    path.display()
+                ));
+            }
+            let status = self.repo.status_file(&path).map_err(|e| e.to_string())?;
+            if status != git2::Status::WT_NEW {
+                return Err(format!(
+                    "{} is not an unchanged untracked selection; refresh status",
+                    path.display()
+                ));
+            }
+            let full = self.root.join(&path);
+            let metadata = fs::symlink_metadata(&full).map_err(|e| e.to_string())?;
+            if !metadata.file_type().is_file() {
+                return Err(format!(
+                    "{} is not a regular file (symlinks and folders are refused)",
+                    path.display()
+                ));
+            }
+            total = total
+                .checked_add(metadata.len())
+                .ok_or("Trash selection exceeds size limit")?;
+            if total > MAX_TRASH_BYTES {
+                return Err("Trash preview limited to 32 MiB total; use the OS file manager for larger files".into());
+            }
+            let bytes = fs::read(&full).map_err(|e| e.to_string())?;
+            if bytes.len() as u64 != metadata.len() {
+                return Err("Untracked file changed during Trash preview".into());
+            }
+            let digest =
+                Oid::hash_object(git2::ObjectType::Blob, &bytes).map_err(|e| e.to_string())?;
+            selected.push(GitUntrackedTrashCandidate {
+                relative: path,
+                size: metadata.len(),
+                blob_oid: digest.to_string(),
+            });
+        }
+        Ok(selected)
+    }
+
+    /// Preflight only: never creates files, Git objects or recycle-bin entries.
+    pub fn preview_untracked_trash(
+        &self,
+        paths: &[PathBuf],
+    ) -> Result<Vec<GitUntrackedTrashCandidate>, String> {
+        self.validate_untracked_trash_paths(paths)
+    }
+
+    /// The full content fingerprints must be unchanged since confirmation.
+    /// Moves files into the system Trash/Recycle Bin, never deletes permanently.
+    /// If one OS move fails, earlier moves may already be in Trash.
+    pub fn apply_untracked_trash(
+        &self,
+        plan: &[GitUntrackedTrashCandidate],
+    ) -> Result<usize, String> {
+        let paths: Vec<PathBuf> = plan.iter().map(|item| item.relative.clone()).collect();
+        let fresh = self.validate_untracked_trash_paths(&paths)?;
+        if fresh != plan {
+            return Err(
+                "Untracked files changed since Trash preview; inspect and confirm again".into(),
+            );
+        }
+        for (index, entry) in fresh.iter().enumerate() {
+            // Recheck immediately before each OS call, including symlink
+            // and status changes after the batch preflight.
+            if self.validate_untracked_trash_paths(&[entry.relative.clone()])?
+                != vec![entry.clone()]
+            {
+                return Err(format!("Trash selection changed after {index} file(s) moved; remaining files untouched"));
+            }
+            send_file_to_os_trash(&self.root.join(&entry.relative))
+                .map_err(|e| format!("Trash refused after {index} successful move(s): {e}"))?;
+        }
+        Ok(fresh.len())
+    }
+
     /// Explicitly confirmed discard of tracked, unstaged working-tree edits.
     /// Restore from the current index, NEVER from HEAD: staged content must
     /// remain staged. Untracked files are not removed by this API.
@@ -998,13 +1180,21 @@ impl GitActions {
         ))
     }
 
-    /// Preview a single-parent commit against the current HEAD in memory.
-    /// Reject conflicts, empty results and all merge commits. No real index,
-    /// HEAD or worktree mutation; Git may store the proposed tree object.
+    /// Preview against HEAD in memory, with an explicit parent choice for
+    /// two-parent merges. Never change the real index, HEAD or worktree.
     pub fn preview_commit_apply(
         &self,
         sha: &str,
         kind: GitCommitApplyKind,
+    ) -> Result<GitCommitApplyPreview, String> {
+        self.preview_commit_apply_with_mainline(sha, kind, 0)
+    }
+
+    pub fn preview_commit_apply_with_mainline(
+        &self,
+        sha: &str,
+        kind: GitCommitApplyKind,
+        mainline: u32,
     ) -> Result<GitCommitApplyPreview, String> {
         self.require_clean_worktree()?;
         if sha.len() != 40 || !sha.bytes().all(|b| b.is_ascii_hexdigit()) {
@@ -1014,8 +1204,15 @@ impl GitActions {
             .repo
             .find_commit(Oid::from_str(sha).map_err(|e| e.to_string())?)
             .map_err(|_| "Selected Git commit does not exist".to_string())?;
-        if target.parent_count() != 1 {
-            return Err("Root and merge commits need explicit mainline selection; Native only handles one-parent commits".into());
+        match target.parent_count() {
+            1 if mainline == 0 => {}
+            2 if matches!(mainline, 1 | 2) => {}
+            0 => {
+                return Err("Root commits cannot be cherry-picked/reverted with a mainline".into())
+            }
+            1 => return Err("Single-parent commits must use the ordinary operation".into()),
+            2 => return Err("Select explicit merge parent 1 or 2 (mainline)".into()),
+            _ => return Err("Octopus merges are unsupported; use a dedicated Git tool".into()),
         }
         let head = self.repo.head().map_err(|e| e.to_string())?;
         if !head.is_branch() {
@@ -1027,10 +1224,12 @@ impl GitActions {
             return Err("Cannot cherry-pick the active HEAD".into());
         }
         let mut index = match kind {
-            GitCommitApplyKind::CherryPick => {
-                self.repo.cherrypick_commit(&target, &current, 0, None)
+            GitCommitApplyKind::CherryPick => self
+                .repo
+                .cherrypick_commit(&target, &current, mainline, None),
+            GitCommitApplyKind::Revert => {
+                self.repo.revert_commit(&target, &current, mainline, None)
             }
-            GitCommitApplyKind::Revert => self.repo.revert_commit(&target, &current, 0, None),
         }
         .map_err(|e| format!("Cannot calculate {}: {e}", kind.label()))?;
         if index.has_conflicts() {
@@ -1076,6 +1275,7 @@ impl GitActions {
         }
         Ok(GitCommitApplyPreview {
             kind,
+            mainline,
             source_oid: sha.to_owned(),
             source_subject: target
                 .summary()
@@ -1094,7 +1294,11 @@ impl GitActions {
     /// exact matches are applied. A late commit error leaves changes staged
     /// rather than force resetting or deleting user content.
     pub fn apply_commit_preview(&self, preview: &GitCommitApplyPreview) -> Result<String, String> {
-        let fresh = self.preview_commit_apply(&preview.source_oid, preview.kind)?;
+        let fresh = self.preview_commit_apply_with_mainline(
+            &preview.source_oid,
+            preview.kind,
+            preview.mainline,
+        )?;
         if &fresh != preview {
             return Err("Git Graph preview is stale; inspect the commit again".into());
         }
@@ -1574,6 +1778,62 @@ mod tests {
     }
 
     #[test]
+    fn trash_preview_is_read_only_and_rejects_staged_symlink_and_stale_data() {
+        let (_dir, actions) = repo_fixture();
+        let root = actions.root();
+        fs::write(root.join("new-note.txt"), "private untracked data").unwrap();
+        let plan = actions
+            .preview_untracked_trash(&[PathBuf::from("new-note.txt")])
+            .unwrap();
+        assert_eq!(plan.len(), 1);
+        assert_eq!(plan[0].size, "private untracked data".len() as u64);
+        assert_eq!(
+            fs::read_to_string(root.join("new-note.txt")).unwrap(),
+            "private untracked data"
+        );
+        assert!(actions
+            .preview_untracked_trash(&[PathBuf::from("a.txt")])
+            .is_err());
+        assert!(actions
+            .preview_untracked_trash(&[PathBuf::from("../escape")])
+            .is_err());
+        assert!(actions
+            .preview_untracked_trash(&[PathBuf::from("missing.txt")])
+            .is_err());
+        fs::write(root.join("new-note.txt"), "changed after preview").unwrap();
+        assert!(actions.apply_untracked_trash(&plan).is_err());
+        assert_eq!(
+            fs::read_to_string(root.join("new-note.txt")).unwrap(),
+            "changed after preview"
+        );
+        actions.stage_file(Path::new("new-note.txt")).unwrap();
+        assert!(actions
+            .preview_untracked_trash(&[PathBuf::from("new-note.txt")])
+            .is_err());
+        assert!(actions.apply_untracked_trash(&plan).is_err());
+        assert!(root.join("new-note.txt").exists());
+    }
+
+    #[test]
+    fn trash_preview_rejects_invalid_batch_without_touching_other_files() {
+        let (_dir, actions) = repo_fixture();
+        fs::write(actions.root().join("valid.txt"), "keep").unwrap();
+        let result =
+            actions.preview_untracked_trash(&[PathBuf::from("valid.txt"), PathBuf::from("a.txt")]);
+        assert!(result.is_err());
+        assert_eq!(
+            fs::read_to_string(actions.root().join("valid.txt")).unwrap(),
+            "keep"
+        );
+        assert!(actions
+            .repo
+            .index()
+            .unwrap()
+            .get_path(Path::new("valid.txt"), 0)
+            .is_none());
+    }
+
+    #[test]
     fn discard_restores_only_unstaged_tracked_files_and_preserves_index() {
         let (_dir, actions) = repo_fixture();
         let root = actions.root();
@@ -1772,6 +2032,71 @@ mod tests {
             actions.repo.head().unwrap().target().unwrap().to_string(),
             preview.head_oid
         );
+    }
+
+    #[test]
+    fn two_parent_merge_requires_explicit_mainline_and_keeps_head_untouched_during_preview() {
+        let (_dir, actions) = repo_fixture();
+        let repo = &actions.repo;
+        let base = repo.head().unwrap().peel_to_commit().unwrap();
+        let original = base.id();
+        let sig = git2::Signature::now("Merge Tester", "merge@example.invalid").unwrap();
+        let base_tree = base.tree().unwrap();
+        let mut builder = repo.treebuilder(Some(&base_tree)).unwrap();
+        let topic_blob = repo.blob(b"topic data\n").unwrap();
+        builder
+            .insert("topic-file.txt", topic_blob, 0o100644)
+            .unwrap();
+        let topic_tree = repo.find_tree(builder.write().unwrap()).unwrap();
+        let topic_oid = repo
+            .commit(
+                Some("refs/heads/topic"),
+                &sig,
+                &sig,
+                "topic",
+                &topic_tree,
+                &[&base],
+            )
+            .unwrap();
+        let topic = repo.find_commit(topic_oid).unwrap();
+        let merge_oid = repo
+            .commit(
+                Some("refs/heads/merge-source"),
+                &sig,
+                &sig,
+                "merge topic",
+                &topic_tree,
+                &[&base, &topic],
+            )
+            .unwrap();
+        let sha = merge_oid.to_string();
+        assert!(actions
+            .preview_commit_apply(&sha, GitCommitApplyKind::CherryPick)
+            .is_err());
+        assert!(actions
+            .preview_commit_apply_with_mainline(&sha, GitCommitApplyKind::CherryPick, 3)
+            .is_err());
+        assert!(actions
+            .preview_commit_apply_with_mainline(&sha, GitCommitApplyKind::Revert, 0)
+            .is_err());
+        let preview = actions
+            .preview_commit_apply_with_mainline(&sha, GitCommitApplyKind::CherryPick, 1)
+            .unwrap();
+        assert_eq!(preview.mainline, 1);
+        assert_eq!(repo.head().unwrap().target(), Some(original));
+        assert!(!actions.root().join("topic-file.txt").exists());
+        assert!(actions.apply_commit_preview(&preview).is_ok());
+        assert_eq!(
+            fs::read_to_string(actions.root().join("topic-file.txt")).unwrap(),
+            "topic data\n"
+        );
+        let revert = actions
+            .preview_commit_apply_with_mainline(&sha, GitCommitApplyKind::Revert, 1)
+            .unwrap();
+        assert_eq!(revert.mainline, 1);
+        assert!(actions.apply_commit_preview(&revert).is_ok());
+        assert!(!actions.root().join("topic-file.txt").exists());
+        assert!(repo.statuses(None).unwrap().is_empty());
     }
 
     #[test]
