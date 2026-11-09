@@ -1,5 +1,6 @@
 //! Bounded read-only history, commit preview and local branch comparison.
 //! All repository I/O belongs on a background worker, never in GPUI render.
+use crate::git_graph_search::GitGraphSearch;
 use git2::{BranchType, Delta, DiffFindOptions, DiffFormat, DiffOptions, Oid, Repository, Sort};
 use std::collections::HashMap;
 use std::fs;
@@ -14,6 +15,9 @@ const MAX_PATCH: usize = 24 * 1024;
 /// Path-limited graph reads are background jobs but may still traverse a
 /// large repository. Never run an unbounded full-history file scan.
 const MAX_FILTER_SCAN: usize = 2048;
+/// An opt-in text search runs only on a background worker and has a hard
+/// traversal budget even when a large repository contains no match.
+pub const MAX_HISTORY_SEARCH_SCAN: usize = 50_000;
 const MAX_RENAME_DIFF_DELTAS: usize = 512;
 
 #[derive(Debug, Clone)]
@@ -51,6 +55,8 @@ pub struct GitHistorySnapshot {
     pub tags: Vec<GitTagRow>,
     pub commits: Vec<GitCommitRow>,
     pub truncated: bool,
+    pub scanned_commits: usize,
+    pub scan_limit_reached: bool,
 }
 
 /// Native-owned Git Graph selection. Favorites belong to independent Native
@@ -68,6 +74,9 @@ pub struct GitHistoryOptions {
     /// by Native. Paths never become shell arguments or Git revspecs.
     pub file_path: Option<String>,
     pub git_diff_root: Option<String>,
+    /// Explicit background search across reachable history; ordinary typing
+    /// in the Graph box continues to filter only loaded rows.
+    pub search_query: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -280,6 +289,16 @@ impl GitHistorySnapshot {
     }
 
     pub fn load_filtered(workspace: &Path, options: &GitHistoryOptions) -> Result<Self, String> {
+        let search = options.search_query.as_deref().map(GitGraphSearch::parse);
+        if search
+            .as_ref()
+            .is_some_and(|query| !query.can_search_commits())
+        {
+            return Err(
+                "Full-history search needs a nonempty commit, author, SHA or message query".into(),
+            );
+        }
+        let search = search.filter(GitGraphSearch::can_search_commits);
         let (repo, filter) = history_repo_and_path_filter(workspace, options)?;
         let current = repo
             .head()
@@ -440,9 +459,18 @@ impl GitHistorySnapshot {
         }
         let mut commits = Vec::new();
         let mut scanned = 0usize;
+        let mut scan_limit_reached = false;
+        let scan_limit = if filter.is_some() {
+            MAX_FILTER_SCAN
+        } else if search.is_some() {
+            MAX_HISTORY_SEARCH_SCAN
+        } else {
+            usize::MAX
+        };
         for oid in walk {
-            if filter.is_some() && scanned >= MAX_FILTER_SCAN {
+            if scanned >= scan_limit {
                 truncated = true;
+                scan_limit_reached = true;
                 break;
             }
             scanned += 1;
@@ -481,6 +509,29 @@ impl GitHistorySnapshot {
                     continue;
                 }
             }
+            let labels = tips
+                .iter()
+                .filter(|(tip, _, _)| *tip == oid)
+                .take(5)
+                .map(|(_, branch, remote)| {
+                    if *remote {
+                        format!("refs/remotes/{branch}")
+                    } else {
+                        branch.clone()
+                    }
+                })
+                .collect::<Vec<_>>();
+            if let Some(query) = &search {
+                let label_refs = labels.iter().map(String::as_str).collect::<Vec<_>>();
+                if !query.commit_fields(
+                    &oid.to_string(),
+                    commit.message().unwrap_or(""),
+                    commit.author().name().unwrap_or("Unknown"),
+                    &label_refs,
+                ) {
+                    continue;
+                }
+            }
             let requested = if options.max_commits == 0 {
                 MAX_HISTORY
             } else {
@@ -500,23 +551,13 @@ impl GitHistorySnapshot {
                 author: subject(commit.author().name().unwrap_or("Unknown"), 48),
                 parents: commit.parent_count(),
                 parent_ids: commit.parent_ids().map(|id| id.to_string()).collect(),
-                labels: tips
-                    .iter()
-                    .filter(|(tip, _, _)| *tip == oid)
-                    .take(5)
-                    .map(|(_, branch, remote)| {
-                        if *remote {
-                            format!("refs/remotes/{branch}")
-                        } else {
-                            branch.clone()
-                        }
-                    })
-                    .collect(),
+                labels,
             });
         }
-        if filter
-            .as_ref()
-            .is_some_and(|filter| filter.missing_at_worktree && commits.is_empty())
+        if search.is_none()
+            && filter
+                .as_ref()
+                .is_some_and(|filter| filter.missing_at_worktree && commits.is_empty())
         {
             return Err(
                 "Git Graph deleted file has no matching history within the scan limit".into(),
@@ -528,6 +569,8 @@ impl GitHistorySnapshot {
             tags,
             commits,
             truncated,
+            scanned_commits: scanned,
+            scan_limit_reached,
         })
     }
 }
@@ -758,6 +801,70 @@ mod tests {
         assert!(!expanded.truncated);
         assert_eq!(normal.commits[0].oid, expanded.commits[0].oid);
         assert_eq!(repo.head().unwrap().target(), before);
+    }
+
+    #[test]
+    fn explicit_full_history_search_finds_old_subject_and_message_body_beyond_page_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        let sig = git2::Signature::now("Search Author", "search@example.invalid").unwrap();
+        let mut parent: Option<Oid> = None;
+        let mut expected = Vec::new();
+        for n in 0..530 {
+            fs::write(dir.path().join("history.txt"), format!("{n}\n")).unwrap();
+            let mut index = repo.index().unwrap();
+            index.add_path(Path::new("history.txt")).unwrap();
+            let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+            let parents = parent
+                .map(|oid| vec![repo.find_commit(oid).unwrap()])
+                .unwrap_or_default();
+            let message = match n {
+                0 => "ancient-needle in first subject",
+                1 => "second commit\n\nancient-needle hidden in body",
+                _ => "ordinary revision",
+            };
+            let oid = repo
+                .commit(
+                    Some("HEAD"),
+                    &sig,
+                    &sig,
+                    message,
+                    &tree,
+                    &parents.iter().collect::<Vec<_>>(),
+                )
+                .unwrap();
+            if n < 2 {
+                expected.push(oid.to_string());
+            }
+            parent = Some(oid);
+        }
+        let head_before = repo.head().unwrap().target();
+        let default = GitHistorySnapshot::load(dir.path()).unwrap();
+        assert_eq!(default.commits.len(), MAX_HISTORY);
+        let found = GitHistorySnapshot::load_filtered(
+            dir.path(),
+            &GitHistoryOptions {
+                search_query: Some("message:ancient-needle".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(found.commits.len(), 2);
+        assert!(expected
+            .iter()
+            .all(|oid| found.commits.iter().any(|row| &row.oid == oid)));
+        assert_eq!(found.scanned_commits, 530);
+        assert!(!found.scan_limit_reached);
+        assert!(!found.truncated);
+        assert_eq!(repo.head().unwrap().target(), head_before);
+        assert!(GitHistorySnapshot::load_filtered(
+            dir.path(),
+            &GitHistoryOptions {
+                search_query: Some("branch:".into()),
+                ..Default::default()
+            },
+        )
+        .is_err());
     }
 
     #[test]

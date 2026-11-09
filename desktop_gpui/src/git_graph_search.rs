@@ -88,6 +88,16 @@ impl GitGraphSearch {
         self.scope != GitGraphSearchScope::All || !self.terms.is_empty()
     }
 
+    /// A repository-wide scan must have a real commit predicate. Ref-only
+    /// filters and empty prefixes belong to the already bounded ref list.
+    pub fn can_search_commits(&self) -> bool {
+        !self.terms.is_empty()
+            && !matches!(
+                self.scope,
+                GitGraphSearchScope::Branch | GitGraphSearchScope::Tag
+            )
+    }
+
     fn contains_all(&self, fields: &[&str]) -> bool {
         self.terms.iter().all(|term| {
             fields
@@ -121,19 +131,21 @@ impl GitGraphSearch {
     }
 
     pub fn commit(&self, row: &GitCommitRow) -> bool {
+        let labels = row.labels.iter().map(String::as_str).collect::<Vec<_>>();
+        self.commit_fields(&row.oid, &row.subject, &row.author, &labels)
+    }
+
+    /// Search the original Git message/author before shorter display strings
+    /// are built. This also finds terms in commit message bodies.
+    pub fn commit_fields(&self, oid: &str, message: &str, author: &str, labels: &[&str]) -> bool {
         match self.scope {
             GitGraphSearchScope::Branch | GitGraphSearchScope::Tag => false,
-            GitGraphSearchScope::Author => self.contains_all(&[&row.author]),
-            GitGraphSearchScope::Sha => self.contains_all(&[&row.oid, &row.short]),
-            GitGraphSearchScope::Message => self.contains_all(&[&row.subject]),
+            GitGraphSearchScope::Author => self.contains_all(&[author]),
+            GitGraphSearchScope::Sha => self.contains_all(&[oid]),
+            GitGraphSearchScope::Message => self.contains_all(&[message]),
             GitGraphSearchScope::All | GitGraphSearchScope::Commit => {
-                let mut fields = vec![
-                    row.oid.as_str(),
-                    row.short.as_str(),
-                    row.subject.as_str(),
-                    row.author.as_str(),
-                ];
-                fields.extend(row.labels.iter().map(String::as_str));
+                let mut fields = vec![oid, message, author];
+                fields.extend_from_slice(labels);
                 self.contains_all(&fields)
             }
         }
@@ -240,5 +252,26 @@ mod tests {
         assert!(GitGraphSearch::parse("tag:").tag(&tag()));
         assert!(!GitGraphSearch::parse("tag:").commit(&commit()));
         assert!(GitGraphSearch::parse("branch:").branch(&branch()));
+    }
+
+    #[test]
+    fn full_history_requires_nonempty_commit_terms_and_checks_full_message() {
+        assert!(!GitGraphSearch::parse("  ").can_search_commits());
+        assert!(!GitGraphSearch::parse("branch:feature").can_search_commits());
+        assert!(!GitGraphSearch::parse("tag:v1").can_search_commits());
+        assert!(!GitGraphSearch::parse("author:").can_search_commits());
+        assert!(GitGraphSearch::parse("author:alice").can_search_commits());
+        assert!(GitGraphSearch::parse("message:rare token").commit_fields(
+            "1234567890abcdef",
+            "Short subject\n\nA rare token is only in the body",
+            "Bob",
+            &[],
+        ));
+        assert!(!GitGraphSearch::parse("message:bob").commit_fields(
+            "1234567890abcdef",
+            "Short subject",
+            "Bob",
+            &[]
+        ));
     }
 }

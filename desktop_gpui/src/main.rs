@@ -1883,6 +1883,32 @@ impl Workbench {
         self.refresh_git_history(cx);
     }
 
+    fn search_all_git_history(&mut self, cx: &mut Context<Self>) {
+        let input = self.git_graph_search_input.read(cx);
+        if input.composing() {
+            self.git_action_status = "Finish IME composition before searching Git history".into();
+            cx.notify();
+            return;
+        }
+        let query = input.query().trim().to_owned();
+        if query.len() > 512 || !GitGraphSearch::parse(&query).can_search_commits() {
+            self.git_action_status =
+                "Enter commit, author:, sha: or message: terms for full-history search".into();
+            cx.notify();
+            return;
+        }
+        self.git_history_options.search_query = Some(query);
+        self.git_history_options.max_commits = 0;
+        self.refresh_git_history(cx);
+    }
+
+    fn exit_git_history_search(&mut self, cx: &mut Context<Self>) {
+        if self.git_history_options.search_query.take().is_some() {
+            self.git_history_options.max_commits = 0;
+            self.refresh_git_history(cx);
+        }
+    }
+
     fn select_git_graph_ref_tab(&mut self, tab: GitGraphRefTab, cx: &mut Context<Self>) {
         if self.git_graph_ref_tab == tab {
             return;
@@ -7450,30 +7476,69 @@ impl Render for Workbench {
         let git_graph_selected_ref = self.git_history_options.selected_ref.clone();
         let git_graph_file = self.git_history_options.file_path.clone();
         let git_graph_scope = self.git_history_options.git_diff_root.clone();
+        let git_graph_full_search = self.git_history_options.search_query.clone();
+        let git_graph_full_search_active = git_graph_full_search.is_some();
+        let git_graph_search_input = self.git_graph_search_input.clone();
+        let git_graph_current_query = self
+            .git_graph_search_input
+            .read(cx)
+            .query()
+            .trim()
+            .to_owned();
+        let git_graph_search_pending = git_graph_full_search
+            .as_ref()
+            .is_some_and(|query| query != &git_graph_current_query);
         let git_branch_compare = self.git_branch_comparison.clone();
         let git_branch_compare_loading = self.git_branch_compare_loading;
         let git_history_more_available = !self.git_history_loading
             && self
                 .git_history
                 .as_ref()
-                .is_some_and(|history| history.truncated)
+                .is_some_and(|history| history.truncated && !history.scan_limit_reached)
             && self.git_history_options.max_commits.max(HISTORY_PAGE_STEP) < MAX_HISTORY_PAGE;
         let git_history_status = if self.git_history_loading {
-            "Loading commit graph…".to_owned()
+            if git_graph_full_search_active {
+                "Searching reachable Git history in background…".to_owned()
+            } else {
+                "Loading commit graph…".to_owned()
+            }
         } else if let Some(history) = &self.git_history {
-            format!(
-                "{} branch(es), {} commit(s){}",
-                history.branches.len(),
-                history.commits.len(),
-                if history.truncated { " (limited)" } else { "" }
-            )
+            if git_graph_full_search_active {
+                format!(
+                    "{} result(s) · {} commits scanned{}{}",
+                    history.commits.len(),
+                    history.scanned_commits,
+                    if history.scan_limit_reached {
+                        " (scan limit reached)"
+                    } else if history.truncated {
+                        " (more matches available)"
+                    } else {
+                        ""
+                    },
+                    if git_graph_search_pending {
+                        " · query changed, search again"
+                    } else {
+                        ""
+                    },
+                )
+            } else {
+                format!(
+                    "{} branch(es), {} commit(s){}",
+                    history.branches.len(),
+                    history.commits.len(),
+                    if history.truncated { " (limited)" } else { "" }
+                )
+            }
         } else {
             self.git_history_error
                 .clone()
                 .unwrap_or_else(|| "Open Git Graph to load history".into())
         };
-        let git_graph_search_input = self.git_graph_search_input.clone();
-        let graph_query = GitGraphSearch::parse(self.git_graph_search_input.read(cx).query());
+        let graph_query = GitGraphSearch::parse(
+            git_graph_full_search
+                .as_deref()
+                .unwrap_or(&git_graph_current_query),
+        );
         let git_branch_rows = self
             .git_history
             .as_ref()
@@ -7500,33 +7565,51 @@ impl Render for Workbench {
             .unwrap_or_default();
         let git_ref_results_empty =
             self.git_history.is_some() && git_branch_rows.is_empty() && git_tag_rows.is_empty();
-        let git_commit_rows = self
-            .git_history
-            .as_ref()
-            .map(|history| history.commits.clone())
-            .unwrap_or_default();
-        let git_graph_topology = layout_git_graph(
-            &git_commit_rows
-                .iter()
-                .map(|commit| GraphCommit {
-                    oid: commit.oid.clone(),
-                    parents: commit.parent_ids.clone(),
-                })
-                .collect::<Vec<_>>(),
-        );
-        let git_graph_topology_note = git_graph_topology.as_ref().err().map(|error| {
-            format!(
-                "Topology unavailable: {} · showing commit list",
-                error.message()
+        let git_commit_rows = if self.git_history_loading && git_graph_full_search_active {
+            Vec::new()
+        } else {
+            self.git_history
+                .as_ref()
+                .map(|history| history.commits.clone())
+                .unwrap_or_default()
+        };
+        // A sparse historical search is not a contiguous Git Graph. Drawing
+        // rails through missing commits would imply nonexistent edges.
+        let git_graph_topology = (!git_graph_full_search_active).then(|| {
+            layout_git_graph(
+                &git_commit_rows
+                    .iter()
+                    .map(|commit| GraphCommit {
+                        oid: commit.oid.clone(),
+                        parents: commit.parent_ids.clone(),
+                    })
+                    .collect::<Vec<_>>(),
             )
         });
-        let git_graph_topology_rows = git_graph_topology.ok().map(|layout| layout.rows);
+        let git_graph_topology_note = if git_graph_full_search_active {
+            Some("Search results omit graph rails between skipped commits".to_owned())
+        } else {
+            git_graph_topology
+                .as_ref()
+                .and_then(|graph| graph.as_ref().err())
+                .map(|error| {
+                    format!(
+                        "Topology unavailable: {} · showing commit list",
+                        error.message()
+                    )
+                })
+        };
+        let git_graph_topology_rows = git_graph_topology
+            .and_then(Result::ok)
+            .map(|layout| layout.rows);
         // Build topology on the full bounded graph before filtering. Filtering
         // first would invent edges/lanes between unrelated commits.
         let git_commit_rows = git_commit_rows
             .into_iter()
             .enumerate()
-            .filter(|(_, row)| graph_query.commit(row))
+            // Background search already matched the entire message body and
+            // untruncated author. Do not refilter the shortened display row.
+            .filter(|(_, row)| git_graph_full_search_active || graph_query.commit(row))
             .collect::<Vec<_>>();
         let git_merge_armed = self.git_merge_armed.is_some();
         let git_conflict_armed = self.git_conflict_confirm_armed;
@@ -8233,11 +8316,27 @@ impl Render for Workbench {
                                     .child(div().text_xs().text_color(rgb(MUTED)).child(git_history_status))
                                     .child(div().flex().items_center().gap_1()
                                         .child(div().flex_1().min_w_0().child(git_graph_search_input))
+                                        .child(icon_button("git-graph-search-all", UiIcon::Search,
+                                            "Search reachable Git history in background (up to 50,000 commits; path scopes remain limited)", false)
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.search_all_git_history(cx);
+                                            })))
+                                        .when(git_graph_full_search_active, |row| row.child(
+                                            icon_button("git-graph-exit-full-search", UiIcon::History,
+                                                "Return to paged Git Graph", false)
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.exit_git_history_search(cx);
+                                                }))
+                                        ))
                                         .child(icon_button("git-graph-clear-search", UiIcon::Close,
                                             "Clear Git Graph search", false)
                                             .on_click(cx.listener(|this, _, _, cx| {
                                                 this.git_graph_search_input.update(cx, |input, cx| input.clear(cx));
-                                                cx.notify();
+                                                if this.git_history_options.search_query.is_some() {
+                                                    this.exit_git_history_search(cx);
+                                                } else {
+                                                    cx.notify();
+                                                }
                                             }))))
                                     .when_some(git_worktree_commit_target, |panel, oid| panel.child(
                                         div().flex().flex_col().gap_1()
@@ -8534,7 +8633,11 @@ impl Render for Workbench {
                                     })
                                     .child(div().flex().items_center().gap_2()
                                         .child(div().flex_1().text_xs().text_color(rgb(TEXT))
-                                            .child("Commits · graph lanes represent actual parent commits"))
+                                            .child(if git_graph_full_search_active {
+                                                "Commit matches · parent rails hidden across skipped history"
+                                            } else {
+                                                "Commits · graph lanes represent actual parent commits"
+                                            }))
                                         .when(git_history_more_available, |row| row.child(
                                             icon_button("git-graph-load-more", UiIcon::Add,
                                                 "Load 96 more commits (bounded maximum 512)", false)
