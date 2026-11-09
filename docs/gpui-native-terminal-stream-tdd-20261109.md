@@ -291,3 +291,7 @@ Validation on Windows: new quick_open_ui::tests::terminal_rejects_delayed_ime_af
 新增兩項純測試（含同座標不位移、物理 API 失敗、邏輯 API 失敗、非 Windows 拒絕）：`python -m unittest discover -s desktop_gpui/tests -p test_terminal_load_probes.py -v` **17/17 PASS**。實際工作階段預檢如預期回報 `SetCursorPos failed (win32=0)` 並在 Host 啟動前退出，屬預檢成功攔截、**不是**注音功能測試 PASS。未開啟該 opt-in 的既有隔離 Host/CLI/Native UTF-8 Smoke 再次 **12/12 PASS**，包括 CJK/Emoji 34 bytes 與第二 PTY 未污染；因此沒有回歸一般串流。後續需先恢復可用的 Windows 互動桌面，再執行 Primary → Secondary → Explorer 多輪注音、晚到 Commit 防污染、真正 UTF-8 文字 Commit 及 Release 同機 p50/p95。
 
 保持 `supported=false`，不合併 main、不推送、不發布；保留 `.gpui-smoke-20261108/`，不碰 Classic 或正式 Host。
+
+### 輸入桌面與 Session 診斷補充
+
+同一工具執行程序的 Windows Session 為 1，系統回報 active console Session 也為 1；`GetThreadDesktop` 與 `OpenInputDesktop` 讀到的桌面名稱均為 `Default`。以唯讀開啟查詢驗證 `WinSta0` 的 `WINSTA_WRITEATTRIBUTES`、`WINSTA_READATTRIBUTES`，以及目前輸入桌面的 `DESKTOP_READOBJECTS`、`DESKTOP_WRITEOBJECTS`、`DESKTOP_SWITCHDESKTOP` 均可取得控制代碼。這排除明顯的錯誤 Session / 桌面名稱及簡單的控制代碼開啟權限問題，但**不能證明桌面可接受游標移動**：同一 Session 下的 `SetCursorPos` 與 `SetPhysicalCursorPos` 仍失敗。Win32 `GetLastError` 可能為前次呼叫殘值，不據此推定根因。不繞過桌面輸入限制；真正 IME 候選窗跨窗格與晚到 Commit 仍列未驗收，`supported=false`。
