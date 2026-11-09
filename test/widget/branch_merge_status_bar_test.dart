@@ -1,4 +1,6 @@
 import 'package:alera/src/features/shell/presentation/alera_shell_page.dart';
+import 'package:alera/src/features/workbench/application/workbench_controller.dart';
+import 'package:alera/src/features/workbench/application/workbench_state.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/domain/workspace_source_control_scope.dart';
 import 'package:alera/src/shared/infra/git/git_providers.dart';
@@ -10,6 +12,97 @@ import 'package:flutter_test/flutter_test.dart';
 import '../unit/fake_git_backend.dart';
 
 void main() {
+  testWidgets(
+    'right-click existing branch navigates to Worktree without checkout',
+    (tester) async {
+      final git = FakeGitBackend()
+        ..sourceBranches = <String>['main', 'feature/existing']
+        ..headBranch = 'main'
+        ..currentBranchesByPath['/repo'] = 'main';
+      final now = DateTime.utc(2026, 11, 9);
+      final main = Workspace(
+        id: 'main-workspace',
+        projectId: 'project-id',
+        name: 'Main',
+        path: '/repo',
+        branch: 'main',
+        kind: .main,
+        status: .active,
+        createdAt: now,
+        updatedAt: now,
+      );
+      final linked = main.copyWith(
+        id: 'linked-workspace',
+        name: 'Existing Worktree',
+        kind: WorkspaceKind.linked,
+        branch: 'feature/existing',
+        path: '/repo-linked',
+      );
+      final workbench = WorkbenchState(
+        workspacesByProject: <String, List<Workspace>>{
+          'project-id': <Workspace>[main, linked],
+        },
+        activeWorkspaceId: main.id,
+      );
+      final requestedBranches = <String>[];
+      var navigated = false;
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            gitBackendProvider.overrideWithValue(git),
+            workbenchControllerProvider.overrideWithValue(workbench),
+          ],
+          child: MaterialApp(
+            home: Scaffold(
+              body: StatefulBuilder(
+                builder: (context, update) => navigated
+                    ? const SizedBox.shrink()
+                    : Align(
+                        alignment: Alignment.bottomRight,
+                        child: WorkspaceBranchStatusBarControl(
+                          workspace: main,
+                          sourceControlScope: WorkspaceSourceControlScope(
+                            workspaceId: main.id,
+                            workspacePath: main.path,
+                            path: main.path,
+                          ),
+                          onSwitchBranch: (branch) async {
+                            requestedBranches.add(branch);
+                            update(() => navigated = true);
+                          },
+                        ),
+                      ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('workspace-branch-status')));
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const ValueKey('workspace-branch-option:feature/existing')),
+        buttons: kSecondaryMouseButton,
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Switch to Worktree'), findsOneWidget);
+      expect(find.text('Switch to Branch'), findsNothing);
+      await tester.tap(
+        find.byKey(const ValueKey('workspace-branch-switch:feature/existing')),
+      );
+      await tester.pumpAndSettle();
+      expect(requestedBranches, <String>['feature/existing']);
+      expect(
+        find.byKey(const ValueKey('workspace-branch-status')),
+        findsNothing,
+      );
+      expect(
+        git.calls.where((call) => call.method == 'checkoutBranch'),
+        isEmpty,
+      );
+    },
+  );
+
   testWidgets('right-click rename updates the selected local branch in place', (
     tester,
   ) async {

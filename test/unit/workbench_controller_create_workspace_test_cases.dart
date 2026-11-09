@@ -105,6 +105,65 @@ void _registerWorkbenchControllerCreateWorkspaceTests() {
   });
 
   test(
+    'branch navigation preserves existing Editor and Terminal tabs',
+    () async {
+      await _controller.bootstrap();
+      final main = await _selectMainWorkspace(_controller, _harness);
+      final linked = (await _controller.createWorkspace(
+        project: _harness.project,
+        sourceBranch: 'main',
+        newBranchName: 'feature/keep-tabs',
+      )).workspace;
+      await _flush();
+
+      final editor = await _controller.openEditorTab(
+        workspace: linked,
+        relativePath: 'docs/keep-open.md',
+      );
+      await _flush();
+      final originalTabs = _controller.state.tabsFor(linked.id);
+      final originalTerminalIds = originalTabs
+          .where((tab) => tab.kind == WorkspaceTabKind.terminal)
+          .map((tab) => tab.id)
+          .toList();
+      expect(originalTerminalIds, isNotEmpty);
+      expect(originalTabs.map((tab) => tab.id), contains(editor.id));
+
+      await _controller.selectWorkspace(
+        project: _harness.project,
+        workspace: main,
+      );
+      final result = await _controller.switchBranchOrSelectWorktree(
+        project: _harness.project,
+        workspace: main,
+        branch: 'feature/keep-tabs',
+      );
+
+      expect(result, BranchWorkspaceNavigationResult.selectedWorktree);
+      expect(_controller.state.activeWorkspaceId, linked.id);
+      final restoredTabs = _controller.state.tabsFor(linked.id);
+      expect(
+        restoredTabs.map((tab) => tab.id).toSet(),
+        originalTabs.map((tab) => tab.id).toSet(),
+        reason: 'Navigating should neither discard tabs nor add duplicates',
+      );
+      expect(restoredTabs.map((tab) => tab.id), contains(editor.id));
+      expect(
+        restoredTabs
+            .where((tab) => tab.kind == WorkspaceTabKind.terminal)
+            .map((tab) => tab.id),
+        containsAll(originalTerminalIds),
+      );
+      expect(
+        _harness.gitBackend.calls.where(
+          (call) => call.method == 'checkoutBranch',
+        ),
+        isEmpty,
+      );
+    },
+  );
+
+  test(
     'createWorkspace surfaces service failures in state and rethrows',
     () async {
       _harness.gitBackend.failingWorktreeAddBranches.add('feature/broken');
