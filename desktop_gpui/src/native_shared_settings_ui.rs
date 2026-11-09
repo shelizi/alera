@@ -115,10 +115,19 @@ impl Workbench {
     ) -> std::io::Result<()> {
         let mut settings = self.native_settings.clone();
         let language = settings.apply_shared_snapshot(snapshot)?;
+        let values = snapshot["values"].as_object().ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, "Shared values missing")
+        })?;
+        let extended = values
+            .iter()
+            .filter(|(path, _)| alera_core::desktop_settings_contract::extended_portable(path))
+            .map(|(path, value)| (path.clone(), value.clone()))
+            .collect();
         if self.agent_selected_profile.is_none() {
             self.agent_selected_profile = settings.default_agent_profile_id.clone();
         }
         self.settings_menu_language = language;
+        self.settings_extra_values = extended;
         self.settings_menu_locale = UiLocale::from_preference(&self.settings_menu_language);
         let locale = self.settings_menu_locale;
         self.settings_menu_search.update(cx, |search, cx| {
@@ -221,6 +230,12 @@ impl Workbench {
         value: serde_json::Value,
         cx: &mut Context<Self>,
     ) {
+        if !self.settings_native_profile_migrated {
+            self.model
+                .set_status("Load Rust Host settings before editing");
+            cx.notify();
+            return;
+        }
         if self.settings_shared_busy {
             self.model
                 .set_status("Settings are updating; retry after the current operation");
@@ -235,6 +250,22 @@ impl Workbench {
         };
         let expected = if path == "general.language" {
             serde_json::json!(self.settings_menu_language)
+        } else if alera_core::desktop_settings_contract::extended_portable(path) {
+            if !alera_core::desktop_settings_contract::valid_extended_portable(path, &value) {
+                self.model
+                    .set_status("Invalid shared portable settings value");
+                cx.notify();
+                return;
+            }
+            match self.settings_extra_values.get(path) {
+                Some(value) => value.clone(),
+                None => {
+                    self.model
+                        .set_status("Load shared Rust settings before editing");
+                    cx.notify();
+                    return;
+                }
+            }
         } else {
             match self.native_settings.get(path) {
                 Some(value) => value,

@@ -108,6 +108,13 @@ impl NativeSettings {
                         "Invalid shared Host default Agent Profile ID",
                     ));
                 }
+            } else if alera_core::desktop_settings_contract::extended_portable(path) {
+                if !alera_core::desktop_settings_contract::valid_extended_portable(path, value) {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "Invalid shared portable setting",
+                    ));
+                }
             } else if !Self::valid_value(path, value) {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
@@ -496,7 +503,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn shared_host_snapshot_updates_all_twelve_fields_without_erasing_native_only_data() {
+    fn shared_host_snapshot_validates_all_twenty_eight_fields_without_erasing_native_only_data() {
         let mut state = NativeSettings::default();
         state.explorer_show_ignored = true;
         state.default_agent_profile_id = Some("managed_codex".to_owned());
@@ -512,7 +519,23 @@ mod tests {
             "general.autoArchiveWorkspacesAfterDays":60,
             "agents.defaultAgentProfileId":"host_codex",
             "explorer.showHiddenFiles":true,
-            "explorer.showIgnoredFiles":false
+            "explorer.showIgnoredFiles":false,
+            "general.showTrayIcon":true,
+            "general.showDockBadge":true,
+            "general.showTrayBadge":false,
+            "terminal.fontFamily":"JetBrains Mono",
+            "terminal.lineHeight":1.5,
+            "terminal.cursorShape":"bar",
+            "terminal.cursorBlink":true,
+            "terminal.themeName":"Dracula",
+            "terminal.backgroundOpacity":0.8,
+            "terminal.tuiScrollSensitivity":2,
+            "terminal.clipboardOnSelect":true,
+            "editor.themeName":"Tokyo Night Dark",
+            "editor.autosaveDelaySeconds":7,
+            "agents.agentStatusNotificationsEnabled":true,
+            "agents.agentStatusFinishedNotificationsEnabled":false,
+            "agents.showTabTitlesInSidebar":true
         }});
         assert_eq!(
             state.apply_shared_snapshot(&snapshot).unwrap(),
@@ -531,6 +554,13 @@ mod tests {
             Some("host_codex")
         );
         let previous = state.clone();
+        let mut invalid_extended = snapshot.clone();
+        invalid_extended["values"]["terminal.cursorShape"] = json!("unexpected");
+        assert!(state.apply_shared_snapshot(&invalid_extended).is_err());
+        assert_eq!(
+            state, previous,
+            "Invalid extended settings must not partially install"
+        );
         assert!(state
             .apply_shared_snapshot(&json!({"values":{
                 "general.language":"japanese",

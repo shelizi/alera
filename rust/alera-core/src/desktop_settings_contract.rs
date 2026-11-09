@@ -2,7 +2,7 @@
 //! This contract is intentionally free of the runtime/sqlite feature so the
 //! Native frontend, CLI and Host can all depend on one Rust Core vocabulary.
 //! Adding a path requires a Rust owner/validator and Classic migration test.
-pub const SHARED_DESKTOP_PATHS: [&str; 12] = [
+pub const SHARED_DESKTOP_PATHS: [&str; 28] = [
     "general.language",
     "general.autoGitFetchEnabled",
     "general.autoGitFetchIntervalMinutes",
@@ -15,11 +15,27 @@ pub const SHARED_DESKTOP_PATHS: [&str; 12] = [
     "agents.defaultAgentProfileId",
     "explorer.showHiddenFiles",
     "explorer.showIgnoredFiles",
+    "general.showTrayIcon",
+    "general.showDockBadge",
+    "general.showTrayBadge",
+    "terminal.fontFamily",
+    "terminal.lineHeight",
+    "terminal.cursorShape",
+    "terminal.cursorBlink",
+    "terminal.themeName",
+    "terminal.backgroundOpacity",
+    "terminal.tuiScrollSensitivity",
+    "terminal.clipboardOnSelect",
+    "editor.themeName",
+    "editor.autosaveDelaySeconds",
+    "agents.agentStatusNotificationsEnabled",
+    "agents.agentStatusFinishedNotificationsEnabled",
+    "agents.showTabTitlesInSidebar",
 ];
 
 /// CLI/Agent-facing writes stay narrower than owner-backed Classic Settings.
 /// An Agent cannot silently disable destructive confirmation switches.
-pub const CLI_WRITABLE_PATHS: [&str; 9] = [
+pub const CLI_WRITABLE_PATHS: [&str; 25] = [
     "general.language",
     "general.autoGitFetchEnabled",
     "general.autoGitFetchIntervalMinutes",
@@ -29,7 +45,77 @@ pub const CLI_WRITABLE_PATHS: [&str; 9] = [
     "agents.defaultAgentProfileId",
     "explorer.showHiddenFiles",
     "explorer.showIgnoredFiles",
+    "general.showTrayIcon",
+    "general.showDockBadge",
+    "general.showTrayBadge",
+    "terminal.fontFamily",
+    "terminal.lineHeight",
+    "terminal.cursorShape",
+    "terminal.cursorBlink",
+    "terminal.themeName",
+    "terminal.backgroundOpacity",
+    "terminal.tuiScrollSensitivity",
+    "terminal.clipboardOnSelect",
+    "editor.themeName",
+    "editor.autosaveDelaySeconds",
+    "agents.agentStatusNotificationsEnabled",
+    "agents.agentStatusFinishedNotificationsEnabled",
+    "agents.showTabTitlesInSidebar",
 ];
+
+/// Already-Classic-portable, reviewed non-secret UI fields.
+pub fn extended_portable(path: &str) -> bool {
+    matches!(
+        path,
+        "general.showTrayIcon"
+            | "general.showDockBadge"
+            | "general.showTrayBadge"
+            | "terminal.fontFamily"
+            | "terminal.lineHeight"
+            | "terminal.cursorShape"
+            | "terminal.cursorBlink"
+            | "terminal.themeName"
+            | "terminal.backgroundOpacity"
+            | "terminal.tuiScrollSensitivity"
+            | "terminal.clipboardOnSelect"
+            | "editor.themeName"
+            | "editor.autosaveDelaySeconds"
+            | "agents.agentStatusNotificationsEnabled"
+            | "agents.agentStatusFinishedNotificationsEnabled"
+            | "agents.showTabTitlesInSidebar"
+    )
+}
+
+/// Readback contract is available to Native even without the SQLite runtime.
+pub fn valid_extended_portable(path: &str, value: &serde_json::Value) -> bool {
+    match path {
+        "general.showTrayIcon"
+        | "general.showDockBadge"
+        | "general.showTrayBadge"
+        | "terminal.cursorBlink"
+        | "terminal.clipboardOnSelect"
+        | "agents.agentStatusNotificationsEnabled"
+        | "agents.agentStatusFinishedNotificationsEnabled"
+        | "agents.showTabTitlesInSidebar" => value.is_boolean(),
+        "terminal.lineHeight" => value
+            .as_f64()
+            .is_some_and(|v| v.is_finite() && (0.8..=2.4).contains(&v)),
+        "terminal.backgroundOpacity" => value
+            .as_f64()
+            .is_some_and(|v| v.is_finite() && (0.0..=1.0).contains(&v)),
+        "terminal.tuiScrollSensitivity" => value.as_u64().is_some_and(|v| (1..=10).contains(&v)),
+        "editor.autosaveDelaySeconds" => value.as_u64().is_some_and(|v| (1..=60).contains(&v)),
+        "terminal.cursorShape" => value
+            .as_str()
+            .is_some_and(|v| matches!(v, "block" | "bar" | "underline")),
+        "terminal.fontFamily" | "terminal.themeName" | "editor.themeName" => {
+            value.as_str().is_some_and(|v| {
+                !v.trim().is_empty() && v.len() <= 128 && !v.chars().any(char::is_control)
+            })
+        }
+        _ => false,
+    }
+}
 
 pub fn cli_writable(path: &str) -> bool {
     CLI_WRITABLE_PATHS.contains(&path)
@@ -49,5 +135,22 @@ mod tests {
         assert!(!cli_writable("general.confirmWorkspaceRemoval"));
         assert!(!cli_writable("general.autoArchiveWorkspacesAfterDays"));
         assert!(!cli_writable("agents.executablePath"));
+        assert!(extended_portable("terminal.cursorBlink"));
+        assert!(valid_extended_portable(
+            "terminal.cursorShape",
+            &serde_json::json!("underline")
+        ));
+        assert!(!valid_extended_portable(
+            "terminal.cursorShape",
+            &serde_json::json!("untrusted")
+        ));
+        assert!(!valid_extended_portable(
+            "editor.autosaveDelaySeconds",
+            &serde_json::json!(0)
+        ));
+        assert!(!valid_extended_portable(
+            "terminal.fontFamily",
+            &serde_json::json!("\n")
+        ));
     }
 }

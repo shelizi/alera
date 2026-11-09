@@ -291,6 +291,22 @@ const _sharedDesktopPaths = <String>[
   'general.confirmWorkspaceRemoval',
   'general.autoArchiveWorkspacesAfterDays',
   'agents.defaultAgentProfileId',
+  'general.showTrayIcon',
+  'general.showDockBadge',
+  'general.showTrayBadge',
+  'terminal.fontFamily',
+  'terminal.lineHeight',
+  'terminal.cursorShape',
+  'terminal.cursorBlink',
+  'terminal.themeName',
+  'terminal.backgroundOpacity',
+  'terminal.tuiScrollSensitivity',
+  'terminal.clipboardOnSelect',
+  'editor.themeName',
+  'editor.autosaveDelaySeconds',
+  'agents.agentStatusNotificationsEnabled',
+  'agents.agentStatusFinishedNotificationsEnabled',
+  'agents.showTabTitlesInSidebar',
 ];
 
 Object? _sharedDesktopValue(
@@ -309,6 +325,24 @@ Object? _sharedDesktopValue(
   'general.autoArchiveWorkspacesAfterDays' =>
     settings.general.autoArchiveWorkspacesAfterDays,
   'agents.defaultAgentProfileId' => settings.agents.defaultAgentProfileId,
+  'general.showTrayIcon' => settings.general.showTrayIcon,
+  'general.showDockBadge' => settings.general.showDockBadge,
+  'general.showTrayBadge' => settings.general.showTrayBadge,
+  'terminal.fontFamily' => settings.terminal.fontFamily,
+  'terminal.lineHeight' => settings.terminal.lineHeight,
+  'terminal.cursorShape' => settings.terminal.cursorShape.name,
+  'terminal.cursorBlink' => settings.terminal.cursorBlink,
+  'terminal.themeName' => settings.terminal.themeName,
+  'terminal.backgroundOpacity' => settings.terminal.backgroundOpacity,
+  'terminal.tuiScrollSensitivity' => settings.terminal.tuiScrollSensitivity,
+  'terminal.clipboardOnSelect' => settings.terminal.clipboardOnSelect,
+  'editor.themeName' => settings.editor.themeName,
+  'editor.autosaveDelaySeconds' => settings.editor.autosaveDelaySeconds,
+  'agents.agentStatusNotificationsEnabled' =>
+    settings.agents.agentStatusNotificationsEnabled,
+  'agents.agentStatusFinishedNotificationsEnabled' =>
+    settings.agents.agentStatusFinishedNotificationsEnabled,
+  'agents.showTabTitlesInSidebar' => settings.agents.showTabTitlesInSidebar,
   _ => throw ArgumentError.value(path, 'path', 'Unsupported desktop setting'),
 };
 
@@ -358,6 +392,22 @@ Map<String, Object?> _changedPortableFields(
             'general.confirmWorkspaceRemoval',
             'general.autoArchiveWorkspacesAfterDays',
             'agents.defaultAgentProfileId',
+            'general.showTrayIcon',
+            'general.showDockBadge',
+            'general.showTrayBadge',
+            'terminal.fontFamily',
+            'terminal.lineHeight',
+            'terminal.cursorShape',
+            'terminal.cursorBlink',
+            'terminal.themeName',
+            'terminal.backgroundOpacity',
+            'terminal.tuiScrollSensitivity',
+            'terminal.clipboardOnSelect',
+            'editor.themeName',
+            'editor.autosaveDelaySeconds',
+            'agents.agentStatusNotificationsEnabled',
+            'agents.agentStatusFinishedNotificationsEnabled',
+            'agents.showTabTitlesInSidebar',
           }.contains(path)) {
         continue;
       }
@@ -389,6 +439,11 @@ AleraSettings _applySharedDesktopValues(
   final archiveDays = values['general.autoArchiveWorkspacesAfterDays'];
   final fontSize = values['terminal.fontSize'];
   final tabSize = values['editor.tabSize'];
+  final lineHeight = values['terminal.lineHeight'];
+  final backgroundOpacity = values['terminal.backgroundOpacity'];
+  final scrollSensitivity = values['terminal.tuiScrollSensitivity'];
+  final autosaveDelay = values['editor.autosaveDelaySeconds'];
+  final cursorShape = values['terminal.cursorShape'];
   return current.copyWith(
     general: current.general.copyWith(
       language: language,
@@ -409,11 +464,53 @@ AleraSettings _applySharedDesktopValues(
           archiveDays is int && archiveDays >= 0 && archiveDays <= 36500
           ? archiveDays
           : current.general.autoArchiveWorkspacesAfterDays,
+      showTrayIcon: values['general.showTrayIcon'] is bool
+          ? values['general.showTrayIcon'] as bool
+          : current.general.showTrayIcon,
+      showDockBadge: values['general.showDockBadge'] is bool
+          ? values['general.showDockBadge'] as bool
+          : current.general.showDockBadge,
+      showTrayBadge: values['general.showTrayBadge'] is bool
+          ? values['general.showTrayBadge'] as bool
+          : current.general.showTrayBadge,
     ),
     terminal: current.terminal.copyWith(
       fontSize: fontSize is num && fontSize >= 8 && fontSize <= 48
           ? fontSize.toDouble()
           : current.terminal.fontSize,
+      fontFamily: values['terminal.fontFamily'] is String
+          ? values['terminal.fontFamily'] as String
+          : current.terminal.fontFamily,
+      lineHeight: lineHeight is num && lineHeight >= 0.8 && lineHeight <= 2.4
+          ? lineHeight.toDouble()
+          : current.terminal.lineHeight,
+      cursorShape: cursorShape is String
+          ? TerminalCursorShape.values.firstWhere(
+              (item) => item.name == cursorShape,
+              orElse: () => current.terminal.cursorShape,
+            )
+          : current.terminal.cursorShape,
+      cursorBlink: values['terminal.cursorBlink'] is bool
+          ? values['terminal.cursorBlink'] as bool
+          : current.terminal.cursorBlink,
+      themeName: values['terminal.themeName'] is String
+          ? values['terminal.themeName'] as String
+          : current.terminal.themeName,
+      backgroundOpacity:
+          backgroundOpacity is num &&
+              backgroundOpacity >= 0 &&
+              backgroundOpacity <= 1
+          ? backgroundOpacity.toDouble()
+          : current.terminal.backgroundOpacity,
+      tuiScrollSensitivity:
+          scrollSensitivity is int &&
+              scrollSensitivity >= 1 &&
+              scrollSensitivity <= 10
+          ? scrollSensitivity
+          : current.terminal.tuiScrollSensitivity,
+      clipboardOnSelect: values['terminal.clipboardOnSelect'] is bool
+          ? values['terminal.clipboardOnSelect'] as bool
+          : current.terminal.clipboardOnSelect,
     ),
     editor: current.editor.copyWith(
       autosaveEnabled: values['editor.autosaveEnabled'] is bool
@@ -422,14 +519,35 @@ AleraSettings _applySharedDesktopValues(
       tabSize: tabSize is int && tabSize >= 1 && tabSize <= 16
           ? tabSize
           : current.editor.tabSize,
+      themeName: values['editor.themeName'] is String
+          ? values['editor.themeName'] as String
+          : current.editor.themeName,
+      autosaveDelaySeconds:
+          autosaveDelay is int && autosaveDelay >= 1 && autosaveDelay <= 60
+          ? autosaveDelay
+          : current.editor.autosaveDelaySeconds,
     ),
-    agents: values.containsKey('agents.defaultAgentProfileId')
-        ? current.agents.copyWith(
-            defaultAgentProfileId: _optionalRuntimeString(
-              values['agents.defaultAgentProfileId'],
-            ),
-          )
-        : current.agents,
+    agents: current.agents
+        .copyWith(
+          agentStatusNotificationsEnabled:
+              values['agents.agentStatusNotificationsEnabled'] is bool
+              ? values['agents.agentStatusNotificationsEnabled'] as bool
+              : current.agents.agentStatusNotificationsEnabled,
+          agentStatusFinishedNotificationsEnabled:
+              values['agents.agentStatusFinishedNotificationsEnabled'] is bool
+              ? values['agents.agentStatusFinishedNotificationsEnabled'] as bool
+              : current.agents.agentStatusFinishedNotificationsEnabled,
+          showTabTitlesInSidebar:
+              values['agents.showTabTitlesInSidebar'] is bool
+              ? values['agents.showTabTitlesInSidebar'] as bool
+              : current.agents.showTabTitlesInSidebar,
+        )
+        .copyWith(
+          defaultAgentProfileId:
+              values.containsKey('agents.defaultAgentProfileId')
+              ? _optionalRuntimeString(values['agents.defaultAgentProfileId'])
+              : current.agents.defaultAgentProfileId,
+        ),
   );
 }
 

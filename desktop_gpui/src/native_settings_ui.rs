@@ -165,7 +165,7 @@ impl Workbench {
         );
     }
 
-    fn native_settings_bool_row(
+    pub(super) fn native_settings_bool_row(
         &self,
         label: &'static str,
         path: &'static str,
@@ -186,7 +186,7 @@ impl Workbench {
             .into_any_element()
     }
 
-    fn native_settings_number_row(
+    pub(super) fn native_settings_number_row(
         &self,
         label: &'static str,
         path: &'static str,
@@ -196,13 +196,22 @@ impl Workbench {
         max: f64,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
-        let previous = (value - step).max(min);
-        let next = (value + step).min(max);
-        let integer = path != "terminal.fontSize";
+        // Decimal controls should not accumulate IEEE-754 display artifacts
+        // (e.g. 0.7000000000000001 after two opacity clicks).
+        let previous = ((value - step).max(min) * 100.0).round() / 100.0;
+        let next = ((value + step).min(max) * 100.0).round() / 100.0;
+        let integer = !matches!(
+            path,
+            "terminal.fontSize" | "terminal.lineHeight" | "terminal.backgroundOpacity"
+        );
         let control_key: u32 = match path {
             "general.autoGitFetchIntervalMinutes" => 1,
             "terminal.fontSize" => 2,
             "editor.tabSize" => 3,
+            "terminal.lineHeight" => 4,
+            "terminal.backgroundOpacity" => 5,
+            "terminal.tuiScrollSensitivity" => 6,
+            "editor.autosaveDelaySeconds" => 7,
             _ => 0,
         };
         div()
@@ -506,7 +515,9 @@ impl Workbench {
         };
         let metrics = NativeModalSize::Settings.resolve(viewport_width, viewport_height);
         let compact = metrics.stacked_navigation;
-        let has_native_controls = has_connected_native_controls(section);
+        // Application, Terminal and Editor use their real controls directly
+        // inside the Classic catalog; don't show a duplicate second panel.
+        let has_native_controls = matches!(section, "agents" | "agentProfiles");
         let navigation = div()
             .id("native-settings-sidebar")
             .flex()
@@ -604,7 +615,7 @@ impl Workbench {
             .map(|selected| tr(locale, selected.title))
             .unwrap_or_else(|| tr(locale, "Settings"));
         let preview = selected
-            .map(|selected| self.render_settings_catalog_preview(selected, locale))
+            .map(|selected| self.render_settings_catalog_preview(selected, locale, cx))
             .unwrap_or_else(|| {
                 div()
                     .text_sm()
@@ -730,7 +741,7 @@ impl Workbench {
                     .text_color(rgb(MUTED))
                     .child(tr(
                         locale,
-                        "Catalog preview only · existing Native controls below may change settings",
+                        "Connected controls save to shared Rust Core · other items are unavailable in GPUI",
                     )),
             );
         let body = div()

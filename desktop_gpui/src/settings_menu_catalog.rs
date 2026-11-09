@@ -107,6 +107,7 @@ pub const SECTIONS: &[SettingsSection] = &[
             group!("Desktop" => [
                 row!("Show Tray Icon", "Keep Alera in the notification area.", Toggle),
                 row!("Show Dock Badge", "Show the number of agents waiting for review.", Toggle),
+                row!("Show Tray Badge", "Show agent review count on the tray icon.", Toggle),
             ]),
             group!("Pull Requests" => [
                 row!("Show Pull Request Status", "Show review and CI state in the sidebar.", Toggle),
@@ -132,7 +133,11 @@ pub const SECTIONS: &[SettingsSection] = &[
             group!("CLI And Skills" => [row!("All Alera Skills", "Install or update core agent skills.", Action), row!("Alera CLI Skill", "Agent instructions for the CLI.", Action)]),
             group!("Extra Skills" => [row!("Agent Profiles Skill", "Catalog and managed-profile instructions.", Action)]),
             group!("Status Hooks" => [row!("Codex Hooks", "Managed status hooks.", Toggle), row!("Claude Code Hooks", "Managed status hooks.", Toggle)]),
-            group!("Behavior" => [row!("Show Tab Titles in Sidebar", "Display agent tab titles in the project tree.", Toggle)]),
+            group!("Behavior" => [
+                row!("Show Tab Titles in Sidebar", "Display agent tab titles in the project tree.", Toggle),
+                row!("Agent Status Notifications", "Notify when an agent needs attention.", Toggle),
+                row!("Agent Finished Notifications", "Also notify when an agent reports completion.", Toggle),
+            ]),
         ],
     },
     SettingsSection {
@@ -241,6 +246,65 @@ pub const SECTIONS: &[SettingsSection] = &[
 
 pub fn section(id: &str) -> Option<&'static SettingsSection> {
     SECTIONS.iter().find(|section| section.id == id)
+}
+
+/// Classic's visible row labels mapped to validated Rust-owned field paths.
+/// Unmapped actions remain visibly unsupported rather than fake switches.
+pub fn shared_setting_row_path(section: &str, title: &str) -> Option<&'static str> {
+    Some(match (section, title) {
+        ("application", "Automatically Fetch Git Remotes") => "general.autoGitFetchEnabled",
+        ("application", "Auto Git Fetch Interval") => "general.autoGitFetchIntervalMinutes",
+        ("application", "Show Tray Icon") => "general.showTrayIcon",
+        ("application", "Show Dock Badge") => "general.showDockBadge",
+        ("application", "Show Tray Badge") => "general.showTrayBadge",
+        ("terminal", "Font Family") => "terminal.fontFamily",
+        ("terminal", "Font Size") => "terminal.fontSize",
+        ("terminal", "Line Height") => "terminal.lineHeight",
+        ("terminal", "Cursor Shape") => "terminal.cursorShape",
+        ("terminal", "Blinking Cursor") => "terminal.cursorBlink",
+        ("terminal", "Theme Preset") => "terminal.themeName",
+        ("terminal", "Background Opacity") => "terminal.backgroundOpacity",
+        ("terminal", "TUI Scroll Speed") => "terminal.tuiScrollSensitivity",
+        ("terminal", "Copy On Select") => "terminal.clipboardOnSelect",
+        ("editor", "Syntax Theme") => "editor.themeName",
+        ("editor", "Tab Size") => "editor.tabSize",
+        ("editor", "Autosave") => "editor.autosaveEnabled",
+        ("editor", "Autosave Delay") => "editor.autosaveDelaySeconds",
+        ("agents", "Show Tab Titles in Sidebar") => "agents.showTabTitlesInSidebar",
+        ("agents", "Agent Status Notifications") => "agents.agentStatusNotificationsEnabled",
+        ("agents", "Agent Finished Notifications") => {
+            "agents.agentStatusFinishedNotificationsEnabled"
+        }
+        _ => return None,
+    })
+}
+
+#[cfg(test)]
+mod shared_row_tests {
+    use super::*;
+    #[test]
+    fn all_connected_rows_resolve_to_the_one_rust_core_allowlist() {
+        for section in SECTIONS {
+            for group in section.groups {
+                for row in group.rows {
+                    if let Some(path) = shared_setting_row_path(section.id, row.title) {
+                        assert!(
+                            alera_core::desktop_settings_contract::cli_writable(path),
+                            "{path} has no approved Rust Core writer"
+                        );
+                    }
+                }
+            }
+        }
+        assert_eq!(
+            shared_setting_row_path("terminal", "Cursor Shape"),
+            Some("terminal.cursorShape")
+        );
+        assert_eq!(
+            shared_setting_row_path("aiDictation", "Test AI Dictation"),
+            None
+        );
+    }
 }
 
 /// Only five sections existed as connected Native controls before parity.

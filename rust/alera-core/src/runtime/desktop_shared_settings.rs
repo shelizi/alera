@@ -58,11 +58,33 @@ fn default_value(path: &str) -> Result<Value> {
         "agents.defaultAgentProfileId" => Value::Null,
         "explorer.showHiddenFiles" => json!(false),
         "explorer.showIgnoredFiles" => json!(false),
+        "general.showTrayIcon" => json!(true),
+        "general.showDockBadge" => json!(true),
+        "general.showTrayBadge" => json!(true),
+        "terminal.fontFamily" => json!("JetBrains Mono"),
+        "terminal.lineHeight" => json!(1.3),
+        "terminal.cursorShape" => json!("block"),
+        "terminal.cursorBlink" => json!(false),
+        "terminal.themeName" => json!("Alera Dark"),
+        "terminal.backgroundOpacity" => json!(1.0),
+        "terminal.tuiScrollSensitivity" => json!(1),
+        "terminal.clipboardOnSelect" => json!(false),
+        "editor.themeName" => json!("Alera"),
+        "editor.autosaveDelaySeconds" => json!(1),
+        "agents.agentStatusNotificationsEnabled" => json!(false),
+        "agents.agentStatusFinishedNotificationsEnabled" => json!(false),
+        "agents.showTabTitlesInSidebar" => json!(false),
         _ => bail!("Unsupported shared desktop setting path"),
     })
 }
 
 fn validate(path: &str, value: &Value) -> Result<()> {
+    if crate::desktop_settings_contract::extended_portable(path) {
+        if crate::desktop_settings_contract::valid_extended_portable(path, value) {
+            return Ok(());
+        }
+        bail!("Unsupported or invalid extended portable setting");
+    }
     let valid = match path {
         "general.language" => value.as_str().is_some_and(|s| {
             matches!(
@@ -685,6 +707,103 @@ mod tests {
                 .unwrap()
                 .default_agent_profile_id,
             None
+        );
+    }
+
+    #[tokio::test]
+    async fn expanded_native_portable_controls_roundtrip_into_classic_configuration() {
+        let temp = tempfile::tempdir().unwrap();
+        let classic = RuntimeStore::open(temp.path()).await.unwrap();
+        let native = RuntimeStore::open(temp.path()).await.unwrap();
+        let defaults = native.desktop_shared_settings_snapshot().await.unwrap();
+        assert_eq!(defaults["values"].as_object().unwrap().len(), 28);
+        assert_eq!(defaults["values"]["terminal.fontFamily"], "JetBrains Mono");
+        assert_eq!(defaults["values"]["editor.autosaveDelaySeconds"], 1);
+        native
+            .desktop_shared_compare_and_set_batch(&[
+                change(
+                    "terminal.fontFamily",
+                    json!("Consolas"),
+                    json!("Cascadia Code"),
+                ),
+                change("terminal.cursorShape", json!("block"), json!("underline")),
+                change("terminal.lineHeight", json!(1.3), json!(1.6)),
+                change("terminal.backgroundOpacity", json!(1.0), json!(0.8)),
+                change("editor.autosaveDelaySeconds", json!(1), json!(7)),
+                change(
+                    "editor.themeName",
+                    json!("Alera"),
+                    json!("Tokyo Night Dark"),
+                ),
+                change("agents.showTabTitlesInSidebar", json!(false), json!(true)),
+                change("general.showTrayIcon", json!(true), json!(false)),
+            ])
+            .await
+            .unwrap_err(); // Incorrect expected value blocks *all* writes.
+        assert_eq!(
+            classic
+                .desktop_shared_setting("terminal.cursorShape")
+                .await
+                .unwrap(),
+            "block"
+        );
+        assert_eq!(
+            classic
+                .desktop_shared_setting("general.showTrayIcon")
+                .await
+                .unwrap(),
+            true
+        );
+        let updated = native
+            .desktop_shared_compare_and_set_batch(&[
+                change(
+                    "terminal.fontFamily",
+                    json!("JetBrains Mono"),
+                    json!("Cascadia Code"),
+                ),
+                change("terminal.cursorShape", json!("block"), json!("underline")),
+                change("terminal.lineHeight", json!(1.3), json!(1.6)),
+                change("terminal.backgroundOpacity", json!(1.0), json!(0.8)),
+                change("editor.autosaveDelaySeconds", json!(1), json!(7)),
+                change(
+                    "editor.themeName",
+                    json!("Alera"),
+                    json!("Tokyo Night Dark"),
+                ),
+                change("agents.showTabTitlesInSidebar", json!(false), json!(true)),
+                change("general.showTrayIcon", json!(true), json!(false)),
+            ])
+            .await
+            .unwrap();
+        assert_eq!(updated["values"]["terminal.lineHeight"], json!(1.6));
+        let classic_config = classic.configuration_settings().await.unwrap();
+        assert_eq!(classic_config["terminal"]["fontFamily"], "Cascadia Code");
+        assert_eq!(classic_config["terminal"]["cursorShape"], "underline");
+        assert_eq!(classic_config["editor"]["autosaveDelaySeconds"], 7);
+        assert_eq!(classic_config["agents"]["showTabTitlesInSidebar"], true);
+        assert_eq!(classic_config["general"]["showTrayIcon"], false);
+        assert!(classic
+            .desktop_shared_compare_and_set("terminal.cursorShape", &json!("block"), &json!("bar"),)
+            .await
+            .is_err());
+        assert!(native
+            .desktop_shared_compare_and_set("editor.autosaveDelaySeconds", &json!(7), &json!(0),)
+            .await
+            .is_err());
+        let restart = RuntimeStore::open(temp.path()).await.unwrap();
+        assert_eq!(
+            restart
+                .desktop_shared_setting("terminal.fontFamily")
+                .await
+                .unwrap(),
+            "Cascadia Code"
+        );
+        assert_eq!(
+            restart
+                .desktop_shared_setting("editor.themeName")
+                .await
+                .unwrap(),
+            "Tokyo Night Dark"
         );
     }
 

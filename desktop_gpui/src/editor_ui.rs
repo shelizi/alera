@@ -261,12 +261,12 @@ impl NativeEditor {
 
     /// Leave untitled drafts in recovery. Autosave only an idle file-backed
     /// document without any in-progress IME composition.
-    pub fn autosave_if_idle(&mut self, cx: &mut Context<Self>) {
+    pub fn autosave_if_idle(&mut self, idle_seconds: u64, cx: &mut Context<Self>) {
         if !self.tabs.is_empty()
             && self.doc().is_dirty()
             && self.doc().path().is_some()
             && self.doc().marked().is_none()
-            && self.last_edit.elapsed() >= Duration::from_secs(3)
+            && self.last_edit.elapsed() >= Duration::from_secs(idle_seconds.clamp(1, 60))
         {
             self.save(cx);
         }

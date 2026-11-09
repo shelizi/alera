@@ -455,6 +455,72 @@ void main() {
       );
     },
   );
+  test('Classic reads and CAS-writes GPUI portable theme, terminal and Agent preferences without stale section overwrite', () async {
+    final legacy = _MemorySettingsRepository();
+    final host = _RecordingRuntimeHostClient()..configurationSupported = true;
+    host.responses['desktopSettings.seedLocal'] = {
+      'values': {
+        'terminal.fontFamily': 'Cascadia Code',
+        'terminal.lineHeight': 1.6,
+        'terminal.cursorShape': 'bar',
+        'terminal.cursorBlink': true,
+        'terminal.themeName': 'Dracula',
+        'terminal.backgroundOpacity': 0.8,
+        'terminal.tuiScrollSensitivity': 2,
+        'terminal.clipboardOnSelect': true,
+        'editor.themeName': 'Tokyo Night Dark',
+        'editor.autosaveDelaySeconds': 7,
+        'general.showTrayIcon': false,
+        'general.showDockBadge': false,
+        'general.showTrayBadge': true,
+        'agents.agentStatusNotificationsEnabled': true,
+        'agents.agentStatusFinishedNotificationsEnabled': true,
+        'agents.showTabTitlesInSidebar': true,
+      },
+    };
+    host.responses['runtimeSettings.get'] = {
+      'workspaceDirectory': '/shared-workspaces',
+    };
+    final repo = RuntimeSettingsRepository(
+      client: host,
+      legacyRepository: legacy,
+    );
+    final loaded = await repo.load();
+    expect(loaded.terminal.fontFamily, 'Cascadia Code');
+    expect(loaded.terminal.lineHeight, 1.6);
+    expect(loaded.terminal.cursorShape, TerminalCursorShape.bar);
+    expect(loaded.terminal.backgroundOpacity, 0.8);
+    expect(loaded.terminal.clipboardOnSelect, isTrue);
+    expect(loaded.editor.themeName, 'Tokyo Night Dark');
+    expect(loaded.editor.autosaveDelaySeconds, 7);
+    expect(loaded.general.showTrayIcon, isFalse);
+    expect(loaded.agents.showTabTitlesInSidebar, isTrue);
+    final changed = loaded.copyWith(
+      terminal: loaded.terminal.copyWith(lineHeight: 2.0),
+      editor: loaded.editor.copyWith(autosaveDelaySeconds: 10),
+    );
+    await repo.compareAndSetSharedDesktopChanges(loaded, changed);
+    expect(host.payloads['desktopSettings.compareAndSetBatch'], [
+      {
+        'changes': [
+          {'path': 'terminal.lineHeight', 'expectedValue': 1.6, 'value': 2.0},
+          {
+            'path': 'editor.autosaveDelaySeconds',
+            'expectedValue': 7,
+            'value': 10,
+          },
+        ],
+      },
+    ]);
+    await repo.save(changed);
+    expect(
+      host.payloads['configuration.settings.update'],
+      isNull,
+      reason: 'Classic must not replay whole portable sections after GPUI CAS writes',
+    );
+    expect(host.payloads['runtimeSettings.update'], isNull);
+  });
+
   test('Classic imports Drift only once and uses Rust CAS without rewriting GPUI portable values', () async {
     final legacy = _MemorySettingsRepository();
     legacy.settings = AleraSettings.defaults.copyWith(

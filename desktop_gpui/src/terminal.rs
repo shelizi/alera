@@ -881,15 +881,26 @@ pub fn estimate_terminal_viewport(
     region_height_px: f32,
     font_px: f32,
 ) -> Option<(u16, u16)> {
+    estimate_terminal_viewport_with_line_height(region_width_px, region_height_px, font_px, 1.3)
+}
+
+pub fn estimate_terminal_viewport_with_line_height(
+    region_width_px: f32,
+    region_height_px: f32,
+    font_px: f32,
+    line_height_factor: f32,
+) -> Option<(u16, u16)> {
     if !region_width_px.is_finite()
         || !region_height_px.is_finite()
         || !font_px.is_finite()
+        || !line_height_factor.is_finite()
+        || !(0.8..=2.4).contains(&line_height_factor)
         || !(8.0..=48.0).contains(&font_px)
     {
         return None;
     }
     let columns = ((region_width_px - 24.0) / (font_px * 0.62)).floor();
-    let lines = ((region_height_px - 16.0) / (font_px * 1.3)).floor();
+    let lines = ((region_height_px - 16.0) / (font_px * line_height_factor)).floor();
     if columns < 20.0 || lines < 5.0 {
         return None;
     }
@@ -907,9 +918,21 @@ pub fn terminal_ime_anchor_px(
     panel_height_px: f32,
     font_px: f32,
 ) -> Option<(f32, f32)> {
+    terminal_ime_anchor_with_line_height(cursor, panel_width_px, panel_height_px, font_px, 1.3)
+}
+
+pub fn terminal_ime_anchor_with_line_height(
+    cursor: (u16, u16),
+    panel_width_px: f32,
+    panel_height_px: f32,
+    font_px: f32,
+    line_height_factor: f32,
+) -> Option<(f32, f32)> {
     if !panel_width_px.is_finite()
         || !panel_height_px.is_finite()
         || !font_px.is_finite()
+        || !line_height_factor.is_finite()
+        || !(0.8..=2.4).contains(&line_height_factor)
         || !(8.0..=48.0).contains(&font_px)
         || panel_width_px < 32.0
         || panel_height_px < 24.0
@@ -917,7 +940,7 @@ pub fn terminal_ime_anchor_px(
         return None;
     }
     let cell_width = font_px * 0.62;
-    let line_height = font_px * 1.3;
+    let line_height = font_px * line_height_factor;
     let visible_cols = ((panel_width_px - 24.0) / cell_width).floor().max(1.0);
     let visible_rows = ((panel_height_px - 16.0) / line_height).floor().max(1.0);
     let col = (cursor.1 as f32).min(visible_cols - 1.0);
@@ -1997,6 +2020,33 @@ mod tests {
         let smaller = estimate_terminal_viewport(800.0, 480.0, 13.0).unwrap();
         let larger = estimate_terminal_viewport(1200.0, 780.0, 13.0).unwrap();
         assert!(larger.0 > smaller.0 && larger.1 > smaller.1);
+    }
+
+    #[test]
+    fn shared_terminal_line_height_keeps_pty_rows_and_ime_anchor_in_sync() {
+        let tight = estimate_terminal_viewport_with_line_height(820.0, 470.0, 14.0, 0.8).unwrap();
+        let loose = estimate_terminal_viewport_with_line_height(820.0, 470.0, 14.0, 2.4).unwrap();
+        assert_eq!(tight.0, loose.0, "Line height must not change PTY width");
+        assert!(
+            tight.1 > loose.1,
+            "Larger line height reduces Host PTY rows"
+        );
+        let compact_ime =
+            terminal_ime_anchor_with_line_height((11, 20), 820.0, 470.0, 14.0, 0.8).unwrap();
+        let loose_ime =
+            terminal_ime_anchor_with_line_height((11, 20), 820.0, 470.0, 14.0, 2.4).unwrap();
+        assert!(
+            loose_ime.1 > compact_ime.1,
+            "IME anchor must match visible cursor row"
+        );
+        assert!(estimate_terminal_viewport_with_line_height(820.0, 470.0, 14.0, 0.7).is_none());
+        assert!(
+            terminal_ime_anchor_with_line_height((0, 0), 820.0, 470.0, 14.0, f32::NAN).is_none()
+        );
+        assert_eq!(
+            estimate_terminal_viewport_with_line_height(1200.0, 600.0, 13.0, 1.3),
+            estimate_terminal_viewport(1200.0, 600.0, 13.0)
+        );
     }
 
     #[test]

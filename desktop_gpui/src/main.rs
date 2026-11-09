@@ -48,8 +48,8 @@ use alera_gpui_desktop::project_tree::{collect_project_tree, ProjectTreeGroup};
 use alera_gpui_desktop::runtime_bridge::RuntimeCliBridge;
 use alera_gpui_desktop::session::{PreviewSessionStore, TerminalLayout, TerminalLayoutTab};
 use alera_gpui_desktop::terminal::{
-    encode_terminal_key, estimate_terminal_viewport, raw_key_reply_may_drain,
-    select_registered_host_workspace, terminal_ime_anchor_px, TerminalAutoResizeGate,
+    encode_terminal_key, estimate_terminal_viewport_with_line_height, raw_key_reply_may_drain,
+    select_registered_host_workspace, terminal_ime_anchor_with_line_height, TerminalAutoResizeGate,
     TerminalCreateFlow,
     TerminalCreateTick, TerminalDock, TerminalLineSelection, TerminalPollCadence, TerminalPollGate,
     TerminalTabContextTarget, TerminalViewMode, TerminalViewportProposal, HOST_SESSION_LIST_SCOPE,
@@ -413,6 +413,8 @@ struct Workbench {
     /// The preview language changes only visible text, never host settings.
     settings_menu_locale: UiLocale,
     settings_menu_language: String,
+    /// Validated read-only model projection from Rust Host. No local JSON.
+    settings_extra_values: serde_json::Map<String, serde_json::Value>,
     settings_shared_busy: bool,
     settings_native_profile_migrated: bool,
     settings_shared_request: u64,
@@ -3918,9 +3920,22 @@ impl Workbench {
     }
 
     fn finish_terminal_line_selection(&mut self, cx: &mut Context<Self>) {
+        let mut completed = false;
         if let Some(selection) = self.terminal_line_selection.as_mut() {
             if selection.is_dragging() {
                 selection.finish();
+                completed = true;
+            }
+        }
+        if completed {
+            // Same opt-in as Classic. Identity/stale-output checks remain in
+            // copy_primary_terminal_text, so a changed Host frame cannot
+            // leak an old selection into the OS clipboard.
+            if self.settings_extra_values.get("terminal.clipboardOnSelect")
+                .and_then(serde_json::Value::as_bool) == Some(true)
+            {
+                self.copy_primary_terminal_text(true, cx);
+            } else {
                 cx.notify();
             }
         }
@@ -5376,9 +5391,13 @@ impl Workbench {
                     {
                         view.refresh_shared_git_favorites(cx);
                     }
-                    if view.native_settings.editor_autosave_enabled && view.terminal_tick % 2 == 0 {
+                    if view.native_settings.editor_autosave_enabled {
+                        let debounce = view.settings_extra_values
+                            .get("editor.autosaveDelaySeconds")
+                            .and_then(serde_json::Value::as_u64)
+                            .unwrap_or(1);
                         for editor in [view.editor.clone(), view.secondary_editor.clone()].into_iter().flatten() {
-                            editor.update(cx, |editor, cx| editor.autosave_if_idle(cx));
+                            editor.update(cx, |editor, cx| editor.autosave_if_idle(debounce, cx));
                         }
                     }
                     if view.native_settings.auto_git_fetch_enabled
@@ -5446,6 +5465,15 @@ impl Render for Workbench {
             });
         }
         let terminal_font_size = self.native_settings.terminal_font_size as f32;
+        let terminal_font_family = self.settings_extra_values
+            .get("terminal.fontFamily")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("JetBrains Mono")
+            .to_owned();
+        let terminal_line_height = self.settings_extra_values
+            .get("terminal.lineHeight")
+            .and_then(serde_json::Value::as_f64)
+            .unwrap_or(1.3) as f32;
         let mixed_tabs = self.mixed_tabs.entries().to_vec();
         let mixed_active = self.mixed_tabs.active().cloned();
         let mixed_secondary_tab_ids = self.mixed_panes.tabs_in(PaneSlot::Secondary).to_vec();
@@ -5783,11 +5811,12 @@ impl Render for Workbench {
         // visual anchor moves, without altering Host PTY geometry.
         let primary_ime_anchor = primary_terminal
             .and_then(|tab| {
-                terminal_ime_anchor_px(
+                terminal_ime_anchor_with_line_height(
                     tab.screen.cursor(),
                     primary_width,
                     primary_height,
                     terminal_font_size,
+                    terminal_line_height,
                 )
             })
             .unwrap_or((12.0, 8.0));
@@ -5796,9 +5825,10 @@ impl Render for Workbench {
             .and_then(|target| self.terminals.index_for_context(target))
             .and_then(|index| self.terminals.tabs.get(index))
             .and_then(|tab| {
-                terminal_ime_anchor_px(
+                terminal_ime_anchor_with_line_height(
                     tab.screen.cursor(), primary_width,
                     (primary_height - TAB_STRIP_HEIGHT).max(24.0), terminal_font_size,
+                    terminal_line_height,
                 )
             })
             .unwrap_or((12.0, 8.0));
@@ -5819,7 +5849,7 @@ impl Render for Workbench {
                             1.0
                         };
                     if let Some((cols, rows)) =
-                        estimate_terminal_viewport(width, height, terminal_font_size)
+                        estimate_terminal_viewport_with_line_height(width, height, terminal_font_size, terminal_line_height)
                     {
                         proposed_viewports.push(TerminalViewportProposal {
                             target: target.clone(),
@@ -5844,7 +5874,7 @@ impl Render for Workbench {
                             / if terminal_split_horizontal { 1.0 } else { 2.0 }
                             - 28.0;
                         if let Some((cols, rows)) =
-                            estimate_terminal_viewport(width, height, terminal_font_size)
+                            estimate_terminal_viewport_with_line_height(width, height, terminal_font_size, terminal_line_height)
                         {
                             proposed_viewports.push(TerminalViewportProposal {
                                 target,
@@ -5871,7 +5901,7 @@ impl Render for Workbench {
                         let height = content_height / if split_height { 2.0 } else { 1.0 }
                             - TAB_STRIP_HEIGHT;
                         if let Some((cols, rows)) =
-                            estimate_terminal_viewport(width, height, terminal_font_size)
+                            estimate_terminal_viewport_with_line_height(width, height, terminal_font_size, terminal_line_height)
                         {
                             proposed_viewports.push(TerminalViewportProposal {
                                 target: target.clone(),
@@ -7075,7 +7105,7 @@ impl Render for Workbench {
                                     .max_h(px(170.0))
                                     .overflow_y_scroll()
                                     .text_xs()
-                                    .font_family("JetBrains Mono")
+                                    .font_family(terminal_font_family.clone())
                                     .text_color(rgb(MUTED))
                                     .child(git_diff),
                             ),
@@ -7421,7 +7451,7 @@ impl Render for Workbench {
                                         .overflow_y_scroll()
                                         .p_4()
                                         .text_sm()
-                                        .font_family("JetBrains Mono")
+                                        .font_family(terminal_font_family.clone())
                                         .child(content)
                                         .into_any_element()
                                 },
@@ -7485,7 +7515,7 @@ impl Render for Workbench {
                                             .overflow_y_scroll()
                                             .px_3()
                                             .py_2()
-                                            .font_family("JetBrains Mono")
+                                            .font_family(terminal_font_family.clone())
                                             .text_size(px(terminal_font_size))
                                             .whitespace_nowrap()
                                             .child(div()
@@ -7501,7 +7531,7 @@ impl Render for Workbench {
                                                     div()
                                                         .id(("terminal-colored-row", row_index))
                                                         .whitespace_nowrap()
-                                                        .line_height(px(terminal_font_size * 1.3))
+                                                        .line_height(px(terminal_font_size * terminal_line_height))
                                                         .bg(rgb(if selected { ACTIVE } else { BG }))
                                                         .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |this, _, _, cx| {
                                                             this.begin_terminal_line_selection(row_index, cx);
@@ -7561,7 +7591,7 @@ impl Render for Workbench {
                                             .overflow_y_scroll()
                                             .px_3()
                                             .py_2()
-                                            .font_family("JetBrains Mono")
+                                            .font_family(terminal_font_family.clone())
                                             .text_size(px(terminal_font_size))
                                             .child(terminal_input)
                                             .child(if terminal_output.is_empty() {
@@ -7618,7 +7648,7 @@ impl Render for Workbench {
                                                         .overflow_y_scroll()
                                                         .px_3()
                                                         .py_2()
-                                                        .font_family("JetBrains Mono")
+                                                        .font_family(terminal_font_family.clone())
                                                         .text_size(px(terminal_font_size))
                                                         .child(output))
                                                     .into_any_element()
@@ -7773,7 +7803,7 @@ impl Render for Workbench {
                                                     .overflow_x_scroll()
                                                     .overflow_y_scroll()
                                                     .p_3()
-                                                    .font_family("JetBrains Mono")
+                                                    .font_family(terminal_font_family.clone())
                                                     .text_size(px(terminal_font_size))
                                                     .child(div()
                                                         .absolute()
@@ -7792,7 +7822,7 @@ impl Render for Workbench {
                                                                 div()
                                                                     .id(("mixed-secondary-colored-row", index))
                                                                     .whitespace_nowrap()
-                                                                    .line_height(px(terminal_font_size * 1.3))
+                                                                    .line_height(px(terminal_font_size * terminal_line_height))
                                                                     .child(
                                                                         gpui::StyledText::new(row.text)
                                                                             .with_highlights(row.spans.into_iter().map(|span| {
@@ -8752,6 +8782,7 @@ fn main() {
                             settings_kit_dialog_open: false,
                             settings_menu_locale: UiLocale::English,
                             settings_menu_language: "system".into(),
+                            settings_extra_values: serde_json::Map::new(),
                             settings_shared_busy: false,
                             settings_native_profile_migrated: false,
                             settings_shared_request: 0,
