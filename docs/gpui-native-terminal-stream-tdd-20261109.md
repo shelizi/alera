@@ -262,3 +262,9 @@ CLI `terminal_stream::tests` 私有 recover 指令白名單 **2/2 PASS**，確�
 隔離 Windows Debug GPUI 實機：Terminal 以繁中注音 `S U 3` 確實顯示「你」候選窗；滑鼠點 Explorer `Filter files…` 後，舊候選窗立即消失；在 Explorer 繼續輸入，新候選窗出現在 Explorer 搜尋框旁，不再遺留 Terminal caret 旁。Native stderr 記錄 `Alera GPUI TSF: blur cancel=Cancelled`。OS 視覺重現案例從 RED 轉 GREEN。另 Native 獨立 Runtime Smoke 結束 `exit_code=0`，既有 Rust Library 325/325 及合併後 `cargo check --all-targets --locked` 通過，獨立 Windows helper 1/1 通過。
 
 來源提交：設定／i18n 同步變更先落在 `edef09ff8`（包含 `main.rs` 的 TSF 呼叫處）；獨立 IMM 輔助模組隨 `7e978ad16` 提交，未把其他修改混入。注意這是**核心候選窗取消與位置重定錨初驗**，不是完整 TSF 結案：仍須多次 Primary／Secondary／Explorer 循環、正式中文 Commit/UTF-8 Shell、失焦遲到 Commit 安全性及高頻操作重測。Classic／Native Release 同場 p50/p95 效能比較尚缺 Release binaries。正式支援仍 `supported=false`，不合併 main、不推送、不發布，原未追蹤 Smoke 目錄保留。
+
+## 2026-11-09: delayed Windows IME callback guard (follow-up)
+
+The Native Terminal IME sink now rejects replace_text_in_range / replace_and_mark_text_in_range callbacks when its GPUI FocusHandle is no longer focused. This is in addition to Workbench's authenticated pane/Host identity check and its observer-time focus gate. Search fields retain their normal text-input behavior. Trace-only diagnostics record rejected callbacks when ALERA_GPUI_TSF_TRACE is set. Scope: desktop_gpui/src/quick_open_ui.rs only; no Classic or production Host changes.
+
+Validation on Windows: new quick_open_ui::tests::terminal_rejects_delayed_ime_after_blur_but_explorer_is_unchanged 1/1 PASS; cargo test --manifest-path desktop_gpui/Cargo.toml --locked --lib 332/332 PASS; cargo check --manifest-path desktop_gpui/Cargo.toml --all-targets --locked PASS. The automated regression validates focus decision logic, not a real delayed OS IME callback. Real repeated Primary/Secondary/Explorer candidate cycles, Unicode commit with UTF-8 PowerShell, and Classic/Native Release p50/p95 remain unverified. Preserve supported=false, no main merge, no push, no release. Preserve .gpui-smoke-20261108/.

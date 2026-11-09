@@ -14,6 +14,12 @@ use std::ops::Range;
 use std::time::Instant;
 use unicode_segmentation::UnicodeSegmentation;
 
+// A delayed Windows TextInput callback must not enqueue a Terminal commit
+// after GPUI focus moved to Explorer, Settings, or the other pane.
+fn accepts_native_text_event(terminal_mode: bool, has_focus: bool) -> bool {
+    !terminal_mode || has_focus
+}
+
 actions!(
     alera_gpui_quick_open,
     [QueryBackspace, QuerySelectAll, QueryPaste]
@@ -241,9 +247,15 @@ impl EntityInputHandler for QuickOpenInput {
         &mut self,
         range: Option<Range<usize>>,
         text: &str,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !accepts_native_text_event(self.terminal_mode, self.focus.is_focused(window)) {
+            if std::env::var_os("ALERA_GPUI_TSF_TRACE").is_some() {
+                eprintln!("Alera GPUI TSF: drop unfocused Terminal text commit");
+            }
+            return;
+        }
         self.replace(range, text, false, cx);
     }
 
@@ -252,9 +264,15 @@ impl EntityInputHandler for QuickOpenInput {
         range: Option<Range<usize>>,
         text: &str,
         _: Option<Range<usize>>,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !accepts_native_text_event(self.terminal_mode, self.focus.is_focused(window)) {
+            if std::env::var_os("ALERA_GPUI_TSF_TRACE").is_some() {
+                eprintln!("Alera GPUI TSF: drop unfocused Terminal preedit");
+            }
+            return;
+        }
         self.replace(range, text, true, cx);
     }
 
@@ -381,5 +399,18 @@ impl Render for QuickOpenInput {
             })
             .child(QuickOpenCapture { input: cx.entity() })
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::accepts_native_text_event;
+
+    #[test]
+    fn terminal_rejects_delayed_ime_after_blur_but_explorer_is_unchanged() {
+        assert!(accepts_native_text_event(true, true));
+        assert!(!accepts_native_text_event(true, false));
+        assert!(accepts_native_text_event(false, true));
+        assert!(accepts_native_text_event(false, false));
     }
 }
