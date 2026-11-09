@@ -76,6 +76,13 @@ impl StreamSessionIdentity {
 
 #[derive(Debug)]
 pub enum StreamViewUpdate {
+    /// Hidden tab's existing Worker is registered with the restarted Host.
+    /// Require a fresh authenticated session list before accepting writes.
+    RecoveryReady {
+        session_id: String,
+        workspace_id: String,
+        tab_id: String,
+    },
     Snapshot {
         identity: StreamSessionIdentity,
         bytes: Vec<u8>,
@@ -89,6 +96,26 @@ pub enum StreamViewUpdate {
     },
     Failed(String),
     Disconnected,
+}
+
+/// A background recovery reply only authorizes an authenticated re-list,
+/// never direct PTY input or a view lease. Reject stale/mismatched replies.
+fn confirmed_background_recovery(
+    expected: (String, String, String),
+    ok: bool,
+    payload: &Value,
+) -> Option<StreamViewUpdate> {
+    if !ok
+        || payload.get("running") != Some(&Value::Bool(true))
+        || payload.get("sessionId").and_then(Value::as_str) != Some(expected.0.as_str())
+    {
+        return None;
+    }
+    Some(StreamViewUpdate::RecoveryReady {
+        session_id: expected.0,
+        workspace_id: expected.1,
+        tab_id: expected.2,
+    })
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -382,6 +409,8 @@ pub struct NativeTerminalStreamBridge {
     next_id: u64,
     lease_prefix: String,
     subscriptions: StreamSubscriptions,
+    recovery_requested: HashSet<(String, String, String)>,
+    recovery_pending: HashMap<u64, (String, String, String)>,
     ready_updates: VecDeque<StreamViewUpdate>,
     ui_parse_budget: TerminalParseBudget,
 }
@@ -450,6 +479,8 @@ impl NativeTerminalStreamBridge {
             next_id: 0,
             lease_prefix: format!("gpui-{}-{nonce}", std::process::id()),
             subscriptions: StreamSubscriptions::default(),
+            recovery_requested: HashSet::new(),
+            recovery_pending: HashMap::new(),
             ready_updates: VecDeque::new(),
             ui_parse_budget: TerminalParseBudget::default(),
         })
@@ -508,6 +539,41 @@ impl NativeTerminalStreamBridge {
         );
     }
 
+    /// Re-register a hidden preview's existing Worker after Host restart,
+    /// without streaming background TUI output or minting a Shell. At most
+    /// one attempt per identity per fresh authenticated CLI stream.
+    pub fn ensure_recovering(&mut self, session_id: &str, workspace_id: &str, tab_id: &str) {
+        if !valid_session_id(session_id)
+            || !valid_session_id(workspace_id)
+            || !valid_session_id(tab_id)
+        {
+            return;
+        }
+        let key = (
+            session_id.to_owned(),
+            workspace_id.to_owned(),
+            tab_id.to_owned(),
+        );
+        if self.recovery_requested.contains(&key) {
+            return;
+        }
+        let id = self.next_request_id();
+        let request = json!({
+            "id": id,
+            "type": "recover",
+            "payload": {
+                "sessionId": session_id,
+                "workspaceId": workspace_id,
+                "tabId": tab_id,
+                "viewLeaseId": format!("{}-recover-{id}", self.lease_prefix),
+            }
+        });
+        if self.requests.try_send(request).is_ok() {
+            self.recovery_requested.insert(key.clone());
+            self.recovery_pending.insert(id, key);
+        }
+    }
+
     pub fn is_observing(&self, session_id: &str, workspace_id: &str, tab_id: &str) -> bool {
         self.subscriptions.active(session_id, workspace_id, tab_id)
     }
@@ -542,6 +608,22 @@ impl NativeTerminalStreamBridge {
             let Some(event) = self.try_next_event() else {
                 break;
             };
+            if let StreamEvent::Response {
+                request_id,
+                ok,
+                payload,
+                ..
+            } = &event
+            {
+                if let Some(identity) = self.recovery_pending.remove(request_id) {
+                    if let Some(update) = confirmed_background_recovery(identity, *ok, payload) {
+                        self.ready_updates.push_back(update);
+                    }
+                    // A refused recovery never invalidates the foreground
+                    // subscription or authorizes a fallback new Shell.
+                    continue;
+                }
+            }
             self.ready_updates.extend(self.subscriptions.process(event));
         }
         let mut remaining = self.ui_parse_budget.max_read_bytes() as usize;
@@ -846,5 +928,33 @@ mod tests {
         assert!(args.iter().any(|a| a == "--no-start"));
         assert!(args.iter().any(|a| a == "stream"));
         assert!(!args.iter().any(|a| a == "runtime-host" || a == "attach"));
+    }
+
+    #[test]
+    fn background_recovery_requires_exact_running_host_ack_and_never_creates_view_lease() {
+        let expected = ("pty-1".into(), "ws-1".into(), "tab-1".into());
+        assert!(confirmed_background_recovery(
+            expected.clone(),
+            true,
+            &json!({"sessionId":"wrong", "running":true})
+        )
+        .is_none());
+        assert!(confirmed_background_recovery(
+            expected.clone(),
+            true,
+            &json!({"sessionId":"pty-1", "running":false})
+        )
+        .is_none());
+        assert!(confirmed_background_recovery(
+            expected.clone(),
+            false,
+            &json!({"sessionId":"pty-1", "running":true})
+        )
+        .is_none());
+        assert!(matches!(confirmed_background_recovery(
+            expected, true, &json!({"sessionId":"pty-1", "running":true})
+        ), Some(StreamViewUpdate::RecoveryReady {
+            session_id, workspace_id, tab_id,
+        }) if session_id == "pty-1" && workspace_id == "ws-1" && tab_id == "tab-1"));
     }
 }

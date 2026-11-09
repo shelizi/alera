@@ -5192,10 +5192,14 @@ impl Workbench {
                 ));
             }
         }
-        if visible.is_empty() && self.terminal_stream.is_none() {
+        // Even when a newly restarted Host temporarily reports zero live
+        // sessions, display-only Native tabs may still have valid persistent
+        // PTY Workers. Allow a private recover-only stream for those tabs;
+        // it cannot mint a Shell or authorize input from a stale listing.
+        if visible.is_empty() && self.terminals.tabs.is_empty() && self.terminal_stream.is_none() {
             return;
         }
-        if !visible.is_empty()
+        if (!visible.is_empty() || !self.terminals.tabs.is_empty())
             && self.terminal_stream.is_none()
             && self.terminal_stream_retry.can_attempt(Instant::now())
         {
@@ -5209,6 +5213,14 @@ impl Workbench {
         let Some(stream) = self.terminal_stream.as_mut() else {
             return;
         };
+        // Restore only the Host Session map for inactive previews, without
+        // subscribing background TUI output. A visible Terminal uses the
+        // normal authenticated observe + VT snapshot path below.
+        for tab in &self.terminals.tabs {
+            if !visible.iter().any(|(id, _, _)| id == &tab.handle) {
+                stream.ensure_recovering(&tab.handle, &tab.workspace_id, &tab.tab_id);
+            }
+        }
         for (session_id, workspace_id, tab_id) in &visible {
             stream.ensure_observing(session_id, workspace_id, tab_id);
         }
@@ -5219,6 +5231,19 @@ impl Workbench {
         let mut disconnected = false;
         for update in updates {
             match update {
+                StreamViewUpdate::RecoveryReady { session_id, workspace_id, tab_id } => {
+                    // Only this still-open, same-workspace preview can
+                    // authorize an inventory refresh after Host recovery.
+                    // Do not mark a tab running or send input on the basis
+                    // of the private recovery reply alone.
+                    if self.terminals.tabs.iter().any(|tab| {
+                        tab.handle == session_id
+                            && tab.workspace_id == workspace_id
+                            && tab.tab_id == tab_id
+                    }) {
+                        self.refresh_terminals(cx);
+                    }
+                }
                 StreamViewUpdate::Snapshot {
                     identity,
                     bytes,

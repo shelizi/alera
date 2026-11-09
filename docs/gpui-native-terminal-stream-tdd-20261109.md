@@ -139,3 +139,24 @@ Windows Native `cargo check` 與 `cargo build` PASS，Rust 函式庫 **324/324 P
 原始碼定位：`terminal.observeExisting` 只允許正在 Host `sessions` map 的 PTY；Host crash 後記憶體 Session map 被清空，持久 Worker 在另一個程序，必須先由 Host 可信任路徑執行 recover-only，才能安全重新 observe。原 `createOrAttach` 可能在無法 recover 時啟動新的 Worker/Shell，不應直接成為 GPUI 背景恢復 API。
 
 **後續設計門檻：**需在專用整合分支設計受 Host 身分與權限保護的「只恢復已存在 Worker」能力（建議語意 `recoverExistingWorker`）：驗證已註冊的 `sessionId`／`workspaceId`／`tabId`、私有 Worker registry 的身份、PID／創建時間與存活驗證；Worker 缺失／過期／身份不符時回傳明確錯誤，**絕不可 fallback 為 spawn Shell**；成功後 Native 重新取得新的 Host view lease 與 VT snapshot，依序測試雙 PTY、重試退避、舊 CLI read 競態、無重複執行、進程零殘留。實作前保持 `supported=false`，也不允許改正式 Host、合併 main、推送或發布。
+
+## 2026-11-09：Host recover-only 路徑與背景 Tab 自動恢復（前輪 RED → GREEN）
+
+**問題收斂：**單純讓 `terminal.observeExisting` 在 Host 重啟後恢復缺失的 Session，確實能恢復 Native 前景一個 PTY；但原 75 秒隔離 E2E 仍為 RED，因為 Native 原本只觀察前景與分割的可見 Terminal，**第二個未顯示的 Tab 根本沒有發出觀察請求**。一律串流所有背景 TUI 雖可繞過此問題，卻會提高 CLI/VT 解析量，違反快路徑與隔離原則。因此區分「前景有輸出的 observe」和「只恢復 Host Session、不訂閱輸出的 recover」。
+
+**安全實作：**
+
+- Host `Session::start` 新增明確 `recover_only`，雙層防護：先驗證私有 Worker registry 與 PID／啟動身分，再在真正的 Worker attach 位置禁止任何 `spawn_pty`／`spawn_worker_pty` fallback；原本明確建立、重啟 Terminal 的呼叫一律傳 `false`，保留 Classic 行為。
+- `terminal.observeExisting` 遇到 Host 記憶體中沒有 Session 時，只允許從已註冊的 Workspace／Tab／Session 三重身分與真正存活 Worker 重建 Session。缺少 Worker、Tab 移動、身分不符、Worker 在檢查後消失，均回錯，絕不建立替代 Shell。傳入的 `launch`／shell／環境變數完全不參與 recovery。
+- 新增 Host `terminal.recoverExistingWorker`（需 Host 驗證）專用於背景 Tab，只重建原 Worker 的 Host Session，不建立輸出 view lease、不訂閱 TUI。CLI 私有 NDJSON `recover` 只轉送白名單三個 ID，不接受 shell/launch/任意 mutation，只有已驗證的 `observe` 才允許後續 `write`。
+- Native 每條新的私有 CLI stream 對非可見預覽各送至多一次 recover-only，並在 Host 回覆 `running=true` 且 Session ID 完全吻合後重新列出 Session。**在 Host 正式清單確認之前，舊 Tab 不因恢復回覆直接獲得輸入權限。**可見 Terminal 仍以獨立 view lease + snapshot/推播運作，不擴大背景輸出訂閱。
+
+**驗證紀錄：**新編譯 CLI `D:/c/t/debug/alera.exe` 與隔離 GPUI 執行檔 `D:/c/t/debug/alera-gpui-desktop.exe`，測試專用臨時 Runtime、兩個原生 Windows PTY。使用 `--native-host-restart --hold-seconds 3` 真正強制結束首次 Host PID，啟動另一個 Host PID，Native 自動建立新的 CLI 子程序並恢復兩個 Host Session；隔離腳本逐一比較兩個 Worker PID 與 Shell PID 都不變，**12/12 PASS**。沒有改動任何使用者正式 Host 或 Classic 的 Runtime。
+
+Native 新增恢復回覆識別測試後，全套 **325/325 Rust lib 測試通過**。Host 專項 `native_observe_recovery_refuses_absent_worker_even_if_tab_and_launch_are_valid` **1/1 PASS**，保護「註冊 Tab + 偽造 launch 但無 Worker」場景。Windows CLI 與 GPUI `cargo check`、實際 `cargo build` 均成功；保留 `.gpui-smoke-20261108/` 原始資料。
+
+**補充 GUI 真實畫面驗收**：重新執行 `--native-host-restart --hold-seconds 55`，測試 Host PID `35656` 被強制結束，由 Host PID `40116` 接替，兩個原有 Worker／Shell PID 均不變，原 Native stream sidecar 從 PID `7116` 恢復為 `30216`。完整隔離測試結束 **12/12 PASS，exit 0**。在這段真實 GPUI 視窗期間，透過獨立測試 CLI（非 GUI 合成輸入）向第一個原 PTY 寫入新 `echo AFTER_HOST_CRASH_GUI_OK_7391`，Windows 實際桌面截圖確認新標記與新提示字元出現在第一個 Native Terminal；切換到原第二個背景 Tab 後，原 `BULK_..._950` 尾端仍可見，再寫入新 `echo AFTER_BACKGROUND_RECOVERY_OK_5832`，實際桌面截圖確認新標記也顯示在第二個 GPUI Terminal，證實重啟後不只是 Host Session ID 恢復，連 UI VT snapshot、兩個 PTY 的後續輸出都能繼續呈現。**此檢查為依序切換兩個 Tab，不宣稱同時左右分割窗格已重新驗收。**
+
+CLI `terminal_stream::tests` 私有 recover 指令白名單 **2/2 PASS**，確保多餘 shell/launch/工作目錄不會傳到 Host；Native 背景恢復回覆身份拒絕案例併入上述 **325/325 PASS**。測試用 Host/GUI 結束後自動清理其專用程序及臨時目錄。
+
+**仍未驗收**：真正 GUI input-to-visible-output p50/p95、長時間多 TUI 背壓、同時雙分割窗格重啟後焦點／注音互動，以及 TSF 未完成組字焦點切換時 Windows 系統候選窗的取消行為。不能因 Worker PID、Host 清單及此次兩個 Tab 視覺恢復通過就直接標記 `supported=true`；不合併 `main`、不推送、不發布。
