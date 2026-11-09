@@ -1513,6 +1513,52 @@ impl GitActions {
         Ok(format!("Renamed checked-out branch {source} to {destination} in its owning worktree; no checkout or worktree file changes"))
     }
 
+    /// Delete a disposable local branch only after proving it is merged into
+    /// the active HEAD, not checked out in any worktree, and not protected.
+    /// Never delete remote refs, unreachable commits, or the current branch.
+    pub fn delete_merged_inactive_branch(&self, name: &str) -> Result<String, String> {
+        if !valid_branch(name) || matches!(name, "main" | "master" | "develop" | "development") {
+            return Err("Refusing unsafe or protected branch deletion".into());
+        }
+        let head = self.repo.head().map_err(|e| e.to_string())?;
+        if !head.is_branch() || head.shorthand().map_err(|e| e.to_string())? == name {
+            return Err("Cannot delete the current branch or detached HEAD".into());
+        }
+        let current = head.peel_to_commit().map_err(|e| e.to_string())?.id();
+        let manager = crate::worktree_manager::WorktreeManager::discover(&self.root)
+            .map_err(|e| e.to_string())?;
+        let entries = manager.list().map_err(|e| e.to_string())?;
+        if entries
+            .iter()
+            .any(|entry| entry.branch.as_deref() == Some(name))
+        {
+            return Err("Branch is checked out in another worktree; cannot delete".into());
+        }
+        let mut branch = self
+            .repo
+            .find_branch(name, BranchType::Local)
+            .map_err(|e| e.to_string())?;
+        let tip = branch
+            .get()
+            .peel_to_commit()
+            .map_err(|e| e.to_string())?
+            .id();
+        if tip != current
+            && !self
+                .repo
+                .graph_descendant_of(current, tip)
+                .map_err(|e| e.to_string())?
+        {
+            return Err("Branch has unmerged commits; refusing history loss".into());
+        }
+        branch
+            .delete()
+            .map_err(|e| format!("Git branch delete refused: {e}"))?;
+        Ok(format!(
+            "Deleted merged inactive local branch {name}; worktrees and remote branches unchanged"
+        ))
+    }
+
     pub fn switch_branch(&self, branch: &str) -> Result<(), String> {
         if !valid_branch(branch) {
             return Err("Invalid local branch name".into());
@@ -2452,6 +2498,58 @@ mod tests {
         assert!(actions.rename_inactive_branch("owned", "renamed").is_err());
         assert!(linked.exists());
         assert!(actions.repo.find_branch("owned", BranchType::Local).is_ok());
+        manager.remove(&linked, true).unwrap();
+    }
+
+    #[test]
+    fn safe_branch_delete_only_allows_merged_inactive_local() {
+        let (_dir, actions) = repo_fixture();
+        let repo = &actions.repo;
+        let head = repo.head().unwrap().peel_to_commit().unwrap();
+        let current_id = head.id();
+        let active_name = repo.head().unwrap().shorthand().unwrap().to_owned();
+        repo.branch("merged-safe", &head, false).unwrap();
+        repo.branch("develop", &head, false).unwrap();
+        assert!(actions.delete_merged_inactive_branch("develop").is_err());
+        assert!(actions.delete_merged_inactive_branch(&active_name).is_err());
+        assert!(actions.delete_merged_inactive_branch("../escape").is_err());
+        assert!(actions.delete_merged_inactive_branch("merged-safe").is_ok());
+        assert!(repo.find_branch("merged-safe", BranchType::Local).is_err());
+        assert_eq!(repo.head().unwrap().target(), Some(current_id));
+        assert_eq!(repo.head().unwrap().shorthand().unwrap(), active_name);
+
+        // A unique branch commit not reachable from current HEAD is protected.
+        let sig = git2::Signature::now("Test", "test@example.invalid").unwrap();
+        let next = repo
+            .commit(
+                Some("refs/heads/unmerged-safe"),
+                &sig,
+                &sig,
+                "unique commit",
+                &head.tree().unwrap(),
+                &[&head],
+            )
+            .unwrap();
+        assert_ne!(next, current_id);
+        assert!(actions
+            .delete_merged_inactive_branch("unmerged-safe")
+            .is_err());
+        assert!(repo.find_branch("unmerged-safe", BranchType::Local).is_ok());
+        assert_eq!(repo.head().unwrap().target(), Some(current_id));
+    }
+
+    #[test]
+    fn safe_branch_delete_refuses_any_worktree_owner() {
+        let (_dir, actions) = repo_fixture();
+        let manager = crate::worktree_manager::WorktreeManager::discover(actions.root()).unwrap();
+        let linked = manager.create("occupied-delete").unwrap();
+        assert!(actions
+            .delete_merged_inactive_branch("occupied-delete")
+            .is_err());
+        assert!(actions
+            .repo
+            .find_branch("occupied-delete", BranchType::Local)
+            .is_ok());
         manager.remove(&linked, true).unwrap();
     }
 

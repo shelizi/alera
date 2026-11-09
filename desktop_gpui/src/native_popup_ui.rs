@@ -510,6 +510,7 @@ impl Workbench {
         current: bool,
         has_worktree: bool,
         armed_remote: Option<(String, bool)>,
+        armed_delete: Option<String>,
     ) -> impl Fn(
         gpui_kit::component::menu::PopupMenu,
         &mut Window,
@@ -568,6 +569,16 @@ impl Workbench {
                     },
                     GitGraphBranchMenuAction::PushBranch,
                 ));
+                if !has_worktree {
+                    actions.push((
+                        if armed_delete.as_deref() == Some(branch.as_str()) {
+                            "Confirm Delete merged local branch"
+                        } else {
+                            "Delete merged local branch (confirm)"
+                        },
+                        GitGraphBranchMenuAction::DeleteMerged,
+                    ));
+                }
                 actions.push((
                     "Merge into current branch (confirm)",
                     GitGraphBranchMenuAction::Merge,

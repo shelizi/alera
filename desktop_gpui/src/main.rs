@@ -188,6 +188,7 @@ enum GitUiAction {
     Fetch,
     RenameInactiveBranch(String, String),
     RenameOwnedBranch(String, String),
+    DeleteMergedBranch(String),
     CreateCommitRef(GitCommitRefKind, String, String),
     ApplyCommitPreview(GitCommitApplyPreview),
     CreateWorktreeAtCommit(String, String),
@@ -244,6 +245,7 @@ enum GitGraphBranchMenuAction {
     Compare,
     CompareReverse,
     PrepareRename,
+    DeleteMerged,
     PullBranch,
     PushBranch,
     OpenWorktree,
@@ -431,6 +433,7 @@ struct Workbench {
     git_history_request: u64,
     git_merge_armed: Option<String>,
     git_graph_remote_armed: Option<(String, bool)>, // true = Pull, false = Push
+    git_branch_delete_armed: Option<String>,
     git_commit_ref_target: Option<(String, GitCommitRefKind)>,
     git_commit_ref_armed: Option<(String, GitCommitRefKind, String)>,
     git_commit_apply_preview: Option<GitCommitApplyPreview>,
@@ -2069,6 +2072,31 @@ impl Workbench {
                 );
                 cx.notify();
             }
+            GitGraphBranchMenuAction::DeleteMerged => {
+                if remote
+                    || self.git_action_busy
+                    || self
+                        .worktrees
+                        .iter()
+                        .any(|entry| entry.branch.as_deref() == Some(branch.as_str()))
+                {
+                    self.git_branch_delete_armed = None;
+                    self.git_action_status =
+                        "Delete only an inactive, merged local branch with no worktree owner"
+                            .into();
+                    cx.notify();
+                    return;
+                }
+                if self.git_branch_delete_armed.as_deref() == Some(branch.as_str()) {
+                    self.git_branch_delete_armed = None;
+                    self.run_git_action(GitUiAction::DeleteMergedBranch(branch), cx);
+                } else {
+                    self.git_branch_delete_armed = Some(branch.clone());
+                    self.git_action_status = format!(
+                        "Delete local branch '{branch}'? Only a branch already merged into current HEAD can be deleted. Reopen its Git Graph menu and choose Confirm Delete. Remote refs and working files stay unchanged.");
+                    cx.notify();
+                }
+            }
             GitGraphBranchMenuAction::PullBranch | GitGraphBranchMenuAction::PushBranch => {
                 if remote || self.git_action_busy {
                     return;
@@ -2705,6 +2733,7 @@ impl Workbench {
                         GitUiAction::RenameOwnedBranch(old, new) => {
                             git.rename_owned_branch(&old, &new)
                         }
+                        GitUiAction::DeleteMergedBranch(name) => git.delete_merged_inactive_branch(&name),
                         GitUiAction::CreateCommitRef(kind, oid, name) => {
                             git.create_ref_at_commit(kind, &oid, &name)
                         }
@@ -2742,6 +2771,7 @@ impl Workbench {
                 match result {
                     Ok(message) => {
                         view.git_action_status = message;
+                        view.git_branch_delete_armed = None;
                         view.git_amend_preview = None;
                         view.git_commit_ref_target = None;
                         view.git_commit_ref_armed = None;
@@ -3916,6 +3946,7 @@ impl Workbench {
         self.git_selected_changes.clear();
         self.git_selection_anchor = None;
         self.git_discard_armed = None;
+        self.git_branch_delete_armed = None;
         self.git_trash_preview = None;
         self.git_trash_loading = false;
         self.git_trash_request = self.git_trash_request.wrapping_add(1);
@@ -8389,6 +8420,7 @@ impl Render for Workbench {
                                                         cx.entity().downgrade(), context_branch,
                                                         remote, row.current, has_worktree,
                                                         self.git_graph_remote_armed.clone(),
+                                                        self.git_branch_delete_armed.clone(),
                                                     )))
                                         })))
                                     .when(!git_tag_rows.is_empty(), |panel| panel.child(
@@ -10637,6 +10669,7 @@ fn main() {
                             git_history_request: 0,
                             git_merge_armed: None,
                             git_graph_remote_armed: None,
+                            git_branch_delete_armed: None,
                             git_commit_ref_target: None,
                             git_commit_ref_armed: None,
                             git_commit_apply_preview: None,
