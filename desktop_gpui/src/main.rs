@@ -3058,6 +3058,55 @@ impl Workbench {
         .detach();
     }
 
+    fn copy_git_original_to_scratch(&mut self, cx: &mut Context<Self>) {
+        let Some(original) = self.git_original_tabs.active().cloned() else {
+            self.model
+                .set_status("Select a Git original read-only tab first");
+            cx.notify();
+            return;
+        };
+        if !self.git_original_active {
+            self.model
+                .set_status("Focus the Git original tab before copying to scratch");
+            cx.notify();
+            return;
+        }
+        let text = original.snapshot.content;
+        let root = self.model.root().to_path_buf();
+        let result = if let Some(owner) = self.focused_editor() {
+            owner
+                .update(cx, |editor, cx| {
+                    editor.open_scratch_with_text(&root, &text, cx)
+                })
+                .map(|_| ())
+        } else {
+            let mut tabs = EditorTabs::new(self.draft_store());
+            tabs.open_scratch(&root)
+                .and_then(|_| {
+                    tabs.document_mut()
+                        .ok_or_else(|| std::io::Error::other("New scratch document unavailable"))?
+                        .replace(None, &text)
+                })
+                .map(|_| {
+                    self.install_editor(tabs, cx);
+                })
+        };
+        match result {
+            Ok(()) => {
+                self.git_original_active = false;
+                self.explorer_preview_active = false;
+                self.center_view = CenterView::Editor;
+                self.model.set_status(
+                    "Git original copied to editable scratch; Save As to create a worktree file",
+                );
+            }
+            Err(error) => self
+                .model
+                .set_status(format!("Cannot copy Git revision into scratch: {error}")),
+        }
+        cx.notify();
+    }
+
     fn focus_git_original_tab(&mut self, instance: u64, cx: &mut Context<Self>) {
         if self.git_original_tabs.activate(instance) {
             self.git_original_active = true;
@@ -9310,8 +9359,14 @@ impl Render for Workbench {
                                         .flex_1().min_h_0().flex().flex_col()
                                         .bg(rgb(BG))
                                         .child(div().px_4().py_2().bg(rgb(PANEL))
-                                            .text_xs().text_color(rgb(TEXT))
-                                            .child(format!("Read-only Git original · {}", original.description())))
+                                            .flex().items_center().gap_2()
+                                            .child(div().flex_1().min_w_0().text_xs().text_color(rgb(TEXT))
+                                                .child(format!("Read-only Git original · {}", original.description())))
+                                            .child(icon_button("git-original-copy-scratch", UiIcon::NewFile,
+                                                "Copy this Git revision into a new editable scratch tab", false)
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.copy_git_original_to_scratch(cx);
+                                                }))))
                                         .child(div().id("git-original-readonly-scroll")
                                             .flex_1().min_h_0().overflow_y_scroll()
                                             .p_4().text_sm().font_family("JetBrains Mono")

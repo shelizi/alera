@@ -369,6 +369,25 @@ impl NativeEditor {
         Ok(effect)
     }
 
+    /// Explicitly make an editable scratch copy of a Git revision or other
+    /// read-only snapshot. The source file and Git object are never opened
+    /// for writing; Save As uses normal scratch document safeguards.
+    pub fn open_scratch_with_text(
+        &mut self,
+        root: &Path,
+        text: &str,
+        cx: &mut Context<Self>,
+    ) -> io::Result<OpenEffect> {
+        let effect = self.open_scratch(root, cx)?;
+        let document = self.tabs.document_mut().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::Other, "New scratch document unavailable")
+        })?;
+        document.replace(None, text)?;
+        self.status = "Copied Git original into new editable scratch; Save As to keep it".into();
+        cx.notify();
+        Ok(effect)
+    }
+
     pub fn activate_tab(&mut self, index: usize, cx: &mut Context<Self>) {
         self.tab_context = None;
         if self.tabs.activate(index) {

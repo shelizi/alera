@@ -39,7 +39,7 @@
 - [x] Add Open Worktree File in Alera and Open Externally (optional ALERA_EXTERNAL_EDITOR executable, otherwise OS-associated app); canonical path confinement and symlink safety.
 - [x] Add guarded Git Commit Amend: prepare exact HEAD/index/message preview, second-click confirmation; reject stale index, conflicts, pushed/reachable upstream HEAD, merge commit and no-op. Never force-push.
 - [x] Add two-step Untracked OS Trash/Recycle Bin workflow: limit 80 regular files/32 MiB, SHA content fingerprint, index/status/path checks and exact replay protection, refuse symlinks and permanent-delete fallback.
-- [ ] Add copying a selected Git revision to a new editable scratch only on explicit request.
+- [x] Add explicit Copy to editable scratch from an immutable Git original tab: creates a new NativeEditor scratch with ordinary Undo and Save As; original Git Blob and worktree file remain unchanged.
 - [x] Coalesce manual refresh requests when a previous snapshot is in-flight; discard obsolete first result and refresh again; reset pending queue across workspace switches. Dedicated in-flight UI smoke still pending.
 - [x] Add scoped notify filesystem watcher for worktree and common Git metadata with bounded event channels, 250ms quiet window/1400ms maximum delay, linked-worktree Git ref detection, and coalesced Graph refresh on external branch/Tag/HEAD changes.
 - [ ] Verify sustained large-repository Windows watch throughput and recover from platform watcher disconnects; add optional reconciliation fallback.

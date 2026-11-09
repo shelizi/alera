@@ -669,6 +669,27 @@ mod tests {
     use std::fs;
 
     #[test]
+    fn explicit_git_snapshot_to_scratch_is_editable_without_modifying_source_file() {
+        let workspace = tempfile::tempdir().unwrap();
+        let root = workspace.path();
+        fs::write(root.join("tracked.txt"), "live worktree content").unwrap();
+        let mut tabs = EditorTabs::new(None);
+        tabs.open_scratch(root).unwrap();
+        let snapshot = "old committed content\n";
+        let doc = tabs.document_mut().unwrap();
+        doc.replace(None, snapshot).unwrap();
+        assert!(doc.is_dirty());
+        assert!(doc.path().is_none());
+        assert_eq!(doc.content(), snapshot);
+        doc.undo();
+        assert_eq!(doc.content(), "");
+        assert_eq!(
+            fs::read_to_string(root.join("tracked.txt")).unwrap(),
+            "live worktree content"
+        );
+    }
+
+    #[test]
     fn tab_instance_follows_reorder_but_is_not_reused_after_close() {
         let workspace = tempfile::tempdir().unwrap();
         let root = workspace.path();
