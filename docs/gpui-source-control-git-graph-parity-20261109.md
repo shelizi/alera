@@ -19,7 +19,7 @@
 | Source Control commits | Message validation, commit staged, amend / suggested message | Commit staged supported | P1 amend and optional AI if configured |
 | Git refresh | Timely repository / FS watcher updates, manual refresh reliable | Native refresh click and async snapshot | P0 bounded refresh on Git operations; P1 watcher |
 | Git Graph ref list | Current ref first, favorites, local/remote/tag tabs; filters | Local+remote refs, favorites, current ordering adjusted | P0 ordering; P1 tags / search |
-| Git Graph branch right-click | Switch/worktree, compare, rename, pull, push, merge, rebase, archive, delete | Native History/Compare both directions/Worktree/Switch/Merge prepare/Copy plus guarded selected Pull/Push | P1 implemented except rename; P2 rewrite operations |
+| Git Graph branch right-click | Switch/worktree, compare, rename, pull, push, merge, rebase, archive, delete | Native History/Compare both directions/Worktree/Switch/Merge prepare/Copy, selected Pull/Push and safe inactive-local-branch rename | P1 core implemented; active-branch rename and destructive actions remain later |
 | Git Graph commit right-click | Preview, copy SHA/subject, branch/tag/worktree at commit, cherry-pick/revert/merge, resets etc. | Native read-only preview + copy SHA/subject | P0 safe subset; P1 branch/tag/worktree; P2 destructive writes |
 | Existing worktree navigation | For branches checked out elsewhere, offer open corresponding workspace instead of duplicate checkout | Native branch context menu identifies matching worktree and revalidates branch before switching | P0; finish with tests |
 | Branch compare | Current vs selected with explicit direction and original-file opening | Structured merge-base-to-target file list; direction toggle; per-file committed diff/original in read-only preview | P1 implemented, Windows UI acceptance pending |
@@ -48,7 +48,8 @@
 - [x] Add guarded "Pull branch without switching" (non-checked-out fast-forward with CAS) and "Push selected branch" (exact tracked upstream, no force) to Git Graph right-click. Reuse existing Git service and two-step confirmation.
 - [x] Add explicitly confirmed selected-branch Pull/Push actions to right-side branch controls (no checkout, no force).
 - [ ] Consolidate selected branch actions into the dropdown itself and share UX for Merge-into-current without checkout.
-- [ ] Add guarded rename/delete/ref creation, tag/branch-at-commit, cherry-pick/revert/worktree-at-commit.
+- [x] Guarded rename of inactive local branch: GPUI Kit input, two-step confirmation, refuse checked-out worktree and existing destination; preserve HEAD and other worktrees.
+- [ ] Add tag/branch-at-commit, guarded delete, cherry-pick/revert and worktree-at-commit. Active-branch rename needs separate explicit worktree-aware operation.
 - [ ] Put reset/rebase/drop/force/destructive operations behind their own later explicit preview + confirmation; do not implement them as unconfirmed right-click actions.
 
 ## Tests / gates

@@ -174,6 +174,7 @@ enum GitUiAction {
     SwitchBranch(String),
     MergeWithoutConflicts(String),
     Fetch,
+    RenameInactiveBranch(String, String),
     PullSelected(String),
     PushSelected(String),
     StashSave,
@@ -226,6 +227,7 @@ enum GitGraphBranchMenuAction {
     History,
     Compare,
     CompareReverse,
+    PrepareRename,
     PullBranch,
     PushBranch,
     OpenWorktree,
@@ -401,6 +403,8 @@ struct Workbench {
     git_history_request: u64,
     git_merge_armed: Option<String>,
     git_graph_remote_armed: Option<(String, bool)>, // true = Pull, false = Push
+    git_rename_source: Option<String>,
+    git_rename_armed: Option<(String, String)>,
     git_sensitive_armed: Option<ConfirmGitAction>,
     git_conflict_preview: Option<GitConflictPlan>,
     git_conflict_choices: HashMap<String, GitConflictChoice>,
@@ -411,6 +415,7 @@ struct Workbench {
     git_filter_input: Entity<QuickOpenInput>,
     git_commit_input: Entity<QuickOpenInput>,
     git_branch_input: Entity<QuickOpenInput>,
+    git_rename_input: Entity<QuickOpenInput>,
     git_action_busy: bool,
     git_action_request: u64,
     git_action_status: String,
@@ -1806,6 +1811,28 @@ impl Workbench {
                     self.compare_git_branch_files(branch, CompareDirection::SelectedToCurrent, cx);
                 }
             }
+            GitGraphBranchMenuAction::PrepareRename => {
+                if remote
+                    || self.git_action_busy
+                    || self
+                        .worktrees
+                        .iter()
+                        .any(|entry| entry.branch.as_deref() == Some(branch.as_str()))
+                {
+                    self.git_action_status =
+                        "Only inactive local branches can be renamed from Git Graph".into();
+                    cx.notify();
+                    return;
+                }
+                self.git_rename_source = Some(branch.clone());
+                self.git_rename_armed = None;
+                self.git_rename_input
+                    .update(cx, |input, cx| input.clear(cx));
+                self.git_action_status = format!(
+                    "Rename {branch}: enter the new branch name below Git Graph, then confirm twice."
+                );
+                cx.notify();
+            }
             GitGraphBranchMenuAction::PullBranch | GitGraphBranchMenuAction::PushBranch => {
                 if remote || self.git_action_busy {
                     return;
@@ -1866,6 +1893,37 @@ impl Workbench {
     fn set_git_history_ref(&mut self, selected: Option<String>, cx: &mut Context<Self>) {
         self.git_history_options.selected_ref = selected;
         self.refresh_git_history(cx);
+    }
+
+    fn confirm_graph_branch_rename(&mut self, cx: &mut Context<Self>) {
+        let Some(old) = self.git_rename_source.clone() else {
+            return;
+        };
+        let new = self.git_rename_input.read(cx).query().trim().to_owned();
+        if self.git_action_busy || new.is_empty() || old == new {
+            self.git_action_status = "Enter a different, non-empty branch name to rename".into();
+            cx.notify();
+            return;
+        }
+        let pending = (old.clone(), new.clone());
+        if self.git_rename_armed.as_ref() != Some(&pending) {
+            self.git_rename_armed = Some(pending);
+            self.git_action_status = format!(
+                "Confirm renaming inactive branch {old} to {new}. Click Confirm Rename again. Remote branches and worktrees will not be renamed."
+            );
+            cx.notify();
+            return;
+        }
+        self.git_rename_armed = None;
+        self.run_git_action(GitUiAction::RenameInactiveBranch(old, new), cx);
+    }
+
+    fn cancel_graph_branch_rename(&mut self, cx: &mut Context<Self>) {
+        self.git_rename_source = None;
+        self.git_rename_armed = None;
+        self.git_rename_input
+            .update(cx, |input, cx| input.clear(cx));
+        cx.notify();
     }
 
     fn confirm_selected_branch_remote(&mut self, pull: bool, cx: &mut Context<Self>) {
@@ -2121,6 +2179,9 @@ impl Workbench {
                             git.fetch_current_remote()?;
                             Ok("Fetched remote refs; working tree unchanged".to_string())
                         }
+                        GitUiAction::RenameInactiveBranch(old, new) => {
+                            git.rename_inactive_branch(&old, &new)
+                        }
                         GitUiAction::PullSelected(branch) => {
                             git.pull_branch_without_switch(&branch)
                         }
@@ -2147,6 +2208,9 @@ impl Workbench {
                 match result {
                     Ok(message) => {
                         view.git_action_status = message;
+                        view.git_rename_source = None;
+                        view.git_rename_armed = None;
+                        view.git_rename_input.update(cx, |input, cx| input.clear(cx));
                         view.git_conflict_preview = None;
                         view.git_conflict_choices.clear();
                         view.git_conflict_selected = None;
@@ -3184,6 +3248,8 @@ impl Workbench {
         self.git_history_request = self.git_history_request.wrapping_add(1);
         self.git_merge_armed = None;
         self.git_graph_remote_armed = None;
+        self.git_rename_source = None;
+        self.git_rename_armed = None;
         self.git_sensitive_armed = None;
         self.git_conflict_preview = None;
         self.git_conflict_choices.clear();
@@ -3198,6 +3264,8 @@ impl Workbench {
         self.git_commit_input
             .update(cx, |input, cx| input.clear(cx));
         self.git_branch_input
+            .update(cx, |input, cx| input.clear(cx));
+        self.git_rename_input
             .update(cx, |input, cx| input.clear(cx));
         self.git_diff = None;
         self.git_branch_comparison = None;
@@ -6547,6 +6615,9 @@ impl Render for Workbench {
         let git_action_status = self.git_action_status.clone();
         let git_commit_input = self.git_commit_input.clone();
         let git_branch_input = self.git_branch_input.clone();
+        let git_rename_source = self.git_rename_source.clone();
+        let git_rename_input = self.git_rename_input.clone();
+        let git_rename_armed = self.git_rename_armed.is_some();
         let git_graph_open = self.git_history_open;
         let git_graph_all_branches = self.git_history_options.all_branches;
         let git_graph_favorites_only = self.git_history_options.favorites_only;
@@ -7298,6 +7369,23 @@ impl Render for Workbench {
                                     .flex_col()
                                     .gap_1()
                                     .child(div().text_xs().text_color(rgb(MUTED)).child(git_history_status))
+                                    .when_some(git_rename_source, |panel, source| panel.child(
+                                        div().flex().flex_col().gap_1()
+                                            .child(div().text_xs().text_color(rgb(TEXT))
+                                                .child(format!("Rename local branch: {source}")))
+                                            .child(div().flex().items_center().gap_1()
+                                                .child(div().flex_1().min_w_0().child(git_rename_input))
+                                                .child(icon_button("git-rename-confirm", if git_rename_armed { UiIcon::Check } else { UiIcon::Edit },
+                                                    if git_rename_armed { "Confirm branch rename" } else { "Prepare branch rename (confirm twice)" },
+                                                    git_rename_armed)
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.confirm_graph_branch_rename(cx);
+                                                    })))
+                                                .child(icon_button("git-rename-cancel", UiIcon::Close, "Cancel rename", false)
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.cancel_graph_branch_rename(cx);
+                                                    }))))
+                                    ))
                                     .child(if git_graph_file.is_some() || git_graph_scope.is_some() {
                                         div()
                                             .flex()
@@ -9569,6 +9657,8 @@ fn main() {
                             git_history_request: 0,
                             git_merge_armed: None,
                             git_graph_remote_armed: None,
+                            git_rename_source: None,
+                            git_rename_armed: None,
                             git_sensitive_armed: None,
                             git_conflict_preview: None,
                             git_conflict_choices: HashMap::new(),
@@ -9582,6 +9672,8 @@ fn main() {
                                 .new(|cx| QuickOpenInput::with_placeholder("Commit message", cx)),
                             git_branch_input: cx
                                 .new(|cx| QuickOpenInput::with_placeholder("Existing branch", cx)),
+                            git_rename_input: cx
+                                .new(|cx| QuickOpenInput::with_placeholder("New branch name", cx)),
                             git_action_busy: false,
                             git_action_request: 0,
                             git_action_status: String::new(),

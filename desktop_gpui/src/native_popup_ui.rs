@@ -517,6 +517,10 @@ impl Workbench {
                     ));
                 } else {
                     actions.push(("Switch to branch", GitGraphBranchMenuAction::Switch));
+                    actions.push((
+                        "Rename inactive branch…",
+                        GitGraphBranchMenuAction::PrepareRename,
+                    ));
                 }
                 actions.push((
                     if armed_remote.as_ref() == Some(&(branch.clone(), true)) {

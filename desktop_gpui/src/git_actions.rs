@@ -856,6 +856,44 @@ impl GitActions {
         Ok(oid.to_string())
     }
 
+    /// Rename only a local branch that is not checked out by any linked
+    /// worktree. Never force overwrite another ref or rename the active HEAD.
+    /// The confirmation UI supplies both exact names, revalidated here.
+    pub fn rename_inactive_branch(
+        &self,
+        source: &str,
+        destination: &str,
+    ) -> Result<String, String> {
+        if !valid_branch(source) || !valid_branch(destination) || source == destination {
+            return Err("Provide distinct valid local Git branch names".into());
+        }
+        let manager = crate::worktree_manager::WorktreeManager::discover(&self.root)
+            .map_err(|error| format!("Cannot inspect worktrees: {error}"))?;
+        let entries = manager.list().map_err(|error| error.to_string())?;
+        if entries
+            .iter()
+            .any(|entry| entry.branch.as_deref() == Some(source))
+        {
+            return Err(
+                "Source branch is checked out in a worktree; open it to manage its name".into(),
+            );
+        }
+        if self
+            .repo
+            .find_branch(destination, BranchType::Local)
+            .is_ok()
+        {
+            return Err("Destination branch already exists; no overwrite permitted".into());
+        }
+        let mut old = self
+            .repo
+            .find_branch(source, BranchType::Local)
+            .map_err(|error| error.to_string())?;
+        old.rename(destination, false)
+            .map_err(|error| format!("Git branch rename failed; inspect branch refs: {error}"))?;
+        Ok(format!("Renamed local branch {source} to {destination}; upstream and remote branches unchanged"))
+    }
+
     pub fn switch_branch(&self, branch: &str) -> Result<(), String> {
         if !valid_branch(branch) {
             return Err("Invalid local branch name".into());
@@ -1317,6 +1355,59 @@ mod tests {
         assert!(GitActions::open(&child).is_err());
         assert!(actions.switch_branch("missing").is_err());
         assert!(actions.commit(" ").is_err());
+    }
+
+    #[test]
+    fn inactive_branch_rename_preserves_worktree_head_and_does_not_overwrite() {
+        let (_dir, actions) = repo_fixture();
+        let current = actions.repo.head().unwrap().shorthand().unwrap().to_owned();
+        let head_id = actions.repo.head().unwrap().peel_to_commit().unwrap().id();
+        let head_commit = actions.repo.find_commit(head_id).unwrap();
+        actions.repo.branch("source", &head_commit, false).unwrap();
+        actions
+            .repo
+            .branch("existing", &head_commit, false)
+            .unwrap();
+        assert!(actions
+            .rename_inactive_branch("source", "existing")
+            .is_err());
+        assert!(actions
+            .rename_inactive_branch("source", "../traversal")
+            .is_err());
+        assert!(actions
+            .rename_inactive_branch(&current, "renamed-current")
+            .is_err());
+        assert!(actions
+            .repo
+            .find_branch("source", BranchType::Local)
+            .is_ok());
+        assert!(actions
+            .rename_inactive_branch("source", "renamed-source")
+            .is_ok());
+        assert!(actions
+            .repo
+            .find_branch("source", BranchType::Local)
+            .is_err());
+        assert!(actions
+            .repo
+            .find_branch("renamed-source", BranchType::Local)
+            .is_ok());
+        assert_eq!(actions.repo.head().unwrap().shorthand().unwrap(), current);
+        assert_eq!(
+            actions.repo.head().unwrap().peel_to_commit().unwrap().id(),
+            head_id
+        );
+    }
+
+    #[test]
+    fn branch_rename_refuses_linked_worktree_owner() {
+        let (_dir, actions) = repo_fixture();
+        let manager = crate::worktree_manager::WorktreeManager::discover(actions.root()).unwrap();
+        let linked = manager.create("owned").unwrap();
+        assert!(actions.rename_inactive_branch("owned", "renamed").is_err());
+        assert!(linked.exists());
+        assert!(actions.repo.find_branch("owned", BranchType::Local).is_ok());
+        manager.remove(&linked, true).unwrap();
     }
 
     #[test]
