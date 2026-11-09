@@ -39,6 +39,16 @@ impl ExplorerMultiSelection {
         self.paths.len()
     }
 
+    /// GPUI ScrollHandle indexes *painted direct children*, not filesystem
+    /// paths. Use the exact visible order (filter/tree/flat) rather than an
+    /// index from a different presentation or a guessed row height.
+    pub fn visible_row_index(&self, path: &Path, visible: &[PathBuf]) -> Option<usize> {
+        if path == self.root || !path.starts_with(&self.root) {
+            return None;
+        }
+        visible.iter().position(|row| row == path)
+    }
+
     /// A stale selection (after refresh/filter/collapse) is not used to
     /// calculate an out-of-range target. Invalid rows can never be selected.
     pub fn navigate(
@@ -174,6 +184,25 @@ impl ExplorerMultiSelection {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scroll_target_index_matches_current_visible_presentation_only() {
+        let root = PathBuf::from("C:/safe");
+        let nested = root.join("src/main.rs");
+        let sibling = root.join("README.md");
+        let hidden = root.join("src/hidden.rs");
+        let selection = ExplorerMultiSelection::new(&root);
+        let filtered = vec![nested.clone(), sibling.clone()];
+        let tree = vec![root.join("src"), sibling.clone(), nested.clone()];
+        assert_eq!(selection.visible_row_index(&nested, &filtered), Some(0));
+        assert_eq!(selection.visible_row_index(&nested, &tree), Some(2));
+        assert_eq!(selection.visible_row_index(&hidden, &filtered), None);
+        assert_eq!(selection.visible_row_index(&root, &filtered), None);
+        assert_eq!(
+            selection.visible_row_index(&PathBuf::from("C:/outside"), &tree),
+            None
+        );
+    }
 
     #[test]
     fn arrow_navigation_keeps_one_visible_target_and_clamps_ends() {

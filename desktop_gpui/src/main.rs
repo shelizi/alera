@@ -83,7 +83,7 @@ use alera_gpui_desktop::worktree_manager::{WorktreeEntry, WorktreeManager};
 use editor_ui::{bind_editor_keys, NativeEditor};
 use gpui::{
     actions, div, prelude::*, px, rgb, size, App, Bounds, Context, Entity, Focusable, KeyBinding,
-    PathPromptOptions, Window, WindowBounds, WindowOptions,
+    PathPromptOptions, ScrollHandle, Window, WindowBounds, WindowOptions,
 };
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenuItem};
@@ -335,6 +335,9 @@ struct Workbench {
     /// dropping its existing dirty buffer, tab identity, or undo history.
     explorer_preview_active: bool,
     explorer_keyboard_focus: gpui::FocusHandle,
+    /// Persistent GPUI viewport handle; keyboard movement reveals its real
+    /// variable-height row in the current filtered/tree/flat presentation.
+    explorer_scroll: ScrollHandle,
     explorer_clipboard: Option<ExplorerClipboardBatch>,
     explorer_drop_busy: bool,
     explorer_drop_request: u64,
@@ -1971,6 +1974,14 @@ impl Workbench {
             &visible,
             direction,
         ) {
+            if let Some(index) = self
+                .explorer_multi_selection
+                .visible_row_index(&path, &visible)
+            {
+                // GPUI resolves this against actual painted children. Do not
+                // guess 32px rows: filtered results can have a second line.
+                self.explorer_scroll.scroll_to_item(index);
+            }
             self.explorer_selection = Some(path);
             self.explorer_delete_confirmed = false;
             self.explorer_delete_pending = None;
@@ -2926,6 +2937,8 @@ impl Workbench {
         self.mixed_tab_context = None;
         self.tree = WorkspaceTree::new_with_options(&canonical, self.explorer_visibility).ok();
         self.explorer_multi_selection = ExplorerMultiSelection::new(&canonical);
+        // Never inherit a remote worktree's vertical list position.
+        self.explorer_scroll.scroll_to_item(0);
         self.explorer_preview_active = false;
         self.explorer_filter_input
             .update(cx, |input, cx| input.clear(cx));
@@ -6783,6 +6796,7 @@ impl Render for Workbench {
                                     .flex_1()
                                     .min_h_0()
                                     .id("explorer-scroll")
+                                    .track_scroll(&self.explorer_scroll)
                                     .on_drop(cx.listener(|this, paths: &gpui::ExternalPaths, _, cx| {
                                         this.import_explorer_drop(paths.paths().to_vec(), None, cx);
                                     }))
@@ -9286,6 +9300,7 @@ fn main() {
                             explorer_multi_selection: ExplorerMultiSelection::new(model.root()),
                             explorer_preview_active: false,
                             explorer_keyboard_focus: cx.focus_handle(),
+                            explorer_scroll: ScrollHandle::new(),
                             explorer_clipboard: None,
                             explorer_drop_busy: false,
                             explorer_drop_request: 0,
