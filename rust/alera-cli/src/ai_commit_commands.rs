@@ -44,25 +44,22 @@ fn configured_agent_plan(settings: &RuntimeAiAssistSettings) -> Result<AgentPlan
                 .selected_model_by_agent
                 .get(agent)
                 .map(String::as_str)
-        })
-        .unwrap_or(match agent {
-            "codex" => "gpt-5.5",
-            "claude" => "sonnet",
-            _ => "",
         });
     // Do not attempt to interpret or run custom commands from the profile.
     // Other registered agents need their own verified read-only adapter.
     if !matches!(agent, "codex" | "claude") {
         bail!("Native AI Commit currently supports read-only Codex or Claude only. Select one in Classic AI Assist settings.");
     }
-    if model.trim().is_empty() || model.len() > 128 || model.chars().any(|c| c.is_control()) {
+    if model.is_some_and(|model| {
+        model.trim().is_empty() || model.len() > 128 || model.chars().any(|c| c.is_control())
+    }) {
         bail!("AI Assist model selection is invalid");
     }
     let thinking = settings
         .selected_thinking_by_operation
         .get("commitMessage")
-        .and_then(|values| values.get(model))
-        .or_else(|| settings.selected_thinking_by_model.get(model));
+        .and_then(|values| model.and_then(|model| values.get(model)))
+        .or_else(|| model.and_then(|model| settings.selected_thinking_by_model.get(model)));
     // Match Classic: send reasoning effort only when the user selected one.
     let thinking = thinking.map(String::as_str);
     if thinking.is_some_and(|value| !matches!(value, "low" | "medium" | "high" | "xhigh" | "max")) {
@@ -74,11 +71,17 @@ fn configured_agent_plan(settings: &RuntimeAiAssistSettings) -> Result<AgentPlan
                 "exec".into(),
                 "--ephemeral".into(),
                 "--skip-git-repo-check".into(),
+                "--ignore-user-config".into(),
+                "--ignore-rules".into(),
                 "-s".into(),
                 "read-only".into(),
-                "--model".into(),
-                model.into(),
             ];
+            // When Classic has no explicit model selection, use the installed
+            // Codex CLI's supported account default. A hard-coded model can be
+            // unavailable for ChatGPT-based Codex logins.
+            if let Some(model) = model {
+                args.extend(["--model".into(), model.into()]);
+            }
             if let Some(thinking) = thinking {
                 args.extend(["-c".into(), format!("model_reasoning_effort={thinking}")]);
             }
@@ -89,10 +92,10 @@ fn configured_agent_plan(settings: &RuntimeAiAssistSettings) -> Result<AgentPlan
                 "-p".into(),
                 "--output-format".into(),
                 "text".into(),
-                "--model".into(),
-                model.into(),
                 "--permission-mode".into(),
                 "plan".into(),
+                "--safe-mode".into(),
+                "--restricted".into(),
                 "--strict-mcp-config".into(),
                 "--mcp-config".into(),
                 "{\"mcpServers\":{}}".into(),
@@ -100,6 +103,9 @@ fn configured_agent_plan(settings: &RuntimeAiAssistSettings) -> Result<AgentPlan
                 "".into(),
                 "--no-chrome".into(),
             ];
+            if let Some(model) = model {
+                args.extend(["--model".into(), model.into()]);
+            }
             if let Some(thinking) = thinking {
                 args.extend(["--effort".into(), thinking.into()]);
             }
@@ -474,10 +480,21 @@ mod tests {
         let plan = configured_agent_plan(&settings).unwrap();
         assert_eq!(plan.program, "codex");
         assert!(plan.args.windows(2).any(|args| args == ["-s", "read-only"]));
+        assert!(plan.args.iter().any(|arg| arg == "--ignore-user-config"));
+        assert!(plan.args.iter().any(|arg| arg == "--ignore-rules"));
+        assert!(!plan.args.iter().any(|arg| arg == "--model"));
         assert!(!plan
             .args
             .iter()
             .any(|value| value.contains("model_reasoning_effort=")));
+        settings
+            .selected_model_by_agent
+            .insert("codex".into(), "codex-approved-model".into());
+        let plan = configured_agent_plan(&settings).unwrap();
+        assert!(plan
+            .args
+            .windows(2)
+            .any(|args| args == ["--model", "codex-approved-model"]));
         settings.prompt_settings_by_operation.insert(
             "commitMessage".into(),
             alera_core::runtime::RuntimeAiAssistPromptSettings {
@@ -488,6 +505,9 @@ mod tests {
         let plan = configured_agent_plan(&settings).unwrap();
         assert_eq!(plan.program, "claude");
         assert!(plan.args.windows(2).any(|args| args == ["--tools", ""]));
+        assert!(plan.args.iter().any(|arg| arg == "--safe-mode"));
+        assert!(plan.args.iter().any(|arg| arg == "--restricted"));
+        assert!(plan.args.windows(2).any(|args| args == ["--model", "opus"]));
         assert!(plan.args.iter().any(|s| s == "--strict-mcp-config"));
         settings.prompt_settings_by_operation.clear();
         settings.agent = "custom".into();
