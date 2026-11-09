@@ -94,6 +94,59 @@ void main() {
     },
   );
 
+  test(
+    'manual refresh requested during an action is queued, not discarded',
+    () async {
+      final backend = _BlockingFetchGitBackend()
+        ..gitStatusResult = _statusWith(1);
+      final watcher = FakeSourceControlWatcher();
+      addTearDown(watcher.dispose);
+      final (container, controller) = await _boot(backend, watcher);
+      final provider = workspaceSourceControlControllerProvider(_workspacePath);
+      final action = controller.fetch();
+      await Future.pause(const Duration(milliseconds: 20));
+      expect(container.read(provider).requireValue.isBusy, isTrue);
+
+      final first = controller.refresh();
+      final second = controller.refresh();
+      expect(identical(first, second), isTrue);
+      backend.gitStatusResult = _statusWith(4);
+      backend.gate.complete();
+      await action;
+      await Future.wait([first, second]);
+      expect(
+        container.read(provider).requireValue.status.entries,
+        hasLength(4),
+      );
+      expect(container.read(provider).requireValue.isBusy, isFalse);
+      expect(
+        backend.calls.where((call) => call.method == 'status').length,
+        greaterThanOrEqualTo(3),
+      );
+    },
+  );
+
+  test(
+    'manual refresh publishes file changes before slow repository metadata',
+    () async {
+      final backend = FakeGitBackend()..gitStatusResult = _statusWith(1);
+      final watcher = FakeSourceControlWatcher();
+      addTearDown(watcher.dispose);
+      final (container, controller) = await _boot(backend, watcher);
+      final provider = workspaceSourceControlControllerProvider(_workspacePath);
+      final gate = Completer<void>();
+      backend.beforeRepositoryState = (_) => gate.future;
+      backend.gitStatusResult = _statusWith(3);
+      await controller.refresh();
+      expect(
+        container.read(provider).requireValue.status.entries,
+        hasLength(3),
+      );
+      expect(container.read(provider).requireValue.isBusy, isFalse);
+      gate.complete();
+      await Future.pause(const Duration(milliseconds: 40));
+    },
+  );
   test('a watch signal reloads source control state', () async {
     final backend = FakeGitBackend()..gitStatusResult = _statusWith(1);
     final watcher = FakeSourceControlWatcher();
@@ -278,6 +331,36 @@ void main() {
     expect(statusCalls(), callsAfterBurst + 1);
   });
 
+  test(
+    'reconnects after watcher stream closes and reconciles missed changes',
+    () async {
+      final backend = FakeGitBackend()..gitStatusResult = _statusWith(1);
+      final watcher = FakeSourceControlWatcher();
+      addTearDown(watcher.dispose);
+      final (container, _) = await _boot(backend, watcher);
+      final provider = workspaceSourceControlControllerProvider(_workspacePath);
+      expect(watcher.startCount, 1);
+
+      backend.gitStatusResult = _statusWith(2);
+      await watcher.closeStream();
+      // The lost-stream reconciliation runs before the delayed reconnect.
+      await Future.pause(const Duration(milliseconds: 450));
+      expect(watcher.startCount, 2);
+      expect(watcher.stopCount, greaterThanOrEqualTo(1));
+      expect(
+        container.read(provider).requireValue.status.entries,
+        hasLength(2),
+      );
+
+      backend.gitStatusResult = _statusWith(3);
+      watcher.emitChange();
+      await Future.pause(const Duration(milliseconds: 300));
+      expect(
+        container.read(provider).requireValue.status.entries,
+        hasLength(3),
+      );
+    },
+  );
   test('disposing the controller stops the watcher', () async {
     final backend = FakeGitBackend()..gitStatusResult = _statusWith(0);
     final watcher = FakeSourceControlWatcher();

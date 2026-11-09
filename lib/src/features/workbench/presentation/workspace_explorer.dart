@@ -149,6 +149,10 @@ class _WorkspaceExplorerState extends ConsumerState<WorkspaceExplorer> {
   bool _nativeProjectionDisabled = false;
   native.WorkspaceExplorerWatcherHandle? _watcherHandle;
   StreamSubscription<native.WorkspaceExplorerWatchBatch>? _watchSubscription;
+  int _watcherGeneration = 0;
+  Timer? _watcherRetryTimer;
+  int _watcherFailureCount = 0;
+  bool _watcherRecoveryInFlight = false;
   bool _watchRefreshInFlight = false;
   final Set<String> _pendingWatchedDirectories = <String>{};
   Set<String>? _lastSyncedWatchedDirectories;

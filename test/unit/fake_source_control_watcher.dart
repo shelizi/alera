@@ -6,13 +6,15 @@ import 'package:alera/src/rust/api/workspace_files.dart' as native;
 /// In-memory [SourceControlWatcher] for tests: lets a test drive watch signals
 /// without touching the filesystem or the native bridge.
 class FakeSourceControlWatcher() extends SourceControlWatcher {
-  final StreamController<native.SourceControlWatchSignal> _signals =
+  StreamController<native.SourceControlWatchSignal> _signals =
       StreamController<native.SourceControlWatchSignal>.broadcast();
 
   int startCount = 0;
   int stopCount = 0;
 
   /// Emits a watch signal, mimicking an external file or `.git/` change.
+  Future<void> closeStream() => _signals.close();
+
   void emitChange({int coalescedEventCount = 1}) {
     _signals.add(
       native.SourceControlWatchSignal(coalescedEventCount: coalescedEventCount),
@@ -24,6 +26,9 @@ class FakeSourceControlWatcher() extends SourceControlWatcher {
     required String workspacePath,
   }) async {
     startCount += 1;
+    if (_signals.isClosed) {
+      _signals = StreamController<native.SourceControlWatchSignal>.broadcast();
+    }
     return const native.SourceControlWatcherHandle(id: 'fake');
   }
 
@@ -39,5 +44,7 @@ class FakeSourceControlWatcher() extends SourceControlWatcher {
     stopCount += 1;
   }
 
-  Future<void> dispose() => _signals.close();
+  Future<void> dispose() async {
+    if (!_signals.isClosed) await _signals.close();
+  }
 }

@@ -852,6 +852,32 @@ void main() {
     expect(find.byTooltip('Refresh'), findsOneWidget);
   });
 
+  testWidgets('manual refresh does not wait for repository re-detection', (
+    tester,
+  ) async {
+    final backend = FakeGitBackend();
+    final repositoryGate = Completer<void>();
+    await _pumpPanel(
+      tester,
+      backend: backend,
+      onRefreshRepository: () => repositoryGate.future,
+    );
+    await tester.pumpAndSettle();
+    backend.gitStatusResult = const GitStatusResult(
+      entries: [
+        GitChangeEntry(
+          path: 'lib/new_file.dart',
+          area: GitChangeArea.untracked,
+          status: GitChangeStatus.untracked,
+        ),
+      ],
+    );
+    await tester.tap(find.byTooltip('Refresh'));
+    await tester.pumpAndSettle();
+    expect(find.text('lib/new_file.dart'), findsOneWidget);
+    repositoryGate.complete();
+    await tester.pump();
+  });
   testWidgets('refresh stays available after initial load failure', (
     tester,
   ) async {
@@ -1714,6 +1740,7 @@ Future<void> _pumpPanel(
   GitDiffGroupMode groupMode = GitDiffGroupMode.byArea,
   WorkspaceSourceControlScope? sourceControlScope,
   FakeSourceControlWatcher? watcher,
+  Future<void> Function()? onRefreshRepository,
   AiAssistService? service,
   AleraSettings settings = AleraSettings.defaults,
   OpenGitDiffTabCallback? onOpenGitDiff,
@@ -1807,6 +1834,7 @@ Future<void> _pumpPanel(
                     onOpenFile: onOpenFile,
                     onRevealInExplorer: onRevealInExplorer,
                     onClearSourceControlRoot: onClearSourceControlRoot,
+                    onRefreshRepository: onRefreshRepository,
                   ),
           ),
         ),

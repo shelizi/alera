@@ -1,6 +1,53 @@
 part of 'workspace_explorer_test.dart';
 
 void _registerWorkspaceExplorerWatchTests() {
+  testWidgets(
+    'closed native watcher reconnects and discovers newly created files',
+    (tester) async {
+      final service = _FakeWorkspaceFileService()
+        ..childrenByDirectory[''] = <native.WorkspaceFileEntry>[
+          _file('before.dart'),
+        ];
+      await _pumpExplorer(tester, service);
+      expect(service.explorerWatcherStarts, 1);
+      expect(service.hasExplorerWatchSubscriber, isTrue);
+      expect(find.text('before.dart'), findsOneWidget);
+
+      service.childrenByDirectory[''] = [
+        _file('before.dart'),
+        _file('created.dart'),
+      ];
+      await service.closeExplorerWatchStream();
+      await tester.pump();
+      expect(service.quickOpenRefreshRequests, isNotEmpty);
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 650)),
+      );
+      for (
+        var attempt = 0;
+        attempt < 8 && service.explorerWatcherStarts < 2;
+        attempt++
+      ) {
+        await tester.pump(const Duration(milliseconds: 150));
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 30)),
+        );
+      }
+      await tester.pumpAndSettle();
+      expect(service.explorerWatcherStops, greaterThanOrEqualTo(1));
+      expect(service.explorerWatcherStarts, 2);
+      expect(find.text('created.dart'), findsOneWidget);
+
+      service.childrenByDirectory[''] = [
+        _file('before.dart'),
+        _file('created.dart'),
+        _file('after.dart'),
+      ];
+      service.emitWatchBatch([''], changedRelativePaths: ['after.dart']);
+      await tester.pumpAndSettle();
+      expect(find.text('after.dart'), findsOneWidget);
+    },
+  );
   testWidgets('watch batch storm coalesces into bounded refreshes', (
     tester,
   ) async {

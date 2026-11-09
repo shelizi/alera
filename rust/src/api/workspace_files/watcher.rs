@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use notify::{RecursiveMode, Watcher};
 
@@ -14,7 +14,8 @@ use super::{
     WorkspaceExplorerWatcherHandle, WorkspaceFileError, WorkspaceFileErrorKind,
 };
 
-const WATCH_DEBOUNCE_MILLIS: u64 = 180;
+const WATCH_DEBOUNCE_MILLIS: u64 = 90;
+const WATCH_MAX_BATCH_MILLIS: u64 = 350;
 const WATCH_IDLE_POLL_MILLIS: u64 = 100;
 
 static NEXT_WATCHER_ID: AtomicU64 = AtomicU64::new(1);
@@ -197,20 +198,36 @@ fn event_loop(
             Err(mpsc::RecvTimeoutError::Disconnected) => return,
         };
         let mut events = Vec::new();
-        let mut coalesced_event_count = 0;
-        if let Ok(event) = first_event {
-            events.push(event);
+        let mut coalesced_event_count = 1;
+        let deadline = Instant::now() + Duration::from_millis(WATCH_MAX_BATCH_MILLIS);
+        match first_event {
+            Ok(event) if event.paths.is_empty() => events.push(event.add_path(root.clone())),
+            Ok(event) => events.push(event),
+            Err(_) => {
+                events.push(notify::Event::new(notify::EventKind::Any).add_path(root.clone()))
+            }
         }
 
         loop {
             if shutdown_rx.try_recv().is_ok() {
                 return;
             }
-            match event_rx.recv_timeout(Duration::from_millis(WATCH_DEBOUNCE_MILLIS)) {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            match event_rx.recv_timeout(remaining.min(Duration::from_millis(WATCH_DEBOUNCE_MILLIS)))
+            {
                 Ok(result) => {
                     coalesced_event_count += 1;
-                    if let Ok(event) = result {
-                        events.push(event);
+                    match result {
+                        Ok(event) if event.paths.is_empty() => {
+                            events.push(event.add_path(root.clone()))
+                        }
+                        Ok(event) => events.push(event),
+                        Err(_) => events.push(
+                            notify::Event::new(notify::EventKind::Any).add_path(root.clone()),
+                        ),
                     }
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => break,
@@ -317,6 +334,54 @@ mod tests {
     use super::*;
     use notify::{Event, EventKind};
 
+    #[test]
+    fn native_file_creation_notifies_loaded_directory() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        let root = workspace.path().to_path_buf();
+        let watched = Arc::new(Mutex::new(HashMap::from([(String::new(), root.clone())])));
+        let (tx, rx) = mpsc::channel();
+        let mut watcher = notify::recommended_watcher(move |event: notify::Result<Event>| {
+            if let Ok(event) = event {
+                let _ = tx.send(event);
+            }
+        })
+        .unwrap();
+        watcher.watch(&root, RecursiveMode::Recursive).unwrap();
+        std::fs::write(root.join("new_file.dart"), b"hello").unwrap();
+        let deadline = Instant::now() + Duration::from_secs(4);
+        let mut observed = false;
+        while Instant::now() < deadline {
+            match rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+                Ok(event) => {
+                    if let Some(batch) = build_batch(&root, &watched, vec![event], 1) {
+                        if batch.directory_relative_paths.contains(&String::new())
+                            && batch
+                                .changed_relative_paths
+                                .contains(&"new_file.dart".to_string())
+                        {
+                            observed = true;
+                            break;
+                        }
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+        assert!(observed, "native watch did not report a newly created file");
+    }
+
+    #[test]
+    fn native_watch_overflow_requests_root_reconciliation() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        let watched = Arc::new(Mutex::new(HashMap::from([(
+            String::new(),
+            workspace.path().to_path_buf(),
+        )])));
+        let error_fallback = Event::new(EventKind::Any).add_path(workspace.path().to_path_buf());
+        let batch = build_batch(workspace.path(), &watched, vec![error_fallback], 1)
+            .expect("root refresh after watcher overflow");
+        assert_eq!(batch.directory_relative_paths, vec![String::new()]);
+    }
     #[test]
     fn recursive_event_from_unloaded_subfolder_updates_search_only() {
         let workspace = tempfile::tempdir().expect("workspace");

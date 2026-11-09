@@ -78,15 +78,21 @@ enum WorkspaceSourceControlAction {
 @riverpod
 class WorkspaceSourceControlController
     extends _$WorkspaceSourceControlController {
-  static const Duration _watcherReloadDebounce = Duration(milliseconds: 250);
+  static const Duration _watcherReloadDebounce = Duration(milliseconds: 120);
+  static const Duration _watcherReloadCooldown = Duration(milliseconds: 250);
 
   SourceControlWatcher? _watcher;
   StreamSubscription<native.SourceControlWatchSignal>? _watchSubscription;
   native.SourceControlWatcherHandle? _watcherHandle;
   Timer? _watcherReloadDebounceTimer;
+  Timer? _watcherRestartTimer;
+  int _watcherRestartFailures = 0;
+  bool _watcherStarting = false;
+  bool _watcherRecovering = false;
   DateTime? _watcherReloadNotBefore;
   bool _watcherReloadInFlight = false;
   bool _watcherReloadQueued = false;
+  Completer<void>? _queuedManualRefresh;
   int _queuedWatcherReloads = 0;
   int _loadGeneration = 0;
   int _staleCompletionCount = 0;
@@ -106,7 +112,31 @@ class WorkspaceSourceControlController
     return _load();
   }
 
-  Future<void> refresh() => _run(.refresh, (_) async {});
+  /// Explicit refresh is never dropped while another Git action is busy.
+  /// A queued call completes only after its follow-up status read publishes.
+  Future<void> refresh() {
+    if (state.asData?.value.isBusy ?? false) {
+      return (_queuedManualRefresh ??= Completer<void>()).future;
+    }
+    // Publish the changes list first. Branch and stash metadata can follow
+    // without delaying a user-requested update to the visible files.
+    return _run(.refresh, (_) async {}, statusFirst: true);
+  }
+
+  void _drainQueuedManualRefresh() {
+    final queued = _queuedManualRefresh;
+    if (_disposed || queued == null || (state.asData?.value.isBusy ?? false)) {
+      return;
+    }
+    _queuedManualRefresh = null;
+    unawaited(
+      refresh().then(
+        (_) => queued.complete(),
+        onError: (Object error, StackTrace stack) =>
+            queued.completeError(error, stack),
+      ),
+    );
+  }
 
   Future<void> stage(String? filePath) => _run(
     .stage,
@@ -400,6 +430,7 @@ class WorkspaceSourceControlController
           _refreshRepositoryStateAfterFastAction(
             backend: backend,
             loadGeneration: loadGeneration,
+            includeStashes: action == WorkspaceSourceControlAction.refresh,
           ),
         );
       }
@@ -412,6 +443,7 @@ class WorkspaceSourceControlController
       }
       rethrow;
     } finally {
+      _drainQueuedManualRefresh();
       _scheduleQueuedWatcherReload();
     }
   }
@@ -432,38 +464,51 @@ class WorkspaceSourceControlController
   Future<void> _refreshRepositoryStateAfterFastAction({
     required GitSourceControlQueryPort backend,
     required int loadGeneration,
+    bool includeStashes = false,
   }) async {
     try {
-      final repositoryState = await backend.repositoryState(workspacePath);
+      final results = await Future.wait<Object>([
+        backend.repositoryState(workspacePath),
+        if (includeStashes) backend.listStashes(workspacePath),
+      ]);
       if (loadGeneration != _loadGeneration) return;
       final current = state.asData?.value;
       if (current == null || current.isBusy) return;
+      final repositoryState = results[0] as GitRepositoryState;
+      final stashes = includeStashes
+          ? results[1] as List<GitStashEntry>
+          : current.stashes;
       if (gitRepositoryStateValuesEqual(
-        current.repositoryState,
-        repositoryState,
-      )) {
+            current.repositoryState,
+            repositoryState,
+          ) &&
+          gitStashEntriesValuesEqual(current.stashes, stashes)) {
         return;
       }
       state = AsyncData(
         WorkspaceSourceControlState(
           status: current.status,
           repositoryState: repositoryState,
-          stashes: current.stashes,
+          stashes: stashes,
           revision: current.revision + 1,
         ),
       );
     } catch (_) {
-      // Stage/unstage already succeeded and status is current. Repository
-      // metadata is best-effort here and can be repaired by watcher/manual
-      // refresh without keeping the source-control UI busy.
+      // The updated file status remains visible even if metadata fails.
+      // A later watcher or manual refresh can repair metadata independently.
     }
   }
 
   Future<void> _startWatching() async {
     final watcher = _watcher;
-    if (watcher == null) {
+    if (_disposed ||
+        watcher == null ||
+        _watcherStarting ||
+        _watcherRecovering ||
+        _watcherHandle != null) {
       return;
     }
+    _watcherStarting = true;
     try {
       final handle = await watcher.start(workspacePath: workspacePath);
       if (_disposed) {
@@ -473,10 +518,59 @@ class WorkspaceSourceControlController
       _watcherHandle = handle;
       _watchSubscription = watcher
           .events(handle: handle)
-          .listen((_) => _scheduleWatcherReload(), onError: (_) {});
+          .listen(
+            (_) => _scheduleWatcherReload(),
+            onError: (Object _) => _recoverWatcher(),
+            onDone: _recoverWatcher,
+          );
+      // The source may have changed while the watcher was unavailable.
+      final recovered = _watcherRestartFailures > 0;
+      _watcherRestartFailures = 0;
+      _watcherRestartTimer?.cancel();
+      _watcherRestartTimer = null;
+      if (recovered) _scheduleWatcherReload();
     } catch (_) {
-      // File watching is best-effort; explicit refresh still works.
+      _scheduleWatcherRestart();
+    } finally {
+      _watcherStarting = false;
     }
+  }
+
+  void _recoverWatcher() {
+    if (_disposed || _watcherRecovering) return;
+    _watcherRecovering = true;
+    // A missed native event is possible; reconcile before reconnecting.
+    _scheduleWatcherReload();
+    final subscription = _watchSubscription;
+    _watchSubscription = null;
+    final handle = _watcherHandle;
+    _watcherHandle = null;
+    final watcher = _watcher;
+    unawaited(() async {
+      try {
+        await subscription?.cancel();
+      } catch (_) {}
+      try {
+        if (handle != null && watcher != null) {
+          await watcher.stop(handle: handle);
+        }
+      } catch (_) {}
+      _watcherRecovering = false;
+      _scheduleWatcherRestart();
+    }());
+  }
+
+  void _scheduleWatcherRestart() {
+    if (_disposed || _watcherRestartTimer != null) return;
+    final exponent = _watcherRestartFailures.clamp(0, 4);
+    _watcherRestartFailures += 1;
+    _watcherRestartTimer = Timer(
+      Duration(milliseconds: 300 * (1 << exponent)),
+      () {
+        _watcherRestartTimer = null;
+        if (!_disposed) unawaited(_startWatching());
+      },
+    );
   }
 
   void _stopWatching() {
@@ -485,6 +579,13 @@ class WorkspaceSourceControlController
     _watcherReloadNotBefore = null;
     _watcherReloadDebounceTimer?.cancel();
     _watcherReloadDebounceTimer = null;
+    _watcherRestartTimer?.cancel();
+    _watcherRestartTimer = null;
+    final pendingManualRefresh = _queuedManualRefresh;
+    _queuedManualRefresh = null;
+    if (pendingManualRefresh != null && !pendingManualRefresh.isCompleted) {
+      pendingManualRefresh.complete();
+    }
     final subscription = _watchSubscription;
     _watchSubscription = null;
     unawaited(subscription?.cancel());
@@ -546,6 +647,7 @@ class WorkspaceSourceControlController
         _queuedWatcherReloads = 0;
         _watcherReloadNotBefore = null;
       }
+      _drainQueuedManualRefresh();
       _scheduleQueuedWatcherReload();
     }
   }
@@ -560,7 +662,7 @@ class WorkspaceSourceControlController
     // not pin a full status scan every few hundred milliseconds. The floor
     // also gates fresh signals, otherwise they would shortcut the cooldown.
     final delay =
-        _watcherReloadDebounce * (1 << _queuedWatcherReloads.clamp(0, 3));
+        _watcherReloadCooldown * (1 << _queuedWatcherReloads.clamp(0, 3));
     _queuedWatcherReloads += 1;
     _watcherReloadNotBefore = DateTime.now().add(delay);
     _scheduleWatcherReload();

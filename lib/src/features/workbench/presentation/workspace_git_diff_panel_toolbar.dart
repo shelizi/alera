@@ -132,7 +132,8 @@ class const _SourceControlToolbar({
                       AleraIconButton(
                         tooltip: 'Refresh',
                         icon: AleraIcons.gitRefresh,
-                        onPressed: busy ? null : onRefresh,
+                        // A refresh while Git is busy queues a trailing scan.
+                        onPressed: onRefresh,
                       ),
                       if (aiAssistSettings.enabled ||
                           generatingCommitMessage) ...<Widget>[

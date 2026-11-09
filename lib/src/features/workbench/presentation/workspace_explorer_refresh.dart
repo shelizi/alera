@@ -61,7 +61,7 @@ extension _WorkspaceExplorerRefresh on _WorkspaceExplorerState {
   }
 
   Future<void> _restartExplorer() async {
-    unawaited(_stopNativeWatcher());
+    await _stopNativeWatcher();
     if (!mounted) {
       return;
     }
