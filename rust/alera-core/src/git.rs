@@ -10,6 +10,7 @@ mod branch_operations;
 #[cfg(test)]
 #[path = "git_branch_tests.rs"]
 mod branch_tests;
+mod commit_message_prompt;
 mod commit_operations;
 #[cfg(test)]
 #[path = "git_commit_ops_tests.rs"]
@@ -30,6 +31,9 @@ pub use branch_extended_operations::{
 pub use branch_operations::{
     branch_exists, checkout_branch, create_and_checkout_branch, delete_branch,
     is_valid_branch_name, list_branches,
+};
+pub use commit_message_prompt::{
+    prepare_staged_commit_prompt, verify_staged_commit_prompt, GitStagedCommitPrompt,
 };
 pub use commit_operations::{checkout_commit, reset_to_commit, revert_commit, GitResetMode};
 pub use commit_replay_operations::{cherry_pick_commit, drop_commit, rebase_onto};

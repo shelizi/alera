@@ -12,6 +12,9 @@ mod quick_open_ui;
 // GPUI types throughout Native instead of mixing gpui 0.2.x and gpui-pre.
 extern crate gpui_kit as gpui;
 
+use alera_core::git::{
+    prepare_staged_commit_prompt, verify_staged_commit_prompt, GitStagedCommitPrompt,
+};
 use alera_gpui_desktop::agent_profiles::{
     matching_agent_handle, AgentProfileRow, LaunchedAgentTab,
 };
@@ -489,6 +492,9 @@ struct Workbench {
     git_commit_input: Entity<QuickOpenInput>,
     git_commit_draft_loading: bool,
     git_commit_draft_request: u64,
+    git_ai_prompt_preview: Option<GitStagedCommitPrompt>,
+    git_ai_prompt_loading: bool,
+    git_ai_prompt_request: u64,
     git_amend_preview: Option<GitAmendPreview>,
     git_amend_loading: bool,
     git_amend_request: u64,
@@ -3004,6 +3010,9 @@ impl Workbench {
         let ticket = self.git_action_request;
         self.git_commit_draft_request = self.git_commit_draft_request.wrapping_add(1);
         self.git_commit_draft_loading = false;
+        self.git_ai_prompt_request = self.git_ai_prompt_request.wrapping_add(1);
+        self.git_ai_prompt_preview = None;
+        self.git_ai_prompt_loading = false;
         self.git_action_busy = true;
         self.git_graph_remote_armed = None;
         self.git_branch_comparison = None;
@@ -3142,6 +3151,104 @@ impl Workbench {
     /// A deliberately offline fallback. Classic's AI Assist is configured in
     /// Flutter and must not be silently replaced with an unapproved agent.
     /// This only suggests an editable draft from staged Git metadata.
+    fn prepare_staged_ai_prompt(&mut self, cx: &mut Context<Self>) {
+        if self.git_ai_prompt_loading {
+            self.git_ai_prompt_request = self.git_ai_prompt_request.wrapping_add(1);
+            self.git_ai_prompt_loading = false;
+            self.git_ai_prompt_preview = None;
+            self.git_action_status = "Cancelled pending staged AI prompt preview".into();
+            cx.notify();
+            return;
+        }
+        if self.git_action_busy {
+            self.git_action_status = "Finish the current Git operation first".into();
+            cx.notify();
+            return;
+        }
+        let root = self.model.root().to_path_buf();
+        let generation = self.workspace_generation;
+        self.git_ai_prompt_request = self.git_ai_prompt_request.wrapping_add(1);
+        let request = self.git_ai_prompt_request;
+        self.git_ai_prompt_preview = None;
+        self.git_ai_prompt_loading = true;
+        self.git_action_status =
+            "Preparing read-only staged AI prompt using shared Rust Core...".into();
+        cx.spawn(async move |view, cx| {
+            let result = cx.background_spawn(async move {
+                prepare_staged_commit_prompt(&root, "").map_err(|error| error.to_string())
+            }).await;
+            view.update(cx, |view, cx| {
+                if view.workspace_generation != generation || view.git_ai_prompt_request != request {
+                    return;
+                }
+                view.git_ai_prompt_loading = false;
+                match result {
+                    Ok(plan) => {
+                        view.git_action_status = format!(
+                            "AI prompt prepared from {} staged file(s). No agent was run; review and copy explicitly.",
+                            plan.staged_files
+                        );
+                        view.git_ai_prompt_preview = Some(plan);
+                    }
+                    Err(error) => {
+                        view.git_ai_prompt_preview = None;
+                        view.git_action_status = format!("AI prompt preview unavailable: {error}");
+                    }
+                }
+                cx.notify();
+            }).ok();
+        }).detach();
+        cx.notify();
+    }
+
+    fn copy_staged_ai_prompt(&mut self, cx: &mut Context<Self>) {
+        let Some(plan) = self.git_ai_prompt_preview.clone() else {
+            return;
+        };
+        if self.git_action_busy || self.git_ai_prompt_loading {
+            self.git_action_status =
+                "Finish the current Git operation before copying the AI prompt".into();
+            cx.notify();
+            return;
+        }
+        let root = self.model.root().to_path_buf();
+        let generation = self.workspace_generation;
+        let request = self.git_ai_prompt_request;
+        self.git_ai_prompt_loading = true;
+        cx.spawn(async move |view, cx| {
+            let result = cx.background_spawn(async move {
+                verify_staged_commit_prompt(&root, &plan)
+                    .map_err(|error| error.to_string())
+                    .map(|_| plan.prompt)
+            }).await;
+            view.update(cx, |view, cx| {
+                if view.workspace_generation != generation || view.git_ai_prompt_request != request {
+                    return;
+                }
+                view.git_ai_prompt_loading = false;
+                match result {
+                    Ok(prompt) => {
+                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(prompt));
+                        view.git_action_status = "Copied staged AI prompt. Paste into your approved Agent; Native did not run AI or alter Git.".into();
+                    }
+                    Err(error) => {
+                        view.git_ai_prompt_preview = None;
+                        view.git_action_status = format!("AI prompt was not copied: {error}. Regenerate the preview.");
+                    }
+                }
+                cx.notify();
+            }).ok();
+        }).detach();
+        cx.notify();
+    }
+
+    fn close_staged_ai_prompt(&mut self, cx: &mut Context<Self>) {
+        self.git_ai_prompt_request = self.git_ai_prompt_request.wrapping_add(1);
+        self.git_ai_prompt_preview = None;
+        self.git_ai_prompt_loading = false;
+        cx.notify();
+    }
+
     fn prepare_offline_commit_draft(&mut self, cx: &mut Context<Self>) {
         if self.git_action_busy {
             self.git_action_status = "Finish the current Git operation first".into();
@@ -4449,6 +4556,9 @@ impl Workbench {
             .update(cx, |input, cx| input.clear(cx));
         self.git_commit_draft_request = self.git_commit_draft_request.wrapping_add(1);
         self.git_commit_draft_loading = false;
+        self.git_ai_prompt_request = self.git_ai_prompt_request.wrapping_add(1);
+        self.git_ai_prompt_preview = None;
+        self.git_ai_prompt_loading = false;
         self.git_branch_input
             .update(cx, |input, cx| input.clear(cx));
         self.git_rename_input
@@ -7827,6 +7937,8 @@ impl Render for Workbench {
         let git_action_status = self.git_action_status.clone();
         let git_commit_input = self.git_commit_input.clone();
         let git_commit_draft_loading = self.git_commit_draft_loading;
+        let git_ai_prompt_preview = self.git_ai_prompt_preview.clone();
+        let git_ai_prompt_loading = self.git_ai_prompt_loading;
         let git_amend_ready = self.git_amend_preview.is_some();
         let git_amend_loading = self.git_amend_loading;
         let git_branch_input = self.git_branch_input.clone();
@@ -9187,6 +9299,37 @@ impl Render for Workbench {
                                             this.prepare_or_confirm_git_amend(cx);
                                         }))),
                             )
+                            .when(git_ai_prompt_loading, |panel| panel.child(
+                                div().text_xs().text_color(rgb(MUTED))
+                                    .child("Preparing or checking staged AI prompt (no Agent started)...")
+                            ))
+                            .when_some(git_ai_prompt_preview, |panel, preview| {
+                                let excerpt: String = preview.prompt.chars().take(550).collect();
+                                let preview_note = format!(
+                                    "Staged AI prompt · {} file(s) · HEAD {} · {}",
+                                    preview.staged_files,
+                                    &preview.head_oid[..8],
+                                    if preview.patch_truncated { "patch truncated to budget" }
+                                    else { "bounded read-only diff" }
+                                );
+                                panel.child(div().flex().flex_col().gap_1()
+                                    .child(div().text_xs().text_color(rgb(TEXT)).child(preview_note))
+                                    .child(div().id("git-ai-prompt-excerpt")
+                                        .max_h(px(110.0)).overflow_y_scroll()
+                                        .text_xs().text_color(rgb(MUTED))
+                                        .child(format!("{excerpt}…")))
+                                    .child(div().flex().items_center().gap_1()
+                                        .child(icon_button("git-ai-prompt-copy", UiIcon::Save,
+                                            "Verify staged index and copy full AI prompt to clipboard (no AI execution)", false)
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.copy_staged_ai_prompt(cx);
+                                            })))
+                                        .child(icon_button("git-ai-prompt-close", UiIcon::Close,
+                                            "Dismiss staged AI prompt without copying", false)
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.close_staged_ai_prompt(cx);
+                                            })))))
+                            })
                             .child(
                                 div()
                                     .flex()
@@ -9271,6 +9414,7 @@ impl Render for Workbench {
                                             let save_owner = owner.clone();
                                             let apply_owner = owner.clone();
                                             let inspect_owner = owner.clone();
+                                            let ai_owner = owner.clone();
                                             let mut menu = menu
                                                 .item(
                                                     PopupMenuItem::new(
@@ -9306,6 +9450,15 @@ impl Render for Workbench {
                                                         .on_click(move |_, _, cx| {
                                                             let _ = inspect_owner.update(cx, |view, cx| {
                                                                 view.preview_git_merge_conflicts(cx);
+                                                            });
+                                                        }),
+                                                )
+                                                .separator()
+                                                .item(
+                                                    PopupMenuItem::new("Preview staged AI Commit prompt (no AI run)")
+                                                        .on_click(move |_, _, cx| {
+                                                            let _ = ai_owner.update(cx, |view, cx| {
+                                                                view.prepare_staged_ai_prompt(cx);
                                                             });
                                                         }),
                                                 );
@@ -11342,6 +11495,9 @@ fn main() {
                                 .new(|cx| QuickOpenInput::with_placeholder("Commit message", cx)),
                             git_commit_draft_loading: false,
                             git_commit_draft_request: 0,
+                            git_ai_prompt_preview: None,
+                            git_ai_prompt_loading: false,
+                            git_ai_prompt_request: 0,
                             git_branch_input: cx
                                 .new(|cx| QuickOpenInput::with_placeholder("Existing branch", cx)),
                             git_rename_input: cx
