@@ -17,8 +17,8 @@
 | Source Control context menu | Stage, unstage, discard, open diff/original, copy path, open externally | Area-aware Staged/Changes diff, read-only Git original at HEAD/Index in preview, Stage/Unstage/copy path/guarded discard | P0 core + original preview implemented; external editor and full file tab pending |
 | Source Control layout | Flat/tree grouping, collapsible sections and folders, filtered counts, manual refresh | Native grouped/unified + flat/tree, section/folder collapse, accurate totals and refresh | P0 implemented; Windows UI acceptance pending |
 | Source Control commits | Message validation, commit staged, amend / suggested message | Commit staged supported | P1 amend and optional AI if configured |
-| Git refresh | Timely repository / FS watcher updates, manual refresh reliable | Async snapshot + coalesced extra read when refresh pressed during in-flight scan; guards old workspace generation | P0 manual refresh queue implemented; P1 filesystem watcher and Windows smoke pending |
-| Git Graph ref list | Current ref first, favorites, local/remote/tag tabs; filters | Local/remote branches with favorites and selectable Git tags (lightweight + annotated), current ref sorted first | P1 tag listing implemented; filtering and dedicated tabs remain |
+| Git refresh | Timely repository / FS watcher updates, manual refresh reliable | notify 8.2 worktree/Git-dir watcher with bounded queue and debounce, existing async single-flight refresh, generation-safe workspace switch and manual fallback | P1 event watcher implemented; sustained Windows UI/large-repo smoke pending |
+| Git Graph ref list | Current ref first, favorites, local/remote/tag tabs; filters | Local/remote branches with favorites, selectable Git tags, client-side search for branch/tag/author/SHA/message/commits; exact original graph lane positions retained | P1 search implemented; dedicated tabs and server-side deep history search remain |
 | Git Graph branch right-click | Switch/worktree, compare, rename, pull, push, merge, rebase, archive, delete | Native History/Compare both directions/Worktree/Switch/Merge prepare/Copy, selected Pull/Push and safe inactive-local-branch rename | P1 core implemented; active-branch rename and destructive actions remain later |
 | Git Graph commit right-click | Preview, copy SHA/subject, branch/tag/worktree at commit, cherry-pick/revert/merge, resets etc. | Preview/copy, exact-commit branch/tag creation, single-parent conflict-free Cherry-pick/Revert with full-tree preview and double confirmation | P1 commit apply and worktree-at-commit implemented; merge-commit mainline and destructive actions pending |
 | Existing worktree navigation | For branches checked out elsewhere, offer open corresponding workspace instead of duplicate checkout | Native branch context menu identifies matching worktree and revalidates branch before switching | P0; finish with tests |
@@ -37,7 +37,8 @@
 - [x] Add Stage-specific diff preview (HEAD -> index) and Changes-specific diff preview (index -> worktree), plus original Git Blob (HEAD/Index) in Source Control read-only preview.
 - [ ] Add full read-only original-file editor tab, external editor integration and dedicated untracked-trash confirmation.
 - [x] Coalesce manual refresh requests when a previous snapshot is in-flight; discard obsolete first result and refresh again; reset pending queue across workspace switches. Dedicated in-flight UI smoke still pending.
-- [ ] Implement low-latency FS/Git watcher refresh with event coalescing, bounded retry and freshness checks.
+- [x] Add scoped notify filesystem watcher for worktree and Git metadata with bounded event channel, 250ms quiet window/1400ms maximum delay, workspace teardown and existing single-flight refresh.
+- [ ] Verify sustained large-repository Windows watch throughput and recover from platform watcher disconnects; add optional reconciliation fallback.
 
 ## Phase 2 — Git Graph first-class Native functionality
 
@@ -46,7 +47,8 @@
 - [x] GPUI Kit popup menu for graph commits: preview, copy hash/subject, create local branch or lightweight tag at selected immutable Commit SHA with two-step confirmation.
 - [x] Add explicit file-level current-vs-selected branch comparison (merge-base..target), direction toggle, per-file committed patch and original blob preview. Arbitrary two-ref selection is still a later UI task.
 - [x] Render bounded actual commit parent lanes with parent IDs, Unicode lane connectors, branch labels and scrolling; explicit fallback when full topology cannot be represented. Windows native visual acceptance remains pending.
-- [ ] Search and filter commits, tags, local/remote refs, favorites, per-file history.
+- [x] Add in-memory case-insensitive Commit/branch/tag search with author:/sha:/message:/branch:/tag: prefixes over the bounded snapshot; preserve original graph lane indices.
+- [ ] Add dedicated ref/tab filters and deep searchable pagination beyond bounded snapshot.
 - [x] Add guarded "Pull branch without switching" (non-checked-out fast-forward with CAS) and "Push selected branch" (exact tracked upstream, no force) to Git Graph right-click. Reuse existing Git service and two-step confirmation.
 - [x] Add explicitly confirmed selected-branch Pull/Push actions to right-side branch controls (no checkout, no force).
 - [ ] Consolidate selected branch actions into the dropdown itself and share UX for Merge-into-current without checkout.

@@ -35,6 +35,7 @@ use alera_gpui_desktop::git_branch_compare::{
     CompareDirection,
 };
 use alera_gpui_desktop::git_graph_layout::{layout_git_graph, GraphCommit};
+use alera_gpui_desktop::git_graph_search::GitGraphSearch;
 use alera_gpui_desktop::git_history::{
     compare_git_refs, preview_commit, GitHistoryOptions, GitHistorySnapshot,
 };
@@ -46,6 +47,7 @@ use alera_gpui_desktop::git_sidebar_layout::{
     layout_git_sidebar, section_keys, FolderKey, GitSidebarEntry, GitSidebarGroupMode,
     GitSidebarOptions, GitSidebarViewMode, SectionKey,
 };
+use alera_gpui_desktop::git_watch::GitWatchService;
 use alera_gpui_desktop::mcp_ui_bridge::{
     matching_host_tab_handle, NativeMcpUiBridge, NativeMcpUiCommand, NativeMcpUiEvent,
 };
@@ -432,6 +434,7 @@ struct Workbench {
     git_conflict_request: u64,
     git_conflict_confirm_armed: bool,
     git_filter_input: Entity<QuickOpenInput>,
+    git_graph_search_input: Entity<QuickOpenInput>,
     git_commit_input: Entity<QuickOpenInput>,
     git_branch_input: Entity<QuickOpenInput>,
     git_rename_input: Entity<QuickOpenInput>,
@@ -441,6 +444,7 @@ struct Workbench {
     git_action_status: String,
     git_loading: bool,
     git_refresh_gate: GitRefreshGate,
+    git_watch_service: Option<GitWatchService>,
     git_error: Option<String>,
     git_diff: Option<String>,
     git_branch_comparison: Option<BranchFileComparison>,
@@ -1577,6 +1581,30 @@ impl Workbench {
                 self.git_action_status = "Action is not supported for this Git status".into();
                 cx.notify();
             }
+        }
+    }
+
+    fn start_git_watch(&mut self, cx: &mut Context<Self>) {
+        // Drop the old watcher first: events from a different workspace must
+        // never invalidate the new workspace's Git snapshot.
+        self.git_watch_service = None;
+        match GitWatchService::start(self.model.root()) {
+            Ok(service) => self.git_watch_service = Some(service),
+            Err(error) => {
+                self.git_action_status = format!("{error}; manual Refresh remains available");
+                cx.notify();
+            }
+        }
+    }
+
+    fn pump_git_watch(&mut self, cx: &mut Context<Self>) {
+        let now = Instant::now();
+        if self
+            .git_watch_service
+            .as_mut()
+            .is_some_and(|watch| watch.poll(now))
+        {
+            self.refresh_git(cx);
         }
     }
 
@@ -3613,6 +3641,8 @@ impl Workbench {
         self.git_action_status.clear();
         self.git_filter_input
             .update(cx, |input, cx| input.clear(cx));
+        self.git_graph_search_input
+            .update(cx, |input, cx| input.clear(cx));
         self.git_commit_input
             .update(cx, |input, cx| input.clear(cx));
         self.git_branch_input
@@ -3687,6 +3717,7 @@ impl Workbench {
         self.refresh_mcp_host_workspaces(cx);
         self.refresh_project_tree(cx);
         self.refresh_worktrees(cx);
+        self.start_git_watch(cx);
         self.refresh_git(cx);
         cx.notify();
     }
@@ -6325,6 +6356,17 @@ impl Workbench {
     }
 
     fn start_terminal_polling(&mut self, cx: &mut Context<Self>) {
+        // One bounded Git invalidation timer for the entire Workbench,
+        // independent of Terminal sessions and invisible when idle.
+        cx.spawn(async move |view, cx| loop {
+            cx.background_executor()
+                .timer(Duration::from_millis(250))
+                .await;
+            if view.update(cx, |view, cx| view.pump_git_watch(cx)).is_err() {
+                break;
+            }
+        })
+        .detach();
         // Native Host push is consumed on a 16ms visible-screen frame.
         // Legacy CLI reads retain their adaptive 100/350/1500ms rate and
         // hidden/stream-disconnected views retain the 50ms housekeeping wake.
@@ -7003,15 +7045,31 @@ impl Render for Workbench {
                 .clone()
                 .unwrap_or_else(|| "Open Git Graph to load history".into())
         };
+        let git_graph_search_input = self.git_graph_search_input.clone();
+        let graph_query = GitGraphSearch::parse(self.git_graph_search_input.read(cx).query());
         let git_branch_rows = self
             .git_history
             .as_ref()
-            .map(|history| history.branches.clone())
+            .map(|history| {
+                history
+                    .branches
+                    .iter()
+                    .filter(|row| graph_query.branch(row))
+                    .cloned()
+                    .collect::<Vec<_>>()
+            })
             .unwrap_or_default();
         let git_tag_rows = self
             .git_history
             .as_ref()
-            .map(|history| history.tags.clone())
+            .map(|history| {
+                history
+                    .tags
+                    .iter()
+                    .filter(|row| graph_query.tag(row))
+                    .cloned()
+                    .collect::<Vec<_>>()
+            })
             .unwrap_or_default();
         let git_commit_rows = self
             .git_history
@@ -7034,6 +7092,13 @@ impl Render for Workbench {
             )
         });
         let git_graph_topology_rows = git_graph_topology.ok().map(|layout| layout.rows);
+        // Build topology on the full bounded graph before filtering. Filtering
+        // first would invent edges/lanes between unrelated commits.
+        let git_commit_rows = git_commit_rows
+            .into_iter()
+            .enumerate()
+            .filter(|(_, row)| graph_query.commit(row))
+            .collect::<Vec<_>>();
         let git_merge_armed = self.git_merge_armed.is_some();
         let git_conflict_armed = self.git_conflict_confirm_armed;
         let git_conflict_count = self
@@ -7737,6 +7802,14 @@ impl Render for Workbench {
                                     .flex_col()
                                     .gap_1()
                                     .child(div().text_xs().text_color(rgb(MUTED)).child(git_history_status))
+                                    .child(div().flex().items_center().gap_1()
+                                        .child(div().flex_1().min_w_0().child(git_graph_search_input))
+                                        .child(icon_button("git-graph-clear-search", UiIcon::Close,
+                                            "Clear Git Graph search", false)
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.git_graph_search_input.update(cx, |input, cx| input.clear(cx));
+                                                cx.notify();
+                                            }))))
                                     .when_some(git_worktree_commit_target, |panel, oid| panel.child(
                                         div().flex().flex_col().gap_1()
                                             .child(div().text_xs().text_color(rgb(TEXT))
@@ -8010,7 +8083,7 @@ impl Render for Workbench {
                                         .id("git-graph-commits")
                                         .max_h(px(220.0))
                                         .overflow_y_scroll()
-                                        .children(git_commit_rows.into_iter().enumerate().map(|(index, row)| {
+                                        .children(git_commit_rows.into_iter().map(|(index, row)| {
                                             let oid = row.oid;
                                             let menu_oid = oid.clone();
                                             let menu_subject = row.subject.clone();
@@ -10041,6 +10114,16 @@ fn main() {
                             cx.notify();
                         })
                         .detach();
+                        let git_graph_search_input = cx.new(|cx| {
+                            QuickOpenInput::with_placeholder(
+                                "Search Graph · author:, sha:, message:, branch:, tag:",
+                                cx,
+                            )
+                        });
+                        cx.observe(&git_graph_search_input, |_: &mut Workbench, _, cx| {
+                            cx.notify();
+                        })
+                        .detach();
                         let mut workbench = Workbench {
                             tree: WorkspaceTree::new_with_options(model.root(), initial_visibility)
                                 .ok(),
@@ -10134,6 +10217,7 @@ fn main() {
                             git_conflict_confirm_armed: false,
                             git_filter_input: cx
                                 .new(|cx| QuickOpenInput::with_placeholder("Filter files…", cx)),
+                            git_graph_search_input,
                             git_commit_input: cx
                                 .new(|cx| QuickOpenInput::with_placeholder("Commit message", cx)),
                             git_branch_input: cx
@@ -10148,6 +10232,7 @@ fn main() {
                             git_action_status: String::new(),
                             git_loading: false,
                             git_refresh_gate: GitRefreshGate::default(),
+                            git_watch_service: None,
                             git_error: None,
                             git_diff: None,
                             git_branch_comparison: None,
@@ -10231,6 +10316,7 @@ fn main() {
                         view.refresh_terminals(cx);
                         view.refresh_project_tree(cx);
                         view.refresh_worktrees(cx);
+                        view.start_git_watch(cx);
                         view.refresh_git(cx);
                         view.refresh_agent_profiles(cx);
                         view.connect_mcp_ui_bridge(cx);
