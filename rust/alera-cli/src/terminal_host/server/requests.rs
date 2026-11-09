@@ -358,6 +358,10 @@ impl ServerActor {
                 self.require_auth(client_id)?;
                 self.create_or_attach(client_id, payload).await
             }
+            "terminal.observeExisting" => {
+                self.require_auth(client_id)?;
+                self.observe_existing_terminal(client_id, payload).await
+            }
             "write" => {
                 self.require_auth(client_id)?;
                 Ok(json!({}))

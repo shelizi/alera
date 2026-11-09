@@ -51,6 +51,7 @@ mod tailscale;
 mod terminal_alias_commands;
 mod terminal_attach;
 mod terminal_host;
+mod terminal_stream;
 mod workspace_context;
 mod workspace_pinning;
 mod workspace_registration;
@@ -174,16 +175,25 @@ async fn run(cli: Cli) -> i32 {
 async fn run_terminal_command(command: TerminalCommand) -> i32 {
     if matches!(
         &command.action,
-        TerminalAction::Workspaces | TerminalAction::Create(_) | TerminalAction::Resize(_)
+        TerminalAction::Workspaces
+            | TerminalAction::Create(_)
+            | TerminalAction::Resize(_)
+            | TerminalAction::Stream
     ) && !command.no_start
     {
-        eprintln!("terminal workspaces/create requires --no-start (existing authenticated Host)");
+        eprintln!("terminal workspaces/create/resize/stream requires --no-start (existing authenticated Host)");
         return USAGE_EXIT_CODE;
     }
     let required_capability = terminal_alias_commands::required_capability(&command.action);
     let runtime_path = runtime_dir(&command.runtime);
     let client = if command.no_start {
         let existing = match required_capability {
+            // The persistent stream represents a real desktop App view;
+            // human ownership is important for automation-owned Terminal
+            // takeover, unlike one-off CLI inspection commands.
+            None if matches!(&command.action, TerminalAction::Stream) => {
+                RuntimeHostRpcClient::connect_native_ui_app(&runtime_path).await
+            }
             Some(capability) => {
                 RuntimeHostRpcClient::connect_with_required_capability(&runtime_path, capability)
                     .await
@@ -214,6 +224,7 @@ async fn run_terminal_command(command: TerminalCommand) -> i32 {
         Err(error) => return print_error(error),
     };
     match command.action {
+        TerminalAction::Stream => terminal_stream::run(client).await,
         TerminalAction::Workspaces => match client
             .request_value("workspace.listAll", &json!({}))
             .await

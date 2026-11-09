@@ -195,6 +195,247 @@ async fn create_or_attach_rejects_stale_owner_then_reuses_original_live_pty() {
 }
 
 #[tokio::test]
+async fn observe_existing_terminal_never_mints_a_pty_and_checks_owner_before_subscribing() {
+    let dir = tempfile::tempdir().unwrap();
+    let (handle, _receiver) = ClientHandle::test_channels();
+    let mut session = Session::driver_test_stub("s1", 120, 40);
+    session.append_output(b"hello");
+    let mut actor = test_actor(
+        &dir,
+        HashMap::from([(1, local_client(handle))]),
+        HashMap::from([("s1".to_string(), session)]),
+    )
+    .await;
+    let original_instance = actor.sessions["s1"].instance_id();
+
+    let missing = actor
+        .observe_existing_terminal(
+            1,
+            &json!({
+                "sessionId": "not-here",
+                "workspaceId": "workspace",
+                "tabId": "tab-new",
+                "viewLeaseId": "native-window-1",
+            }),
+        )
+        .await;
+    assert!(
+        missing.is_err(),
+        "missing PTY cannot be reminted by a subscription"
+    );
+    assert_eq!(actor.sessions.len(), 1);
+    assert!(actor.sessions["s1"].clients.is_empty());
+
+    let moved = actor
+        .observe_existing_terminal(
+            1,
+            &json!({
+                "sessionId": "s1",
+                "workspaceId": "other-project",
+                "tabId": "tab-s1",
+                "viewLeaseId": "native-window-1",
+            }),
+        )
+        .await;
+    assert!(moved.is_err(), "stale worktree must not attach");
+    assert!(actor.sessions["s1"].clients.is_empty());
+
+    let unscoped = actor
+        .observe_existing_terminal(
+            1,
+            &json!({
+                "sessionId": "s1",
+                "workspaceId": "workspace",
+                "tabId": "tab-s1",
+            }),
+        )
+        .await;
+    assert!(
+        unscoped.is_err(),
+        "Native observation requires per-window lease"
+    );
+
+    let observed = actor
+        .observe_existing_terminal(
+            1,
+            &json!({
+                "sessionId": "s1",
+                "workspaceId": "workspace",
+                "tabId": "tab-s1",
+                "viewLeaseId": "native-window-1",
+            }),
+        )
+        .await
+        .expect("live session can be observed");
+    assert_eq!(observed["created"], false);
+    assert_eq!(observed["running"], true);
+    assert_eq!(
+        decode_bytes(observed.get("snapshotBase64")).unwrap(),
+        b"hello"
+    );
+    assert_eq!(actor.sessions["s1"].instance_id(), original_instance);
+    assert!(actor.sessions["s1"].has_view_lease(1, "native-window-1"));
+}
+
+#[tokio::test]
+async fn observe_existing_terminal_resumes_delta_on_same_output_lane() {
+    let dir = tempfile::tempdir().unwrap();
+    let (control_tx, _control_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (terminal_tx, mut terminal_rx) = tokio::sync::mpsc::channel(8);
+    let handle = ClientHandle::new(control_tx, terminal_tx);
+    let mut session = Session::driver_test_stub("s1", 120, 40);
+    session.append_output(b"hello world");
+    let mut actor = test_actor(
+        &dir,
+        HashMap::from([(7, local_client(handle))]),
+        HashMap::from([("s1".to_string(), session)]),
+    )
+    .await;
+
+    let reply = actor
+        .observe_existing_terminal(
+            7,
+            &json!({
+                "sessionId": "s1",
+                "workspaceId": "workspace",
+                "tabId": "tab-s1",
+                "viewLeaseId": "native-window-7",
+                "resumeCursor": 5,
+            }),
+        )
+        .await
+        .expect("resumable session");
+    assert_eq!(reply["delta"], true);
+    assert_eq!(reply["resumed"], true);
+    assert_eq!(reply["outputCursor"], 11);
+    assert_eq!(reply.get("snapshotBase64"), None);
+    assert!(matches!(
+        terminal_rx.recv().await.expect("delta output"),
+        ClientFrame::SequencedTerminal { frame, .. }
+            if matches!(*frame, ClientFrame::Output { ref data, .. } if data == b" world")
+    ));
+}
+
+#[tokio::test]
+async fn observed_native_write_requires_original_view_lease_and_live_triple_identity() {
+    let dir = tempfile::tempdir().unwrap();
+    let (handle, mut receiver) = ClientHandle::test_channels();
+    let mut actor = test_actor(
+        &dir,
+        HashMap::from([(1, local_client(handle))]),
+        HashMap::from([("s1".to_owned(), Session::driver_test_stub("s1", 80, 24))]),
+    )
+    .await;
+    let (inbox, mut inbox_receiver) = tokio::sync::mpsc::unbounded_channel();
+    actor.inbox = inbox;
+
+    actor
+        .observe_existing_terminal(
+            1,
+            &json!({
+                "sessionId": "s1", "workspaceId": "workspace", "tabId": "tab-s1",
+                "viewLeaseId": "native-window-1"
+            }),
+        )
+        .await
+        .unwrap();
+
+    for (owner_workspace, lease) in [
+        ("other-project", "native-window-1"),
+        ("workspace", "stolen-window-lease"),
+    ] {
+        let reply = request(
+            &mut actor,
+            1,
+            4,
+            "terminal.writeObserved",
+            json!({
+                "sessionId": "s1", "workspaceId": owner_workspace,
+                "tabId": "tab-s1", "viewLeaseId": lease,
+                "dataBase64": "aGk="
+            }),
+            &mut receiver,
+            &mut inbox_receiver,
+        )
+        .await;
+        assert_eq!(reply["ok"], false);
+        assert!(
+            reply["error"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("observed"),
+            "{reply}"
+        );
+    }
+    // The correct live triple and lease pass the authorization boundary and
+    // reach the stub writer, which deliberately has no PTY behind it.
+    let reply = request(
+        &mut actor,
+        1,
+        5,
+        "terminal.writeObserved",
+        json!({
+            "sessionId": "s1", "workspaceId": "workspace",
+            "tabId": "tab-s1", "viewLeaseId": "native-window-1",
+            "dataBase64": "aGk="
+        }),
+        &mut receiver,
+        &mut inbox_receiver,
+    )
+    .await;
+    assert_eq!(reply["ok"], false);
+    assert_eq!(reply["error"], "terminal input writer is unavailable");
+}
+
+#[tokio::test]
+async fn native_app_observation_prevents_automation_owned_terminal_cleanup() {
+    let dir = tempfile::tempdir().unwrap();
+    let (handle, _receiver) = ClientHandle::test_channels();
+    let mut session = Session::driver_test_stub("s1", 120, 40);
+    session.workspace_id = "workspace".into();
+    session.tab_id = "tab-native-takeover".into();
+    let mut actor = test_actor(
+        &dir,
+        HashMap::from([(1, super::ClientState::local(handle, true))]),
+        HashMap::from([("s1".to_string(), session)]),
+    )
+    .await;
+    seed_automation_owned_tab(&actor, "tab-native-takeover", "run-native").await;
+    assert!(
+        !actor
+            .runtime_store
+            .find_automation_run("run-native")
+            .await
+            .unwrap()
+            .unwrap()
+            .taken_over
+    );
+
+    actor
+        .observe_existing_terminal(
+            1,
+            &json!({
+                "sessionId": "s1",
+                "workspaceId": "workspace",
+                "tabId": "tab-native-takeover",
+                "viewLeaseId": "native-window-1",
+            }),
+        )
+        .await
+        .unwrap();
+    assert!(
+        actor
+            .runtime_store
+            .find_automation_run("run-native")
+            .await
+            .unwrap()
+            .unwrap()
+            .taken_over,
+        "Native App opening a running automation-owned terminal must prevent cleanup"
+    );
+}
+
+#[tokio::test]
 async fn desktop_app_attach_marks_an_automation_owned_tab_run_taken_over() {
     let dir = tempfile::tempdir().unwrap();
     let (handle, _receiver) = ClientHandle::test_channels();

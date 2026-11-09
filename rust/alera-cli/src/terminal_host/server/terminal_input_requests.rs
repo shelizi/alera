@@ -9,6 +9,32 @@ use super::ClientKind;
 use super::ServerActor;
 
 impl ServerActor {
+    /// Session-specific Native input must stay bound to the same live Host
+    /// view after a worktree transfer. No SQLite round trip per keystroke.
+    pub(super) fn queue_observed_terminal_input(
+        &mut self,
+        client_id: u64,
+        request_id: i64,
+        payload: &Value,
+    ) -> HostResult<bool> {
+        let session_id = self.require_session(payload)?;
+        let workspace_id = payload.get("workspaceId").and_then(Value::as_str);
+        let tab_id = payload.get("tabId").and_then(Value::as_str);
+        let lease = payload.get("viewLeaseId").and_then(Value::as_str);
+        let authorized = self.sessions.get(&session_id).is_some_and(|session| {
+            session.running()
+                && workspace_id == Some(session.workspace_id.as_str())
+                && tab_id == Some(session.tab_id.as_str())
+                && lease.is_some_and(|lease| session.has_view_lease(client_id, lease))
+        });
+        if !authorized {
+            return Err(HostError::state(
+                "Terminal input requires the observed live Workspace, Tab and view lease.",
+            ));
+        }
+        self.queue_terminal_input(client_id, request_id, payload)
+    }
+
     pub(super) async fn finish_terminal_client_write(
         &mut self,
         session_id: &str,

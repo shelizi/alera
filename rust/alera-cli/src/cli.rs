@@ -131,6 +131,9 @@ pub struct TerminalCommand {
 
 #[derive(Debug, Subcommand)]
 pub enum TerminalAction {
+    /// Long-lived authenticated Host event transport for the native GPUI app.
+    /// JSON commands/events are exchanged on stdin/stdout; never starts Host.
+    Stream,
     /// List registered Host workspaces without starting the Host.
     Workspaces,
     /// Create a new Runtime Host terminal in an existing Workspace.

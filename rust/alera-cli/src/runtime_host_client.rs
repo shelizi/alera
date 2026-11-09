@@ -58,6 +58,15 @@ struct RuntimeHostFrame {
 }
 
 impl RuntimeHostRpcClient {
+    /// Transfer an already authenticated, no-start local connection to the
+    /// Native stdin/stdout event pump. Neither GPUI nor the pump sees the
+    /// Host control-file token or gains the ability to start another Host.
+    pub(crate) fn into_terminal_stream_parts(
+        self,
+    ) -> (Lines<BufReader<OwnedReadHalf>>, OwnedWriteHalf, i64) {
+        (self.reader, self.writer, self.next_request_id)
+    }
+
     /// Connect as a local Alera App (not CLI) to accept Host-authorized UI
     /// commands. Never starts the Host; the CLI owns its control-file token.
     pub(crate) async fn connect_native_ui_app(runtime_dir: &Path) -> Result<Option<Self>> {
