@@ -66,10 +66,33 @@ instead of the stale legacy `center_view` flag after session restore.
   interpret a Rust compile or a synthetic Unicode typing attempt as a
   successful real Windows IME test.
 
-**Remaining parity:** Native's global mixed strip does not yet render
-an independent tab strip inside each split pane; pinned-tab grouping and
-Classic's opt-in two-row pinned layout remain unimplemented. Do not
-confuse either with the now-removed redundant mode/preview header.
+### Per-pane mixed Tab strip follow-up (2026-11-09)
+
+- In split mode, each pane now renders **its own 44px mixed Tab strip**.
+  Tabs appear only in their owning pane; in unsplit mode the original
+  single mixed strip remains. The secondary pane no longer substitutes
+  a text-only `Second · ...` header or another Terminal-only navigation bar.
+- One shared chip presenter preserves Classic's click, middle-click, drag,
+  context menu, title, dirty/running and explicit close affordances. Each
+  pane owns its independent active identity, and its Kit overflow contains
+  pane/split controls instead of persistent `Stack` and `Unsplit` text.
+- Same-pane drag and right-click Move Left/Right change **that pane's** order;
+  right-click Close Others/Close to Right can only target that pane. A
+  cross-pane drag uses the existing identity-checked transfer: real Editor
+  buffer/undo/draft ownership moves, but Host PTYs remain Host-owned.
+  An already-open context menu cannot mutate a tab moved to another pane.
+- The primary + menu and blank-strip double-click create files in the
+  primary pane. The Kit pane overflow exposes New File in this pane,
+  including an independent secondary Editor created beside a Host tab.
+  The first secondary Editor receives a new editor epoch, not a reused ID.
+- The pane projection and scoped context candidates are covered by
+  model regressions, and Native type-checks pass. This is **not** a
+  claim of pointer-level Windows GUI usability acceptance.
+
+**Remaining parity:** Secondary pane still needs its own full Classic +
+menu (especially new Terminal routing/attachment), pinned-tab grouping and
+Classic's optional two-row pinned layout. Precise Windows pane-tab pointer,
+keyboard focus and layout restoration acceptance remains outstanding.
 
 ## Explorer baseline and implemented slice
 

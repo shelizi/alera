@@ -1357,6 +1357,11 @@ impl Workbench {
     }
 
     fn install_secondary_editor(&mut self, tabs: EditorTabs, cx: &mut Context<Self>) {
+        // The first Editor might be created directly in an existing Host-only
+        // second pane. It still needs a fresh generation-bound document ID.
+        if self.editor.is_none() && self.secondary_editor.is_none() {
+            self.editor_epoch = self.editor_epoch.wrapping_add(1);
+        }
         let editor = cx.new(|cx| NativeEditor::new(tabs, cx));
         editor.update(cx, |editor, cx| {
             editor.set_local_tab_strip_visible(false, cx);
@@ -2526,36 +2531,50 @@ impl Workbench {
         cx.notify();
     }
 
-    fn new_editor(&mut self, cx: &mut Context<Self>) {
+    fn new_editor_in_pane(&mut self, pane: PaneSlot, cx: &mut Context<Self>) {
+        if pane == PaneSlot::Secondary && !self.mixed_panes.has_secondary() {
+            self.model
+                .set_status("Split a tab before creating a file in the second pane");
+            cx.notify();
+            return;
+        }
         self.explorer_preview_active = false;
         let root = self.model.root().to_path_buf();
-        if self.editor.is_none() {
+        if self.editor_for_pane(pane).is_none() {
             let mut tabs = EditorTabs::new(self.draft_store());
             match tabs.open_scratch(&root) {
                 Ok(effect) => {
                     self.model.set_status(effect.status());
-                    self.install_editor(tabs, cx);
+                    match pane {
+                        PaneSlot::Primary => self.install_editor(tabs, cx),
+                        PaneSlot::Secondary => self.install_secondary_editor(tabs, cx),
+                    }
                     self.center_view = CenterView::Editor;
                 }
                 Err(error) => self
                     .model
                     .set_status(format!("Cannot create an editor: {error}")),
             }
-            cx.notify();
-            return;
-        }
-        let owner = self.focused_editor().expect("native editor installed");
-        let result = owner.update(cx, |editor, cx| editor.open_scratch(&root, cx));
-        match result {
-            Ok(effect) => {
-                self.model.set_status(effect.status());
-                self.center_view = CenterView::Editor;
+        } else if let Some(owner) = self.editor_for_pane(pane) {
+            let result = owner.update(cx, |editor, cx| editor.open_scratch(&root, cx));
+            match result {
+                Ok(effect) => {
+                    self.model.set_status(effect.status());
+                    self.center_view = CenterView::Editor;
+                }
+                Err(error) => self
+                    .model
+                    .set_status(format!("Cannot create an editor: {error}")),
             }
-            Err(error) => self
-                .model
-                .set_status(format!("Cannot create an editor: {error}")),
         }
+        self.mixed_panes.focus_pane(pane);
+        self.sync_mixed_tabs(cx);
+        self.save_mixed_pane_layout(cx);
         cx.notify();
+    }
+
+    fn new_editor(&mut self, cx: &mut Context<Self>) {
+        self.new_editor_in_pane(self.mixed_panes.focused_pane(), cx);
     }
 
     fn pick_save_as(&mut self, cx: &mut Context<Self>) {
@@ -4993,6 +5012,118 @@ impl Workbench {
         }
     }
 
+    /// Both Classic workbench panes use this same chip behavior. Only
+    /// WorkbenchPaneLayout decides which pane renders an identity; this
+    /// presentation never owns, clones or terminates Host PTYs or Editors.
+    fn render_mixed_tab_chip(
+        index: usize,
+        tab: WorkbenchTab,
+        pane: PaneSlot,
+        selected: bool,
+        drag_generation: u64,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let secondary = pane == PaneSlot::Secondary;
+        let (chip_id, focus_id, close_id) = if secondary {
+            (
+                "mixed-secondary-tab",
+                "mixed-secondary-tab-focus",
+                "mixed-secondary-tab-close",
+            )
+        } else {
+            ("mixed-tab", "mixed-tab-focus", "mixed-tab-close")
+        };
+        let identity = tab.identity;
+        let icon_kind = match tab.kind {
+            WorkbenchTabKind::Terminal | WorkbenchTabKind::Agent => UiIcon::Terminal,
+            WorkbenchTabKind::Editor => UiIcon::File,
+        };
+        let title = tab.title;
+        let for_click = identity.clone();
+        let for_middle = identity.clone();
+        let for_right = identity.clone();
+        let for_close = identity.clone();
+        let for_drop = identity.clone();
+        let drag_caption = title.clone();
+        div()
+            .id((chip_id, index))
+            .h(px(32.0))
+            .mr_2()
+            .px_1()
+            .flex()
+            .items_center()
+            .rounded_md()
+            .border_1()
+            .border_color(rgb(if selected { BORDER_ACTIVE } else { BORDER }))
+            .bg(rgb(if selected { ELEVATED } else { TOOLBAR }))
+            .child(
+                div()
+                    .id((focus_id, index))
+                    .min_w_0()
+                    .max_w(px(210.0))
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .px_1()
+                    .cursor_pointer()
+                    .text_color(rgb(if selected { TEXT } else { MUTED }))
+                    .child(icon(icon_kind, 12.0, if selected { TEXT } else { MUTED }))
+                    .child(
+                        div()
+                            .min_w_0()
+                            .max_w(px(if tab.kind == WorkbenchTabKind::Terminal {
+                                92.0
+                            } else {
+                                180.0
+                            }))
+                            .truncate()
+                            .text_sm()
+                            .child(title),
+                    )
+                    .when(tab.dirty, |entry| entry.child(div().text_xs().child("●")))
+                    .when(!tab.running, |entry| {
+                        entry.child(div().text_xs().text_color(rgb(MUTED)).child("○"))
+                    })
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.focus_mixed_tab(&for_click, window, cx);
+                    }))
+                    .on_mouse_up(
+                        gpui::MouseButton::Middle,
+                        cx.listener(move |this, _, _, cx| {
+                            this.close_mixed_tab(&for_middle, cx);
+                        }),
+                    )
+                    .on_drag(
+                        MixedTabDrag {
+                            identity,
+                            workspace_generation: drag_generation,
+                        },
+                        move |_, _, _, cx| {
+                            cx.new(|_| TerminalTabDragPreview {
+                                label: drag_caption.clone(),
+                            })
+                        },
+                    )
+                    .on_drop(cx.listener(move |this, drag: &MixedTabDrag, _, cx| {
+                        this.reorder_mixed_tab(drag, &for_drop, cx);
+                    }))
+                    .context_menu(Self::kit_mixed_tab_context_menu(
+                        cx.entity().downgrade(),
+                        for_right,
+                        secondary,
+                    )),
+            )
+            .child(
+                icon_button((close_id, index), UiIcon::Close, "Close tab", false)
+                    .w(px(22.0))
+                    .h(px(22.0))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.close_mixed_tab(&for_close, cx);
+                    })),
+            )
+            .into_any_element()
+    }
+
     /// Project both original state owners into one stable, mixed-order tab
     /// strip. The original editor buffers and Host PTYs remain authoritative.
     fn sync_mixed_tabs(&mut self, cx: &mut Context<Self>) {
@@ -5352,7 +5483,32 @@ impl Workbench {
         {
             return;
         }
-        if self.mixed_tabs.move_to(&drag.identity, target) {
+        let destination = if self
+            .mixed_panes
+            .tabs_in(PaneSlot::Secondary)
+            .contains(target)
+        {
+            PaneSlot::Secondary
+        } else if self.mixed_panes.tabs_in(PaneSlot::Primary).contains(target) {
+            PaneSlot::Primary
+        } else {
+            return;
+        };
+        let source_in_destination = self
+            .mixed_panes
+            .tabs_in(destination)
+            .contains(&drag.identity);
+        if !source_in_destination && !self.transfer_editor_to_pane(&drag.identity, destination, cx)
+        {
+            return;
+        }
+        let pane_reordered = self.mixed_panes.reorder_within(&drag.identity, target);
+        let global_reordered = self.mixed_tabs.move_to(&drag.identity, target);
+        if pane_reordered || global_reordered || !source_in_destination {
+            self.save_mixed_pane_layout(cx);
+            if !source_in_destination {
+                self.refresh_terminal_split_output(cx);
+            }
             cx.notify();
         }
     }
@@ -5374,40 +5530,22 @@ impl Workbench {
             MixedContextAction::Focus => self.focus_mixed_tab(&id, window, cx),
             MixedContextAction::Close => self.close_mixed_tab(&id, cx),
             MixedContextAction::CloseOthers | MixedContextAction::CloseToRight => {
-                let entries = self.mixed_tabs.entries();
-                let Some(index) = entries.iter().position(|tab| tab.identity == id) else {
-                    return;
-                };
-                let candidates: Vec<_> = entries
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(i, item)| {
-                        (i != index
-                            && (matches!(action, MixedContextAction::CloseOthers) || i > index))
-                            .then_some(item.identity.clone())
-                    })
-                    .collect();
-                for target in candidates {
+                for target in self
+                    .mixed_panes
+                    .close_candidates(&id, matches!(action, MixedContextAction::CloseToRight))
+                {
                     // Editor dirty-buffer protection and Host PTY ownership
                     // are enforced by the original owners for every close.
                     self.close_mixed_tab(&target, cx);
                 }
             }
             MixedContextAction::MoveLeft | MixedContextAction::MoveRight => {
-                let entries = self.mixed_tabs.entries();
-                if let Some(index) = entries.iter().position(|tab| tab.identity == id) {
-                    let other = match action {
-                        MixedContextAction::MoveLeft => index.checked_sub(1),
-                        _ => (index + 1 < entries.len()).then_some(index + 1),
-                    }
-                    .and_then(|index| entries.get(index).map(|tab| tab.identity.clone()));
-                    if let Some(other) = other {
-                        if matches!(action, MixedContextAction::MoveLeft) {
-                            self.mixed_tabs.move_to(&id, &other);
-                        } else {
-                            self.mixed_tabs.move_to(&id, &other);
-                        }
-                    }
+                if let Some(other) = self
+                    .mixed_panes
+                    .adjacent_tab(&id, matches!(action, MixedContextAction::MoveRight))
+                {
+                    self.mixed_panes.reorder_within(&id, &other);
+                    self.mixed_tabs.move_to(&id, &other);
                 }
             }
             MixedContextAction::SecondPane => {
@@ -5883,10 +6021,20 @@ impl Render for Workbench {
             .and_then(serde_json::Value::as_f64)
             .unwrap_or(1.3) as f32;
         let mixed_tabs = self.mixed_tabs.entries().to_vec();
-        let mixed_active = self.mixed_tabs.active().cloned();
-        let mixed_secondary_tab_ids = self.mixed_panes.tabs_in(PaneSlot::Secondary).to_vec();
         let mixed_secondary_active = self.mixed_panes.active_in(PaneSlot::Secondary).cloned();
+        let mixed_primary_active = self.mixed_panes.active_in(PaneSlot::Primary).cloned();
         let mixed_has_secondary = self.mixed_panes.has_secondary();
+        // Classic shows one independent mixed Tab strip per visible pane.
+        // The old single shared strip remains the unsplit fallback only.
+        let mixed_primary_tabs = if mixed_has_secondary {
+            self.mixed_panes
+                .visible_tabs_in(PaneSlot::Primary, &mixed_tabs)
+        } else {
+            mixed_tabs.clone()
+        };
+        let mixed_secondary_tabs = self
+            .mixed_panes
+            .visible_tabs_in(PaneSlot::Secondary, &mixed_tabs);
         let mixed_split_horizontal = self.mixed_panes.axis() == PaneAxis::Horizontal;
         let mixed_secondary_identity = self.mixed_panes.active_in(PaneSlot::Secondary).cloned();
         let mixed_secondary_host = mixed_secondary_identity.as_ref().and_then(|id| match id {
@@ -6037,7 +6185,6 @@ impl Render for Workbench {
         } else {
             None
         };
-        let secondary_editor_live = secondary_native_editor.is_some();
         let editor_dirty = toolbar_editor
             .as_ref()
             .is_some_and(|editor| editor.read(cx).document().is_dirty());
@@ -7588,87 +7735,13 @@ impl Render for Workbench {
                                             .items_center()
                                             .overflow_x_scroll()
                                             .pl_2()
-                                            .children(mixed_tabs.into_iter().enumerate().map(|(index, tab)| {
-                                                let identity = tab.identity;
-                                                let in_secondary = mixed_secondary_tab_ids.contains(&identity);
+                                            .children(mixed_primary_tabs.into_iter().enumerate().map(|(index, tab)| {
                                                 let selected = !showing_explorer_preview
-                                                    && (mixed_active.as_ref() == Some(&identity)
-                                                        || mixed_secondary_active.as_ref() == Some(&identity));
-                                                let icon_kind = match tab.kind {
-                                                    WorkbenchTabKind::Terminal | WorkbenchTabKind::Agent => UiIcon::Terminal,
-                                                    WorkbenchTabKind::Editor => UiIcon::File,
-                                                };
-                                                let title = tab.title.clone();
-                                                let for_click = identity.clone();
-                                                let for_middle = identity.clone();
-                                                let for_right = identity.clone();
-                                                let for_close = identity.clone();
-                                                let for_drop = identity.clone();
-                                                let drag_identity = identity.clone();
-                                                let drag_caption = title.clone();
-                                                div()
-                                                    .id(("mixed-tab", index))
-                                                    .h(px(32.0))
-                                                    .mr_2()
-                                                    .px_1()
-                                                    .flex()
-                                                    .items_center()
-                                                    .rounded_md()
-                                                    .border_1()
-                                                    .border_color(rgb(if selected { BORDER_ACTIVE } else { BORDER }))
-                                                    .bg(rgb(if selected { ELEVATED } else { TOOLBAR }))
-                                                    .child(
-                                                        div()
-                                                            .id(("mixed-tab-focus", index))
-                                                            .min_w_0()
-                                                            .max_w(px(210.0))
-                                                            .flex()
-                                                            .items_center()
-                                                            .gap_1()
-                                                            .px_1()
-                                                            .cursor_pointer()
-                                                            .text_color(rgb(if selected { TEXT } else { MUTED }))
-                                                            .child(icon(icon_kind, 12.0, if selected { TEXT } else { MUTED }))
-                                                            .child(
-                                                                div()
-                                                                    .min_w_0()
-                                                                    .max_w(px(if tab.kind == WorkbenchTabKind::Terminal { 92.0 } else { 180.0 }))
-                                                                    .truncate()
-                                                                    .text_sm()
-                                                                    .child(title),
-                                                            )
-                                                            .when(tab.dirty, |entry| entry.child(div().text_xs().child("●")))
-                                                            .when(!tab.running, |entry| entry.child(div().text_xs().text_color(rgb(MUTED)).child("○")))
-                                                            .when(in_secondary, |entry| entry.child(div().text_xs().text_color(rgb(MUTED)).child("②")))
-                                                            .on_click(cx.listener(move |this, _, window, cx| {
-                                                                this.focus_mixed_tab(&for_click, window, cx);
-                                                            }))
-                                                            .on_mouse_up(gpui::MouseButton::Middle, cx.listener(move |this, _, _, cx| {
-                                                                this.close_mixed_tab(&for_middle, cx);
-                                                            }))
-                                                            .on_drag(MixedTabDrag {
-                                                                identity: drag_identity,
-                                                                workspace_generation: mixed_drag_generation,
-                                                            }, move |_, _, _, cx| {
-                                                                cx.new(|_| TerminalTabDragPreview { label: drag_caption.clone() })
-                                                            })
-                                                            .on_drop(cx.listener(move |this, drag: &MixedTabDrag, _, cx| {
-                                                                this.reorder_mixed_tab(drag, &for_drop, cx);
-                                                            }))
-                                                            .context_menu(Self::kit_mixed_tab_context_menu(
-                                                                cx.entity().downgrade(),
-                                                                for_right,
-                                                                in_secondary,
-                                                            )),
-                                                    )
-                                                    .child(
-                                                        icon_button(("mixed-tab-close", index), UiIcon::Close, "Close tab", false)
-                                                            .w(px(22.0))
-                                                            .h(px(22.0))
-                                                            .on_click(cx.listener(move |this, _, _, cx| {
-                                                                this.close_mixed_tab(&for_close, cx);
-                                                            })),
-                                                    )
+                                                    && mixed_primary_active.as_ref() == Some(&tab.identity);
+                                                Self::render_mixed_tab_chip(
+                                                    index, tab, PaneSlot::Primary, selected,
+                                                    mixed_drag_generation, cx,
+                                                )
                                             }))
                                             // Legacy Explorer preview tabs belong
                                             // to the same visual strip, never a
@@ -7760,6 +7833,7 @@ impl Render for Workbench {
                                                     .on_open_change(move |open, _, cx| {
                                                         if *open {
                                                             let _ = refresh_owner.update(cx, |view, cx| {
+                                                                view.mixed_panes.focus_pane(PaneSlot::Primary);
                                                                 view.refresh_terminals(cx);
                                                             });
                                                         }
@@ -7773,7 +7847,7 @@ impl Render for Workbench {
                                                     .h(px(TAB_STRIP_HEIGHT - 1.0))
                                                     .on_click(cx.listener(|this, event: &gpui::ClickEvent, _, cx| {
                                                         if event.click_count() == 2 {
-                                                            this.new_editor(cx);
+                                                            this.new_editor_in_pane(PaneSlot::Primary, cx);
                                                         }
                                                     })),
                                             ),
@@ -7782,8 +7856,8 @@ impl Render for Workbench {
                                         icon_button("mixed-pane-actions", UiIcon::More, "Pane actions", false)
                                             .dropdown_menu(Self::kit_pane_actions_menu(
                                                 cx.entity().downgrade(),
-                                                mixed_active.clone(),
-                                                mixed_active.as_ref().is_some_and(|id| mixed_secondary_tab_ids.contains(id)),
+                                                mixed_primary_active.clone(),
+                                                false,
                                                 mixed_has_secondary,
                                             )),
                                     ),
@@ -8134,7 +8208,7 @@ impl Render for Workbench {
                                     .into_any_element()
                             }),
                                     )
-                                    .child(if let Some((label, preview)) = mixed_secondary_preview {
+                                    .child(if let Some((_, preview)) = mixed_secondary_preview {
                                         div()
                                             .id("mixed-secondary-pane")
                                             .flex_1()
@@ -8151,17 +8225,25 @@ impl Render for Workbench {
                                                     .px_2()
                                                     .flex()
                                                     .items_center()
-                                                    .gap_3()
-                                                    .bg(rgb(PANEL))
+                                                    .gap_1()
+                                                    .bg(rgb(TOOLBAR))
+                                                    .border_b_1()
+                                                    .border_color(rgb(BORDER))
                                                     .child(
                                                         div()
+                                                            .id("mixed-secondary-tabs-scroll")
                                                             .flex_1()
                                                             .min_w_0()
-                                                            .text_sm()
-                                                            .child(format!(
-                                                                "Second · {label} · {}",
-                                                                if secondary_editor_live { "Editor" } else { "Preview" }
-                                                            ))
+                                                            .flex()
+                                                            .items_center()
+                                                            .overflow_x_scroll()
+                                                            .children(mixed_secondary_tabs.into_iter().enumerate().map(|(index, tab)| {
+                                                                let selected = mixed_secondary_active.as_ref() == Some(&tab.identity);
+                                                                Self::render_mixed_tab_chip(
+                                                                    index, tab, PaneSlot::Secondary, selected,
+                                                                    mixed_drag_generation, cx,
+                                                                )
+                                                            }))
                                                             .on_drop(cx.listener(|this, drag: &MixedTabDrag, window, cx| {
                                                                 if drag.workspace_generation == this.workspace_generation
                                                                     && this.mixed_tab_is_current(&drag.identity, cx)
@@ -8173,26 +8255,13 @@ impl Render for Workbench {
                                                             })),
                                                     )
                                                     .child(
-                                                        div()
-                                                            .id("mixed-split-axis")
-                                                            .cursor_pointer()
-                                                            .text_xs()
-                                                            .child(if mixed_split_horizontal { "Stack" } else { "Side by side" })
-                                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                                this.mixed_panes.toggle_axis();
-                                                                this.save_mixed_pane_layout(cx);
-                                                                cx.notify();
-                                                            })),
-                                                    )
-                                                    .child(
-                                                        div()
-                                                            .id("mixed-split-close")
-                                                            .cursor_pointer()
-                                                            .text_xs()
-                                                            .child("Unsplit")
-                                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                                this.unsplit_mixed_panes(cx);
-                                                            })),
+                                                        icon_button("mixed-secondary-pane-actions", UiIcon::More, "Second pane actions", false)
+                                                            .dropdown_menu(Self::kit_pane_actions_menu(
+                                                                cx.entity().downgrade(),
+                                                                mixed_secondary_active.clone(),
+                                                                true,
+                                                                mixed_has_secondary,
+                                                            )),
                                                     ),
                                             )
                                             .child(if let Some(editor) = secondary_native_editor {

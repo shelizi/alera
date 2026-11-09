@@ -97,6 +97,18 @@ impl Workbench {
     ) -> gpui_kit::component::menu::PopupMenu
            + 'static {
         move |mut menu, _, _| {
+            let file_owner = owner.clone();
+            let pane = if active_in_secondary {
+                PaneSlot::Secondary
+            } else {
+                PaneSlot::Primary
+            };
+            menu = menu.item(PopupMenuItem::new("New File in this pane").on_click(
+                move |_, _, cx| {
+                    let _ = file_owner.update(cx, |view, cx| view.new_editor_in_pane(pane, cx));
+                },
+            ));
+            menu = menu.separator();
             if let Some(WorkbenchTabIdentity::Host(target)) = active.clone() {
                 menu = menu.label("Terminal");
                 let refresh_owner = owner.clone();
@@ -325,8 +337,14 @@ impl Workbench {
                 let identity = identity.clone();
                 menu = menu.item(PopupMenuItem::new(label).on_click(move |_, window, cx| {
                     let _ = owner.update(cx, |view, cx| {
+                        let expected = if secondary {
+                            PaneSlot::Secondary
+                        } else {
+                            PaneSlot::Primary
+                        };
                         if view.mixed_tab_is_current(&identity, cx)
                             && view.mixed_tabs.contains(&identity)
+                            && view.mixed_panes.tabs_in(expected).contains(&identity)
                         {
                             view.mixed_tab_context = Some(identity.clone());
                             view.apply_mixed_tab_context(action, window, cx);
