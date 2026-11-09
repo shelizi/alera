@@ -156,6 +156,60 @@ def write_and_expect_host_output(stream, request_id, identity, command, marker, 
     raise SmokeError("Native stream did not deliver scoped Host output before deadline")
 
 
+def exercise_isolated_unicode_shell(stream, executable, profile, first, second, run_marker):
+    """Validate real CJK ingress/egress without touching an existing Host.
+
+    Command echo cannot satisfy ingress: expected base64 is computed by the
+    child PowerShell, and the literal Unicode input has no expected base64.
+    Egress sends ASCII only, so actual CJK bytes must originate in the PTY.
+    """
+    sample = "\u4f60\uff0c\u7e41\u9ad4\u4e2d\u6587\u6ce8\u97f3\u6e2c\u8a66\U0001f431"
+    expected_b64 = base64.b64encode(sample.encode("utf-8")).decode("ascii")
+    other_before = checked_cli(
+        executable, profile, "terminal", "--no-start", "read",
+        "--handle", second["sessionId"],
+    )
+    other_cursor = int(other_before["nextCursor"])
+
+    write_and_expect_host_output(
+        stream, 61, first, "chcp 65001\r", "65001", timeout=20,
+    )
+    write_and_expect_host_output(
+        stream, 62, first, "powershell.exe -NoLogo -NoProfile -NoExit\r",
+        "PS ", timeout=25,
+    )
+    ready = (
+        "$u = New-Object System.Text.UTF8Encoding $false; "
+        "[Console]::InputEncoding = $u; [Console]::OutputEncoding = $u; "
+        "$OutputEncoding = $u; Write-Output 'UTF8_READY_" + run_marker + "'\r"
+    )
+    write_and_expect_host_output(
+        stream, 63, first, ready, "UTF8_READY_" + run_marker, timeout=25,
+    )
+    ingress = (
+        "Write-Output ('INPUT_' + [Convert]::ToBase64String("
+        "[Text.Encoding]::UTF8.GetBytes('" + sample + "')))\r"
+    )
+    write_and_expect_host_output(
+        stream, 64, first, ingress, "INPUT_" + expected_b64, timeout=30,
+    )
+    egress = (
+        "[Console]::WriteLine('OUTPUT_' + "
+        "[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('"
+        + expected_b64 + "')))\r"
+    )
+    write_and_expect_host_output(
+        stream, 65, first, egress, "OUTPUT_" + sample, timeout=30,
+    )
+    other_after = checked_cli(
+        executable, profile, "terminal", "--no-start", "read",
+        "--handle", second["sessionId"],
+    )
+    if int(other_after["nextCursor"]) != other_cursor:
+        raise SmokeError("UTF-8 input contaminated the other isolated Host PTY")
+    return len(sample.encode("utf-8"))
+
+
 def host_rpc(control, verb, payload):
     # The control file exists *only* inside the random temporary profile.
     with socket.create_connection(("127.0.0.1", int(control["port"])), timeout=3) as client:
@@ -855,7 +909,8 @@ def run_smoke(executable, native_app=None, hold_seconds=25,
               native_reconnect=False, native_host_restart=False,
               native_split_gate=False, native_load_seconds=0, native_load_style="plain",
               native_load_target="both", native_real_tui_pager=None,
-              native_real_tui_target="primary", native_real_tui_rounds=6):
+              native_real_tui_target="primary", native_real_tui_rounds=6,
+              unicode_shell_gate=False):
     validate_real_tui_target(native_real_tui_target, native_real_tui_pager is not None,
                              native_host_restart, native_split_gate)
     run_marker = uuid.uuid4().hex[:14]
@@ -1087,6 +1142,14 @@ def run_smoke(executable, native_app=None, hold_seconds=25,
                 "FIRST_PANE_" + run_marker,
             )
             checks.append("two distinct PTYs share one CLI stream with scoped input/output")
+            if unicode_shell_gate:
+                bytes_checked = exercise_isolated_unicode_shell(
+                    stream, executable, profile, fresh, second_identity, run_marker,
+                )
+                checks.append(
+                    f"Windows PowerShell UTF-8 CJK ingress/egress ({bytes_checked} bytes), second PTY unchanged"
+                )
+
 
             # More than a default 64KiB Host read window, from a real
             # interactive Windows cmd.exe. The terminal must deliver the
@@ -1445,6 +1508,8 @@ if __name__ == "__main__":
                         default="primary", help="real less.exe in first viewport or both verified split panes")
     parser.add_argument("--native-real-tui-rounds", type=int, default=6,
                         help="1..20 interleaved top/end real pager redraw rounds per visible pane")
+    parser.add_argument("--unicode-shell-gate", action="store_true",
+                        help="opt-in strict UTF-8 PowerShell CJK ingress/egress and second-PTY isolation")
     parser.add_argument("--hold-seconds", type=int, default=25)
     args = parser.parse_args()
     if not args.cli.is_file() or (args.native_app is not None and not args.native_app.is_file()):
@@ -1494,6 +1559,7 @@ if __name__ == "__main__":
             if args.native_real_tui_pager is not None else None,
             native_real_tui_target=args.native_real_tui_target,
             native_real_tui_rounds=args.native_real_tui_rounds,
+            unicode_shell_gate=args.unicode_shell_gate,
         )
     except (SmokeError, OSError, KeyError, ValueError, subprocess.TimeoutExpired) as error:
         print(f"FAIL: isolated Terminal stream smoke: {error}", file=sys.stderr)

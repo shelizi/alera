@@ -268,3 +268,11 @@ CLI `terminal_stream::tests` 私有 recover 指令白名單 **2/2 PASS**，確�
 The Native Terminal IME sink now rejects replace_text_in_range / replace_and_mark_text_in_range callbacks when its GPUI FocusHandle is no longer focused. This is in addition to Workbench's authenticated pane/Host identity check and its observer-time focus gate. Search fields retain their normal text-input behavior. Trace-only diagnostics record rejected callbacks when ALERA_GPUI_TSF_TRACE is set. Scope: desktop_gpui/src/quick_open_ui.rs only; no Classic or production Host changes.
 
 Validation on Windows: new quick_open_ui::tests::terminal_rejects_delayed_ime_after_blur_but_explorer_is_unchanged 1/1 PASS; cargo test --manifest-path desktop_gpui/Cargo.toml --locked --lib 332/332 PASS; cargo check --manifest-path desktop_gpui/Cargo.toml --all-targets --locked PASS. The automated regression validates focus decision logic, not a real delayed OS IME callback. Real repeated Primary/Secondary/Explorer candidate cycles, Unicode commit with UTF-8 PowerShell, and Classic/Native Release p50/p95 remain unverified. Preserve supported=false, no main merge, no push, no release. Preserve .gpui-smoke-20261108/.
+
+## 2026-11-09：Windows Unicode / PowerShell 隔離端到端 Gate
+
+新增 opt-in `--unicode-shell-gate`，重用 `desktop_gpui/tests/terminal_stream_isolated_smoke.py` 的一次性 Host profile 與兩個獨立 PTY；先在 Windows CMD 執行 `chcp 65001`，再啟動隔離 PowerShell 並設定 InputEncoding / OutputEncoding 為 UTF-8。正式中文輸入使用「你，繁體中文注音測試🐱」(34 UTF-8 bytes)，由 PTY 內的 PowerShell 計算輸入文字的 UTF-8 Base64，避免把單純的 command echo 誤判為正確輸入；輸出方向則只透過 ASCII Base64 指令，要求 PTY 真正回傳 UTF-8 中文和 Emoji。另核對第二個 PTY 的 Host output cursor 在此期間不變，確保沒有跨 PTY 污染。
+
+第一輪使用較舊 `D:/c/cli/debug/alera.exe` 時，原始基準測試與新 Unicode 測試都在 CLI stream IPC 初始化結束（RED），沒有進入 UTF-8 測項；改用現有的 `D:/c/cli/debug/deps/alera.exe` 後，隔離 Host / CLI 版本 11/11 PASS。再加入隔離 Native Debug GUI `D:/c/t/debug/alera-gpui-desktop.exe`，得到 12/12 PASS，包含 Unicode roundtrip 34 bytes、第二 PTY 未污染、超過 64 KiB stream 與視窗存活。Python AST parse 與 `git diff --check` 通過。
+
+驗證邊界：此測試證明 CLI / Host / ConPTY / PowerShell 的文字編碼鏈路，不代表透過 Windows 注音候選窗進行 GPUI 鍵盤輸入已有完整驗收。仍待真實 Primary → Secondary → Explorer 多次候選窗切換、正式注音 Commit 在 Native UI 端路由、失焦後 OS 延遲 Commit，以及 Classic / Native Release 同場 p50/p95。保持 `supported=false`，不合併 main、不推送、不發布，不修改 Classic / 正式 Host，保留 `.gpui-smoke-20261108/`。
