@@ -26,6 +26,7 @@ mod configuration_store;
 #[cfg(test)]
 mod configuration_store_tests;
 mod configuration_validation;
+mod desktop_shared_settings;
 mod mobile_access_settings_row;
 #[cfg(test)]
 mod mobile_store_tests;
@@ -98,6 +99,7 @@ pub use orchestration_task_store::NewOrchestrationTask;
 pub use project_clone_models::*;
 pub use runtime_file_security::*;
 pub use settings_models::*;
+pub use desktop_shared_settings::SHARED_DESKTOP_PATHS;
 pub use store::*;
 pub use store_error::*;
 pub use text_actions_validation::{validate_text_actions_settings, AI_ASSIST_AGENTS};

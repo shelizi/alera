@@ -4,6 +4,7 @@ mod native_action_dialog_ui;
 mod native_components;
 mod native_popup_ui;
 mod native_settings_catalog_ui;
+mod native_shared_settings_ui;
 mod native_settings_ui;
 mod native_ui_icons;
 mod native_ui_theme;
@@ -407,6 +408,11 @@ struct Workbench {
     settings_kit_dialog_open: bool,
     /// The preview language changes only visible text, never host settings.
     settings_menu_locale: UiLocale,
+    settings_menu_language: String,
+    settings_shared_busy: bool,
+    settings_shared_request: u64,
+    settings_shared_last_refresh: Instant,
+    settings_shared_error: Option<String>,
     settings_menu_search: Entity<QuickOpenInput>,
     last_auto_git_fetch: Instant,
     agent_profiles: Vec<AgentProfileRow>,
@@ -2837,8 +2843,17 @@ impl Workbench {
 
     /// The Host authenticates the Agent and allowlists the path. Native
     /// independently rechecks its live Workspace registration and store,
-    /// and replies only with the value actually read from its own JSON file.
+    /// and acknowledges shared scalar settings only after Rust Host readback.
     fn apply_native_mcp_setting(&mut self, command: &NativeMcpUiCommand, cx: &mut Context<Self>) {
+        if command
+            .arguments
+            .get("path")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(NativeSettings::writable)
+        {
+            self.apply_shared_mcp_setting(command.clone(), cx);
+            return;
+        }
         let result: Result<(NativeSettings, serde_json::Value), &'static str> = (|| {
             let authorized = self.mcp_host_workspaces.iter().any(|workspace| {
                 workspace.id == command.workspace_id
@@ -2847,12 +2862,12 @@ impl Workbench {
             if !authorized {
                 return Err("workspace_missing");
             }
-            let store = self.native_settings_store.as_ref().ok_or("ui_not_ready")?;
             let path = command
                 .arguments
                 .get("path")
                 .and_then(|value| value.as_str())
                 .ok_or("ui_operation_failed")?;
+            let store = self.native_settings_store.as_ref().ok_or("ui_not_ready")?;
             let settings = if command.action == "get_setting" {
                 store.read().map_err(|_| "ui_operation_failed")?
             } else {
@@ -2904,26 +2919,7 @@ impl Workbench {
         value: serde_json::Value,
         cx: &mut Context<Self>,
     ) {
-        let result = self
-            .native_settings_store
-            .as_ref()
-            .ok_or_else(|| std::io::Error::other("Native state directory is unavailable"))
-            .and_then(|store| {
-                let expected = store.get(path)?;
-                store.compare_and_set(path, &expected, &value)
-            });
-        match result {
-            Ok(settings) => {
-                self.install_native_settings(settings, cx);
-                self.model
-                    .set_status(format!("Native {path} saved and read back"));
-            }
-            Err(error) => {
-                self.model
-                    .set_status(format!("Native setting unchanged: {error}"));
-            }
-        }
-        cx.notify();
+        self.change_shared_desktop_setting(path, value, cx);
     }
 
     /// Host has already authorized the target and parameters, but this window
@@ -5391,6 +5387,16 @@ impl Workbench {
                     view.terminal_tick = view.terminal_tick.wrapping_add(1);
                     view.flush_auto_terminal_resizes(cx);
                     view.poll_native_mcp_commands(cx);
+                    // Classic and GPUI may remain open simultaneously.
+                    // Poll a narrow six-field Host snapshot off the UI
+                    // thread: fast while Settings is open, bounded otherwise.
+                    let settings_refresh_secs =
+                        if view.settings_section.is_some() { 3 } else { 15 };
+                    if view.settings_shared_last_refresh.elapsed()
+                        >= Duration::from_secs(settings_refresh_secs)
+                    {
+                        view.refresh_shared_desktop_settings(cx);
+                    }
                     if view.native_settings.editor_autosave_enabled && view.terminal_tick % 2 == 0 {
                         for editor in [view.editor.clone(), view.secondary_editor.clone()].into_iter().flatten() {
                             editor.update(cx, |editor, cx| editor.autosave_if_idle(cx));
@@ -8775,6 +8781,13 @@ fn main() {
                             settings_modal_focus: cx.focus_handle(),
                             settings_kit_dialog_open: false,
                             settings_menu_locale: UiLocale::English,
+                            settings_menu_language: "system".into(),
+                            settings_shared_busy: false,
+                            settings_shared_request: 0,
+                            settings_shared_last_refresh: Instant::now()
+                                .checked_sub(Duration::from_secs(10))
+                                .unwrap_or_else(Instant::now),
+                            settings_shared_error: None,
                             settings_menu_search,
                             last_auto_git_fetch: Instant::now(),
                             agent_profiles: Vec::new(),
@@ -8815,6 +8828,7 @@ fn main() {
                         workbench.load_terminal_layout();
                         workbench.load_mixed_pane_layout();
                         workbench.restore_file_tabs_from_pane_layout(cx);
+                        workbench.refresh_shared_desktop_settings(cx);
                         workbench
                     });
                     view.update(cx, |view, cx| {

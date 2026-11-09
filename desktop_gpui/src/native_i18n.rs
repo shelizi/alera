@@ -16,6 +16,17 @@ pub enum UiLocale {
 }
 
 impl UiLocale {
+    pub fn from_preference(raw: &str) -> Self {
+        match raw {
+            "english" => Self::English,
+            "traditionalChinese" => Self::TraditionalChinese,
+            "simplifiedChinese" => Self::SimplifiedChinese,
+            "japanese" => Self::Japanese,
+            "system" => Self::from_tag(&system_locale_name()),
+            _ => Self::English,
+        }
+    }
+
     pub const ALL: [Self; 4] = [
         Self::English,
         Self::TraditionalChinese,
@@ -58,6 +69,27 @@ impl UiLocale {
     }
 }
 
+/// Resolve the same OS language as Classic for the persisted 'system' mode.
+fn system_locale_name() -> String {
+    #[cfg(windows)]
+    {
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn GetUserDefaultLocaleName(name: *mut u16, count: i32) -> i32;
+        }
+        let mut buffer = [0u16; 85];
+        let count = unsafe { GetUserDefaultLocaleName(buffer.as_mut_ptr(), buffer.len() as i32) };
+        if count > 1 {
+            return String::from_utf16_lossy(&buffer[..count as usize - 1]);
+        }
+    }
+    std::env::var("LC_ALL")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .or_else(|| std::env::var("LANG").ok())
+        .unwrap_or_else(|| "en".into())
+}
+
 /// Translation of a Classic source string, with English as final fallback.
 /// Callers should pass locale from the view state, not mutate global locale.
 pub fn tr(locale: UiLocale, source: &str) -> String {
@@ -95,6 +127,12 @@ mod tests {
 
     #[test]
     fn locale_variants_and_unknown_sources_fall_back_safely() {
+        assert_eq!(
+            UiLocale::from_preference("traditionalChinese"),
+            UiLocale::TraditionalChinese
+        );
+        assert_eq!(UiLocale::from_preference("japanese"), UiLocale::Japanese);
+        assert_eq!(UiLocale::from_preference("unknown"), UiLocale::English);
         assert_eq!(
             UiLocale::from_tag("zh_Hant_TW"),
             UiLocale::TraditionalChinese

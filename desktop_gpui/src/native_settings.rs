@@ -64,6 +64,76 @@ impl Default for NativeSettings {
 }
 
 impl NativeSettings {
+    /// Apply only six reviewed Classic/GPUI shared fields to the current UI
+    /// snapshot. Explorer visibility and Native-only metadata remain intact.
+    /// No local JSON is written; Runtime Host stays the authoritative owner.
+    pub fn apply_shared_snapshot(&mut self, snapshot: &Value) -> io::Result<String> {
+        let values = snapshot
+            .get("values")
+            .and_then(Value::as_object)
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "Shared desktop Settings values missing",
+                )
+            })?;
+        let mut required = Vec::new();
+        for path in [
+            "general.language",
+            "general.autoGitFetchEnabled",
+            "general.autoGitFetchIntervalMinutes",
+            "terminal.fontSize",
+            "editor.autosaveEnabled",
+            "editor.tabSize",
+        ] {
+            let value = values.get(path).ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "Incomplete shared desktop Settings snapshot",
+                )
+            })?;
+            if path == "general.language" {
+                if !value.as_str().is_some_and(|v| {
+                    matches!(
+                        v,
+                        "system"
+                            | "english"
+                            | "traditionalChinese"
+                            | "simplifiedChinese"
+                            | "japanese"
+                    )
+                }) {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "Invalid shared language",
+                    ));
+                }
+            } else if !Self::valid_value(path, value) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "Invalid shared setting",
+                ));
+            }
+            required.push((path, value.clone()));
+        }
+        let language = values["general.language"].as_str().unwrap().to_owned();
+        for (path, value) in required {
+            match path {
+                "general.autoGitFetchEnabled" => {
+                    self.auto_git_fetch_enabled = value.as_bool().unwrap()
+                }
+                "general.autoGitFetchIntervalMinutes" => {
+                    self.auto_git_fetch_interval_minutes = value.as_u64().unwrap()
+                }
+                "terminal.fontSize" => self.terminal_font_size = value.as_f64().unwrap(),
+                "editor.autosaveEnabled" => self.editor_autosave_enabled = value.as_bool().unwrap(),
+                "editor.tabSize" => self.editor_tab_size = value.as_u64().unwrap(),
+                _ => {}
+            }
+        }
+        Ok(language)
+    }
+
     fn valid_agent_profile_id(id: &str) -> bool {
         !id.is_empty()
             && id.len() <= 128
@@ -403,6 +473,41 @@ impl Drop for SettingsFileLock {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_host_snapshot_updates_only_six_fields_and_rejects_partial_data() {
+        let mut state = NativeSettings::default();
+        state.explorer_show_ignored = true;
+        state.default_agent_profile_id = Some("managed_codex".to_owned());
+        let snapshot = json!({"values":{
+            "general.language":"traditionalChinese",
+            "general.autoGitFetchEnabled":false,
+            "general.autoGitFetchIntervalMinutes":10,
+            "terminal.fontSize":17.0,
+            "editor.autosaveEnabled":true,
+            "editor.tabSize":8
+        }});
+        assert_eq!(
+            state.apply_shared_snapshot(&snapshot).unwrap(),
+            "traditionalChinese"
+        );
+        assert_eq!(state.terminal_font_size, 17.0);
+        assert_eq!(state.editor_tab_size, 8);
+        assert!(!state.auto_git_fetch_enabled);
+        assert!(state.explorer_show_ignored);
+        assert_eq!(
+            state.default_agent_profile_id.as_deref(),
+            Some("managed_codex")
+        );
+        let previous = state.clone();
+        assert!(state
+            .apply_shared_snapshot(&json!({"values":{
+                "general.language":"japanese",
+                "general.autoGitFetchEnabled":true
+            }}))
+            .is_err());
+        assert_eq!(state, previous);
+    }
 
     #[test]
     fn isolated_store_cas_survives_restart_and_refuses_stale_or_unsafe_mutations() {

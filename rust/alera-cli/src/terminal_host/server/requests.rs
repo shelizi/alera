@@ -671,6 +671,43 @@ impl ServerActor {
                 self.require_auth(client_id)?;
                 self.runtime_settings_snapshot().await
             }
+            "desktopSettings.get" => {
+                self.require_auth(client_id)?;
+                self.runtime_store
+                    .desktop_shared_settings_snapshot()
+                    .await
+                    .map_err(|error| HostError::state(error.to_string()))
+            }
+            "desktopSettings.seedLocal" => {
+                self.require_auth(client_id)?;
+                let result = self
+                    .runtime_store
+                    .desktop_shared_seed_local(&payload["values"])
+                    .await
+                    .map_err(|error| HostError::state(error.to_string()))?;
+                // Idempotent migration runs on each Classic settings reload.
+                // Broadcasting here would cause an infinite reload/seed loop.
+                Ok(result)
+            }
+            "desktopSettings.compareAndSet" => {
+                self.require_auth(client_id)?;
+                let path = payload["path"]
+                    .as_str()
+                    .ok_or_else(|| HostError::state("Missing desktop setting path"))?;
+                let expected = payload
+                    .get("expectedValue")
+                    .ok_or_else(|| HostError::state("Missing desktop expectedValue"))?;
+                let next = payload
+                    .get("value")
+                    .ok_or_else(|| HostError::state("Missing desktop setting value"))?;
+                let result = self
+                    .runtime_store
+                    .desktop_shared_compare_and_set(path, expected, next)
+                    .await
+                    .map_err(|error| HostError::state(error.to_string()))?;
+                self.broadcast_authenticated(event("runtimeSettingsChanged", json!({})));
+                Ok(result)
+            }
             "mobile.runtimeSettings.get" => {
                 self.require_auth(client_id)?;
                 self.runtime_settings_snapshot().await

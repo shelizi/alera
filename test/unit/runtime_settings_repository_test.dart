@@ -79,7 +79,11 @@ void main() {
       expect(seed['general'], isNot(contains('workspaceDirectory')));
       expect(seed['agents'], isNot(contains('quotas')));
       await repository.save(result);
-      expect(client.payloads['configuration.settings.update'], hasLength(1));
+      expect(
+        client.payloads['configuration.settings.update'],
+        isNull,
+        reason: 'No-op Classic saves must not replay stale portable settings over GPUI',
+      );
     },
   );
   test(
@@ -440,7 +444,9 @@ void main() {
       expect(actual.keyboard.overrides.keys.map((id) => id.name), [
         'openSettings',
       ]);
-      await repository.save(actual);
+      await repository.save(
+        actual.copyWith(terminal: actual.terminal.copyWith(fontSize: 21)),
+      );
       final saved = client.payloads['configuration.settings.update']!.single;
       expect(saved['supportedKeyboardActionIds'], contains('openSettings'));
       expect(
@@ -449,6 +455,65 @@ void main() {
       );
     },
   );
+  test('Classic imports Drift only once and uses Rust CAS without rewriting GPUI portable values', () async {
+    final legacy = _MemorySettingsRepository();
+    legacy.settings = AleraSettings.defaults.copyWith(
+      general: AleraSettings.defaults.general.copyWith(
+        language: AppLanguage.traditionalChinese,
+        autoGitFetchEnabled: false,
+        autoGitFetchIntervalMinutes: 12,
+      ),
+    );
+    final host = _RecordingRuntimeHostClient()..configurationSupported = true;
+    host.responses['desktopSettings.seedLocal'] = {
+      'values': {
+        'general.language': 'japanese',
+        'general.autoGitFetchEnabled': true,
+        'general.autoGitFetchIntervalMinutes': 8,
+        'terminal.fontSize': 20.0,
+        'editor.autosaveEnabled': true,
+        'editor.tabSize': 2,
+      },
+    };
+    host.responses['runtimeSettings.get'] = {
+      'workspaceDirectory': '/native-and-classic',
+    };
+    final repo = RuntimeSettingsRepository(
+      client: host,
+      legacyRepository: legacy,
+    );
+    final loaded = await repo.load();
+    expect(loaded.general.language, AppLanguage.japanese);
+    expect(loaded.general.autoGitFetchEnabled, true);
+    expect(loaded.general.autoGitFetchIntervalMinutes, 8);
+    expect(loaded.terminal.fontSize, 20);
+    expect(loaded.editor.autosaveEnabled, true);
+    expect(loaded.editor.tabSize, 2);
+    final seeded =
+        host.payloads['desktopSettings.seedLocal']!.single['values']! as Map;
+    expect(seeded['general.language'], 'traditionalChinese');
+
+    final edited = loaded.copyWith(
+      general: loaded.general.copyWith(language: AppLanguage.english),
+      terminal: loaded.terminal.copyWith(fontSize: 22),
+    );
+    await repo.compareAndSetSharedDesktopChanges(loaded, edited);
+    expect(host.payloads['desktopSettings.compareAndSet'], [
+      {
+        'path': 'general.language',
+        'expectedValue': 'japanese',
+        'value': 'english',
+      },
+      {'path': 'terminal.fontSize', 'expectedValue': 20.0, 'value': 22.0},
+    ]);
+    await repo.save(edited);
+    expect(
+      host.payloads['configuration.settings.update'],
+      isNull,
+      reason:
+          'All shared portable fields are CAS-owned by the Rust Runtime Host',
+    );
+  });
 }
 
 final class _RecordingRuntimeHostClient
@@ -472,6 +537,9 @@ final class _RecordingRuntimeHostClient
     Duration? timeout,
   ]) async {
     payloads.putIfAbsent(type, () => <Map<String, Object?>>[]).add(payload);
+    if (type == 'desktopSettings.seedLocal' && !responses.containsKey(type)) {
+      throw StateError('Older Host: shared desktop settings not supported');
+    }
     if (type == 'configuration.settings.update' && failConfigurationUpdate) {
       throw StateError('Runtime unavailable');
     }

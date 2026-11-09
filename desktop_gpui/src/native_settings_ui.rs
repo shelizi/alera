@@ -70,12 +70,10 @@ impl Workbench {
         if catalog_section(section).is_none() {
             return Err("ui_not_ready");
         }
-        // Preserve existing connected Native controls; all remaining Classic
-        // sections are catalog previews and never open a preference store.
+        // Existing connected Native controls now read the same Rust Runtime
+        // Store as Classic. Never overlay them with stale native-settings.json.
         if has_connected_native_controls(section) {
-            let store = self.native_settings_store.as_ref().ok_or("ui_not_ready")?;
-            let settings = store.read().map_err(|_| "ui_operation_failed")?;
-            self.install_native_settings(settings, cx);
+            self.refresh_shared_desktop_settings(cx);
         }
         if self.settings_section.is_none() {
             self.settings_menu_search
@@ -733,6 +731,14 @@ impl Workbench {
                     .text_sm()
                     .text_color(rgb(MUTED))
                     .child(format!("Settings load error: {error}"))
+            }))
+            .children(self.settings_shared_error.clone().map(|error| {
+                div()
+                    .px_4()
+                    .py_2()
+                    .text_sm()
+                    .text_color(rgb(MUTED))
+                    .child(format!("Classic / GPUI settings sync unavailable: {error}"))
             }))
             .child(
                 div()

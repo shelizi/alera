@@ -86,7 +86,11 @@ class SettingsController extends _$SettingsController
 
   Future<void> _save(AleraSettings settings) async {
     try {
-      await _repository.save(settings);
+      final repository = _repository;
+      if (repository is RuntimeSettingsRepository) {
+        await repository.compareAndSetSharedDesktopChanges(state, settings);
+      }
+      await repository.save(settings);
       state = settings;
     } on TerminalHostConflictException catch (error, stackTrace) {
       if (error.code != _runtimeSettingsRevisionConflictCode) {

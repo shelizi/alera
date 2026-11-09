@@ -56,6 +56,8 @@ pub enum Command {
     TerminalHost(TerminalHostArgs),
     /// Inspect or operate the local Alera runtime profile.
     Runtime(RuntimeCommand),
+    /// Read or compare-and-set the reviewed cross-desktop settings projection.
+    Settings(DesktopSettingsCommand),
 
     /// Create, list, update, and remove runtime-owned projects.
     Project(ProjectCommand),
@@ -341,6 +343,31 @@ pub struct OutputArgs {
     /// Print machine-readable JSON.
     #[arg(long = "json")]
     pub json: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct DesktopSettingsCommand {
+    #[command(flatten)]
+    pub runtime: RuntimeDirArgs,
+    #[command(flatten)]
+    pub output: OutputArgs,
+    #[arg(long = "no-start", default_value_t = false)]
+    pub no_start: bool,
+    #[command(subcommand)]
+    pub action: DesktopSettingsAction,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum DesktopSettingsAction {
+    Get,
+    Set {
+        #[arg(long)]
+        path: String,
+        #[arg(long)]
+        expected: String,
+        #[arg(long)]
+        value: String,
+    },
 }
 
 #[derive(Debug, Args)]

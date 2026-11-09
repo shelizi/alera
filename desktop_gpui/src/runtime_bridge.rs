@@ -199,6 +199,105 @@ impl RuntimeCliBridge {
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
     }
 
+    /// Read exactly six non-secret Classic/Native shared settings through the
+    /// already running Host; this does not read RuntimeStore SQLite directly.
+    pub fn desktop_settings_snapshot(&self) -> io::Result<Value> {
+        self.desktop_settings_command(&[OsString::from("get")])
+    }
+
+    pub fn desktop_settings_compare_and_set(
+        &self,
+        path: &str,
+        expected: &Value,
+        next: &Value,
+    ) -> io::Result<Value> {
+        const PATHS: &[&str] = &[
+            "general.language",
+            "general.autoGitFetchEnabled",
+            "general.autoGitFetchIntervalMinutes",
+            "terminal.fontSize",
+            "editor.autosaveEnabled",
+            "editor.tabSize",
+        ];
+        if !PATHS.contains(&path) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Unknown shared Settings path",
+            ));
+        }
+        self.desktop_settings_command(&[
+            OsString::from("set"),
+            OsString::from("--path"),
+            OsString::from(path),
+            OsString::from("--expected"),
+            OsString::from(expected.to_string()),
+            OsString::from("--value"),
+            OsString::from(next.to_string()),
+        ])
+    }
+
+    fn desktop_settings_command(&self, args: &[OsString]) -> io::Result<Value> {
+        if !self.runtime_dir.join("host.json").is_file()
+            && !self.runtime_dir.join("runtime-host.json").is_file()
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::NotConnected,
+                "Classic Runtime Host is not running",
+            ));
+        }
+        let mut command = windowless_command(&self.executable);
+        command
+            .arg("settings")
+            .arg("--no-start")
+            .arg("--json")
+            .arg("--runtime-dir")
+            .arg(&self.runtime_dir)
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        let mut child = command.spawn()?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| io::Error::other("Settings CLI stdout missing"))?;
+        let reader = thread::spawn(move || -> io::Result<Vec<u8>> {
+            let mut bytes = Vec::new();
+            stdout
+                .take(MAX_RESPONSE_BYTES + 1)
+                .read_to_end(&mut bytes)?;
+            Ok(bytes)
+        });
+        let status = match wait_with_timeout(&mut child, PROBE_TIMEOUT) {
+            Ok(status) => status,
+            Err(error) => {
+                let _ = reader.join();
+                return Err(error);
+            }
+        };
+        let bytes = reader
+            .join()
+            .map_err(|_| io::Error::other("Settings CLI reader panicked"))??;
+        if !status.success() {
+            return Err(io::Error::other("Shared settings unavailable: Host/CLI missing feature, offline or conflicting edit"));
+        }
+        if bytes.len() as u64 > MAX_RESPONSE_BYTES {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Settings response exceeded limit",
+            ));
+        }
+        let response: Value = serde_json::from_slice(&bytes)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        if !response["values"].is_object() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Missing shared Settings values",
+            ));
+        }
+        Ok(response)
+    }
+
     /// Never start a host on behalf of the GPUI preview, and never read its
     /// control file's token. The CLI itself performs authenticated requests.
     pub fn probe(&self) -> io::Result<RuntimeStatus> {

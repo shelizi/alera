@@ -142,13 +142,13 @@ impl Workbench {
             .into_any_element()
     }
 
-    /// Change only this Settings UI's in-memory language. User preferences,
-    /// Terminal PTYs and the Runtime Host are intentionally unaffected.
+    /// Exactly the five Classic AppLanguage values. Selection is persisted
+    /// through Rust Host CAS and updates Classic on its next change event.
     pub(super) fn render_settings_language_preview(
         &self,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
-        let locale = self.settings_menu_locale;
+        let selected = self.settings_menu_language.as_str();
         div()
             .id("native-settings-language-preview")
             .flex()
@@ -159,35 +159,39 @@ impl Workbench {
             .border_b_1()
             .border_color(rgb(BORDER))
             .children(
-                UiLocale::ALL
-                    .into_iter()
-                    .enumerate()
-                    .map(|(index, candidate)| {
-                        let label = match candidate {
-                            UiLocale::English => "EN",
-                            UiLocale::TraditionalChinese => "繁中",
-                            UiLocale::SimplifiedChinese => "简中",
-                            UiLocale::Japanese => "日本語",
-                        };
-                        div()
-                            .id(("native-settings-locale-option", index))
-                            .cursor_pointer()
-                            .rounded_md()
-                            .px_2()
-                            .py_1()
-                            .text_xs()
-                            .text_color(rgb(if locale == candidate { TEXT } else { MUTED }))
-                            .bg(rgb(if locale == candidate { ACTIVE } else { PANEL }))
-                            .hover(|style| style.bg(rgb(ACTIVE)))
-                            .child(label)
-                            .on_click(cx.listener(move |view, _, _, cx| {
-                                view.settings_menu_locale = candidate;
-                                view.settings_menu_search.update(cx, |search, cx| {
-                                    search.set_placeholder(tr(candidate, "Search settings"), cx);
-                                });
-                                cx.notify();
-                            }))
-                    }),
+                [
+                    ("system", "System"),
+                    ("english", "EN"),
+                    ("traditionalChinese", "繁中"),
+                    ("simplifiedChinese", "简中"),
+                    ("japanese", "日本語"),
+                ]
+                .into_iter()
+                .enumerate()
+                .map(|(index, (preference, label))| {
+                    div()
+                        .id(("native-settings-locale-option", index))
+                        .cursor_pointer()
+                        .rounded_md()
+                        .px_2()
+                        .py_1()
+                        .text_xs()
+                        .text_color(rgb(if selected == preference { TEXT } else { MUTED }))
+                        .bg(rgb(if selected == preference {
+                            ACTIVE
+                        } else {
+                            PANEL
+                        }))
+                        .hover(|style| style.bg(rgb(ACTIVE)))
+                        .child(label)
+                        .on_click(cx.listener(move |view, _, _, cx| {
+                            view.change_shared_desktop_setting(
+                                "general.language",
+                                serde_json::json!(preference),
+                                cx,
+                            );
+                        }))
+                }),
             )
             .into_any_element()
     }

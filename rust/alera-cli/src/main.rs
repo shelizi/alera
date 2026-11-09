@@ -15,6 +15,7 @@ mod cli_orchestration;
 mod cli_orchestration_runs;
 mod cli_orchestration_terminal;
 mod cli_orchestration_timeouts;
+mod desktop_settings_commands;
 #[cfg(test)]
 mod cli_tests;
 mod host_tools;
@@ -154,6 +155,7 @@ async fn run(cli: Cli) -> i32 {
         Command::Version(command) => run_version_command(command).await,
         Command::TerminalHost(args) => runtime_host_command::run(args).await,
         Command::Runtime(command) => runtime_commands::run_runtime_command(command).await,
+        Command::Settings(command) => desktop_settings_commands::run(command).await,
         Command::Project(command) => run_project_command(command).await,
         Command::Workspace(command) => run_workspace_command(command).await,
         Command::Tag(command) => run_tag_command(command).await,

@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:alera/src/features/settings/application/settings_repository.dart';
 import 'package:alera/src/features/settings/domain/settings_ownership.dart';
 import 'package:alera_configuration/alera_configuration.dart';
@@ -12,9 +14,13 @@ class RuntimeSettingsRepository({
   required final SettingsRepository legacyRepository,
   final Future<void> Function()? beforeAccess,
 }) implements SettingsRepository {
+  Map<String, Object?>? _lastLoadedPortable;
+  bool _sharedDesktopAvailable = false;
+
   @override
   Future<AleraSettings> load() async {
     var legacy = await legacyRepository.load();
+    _sharedDesktopAvailable = false;
     try {
       await beforeAccess?.call();
       if (await _supportsConfiguration()) {
@@ -38,10 +44,33 @@ class RuntimeSettingsRepository({
           ),
         );
       }
+      // Import Classic local UI preferences once, then read the single
+      // Rust-owned value. Late Classic migration must not replace a value
+      // that GPUI has already saved.
+      var sharedDesktop = <String, Object?>{};
+      try {
+        final imported = _asMap(
+          await client.runtimeRequest('desktopSettings.seedLocal', {
+            'values': {
+              'general.language': legacy.general.language.name,
+              'general.autoGitFetchEnabled': legacy.general.autoGitFetchEnabled,
+              'general.autoGitFetchIntervalMinutes':
+                  legacy.general.autoGitFetchIntervalMinutes,
+            },
+          }),
+        );
+        sharedDesktop = _asMap(imported['values']);
+        _sharedDesktopAvailable = true;
+      } catch (_) {
+        // A running older Host cannot synchronize shared preferences yet.
+        // Keep Classic's Drift values rather than breaking Settings startup.
+      }
       final payload = await client.runtimeRequest('runtimeSettings.get');
       final runtime = _asMap(payload);
       if (!runtime.containsKey('workspaceDirectory')) {
-        return legacy;
+        final effective = _applySharedDesktopValues(legacy, sharedDesktop);
+        _lastLoadedPortable = effective.toPortableConfigurationMap();
+        return effective;
       }
       final legacyLocalQuotas = legacy.agents.quotas.forHost('local');
       final runtimeAiAssist = _asMap(runtime['aiTextGeneration']);
@@ -92,10 +121,33 @@ class RuntimeSettingsRepository({
         aiAssist: sharedAiAssist,
         textActions: sharedTextActions,
       );
-      await legacyRepository.save(resolved);
-      return resolved;
+      final effective = _applySharedDesktopValues(resolved, sharedDesktop);
+      _lastLoadedPortable = effective.toPortableConfigurationMap();
+      await legacyRepository.save(effective);
+      return effective;
     } catch (_) {
+      _lastLoadedPortable = legacy.toPortableConfigurationMap();
       return legacy;
+    }
+  }
+
+  /// Write only user-edited fields to the Rust Host with field-scoped CAS.
+  /// Existing installations without desktopSettings support keep legacy
+  /// persistence until both app binaries can be upgraded together.
+  Future<void> compareAndSetSharedDesktopChanges(
+    AleraSettings previous,
+    AleraSettings next,
+  ) async {
+    if (!_sharedDesktopAvailable) return;
+    for (final path in _sharedDesktopPaths) {
+      final expected = _sharedDesktopValue(previous, path);
+      final value = _sharedDesktopValue(next, path);
+      if (expected == value) continue;
+      await client.runtimeRequest('desktopSettings.compareAndSet', {
+        'path': path,
+        'expectedValue': expected,
+        'value': value,
+      });
     }
   }
 
@@ -117,6 +169,16 @@ class RuntimeSettingsRepository({
       'general.autoArchiveWorkspacesAfterDays',
     }.contains(path)) {
       throw ArgumentError.value(path, 'path', 'MCP setting is not exposed');
+    }
+    if (_sharedDesktopAvailable && _sharedDesktopPaths.contains(path)) {
+      final snapshot = _asMap(
+        await client.runtimeRequest('desktopSettings.get'),
+      );
+      final value = _asMap(snapshot['values'])[path];
+      if (value == null) {
+        throw StateError('mcp_setting_authoritative_value_unavailable');
+      }
+      return value;
     }
     Object? value;
     if (const <String>{
@@ -169,18 +231,29 @@ class RuntimeSettingsRepository({
   Future<void> save(AleraSettings settings) async {
     await beforeAccess?.call();
     if (await _supportsConfiguration()) {
-      await client.runtimeRequest('configuration.settings.update', {
-        'settings': settings.toPortableConfigurationMap(),
-        'supportedKeyboardActionIds': KeyboardActionId.values
-            .map((id) => id.name)
-            .toList(),
-      });
+      // An unrelated Classic setting edit must never replay stale Terminal
+      // size, Autosave or Tab Size over a newer GPUI CAS update.
+      final current = settings.toPortableConfigurationMap();
+      final patch = _changedPortableFields(
+        _lastLoadedPortable,
+        current,
+        excludeShared: _sharedDesktopAvailable,
+      );
+      if (patch.isNotEmpty) {
+        await client.runtimeRequest('configuration.settings.update', {
+          'settings': patch,
+          'supportedKeyboardActionIds': KeyboardActionId.values
+              .map((id) => id.name)
+              .toList(),
+        });
+      }
     }
     await client.runtimeRequest(
       'runtimeSettings.update',
       settings.toRuntimeOperationalMap(),
     );
     await legacyRepository.save(settings);
+    _lastLoadedPortable = settings.toPortableConfigurationMap();
   }
 
   Future<bool> _supportsConfiguration() async {
@@ -189,6 +262,106 @@ class RuntimeSettingsRepository({
         await (capabilityClient as RuntimeHostCapabilityClient)
             .supportsRuntimeCapability('configurationSyncV1');
   }
+}
+
+const _sharedDesktopPaths = <String>[
+  'general.language',
+  'general.autoGitFetchEnabled',
+  'general.autoGitFetchIntervalMinutes',
+  'terminal.fontSize',
+  'editor.autosaveEnabled',
+  'editor.tabSize',
+];
+
+Object _sharedDesktopValue(AleraSettings settings, String path) =>
+    switch (path) {
+      'general.language' => settings.general.language.name,
+      'general.autoGitFetchEnabled' => settings.general.autoGitFetchEnabled,
+      'general.autoGitFetchIntervalMinutes' =>
+        settings.general.autoGitFetchIntervalMinutes,
+      'terminal.fontSize' => settings.terminal.fontSize,
+      'editor.autosaveEnabled' => settings.editor.autosaveEnabled,
+      'editor.tabSize' => settings.editor.tabSize,
+      _ => throw ArgumentError.value(
+        path,
+        'path',
+        'Unsupported desktop setting',
+      ),
+    };
+
+/// Preserve all unknown/future portable keys. A settings save writes only
+/// fields changed in this Classic process, not GPUI's newer field values.
+Map<String, Object?> _changedPortableFields(
+  Map<String, Object?>? before,
+  Map<String, Object?> current, {
+  required bool excludeShared,
+}) {
+  final result = <String, Object?>{};
+  for (final section in current.entries) {
+    final earlier = _asMap(before?[section.key]);
+    final changed = <String, Object?>{};
+    for (final field in _asMap(section.value).entries) {
+      final path = '${section.key}.${field.key}';
+      if (excludeShared &&
+          const {
+            'terminal.fontSize',
+            'editor.autosaveEnabled',
+            'editor.tabSize',
+          }.contains(path)) {
+        continue;
+      }
+      if (before == null ||
+          !earlier.containsKey(field.key) ||
+          jsonEncode(earlier[field.key]) != jsonEncode(field.value)) {
+        changed[field.key] = field.value;
+      }
+    }
+    if (changed.isNotEmpty) result[section.key] = changed;
+  }
+  return result;
+}
+
+/// Apply the Host's reviewed non-secret settings projection to the existing
+/// Classic model. Unshared local Drift preferences stay intact.
+AleraSettings _applySharedDesktopValues(
+  AleraSettings current,
+  Map<String, Object?> values,
+) {
+  final rawLanguage = values['general.language'];
+  final language = rawLanguage is String
+      ? AppLanguage.values.firstWhere(
+          (item) => item.name == rawLanguage,
+          orElse: () => current.general.language,
+        )
+      : current.general.language;
+  final fetchInterval = values['general.autoGitFetchIntervalMinutes'];
+  final fontSize = values['terminal.fontSize'];
+  final tabSize = values['editor.tabSize'];
+  return current.copyWith(
+    general: current.general.copyWith(
+      language: language,
+      autoGitFetchEnabled: values['general.autoGitFetchEnabled'] is bool
+          ? values['general.autoGitFetchEnabled'] as bool
+          : current.general.autoGitFetchEnabled,
+      autoGitFetchIntervalMinutes:
+          fetchInterval is int && fetchInterval >= 1 && fetchInterval <= 60
+          ? fetchInterval
+          : current.general.autoGitFetchIntervalMinutes,
+    ),
+    terminal: current.terminal.copyWith(
+      fontSize: fontSize is num && fontSize >= 8 && fontSize <= 48
+          ? fontSize.toDouble()
+          : current.terminal.fontSize,
+    ),
+    editor: current.editor.copyWith(
+      autosaveEnabled: values['editor.autosaveEnabled'] is bool
+          ? values['editor.autosaveEnabled'] as bool
+          : current.editor.autosaveEnabled,
+      tabSize: tabSize is int && tabSize >= 1 && tabSize <= 16
+          ? tabSize
+          : current.editor.tabSize,
+    ),
+  );
 }
 
 Map<String, Object?> _asMap(Object? value) {
