@@ -18,6 +18,7 @@ import os
 from collections import deque
 from pathlib import Path
 import queue
+import re
 import socket
 import subprocess
 import sys
@@ -366,10 +367,137 @@ def isolated_worker_process_alive(executable, pid):
         return False
 
 
+def paced_load_command(run_marker, index, seconds):
+    """Return an end sentinel NEVER present in the echoed input command.
+
+    cmd.exe echoes the entire PowerShell command before executing it. A
+    literal `LOAD_DONE_...` in that command produces a false-positive finish
+    while the generator is still producing output. Compose its prefix only
+    *inside* PowerShell after all loops are complete.
+    """
+    marker = f"LOAD_DONE_{run_marker}_{index}"
+    command = (
+        'powershell.exe -NoLogo -NoProfile -NonInteractive -Command "'
+        f'for($i=0;$i -lt {seconds};$i++){{'
+        'for($j=0;$j -lt 40;$j++){'
+        f"Write-Output ('LOAD_{run_marker}_{index}_'+$i+'_'+$j+'_'+('x'*72))"
+        '};Start-Sleep -Milliseconds 900'
+        f"}};Write-Output ('LOAD_'+'DONE_{run_marker}_{index}')\""
+    )
+    assert marker not in command, "Shell input echo must not pass the completion gate"
+    return marker, command
+
+
+def native_visible_cursors_from_diagnostic(line, expected_count):
+    """Parse only cursor positions, not PTY content, from isolated debug log."""
+    if not line.startswith("GPUI_STREAM_DIAG "):
+        raise SmokeError("Not an isolated Native stream diagnostic")
+    active = re.search(r"\bactive=(\d+)\b", line)
+    matches = re.findall(r"\((\d+), (true|false)\)", line)
+    if not active or int(active.group(1)) < expected_count or len(matches) != expected_count:
+        raise SmokeError("Not all expected visible PTYs are attached and live")
+    if any(running != "true" for _, running in matches):
+        raise SmokeError("A visible Native Terminal is not running")
+    return [int(cursor) for cursor, _ in matches]
+
+
+def exercise_native_two_pty_sustained_load(executable, profile, native_process,
+                                           handles, run_marker, seconds):
+    """Run bounded concurrent output in only the two disposable cmd PTYs.
+
+    40 lines per second per PTY for `seconds`: intentionally greater than the
+    default 64 KiB stream read budget, but bounded and paced so this tests
+    continual GUI dispatch/render rather than a single giant startup burst.
+    Measure the isolated GUI's RSS and CPU time without profiling any other
+    process, and require both original Shells to complete their work.
+    """
+    import psutil
+
+    native = psutil.Process(native_process.pid)
+    initial_rss = native.memory_info().rss
+    cpu = native.cpu_times()
+    initial_cpu = cpu.user + cpu.system
+    markers = []
+    started = time.monotonic()
+    for index, handle in enumerate(handles):
+        marker, command = paced_load_command(run_marker, index, seconds)
+        markers.append(marker)
+        # No project scripts, network, secrets, or process replacement: the
+        # one temporary cmd PTY runs its own bounded PowerShell generator.
+        checked_cli(executable, profile, "terminal", "--no-start", "write",
+                    "--handle", handle, "--text", command, "--enter", timeout=12)
+
+    print(f"ISOLATED_NATIVE_DUAL_TUI_LOAD_STARTED seconds={seconds}", flush=True)
+    rss_peak = initial_rss
+    observed = set()
+    host_cursors = [0] * len(handles)
+    deadline = time.monotonic() + seconds + 25
+    while time.monotonic() < deadline and len(observed) < len(handles):
+        if native_process.poll() is not None:
+            raise SmokeError("GPUI crashed during dual PTY sustained output")
+        rss_peak = max(rss_peak, native.memory_info().rss)
+        for index, handle in enumerate(handles):
+            if index in observed:
+                continue
+            state = checked_cli(executable, profile, "terminal", "--no-start",
+                                "read", "--handle", handle, timeout=6)
+            if state.get("running") is not True:
+                raise SmokeError("PTY stopped during sustained Host output")
+            host_cursors[index] = max(host_cursors[index], int(state.get("nextCursor", 0)))
+            if markers[index] in str(state.get("text", "")):
+                observed.add(index)
+        if len(observed) < len(handles):
+            time.sleep(1)
+    if len(observed) != len(handles):
+        raise SmokeError(f"Dual TUI load did not complete: {len(observed)}/2 output markers")
+    elapsed = time.monotonic() - started
+    if elapsed < seconds * 0.8:
+        raise SmokeError(
+            f"TUI load completion was premature ({elapsed:.1f}s < 80% of {seconds}s); "
+            "check for echoed completion marker"
+        )
+    final_cpu = native.cpu_times()
+    cpu_seconds = final_cpu.user + final_cpu.system - initial_cpu
+    rss_growth = rss_peak - initial_rss
+    if rss_growth > 256 * 1024 * 1024:
+        raise SmokeError(f"Native RSS grew too far under bounded dual TUI load: {rss_growth}")
+    print(
+        f"ISOLATED_NATIVE_DUAL_TUI_LOAD_PASS seconds={seconds} elapsed={elapsed:.1f} "
+        f"markers={len(observed)} rss_start_mib={initial_rss/1048576:.1f} "
+        f"rss_peak_mib={rss_peak/1048576:.1f} "
+        f"rss_growth_mib={rss_growth/1048576:.1f} "
+        f"native_cpu_seconds={cpu_seconds:.2f} "
+        f"host_terminal_end_cursors={host_cursors}", flush=True,
+    )
+
+
+def await_isolated_split_inspection(native_process, gate, timeout=75):
+    """Optional human/UI-automation checkpoint before the disposable crash.
+
+    The gate lives under the authorized integration worktree, never under
+    Windows Temp (which is outside the remote tool workspace boundary). Merely
+    acknowledging it does not assert two panes exist: the examiner must
+    inspect the actual GPUI window before signaling, and verify after crash.
+    This avoids clicking or probing any other running Alera window.
+    """
+    print(f"ISOLATED_NATIVE_SPLIT_GATE path={gate}", flush=True)
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if native_process.poll() is not None:
+            raise SmokeError("Disposable GPUI exited before split inspection")
+        if gate.is_file():
+            print("ISOLATED_NATIVE_SPLIT_CONFIRMED", flush=True)
+            return
+        time.sleep(0.2)
+    raise SmokeError("Timed out waiting for isolated GPUI split inspection")
+
+
 def run_smoke(executable, native_app=None, hold_seconds=25,
-              native_reconnect=False, native_host_restart=False):
+              native_reconnect=False, native_host_restart=False,
+              native_split_gate=False, native_load_seconds=0):
     run_marker = uuid.uuid4().hex[:14]
     checks = []
+    gate_path = None
     with tempfile.TemporaryDirectory(prefix="alera_gpui_stream_isolated_") as temp:
         root = Path(temp)
         profile = root / "runtime"
@@ -648,6 +776,10 @@ def run_smoke(executable, native_app=None, hold_seconds=25,
                         "APPDATA": str(native_home / "AppData" / "Roaming"),
                         "LOCALAPPDATA": str(native_home / "AppData" / "Local"),
                     }
+                    if native_load_seconds:
+                        # Compile-time debug-only, opt-in cursor and queue
+                        # counters; never logs PTY text or Host credentials.
+                        native_env["ALERA_GPUI_ISOLATED_STREAM_DIAGNOSTICS"] = "1"
                     native_process = subprocess.Popen(
                         [str(native_app), str(workspace.resolve())],
                         cwd=workspace,
@@ -681,6 +813,11 @@ def run_smoke(executable, native_app=None, hold_seconds=25,
                             flush=True,
                         )
                     if native_host_restart:
+                        if native_split_gate:
+                            gate_path = Path(__file__).resolve().parents[2] / (
+                                f".gpui-split-{run_marker}.signal"
+                            )
+                            await_isolated_split_inspection(native_process, gate_path)
                         original_relay_pid = unique_native_stream_pid(
                             native_process, executable, profile
                         )
@@ -767,6 +904,15 @@ def run_smoke(executable, native_app=None, hold_seconds=25,
                             "workers_preserved=2",
                             flush=True,
                         )
+                    if native_load_seconds:
+                        exercise_native_two_pty_sustained_load(
+                            executable, profile, native_process,
+                            (session_id, second_session_id), run_marker,
+                            native_load_seconds,
+                        )
+                        checks.append(
+                            "simultaneous paced dual-PTY TUI output completed with bounded Native RSS"
+                        )
                     until = time.monotonic() + hold_seconds
                     while time.monotonic() < until:
                         if native_process.poll() is not None:
@@ -776,6 +922,33 @@ def run_smoke(executable, native_app=None, hold_seconds=25,
                             )
                         time.sleep(0.2)
                 checks.append("isolated Native GPUI window remained alive")
+                if native_load_seconds:
+                    diagnostic_lines = [line.strip() for line in
+                                        native_stderr_path.read_text(encoding="utf-8", errors="replace").splitlines()
+                                        if line.startswith("GPUI_STREAM_DIAG ")]
+                    for line in diagnostic_lines[-4:]:
+                        print("ISOLATED_" + line, flush=True)
+                    print(f"ISOLATED_GPUI_STREAM_DIAGNOSTIC_SAMPLES {len(diagnostic_lines)}", flush=True)
+                    if native_split_gate:
+                        if not diagnostic_lines:
+                            raise SmokeError("No Native debug output cursors; cannot certify GUI catch-up")
+                        native_cursors = native_visible_cursors_from_diagnostic(
+                            diagnostic_lines[-1], 2,
+                        )
+                        final_host_cursors = [int(checked_cli(
+                            executable, profile, "terminal", "--no-start", "read", "--handle", handle,
+                        ).get("nextCursor", 0)) for handle in (session_id, second_session_id)]
+                        if any(native_cursor < host_cursor for native_cursor, host_cursor in
+                               zip(native_cursors, final_host_cursors)):
+                            raise SmokeError(
+                                "Native visible VT streams have not caught up to Host: "
+                                f"Native={native_cursors}, Host={final_host_cursors}"
+                            )
+                        checks.append("both simultaneous Native visible VT cursors caught up to authenticated Host")
+                        print(
+                            f"ISOLATED_NATIVE_STREAM_CAUGHT_UP native={native_cursors} "
+                            f"host={final_host_cursors}", flush=True,
+                        )
             return checks
         except Exception as error:
             diagnostics = "".join(host_diagnostics)[-900:].replace(token, "[redacted]").strip()
@@ -784,6 +957,8 @@ def run_smoke(executable, native_app=None, hold_seconds=25,
                 f"isolated_host_stderr={diagnostics or '(none)'}"
             ) from error
         finally:
+            if gate_path is not None:
+                gate_path.unlink(missing_ok=True)
             if native_process is not None and native_process.poll() is None:
                 native_process.terminate()
                 try:
@@ -845,6 +1020,10 @@ if __name__ == "__main__":
                         help="kill only this Native GUI's scoped private relay and verify automatic respawn")
     parser.add_argument("--native-host-restart", action="store_true",
                         help="crash only disposable Host, verify Worker/Shell identity and Native reattach")
+    parser.add_argument("--native-split-gate", action="store_true",
+                        help="pause before isolated Host crash for actual GPUI dual-pane visual/focus inspection")
+    parser.add_argument("--native-load-seconds", type=int, default=0,
+                        help="run 10-60s of paced, concurrent output in both disposable PTYs")
     parser.add_argument("--hold-seconds", type=int, default=25)
     args = parser.parse_args()
     if not args.cli.is_file() or (args.native_app is not None and not args.native_app.is_file()):
@@ -855,6 +1034,11 @@ if __name__ == "__main__":
         parser.error("Native fault injection requires --native-app")
     if args.native_reconnect and args.native_host_restart:
         parser.error("Use only one Native fault injection mode per isolated run")
+    if args.native_split_gate and not args.native_host_restart:
+        parser.error("--native-split-gate requires --native-host-restart")
+    if args.native_load_seconds and not (args.native_app and
+                                         10 <= args.native_load_seconds <= 60):
+        parser.error("--native-load-seconds requires --native-app and 10..60 seconds")
     try:
         results = run_smoke(
             args.cli.resolve(), native_app=args.native_app.resolve()
@@ -862,6 +1046,8 @@ if __name__ == "__main__":
             hold_seconds=args.hold_seconds,
             native_reconnect=args.native_reconnect,
             native_host_restart=args.native_host_restart,
+            native_split_gate=args.native_split_gate,
+            native_load_seconds=args.native_load_seconds,
         )
     except (SmokeError, OSError, KeyError, ValueError, subprocess.TimeoutExpired) as error:
         print(f"FAIL: isolated Terminal stream smoke: {error}", file=sys.stderr)

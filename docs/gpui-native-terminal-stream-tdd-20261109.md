@@ -160,3 +160,15 @@ Native 新增恢復回覆識別測試後，全套 **325/325 Rust lib 測試通�
 CLI `terminal_stream::tests` 私有 recover 指令白名單 **2/2 PASS**，確保多餘 shell/launch/工作目錄不會傳到 Host；Native 背景恢復回覆身份拒絕案例併入上述 **325/325 PASS**。測試用 Host/GUI 結束後自動清理其專用程序及臨時目錄。
 
 **仍未驗收**：真正 GUI input-to-visible-output p50/p95、長時間多 TUI 背壓、同時雙分割窗格重啟後焦點／注音互動，以及 TSF 未完成組字焦點切換時 Windows 系統候選窗的取消行為。不能因 Worker PID、Host 清單及此次兩個 Tab 視覺恢復通過就直接標記 `supported=true`；不合併 `main`、不推送、不發布。
+
+## 2026-11-09：雙窗格真實焦點、可見延遲與持續推播門檻
+
+**同時雙窗格真實重啟與 IME 目視驗證。**在測試專用的 GPUI 視窗右鍵第二個 Terminal Tab，執行原生 `Move to second pane`；兩個 Host PTY 於左右窗格同時可見，實際 GUI 輸入 `echo SPLIT_PRIMARY_BEFORE_2391` 與 `echo SPLIT_SECOND_BEFORE_2391` 在各自畫面執行，沒有跨 Pane 串線。Windows 繁中注音組字候選窗由第一窗格切換第二窗格時消失，未確認文字沒有意外送入第二 PTY。使用 opt-in `--native-split-gate`（實際目視確認後才觸發一次性 worktree marker），測試隔離 Host 真正 crash/restart；左右分割保持，之後兩邊 GUI 再分別輸入 `echo GPUI_PRIMARY_AFTER_CRASH_8514` 和 `echo GPUI_SECONDARY_AFTER_CRASH_8514`，實際桌面截圖確認各自正確輸出。**85 秒隔離 Host／CLI smoke 12/12 PASS**；此為實機操作與截圖驗證，尚非完全自動化 OS/IME 圖形回歸。
+
+**OS key-down 到畫面可見像素變更的 p50/p95 基準。**新增 `desktop_gpui/tests/native_terminal_visual_latency_probe.py`，嚴格限制為前景且命令列含唯一隔離 smoke profile 的 `alera-gpui-desktop.exe`，DWM 物理座標、MSS 針對單 Pane 裁切取樣、不做 OCR、不讀 Host token 或其他應用視窗；僅在確定測試 Shell 為英文輸入狀態時逐字輸入測量。第一窗格 **16 個樣本 p50 92.05ms、p95 124.39ms**；第二窗格 **24 個樣本 p50 74.94ms、p95 92.41ms**。桌面截圖 median **16.48ms**，量測包含輸入送出、Native/Host、GPUI 重繪與取樣抖動，不是 GPU 精確 present latency，亦未與 Classic 同場比較。非同步候選窗及命令欄換行可影響畫面像素判定；工具改以可變 ASCII glyph、主視窗最大面積、最多每 10 字重置測試欄位，仍需重複多輪與不同 Windows IME 狀態後才能推廣。
+
+**持續輸出測試的假陽性與根因修復。**初版 `--native-load-seconds` 的完成標記 `LOAD_DONE_...` 直接寫在提交至 `cmd.exe` 的 PowerShell 命令中；cmd 的輸入回顯讓測試在發送命令後提早讀到標記，誤稱「30 秒負載完成」，而 GPUI 截圖只顯示較早輸出。**此先前 30 秒完成結論無效，不代表已證實 Native 解析落後。**修正為在 PowerShell 內把 `'LOAD_'+'DONE_...'` 動態串接，保證提交命令字串中沒有完整完成標記；另對真正耗時設最低 `seconds*0.8` 門檻。新增純函式測試驗證完成標記不會在輸入命令回顯中出現，避免再有假陽性。
+
+**修正後真正持續輸出 GREEN。**在隔離 Host 真實 crash/restart 後持續兩個原 PTY 各輸出每秒 40 行，20 秒負載的驗收總耗時 **26.4 秒**（含 CLI 啟動／查詢），Host end cursors `[111116, 323849]`，獨立 Native debug-only 游標紀錄最終也是 `[111116, 323849]`，串流 `active=2` 且事件佇列清空；Native RSS **95.8→97.0 MiB（+1.2 MiB）**，測試期間 Native process CPU time **2.14 秒**。再次改成 10 秒負載，真正耗時 **12.3 秒**，Native CPU **1.19 秒**、RSS **93.3→96.8 MiB（+3.5 MiB）**，最後以新 `native_visible_cursors_from_diagnostic()` 比對 Host 的新鮮授權讀取游標，兩邊為 `[56457, 268831]`、串流 `active=2`，全部追上且 **14/14 隔離測試 PASS**。正式驗收條件新增「已存在的兩個可見 PTY 的 Native 游標不得小於 Host 最終游標」，不再只看 Shell 完成標記。儀表僅 `debug_assertions` + `ALERA_GPUI_ISOLATED_STREAM_DIAGNOSTICS` opt-in，每秒輸出數值、訂閱數和 cursor，不輸出 Host token／命令／PTY 內容；release 不含偵錯列印。
+
+**目前 Gate**：同時雙 Pane / Host crash / 輸入路由 / 忽略逾期 IME 提交與短時負載的記錄更完整，但 Native 仍 `supported=false`。剩餘的是真正超過 30–60 秒的穩態負載多輪比較、量測不同 TUI（全螢幕互動／ANSI 變化）、跨 Windows TSF 候選組字階段的系統級驗收、Classic 對照 p50/p95 與 Native release 版效能；不合併 `main`、不推送／發布，不改 Classic 或正式 Host。
