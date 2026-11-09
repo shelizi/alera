@@ -18,9 +18,9 @@
 | Source Control layout | Flat/tree grouping, collapsible sections and folders, filtered counts, manual refresh | Native grouped/unified + flat/tree, section/folder collapse, accurate totals and refresh | P0 implemented; Windows UI acceptance pending |
 | Source Control commits | Message validation, commit staged, amend / suggested message | Commit staged supported | P1 amend and optional AI if configured |
 | Git refresh | Timely repository / FS watcher updates, manual refresh reliable | Native refresh click and async snapshot | P0 bounded refresh on Git operations; P1 watcher |
-| Git Graph ref list | Current ref first, favorites, local/remote/tag tabs; filters | Local+remote refs, favorites, current ordering adjusted | P0 ordering; P1 tags / search |
+| Git Graph ref list | Current ref first, favorites, local/remote/tag tabs; filters | Local/remote branches with favorites and selectable Git tags (lightweight + annotated), current ref sorted first | P1 tag listing implemented; filtering and dedicated tabs remain |
 | Git Graph branch right-click | Switch/worktree, compare, rename, pull, push, merge, rebase, archive, delete | Native History/Compare both directions/Worktree/Switch/Merge prepare/Copy, selected Pull/Push and safe inactive-local-branch rename | P1 core implemented; active-branch rename and destructive actions remain later |
-| Git Graph commit right-click | Preview, copy SHA/subject, branch/tag/worktree at commit, cherry-pick/revert/merge, resets etc. | Native read-only preview + copy SHA/subject | P0 safe subset; P1 branch/tag/worktree; P2 destructive writes |
+| Git Graph commit right-click | Preview, copy SHA/subject, branch/tag/worktree at commit, cherry-pick/revert/merge, resets etc. | Preview + copy SHA/subject, exact-commit branch creation or lightweight tag creation with explicit name/confirmation | P1 branch/tag complete; worktree-at-commit and destructive actions later |
 | Existing worktree navigation | For branches checked out elsewhere, offer open corresponding workspace instead of duplicate checkout | Native branch context menu identifies matching worktree and revalidates branch before switching | P0; finish with tests |
 | Branch compare | Current vs selected with explicit direction and original-file opening | Structured merge-base-to-target file list; direction toggle; per-file committed diff/original in read-only preview | P1 implemented, Windows UI acceptance pending |
 | Git Graph topology | Commit lanes/parents, merges, graph scrolling; inspect commit diff | Native exact parent SHA + bounded Unicode lanes and connectors, fallback for invalid history | P1 completed code, Native visual acceptance still pending |
@@ -41,7 +41,7 @@
 
 - [x] Current branch and favorite refs sorted ahead of ordinary branches.
 - [x] GPUI Kit popup menu for graph branches: show history, compare local branch, open existing worktree, switch branch, prepare merge, copy name.
-- [x] GPUI Kit popup menu for graph commits: preview, copy hash and subject.
+- [x] GPUI Kit popup menu for graph commits: preview, copy hash/subject, create local branch or lightweight tag at selected immutable Commit SHA with two-step confirmation.
 - [x] Add explicit file-level current-vs-selected branch comparison (merge-base..target), direction toggle, per-file committed patch and original blob preview. Arbitrary two-ref selection is still a later UI task.
 - [x] Render bounded actual commit parent lanes with parent IDs, Unicode lane connectors, branch labels and scrolling; explicit fallback when full topology cannot be represented. Windows native visual acceptance remains pending.
 - [ ] Search and filter commits, tags, local/remote refs, favorites, per-file history.
@@ -49,7 +49,8 @@
 - [x] Add explicitly confirmed selected-branch Pull/Push actions to right-side branch controls (no checkout, no force).
 - [ ] Consolidate selected branch actions into the dropdown itself and share UX for Merge-into-current without checkout.
 - [x] Guarded rename of inactive local branch: GPUI Kit input, two-step confirmation, refuse checked-out worktree and existing destination; preserve HEAD and other worktrees.
-- [ ] Add tag/branch-at-commit, guarded delete, cherry-pick/revert and worktree-at-commit. Active-branch rename needs separate explicit worktree-aware operation.
+- [x] Create branch and lightweight tag at exact selected commit; validate refs, refuse collision, never move HEAD/index/worktree; show tags in selectable Git Graph list.
+- [ ] Add guarded delete, cherry-pick/revert and worktree-at-commit. Active-branch rename needs separate explicit worktree-aware operation.
 - [ ] Put reset/rebase/drop/force/destructive operations behind their own later explicit preview + confirmation; do not implement them as unconfirmed right-click actions.
 
 ## Tests / gates

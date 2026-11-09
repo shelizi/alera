@@ -36,6 +36,23 @@ pub struct GitConflictPlan {
 const MAX_MERGE_CONFLICT_FILES: usize = 48;
 const MAX_MERGE_CONFLICT_TEXT_BYTES: usize = 64 * 1024;
 
+/// Non-destructive Git Graph reference creation. Both kinds point to an
+/// existing immutable commit and never move HEAD, index or working files.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GitCommitRefKind {
+    LocalBranch,
+    LightweightTag,
+}
+
+impl GitCommitRefKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::LocalBranch => "local branch",
+            Self::LightweightTag => "lightweight tag",
+        }
+    }
+}
+
 pub struct GitActions {
     repo: Repository,
     root: PathBuf,
@@ -856,6 +873,58 @@ impl GitActions {
         Ok(oid.to_string())
     }
 
+    /// Create a branch or lightweight tag at the exact selected Git Graph
+    /// commit. No shell invocation, checkout, Git index update or force flag.
+    /// All names are validated as complete Git refs before libgit2 writes.
+    pub fn create_ref_at_commit(
+        &self,
+        kind: GitCommitRefKind,
+        commit_sha: &str,
+        name: &str,
+    ) -> Result<String, String> {
+        if commit_sha.len() != 40 || !commit_sha.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err("Use a full 40-character hexadecimal commit ID".into());
+        }
+        if !valid_branch(name) || name.starts_with('-') || name.ends_with(".lock") {
+            return Err("Invalid new branch/tag name".into());
+        }
+        let ref_name = match kind {
+            GitCommitRefKind::LocalBranch => format!("refs/heads/{name}"),
+            GitCommitRefKind::LightweightTag => format!("refs/tags/{name}"),
+        };
+        if !git2::Reference::is_valid_name(&ref_name) {
+            return Err("Name violates Git reference rules".into());
+        }
+        if self.repo.find_reference(&ref_name).is_ok() {
+            return Err(format!(
+                "{} already exists; overwrite is not permitted",
+                kind.label()
+            ));
+        }
+        let oid = Oid::from_str(commit_sha).map_err(|_| "Invalid Git commit ID".to_owned())?;
+        let commit = self
+            .repo
+            .find_commit(oid)
+            .map_err(|_| "Selected commit no longer exists; refresh Git Graph".to_owned())?;
+        match kind {
+            GitCommitRefKind::LocalBranch => {
+                self.repo
+                    .branch(name, &commit, false)
+                    .map_err(|error| format!("Cannot create Git branch: {error}"))?;
+            }
+            GitCommitRefKind::LightweightTag => {
+                self.repo
+                    .tag_lightweight(name, commit.as_object(), false)
+                    .map_err(|error| format!("Cannot create lightweight tag: {error}"))?;
+            }
+        }
+        Ok(format!(
+            "Created {} '{name}' at {} without checkout",
+            kind.label(),
+            &commit_sha[..8]
+        ))
+    }
+
     /// Rename only a local branch that is not checked out by any linked
     /// worktree. Never force overwrite another ref or rename the active HEAD.
     /// The confirmation UI supplies both exact names, revalidated here.
@@ -1355,6 +1424,83 @@ mod tests {
         assert!(GitActions::open(&child).is_err());
         assert!(actions.switch_branch("missing").is_err());
         assert!(actions.commit(" ").is_err());
+    }
+
+    #[test]
+    fn create_ref_at_commit_does_not_move_head_or_working_files() {
+        let (_dir, actions) = repo_fixture();
+        let head = actions.repo.head().unwrap().peel_to_commit().unwrap().id();
+        let original = fs::read(actions.root().join("a.txt")).unwrap();
+        let sha = head.to_string();
+        let branch = actions
+            .create_ref_at_commit(GitCommitRefKind::LocalBranch, &sha, "from-graph/topic")
+            .unwrap();
+        assert!(branch.contains("local branch"));
+        assert_eq!(
+            actions
+                .repo
+                .find_reference("refs/heads/from-graph/topic")
+                .unwrap()
+                .target(),
+            Some(head)
+        );
+        let tag = actions
+            .create_ref_at_commit(GitCommitRefKind::LightweightTag, &sha, "v1.0.0")
+            .unwrap();
+        assert!(tag.contains("lightweight tag"));
+        assert_eq!(
+            actions
+                .repo
+                .find_reference("refs/tags/v1.0.0")
+                .unwrap()
+                .target(),
+            Some(head)
+        );
+        assert_eq!(actions.repo.head().unwrap().target(), Some(head));
+        assert_eq!(fs::read(actions.root().join("a.txt")).unwrap(), original);
+    }
+
+    #[test]
+    fn create_ref_at_commit_refuses_existing_unsafe_or_noncommit_target() {
+        let (_dir, actions) = repo_fixture();
+        let oid = actions.repo.head().unwrap().target().unwrap().to_string();
+        actions
+            .create_ref_at_commit(GitCommitRefKind::LocalBranch, &oid, "created")
+            .unwrap();
+        for kind in [
+            GitCommitRefKind::LocalBranch,
+            GitCommitRefKind::LightweightTag,
+        ] {
+            for name in [
+                "",
+                "../escape",
+                "evil..branch",
+                "-option",
+                "bad name",
+                "refs/heads/a.lock",
+                "a//b",
+            ] {
+                assert!(
+                    actions.create_ref_at_commit(kind, &oid, name).is_err(),
+                    "{name}"
+                );
+            }
+        }
+        assert!(actions
+            .create_ref_at_commit(GitCommitRefKind::LocalBranch, &oid, "created")
+            .is_err());
+        assert!(actions
+            .create_ref_at_commit(GitCommitRefKind::LightweightTag, &oid, "v0")
+            .is_ok());
+        assert!(actions
+            .create_ref_at_commit(GitCommitRefKind::LightweightTag, &oid, "v0")
+            .is_err());
+        assert!(actions
+            .create_ref_at_commit(GitCommitRefKind::LocalBranch, "0123", "new")
+            .is_err());
+        assert!(actions
+            .create_ref_at_commit(GitCommitRefKind::LightweightTag, &"0".repeat(40), "new")
+            .is_err());
     }
 
     #[test]

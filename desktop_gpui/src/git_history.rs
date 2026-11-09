@@ -7,6 +7,7 @@ use std::path::{Component, Path, PathBuf};
 
 const MAX_HISTORY: usize = 96;
 const MAX_BRANCHES: usize = 80;
+const MAX_TAGS: usize = 80;
 const MAX_PATCH: usize = 24 * 1024;
 /// Path-limited graph reads are background jobs but may still traverse a
 /// large repository. Never run an unbounded full-history file scan.
@@ -35,9 +36,17 @@ pub struct GitCommitRow {
 }
 
 #[derive(Debug, Clone)]
+pub struct GitTagRow {
+    pub name: String,
+    pub tip: String,
+    pub oid: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct GitHistorySnapshot {
     pub current: String,
     pub branches: Vec<GitBranchRow>,
+    pub tags: Vec<GitTagRow>,
     pub commits: Vec<GitCommitRow>,
     pub truncated: bool,
 }
@@ -325,9 +334,42 @@ impl GitHistorySnapshot {
                 .then(b.favorite.cmp(&a.favorite))
                 .then_with(|| a.name.cmp(&b.name))
         });
+        // Lightweight and annotated tags both peel to a real commit. Keep
+        // UI refs distinct from local branches and reject unsupported tags.
+        let mut tags = Vec::new();
+        for item in repo
+            .references_glob("refs/tags/*")
+            .map_err(|e| e.to_string())?
+        {
+            let reference = item.map_err(|e| e.to_string())?;
+            let Some(name) = reference
+                .name()
+                .ok()
+                .and_then(|name| name.strip_prefix("refs/tags/"))
+            else {
+                continue;
+            };
+            let Ok(commit) = reference.peel_to_commit() else {
+                continue;
+            };
+            if tags.len() == MAX_TAGS {
+                truncated = true;
+                continue;
+            }
+            tags.push(GitTagRow {
+                name: name.to_owned(),
+                tip: commit.id().to_string()[..8].to_owned(),
+                oid: commit.id().to_string(),
+            });
+        }
+        tags.sort_by(|a, b| a.name.cmp(&b.name));
         if let Some(requested) = options.selected_ref.as_deref() {
             // Host references are accepted only after resolving an exact,
             // visible branch. Do not interpret arbitrary revspec operators.
+            let tag_selected = requested
+                .strip_prefix("refs/tags/")
+                .and_then(|name| tags.iter().find(|tag| tag.name == name))
+                .map(|tag| tag.oid.clone());
             let expected_remote = if requested.starts_with("refs/remotes/") {
                 Some(true)
             } else if requested.starts_with("refs/heads/") {
@@ -350,12 +392,18 @@ impl GitHistorySnapshot {
                     name == selected && expected_remote.is_none_or(|expected| expected == *remote)
                 })
                 .collect::<Vec<_>>();
-            if matching.len() != 1 {
-                return Err("Requested Git Graph reference is missing or ambiguous".into());
+            if let Some(tag_oid) = tag_selected {
+                let oid = Oid::from_str(&tag_oid).map_err(|error| error.to_string())?;
+                tips.clear();
+                tips.push((oid, requested.to_owned(), false));
+            } else {
+                if matching.len() != 1 {
+                    return Err("Requested Git Graph reference is missing or ambiguous".into());
+                }
+                let tip = (*matching[0]).clone();
+                tips.clear();
+                tips.push(tip);
             }
-            let tip = (*matching[0]).clone();
-            tips.clear();
-            tips.push(tip);
         }
         let mut walk = repo.revwalk().map_err(|e| e.to_string())?;
         walk.set_sorting(Sort::TOPOLOGICAL | Sort::TIME)
@@ -467,6 +515,7 @@ impl GitHistorySnapshot {
         Ok(Self {
             current,
             branches,
+            tags,
             commits,
             truncated,
         })
@@ -671,6 +720,12 @@ mod tests {
             .unwrap();
         repo.branch("feature", &repo.find_commit(first).unwrap(), false)
             .unwrap();
+        repo.tag_lightweight(
+            "v1.0.0",
+            repo.find_commit(first).unwrap().as_object(),
+            false,
+        )
+        .unwrap();
         drop(tree);
         fs::write(dir.path().join("中文.txt"), "second\n").unwrap();
         index.add_path(Path::new("中文.txt")).unwrap();
@@ -697,6 +752,27 @@ mod tests {
         let snapshot = GitHistorySnapshot::load(dir.path()).unwrap();
         assert_eq!(snapshot.commits.len(), 2);
         assert_eq!(snapshot.branches.len(), 2);
+        assert_eq!(snapshot.tags.len(), 1);
+        assert_eq!(snapshot.tags[0].name, "v1.0.0");
+        assert_eq!(snapshot.tags[0].oid, first.to_string());
+        let tagged = GitHistorySnapshot::load_filtered(
+            dir.path(),
+            &GitHistoryOptions {
+                selected_ref: Some("refs/tags/v1.0.0".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(tagged.commits.len(), 1);
+        assert_eq!(tagged.commits[0].oid, first.to_string());
+        assert!(GitHistorySnapshot::load_filtered(
+            dir.path(),
+            &GitHistoryOptions {
+                selected_ref: Some("refs/tags/no-such-tag".into()),
+                ..Default::default()
+            },
+        )
+        .is_err());
         assert!(snapshot
             .commits
             .iter()

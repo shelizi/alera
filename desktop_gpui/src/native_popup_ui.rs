@@ -557,8 +557,9 @@ impl Workbench {
         }
     }
 
-    /// Read-only commit actions: no checkout, reset, cherry-pick, or index
-    /// mutation is reachable from this menu.
+    /// Commit menu: read-only preview/copy plus explicit creation of new
+    /// refs at an existing commit. Never checkout, reset, cherry-pick or
+    /// change the index from this menu.
     pub(super) fn kit_git_graph_commit_menu(
         owner: gpui::WeakEntity<Self>,
         oid: String,
@@ -591,6 +592,24 @@ impl Workbench {
                     });
                 },
             ));
+            for (title, kind) in [
+                (
+                    "Create local branch at commit…",
+                    alera_gpui_desktop::git_actions::GitCommitRefKind::LocalBranch,
+                ),
+                (
+                    "Create lightweight tag at commit…",
+                    alera_gpui_desktop::git_actions::GitCommitRefKind::LightweightTag,
+                ),
+            ] {
+                let owner = owner.clone();
+                let commit_id = oid.clone();
+                menu = menu.item(PopupMenuItem::new(title).on_click(move |_, _, cx| {
+                    let _ = owner.update(cx, |view, cx| {
+                        view.prepare_git_commit_ref(commit_id.clone(), kind, cx);
+                    });
+                }));
+            }
             let hash = oid.clone();
             menu = menu.item(
                 PopupMenuItem::new("Copy commit hash").on_click(move |_, _, cx| {

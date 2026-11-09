@@ -26,7 +26,9 @@ use alera_gpui_desktop::explorer_ops::{
 use alera_gpui_desktop::explorer_selection::ExplorerMultiSelection;
 use alera_gpui_desktop::explorer_visibility::ExplorerVisibilityOptions;
 use alera_gpui_desktop::file_search::WorkspaceFileIndex;
-use alera_gpui_desktop::git_actions::{GitActions, GitConflictChoice, GitConflictPlan};
+use alera_gpui_desktop::git_actions::{
+    GitActions, GitCommitRefKind, GitConflictChoice, GitConflictPlan,
+};
 use alera_gpui_desktop::git_branch_compare::{
     compare_branch_files, diff_compared_file, original_compared_file, BranchFileComparison,
     CompareDirection,
@@ -175,6 +177,7 @@ enum GitUiAction {
     MergeWithoutConflicts(String),
     Fetch,
     RenameInactiveBranch(String, String),
+    CreateCommitRef(GitCommitRefKind, String, String),
     PullSelected(String),
     PushSelected(String),
     StashSave,
@@ -403,6 +406,8 @@ struct Workbench {
     git_history_request: u64,
     git_merge_armed: Option<String>,
     git_graph_remote_armed: Option<(String, bool)>, // true = Pull, false = Push
+    git_commit_ref_target: Option<(String, GitCommitRefKind)>,
+    git_commit_ref_armed: Option<(String, GitCommitRefKind, String)>,
     git_rename_source: Option<String>,
     git_rename_armed: Option<(String, String)>,
     git_sensitive_armed: Option<ConfirmGitAction>,
@@ -416,6 +421,7 @@ struct Workbench {
     git_commit_input: Entity<QuickOpenInput>,
     git_branch_input: Entity<QuickOpenInput>,
     git_rename_input: Entity<QuickOpenInput>,
+    git_commit_ref_input: Entity<QuickOpenInput>,
     git_action_busy: bool,
     git_action_request: u64,
     git_action_status: String,
@@ -1824,6 +1830,8 @@ impl Workbench {
                     cx.notify();
                     return;
                 }
+                self.git_commit_ref_target = None;
+                self.git_commit_ref_armed = None;
                 self.git_rename_source = Some(branch.clone());
                 self.git_rename_armed = None;
                 self.git_rename_input
@@ -1893,6 +1901,77 @@ impl Workbench {
     fn set_git_history_ref(&mut self, selected: Option<String>, cx: &mut Context<Self>) {
         self.git_history_options.selected_ref = selected;
         self.refresh_git_history(cx);
+    }
+
+    fn prepare_git_commit_ref(
+        &mut self,
+        oid: String,
+        kind: GitCommitRefKind,
+        cx: &mut Context<Self>,
+    ) {
+        if self.git_action_busy
+            || !self
+                .git_history
+                .as_ref()
+                .is_some_and(|history| history.commits.iter().any(|row| row.oid == oid))
+        {
+            self.git_action_status = "Commit is stale or Git is busy; refresh Git Graph".into();
+            cx.notify();
+            return;
+        }
+        self.git_rename_source = None;
+        self.git_rename_armed = None;
+        self.git_graph_remote_armed = None;
+        self.git_commit_ref_target = Some((oid.clone(), kind));
+        self.git_commit_ref_armed = None;
+        self.git_commit_ref_input
+            .update(cx, |input, cx| input.clear(cx));
+        self.git_action_status = format!(
+            "Create {} at {}: enter a new name, then confirm twice.",
+            kind.label(),
+            &oid[..8]
+        );
+        cx.notify();
+    }
+
+    fn confirm_git_commit_ref(&mut self, cx: &mut Context<Self>) {
+        let Some((oid, kind)) = self.git_commit_ref_target.clone() else {
+            return;
+        };
+        let name = self.git_commit_ref_input.read(cx).query().trim().to_owned();
+        if self.git_action_busy || name.is_empty() {
+            self.git_action_status = "Enter a new branch or tag name before confirming".into();
+            cx.notify();
+            return;
+        }
+        let pending = (oid.clone(), kind, name.clone());
+        if self.git_commit_ref_armed.as_ref() != Some(&pending) {
+            self.git_commit_ref_armed = Some(pending);
+            self.git_action_status = format!("Confirm creating {} '{name}' at {}. Click Confirm Create again. HEAD and worktree will not change.", kind.label(), &oid[..8]);
+            cx.notify();
+            return;
+        }
+        if !self
+            .git_history
+            .as_ref()
+            .is_some_and(|history| history.commits.iter().any(|row| row.oid == oid))
+        {
+            self.git_commit_ref_armed = None;
+            self.git_action_status =
+                "Commit disappeared from Git Graph; refresh and select again".into();
+            cx.notify();
+            return;
+        }
+        self.git_commit_ref_armed = None;
+        self.run_git_action(GitUiAction::CreateCommitRef(kind, oid, name), cx);
+    }
+
+    fn cancel_git_commit_ref(&mut self, cx: &mut Context<Self>) {
+        self.git_commit_ref_target = None;
+        self.git_commit_ref_armed = None;
+        self.git_commit_ref_input
+            .update(cx, |input, cx| input.clear(cx));
+        cx.notify();
     }
 
     fn confirm_graph_branch_rename(&mut self, cx: &mut Context<Self>) {
@@ -2182,6 +2261,9 @@ impl Workbench {
                         GitUiAction::RenameInactiveBranch(old, new) => {
                             git.rename_inactive_branch(&old, &new)
                         }
+                        GitUiAction::CreateCommitRef(kind, oid, name) => {
+                            git.create_ref_at_commit(kind, &oid, &name)
+                        }
                         GitUiAction::PullSelected(branch) => {
                             git.pull_branch_without_switch(&branch)
                         }
@@ -2208,6 +2290,9 @@ impl Workbench {
                 match result {
                     Ok(message) => {
                         view.git_action_status = message;
+                        view.git_commit_ref_target = None;
+                        view.git_commit_ref_armed = None;
+                        view.git_commit_ref_input.update(cx, |input, cx| input.clear(cx));
                         view.git_rename_source = None;
                         view.git_rename_armed = None;
                         view.git_rename_input.update(cx, |input, cx| input.clear(cx));
@@ -3248,6 +3333,8 @@ impl Workbench {
         self.git_history_request = self.git_history_request.wrapping_add(1);
         self.git_merge_armed = None;
         self.git_graph_remote_armed = None;
+        self.git_commit_ref_target = None;
+        self.git_commit_ref_armed = None;
         self.git_rename_source = None;
         self.git_rename_armed = None;
         self.git_sensitive_armed = None;
@@ -3266,6 +3353,8 @@ impl Workbench {
         self.git_branch_input
             .update(cx, |input, cx| input.clear(cx));
         self.git_rename_input
+            .update(cx, |input, cx| input.clear(cx));
+        self.git_commit_ref_input
             .update(cx, |input, cx| input.clear(cx));
         self.git_diff = None;
         self.git_branch_comparison = None;
@@ -6617,6 +6706,9 @@ impl Render for Workbench {
         let git_branch_input = self.git_branch_input.clone();
         let git_rename_source = self.git_rename_source.clone();
         let git_rename_input = self.git_rename_input.clone();
+        let git_commit_ref_target = self.git_commit_ref_target.clone();
+        let git_commit_ref_input = self.git_commit_ref_input.clone();
+        let git_commit_ref_armed = self.git_commit_ref_armed.is_some();
         let git_rename_armed = self.git_rename_armed.is_some();
         let git_graph_open = self.git_history_open;
         let git_graph_all_branches = self.git_history_options.all_branches;
@@ -6644,6 +6736,11 @@ impl Render for Workbench {
             .git_history
             .as_ref()
             .map(|history| history.branches.clone())
+            .unwrap_or_default();
+        let git_tag_rows = self
+            .git_history
+            .as_ref()
+            .map(|history| history.tags.clone())
             .unwrap_or_default();
         let git_commit_rows = self
             .git_history
@@ -7369,6 +7466,25 @@ impl Render for Workbench {
                                     .flex_col()
                                     .gap_1()
                                     .child(div().text_xs().text_color(rgb(MUTED)).child(git_history_status))
+                                    .when_some(git_commit_ref_target, |panel, (oid, kind)| panel.child(
+                                        div().flex().flex_col().gap_1()
+                                            .child(div().text_xs().text_color(rgb(TEXT))
+                                                .child(format!("Create {} at {}", kind.label(), &oid[..8])))
+                                            .child(div().flex().items_center().gap_1()
+                                                .child(div().flex_1().min_w_0().child(git_commit_ref_input))
+                                                .child(icon_button("git-commit-ref-confirm",
+                                                    if git_commit_ref_armed { UiIcon::Check } else { UiIcon::Add },
+                                                    if git_commit_ref_armed { "Confirm creation at this commit" } else { "Prepare new branch or tag (confirm twice)" },
+                                                    git_commit_ref_armed)
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.confirm_git_commit_ref(cx);
+                                                    })))
+                                                .child(icon_button("git-commit-ref-cancel", UiIcon::Close,
+                                                    "Cancel creating reference", false)
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.cancel_git_commit_ref(cx);
+                                                    }))))
+                                    ))
                                     .when_some(git_rename_source, |panel, source| panel.child(
                                         div().flex().flex_col().gap_1()
                                             .child(div().text_xs().text_color(rgb(TEXT))
@@ -7507,6 +7623,25 @@ impl Render for Workbench {
                                                         self.git_graph_remote_armed.clone(),
                                                     )))
                                         })))
+                                    .when(!git_tag_rows.is_empty(), |panel| panel.child(
+                                        div().flex().flex_col().gap_1()
+                                            .child(div().text_xs().text_color(rgb(TEXT)).child("Tags · select to view commit history"))
+                                            .child(div().id("git-graph-tags")
+                                                .max_h(px(90.0))
+                                                .overflow_y_scroll()
+                                                .children(git_tag_rows.into_iter().enumerate().map(|(index, tag)| {
+                                                    let reference = format!("refs/tags/{}", tag.name);
+                                                    let selected = git_graph_selected_ref.as_deref() == Some(reference.as_str());
+                                                    div().id(("git-graph-tag", index))
+                                                        .cursor_pointer().text_xs()
+                                                        .text_color(rgb(if selected { TEXT } else { MUTED }))
+                                                        .hover(|style| style.bg(rgb(ACTIVE)))
+                                                        .child(format!("◇ {} · {}", tag.name, tag.tip))
+                                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                                            this.set_git_history_ref(Some(reference.clone()), cx);
+                                                        }))
+                                                })))
+                                    ))
                                     .when(git_branch_compare_loading, |panel| panel.child(
                                         div().text_xs().text_color(rgb(MUTED)).child("Comparing branch files…")
                                     ))
@@ -9657,6 +9792,8 @@ fn main() {
                             git_history_request: 0,
                             git_merge_armed: None,
                             git_graph_remote_armed: None,
+                            git_commit_ref_target: None,
+                            git_commit_ref_armed: None,
                             git_rename_source: None,
                             git_rename_armed: None,
                             git_sensitive_armed: None,
@@ -9674,6 +9811,9 @@ fn main() {
                                 .new(|cx| QuickOpenInput::with_placeholder("Existing branch", cx)),
                             git_rename_input: cx
                                 .new(|cx| QuickOpenInput::with_placeholder("New branch name", cx)),
+                            git_commit_ref_input: cx.new(|cx| {
+                                QuickOpenInput::with_placeholder("New branch or tag name", cx)
+                            }),
                             git_action_busy: false,
                             git_action_request: 0,
                             git_action_status: String::new(),
