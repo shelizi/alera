@@ -13,6 +13,10 @@ from terminal_stream_isolated_smoke import (
     paced_load_command,
     real_tui_less_command,
     real_tui_read_after_cursor,
+    real_tui_fixture_paths,
+    real_tui_row_marker,
+    real_tui_shell_prompt_in_delta,
+    validate_real_tui_target,
 )
 
 
@@ -102,6 +106,60 @@ class IsolatedTerminalLoadProbeTests(unittest.TestCase):
         self.assertNotIn("--start", args)
         with self.assertRaises(ValueError):
             real_tui_read_after_cursor("isolated.exe", "runtime", "pty-id", -1)
+
+    def test_real_tui_shell_ready_requires_new_shell_prompt_not_pager_escape(self):
+        self.assertTrue(real_tui_shell_prompt_in_delta(
+            "\x1b[?1049l\r\nC:\\temp\\workspace>", "workspace",
+        ))
+        self.assertFalse(real_tui_shell_prompt_in_delta(
+            "\x1b[?1049l\r\nREAL_TUI_123_0", "workspace",
+        ))
+        self.assertFalse(real_tui_shell_prompt_in_delta(
+            "\x1b[?25h", "workspace",
+        ))
+        with self.assertRaises(ValueError):
+            real_tui_shell_prompt_in_delta("workspace>", "bad/name")
+
+    def test_dual_real_tui_row_markers_fit_narrow_pty_without_wrapping(self):
+        marker = "abc123abc123ab"
+        for pane in (0, 1):
+            for row in (0, 239):
+                token = real_tui_row_marker(marker, pane, row)
+                self.assertLessEqual(len(token), 16)
+                self.assertTrue(token.startswith(f"T{pane}_"))
+                self.assertTrue(token.endswith(f"_{row:03d}"))
+        self.assertNotEqual(real_tui_row_marker(marker, 0, 0),
+                            real_tui_row_marker(marker, 1, 0))
+        for args in ((marker, 2, 0), (marker, 0, -1),
+                     (marker, 0, 240), ("bad&cmd", 0, 0)):
+            with self.subTest(args=args), self.assertRaises(ValueError):
+                real_tui_row_marker(*args)
+
+    def test_dual_real_tui_fixtures_are_unique_and_scoped(self):
+        root = Path(r"C:\temp\isolated-tui")
+        document_a, completion_a = real_tui_fixture_paths(root, "abc123abc123ab", 0)
+        document_b, completion_b = real_tui_fixture_paths(root, "abc123abc123ab", 1)
+        self.assertNotEqual(document_a, document_b)
+        self.assertNotEqual(completion_a, completion_b)
+        self.assertEqual(document_a.parent, root)
+        self.assertEqual(completion_b.parent, root)
+        for pane in (-1, 2):
+            with self.subTest(pane=pane), self.assertRaises(ValueError):
+                real_tui_fixture_paths(root, "abc123abc123ab", pane)
+        with self.assertRaises(ValueError):
+            real_tui_fixture_paths(root, "abc&echo bad", 0)
+
+    def test_dual_real_tui_requires_visual_split_gate_and_host_restart(self):
+        validate_real_tui_target("primary", True, False, False)
+        validate_real_tui_target("both", True, True, True)
+        for options in (
+            ("both", False, True, True),
+            ("both", True, False, True),
+            ("both", True, True, False),
+            ("unexpected", True, True, True),
+        ):
+            with self.subTest(options=options), self.assertRaises(ValueError):
+                validate_real_tui_target(*options)
 
     def test_real_tui_rejects_other_programs_and_shell_metacharacters(self):
         document = Path(r"C:\temp\isolated\input.txt")

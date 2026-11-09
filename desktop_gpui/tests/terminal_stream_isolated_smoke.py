@@ -419,6 +419,43 @@ def real_tui_less_command(pager, document):
     return f'"{pager}" -R -- "{document}"'
 
 
+def real_tui_row_marker(run_marker, pane, row):
+    """Short marker fits even a narrow split pane without ConPTY wrapping."""
+    if re.fullmatch(r"[a-f0-9]{14}", run_marker) is None or pane not in (0, 1):
+        raise ValueError("Invalid isolated real TUI row identity")
+    if not 0 <= row < 240:
+        raise ValueError("Real TUI row outside 240-line fixture")
+    return f"T{pane}_{run_marker[:6]}_{row:03d}"
+
+
+def real_tui_shell_prompt_in_delta(output, workspace_name):
+    """Require freshly emitted cmd.exe prompt after q, not a timer guess."""
+    if not workspace_name or re.fullmatch(r"[A-Za-z0-9_-]+", workspace_name) is None:
+        raise ValueError("Invalid isolated Workspace prompt")
+    return workspace_name + ">" in str(output)
+
+
+def real_tui_fixture_paths(workspace, run_marker, pane):
+    """Unique, bounded temporary documents and return-to-Shell markers."""
+    if pane not in (0, 1) or re.fullmatch(r"[a-f0-9]{14}", run_marker) is None:
+        raise ValueError("Real TUI fixture requires a scoped pane and test run marker")
+    workspace = Path(workspace)
+    return (
+        workspace / f"real-tui-{run_marker}-{pane}.txt",
+        workspace / f"real-tui-finished-{run_marker}-{pane}.txt",
+    )
+
+
+def validate_real_tui_target(target, has_pager, host_restart, split_gate):
+    if target not in ("primary", "both"):
+        raise ValueError("Unknown real TUI target")
+    if target == "both" and not (has_pager and host_restart and split_gate):
+        raise ValueError(
+            "Two real visible TUI panes require a pager, isolated Host restart, "
+            "and a visually confirmed --native-split-gate"
+        )
+
+
 def native_visible_cursors_from_diagnostic(line, expected_count):
     """Parse only cursor positions, not PTY content, from isolated debug log."""
     if not line.startswith("GPUI_STREAM_DIAG "):
@@ -528,7 +565,7 @@ def real_tui_read_after_cursor(executable, profile, handle, cursor):
         raise ValueError("Incremental TUI cursor must not be negative")
     return checked_cli(
         executable, profile, "terminal", "--no-start", "read", "--handle", handle,
-        "--cursor", str(cursor), timeout=6,
+        "--cursor", str(cursor), "--max-bytes", str(1024 * 1024), timeout=6,
     )
 
 
@@ -608,6 +645,191 @@ def exercise_native_real_tui(executable, profile, native_process, handle,
     return final
 
 
+def wait_for_native_dual_tui_panes(native_process, diagnostic_path, timeout=45):
+    """Fail closed until two Native live subscriptions are actually visible."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if native_process.poll() is not None:
+            raise SmokeError("Isolated GPUI window exited before dual TUI attachment")
+        if diagnostic_path.is_file():
+            lines = [
+                line.strip() for line in diagnostic_path.read_text(
+                    encoding="utf-8", errors="replace"
+                ).splitlines()
+                if line.startswith("GPUI_STREAM_DIAG ")
+            ]
+            if lines:
+                try:
+                    cursors = native_visible_cursors_from_diagnostic(lines[-1], 2)
+                    print(f"ISOLATED_REAL_TUI_DUAL_VISIBLE cursors={cursors}", flush=True)
+                    return cursors
+                except SmokeError:
+                    pass
+        time.sleep(0.35)
+    raise SmokeError(
+        "Two original PTYs did not become simultaneously visible in the "
+        "disposable Native GPUI window; do not claim dual real-TUI acceptance"
+    )
+
+
+def exercise_native_dual_real_tui(executable, profile, native_process, handles,
+                                  workspace, run_marker, pager, rounds=6):
+    """Interleave real fullscreen pager redraws on two EXISTING Host PTYs.
+
+    Both less instances must remain interactive concurrently. Every movement
+    is authorized for its exact Host handle and checked against only output
+    appended AFTER the previous movement. q must restore each original Shell.
+    """
+    import psutil
+
+    if len(handles) != 2 or handles[0] == handles[1] or not 1 <= rounds <= 20:
+        raise SmokeError("Real dual TUI requires two unique Host PTYs and 1..20 rounds")
+    native = psutil.Process(native_process.pid)
+    start_rss = native.memory_info().rss
+    initial_cpu = native.cpu_times()
+    start_cpu = initial_cpu.user + initial_cpu.system
+    peak_rss = start_rss
+    started = time.monotonic()
+    documents = []
+    completions = []
+    cursors = []
+    for pane, handle in enumerate(handles):
+        document, completion = real_tui_fixture_paths(workspace, run_marker, pane)
+        document.write_text(
+            "".join(
+                real_tui_row_marker(run_marker, pane, row)
+                + " " + ("#" * 62) + "\n" for row in range(240)
+            ), encoding="utf-8",
+        )
+        documents.append(document)
+        completions.append(completion)
+        current = checked_cli(
+            executable, profile, "terminal", "--no-start", "read",
+            "--handle", handle, timeout=6,
+        )
+        if current.get("running") is not True:
+            raise SmokeError(f"Real dual TUI PTY {pane} is not live")
+        cursors.append(int(current.get("nextCursor", 0)))
+
+    def wait_for_pane_redraw(pane, previous, row, action):
+        nonlocal peak_rss
+        deadline = time.monotonic() + 18
+        expected = real_tui_row_marker(run_marker, pane, row)
+        wrong_pane = f"T{1-pane}_{run_marker[:6]}_"
+        while time.monotonic() < deadline:
+            if native_process.poll() is not None:
+                raise SmokeError("GPUI exited with two real fullscreen pagers active")
+            peak_rss = max(peak_rss, native.memory_info().rss)
+            state = real_tui_read_after_cursor(
+                executable, profile, handles[pane], previous,
+            )
+            text = str(state.get("text", ""))
+            if state.get("running") is not True:
+                raise SmokeError(f"Real TUI {pane} unexpectedly stopped")
+            if wrong_pane in text:
+                raise SmokeError("A real TUI rendered the other PTY's isolated file")
+            current = int(state.get("nextCursor", 0))
+            if current >= previous + 100 and expected in text:
+                return current
+            time.sleep(0.2)
+        raise SmokeError(f"Real TUI {pane} did not repaint {action}")
+
+    for pane, handle in enumerate(handles):
+        checked_cli(
+            executable, profile, "terminal", "--no-start", "write",
+            "--handle", handle, "--text",
+            real_tui_less_command(pager, documents[pane]), "--enter", timeout=12,
+        )
+    for pane in (0, 1):
+        cursors[pane] = wait_for_pane_redraw(
+            pane, cursors[pane], 0, "initial read-only fullscreen viewport",
+        )
+    print(f"ISOLATED_REAL_TUI_DUAL_OPEN cursors={cursors}", flush=True)
+    for movement in range(rounds * 2):
+        key = "G" if movement % 2 == 0 else "g"
+        expected_row = 239 if key == "G" else 0
+        # Send both navigation commands before waiting for either response:
+        # both real pagers remain running during the same redraw window.
+        for handle in handles:
+            checked_cli(
+                executable, profile, "terminal", "--no-start", "write",
+                "--handle", handle, "--text", key, timeout=8,
+            )
+        for pane in (0, 1):
+            cursors[pane] = wait_for_pane_redraw(
+                pane, cursors[pane], expected_row, f"{key} movement {movement}",
+            )
+    for handle in handles:
+        checked_cli(
+            executable, profile, "terminal", "--no-start", "write",
+            "--handle", handle, "--text", "q", timeout=8,
+        )
+    # This must not be a fixed sleep: a real pager may still be restoring
+    # the alternate screen while the test sends its next command. Wait for
+    # the newly emitted cmd.exe prompt in EACH original Host PTY.
+    for pane, handle in enumerate(handles):
+        deadline = time.monotonic() + 15
+        returned_to_shell = False
+        last_host_cursor = cursors[pane]
+        while time.monotonic() < deadline:
+            if native_process.poll() is not None:
+                raise SmokeError("GPUI exited while real pagers were quitting")
+            state = real_tui_read_after_cursor(
+                executable, profile, handle, cursors[pane],
+            )
+            last_host_cursor = int(state.get("nextCursor", 0))
+            if state.get("running") is not True:
+                raise SmokeError(f"Real pager {pane} original Host PTY stopped")
+            if real_tui_shell_prompt_in_delta(state.get("text", ""), workspace.name):
+                returned_to_shell = True
+                break
+            time.sleep(0.2)
+        if not returned_to_shell:
+            raise SmokeError(
+                f"Real pager {pane} did not emit a fresh cmd Shell prompt after q "
+                f"(cursor_before={cursors[pane]}, cursor_after={last_host_cursor})"
+            )
+    for pane, handle in enumerate(handles):
+        checked_cli(
+            executable, profile, "terminal", "--no-start", "write",
+            "--handle", handle,
+            "--text", f'echo restored> "{completions[pane]}"',
+            "--enter", timeout=8,
+        )
+    deadline = time.monotonic() + 14
+    while time.monotonic() < deadline and not all(path.is_file() for path in completions):
+        if native_process.poll() is not None:
+            raise SmokeError("GPUI exited before both real TUI Shells were restored")
+        time.sleep(0.25)
+    if not all(path.is_file() and path.read_text(encoding="utf-8").strip() == "restored"
+               for path in completions):
+        restored = [path.is_file() and path.read_text(encoding="utf-8").strip() == "restored"
+                    for path in completions]
+        raise SmokeError(
+            f"Real TUI Shell completion marker was not written for both panes: {restored}"
+        )
+    final_cursors = []
+    for pane, handle in enumerate(handles):
+        state = real_tui_read_after_cursor(executable, profile, handle, cursors[pane])
+        final_cursor = int(state.get("nextCursor", 0))
+        if state.get("running") is not True or final_cursor <= cursors[pane]:
+            raise SmokeError(f"Real TUI {pane} Shell exit output did not reach Host")
+        final_cursors.append(final_cursor)
+    end_cpu = native.cpu_times()
+    rss_growth = peak_rss - start_rss
+    if rss_growth > 256 * 1048576:
+        raise SmokeError("Native RSS increased more than 256 MiB during two real TUIs")
+    print(
+        f"ISOLATED_REAL_TUI_DUAL_PASS rounds={rounds} real_apps=2 "
+        f"redraws={2*rounds*2} elapsed={time.monotonic()-started:.1f}s "
+        f"host_end_cursors={final_cursors} both_shells_restored=true "
+        f"rss_growth_mib={rss_growth/1048576:.1f} "
+        f"native_cpu_seconds={end_cpu.user+end_cpu.system-start_cpu:.2f}",
+        flush=True,
+    )
+    return final_cursors
+
+
 def await_isolated_split_inspection(native_process, gate, timeout=75):
     """Optional human/UI-automation checkpoint before the disposable crash.
 
@@ -632,7 +854,10 @@ def await_isolated_split_inspection(native_process, gate, timeout=75):
 def run_smoke(executable, native_app=None, hold_seconds=25,
               native_reconnect=False, native_host_restart=False,
               native_split_gate=False, native_load_seconds=0, native_load_style="plain",
-              native_load_target="both", native_real_tui_pager=None):
+              native_load_target="both", native_real_tui_pager=None,
+              native_real_tui_target="primary", native_real_tui_rounds=6):
+    validate_real_tui_target(native_real_tui_target, native_real_tui_pager is not None,
+                             native_host_restart, native_split_gate)
     run_marker = uuid.uuid4().hex[:14]
     checks = []
     gate_path = None
@@ -1058,13 +1283,27 @@ def run_smoke(executable, native_app=None, hold_seconds=25,
                                 "background second-PTY TUI output completed while first terminal remained interactive"
                             )
                     if native_real_tui_pager is not None:
-                        exercise_native_real_tui(
-                            executable, profile, native_process, session_id,
-                            workspace, run_marker, native_real_tui_pager,
-                        )
-                        checks.append(
-                            "real full-screen pager repainted top/end/top and returned to same Host Shell"
-                        )
+                        if native_real_tui_target == "both":
+                            wait_for_native_dual_tui_panes(
+                                native_process, native_stderr_path,
+                            )
+                            exercise_native_dual_real_tui(
+                                executable, profile, native_process,
+                                (session_id, second_session_id),
+                                workspace, run_marker, native_real_tui_pager,
+                                rounds=native_real_tui_rounds,
+                            )
+                            checks.append(
+                                "two concurrently running real less pagers navigated independently and restored both Shells"
+                            )
+                        else:
+                            exercise_native_real_tui(
+                                executable, profile, native_process, session_id,
+                                workspace, run_marker, native_real_tui_pager,
+                            )
+                            checks.append(
+                                "real full-screen pager repainted top/end/top and returned to same Host Shell"
+                            )
                     until = time.monotonic() + hold_seconds
                     while time.monotonic() < until:
                         if native_process.poll() is not None:
@@ -1202,6 +1441,10 @@ if __name__ == "__main__":
                         help="emit in both PTYs or leave primary idle for foreground key latency testing")
     parser.add_argument("--native-real-tui-pager", type=Path,
                         help="opt-in actual full-screen, read-only less.exe (absolute Windows path)")
+    parser.add_argument("--native-real-tui-target", choices=("primary", "both"),
+                        default="primary", help="real less.exe in first viewport or both verified split panes")
+    parser.add_argument("--native-real-tui-rounds", type=int, default=6,
+                        help="1..20 interleaved top/end real pager redraw rounds per visible pane")
     parser.add_argument("--hold-seconds", type=int, default=25)
     args = parser.parse_args()
     if not args.cli.is_file() or (args.native_app is not None and not args.native_app.is_file()):
@@ -1217,6 +1460,17 @@ if __name__ == "__main__":
     if args.native_load_seconds and not (args.native_app and
                                          10 <= args.native_load_seconds <= 60):
         parser.error("--native-load-seconds requires --native-app and 10..60 seconds")
+    try:
+        validate_real_tui_target(
+            args.native_real_tui_target,
+            args.native_real_tui_pager is not None,
+            args.native_host_restart,
+            args.native_split_gate,
+        )
+    except ValueError as error:
+        parser.error(str(error))
+    if not 1 <= args.native_real_tui_rounds <= 20:
+        parser.error("--native-real-tui-rounds must be 1..20")
     if args.native_real_tui_pager is not None:
         if args.native_app is None or not args.native_real_tui_pager.is_file():
             parser.error("--native-real-tui-pager requires --native-app and an installed less.exe")
@@ -1238,6 +1492,8 @@ if __name__ == "__main__":
             native_load_target=args.native_load_target,
             native_real_tui_pager=args.native_real_tui_pager.resolve()
             if args.native_real_tui_pager is not None else None,
+            native_real_tui_target=args.native_real_tui_target,
+            native_real_tui_rounds=args.native_real_tui_rounds,
         )
     except (SmokeError, OSError, KeyError, ValueError, subprocess.TimeoutExpired) as error:
         print(f"FAIL: isolated Terminal stream smoke: {error}", file=sys.stderr)

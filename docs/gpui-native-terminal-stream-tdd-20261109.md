@@ -216,3 +216,22 @@ CLI `terminal_stream::tests` 私有 recover 指令白名單 **2/2 PASS**，確�
 重新以隔離 Windows GUI／Runtime Host 真正崩潰重啟／雙原 Worker 測試：**14/14 Host／CLI／Native PASS**、Python **11/11 PASS**，最終 Native／Host output cursor **20028／20028**。測試專用 Host／PTY／Native 及臨時資料在結束時清理，沒有動正式 Host。
 
 另外曾在獨立 GPUI GUI 目視將第二個既有 PTY 透過 Tab 右鍵移至第二窗格，兩個 PTY 同時顯示；該輪隔離標準 Smoke **11/11 PASS**。但實體鍵盤輸入未取得**已確定進入注音組字候選模式**的證據，也未完整確認未完成組字切窗取消，所以 Windows TSF 跨 Pane **仍未通過完整驗收**。此輪不修改 TSF 程式碼，不把純 ASCII 輸入當成注音驗證。Classic／Native Release 同場效能比較與兩個真實高頻 TUI 同時互動亦未完成；`supported=false`、不合併 main、不推送、不發布。
+
+## 2026-11-09：雙真實全螢幕 pager 同時執行與 Host 重啟後加壓驗收
+
+新擴充 opt-in `--native-real-tui-target both --native-real-tui-rounds N`（N=1..20），限定已有 `--native-host-restart --native-split-gate --native-real-tui-pager` 的隔離測試。測試需在實際 GPUI 視窗把第二個原 Host Tab 移到第二窗格，由操作者目視確認後建立**測試專用一次性** split gate；執行時還需 Native diagnostics 回報 `active=2`、兩份 running Tab，避免把背景 Tab 當可見 Pane。
+
+每個原 PTY 以不同的 240 行唯讀檔案啟動獨立 `less.exe`，兩份 pager 同時存活，交錯注入 `G`／`g` 導航，要求 Host `terminal read --cursor` 僅從**該次鍵盤操作後的新資料**檢查兩邊各自的頁首或頁尾，並拒絕另一 PTY 的識別文字。兩份 Shell 都必須在 `q` 後恢復，才能由**原 PTY**建立各自的完成檔。Native RSS 增量限制仍為 256 MiB，結束後核對同時可見雙 Pane 的 Native／Host output cursor，測試子程序與 Worker 只按隔離 PID 樹清理。
+
+### 實機 RED→GREEN
+
+- 第一版雙窗 3 輪為 RED：初始 TUI header 無法被完整比對。實機 GUI 的窄 Pane 讓長的 `REAL_DUAL_..._ROW` 標記經 ConPTY 折行；增加 CLI cursor read buffer（上限 1 MiB）仍無法解決，不能把它誤判為 Host 缺資料。改用長度小於 16 字元的 `T{pane}_{run[:6]}_{row:03d}`；加入合法 Pane／row 範圍與跨 Pane 唯一性測試。
+- 更正後雙 `less.exe` **3 輪、12 次 per-pane redraw、14/14 隔離端到端 PASS**；Native／Host 最終 cursor **[12390, 225013]** 完全一致，Native RSS 峰值增加 **2.9 MiB**、CPU 增量 **0.84 秒**。
+- 首輪擴大為 12 輪得到 RED：有至少一個 pager 退出後未產生 Shell 完成檔。原測試只是 `q` 後固定 sleep 650ms 就送指令，沒有證明 Shell 已接回鍵盤，不能當成真正的 GPUI 缺陷。改成兩個 PTY 各自等待**新輸出**中的 `workspace>` 命令提示字元，確認退出後才送出檔案標記，並改善失敗時的逐窗診斷。
+- 改善後的真實 Windows 雙 Pane、隔離 Runtime Host crash/restart、原 Worker 保存與 **12 輪、48 次導航重繪測試：14/14 PASS**。最終兩個 Host／Native output cursor **[34591, 249430]** 一致、`active=2`、`pending=0`，兩個原 Shell 皆回復。Python 純測試 **15/15 PASS**。本測試以 CLI/Host output cursor + Native stream consumption 核對，不把它聲稱為 GPU present frame latency 或所有實體鍵盤事件覆蓋。
+
+可重複執行（需要手動實際將 Tab 分到第二窗格再觸發 test-only gate）：
+
+`python desktop_gpui/tests/terminal_stream_isolated_smoke.py D:/c/t/debug/alera.exe --native-app D:/c/t/debug/alera-gpui-desktop.exe --native-host-restart --native-split-gate --native-real-tui-pager "C:/Program Files/Git/usr/bin/less.exe" --native-real-tui-target both --native-real-tui-rounds 12 --hold-seconds 3`
+
+**尚未關 Gate**：Windows TSF 注音「未完成組字」在左右窗格與 Explorer 切換的真實候選窗取消／遲到 Commit 檢查仍缺完整 OS 證據；Classic／Native Release 同場輸入至像素 p50/p95、實際高頻全螢幕編輯器超長時間壓測也尚未完成。這次只修改測試工具／文件，`supported=false`；不改 Classic 或正式 Host、不合併 main、不推送、不發布。保留原始未追蹤 `.gpui-smoke-20261108/`。
