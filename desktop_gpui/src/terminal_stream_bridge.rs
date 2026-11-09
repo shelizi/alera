@@ -39,6 +39,8 @@ pub enum StreamViewUpdate {
         identity: StreamSessionIdentity,
         bytes: Vec<u8>,
         cursor: u64,
+        rows: u16,
+        cols: u16,
     },
     Output {
         identity: StreamSessionIdentity,
@@ -143,12 +145,24 @@ impl StreamSubscriptions {
                     }))];
                 }
                 let (cursor, bytes) = (cursor.unwrap(), bytes.unwrap());
+                let rows = payload
+                    .get("snapshotRows")
+                    .and_then(Value::as_u64)
+                    .filter(|n| (5..=200).contains(n))
+                    .unwrap_or(24) as u16;
+                let cols = payload
+                    .get("snapshotCols")
+                    .and_then(Value::as_u64)
+                    .filter(|n| (20..=512).contains(n))
+                    .unwrap_or(80) as u16;
                 self.active.insert(session_id.clone(), identity.clone());
                 self.rejected.remove(&session_id);
                 let mut updates = vec![StreamViewUpdate::Snapshot {
                     identity: identity.clone(),
                     bytes,
                     cursor,
+                    rows,
+                    cols,
                 }];
                 for bytes in self.buffered.remove(&session_id).unwrap_or_default() {
                     updates.push(StreamViewUpdate::Output {
@@ -497,12 +511,16 @@ impl NativeTerminalStreamBridge {
                     identity,
                     mut bytes,
                     cursor,
+                    rows,
+                    cols,
                 } => {
                     if remaining == 0 {
                         self.ready_updates.push_front(StreamViewUpdate::Snapshot {
                             identity,
                             bytes,
                             cursor,
+                            rows,
+                            cols,
                         });
                         break;
                     }
@@ -519,6 +537,8 @@ impl NativeTerminalStreamBridge {
                             identity,
                             bytes,
                             cursor: first_cursor,
+                            rows,
+                            cols,
                         });
                     } else {
                         remaining -= bytes.len();
@@ -526,6 +546,8 @@ impl NativeTerminalStreamBridge {
                             identity,
                             bytes,
                             cursor,
+                            rows,
+                            cols,
                         });
                     }
                 }
@@ -617,6 +639,38 @@ mod subscription_tests {
         assert!(matches!(&updates[1], StreamViewUpdate::Output { bytes, .. } if bytes==b"new"));
         assert!(sessions.active("pty-1", "ws-1", "tab-1"));
         assert!(!sessions.active("pty-1", "wrong-worktree", "tab-1"));
+    }
+
+    #[test]
+    fn native_observation_retains_host_snapshot_geometry_for_vt_replay() {
+        let mut sessions = StreamSubscriptions::default();
+        sessions.pending.insert(
+            21,
+            StreamSessionIdentity {
+                session_id: "pty-1".into(),
+                workspace_id: "ws-1".into(),
+                tab_id: "tab-1".into(),
+                lease_id: "lease-1".into(),
+            },
+        );
+        let updates = sessions.process(StreamEvent::Response {
+            request_id: 21,
+            ok: true,
+            payload: json!({
+                "created": false, "running": true, "outputCursor": 52,
+                "snapshotBase64": "YWJj", "snapshotRows": 32, "snapshotCols": 44,
+            }),
+            error: None,
+        });
+        assert!(matches!(
+            updates.first(),
+            Some(StreamViewUpdate::Snapshot {
+                rows: 32,
+                cols: 44,
+                cursor: 52,
+                ..
+            })
+        ));
     }
 
     #[test]

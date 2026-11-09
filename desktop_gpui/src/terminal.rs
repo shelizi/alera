@@ -1237,10 +1237,21 @@ impl Default for TerminalPollCadence {
 
 impl TerminalPollCadence {
     pub const WAKE_INTERVAL: Duration = Duration::from_millis(50);
+    /// Native Host push frames should be rendered on the next display frame,
+    /// without spinning a 16ms timer when terminal is hidden or disconnected.
+    const VISIBLE_STREAM_INTERVAL: Duration = Duration::from_millis(16);
     const FAST_INTERVAL: Duration = Duration::from_millis(100);
     const IDLE_INTERVAL: Duration = Duration::from_millis(350);
     const HIDDEN_INTERVAL: Duration = Duration::from_millis(1500);
     const ACTIVITY_WINDOW: Duration = Duration::from_secs(3);
+
+    pub fn wake_interval(stream_active: bool, terminal_visible: bool) -> Duration {
+        if stream_active && terminal_visible {
+            Self::VISIBLE_STREAM_INTERVAL
+        } else {
+            Self::WAKE_INTERVAL
+        }
+    }
 
     pub fn new(now: Instant) -> Self {
         Self {
@@ -1272,6 +1283,22 @@ impl TerminalPollCadence {
 #[cfg(test)]
 mod terminal_poll_cadence_tests {
     use super::*;
+
+    #[test]
+    fn pushed_output_has_frame_rate_wakeup_only_in_visible_terminal() {
+        assert_eq!(
+            TerminalPollCadence::wake_interval(true, true),
+            Duration::from_millis(16)
+        );
+        assert_eq!(
+            TerminalPollCadence::wake_interval(true, false),
+            TerminalPollCadence::WAKE_INTERVAL
+        );
+        assert_eq!(
+            TerminalPollCadence::wake_interval(false, true),
+            TerminalPollCadence::WAKE_INTERVAL
+        );
+    }
 
     #[test]
     fn foreground_output_is_fast_only_during_activity_and_background_is_throttled() {
@@ -1402,13 +1429,17 @@ impl TerminalDock {
         workspace_id: &str,
         tab_id: &str,
         output_cursor: u64,
+        rows: u16,
+        cols: u16,
         bytes: &[u8],
     ) -> bool {
         let Some(tab) = self.live_stream_tab_mut(session_id, workspace_id, tab_id) else {
             return false;
         };
         tab.output.clear();
-        tab.screen.reset();
+        // Use the original PTY dimensions before replaying absolute cursor
+        // moves/hard wraps. This changes only local VT preview geometry.
+        tab.screen = VtScreen::new(rows, cols);
         tab.decoder = TextDecoder::default();
         tab.stream_utf8_pending.clear();
         tab.parse_budget = TerminalParseBudget::default();
@@ -2150,7 +2181,15 @@ mod tests {
         let mut dock = TerminalDock::for_workspace(3);
         assert!(dock.apply_session_list(3, vec![session("pty-1")]));
         assert!(dock.open("pty-1"));
-        assert!(dock.apply_stream_snapshot("pty-1", "workspace-1", "tab-pty-1", 120, b"hello\n"));
+        assert!(dock.apply_stream_snapshot(
+            "pty-1",
+            "workspace-1",
+            "tab-pty-1",
+            120,
+            24,
+            80,
+            b"hello\n"
+        ));
         let unicode = "貓".as_bytes();
         assert!(dock.apply_stream_output("pty-1", "workspace-1", "tab-pty-1", &unicode[..1]));
         assert!(dock.apply_stream_output("pty-1", "workspace-1", "tab-pty-1", &unicode[1..]));
@@ -2160,8 +2199,35 @@ mod tests {
         let before = dock.active().unwrap().output.clone();
         assert!(!dock.apply_stream_output("pty-1", "other-worktree", "tab-pty-1", b"stale"));
         assert_eq!(dock.active().unwrap().output, before);
-        assert!(!dock.apply_stream_snapshot("pty-1", "workspace-1", "other-tab", 999, b"wrong"));
+        assert!(!dock.apply_stream_snapshot(
+            "pty-1",
+            "workspace-1",
+            "other-tab",
+            999,
+            24,
+            80,
+            b"wrong"
+        ));
         assert_eq!(dock.active().unwrap().next_cursor, Some(123));
+    }
+
+    #[test]
+    fn host_snapshot_replays_at_original_pty_geometry_without_host_resize() {
+        let mut dock = TerminalDock::for_workspace(5);
+        assert!(dock.apply_session_list(5, vec![session("pty-1")]));
+        assert!(dock.open("pty-1"));
+        let tab = dock.active().unwrap();
+        assert_eq!(tab.screen.dimensions(), (24, 80));
+        assert!(dock.apply_stream_snapshot(
+            "pty-1",
+            "workspace-1",
+            "tab-pty-1",
+            11,
+            36,
+            44,
+            b"hello\n"
+        ));
+        assert_eq!(dock.active().unwrap().screen.dimensions(), (36, 44));
     }
 
     #[test]
@@ -2174,6 +2240,8 @@ mod tests {
             "workspace-1",
             "tab-pty-1",
             500,
+            24,
+            80,
             b"old state\n"
         ));
         assert!(dock.apply_stream_output("pty-1", "workspace-1", "tab-pty-1", b"new"));

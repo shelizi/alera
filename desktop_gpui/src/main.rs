@@ -5121,12 +5121,16 @@ impl Workbench {
                     identity,
                     bytes,
                     cursor,
+                    rows,
+                    cols,
                 } => {
                     if self.terminals.apply_stream_snapshot(
                         &identity.session_id,
                         &identity.workspace_id,
                         &identity.tab_id,
                         cursor,
+                        rows,
+                        cols,
                         &bytes,
                     ) {
                         parsed_bytes += bytes.len();
@@ -5179,18 +5183,22 @@ impl Workbench {
     }
 
     fn start_terminal_polling(&mut self, cx: &mut Context<Self>) {
-        // Foreground Host output must not wait for housekeeping (1.5s).
-        // The cadence adapts from 100ms during input/output to 350ms idle,
-        // with hidden terminals throttled back to 1.5s. No per-tab timers.
-        cx.spawn(async move |view, cx| loop {
-            cx.background_executor()
-                .timer(TerminalPollCadence::WAKE_INTERVAL)
-                .await;
-            if view
-                .update(cx, |view, cx| {
+        // Native Host push is consumed on a 16ms visible-screen frame.
+        // Legacy CLI reads retain their adaptive 100/350/1500ms rate and
+        // hidden/stream-disconnected views retain the 50ms housekeeping wake.
+        // One lifecycle-bound timer, never one timer per Terminal tab.
+        cx.spawn(async move |view, cx| {
+            let mut wake = TerminalPollCadence::WAKE_INTERVAL;
+            loop {
+                cx.background_executor().timer(wake).await;
+                let next = view.update(cx, |view, cx| {
                     view.pump_native_terminal_stream(cx);
                     let foreground = view.center_view == CenterView::Terminal
                         || view.mixed_panes.background_host_target().is_some();
+                    let next_wake = TerminalPollCadence::wake_interval(
+                        view.terminal_stream.is_some(),
+                        foreground,
+                    );
                     if (view.terminals.active_ticket().is_none()
                         && view.mixed_panes.background_host_target().is_none())
                         || !view
@@ -5198,14 +5206,16 @@ impl Workbench {
                             .is_due(Instant::now(), foreground)
                         || !view.terminal_poll.tick()
                     {
-                        return;
+                        return next_wake;
                     }
                     view.refresh_terminal_output(cx);
                     view.refresh_terminal_split_output(cx);
-                })
-                .is_err()
-            {
-                break;
+                    next_wake
+                });
+                match next {
+                    Ok(next) => wake = next,
+                    Err(_) => break,
+                }
             }
         })
         .detach();
