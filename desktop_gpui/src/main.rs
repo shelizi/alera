@@ -48,7 +48,7 @@ use alera_gpui_desktop::project_search::{ContentMatch, ProjectSearch};
 use alera_gpui_desktop::project_tree::{
     collect_project_tree_with_registered, sidebar_workspaces_for_group, ProjectTreeGroup,
 };
-use alera_gpui_desktop::runtime_bridge::RuntimeCliBridge;
+use alera_gpui_desktop::runtime_bridge::{ProjectRemovalPreview, RuntimeCliBridge};
 use alera_gpui_desktop::runtime_catalog::RuntimeCatalog;
 use alera_gpui_desktop::session::{PreviewSessionStore, TerminalLayout, TerminalLayoutTab};
 use alera_gpui_desktop::terminal::{
@@ -340,6 +340,10 @@ struct Workbench {
     runtime_catalog: Option<RuntimeCatalog>,
     runtime_catalog_error: Option<String>,
     sidebar_pending_action: Option<String>,
+    sidebar_rename_target: Option<(String, String)>,
+    sidebar_rename_input: Option<Entity<QuickOpenInput>>,
+    sidebar_selected_parent: Option<(String, String)>,
+    sidebar_project_remove_pending: Option<(String, ProjectRemovalPreview)>,
     collapsed_project_roots: HashSet<PathBuf>,
     project_tree_loading: bool,
     project_tree_request: u64,
@@ -5799,6 +5803,12 @@ impl Render for Workbench {
         let runtime_catalog = self.runtime_catalog.clone();
         let runtime_catalog_error = self.runtime_catalog_error.clone();
         let sidebar_pending_action = self.sidebar_pending_action.clone();
+        let sidebar_rename_input = self.sidebar_rename_input.clone();
+        let selected_sidebar_parent = self.sidebar_selected_parent.clone();
+        let sidebar_project_remove_id = self
+            .sidebar_project_remove_pending
+            .as_ref()
+            .map(|(id, _)| id.clone());
         let worktree_rows: Vec<_> = self
             .worktrees
             .iter()
@@ -8081,6 +8091,25 @@ impl Render for Workbench {
                                         div().text_xs().text_color(rgb(MUTED))
                                             .child("Classic RuntimeStore · synced").into_any_element()
                                     })
+                                    .child(if let Some(input) = sidebar_rename_input {
+                                        div().flex().flex_col().gap_1().p_2()
+                                            .child(div().text_xs().text_color(rgb(MUTED)).child("Rename Classic project / Workspace"))
+                                            .child(input)
+                                            .child(div().flex().gap_3()
+                                                .child(div().id("sidebar-rename-confirm").cursor_pointer().text_sm()
+                                                    .child("Save display name")
+                                                    .on_click(cx.listener(|this, _, _, cx| this.submit_sidebar_rename(cx))))
+                                                .child(div().id("sidebar-rename-cancel").cursor_pointer().text_sm()
+                                                    .child("Cancel")
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.sidebar_rename_target = None;
+                                                        this.sidebar_rename_input = None;
+                                                        cx.notify();
+                                                    }))))
+                                            .into_any_element()
+                                    } else {
+                                        div().h(px(0.0)).into_any_element()
+                                    })
                                     .child(
                                         div()
                                             .id("project-tree-scroll")
@@ -8092,6 +8121,11 @@ impl Render for Workbench {
                                                 let fold_root = group.root.clone();
                                                 let current = group.is_active;
                                                 let pinned = group.is_saved;
+                                                let menu_project_id = runtime_catalog.as_ref()
+                                                    .and_then(|catalog| catalog.projects.iter().find(|project| project.root == group.root))
+                                                    .map(|project| project.id.clone());
+                                                let project_remove_armed = menu_project_id.as_deref()
+                                                    == sidebar_project_remove_id.as_deref();
                                                 let project_context_root = group.root.clone();
                                                 let worktree_project_root = group.root.clone();
                                                 let title = runtime_catalog.as_ref()
@@ -8144,6 +8178,8 @@ impl Render for Workbench {
                                                                     }))
                                                                     .context_menu(Self::sidebar_project_context_menu(
                                                                         cx.entity().downgrade(), project_context_root, pinned,
+                                                                        menu_project_id,
+                                                                        project_remove_armed,
                                                                     )),
                                                             ),
                                                     )
@@ -8157,6 +8193,7 @@ impl Render for Workbench {
                                                         let menu_path = target.clone();
                                                         let menu_catalog = runtime_catalog.clone();
                                                         let menu_confirmation = sidebar_pending_action.clone();
+                                                        let menu_selected_parent = selected_sidebar_parent.clone();
                                                         let metadata = runtime_catalog.as_ref().and_then(|catalog|
                                                             catalog.workspaces.iter().find(|workspace| workspace.path == target)
                                                         );
@@ -8197,7 +8234,8 @@ impl Render for Workbench {
                                                             }))
                                                             .context_menu(Self::sidebar_workspace_context_menu(
                                                                 cx.entity().downgrade(), menu_root, menu_path,
-                                                                metadata.cloned(), menu_catalog, menu_confirmation, active,
+                                                                metadata.cloned(), menu_catalog, menu_confirmation,
+                                                                menu_selected_parent, active,
                                                             )))
                                                     }))
                                                     .child(if let Some(error) = error {
@@ -8926,6 +8964,10 @@ fn main() {
                             runtime_catalog: None,
                             runtime_catalog_error: None,
                             sidebar_pending_action: None,
+                            sidebar_rename_target: None,
+                            sidebar_rename_input: None,
+                            sidebar_selected_parent: None,
+                            sidebar_project_remove_pending: None,
                             project_tree_loading: false,
                             project_tree_request: 0,
                             collapsed_project_roots: HashSet::new(),

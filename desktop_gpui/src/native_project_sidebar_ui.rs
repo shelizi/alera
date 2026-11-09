@@ -124,6 +124,272 @@ impl Workbench {
         .detach();
     }
 
+    fn begin_sidebar_rename(&mut self, kind: &str, id: String, cx: &mut Context<Self>) {
+        if !matches!(kind, "project" | "workspace") {
+            return;
+        }
+        self.sidebar_rename_target = Some((kind.to_owned(), id));
+        self.sidebar_rename_input =
+            Some(cx.new(|cx| QuickOpenInput::with_placeholder("New display name…", cx)));
+        self.show_project_management = true;
+        cx.notify();
+    }
+
+    pub(super) fn submit_sidebar_rename(&mut self, cx: &mut Context<Self>) {
+        let (Some((kind, id)), Some(input)) = (
+            self.sidebar_rename_target.clone(),
+            self.sidebar_rename_input.as_ref(),
+        ) else {
+            return;
+        };
+        let name = input.read(cx).query().trim().to_owned();
+        let Some(bridge) = self.runtime_bridge.clone() else {
+            self.model
+                .set_status("Classic Host unavailable; name unchanged");
+            cx.notify();
+            return;
+        };
+        if self.worktree_busy {
+            return;
+        }
+        self.worktree_busy = true;
+        let generation = self.workspace_generation;
+        cx.spawn(async move |view, cx| {
+            let result = cx
+                .background_spawn(async move { bridge.rename_catalog_record(&kind, &id, &name) })
+                .await;
+            view.update(cx, |view, cx| {
+                if view.workspace_generation != generation {
+                    return;
+                }
+                view.worktree_busy = false;
+                match result {
+                    Ok(()) => {
+                        view.sidebar_rename_target = None;
+                        view.sidebar_rename_input = None;
+                        view.model.set_status(
+                            "Classic display name updated (Git path and branch unchanged)",
+                        );
+                        view.refresh_project_tree(cx);
+                    }
+                    Err(error) => view
+                        .model
+                        .set_status(format!("Classic rename refused: {error}")),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn select_sidebar_parent(
+        &mut self,
+        workspace_id: String,
+        project_id: String,
+        cx: &mut Context<Self>,
+    ) {
+        self.sidebar_selected_parent = Some((workspace_id, project_id));
+        self.model.set_status(
+            "Parent selected. Right-click another Workspace in the same project to attach.",
+        );
+        cx.notify();
+    }
+
+    fn change_sidebar_parent(
+        &mut self,
+        parent_id: String,
+        child_id: String,
+        link: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(bridge) = self.runtime_bridge.clone() else {
+            self.model
+                .set_status("Classic Host unavailable; parent unchanged");
+            cx.notify();
+            return;
+        };
+        if self.worktree_busy {
+            return;
+        }
+        self.worktree_busy = true;
+        let generation = self.workspace_generation;
+        cx.spawn(async move |view, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    bridge.set_workspace_parent(&parent_id, &child_id, link)
+                })
+                .await;
+            view.update(cx, |view, cx| {
+                if view.workspace_generation != generation {
+                    return;
+                }
+                view.worktree_busy = false;
+                match result {
+                    Ok(()) => {
+                        view.sidebar_selected_parent = None;
+                        view.model
+                            .set_status("Classic workspace parent relationship updated");
+                        view.refresh_project_tree(cx);
+                    }
+                    Err(error) => view
+                        .model
+                        .set_status(format!("Parent relationship rejected: {error}")),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn pin_sidebar_workspace_tree(
+        &mut self,
+        root_id: String,
+        pinned: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(catalog) = self.runtime_catalog.as_ref() else {
+            self.model
+                .set_status("Classic workspace catalog unavailable; tree not modified");
+            cx.notify();
+            return;
+        };
+        let ids = alera_gpui_desktop::runtime_catalog::workspace_family_ids(catalog, &root_id)
+            .into_iter()
+            .filter(|id| {
+                catalog
+                    .workspaces
+                    .iter()
+                    .any(|workspace| workspace.id == *id && workspace.is_pinned != pinned)
+            })
+            .collect::<Vec<_>>();
+        if ids.is_empty() {
+            self.model
+                .set_status("Workspace tree already has requested pin state");
+            cx.notify();
+            return;
+        }
+        let Some(bridge) = self.runtime_bridge.clone() else {
+            self.model
+                .set_status("Classic Host unavailable; workspace tree unchanged");
+            cx.notify();
+            return;
+        };
+        if self.worktree_busy {
+            return;
+        }
+        self.worktree_busy = true;
+        let generation = self.workspace_generation;
+        cx.spawn(async move |view, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    let mut updated = 0usize;
+                    for id in ids {
+                        if let Err(error) = bridge.set_workspace_pinned(&id, pinned) {
+                            return Err::<usize, (usize, std::io::Error)>((updated, error));
+                        }
+                        updated += 1;
+                    }
+                    Ok::<usize, (usize, std::io::Error)>(updated)
+                })
+                .await;
+            view.update(cx, |view, cx| {
+                if view.workspace_generation != generation {
+                    return;
+                }
+                view.worktree_busy = false;
+                match result {
+                    Ok(updated) => view.model.set_status(format!(
+                        "Workspace tree {}: {updated} updated",
+                        if pinned { "pinned" } else { "unpinned" }
+                    )),
+                    Err((updated, error)) => view.model.set_status(format!(
+                        "Workspace tree partially updated ({updated} saved): {error}"
+                    )),
+                }
+                view.refresh_project_tree(cx);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn forget_sidebar_project(
+        &mut self,
+        project_id: String,
+        root: PathBuf,
+        cx: &mut Context<Self>,
+    ) {
+        if self.worktree_busy
+            || self
+                .project_tree_groups
+                .iter()
+                .any(|group| group.root == root && group.is_active)
+        {
+            self.model.set_status(
+                "Cannot forget the active project or during another Worktree operation",
+            );
+            cx.notify();
+            return;
+        }
+        let Some(bridge) = self.runtime_bridge.clone() else {
+            self.model
+                .set_status("Classic Host unavailable; project registration unchanged");
+            cx.notify();
+            return;
+        };
+        let prior_preview = self
+            .sidebar_project_remove_pending
+            .as_ref()
+            .filter(|(id, _)| id == &project_id)
+            .map(|(_, impact)| impact.clone());
+        self.worktree_busy = true;
+        let generation = self.workspace_generation;
+        cx.spawn(async move |view, cx| {
+            let result = cx.background_spawn(async move {
+                if let Some(preview) = prior_preview {
+                    bridge.remove_project_record(&project_id, &root, &preview)?;
+                    Ok::<_, std::io::Error>(Ok(root))
+                } else {
+                    let impact = bridge.preview_project_removal(&project_id)?;
+                    Ok(Err((project_id, impact)))
+                }
+            }).await;
+            view.update(cx, |view, cx| {
+                if view.workspace_generation != generation { return; }
+                view.worktree_busy = false;
+                match result {
+                    Ok(Err((id, preview))) => {
+                        view.model.set_status(format!(
+                            "Project removal impact: {} workspaces, {} tabs, {} live sessions; config override {}. Right-click again to confirm.",
+                            preview.workspace_count, preview.tab_count, preview.active_session_count,
+                            if preview.has_config_override { "yes" } else { "no" },
+                        ));
+                        view.sidebar_project_remove_pending = Some((id, preview));
+                    }
+                    Ok(Ok(root)) => {
+                        view.sidebar_project_remove_pending = None;
+                        if let Some(store) = &view.session_store {
+                            let _ = store.unsave_project(&root);
+                            let _ = store.forget_recent_workspace(&root);
+                        }
+                        view.saved_projects.retain(|path| path != &root);
+                        view.recent_workspaces.retain(|path| path != &root);
+                        view.model.set_status("Classic project registration removed; Git files/branches retained");
+                        view.refresh_project_tree(cx);
+                    }
+                    Err(error) => {
+                        view.sidebar_project_remove_pending = None;
+                        view.model.set_status(format!("Project removal refused: {error}"));
+                    }
+                }
+                cx.notify();
+            }).ok();
+        }).detach();
+    }
+
     fn pin_sidebar_project(&mut self, root: &Path, cx: &mut Context<Self>) {
         let Some(store) = &self.session_store else {
             self.model.set_status("Preview favorites unavailable");
@@ -174,6 +440,8 @@ impl Workbench {
         owner: gpui::WeakEntity<Self>,
         root: PathBuf,
         pinned: bool,
+        project_id: Option<String>,
+        remove_armed: bool,
     ) -> impl Fn(
         gpui_kit::component::menu::PopupMenu,
         &mut Window,
@@ -207,6 +475,36 @@ impl Workbench {
                     });
                 }),
             );
+            if let Some(project_id) = project_id.clone() {
+                let rename_owner = owner.clone();
+                menu = menu.item(PopupMenuItem::new("Rename project…").on_click(
+                    move |_, _, cx| {
+                        let _ = rename_owner.update(cx, |view, cx| {
+                            view.begin_sidebar_rename("project", project_id.clone(), cx);
+                        });
+                    },
+                ));
+            }
+            if let Some(project_id) = project_id.clone() {
+                let remove_owner = owner.clone();
+                let remove_root = root.clone();
+                menu = menu.item(
+                    PopupMenuItem::new(if remove_armed {
+                        "Confirm forget project"
+                    } else {
+                        "Forget project…"
+                    })
+                    .on_click(move |_, _, cx| {
+                        let _ = remove_owner.update(cx, |view, cx| {
+                            view.forget_sidebar_project(
+                                project_id.clone(),
+                                remove_root.clone(),
+                                cx,
+                            );
+                        });
+                    }),
+                );
+            }
             let owner_worktree = owner.clone();
             let worktree_root = root.clone();
             menu = menu.item(
@@ -236,6 +534,7 @@ impl Workbench {
         metadata: Option<RuntimeWorkspace>,
         catalog: Option<RuntimeCatalog>,
         confirmation: Option<String>,
+        selected_parent: Option<(String, String)>,
         is_active: bool,
     ) -> impl Fn(
         gpui_kit::component::menu::PopupMenu,
@@ -264,6 +563,84 @@ impl Workbench {
             }));
             if let Some(workspace) = metadata.clone() {
                 let id = workspace.id.clone();
+                let rename_owner = owner.clone();
+                let rename_id = id.clone();
+                menu = menu.item(PopupMenuItem::new("Rename Workspace…").on_click(
+                    move |_, _, cx| {
+                        let _ = rename_owner.update(cx, |view, cx| {
+                            view.begin_sidebar_rename("workspace", rename_id.clone(), cx);
+                        });
+                    },
+                ));
+                let select_parent_owner = owner.clone();
+                let select_id = id.clone();
+                let select_project = workspace.project_id.clone();
+                menu = menu.item(
+                    PopupMenuItem::new("Use as parent").on_click(move |_, _, cx| {
+                        let _ = select_parent_owner.update(cx, |view, cx| {
+                            view.select_sidebar_parent(
+                                select_id.clone(),
+                                select_project.clone(),
+                                cx,
+                            );
+                        });
+                    }),
+                );
+                if let Some(parent_id) = workspace.parent_workspace_id.clone() {
+                    let detach_owner = owner.clone();
+                    let child = id.clone();
+                    menu = menu.item(PopupMenuItem::new("Detach parent").on_click(
+                        move |_, _, cx| {
+                            let _ = detach_owner.update(cx, |view, cx| {
+                                view.change_sidebar_parent(
+                                    parent_id.clone(),
+                                    child.clone(),
+                                    false,
+                                    cx,
+                                );
+                            });
+                        },
+                    ));
+                } else if let Some((parent_id, project_id)) = selected_parent.clone() {
+                    if project_id == workspace.project_id && parent_id != id {
+                        let attach_owner = owner.clone();
+                        let child = id.clone();
+                        menu = menu.item(PopupMenuItem::new("Attach to selected parent").on_click(
+                            move |_, _, cx| {
+                                let _ = attach_owner.update(cx, |view, cx| {
+                                    view.change_sidebar_parent(
+                                        parent_id.clone(),
+                                        child.clone(),
+                                        true,
+                                        cx,
+                                    );
+                                });
+                            },
+                        ));
+                    }
+                }
+                if catalog.as_ref().is_some_and(|catalog| {
+                    alera_gpui_desktop::runtime_catalog::workspace_family_ids(catalog, &id).len()
+                        > 1
+                }) {
+                    for pinned in [true, false] {
+                        let tree_owner = owner.clone();
+                        let root_id = id.clone();
+                        menu = menu.item(
+                            PopupMenuItem::new(if pinned {
+                                "Pin workspace tree"
+                            } else {
+                                "Unpin workspace tree"
+                            })
+                            .on_click(move |_, _, cx| {
+                                let _ = tree_owner.update(cx, |view, cx| {
+                                    view.pin_sidebar_workspace_tree(root_id.clone(), pinned, cx);
+                                });
+                            }),
+                        );
+                    }
+                }
+
                 for (label, action) in [
                     (
                         if workspace.is_pinned {

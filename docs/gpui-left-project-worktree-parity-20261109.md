@@ -13,6 +13,15 @@
 - Keep the old source worktree uncommitted/untouched; the mainline integration branch must receive only validated, scoped commits after checks.
 - This is **code integration**, not a claim of Windows visual testing or full feature parity.
 
+## GPUI mainline continuation: rename, workspace trees and guarded project removal
+
+- Ported project/workspace **rename display name** actions into GPUI Kit right-click menus using existing Classic `project rename` and `workspace rename` CLI / RuntimeStore. The native input is a lightweight rename field, not an alternative global Settings UI. Neither Git branch nor project path is renamed.
+- Ported parent selection, attach within one project, and detach from a workspace. Host rejects invalid/cyclic relations; the hierarchical Native tree refreshes after success.
+- Added `Pin workspace tree` and `Unpin workspace tree` across registered same-project descendants, skipping already matching rows and explicitly reporting partial-update counts if a later Host call fails. These multiple writes are **not atomic**.
+- Added two-stage `Forget project…` via existing `project.remove.preview` and `RuntimeCliBridge::remove_project_record`. Native refuses the active project; the bridge independently rejects linked Git Worktrees, live sessions and stale impact previews. Source files and Git branches are kept.
+- The mainline shared Classic/GPUI settings Core, settings modal, Git favorites and Terminal/Editor implementation remain unchanged.
+- Checks: Native GPUI `cargo check` passed after these changes; the 349/349 Native library suite passed before the final project removal menu, which is also covered by the subsequent native compilation check. A full Windows GUI acceptance remains pending.
+
 ## Scope and baseline
 
 - Working tree: `.worktrees/fix-gpui-smoke-navigation-terminal-20261108` (no recent MCP activity at selection time).
