@@ -24,30 +24,98 @@ bool workspaceExplorerWatcherTouchesSearch({
 
 extension _WorkspaceExplorerWatcher on _WorkspaceExplorerState {
   Future<void> _startNativeWatcher() async {
+    if (!mounted || _watcherHandle != null) return;
+    final generation = _watcherGeneration;
+    final workspacePath = widget.workspace.path;
     try {
       final handle = await _workspaceFiles.startExplorerWatcher(
-        workspacePath: widget.workspace.path,
+        workspacePath: workspacePath,
       );
-      if (!mounted) {
+      if (!mounted ||
+          generation != _watcherGeneration ||
+          widget.workspace.path != workspacePath) {
         await _workspaceFiles.stopExplorerWatcher(handle: handle);
         return;
       }
       _watcherHandle = handle;
       _watchSubscription = _workspaceFiles
           .watchExplorerEvents(handle: handle)
-          .listen(_scheduleWatchedRefresh, onError: (_) {});
+          .listen(
+            (batch) {
+              if (mounted && generation == _watcherGeneration) {
+                _scheduleWatchedRefresh(batch);
+              }
+            },
+            onError: (Object _) => _scheduleWatcherRecovery(generation),
+            onDone: () => _scheduleWatcherRecovery(generation),
+          );
       await _syncWatchedDirectories();
+      if (generation == _watcherGeneration && _watcherRetryTimer == null) {
+        _watcherFailureCount = 0;
+      }
     } catch (_) {
-      // File watching is best-effort; manual refresh remains available.
+      _scheduleWatcherRecovery(generation);
     }
   }
 
-  Future<void> _stopNativeWatcher() async {
+  /// OS watcher overflow, failed startup or a closed event stream may leave
+  /// Explorer rows and Quick Open stale. Reconcile immediately, then reattach.
+  void _scheduleWatcherRecovery(int generation) {
+    if (!mounted ||
+        generation != _watcherGeneration ||
+        _watcherRetryTimer != null ||
+        _watcherRecoveryInFlight) {
+      return;
+    }
+    _workspaceFiles.scheduleQuickOpenRefresh(
+      workspacePath: widget.workspace.path,
+      debounce: const Duration(milliseconds: 120),
+    );
+    _pendingWatchedDirectories.add('');
+    if (!_watchRefreshInFlight) {
+      _watchRefreshInFlight = true;
+      unawaited(_drainWatchedRefreshes());
+    }
+    final exponent = _watcherFailureCount.clamp(0, 4);
+    _watcherFailureCount += 1;
+    _watcherRetryTimer = Timer(
+      Duration(milliseconds: 300 * (1 << exponent)),
+      () {
+        _watcherRetryTimer = null;
+        if (mounted && generation == _watcherGeneration) {
+          unawaited(_restartNativeWatcher(generation));
+        }
+      },
+    );
+  }
+
+  Future<void> _restartNativeWatcher(int generation) async {
+    if (!mounted ||
+        generation != _watcherGeneration ||
+        _watcherRecoveryInFlight) {
+      return;
+    }
+    _watcherRecoveryInFlight = true;
+    final workspacePath = widget.workspace.path;
+    try {
+      await _stopNativeWatcher(discardPending: false);
+    } finally {
+      _watcherRecoveryInFlight = false;
+    }
+    if (mounted && widget.workspace.path == workspacePath) {
+      await _startNativeWatcher();
+    }
+  }
+
+  Future<void> _stopNativeWatcher({bool discardPending = true}) async {
+    _watcherGeneration += 1;
+    _watcherRetryTimer?.cancel();
+    _watcherRetryTimer = null;
     final subscription = _watchSubscription;
     final handle = _watcherHandle;
     _watchSubscription = null;
     _watcherHandle = null;
-    _pendingWatchedDirectories.clear();
+    if (discardPending) _pendingWatchedDirectories.clear();
     _lastSyncedWatchedDirectories = null;
     await subscription?.cancel();
     if (handle != null) {
@@ -75,7 +143,7 @@ extension _WorkspaceExplorerWatcher on _WorkspaceExplorerState {
       );
     } catch (_) {
       _lastSyncedWatchedDirectories = null;
-      // File watching is best-effort; explicit refresh still works.
+      _scheduleWatcherRecovery(_watcherGeneration);
     }
   }
 

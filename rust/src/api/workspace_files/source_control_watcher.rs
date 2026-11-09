@@ -1,4 +1,5 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread;
@@ -16,6 +17,75 @@ use super::{
 const WATCH_DEBOUNCE_MILLIS: u64 = 90;
 const WATCH_MAX_BATCH_MILLIS: u64 = 350;
 const WATCH_IDLE_POLL_MILLIS: u64 = 100;
+
+#[derive(Debug, Clone)]
+struct LinkedGitMetadata {
+    private_dir: PathBuf,
+    common_dir: PathBuf,
+}
+
+// For linked worktrees, HEAD and index live outside the workspace root.
+fn linked_git_metadata(root: &Path) -> Option<LinkedGitMetadata> {
+    let pointer = std::fs::read_to_string(root.join(".git")).ok()?;
+    let git_dir = pointer
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("gitdir:").map(str::trim))?;
+    let private_dir = canonical_git_directory(root, git_dir)?;
+    let common_dir = match std::fs::read_to_string(private_dir.join("commondir")) {
+        Ok(common) if !common.trim().is_empty() => {
+            canonical_git_directory(&private_dir, common.trim())?
+        }
+        _ => private_dir.clone(),
+    };
+    Some(LinkedGitMetadata {
+        private_dir,
+        common_dir,
+    })
+}
+
+fn canonical_git_directory(base: &Path, value: &str) -> Option<PathBuf> {
+    let candidate = Path::new(value);
+    let candidate = if candidate.is_absolute() {
+        candidate.to_path_buf()
+    } else {
+        base.join(candidate)
+    };
+    let path = dunce::canonicalize(candidate).ok()?;
+    path.is_dir().then_some(path)
+}
+
+// Avoid recursively watching the noisy Git object database.
+fn watch_linked_git_metadata(
+    watcher: &mut notify::RecommendedWatcher,
+    metadata: &LinkedGitMetadata,
+) -> notify::Result<()> {
+    let mut watched = HashSet::<PathBuf>::new();
+    for dir in [&metadata.private_dir, &metadata.common_dir] {
+        if watched.insert(dir.clone()) {
+            watcher.watch(dir, RecursiveMode::NonRecursive)?;
+        }
+    }
+    for dir in [
+        metadata.private_dir.join("refs"),
+        metadata.common_dir.join("refs"),
+    ] {
+        if dir.is_dir() && watched.insert(dir.clone()) {
+            watcher.watch(&dir, RecursiveMode::Recursive)?;
+        }
+    }
+    Ok(())
+}
+
+fn metadata_path_is_relevant(metadata_root: &Path, path: &Path) -> bool {
+    let Ok(relative) = path.strip_prefix(metadata_root) else {
+        return false;
+    };
+    let first = relative
+        .components()
+        .next()
+        .and_then(|part| part.as_os_str().to_str());
+    !matches!(first, Some("objects" | "logs" | "hooks" | "info" | "lfs"))
+}
 
 static NEXT_WATCHER_ID: AtomicU64 = AtomicU64::new(1);
 static WATCHERS: OnceLock<Mutex<HashMap<String, SourceControlWatcherSession>>> = OnceLock::new();
@@ -47,10 +117,12 @@ pub(super) fn start_source_control_watcher(
     let (shutdown_tx, shutdown_rx) = mpsc::channel::<()>();
     let sink = Arc::new(Mutex::new(None));
     let event_root = root.clone();
+    let metadata = linked_git_metadata(&root);
+    let event_metadata = metadata.clone();
     let mut watcher = notify::recommended_watcher(move |result: notify::Result<notify::Event>| {
         if result
             .as_ref()
-            .is_ok_and(|event| !event_is_relevant(&event_root, event))
+            .is_ok_and(|event| !event_is_relevant(&event_root, event_metadata.as_ref(), event))
         {
             return;
         }
@@ -62,6 +134,10 @@ pub(super) fn start_source_control_watcher(
     watcher
         .watch(&root, RecursiveMode::Recursive)
         .map_err(notify_error)?;
+    // Linked worktree metadata and shared refs are outside the watched root.
+    if let Some(metadata) = metadata.as_ref() {
+        watch_linked_git_metadata(&mut watcher, metadata).map_err(notify_error)?;
+    }
 
     let thread_sink = sink.clone();
     let thread = thread::Builder::new()
@@ -84,11 +160,20 @@ pub(super) fn start_source_control_watcher(
     Ok(SourceControlWatcherHandle { id })
 }
 
-fn event_is_relevant(root: &std::path::Path, event: &notify::Event) -> bool {
-    event
-        .paths
-        .iter()
-        .any(|path| path_is_relevant(root, path.as_path()))
+fn event_is_relevant(
+    root: &Path,
+    metadata: Option<&LinkedGitMetadata>,
+    event: &notify::Event,
+) -> bool {
+    // Unknown/overflow events must always trigger a status reconciliation.
+    event.paths.is_empty()
+        || event.paths.iter().any(|path| {
+            path_is_relevant(root, path)
+                || metadata.is_some_and(|git| {
+                    metadata_path_is_relevant(&git.private_dir, path)
+                        || metadata_path_is_relevant(&git.common_dir, path)
+                })
+        })
 }
 
 fn path_is_relevant(root: &std::path::Path, path: &std::path::Path) -> bool {
@@ -111,9 +196,11 @@ fn path_is_relevant(root: &std::path::Path, path: &std::path::Path) -> bool {
     if first != ".git" {
         return true;
     }
-    matches!(
+    // Merge/rebase markers, index locks and refs affect repository state too.
+    // Ignore only noisy object/log storage rather than a fragile allowlist.
+    !matches!(
         components.get(1).copied(),
-        None | Some("HEAD" | "index" | "packed-refs" | "config" | "refs" | "worktrees")
+        Some("objects" | "logs" | "hooks" | "info" | "lfs")
     )
 }
 
@@ -195,19 +282,14 @@ fn collect_signal(
             break;
         }
         match event_rx.recv_timeout(remaining.min(Duration::from_millis(WATCH_DEBOUNCE_MILLIS))) {
-            Ok(result) => {
-                if result.is_ok() {
-                    coalesced_event_count = coalesced_event_count.saturating_add(1);
-                }
+            Ok(_) => {
+                coalesced_event_count = coalesced_event_count.saturating_add(1);
             }
             Err(mpsc::RecvTimeoutError::Timeout) => break,
             Err(mpsc::RecvTimeoutError::Disconnected) => return CollectOutcome::Shutdown,
         }
     }
 
-    if coalesced_event_count == 0 {
-        return CollectOutcome::Idle;
-    }
     CollectOutcome::Signal(SourceControlWatchSignal {
         coalesced_event_count,
     })
@@ -249,6 +331,99 @@ mod tests {
         )))
     }
 
+    #[test]
+    fn linked_worktree_metadata_resolves_private_and_shared_git_dirs() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("checkout");
+        let common = temp.path().join("original").join(".git");
+        let private = common.join("worktrees").join("checkout");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&private).unwrap();
+        std::fs::write(
+            root.join(".git"),
+            "gitdir: ../original/.git/worktrees/checkout\n",
+        )
+        .unwrap();
+        std::fs::write(private.join("commondir"), "../..\n").unwrap();
+        let metadata = linked_git_metadata(&root).expect("linked worktree metadata");
+        assert_eq!(metadata.private_dir, dunce::canonicalize(&private).unwrap());
+        assert_eq!(metadata.common_dir, dunce::canonicalize(&common).unwrap());
+
+        let event = |path: &Path| Event::new(EventKind::Any).add_path(path.to_path_buf());
+        for path in [
+            private.join("HEAD"),
+            private.join("index"),
+            common.join("packed-refs"),
+            common.join("refs").join("heads").join("main"),
+        ] {
+            assert!(
+                event_is_relevant(&root, Some(&metadata), &event(&path)),
+                "{path:?}"
+            );
+        }
+        assert!(!event_is_relevant(
+            &root,
+            Some(&metadata),
+            &event(&common.join("objects").join("00").join("ab"))
+        ));
+    }
+
+    #[test]
+    fn linked_worktree_index_change_triggers_real_os_notification() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("checkout");
+        let common = temp.path().join("repo").join(".git");
+        let private = common.join("worktrees").join("checkout");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&private).unwrap();
+        std::fs::create_dir_all(common.join("refs")).unwrap();
+        std::fs::write(
+            root.join(".git"),
+            "gitdir: ../repo/.git/worktrees/checkout\n",
+        )
+        .unwrap();
+        std::fs::write(private.join("commondir"), "../..\n").unwrap();
+        let metadata = linked_git_metadata(&root).unwrap();
+        let (tx, rx) = mpsc::channel();
+        let _watcher = {
+            let metadata_for_event = metadata.clone();
+            let root_for_event = root.clone();
+            let mut watcher = notify::recommended_watcher(move |event: notify::Result<Event>| {
+                if let Ok(event) = event {
+                    if event_is_relevant(&root_for_event, Some(&metadata_for_event), &event) {
+                        let _ = tx.send(event);
+                    }
+                }
+            })
+            .unwrap();
+            watcher.watch(&root, RecursiveMode::Recursive).unwrap();
+            watch_linked_git_metadata(&mut watcher, &metadata).unwrap();
+            watcher
+        };
+        std::fs::write(private.join("index"), b"new index").unwrap();
+        let deadline = Instant::now() + Duration::from_secs(4);
+        let mut observed = false;
+        while Instant::now() < deadline {
+            let timeout = deadline.saturating_duration_since(Instant::now());
+            match rx.recv_timeout(timeout) {
+                Ok(event)
+                    if event
+                        .paths
+                        .iter()
+                        .any(|path| path == &private.join("index")) =>
+                {
+                    observed = true;
+                    break;
+                }
+                Ok(_) => {}
+                Err(_) => break,
+            }
+        }
+        assert!(
+            observed,
+            "linked worktree index did not emit a filesystem event"
+        );
+    }
     #[test]
     fn coalesces_a_burst_into_one_signal() {
         let (event_tx, event_rx) = mpsc::channel::<notify::Result<Event>>();
@@ -309,11 +484,25 @@ mod tests {
             ..Event::new(EventKind::Any)
         };
 
-        assert!(!event_is_relevant(&root, &event(".dart_tool/cache")));
-        assert!(!event_is_relevant(&root, &event("app/node_modules/pkg")));
-        assert!(!event_is_relevant(&root, &event(".git/objects/aa/bb")));
-        assert!(event_is_relevant(&root, &event("lib/main.dart")));
-        assert!(event_is_relevant(&root, &event(".git/index")));
-        assert!(event_is_relevant(&root, &event(".git/refs/heads/main")));
+        assert!(!event_is_relevant(&root, None, &event(".dart_tool/cache")));
+        assert!(!event_is_relevant(
+            &root,
+            None,
+            &event("app/node_modules/pkg")
+        ));
+        assert!(!event_is_relevant(
+            &root,
+            None,
+            &event(".git/objects/aa/bb")
+        ));
+        assert!(event_is_relevant(&root, None, &event("lib/main.dart")));
+        assert!(event_is_relevant(&root, None, &event(".git/index")));
+        assert!(event_is_relevant(&root, None, &event(".git/MERGE_HEAD")));
+        assert!(event_is_relevant(&root, None, &event(".git/index.lock")));
+        assert!(event_is_relevant(
+            &root,
+            None,
+            &event(".git/refs/heads/main")
+        ));
     }
 }

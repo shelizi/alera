@@ -85,6 +85,10 @@ class WorkspaceSourceControlController
   StreamSubscription<native.SourceControlWatchSignal>? _watchSubscription;
   native.SourceControlWatcherHandle? _watcherHandle;
   Timer? _watcherReloadDebounceTimer;
+  Timer? _watcherRestartTimer;
+  int _watcherRestartFailures = 0;
+  bool _watcherStarting = false;
+  bool _watcherRecovering = false;
   DateTime? _watcherReloadNotBefore;
   bool _watcherReloadInFlight = false;
   bool _watcherReloadQueued = false;
@@ -462,9 +466,14 @@ class WorkspaceSourceControlController
 
   Future<void> _startWatching() async {
     final watcher = _watcher;
-    if (watcher == null) {
+    if (_disposed ||
+        watcher == null ||
+        _watcherStarting ||
+        _watcherRecovering ||
+        _watcherHandle != null) {
       return;
     }
+    _watcherStarting = true;
     try {
       final handle = await watcher.start(workspacePath: workspacePath);
       if (_disposed) {
@@ -476,12 +485,57 @@ class WorkspaceSourceControlController
           .events(handle: handle)
           .listen(
             (_) => _scheduleWatcherReload(),
-            onError: (_) => _scheduleWatcherReload(),
-            onDone: _scheduleWatcherReload,
+            onError: (Object _) => _recoverWatcher(),
+            onDone: _recoverWatcher,
           );
+      // The source may have changed while the watcher was unavailable.
+      final recovered = _watcherRestartFailures > 0;
+      _watcherRestartFailures = 0;
+      _watcherRestartTimer?.cancel();
+      _watcherRestartTimer = null;
+      if (recovered) _scheduleWatcherReload();
     } catch (_) {
-      // File watching is best-effort; explicit refresh still works.
+      _scheduleWatcherRestart();
+    } finally {
+      _watcherStarting = false;
     }
+  }
+
+  void _recoverWatcher() {
+    if (_disposed || _watcherRecovering) return;
+    _watcherRecovering = true;
+    // A missed native event is possible; reconcile before reconnecting.
+    _scheduleWatcherReload();
+    final subscription = _watchSubscription;
+    _watchSubscription = null;
+    final handle = _watcherHandle;
+    _watcherHandle = null;
+    final watcher = _watcher;
+    unawaited(() async {
+      try {
+        await subscription?.cancel();
+      } catch (_) {}
+      try {
+        if (handle != null && watcher != null) {
+          await watcher.stop(handle: handle);
+        }
+      } catch (_) {}
+      _watcherRecovering = false;
+      _scheduleWatcherRestart();
+    }());
+  }
+
+  void _scheduleWatcherRestart() {
+    if (_disposed || _watcherRestartTimer != null) return;
+    final exponent = _watcherRestartFailures.clamp(0, 4);
+    _watcherRestartFailures += 1;
+    _watcherRestartTimer = Timer(
+      Duration(milliseconds: 300 * (1 << exponent)),
+      () {
+        _watcherRestartTimer = null;
+        if (!_disposed) unawaited(_startWatching());
+      },
+    );
   }
 
   void _stopWatching() {
@@ -490,6 +544,8 @@ class WorkspaceSourceControlController
     _watcherReloadNotBefore = null;
     _watcherReloadDebounceTimer?.cancel();
     _watcherReloadDebounceTimer = null;
+    _watcherRestartTimer?.cancel();
+    _watcherRestartTimer = null;
     final subscription = _watchSubscription;
     _watchSubscription = null;
     unawaited(subscription?.cancel());

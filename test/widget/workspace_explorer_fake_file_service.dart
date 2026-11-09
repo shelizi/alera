@@ -32,8 +32,12 @@ class _FakeWorkspaceFileService({
     quickOpenRefreshRequests.add(workspacePath);
   }
 
-  final StreamController<native.WorkspaceExplorerWatchBatch> _watchController =
+  StreamController<native.WorkspaceExplorerWatchBatch> _watchController =
       StreamController<native.WorkspaceExplorerWatchBatch>.broadcast();
+  bool get hasExplorerWatchSubscriber => _watchController.hasListener;
+  int explorerWatcherStarts = 0;
+  int explorerWatcherStops = 0;
+  Future<void> closeExplorerWatchStream() => _watchController.close();
   final Map<String, List<native.WorkspaceFileEntry>> childrenByDirectory =
       <String, List<native.WorkspaceFileEntry>>{};
   final Map<String, Map<String, List<native.WorkspaceFileEntry>>>
@@ -289,6 +293,11 @@ class _FakeWorkspaceFileService({
   Future<native.WorkspaceExplorerWatcherHandle> startExplorerWatcher({
     required String workspacePath,
   }) async {
+    explorerWatcherStarts++;
+    if (_watchController.isClosed) {
+      _watchController =
+          StreamController<native.WorkspaceExplorerWatchBatch>.broadcast();
+    }
     return const native.WorkspaceExplorerWatcherHandle(id: 'watcher-1');
   }
 
@@ -311,6 +320,7 @@ class _FakeWorkspaceFileService({
   Future<void> stopExplorerWatcher({
     required native.WorkspaceExplorerWatcherHandle handle,
   }) async {
+    explorerWatcherStops++;
     await stopGate?.future;
   }
 

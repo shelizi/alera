@@ -201,6 +201,7 @@ fn event_loop(
         let mut coalesced_event_count = 1;
         let deadline = Instant::now() + Duration::from_millis(WATCH_MAX_BATCH_MILLIS);
         match first_event {
+            Ok(event) if event.paths.is_empty() => events.push(event.add_path(root.clone())),
             Ok(event) => events.push(event),
             Err(_) => {
                 events.push(notify::Event::new(notify::EventKind::Any).add_path(root.clone()))
@@ -220,6 +221,9 @@ fn event_loop(
                 Ok(result) => {
                     coalesced_event_count += 1;
                     match result {
+                        Ok(event) if event.paths.is_empty() => {
+                            events.push(event.add_path(root.clone()))
+                        }
                         Ok(event) => events.push(event),
                         Err(_) => events.push(
                             notify::Event::new(notify::EventKind::Any).add_path(root.clone()),
@@ -330,6 +334,54 @@ mod tests {
     use super::*;
     use notify::{Event, EventKind};
 
+    #[test]
+    fn native_file_creation_notifies_loaded_directory() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        let root = workspace.path().to_path_buf();
+        let watched = Arc::new(Mutex::new(HashMap::from([(String::new(), root.clone())])));
+        let (tx, rx) = mpsc::channel();
+        let mut watcher = notify::recommended_watcher(move |event: notify::Result<Event>| {
+            if let Ok(event) = event {
+                let _ = tx.send(event);
+            }
+        })
+        .unwrap();
+        watcher.watch(&root, RecursiveMode::Recursive).unwrap();
+        std::fs::write(root.join("new_file.dart"), b"hello").unwrap();
+        let deadline = Instant::now() + Duration::from_secs(4);
+        let mut observed = false;
+        while Instant::now() < deadline {
+            match rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+                Ok(event) => {
+                    if let Some(batch) = build_batch(&root, &watched, vec![event], 1) {
+                        if batch.directory_relative_paths.contains(&String::new())
+                            && batch
+                                .changed_relative_paths
+                                .contains(&"new_file.dart".to_string())
+                        {
+                            observed = true;
+                            break;
+                        }
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+        assert!(observed, "native watch did not report a newly created file");
+    }
+
+    #[test]
+    fn native_watch_overflow_requests_root_reconciliation() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        let watched = Arc::new(Mutex::new(HashMap::from([(
+            String::new(),
+            workspace.path().to_path_buf(),
+        )])));
+        let error_fallback = Event::new(EventKind::Any).add_path(workspace.path().to_path_buf());
+        let batch = build_batch(workspace.path(), &watched, vec![error_fallback], 1)
+            .expect("root refresh after watcher overflow");
+        assert_eq!(batch.directory_relative_paths, vec![String::new()]);
+    }
     #[test]
     fn recursive_event_from_unloaded_subfolder_updates_search_only() {
         let workspace = tempfile::tempdir().expect("workspace");
