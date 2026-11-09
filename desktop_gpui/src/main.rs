@@ -44,7 +44,8 @@ use alera_gpui_desktop::runtime_bridge::RuntimeCliBridge;
 use alera_gpui_desktop::session::{PreviewSessionStore, TerminalLayout, TerminalLayoutTab};
 use alera_gpui_desktop::terminal::{
     encode_terminal_key, estimate_terminal_viewport, raw_key_reply_may_drain,
-    select_registered_host_workspace, TerminalAutoResizeGate, TerminalCreateFlow,
+    select_registered_host_workspace, terminal_ime_anchor_px, TerminalAutoResizeGate,
+    TerminalCreateFlow,
     TerminalCreateTick, TerminalDock, TerminalLineSelection, TerminalPollCadence, TerminalPollGate,
     TerminalTabContextTarget, TerminalViewMode, TerminalViewportProposal, HOST_SESSION_LIST_SCOPE,
 };
@@ -5697,6 +5698,30 @@ impl Render for Workbench {
         let split_height = mixed_has_secondary && !mixed_split_horizontal;
         let primary_width = content_width / if split_width { 2.0 } else { 1.0 };
         let primary_height = content_height / if split_height { 2.0 } else { 1.0 };
+        // Keep Windows Zhuyin candidate popups beside the visible VT cursor.
+        // The 1px GPUI TextInput still captures composition; only its local
+        // visual anchor moves, without altering Host PTY geometry.
+        let primary_ime_anchor = primary_terminal
+            .and_then(|tab| {
+                terminal_ime_anchor_px(
+                    tab.screen.cursor(),
+                    primary_width,
+                    primary_height,
+                    terminal_font_size,
+                )
+            })
+            .unwrap_or((12.0, 8.0));
+        let secondary_ime_anchor = mixed_secondary_host
+            .as_ref()
+            .and_then(|target| self.terminals.index_for_context(target))
+            .and_then(|index| self.terminals.tabs.get(index))
+            .and_then(|tab| {
+                terminal_ime_anchor_px(
+                    tab.screen.cursor(), primary_width,
+                    (primary_height - TAB_STRIP_HEIGHT).max(24.0), terminal_font_size,
+                )
+            })
+            .unwrap_or((12.0, 8.0));
         let mut proposed_viewports = Vec::new();
         if self.settings_section.is_none() && !center_is_editor {
             if let Some((target, tab)) = current_primary_host.as_ref().zip(primary_terminal) {
@@ -7341,6 +7366,7 @@ impl Render for Workbench {
                                             .child(if terminal_is_vt {
                                         div()
                                             .id("terminal-colored-grid")
+                                            .relative()
                                             .key_context("AleraGpuiTerminalRaw")
                                             .track_focus(&terminal_keyboard_focus)
                                             .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, window, cx| {
@@ -7379,7 +7405,13 @@ impl Render for Workbench {
                                             .font_family("JetBrains Mono")
                                             .text_size(px(terminal_font_size))
                                             .whitespace_nowrap()
-                                            .child(terminal_input.clone())
+                                            .child(div()
+                                                .absolute()
+                                                .left(px(primary_ime_anchor.0))
+                                                .top(px(primary_ime_anchor.1))
+                                                .w(px(1.0))
+                                                .h(px(1.0))
+                                                .child(terminal_input.clone()))
                                             .children(terminal_screen_rows.into_iter().enumerate().map(
                                                 |(row_index, row)| {
                                                     let selected = terminal_selected_rows.get(row_index).copied().unwrap_or(false);
@@ -7613,6 +7645,7 @@ impl Render for Workbench {
                                             } else {
                                                 div()
                                                     .id("mixed-secondary-content")
+                                                    .relative()
                                                     .flex_1()
                                                     .min_h_0()
                                                     .key_context("AleraGpuiTerminalRaw")
@@ -7656,7 +7689,13 @@ impl Render for Workbench {
                                                     .p_3()
                                                     .font_family("JetBrains Mono")
                                                     .text_size(px(terminal_font_size))
-                                                    .child(secondary_terminal_input)
+                                                    .child(div()
+                                                        .absolute()
+                                                        .left(px(secondary_ime_anchor.0))
+                                                        .top(px(secondary_ime_anchor.1))
+                                                        .w(px(1.0))
+                                                        .h(px(1.0))
+                                                        .child(secondary_terminal_input))
                                                     .child(if let Some(rows) = mixed_secondary_vt_rows {
                                                         div()
                                                             .id("mixed-secondary-colored-grid")

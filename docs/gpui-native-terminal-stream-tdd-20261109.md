@@ -109,3 +109,15 @@ Native 進一步執行 `cargo test --manifest-path desktop_gpui/Cargo.toml --no-
 TDD：`delayed_ime_commit_must_match_focused_pane_and_active_host_identity` 首先因缺少身份核對方法而 RED，修正後 GREEN；`transient_host_inventory_failure_preserves_preview_until_authenticated_recovery` 先 RED 再 GREEN。Windows `cargo test --manifest-path desktop_gpui/Cargo.toml --no-default-features --lib --offline --locked` 已完成、exit 0（原 320 項 + 2 項新測試）。`cargo check` 用於額外驗證 UI 實際主程式連結的可編譯性。
 
 **尚未驗收**：Windows 注音真實候選窗／兩窗格連續輸入、真正 Host 進程意外退出再恢復的 GUI 端對端流程、真實 p50/p95、長時間 TUI 壓測。這次只修改 GPUI Native 整合工作樹，不更動 Classic／正式 Host，不代表 `supported=true`，不合併、推送或發布。
+
+## 2026-11-09：隔離 GPUI GUI 雙 PTY、私有串流中斷與真實注音候選窗
+
+延伸 `desktop_gpui/tests/terminal_stream_isolated_smoke.py`：原生預覽現在預載同一測試 Host 的兩個真實 Session/Tab，而非只開一個。可選的 `--native-reconnect` 測試，依精確 **Native 子程序 PID、測試專用 CLI 執行檔路徑及臨時 Runtime 參數** 找到唯一 `terminal --no-start stream` 子程序，故意殺掉這條**私有** CLI 串流，再等待 Native 自動建立新子程序；絕不殺使用者 Host／Classic／其他執行中的 Alera。原測試 teardown 維持只回收測試 Host PID 樹。
+
+- 隔離 Host/CLI **10/10 PASS**；獨立 `tool/debug/test_runtime_host_worker_recovery.py` 真正殺掉測試專用 Host 再重啟，確認原 Worker PID 與 Shell PID 原封不動、仍可輸入及讀取。這個 Host 層整合測試**不是** GPUI Host crash/restart 的 GUI 驗收。
+- `--native-app ... --native-reconnect --hold-seconds 85`：**12/12 PASS**，實際 GPUI 視窗啟動；CLI private stream 子程序 PID 改變，兩個仍運作中的 Host PTY 未被重建。後續不帶 `--native-reconnect` 的單獨視窗測試 **11/11 PASS**。
+- 使用 Windows 桌面上的**實際注音鍵盤事件**（並非 `desktop_input.type` 的合成文字注入）確認 Explorer filter 能出現注音候選清單；Native 的 Primary Terminal 及透過 Tab 右鍵「Move to second pane」切出的 Secondary Terminal，均能呼叫注音候選窗。Secondary 以 Enter 完成候選詞選字後，中文出現在其 Shell 游標後。`desktop_input.type` 在一般 Explorer Filter 同樣沒有產生文字，不能拿該工具的文字注入失敗直接推論 Terminal 文本處理失敗。
+- 實機發現初版隱藏 1px IME input 固定在窗格內容左上角，候選清單遠離可見 Shell 游標。新增純 `terminal_ime_anchor_px`，沿用原生 VT viewport 的 JetBrains Mono 欄寬 0.62×font、列高 1.3×font 和 12/8px 內距，限制座標不超出可視窗格；雙 Pane 各從自己的 `VtScreen::cursor()` 計算定位，GPUI 使用 absolute 1px capture 而不改 Host PTY 尺寸。TDD 先 RED（缺少函式）、補齊後 GREEN，Windows `cargo check` 與獨立 Native `cargo build` 通過。
+- 新編譯的 Native 實機重驗：主窗格注音候選清單已落在可見游標旁，不再固定在頂端。第二個窄窗格也有自己的注音候選清單並能完成選字；候選清單會因螢幕邊緣改往上顯示。窗格間在*尚未選字*時切換，曾短暫同時看到兩份 IME 候選清單；選字後消失，仍值得另外驗收組字取消的焦點交接。
+
+**驗收界線**：以上成功證明測試專用 CLI stream 自動恢復、兩個真實 Host PTY 仍存在、Windows Primary/Secondary 的注音候選與提交。尚未完成 GPUI 視窗全路徑 Host 真正崩潰／重啟、不重複指令的自動恢復、IME 中途換窗的取消策略、實機 p50/p95 和更長時間 TUI 背壓。Native 仍 `supported=false`；這批變更不包含 Classic、正式 Host、main、推送或發布。

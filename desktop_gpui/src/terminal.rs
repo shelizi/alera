@@ -896,6 +896,38 @@ pub fn estimate_terminal_viewport(
     Some((columns.min(240.0) as u16, lines.min(100.0) as u16))
 }
 
+/// Position the tiny Windows IME input capture near the actual VT cursor,
+/// not at the top-left of its Terminal pane. Reuse the same JetBrains Mono
+/// metrics as Native's existing viewport estimator and clamp to the visible
+/// panel so a narrow/scrolling split cannot strand the candidate popup offscreen.
+/// The Host PTY dimensions and cursor are never changed by this calculation.
+pub fn terminal_ime_anchor_px(
+    cursor: (u16, u16),
+    panel_width_px: f32,
+    panel_height_px: f32,
+    font_px: f32,
+) -> Option<(f32, f32)> {
+    if !panel_width_px.is_finite()
+        || !panel_height_px.is_finite()
+        || !font_px.is_finite()
+        || !(8.0..=48.0).contains(&font_px)
+        || panel_width_px < 32.0
+        || panel_height_px < 24.0
+    {
+        return None;
+    }
+    let cell_width = font_px * 0.62;
+    let line_height = font_px * 1.3;
+    let visible_cols = ((panel_width_px - 24.0) / cell_width).floor().max(1.0);
+    let visible_rows = ((panel_height_px - 16.0) / line_height).floor().max(1.0);
+    let col = (cursor.1 as f32).min(visible_cols - 1.0);
+    let row = (cursor.0 as f32).min(visible_rows - 1.0);
+    Some((
+        (12.0 + col * cell_width).min(panel_width_px - 2.0),
+        (8.0 + row * line_height).min(panel_height_px - 2.0),
+    ))
+}
+
 /// A single, bounded per-Workbench debounce/coalescing gate.  Only visible
 /// Host tab identities are observed; each unique viewport is sent at most
 /// once until its dimensions change. A failed Host request is not spammed
@@ -1929,6 +1961,23 @@ impl TerminalDock {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn native_ime_candidate_anchor_tracks_vt_cursor_inside_each_visible_pane() {
+        let at_origin = terminal_ime_anchor_px((0, 0), 420.0, 470.0, 14.0).unwrap();
+        assert_eq!(at_origin, (12.0, 8.0));
+
+        let moved = terminal_ime_anchor_px((11, 20), 420.0, 470.0, 14.0).unwrap();
+        assert!((moved.0 - (12.0 + 20.0 * 14.0 * 0.62)).abs() < 0.01);
+        assert!((moved.1 - (8.0 + 11.0 * 14.0 * 1.3)).abs() < 0.01);
+
+        let narrow = terminal_ime_anchor_px((99, 239), 220.0, 180.0, 14.0).unwrap();
+        assert!(narrow.0 >= 12.0 && narrow.0 <= 218.0);
+        assert!(narrow.1 >= 8.0 && narrow.1 <= 178.0);
+        assert!(terminal_ime_anchor_px((0, 0), f32::NAN, 100.0, 14.0).is_none());
+        assert!(terminal_ime_anchor_px((0, 0), 500.0, f32::INFINITY, 14.0).is_none());
+        assert!(terminal_ime_anchor_px((0, 0), 500.0, 500.0, 0.0).is_none());
+    }
 
     #[test]
     fn terminal_auto_viewport_fits_minimum_and_bounds_dimensions() {
