@@ -781,7 +781,8 @@ mod tests {
         let classic = RuntimeStore::open(temp.path()).await.unwrap();
         let native = RuntimeStore::open(temp.path()).await.unwrap();
         let defaults = native.desktop_shared_settings_snapshot().await.unwrap();
-        assert_eq!(defaults["values"].as_object().unwrap().len(), 29);
+        assert_eq!(defaults["values"].as_object().unwrap().len(), 30);
+        assert_eq!(defaults["values"]["editor.twoRowTabs"], false);
         assert_eq!(defaults["values"]["terminal.fontFamily"], "JetBrains Mono");
         assert_eq!(defaults["values"]["editor.autosaveDelaySeconds"], 1);
         assert_eq!(

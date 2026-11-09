@@ -2252,6 +2252,16 @@ mod tests {
             1,
             "exactly one of two simultaneous revision-matched writes may succeed"
         );
+        let rejected = classic_result
+            .err()
+            .or_else(|| native_result.err())
+            .unwrap();
+        assert!(
+            rejected
+                .to_string()
+                .contains("workspace_tab_pin_revision_conflict"),
+            "losing writer should receive a version conflict, not a SQLite busy error: {rejected}"
+        );
         let committed = classic
             .find_workspace_tab("tab-concurrent")
             .await
