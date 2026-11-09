@@ -36,6 +36,10 @@ use alera_gpui_desktop::git_history::{
     compare_git_refs, preview_commit, GitHistoryOptions, GitHistorySnapshot,
 };
 use alera_gpui_desktop::git_inspect::{read_file_diff, GitSnapshot};
+use alera_gpui_desktop::git_sidebar_layout::{
+    layout_git_sidebar, section_keys, FolderKey, GitSidebarEntry, GitSidebarGroupMode,
+    GitSidebarOptions, GitSidebarViewMode, SectionKey,
+};
 use alera_gpui_desktop::mcp_ui_bridge::{
     matching_host_tab_handle, NativeMcpUiBridge, NativeMcpUiCommand, NativeMcpUiEvent,
 };
@@ -388,6 +392,7 @@ struct Workbench {
     git_selected_changes: HashSet<alera_gpui_desktop::git_inspect::GitChangeRow>,
     git_selection_anchor: Option<alera_gpui_desktop::git_inspect::GitChangeRow>,
     git_discard_armed: Option<Vec<PathBuf>>,
+    git_sidebar_options: GitSidebarOptions,
     git_history: Option<GitHistorySnapshot>,
     git_history_open: bool,
     git_history_options: GitHistoryOptions,
@@ -1343,6 +1348,72 @@ impl Workbench {
         self.observe_native_editor(&editor, cx);
     }
 
+    /// Collapse never leaves a selected-but-invisible file available for
+    /// accidental batch Stage/Unstage/Discard.
+    fn clear_git_change_selection(&mut self) {
+        self.git_selected_changes.clear();
+        self.git_selection_anchor = None;
+        self.git_discard_armed = None;
+    }
+
+    fn toggle_git_sidebar_section(&mut self, section: SectionKey, cx: &mut Context<Self>) {
+        if !self.git_sidebar_options.collapsed_sections.insert(section) {
+            self.git_sidebar_options.collapsed_sections.remove(&section);
+        }
+        self.clear_git_change_selection();
+        cx.notify();
+    }
+
+    fn toggle_git_sidebar_folder(&mut self, folder: FolderKey, cx: &mut Context<Self>) {
+        if !self
+            .git_sidebar_options
+            .collapsed_folders
+            .insert(folder.clone())
+        {
+            self.git_sidebar_options.collapsed_folders.remove(&folder);
+        }
+        self.clear_git_change_selection();
+        cx.notify();
+    }
+
+    fn toggle_git_sidebar_collapse_all(&mut self, cx: &mut Context<Self>) {
+        let all = self
+            .git_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.visible_rows(""))
+            .unwrap_or_default();
+        let sections = section_keys(self.git_sidebar_options.grouping, &all);
+        if sections
+            .iter()
+            .all(|key| self.git_sidebar_options.collapsed_sections.contains(key))
+        {
+            self.git_sidebar_options.collapsed_sections.clear();
+            self.git_sidebar_options.collapsed_folders.clear();
+        } else {
+            self.git_sidebar_options.collapsed_sections.extend(sections);
+        }
+        self.clear_git_change_selection();
+        cx.notify();
+    }
+
+    fn toggle_git_sidebar_view(&mut self, cx: &mut Context<Self>) {
+        self.git_sidebar_options.view = match self.git_sidebar_options.view {
+            GitSidebarViewMode::Flat => GitSidebarViewMode::Tree,
+            GitSidebarViewMode::Tree => GitSidebarViewMode::Flat,
+        };
+        self.clear_git_change_selection();
+        cx.notify();
+    }
+
+    fn toggle_git_sidebar_group(&mut self, cx: &mut Context<Self>) {
+        self.git_sidebar_options.grouping = match self.git_sidebar_options.grouping {
+            GitSidebarGroupMode::ByArea => GitSidebarGroupMode::Unified,
+            GitSidebarGroupMode::Unified => GitSidebarGroupMode::ByArea,
+        };
+        self.clear_git_change_selection();
+        cx.notify();
+    }
+
     fn select_git_change(
         &mut self,
         row: alera_gpui_desktop::git_inspect::GitChangeRow,
@@ -1418,10 +1489,19 @@ impl Workbench {
         action: GitChangeMenuAction,
         cx: &mut Context<Self>,
     ) {
-        let valid = self
+        // Recompute the current visible set at click time. A menu opened
+        // before collapsing a folder or changing the filter cannot operate
+        // on a now-hidden or stale row, even when it remains in selection.
+        let mut options = self.git_sidebar_options.clone();
+        options.filter = self.git_filter_input.read(cx).query().to_owned();
+        let visible = self
             .git_snapshot
             .as_ref()
-            .is_some_and(|snapshot| snapshot.visible_rows("").contains(&row));
+            .map(|snapshot| {
+                layout_git_sidebar(&snapshot.visible_rows(""), &options).visible_files()
+            })
+            .unwrap_or_default();
+        let valid = visible.contains(&row);
         if !valid {
             self.git_discard_armed = None;
             self.git_action_status = "Git change list changed; refresh before continuing".into();
@@ -1433,7 +1513,7 @@ impl Workbench {
             let mut rows = self
                 .git_selected_changes
                 .iter()
-                .filter(|entry| entry.area == row.area)
+                .filter(|entry| entry.area == row.area && visible.contains(entry))
                 .map(|entry| entry.relative.clone())
                 .collect::<Vec<_>>();
             rows.sort();
@@ -3085,6 +3165,8 @@ impl Workbench {
         self.git_selected_changes.clear();
         self.git_selection_anchor = None;
         self.git_discard_armed = None;
+        self.git_sidebar_options.collapsed_sections.clear();
+        self.git_sidebar_options.collapsed_folders.clear();
         self.git_loading = false;
         self.git_history = None;
         self.git_history_loading = false;
@@ -6412,12 +6494,24 @@ impl Render for Workbench {
         };
         let git_filter_input = self.git_filter_input.clone();
         let git_filter = self.git_filter_input.read(cx).query().to_owned();
-        let git_changes = self
+        let git_all_changes = self
             .git_snapshot
             .as_ref()
-            .map(|snapshot| snapshot.visible_rows(&git_filter))
+            .map(|snapshot| snapshot.visible_rows(""))
             .unwrap_or_default();
+        let mut git_sidebar_options = self.git_sidebar_options.clone();
+        git_sidebar_options.filter = git_filter;
+        let git_sidebar_layout = layout_git_sidebar(&git_all_changes, &git_sidebar_options);
+        let git_sidebar_matches = git_sidebar_layout.matches;
+        let git_sidebar_total = git_sidebar_layout.total;
+        let git_sidebar_entries = git_sidebar_layout.entries;
+        let git_changes = git_sidebar_entries
+            .iter()
+            .filter_map(|entry| entry.file().cloned())
+            .collect::<Vec<_>>();
         let git_visible_rows = Arc::new(git_changes.clone());
+        let git_tree_mode = self.git_sidebar_options.view == GitSidebarViewMode::Tree;
+        let git_group_by_area = self.git_sidebar_options.grouping == GitSidebarGroupMode::ByArea;
         let git_selected = self.git_selected_changes.clone();
         let mut git_stage_paths = Vec::new();
         let mut git_unstage_paths = Vec::new();
@@ -7658,6 +7752,22 @@ impl Render for Workbench {
                                 .text_xs()
                                 .text_color(rgb(MUTED))
                                 .child(if git_action_busy { "Git operation running…".to_owned() } else { git_action_status }))
+                            .child(div().flex().items_center().gap_1().text_xs()
+                                .child(div().flex_1().min_w_0().text_color(rgb(MUTED))
+                                    .child(format!("{git_sidebar_matches} / {git_sidebar_total} changes")))
+                                .child(icon_button("git-sidebar-flat-tree", if git_tree_mode { UiIcon::File } else { UiIcon::Folder },
+                                    if git_tree_mode { "Show flat Git changes list" } else { "Show Git changes tree" }, git_tree_mode)
+                                    .on_click(cx.listener(|this, _, _, cx| this.toggle_git_sidebar_view(cx))))
+                                .child(icon_button("git-sidebar-group-toggle", UiIcon::Graph,
+                                    if git_group_by_area { "Show all Git changes together" } else { "Group Git changes by stage" },
+                                    git_group_by_area)
+                                    .on_click(cx.listener(|this, _, _, cx| this.toggle_git_sidebar_group(cx))))
+                                .child(icon_button("git-sidebar-collapse-all", UiIcon::CollapseAll,
+                                    "Collapse or expand all Git change groups", false)
+                                    .on_click(cx.listener(|this, _, _, cx| this.toggle_git_sidebar_collapse_all(cx))))
+                                .child(icon_button("git-sidebar-refresh", UiIcon::Refresh,
+                                    "Refresh Git status", false)
+                                    .on_click(cx.listener(|this, _, _, cx| this.refresh_git(cx)))))
                             .child(git_filter_input)
                             .when(git_selected_count > 0, |panel| panel.child(
                                 div()
@@ -7698,14 +7808,63 @@ impl Render for Workbench {
                                     .id("git-change-list")
                                     .max_h(px(135.0))
                                     .overflow_y_scroll()
-                                    .children(git_changes.into_iter().enumerate().map(|(i, change)| {
+                                    .children(git_sidebar_entries.into_iter().enumerate().map(|(i, entry)| {
+                                        let (change, depth) = match entry {
+                                            GitSidebarEntry::Section { key, total, matching, expanded } => {
+                                                let label = if let Some(area) = key { area.title() } else { "ALL CHANGES" };
+                                                let caption = if matching == total {
+                                                    format!("{label} ({total})")
+                                                } else {
+                                                    format!("{label} ({matching}/{total})")
+                                                };
+                                                return div().id(("git-group-section", i))
+                                                    .flex().items_center().gap_2().py_1().text_xs()
+                                                    .cursor_pointer().text_color(rgb(TEXT))
+                                                    .hover(|style| style.bg(rgb(ACTIVE)))
+                                                    .child(if expanded { "⌄" } else { "›" })
+                                                    .child(caption)
+                                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                                        this.toggle_git_sidebar_section(key, cx);
+                                                    }))
+                                                    .into_any_element();
+                                            }
+                                            GitSidebarEntry::Folder { key, depth, total, matching, expanded } => {
+                                                let name = key.1.file_name().unwrap_or_default().to_string_lossy().into_owned();
+                                                let caption = if total == matching {
+                                                    format!("{name} ({total})")
+                                                } else {
+                                                    format!("{name} ({matching}/{total})")
+                                                };
+                                                return div().id(("git-group-folder", i))
+                                                    .flex().items_center().gap_2().py_1().text_xs()
+                                                    .pl(px(8.0 + depth as f32 * 14.0))
+                                                    .cursor_pointer().text_color(rgb(MUTED))
+                                                    .hover(|style| style.bg(rgb(ACTIVE)))
+                                                    .child(if expanded { "⌄" } else { "›" })
+                                                    .child(caption)
+                                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                                        this.toggle_git_sidebar_folder(key.clone(), cx);
+                                                    }))
+                                                    .into_any_element();
+                                            }
+                                            GitSidebarEntry::File { change, depth } => (change, depth),
+                                        };
                                         let selected = git_selected.contains(&change);
                                         let clicked_row = change.clone();
                                         let menu_row = change.clone();
                                         let discard_armed = change.area == alera_gpui_desktop::git_inspect::GitChangeArea::Changes &&
                                             self.git_discard_armed.as_ref().is_some_and(|paths| paths.contains(&change.relative));
                                         let visible_for_click = Arc::clone(&git_visible_rows);
-                                        let label = format!("{} {} {}", change.area.title(), change.label, change.relative.display());
+                                        let display_name = if git_tree_mode {
+                                            change.relative.file_name().unwrap_or_default().to_string_lossy().into_owned()
+                                        } else {
+                                            change.relative.display().to_string()
+                                        };
+                                        let label = if git_group_by_area {
+                                            format!("{} {}", change.label, display_name)
+                                        } else {
+                                            format!("{} {} {}", change.area.title(), change.label, display_name)
+                                        };
                                         let can_stage = change.area.can_stage();
                                         let can_unstage = change.area.can_unstage();
                                         let relative = change.relative;
@@ -7717,6 +7876,7 @@ impl Render for Workbench {
                                             .items_center()
                                             .gap_2()
                                             .py_1()
+                                            .pl(px(8.0 + depth as f32 * 14.0))
                                             .text_xs()
                                             .bg(rgb(if selected { ACTIVE } else { PANEL }))
                                             .hover(|style| style.bg(rgb(ACTIVE)))
@@ -7744,6 +7904,7 @@ impl Render for Workbench {
                                                 .on_click(cx.listener(move |this, _, _, cx| {
                                                     this.run_git_action(GitUiAction::Unstage(unstage_path.clone()), cx);
                                                 }))))
+                                            .into_any_element()
                                     })),
                             )
                             .child(
@@ -9396,6 +9557,7 @@ fn main() {
                             git_selected_changes: HashSet::new(),
                             git_selection_anchor: None,
                             git_discard_armed: None,
+                            git_sidebar_options: GitSidebarOptions::default(),
                             git_history: None,
                             git_history_open: false,
                             git_history_options: GitHistoryOptions {

@@ -18,6 +18,7 @@ pub mod git_branch_compare;
 pub mod git_graph_layout;
 pub mod git_history;
 pub mod git_inspect;
+pub mod git_sidebar_layout;
 pub mod mcp_ui_bridge;
 pub mod mcp_workspace_creation;
 pub mod model;

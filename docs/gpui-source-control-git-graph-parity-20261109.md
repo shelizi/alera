@@ -15,7 +15,7 @@
 | Source Control status | Staged / Changes / Untracked / conflicts, correct file status | Area-aware snapshot and file filter; same path can occur twice | P0 completed in dedicated branch |
 | Source Control selection | Ctrl/Cmd toggle, Shift range, batch stage / unstage / discard | Ctrl/Shift batch stage/unstage and confirmed tracked-only unstaged discard | P0 core complete; native UI acceptance pending |
 | Source Control context menu | Stage, unstage, discard, open diff/original, copy path, open externally | GPUI Kit context menu: preview, stage, unstage, copy relative path, guarded discard tracked unstaged | P0 core complete; original and external editor P1 |
-| Source Control layout | Flat/tree grouping, collapse sections, counters, filter, manual refresh | Filter and flattened area rows | P0 group headers/counters; P1 tree |
+| Source Control layout | Flat/tree grouping, collapsible sections and folders, filtered counts, manual refresh | Native grouped/unified + flat/tree, section/folder collapse, accurate totals and refresh | P0 implemented; Windows UI acceptance pending |
 | Source Control commits | Message validation, commit staged, amend / suggested message | Commit staged supported | P1 amend and optional AI if configured |
 | Git refresh | Timely repository / FS watcher updates, manual refresh reliable | Native refresh click and async snapshot | P0 bounded refresh on Git operations; P1 watcher |
 | Git Graph ref list | Current ref first, favorites, local/remote/tag tabs; filters | Local+remote refs, favorites, current ordering adjusted | P0 ordering; P1 tags / search |
@@ -31,7 +31,7 @@
 - [x] Split staged/unstaged/untracked/conflicts, retain both areas for files changed in both index and working tree.
 - [x] Search/filter Git files, branch-aware refresh, correct per-area stage/unstage actions.
 - [x] Ctrl/Cmd + Shift multi-select; batch Stage/Unstage with path and index validation.
-- [ ] Add per-area section headers and collapse/expand-all, rather than prefixing area labels to every filename.
+- [x] Add area-group section headers, filtered/total counts, collapse/expand-all and flat/tree toggle, including collapsed folder rows in tree mode.
 - [x] Add targeted two-click guarded discard for tracked unstaged changes from index, preserving staged state and all untracked files; unsupported/untracked deletion intentionally refused. Untracked removal requires a separate, explicit trash workflow.
 - [x] Add GPUI Kit right-click menu for one/multiple Git files: Stage, Unstage, confirmed tracked-only Discard, copy relative path and preview diff.
 - [ ] Add open original Git blob from Source Control, external editor integration and dedicated untracked-trash confirmation.
