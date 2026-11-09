@@ -410,6 +410,7 @@ struct Workbench {
     settings_menu_locale: UiLocale,
     settings_menu_language: String,
     settings_shared_busy: bool,
+    settings_native_profile_migrated: bool,
     settings_shared_request: u64,
     settings_shared_last_refresh: Instant,
     settings_shared_error: Option<String>,
@@ -552,57 +553,21 @@ impl Workbench {
         if previous == next {
             return;
         }
-        if let Some(tree) = &mut self.tree {
-            if let Err(error) = tree.set_visibility_options(next) {
-                self.model
-                    .set_status(format!("Explorer visibility update failed: {error}"));
-                cx.notify();
-                return;
-            }
-        }
-        if let Some(store) = &self.native_settings_store {
-            match store.compare_and_set_explorer_visibility(previous, next) {
-                Ok(settings) => self.native_settings = settings,
-                Err(error) => {
-                    if let Some(tree) = &mut self.tree {
-                        let _ = tree.set_visibility_options(previous);
-                    }
-                    self.model.set_status(format!(
-                        "Explorer visibility unchanged; settings could not be saved: {error}"
-                    ));
-                    cx.notify();
-                    return;
-                }
-            }
-        } else {
-            // A missing native state path must not write Flutter preferences.
-            self.native_settings.explorer_show_hidden = next.show_hidden;
-            self.native_settings.explorer_show_ignored = next.show_ignored;
-        }
-        self.explorer_visibility = next;
-        self.explorer_multi_selection.clear();
-        self.explorer_selection = None;
-        self.explorer_context_menu = None;
-        self.tree_mode = true;
-        self.file_index = None;
-        self.file_index_loading = false;
-        self.file_index_request = self.file_index_request.wrapping_add(1);
-        if !self
-            .explorer_filter_input
-            .read(cx)
-            .query()
-            .trim()
-            .is_empty()
-            || self.quick_open.is_some()
+        // Explorer preferences are shared with Classic. Never optimistically
+        // mutate the tree or write Native JSON before Host CAS acknowledges.
+        if previous.show_hidden != next.show_hidden
+            && previous.show_ignored != next.show_ignored
         {
-            self.ensure_file_index(cx);
+            self.model.set_status("Change one Explorer visibility option at a time");
+            cx.notify();
+            return;
         }
-        self.model.set_status(format!(
-            "Explorer: {} ignored files, {} hidden items",
-            if next.show_ignored { "show" } else { "hide" },
-            if next.show_hidden { "show" } else { "hide" },
-        ));
-        cx.notify();
+        let (path, value) = if previous.show_hidden != next.show_hidden {
+            ("explorer.showHiddenFiles", next.show_hidden)
+        } else {
+            ("explorer.showIgnoredFiles", next.show_ignored)
+        };
+        self.change_shared_desktop_setting(path, serde_json::json!(value), cx);
     }
 
     fn set_explorer_clipboard(&mut self, mode: ExplorerClipboardMode, cx: &mut Context<Self>) {
@@ -2823,6 +2788,33 @@ impl Workbench {
     }
 
     fn install_native_settings(&mut self, settings: NativeSettings, cx: &mut Context<Self>) {
+        let visibility = ExplorerVisibilityOptions {
+            show_hidden: settings.explorer_show_hidden,
+            show_ignored: settings.explorer_show_ignored,
+        };
+        if self.explorer_visibility != visibility {
+            if let Some(tree) = &mut self.tree {
+                if let Err(error) = tree.set_visibility_options(visibility) {
+                    self.native_settings_error = Some(format!(
+                        "Explorer could not apply Rust Host preferences: {error}"
+                    ));
+                    cx.notify();
+                    return;
+                }
+            }
+            self.explorer_visibility = visibility;
+            self.explorer_multi_selection.clear();
+            self.explorer_selection = None;
+            self.explorer_context_menu = None;
+            self.file_index = None;
+            self.file_index_loading = false;
+            self.file_index_request = self.file_index_request.wrapping_add(1);
+            if !self.explorer_filter_input.read(cx).query().trim().is_empty()
+                || self.quick_open.is_some()
+            {
+                self.ensure_file_index(cx);
+            }
+        }
         if self.native_settings.auto_git_fetch_enabled != settings.auto_git_fetch_enabled
             || self.native_settings.auto_git_fetch_interval_minutes
                 != settings.auto_git_fetch_interval_minutes
@@ -8783,6 +8775,7 @@ fn main() {
                             settings_menu_locale: UiLocale::English,
                             settings_menu_language: "system".into(),
                             settings_shared_busy: false,
+                            settings_native_profile_migrated: false,
                             settings_shared_request: 0,
                             settings_shared_last_refresh: Instant::now()
                                 .checked_sub(Duration::from_secs(10))

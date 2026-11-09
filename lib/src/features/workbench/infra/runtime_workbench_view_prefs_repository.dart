@@ -11,10 +11,15 @@ class RuntimeWorkbenchViewPrefsRepository({
   final Future<void> Function()? beforeAccess,
 }) implements WorkbenchViewPrefsRepository {
   int? _revision;
+  Map<String, bool>? _lastExplorerShared;
 
   @override
   Stream<WorkbenchViewPrefs> get changes => client.runtimeEvents
-      .where((event) => event.name == 'workbenchViewPrefsChanged')
+      .where(
+        (event) =>
+            event.name == 'workbenchViewPrefsChanged' ||
+            event.name == 'runtimeSettingsChanged',
+      )
       .asyncMap((_) => load());
 
   @override
@@ -28,9 +33,13 @@ class RuntimeWorkbenchViewPrefsRepository({
       _revision = (record['revision'] as num?)?.toInt() ?? 0;
       if (record['desktopInitialized'] != true) {
         await _writeShared(local);
-        return await _forRuntime(local);
+        final merged = await _loadExplorerShared(local);
+        await legacyRepository.save(merged);
+        return await _forRuntime(merged);
       }
-      final merged = _mergeShared(local, _asMap(record['prefs']));
+      final merged = await _loadExplorerShared(
+        _mergeShared(local, _asMap(record['prefs'])),
+      );
       await legacyRepository.save(merged);
       return await _forRuntime(merged);
     } catch (error, stackTrace) {
@@ -41,7 +50,41 @@ class RuntimeWorkbenchViewPrefsRepository({
         error,
         stackTrace,
       );
+      _lastExplorerShared = null;
       return _forRuntime(local);
+    }
+  }
+
+  /// One-time Classic Drift -> Rust migration; thereafter Host values win.
+  /// This never shares unrelated Classic layout or panel sizing preferences.
+  Future<WorkbenchViewPrefs> _loadExplorerShared(
+    WorkbenchViewPrefs prefs,
+  ) async {
+    try {
+      final response = _asMap(
+        await client.runtimeRequest(
+          'desktopSettings.seedLocal',
+          <String, Object?>{'values': _explorerSharedValues(prefs)},
+        ),
+      );
+      final values = _asMap(response['values']);
+      final hidden = values['explorer.showHiddenFiles'];
+      final ignored = values['explorer.showIgnoredFiles'];
+      if (hidden is! bool || ignored is! bool) {
+        throw StateError('Shared Explorer preference source unavailable');
+      }
+      final updated = prefs.copyWith(
+        showHiddenFiles: hidden,
+        explorerMode: ignored
+            ? WorkspaceExplorerMode.showAll
+            : WorkspaceExplorerMode.hideIgnored,
+      );
+      _lastExplorerShared = _explorerSharedValues(updated);
+      return updated;
+    } catch (error, stackTrace) {
+      _lastExplorerShared = null;
+      _log.fine('Shared Explorer preferences unavailable', error, stackTrace);
+      return prefs;
     }
   }
 
@@ -63,9 +106,31 @@ class RuntimeWorkbenchViewPrefsRepository({
 
   @override
   Future<void> save(WorkbenchViewPrefs prefs) async {
-    await legacyRepository.save(prefs);
     await beforeAccess?.call();
+    final previous = _lastExplorerShared;
+    final current = _explorerSharedValues(prefs);
+    if (previous != null) {
+      final changes = <Map<String, Object?>>[];
+      for (final entry in current.entries) {
+        if (previous[entry.key] != entry.value) {
+          changes.add({
+            'path': entry.key,
+            'expectedValue': previous[entry.key],
+            'value': entry.value,
+          });
+        }
+      }
+      if (changes.isNotEmpty) {
+        // The two fields are applied atomically in RuntimeStore. On a
+        // conflict, keep Drift unchanged and let the caller reload.
+        await client.runtimeRequest('desktopSettings.compareAndSetBatch', {
+          'changes': changes,
+        });
+      }
+    }
     await _writeShared(prefs);
+    await legacyRepository.save(prefs);
+    if (previous != null) _lastExplorerShared = current;
   }
 
   Future<void> _writeShared(WorkbenchViewPrefs prefs) async {
@@ -91,6 +156,12 @@ class RuntimeWorkbenchViewPrefsRepository({
     _revision = (record['revision'] as num?)?.toInt() ?? _revision;
   }
 }
+
+Map<String, bool> _explorerSharedValues(WorkbenchViewPrefs prefs) => {
+  'explorer.showHiddenFiles': prefs.showHiddenFiles,
+  'explorer.showIgnoredFiles':
+      prefs.explorerMode == WorkspaceExplorerMode.showAll,
+};
 
 Map<String, Object?> _sharedJson(WorkbenchViewPrefs prefs) {
   return <String, Object?>{

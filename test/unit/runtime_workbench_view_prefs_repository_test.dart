@@ -76,6 +76,107 @@ void main() {
     );
     expect(legacy.prefs.showActiveWorkspacesOnly, isFalse);
   });
+
+  test(
+    'Explorer visibility is Host-owned while Classic pane layout stays local',
+    () async {
+      final client = _FakeRuntimeHostClient()
+        ..responses['workbenchViewPrefs.get'] = <String, Object?>{
+          'revision': 2,
+          'desktopInitialized': true,
+          'prefs': <String, Object?>{},
+        }
+        ..responses['workbenchViewPrefs.update'] = <String, Object?>{
+          'revision': 3,
+        }
+        ..responses['desktopSettings.seedLocal'] = <String, Object?>{
+          'values': <String, Object?>{
+            'explorer.showHiddenFiles': false,
+            'explorer.showIgnoredFiles': false,
+          },
+        };
+      final legacy = _MemoryViewPrefsRepository()
+        ..prefs = WorkbenchViewPrefs.defaults.copyWith(
+          showHiddenFiles: true,
+          explorerMode: WorkspaceExplorerMode.showAll,
+          rightSidebarWidth: 355,
+        );
+      final repo = RuntimeWorkbenchViewPrefsRepository(
+        client: client,
+        legacyRepository: legacy,
+      );
+      final loaded = await repo.load();
+      expect(loaded.showHiddenFiles, false);
+      expect(loaded.explorerMode, WorkspaceExplorerMode.hideIgnored);
+      expect(loaded.rightSidebarWidth, 355);
+      expect(client.payloads['desktopSettings.seedLocal']?.single['values'], {
+        'explorer.showHiddenFiles': true,
+        'explorer.showIgnoredFiles': true,
+      });
+      await repo.save(loaded.copyWith(rightSidebarWidth: 400));
+      expect(
+        client.payloads['desktopSettings.compareAndSetBatch'],
+        isNull,
+        reason:
+            'Classic-only pane sizes never modify shared Explorer preferences',
+      );
+      final changed = loaded.copyWith(
+        showHiddenFiles: true,
+        explorerMode: WorkspaceExplorerMode.showAll,
+      );
+      await repo.save(changed);
+      expect(client.payloads['desktopSettings.compareAndSetBatch'], [
+        {
+          'changes': [
+            {
+              'path': 'explorer.showHiddenFiles',
+              'expectedValue': false,
+              'value': true,
+            },
+            {
+              'path': 'explorer.showIgnoredFiles',
+              'expectedValue': false,
+              'value': true,
+            },
+          ],
+        },
+      ]);
+      expect(legacy.prefs.showHiddenFiles, true);
+      expect(legacy.prefs.explorerMode, WorkspaceExplorerMode.showAll);
+    },
+  );
+
+  test(
+    'Stale Classic Explorer changes cannot overwrite GPUI or local Drift cache',
+    () async {
+      final client = _FakeRuntimeHostClient()
+        ..responses['workbenchViewPrefs.get'] = <String, Object?>{
+          'revision': 1,
+          'desktopInitialized': true,
+          'prefs': <String, Object?>{},
+        }
+        ..responses['desktopSettings.seedLocal'] = <String, Object?>{
+          'values': <String, Object?>{
+            'explorer.showHiddenFiles': false,
+            'explorer.showIgnoredFiles': true,
+          },
+        };
+      final legacy = _MemoryViewPrefsRepository();
+      final repo = RuntimeWorkbenchViewPrefsRepository(
+        client: client,
+        legacyRepository: legacy,
+      );
+      final loaded = await repo.load();
+      client.failExplorerBatch = true;
+      await expectLater(
+        repo.save(loaded.copyWith(showHiddenFiles: true)),
+        throwsStateError,
+      );
+      expect(legacy.prefs.showHiddenFiles, false);
+      expect(legacy.prefs.explorerMode, WorkspaceExplorerMode.showAll);
+      expect(client.payloads['workbenchViewPrefs.update'], isNull);
+    },
+  );
 }
 
 final class _MemoryViewPrefsRepository implements WorkbenchViewPrefsRepository {
@@ -97,6 +198,7 @@ final class _MemoryViewPrefsRepository implements WorkbenchViewPrefsRepository {
 final class _FakeRuntimeHostClient
     implements RuntimeHostClient, RuntimeHostCapabilityClient {
   bool supportsSections = false;
+  bool failExplorerBatch = false;
   @override
   Future<bool> supportsRuntimeCapability(String capability) async =>
       supportsSections && capability == 'workspaceSectionsV1';
@@ -114,6 +216,9 @@ final class _FakeRuntimeHostClient
     Duration? timeout,
   ]) async {
     payloads.putIfAbsent(type, () => <Map<String, Object?>>[]).add(payload);
+    if (type == 'desktopSettings.compareAndSetBatch' && failExplorerBatch) {
+      throw StateError('desktop_settings_revision_conflict');
+    }
     return responses[type];
   }
 }

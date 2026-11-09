@@ -115,6 +115,9 @@ impl Workbench {
     ) -> std::io::Result<()> {
         let mut settings = self.native_settings.clone();
         let language = settings.apply_shared_snapshot(snapshot)?;
+        if self.agent_selected_profile.is_none() {
+            self.agent_selected_profile = settings.default_agent_profile_id.clone();
+        }
         self.settings_menu_language = language;
         self.settings_menu_locale = UiLocale::from_preference(&self.settings_menu_language);
         let locale = self.settings_menu_locale;
@@ -141,13 +144,49 @@ impl Workbench {
             cx.notify();
             return;
         };
+        let migration_needed = !self.settings_native_profile_migrated;
+        let (old_native_profile, old_hidden, old_ignored) = if migration_needed {
+            match self
+                .native_settings_store
+                .as_ref()
+                .map(|store| store.read())
+            {
+                Some(Ok(stored)) => (
+                    stored.default_agent_profile_id,
+                    stored.explorer_show_hidden,
+                    stored.explorer_show_ignored,
+                ),
+                Some(Err(error)) => {
+                    self.settings_shared_error = Some(format!(
+                        "Cannot safely migrate old Native preferences: {error}"
+                    ));
+                    cx.notify();
+                    return;
+                }
+                None => (
+                    None,
+                    self.native_settings.explorer_show_hidden,
+                    self.native_settings.explorer_show_ignored,
+                ),
+            }
+        } else {
+            (None, false, false)
+        };
         self.settings_shared_busy = true;
         self.settings_shared_last_refresh = Instant::now();
         self.settings_shared_request = self.settings_shared_request.wrapping_add(1);
         let request = self.settings_shared_request;
         cx.spawn(async move |view, cx| {
             let result = cx
-                .background_spawn(async move { bridge.desktop_settings_snapshot() })
+                .background_spawn(async move {
+                    if migration_needed {
+                        // Existing Classic values win. A GPUI-only user's
+                        // previous Explorer choices are imported once.
+                        bridge.desktop_settings_migrate_explorer(old_hidden, old_ignored)?;
+                        bridge.desktop_settings_migrate_profile(old_native_profile.as_deref())?;
+                    }
+                    bridge.desktop_settings_snapshot()
+                })
                 .await;
             view.update(cx, |view, cx| {
                 if view.settings_shared_request != request {
@@ -156,7 +195,10 @@ impl Workbench {
                 view.settings_shared_busy = false;
                 match result {
                     Ok(snapshot) => match view.install_shared_desktop_snapshot(&snapshot, cx) {
-                        Ok(()) => view.settings_shared_error = None,
+                        Ok(()) => {
+                            view.settings_native_profile_migrated = true;
+                            view.settings_shared_error = None;
+                        }
                         Err(error) => view.settings_shared_error = Some(error.to_string()),
                     },
                     Err(error) => {
@@ -224,6 +266,10 @@ impl Workbench {
                     Ok(snapshot) => match view.install_shared_desktop_snapshot(&snapshot, cx) {
                         Ok(()) => {
                             view.settings_shared_error = None;
+                            if path_for_status == "agents.defaultAgentProfileId" {
+                                view.agent_selected_profile =
+                                    view.native_settings.default_agent_profile_id.clone();
+                            }
                             view.model.set_status(format!(
                                 "Shared {path_for_status} saved in Rust Runtime Store"
                             ));

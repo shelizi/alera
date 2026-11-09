@@ -38,6 +38,21 @@ use self::idempotency_receipts::{
 };
 
 pub(super) mod idempotency_receipts;
+
+fn shared_desktop_settings_error(error: anyhow::Error) -> HostError {
+    if error
+        .to_string()
+        .contains("desktop_settings_revision_conflict")
+    {
+        HostError::conflict(
+            "desktop_settings_revision_conflict",
+            "Shared desktop settings changed elsewhere. Refresh and retry.",
+            json!({}),
+        )
+    } else {
+        HostError::state(error.to_string())
+    }
+}
 mod runtime_settings;
 mod runtime_settings_store;
 mod runtime_settings_validation;
@@ -689,6 +704,56 @@ impl ServerActor {
                 // Broadcasting here would cause an infinite reload/seed loop.
                 Ok(result)
             }
+            "desktopSettings.seedExplorer" => {
+                self.require_auth(client_id)?;
+                let hidden = payload
+                    .get("showHidden")
+                    .and_then(Value::as_bool)
+                    .ok_or_else(|| HostError::state("Missing Native showHidden bool"))?;
+                let ignored = payload
+                    .get("showIgnored")
+                    .and_then(Value::as_bool)
+                    .ok_or_else(|| HostError::state("Missing Native showIgnored bool"))?;
+                let result = self
+                    .runtime_store
+                    .desktop_shared_seed_local(&json!({
+                        "explorer.showHiddenFiles": hidden,
+                        "explorer.showIgnoredFiles": ignored,
+                    }))
+                    .await
+                    .map_err(|error| HostError::state(error.to_string()))?;
+                self.broadcast_authenticated(event("runtimeSettingsChanged", json!({})));
+                Ok(result)
+            }
+            "desktopSettings.seedNativeProfile" => {
+                self.require_auth(client_id)?;
+                let profile = payload
+                    .get("profileId")
+                    .ok_or_else(|| HostError::state("Missing Native profile migration value"))?;
+                if !profile.is_null() && !profile.is_string() {
+                    return Err(HostError::state("Invalid Native profile migration value"));
+                }
+                let result = self
+                    .runtime_store
+                    .desktop_shared_seed_native_default_profile(profile.as_str())
+                    .await
+                    .map_err(|error| HostError::state(error.to_string()))?;
+                self.broadcast_authenticated(event("runtimeSettingsChanged", json!({})));
+                Ok(result)
+            }
+            "desktopSettings.compareAndSetBatch" => {
+                self.require_auth(client_id)?;
+                let changes: Vec<alera_core::runtime::DesktopSettingChange> =
+                    serde_json::from_value(payload["changes"].clone())
+                        .map_err(|_| HostError::state("Invalid shared settings batch"))?;
+                let result = self
+                    .runtime_store
+                    .desktop_shared_compare_and_set_batch(&changes)
+                    .await
+                    .map_err(shared_desktop_settings_error)?;
+                self.broadcast_authenticated(event("runtimeSettingsChanged", json!({})));
+                Ok(result)
+            }
             "desktopSettings.compareAndSet" => {
                 self.require_auth(client_id)?;
                 let path = payload["path"]
@@ -704,7 +769,7 @@ impl ServerActor {
                     .runtime_store
                     .desktop_shared_compare_and_set(path, expected, next)
                     .await
-                    .map_err(|error| HostError::state(error.to_string()))?;
+                    .map_err(shared_desktop_settings_error)?;
                 self.broadcast_authenticated(event("runtimeSettingsChanged", json!({})));
                 Ok(result)
             }

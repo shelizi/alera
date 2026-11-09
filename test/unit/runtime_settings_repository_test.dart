@@ -473,6 +473,10 @@ void main() {
         'terminal.fontSize': 20.0,
         'editor.autosaveEnabled': true,
         'editor.tabSize': 2,
+        'general.confirmProjectRemoval': false,
+        'general.confirmWorkspaceRemoval': true,
+        'general.autoArchiveWorkspacesAfterDays': 7,
+        'agents.defaultAgentProfileId': 'prof_alpha',
       },
     };
     host.responses['runtimeSettings.get'] = {
@@ -489,22 +493,43 @@ void main() {
     expect(loaded.terminal.fontSize, 20);
     expect(loaded.editor.autosaveEnabled, true);
     expect(loaded.editor.tabSize, 2);
+    expect(loaded.general.confirmProjectRemoval, false);
+    expect(loaded.general.autoArchiveWorkspacesAfterDays, 7);
+    expect(loaded.agents.defaultAgentProfileId, 'prof_alpha');
     final seeded =
         host.payloads['desktopSettings.seedLocal']!.single['values']! as Map;
     expect(seeded['general.language'], 'traditionalChinese');
 
     final edited = loaded.copyWith(
-      general: loaded.general.copyWith(language: AppLanguage.english),
+      general: loaded.general.copyWith(
+        language: AppLanguage.english,
+        confirmProjectRemoval: true,
+      ),
       terminal: loaded.terminal.copyWith(fontSize: 22),
+      agents: loaded.agents.copyWith(defaultAgentProfileId: null),
     );
     await repo.compareAndSetSharedDesktopChanges(loaded, edited);
-    expect(host.payloads['desktopSettings.compareAndSet'], [
+    expect(host.payloads['desktopSettings.compareAndSetBatch'], [
       {
-        'path': 'general.language',
-        'expectedValue': 'japanese',
-        'value': 'english',
+        'changes': [
+          {
+            'path': 'general.language',
+            'expectedValue': 'japanese',
+            'value': 'english',
+          },
+          {'path': 'terminal.fontSize', 'expectedValue': 20.0, 'value': 22.0},
+          {
+            'path': 'general.confirmProjectRemoval',
+            'expectedValue': false,
+            'value': true,
+          },
+          {
+            'path': 'agents.defaultAgentProfileId',
+            'expectedValue': 'prof_alpha',
+            'value': null,
+          },
+        ],
       },
-      {'path': 'terminal.fontSize', 'expectedValue': 20.0, 'value': 22.0},
     ]);
     await repo.save(edited);
     expect(
@@ -512,6 +537,11 @@ void main() {
       isNull,
       reason:
           'All shared portable fields are CAS-owned by the Rust Runtime Host',
+    );
+    expect(
+      host.payloads['runtimeSettings.update'],
+      isNull,
+      reason: 'Shared safety and profile settings are already CAS-owned by the Rust Runtime Host',
     );
   });
 }

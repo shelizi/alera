@@ -205,21 +205,39 @@ impl RuntimeCliBridge {
         self.desktop_settings_command(&[OsString::from("get")])
     }
 
+    /// Older GPUI builds saved the default Agent Profile in Native JSON.
+    /// Migrate at most once in the Host; the Host checks the existing catalog
+    /// and prefers an already saved Classic selection.
+    pub fn desktop_settings_migrate_profile(&self, profile: Option<&str>) -> io::Result<Value> {
+        let mut args = vec![OsString::from("migrate-profile")];
+        if let Some(profile) = profile {
+            args.push(OsString::from("--profile-id"));
+            args.push(OsString::from(profile));
+        }
+        self.desktop_settings_command(&args)
+    }
+
+    pub fn desktop_settings_migrate_explorer(
+        &self,
+        show_hidden: bool,
+        show_ignored: bool,
+    ) -> io::Result<Value> {
+        self.desktop_settings_command(&[
+            OsString::from("migrate-explorer"),
+            OsString::from("--show-hidden"),
+            OsString::from(show_hidden.to_string()),
+            OsString::from("--show-ignored"),
+            OsString::from(show_ignored.to_string()),
+        ])
+    }
+
     pub fn desktop_settings_compare_and_set(
         &self,
         path: &str,
         expected: &Value,
         next: &Value,
     ) -> io::Result<Value> {
-        const PATHS: &[&str] = &[
-            "general.language",
-            "general.autoGitFetchEnabled",
-            "general.autoGitFetchIntervalMinutes",
-            "terminal.fontSize",
-            "editor.autosaveEnabled",
-            "editor.tabSize",
-        ];
-        if !PATHS.contains(&path) {
+        if !alera_core::desktop_settings_contract::cli_writable(path) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "Unknown shared Settings path",

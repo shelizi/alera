@@ -142,8 +142,8 @@ impl Workbench {
             .into_any_element()
     }
 
-    /// Store only a Host-listed Agent Profile ID, never its launch command,
-    /// credentials, or Managed configuration. This is a Native-local setting.
+    /// Store only a Host-listed Agent Profile ID in the shared Rust owner.
+    /// Never copy commands, credentials or Managed config into Native JSON.
     fn change_native_default_agent_profile(
         &mut self,
         next: Option<String>,
@@ -158,31 +158,11 @@ impl Workbench {
             cx.notify();
             return;
         }
-        let result = self
-            .native_settings_store
-            .as_ref()
-            .ok_or_else(|| std::io::Error::other("Native settings store unavailable"))
-            .and_then(|store| {
-                store.compare_and_set_default_agent_profile(
-                    self.native_settings.default_agent_profile_id.as_deref(),
-                    next.as_deref(),
-                )
-            });
-        match result {
-            Ok(settings) => {
-                self.install_native_settings(settings, cx);
-                if let Some(id) = next {
-                    self.agent_selected_profile = Some(id);
-                }
-                self.model.set_status("Native default Agent Profile saved");
-            }
-            Err(error) => {
-                self.model.set_status(format!(
-                    "Native Agent Profile preference unchanged: {error}"
-                ));
-            }
-        }
-        cx.notify();
+        self.change_shared_desktop_setting(
+            "agents.defaultAgentProfileId",
+            serde_json::json!(next),
+            cx,
+        );
     }
 
     fn native_settings_bool_row(

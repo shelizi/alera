@@ -24,6 +24,8 @@ part 'settings_controller_mcp.dart';
 
 const String _runtimeSettingsRevisionConflictCode =
     'runtime_settings_revision_conflict';
+const String _desktopSettingsRevisionConflictCode =
+    'desktop_settings_revision_conflict';
 
 @Riverpod(keepAlive: true)
 class SettingsController extends _$SettingsController
@@ -93,7 +95,8 @@ class SettingsController extends _$SettingsController
       await repository.save(settings);
       state = settings;
     } on TerminalHostConflictException catch (error, stackTrace) {
-      if (error.code != _runtimeSettingsRevisionConflictCode) {
+      if (error.code != _runtimeSettingsRevisionConflictCode &&
+          error.code != _desktopSettingsRevisionConflictCode) {
         rethrow;
       }
       try {

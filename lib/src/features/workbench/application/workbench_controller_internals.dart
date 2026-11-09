@@ -311,6 +311,20 @@ mixin _WorkbenchControllerInternals on _$WorkbenchController
     final prefs = state.viewPrefs;
     try {
       await _viewPrefsPersistence.save(repository: repo, prefs: prefs);
+    } on TerminalHostConflictException catch (error) {
+      if (error.code == 'desktop_settings_revision_conflict') {
+        // The other desktop version won the shared Explorer preference CAS.
+        // Do not leave optimistic Classic UI toggles showing rejected state.
+        try {
+          final authoritative = await repo.load();
+          if (!_disposed) {
+            state = state.copyWith(viewPrefs: authoritative);
+          }
+        } catch (_) {
+          // Host unavailable: retain the current view without writing a
+          // stale local value over the authoritative Rust store.
+        }
+      }
     } catch (_) {
       // Persistence is best-effort; never surface an error from the UI path.
     }

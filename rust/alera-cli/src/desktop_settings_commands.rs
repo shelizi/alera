@@ -1,6 +1,5 @@
 //! Human-owned CLI bridge for Classic/GPUI shared settings. Never starts
 //! a Runtime Host and never prints whole configuration or secret material.
-use alera_core::runtime::SHARED_DESKTOP_PATHS;
 use serde_json::{json, Value};
 
 use crate::cli::{DesktopSettingsAction, DesktopSettingsCommand};
@@ -21,12 +20,26 @@ pub async fn run(command: DesktopSettingsCommand) -> i32 {
     };
     let (request, payload) = match command.action {
         DesktopSettingsAction::Get => ("desktopSettings.get", json!({})),
+        DesktopSettingsAction::MigrateProfile { profile_id } => (
+            "desktopSettings.seedNativeProfile",
+            json!({"profileId":profile_id}),
+        ),
+        DesktopSettingsAction::MigrateExplorer {
+            show_hidden,
+            show_ignored,
+        } => (
+            "desktopSettings.seedExplorer",
+            json!({"showHidden":show_hidden,"showIgnored":show_ignored}),
+        ),
         DesktopSettingsAction::Set {
             path,
             expected,
             value,
         } => {
-            if !SHARED_DESKTOP_PATHS.contains(&path.as_str()) {
+            // Destructive confirmation switches and auto-archiving are
+            // explicitly user-facing Classic Settings controls, not
+            // available for arbitrary Agent-executable CLI mutation.
+            if !alera_core::desktop_settings_contract::cli_writable(&path) {
                 return print_error("Unsupported shared desktop setting path");
             }
             let expected: Value = match serde_json::from_str(&expected) {
@@ -58,7 +71,6 @@ pub async fn run(command: DesktopSettingsCommand) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use clap::Parser;
 
     #[test]
@@ -78,6 +90,38 @@ mod tests {
         ])
         .unwrap();
         assert!(matches!(parsed.command, crate::cli::Command::Settings(_)));
-        assert!(!SHARED_DESKTOP_PATHS.contains(&"agents.secret"));
+        let rejected = crate::cli::Cli::try_parse_from([
+            "alera",
+            "settings",
+            "--no-start",
+            "--json",
+            "migrate-profile",
+            "--profile-id",
+            "prof_alpha",
+        ])
+        .unwrap();
+        assert!(matches!(rejected.command, crate::cli::Command::Settings(_)));
+        let explorer = crate::cli::Cli::try_parse_from([
+            "alera",
+            "settings",
+            "--no-start",
+            "--json",
+            "migrate-explorer",
+            "--show-hidden",
+            "true",
+            "--show-ignored",
+            "false",
+        ])
+        .unwrap();
+        assert!(matches!(
+            explorer.command,
+            crate::cli::Command::Settings(crate::cli::DesktopSettingsCommand {
+                action: crate::cli::DesktopSettingsAction::MigrateExplorer {
+                    show_hidden: true,
+                    show_ignored: false,
+                },
+                ..
+            })
+        ));
     }
 }

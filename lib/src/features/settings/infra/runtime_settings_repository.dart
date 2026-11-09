@@ -15,6 +15,7 @@ class RuntimeSettingsRepository({
   final Future<void> Function()? beforeAccess,
 }) implements SettingsRepository {
   Map<String, Object?>? _lastLoadedPortable;
+  Map<String, Object?>? _lastLoadedRuntime;
   bool _sharedDesktopAvailable = false;
 
   @override
@@ -70,6 +71,7 @@ class RuntimeSettingsRepository({
       if (!runtime.containsKey('workspaceDirectory')) {
         final effective = _applySharedDesktopValues(legacy, sharedDesktop);
         _lastLoadedPortable = effective.toPortableConfigurationMap();
+        _lastLoadedRuntime = effective.toRuntimeOperationalMap();
         return effective;
       }
       final legacyLocalQuotas = legacy.agents.quotas.forHost('local');
@@ -123,10 +125,12 @@ class RuntimeSettingsRepository({
       );
       final effective = _applySharedDesktopValues(resolved, sharedDesktop);
       _lastLoadedPortable = effective.toPortableConfigurationMap();
+      _lastLoadedRuntime = effective.toRuntimeOperationalMap();
       await legacyRepository.save(effective);
       return effective;
     } catch (_) {
       _lastLoadedPortable = legacy.toPortableConfigurationMap();
+      _lastLoadedRuntime = legacy.toRuntimeOperationalMap();
       return legacy;
     }
   }
@@ -139,14 +143,17 @@ class RuntimeSettingsRepository({
     AleraSettings next,
   ) async {
     if (!_sharedDesktopAvailable) return;
+    final changes = <Map<String, Object?>>[];
     for (final path in _sharedDesktopPaths) {
       final expected = _sharedDesktopValue(previous, path);
       final value = _sharedDesktopValue(next, path);
       if (expected == value) continue;
-      await client.runtimeRequest('desktopSettings.compareAndSet', {
-        'path': path,
-        'expectedValue': expected,
-        'value': value,
+      changes.add({'path': path, 'expectedValue': expected, 'value': value});
+    }
+    if (changes.isNotEmpty) {
+      // All changed values (local, portable and runtime) commit atomically.
+      await client.runtimeRequest('desktopSettings.compareAndSetBatch', {
+        'changes': changes,
       });
     }
   }
@@ -248,12 +255,21 @@ class RuntimeSettingsRepository({
         });
       }
     }
-    await client.runtimeRequest(
-      'runtimeSettings.update',
-      settings.toRuntimeOperationalMap(),
+    // Runtime Host accepts partial updates. Sending the old full snapshot
+    // would resurrect a deleted default profile or undo a safety change
+    // made from GPUI while Classic remained open.
+    final runtimeNow = settings.toRuntimeOperationalMap();
+    final changedRuntime = _changedRuntimeFields(
+      _lastLoadedRuntime,
+      runtimeNow,
+      excludeShared: _sharedDesktopAvailable,
     );
+    if (changedRuntime.isNotEmpty) {
+      await client.runtimeRequest('runtimeSettings.update', changedRuntime);
+    }
     await legacyRepository.save(settings);
     _lastLoadedPortable = settings.toPortableConfigurationMap();
+    _lastLoadedRuntime = runtimeNow;
   }
 
   Future<bool> _supportsConfiguration() async {
@@ -271,23 +287,54 @@ const _sharedDesktopPaths = <String>[
   'terminal.fontSize',
   'editor.autosaveEnabled',
   'editor.tabSize',
+  'general.confirmProjectRemoval',
+  'general.confirmWorkspaceRemoval',
+  'general.autoArchiveWorkspacesAfterDays',
+  'agents.defaultAgentProfileId',
 ];
 
-Object _sharedDesktopValue(AleraSettings settings, String path) =>
-    switch (path) {
-      'general.language' => settings.general.language.name,
-      'general.autoGitFetchEnabled' => settings.general.autoGitFetchEnabled,
-      'general.autoGitFetchIntervalMinutes' =>
-        settings.general.autoGitFetchIntervalMinutes,
-      'terminal.fontSize' => settings.terminal.fontSize,
-      'editor.autosaveEnabled' => settings.editor.autosaveEnabled,
-      'editor.tabSize' => settings.editor.tabSize,
-      _ => throw ArgumentError.value(
-        path,
-        'path',
-        'Unsupported desktop setting',
-      ),
-    };
+Object? _sharedDesktopValue(
+  AleraSettings settings,
+  String path,
+) => switch (path) {
+  'general.language' => settings.general.language.name,
+  'general.autoGitFetchEnabled' => settings.general.autoGitFetchEnabled,
+  'general.autoGitFetchIntervalMinutes' =>
+    settings.general.autoGitFetchIntervalMinutes,
+  'terminal.fontSize' => settings.terminal.fontSize,
+  'editor.autosaveEnabled' => settings.editor.autosaveEnabled,
+  'editor.tabSize' => settings.editor.tabSize,
+  'general.confirmProjectRemoval' => settings.general.confirmProjectRemoval,
+  'general.confirmWorkspaceRemoval' => settings.general.confirmWorkspaceRemoval,
+  'general.autoArchiveWorkspacesAfterDays' =>
+    settings.general.autoArchiveWorkspacesAfterDays,
+  'agents.defaultAgentProfileId' => settings.agents.defaultAgentProfileId,
+  _ => throw ArgumentError.value(path, 'path', 'Unsupported desktop setting'),
+};
+
+/// Host settings writes are also partial, so Classic never resends a stale
+/// safety switch, default Agent Profile, quota or AI setting from another
+/// window merely because a different preference was edited.
+Map<String, Object?> _changedRuntimeFields(
+  Map<String, Object?>? before,
+  Map<String, Object?> current, {
+  required bool excludeShared,
+}) {
+  const shared = <String>{
+    'confirmProjectRemoval',
+    'confirmWorkspaceRemoval',
+    'autoArchiveWorkspacesAfterDays',
+    'defaultAgentProfileId',
+  };
+  return {
+    for (final entry in current.entries)
+      if ((!excludeShared || !shared.contains(entry.key)) &&
+          (before == null ||
+              !before.containsKey(entry.key) ||
+              jsonEncode(before[entry.key]) != jsonEncode(entry.value)))
+        entry.key: entry.value,
+  };
+}
 
 /// Preserve all unknown/future portable keys. A settings save writes only
 /// fields changed in this Classic process, not GPUI's newer field values.
@@ -307,6 +354,10 @@ Map<String, Object?> _changedPortableFields(
             'terminal.fontSize',
             'editor.autosaveEnabled',
             'editor.tabSize',
+            'general.confirmProjectRemoval',
+            'general.confirmWorkspaceRemoval',
+            'general.autoArchiveWorkspacesAfterDays',
+            'agents.defaultAgentProfileId',
           }.contains(path)) {
         continue;
       }
@@ -335,6 +386,7 @@ AleraSettings _applySharedDesktopValues(
         )
       : current.general.language;
   final fetchInterval = values['general.autoGitFetchIntervalMinutes'];
+  final archiveDays = values['general.autoArchiveWorkspacesAfterDays'];
   final fontSize = values['terminal.fontSize'];
   final tabSize = values['editor.tabSize'];
   return current.copyWith(
@@ -347,6 +399,16 @@ AleraSettings _applySharedDesktopValues(
           fetchInterval is int && fetchInterval >= 1 && fetchInterval <= 60
           ? fetchInterval
           : current.general.autoGitFetchIntervalMinutes,
+      confirmProjectRemoval: values['general.confirmProjectRemoval'] is bool
+          ? values['general.confirmProjectRemoval'] as bool
+          : current.general.confirmProjectRemoval,
+      confirmWorkspaceRemoval: values['general.confirmWorkspaceRemoval'] is bool
+          ? values['general.confirmWorkspaceRemoval'] as bool
+          : current.general.confirmWorkspaceRemoval,
+      autoArchiveWorkspacesAfterDays:
+          archiveDays is int && archiveDays >= 0 && archiveDays <= 36500
+          ? archiveDays
+          : current.general.autoArchiveWorkspacesAfterDays,
     ),
     terminal: current.terminal.copyWith(
       fontSize: fontSize is num && fontSize >= 8 && fontSize <= 48
@@ -361,6 +423,13 @@ AleraSettings _applySharedDesktopValues(
           ? tabSize
           : current.editor.tabSize,
     ),
+    agents: values.containsKey('agents.defaultAgentProfileId')
+        ? current.agents.copyWith(
+            defaultAgentProfileId: _optionalRuntimeString(
+              values['agents.defaultAgentProfileId'],
+            ),
+          )
+        : current.agents,
   );
 }
 

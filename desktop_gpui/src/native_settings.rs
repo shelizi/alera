@@ -64,7 +64,7 @@ impl Default for NativeSettings {
 }
 
 impl NativeSettings {
-    /// Apply only six reviewed Classic/GPUI shared fields to the current UI
+    /// Apply all ten reviewed Classic/GPUI shared fields to the current UI
     /// snapshot. Explorer visibility and Native-only metadata remain intact.
     /// No local JSON is written; Runtime Host stays the authoritative owner.
     pub fn apply_shared_snapshot(&mut self, snapshot: &Value) -> io::Result<String> {
@@ -78,14 +78,7 @@ impl NativeSettings {
                 )
             })?;
         let mut required = Vec::new();
-        for path in [
-            "general.language",
-            "general.autoGitFetchEnabled",
-            "general.autoGitFetchIntervalMinutes",
-            "terminal.fontSize",
-            "editor.autosaveEnabled",
-            "editor.tabSize",
-        ] {
+        for path in alera_core::desktop_settings_contract::SHARED_DESKTOP_PATHS {
             let value = values.get(path).ok_or_else(|| {
                 io::Error::new(
                     io::ErrorKind::InvalidData,
@@ -108,6 +101,13 @@ impl NativeSettings {
                         "Invalid shared language",
                     ));
                 }
+            } else if path == "agents.defaultAgentProfileId" {
+                if !value.is_null() && !value.as_str().is_some_and(Self::valid_agent_profile_id) {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "Invalid shared Host default Agent Profile ID",
+                    ));
+                }
             } else if !Self::valid_value(path, value) {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
@@ -128,6 +128,22 @@ impl NativeSettings {
                 "terminal.fontSize" => self.terminal_font_size = value.as_f64().unwrap(),
                 "editor.autosaveEnabled" => self.editor_autosave_enabled = value.as_bool().unwrap(),
                 "editor.tabSize" => self.editor_tab_size = value.as_u64().unwrap(),
+                "general.confirmProjectRemoval" => {
+                    self.confirm_project_removal = value.as_bool().unwrap()
+                }
+                "general.confirmWorkspaceRemoval" => {
+                    self.confirm_workspace_removal = value.as_bool().unwrap()
+                }
+                "general.autoArchiveWorkspacesAfterDays" => {
+                    self.auto_archive_workspaces_after_days = value.as_u64().unwrap()
+                }
+                "agents.defaultAgentProfileId" => {
+                    self.default_agent_profile_id = value.as_str().map(str::to_owned)
+                }
+                "explorer.showHiddenFiles" => self.explorer_show_hidden = value.as_bool().unwrap(),
+                "explorer.showIgnoredFiles" => {
+                    self.explorer_show_ignored = value.as_bool().unwrap()
+                }
                 _ => {}
             }
         }
@@ -154,6 +170,9 @@ impl NativeSettings {
             "general.autoArchiveWorkspacesAfterDays" => {
                 json!(self.auto_archive_workspaces_after_days)
             }
+            "agents.defaultAgentProfileId" => json!(self.default_agent_profile_id),
+            "explorer.showHiddenFiles" => json!(self.explorer_show_hidden),
+            "explorer.showIgnoredFiles" => json!(self.explorer_show_ignored),
             _ => return None,
         })
     }
@@ -173,6 +192,8 @@ impl NativeSettings {
         match path {
             "general.autoGitFetchEnabled"
             | "editor.autosaveEnabled"
+            | "explorer.showHiddenFiles"
+            | "explorer.showIgnoredFiles"
             | "general.confirmProjectRemoval"
             | "general.confirmWorkspaceRemoval" => value.is_boolean(),
             "general.autoGitFetchIntervalMinutes" => {
@@ -475,7 +496,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn shared_host_snapshot_updates_only_six_fields_and_rejects_partial_data() {
+    fn shared_host_snapshot_updates_all_twelve_fields_without_erasing_native_only_data() {
         let mut state = NativeSettings::default();
         state.explorer_show_ignored = true;
         state.default_agent_profile_id = Some("managed_codex".to_owned());
@@ -485,7 +506,13 @@ mod tests {
             "general.autoGitFetchIntervalMinutes":10,
             "terminal.fontSize":17.0,
             "editor.autosaveEnabled":true,
-            "editor.tabSize":8
+            "editor.tabSize":8,
+            "general.confirmProjectRemoval":false,
+            "general.confirmWorkspaceRemoval":true,
+            "general.autoArchiveWorkspacesAfterDays":60,
+            "agents.defaultAgentProfileId":"host_codex",
+            "explorer.showHiddenFiles":true,
+            "explorer.showIgnoredFiles":false
         }});
         assert_eq!(
             state.apply_shared_snapshot(&snapshot).unwrap(),
@@ -494,10 +521,14 @@ mod tests {
         assert_eq!(state.terminal_font_size, 17.0);
         assert_eq!(state.editor_tab_size, 8);
         assert!(!state.auto_git_fetch_enabled);
-        assert!(state.explorer_show_ignored);
+        assert!(!state.confirm_project_removal);
+        assert!(state.confirm_workspace_removal);
+        assert_eq!(state.auto_archive_workspaces_after_days, 60);
+        assert!(!state.explorer_show_ignored);
+        assert!(state.explorer_show_hidden);
         assert_eq!(
             state.default_agent_profile_id.as_deref(),
-            Some("managed_codex")
+            Some("host_codex")
         );
         let previous = state.clone();
         assert!(state

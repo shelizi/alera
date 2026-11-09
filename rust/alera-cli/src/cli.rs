@@ -360,6 +360,18 @@ pub struct DesktopSettingsCommand {
 #[derive(Debug, Subcommand)]
 pub enum DesktopSettingsAction {
     Get,
+    /// One-time upgrade of Native's former local Agent Profile preference.
+    MigrateProfile {
+        #[arg(long)]
+        profile_id: Option<String>,
+    },
+    /// Import the previous Native Explorer preferences only if Rust has none.
+    MigrateExplorer {
+        #[arg(long, action = clap::ArgAction::Set)]
+        show_hidden: bool,
+        #[arg(long, action = clap::ArgAction::Set)]
+        show_ignored: bool,
+    },
     Set {
         #[arg(long)]
         path: String,
