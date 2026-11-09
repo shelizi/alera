@@ -295,3 +295,10 @@ Validation on Windows: new quick_open_ui::tests::terminal_rejects_delayed_ime_af
 ### 輸入桌面與 Session 診斷補充
 
 同一工具執行程序的 Windows Session 為 1，系統回報 active console Session 也為 1；`GetThreadDesktop` 與 `OpenInputDesktop` 讀到的桌面名稱均為 `Default`。以唯讀開啟查詢驗證 `WinSta0` 的 `WINSTA_WRITEATTRIBUTES`、`WINSTA_READATTRIBUTES`，以及目前輸入桌面的 `DESKTOP_READOBJECTS`、`DESKTOP_WRITEOBJECTS`、`DESKTOP_SWITCHDESKTOP` 均可取得控制代碼。這排除明顯的錯誤 Session / 桌面名稱及簡單的控制代碼開啟權限問題，但**不能證明桌面可接受游標移動**：同一 Session 下的 `SetCursorPos` 與 `SetPhysicalCursorPos` 仍失敗。Win32 `GetLastError` 可能為前次呼叫殘值，不據此推定根因。不繞過桌面輸入限制；真正 IME 候選窗跨窗格與晚到 Commit 仍列未驗收，`supported=false`。
+## 2026-11-09：Explorer → Terminal 注音候選窗跨欄位焦點修正（第五輪）
+
+在 3840×2160 / 200% DPI Windows 真實桌面以 `--require-interactive-desktop` 通過原生座標 API 預檢，使用隔離 Native Debug GUI + 一次性 Host / 雙 PTY，重新重現 Explorer 有正在組字之 Windows 注音候選窗，但點 Terminal 文字列或 Tab 後候選仍停留 Explorer 的問題。先前同一隔離視窗可成功將注音候選窗定位到 Explorer 搜尋框；但 Terminal 文字列點擊時舊組字仍可能殘留。
+
+修正在 `desktop_gpui/src/quick_open_ui.rs` 對 **所有**輸入欄位（不只 Terminal）拒絕失焦後遲到的 `replace_text_in_range` / `replace_and_mark_text_in_range`。新增 `discard_marked_preedit` 僅移除 Explorer 的未完成組字標記範圍，保留已正式提交的搜尋文字，並對非法 Unicode byte 邊界安全拒絕。Native `main.rs` 的 Explorer FocusHandle 於 GPUI `on_blur` 透過 `win_ime::cancel_focused_composition` 取消 OS 舊候選窗，同時清理標記組字；Terminal 文字列滑鼠 Down 顯式恢復 Primary Terminal TextInput 焦點，避免子列消耗滑鼠事件時仍停在 Explorer。Trace 不記錄輸入內容。
+
+原生 bin 專項 Rust 回歸測試 `6/6 PASS`，其中新測試驗證 Explorer/Terminal 失焦 callback 拒絕與保留原搜尋 Unicode；Windows Debug `cargo build` 通過，`git diff --check` 通過。使用重新編譯 Native 視窗再次進行真實操作：Explorer 中輸入候選 → 點回第一個 Terminal 並輸入注音，候選出現在 Terminal caret；再點回 Explorer，Terminal 舊候選消失；點第二個 Terminal Tab，注音候選移到第二 Terminal 內容處。**這僅通過候選窗定位/取消的實機初驗**，不代表正式中文 Commit 已經被核對到正確的 Host PTY。按 Enter 後候選視覺消失，但尚未取得 Host commit byte-level 證據，延遲 Commit 多輪壓力測試、真正雙窗格（不是兩個 Tab）與 Classic/Native Release p50/p95 仍待驗收。仍維持 `supported=false`，不合併 main、不推送、不發布；正式 Host 和 Classic 未改動。

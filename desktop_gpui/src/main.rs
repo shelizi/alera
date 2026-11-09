@@ -7682,7 +7682,12 @@ impl Render for Workbench {
                                                         .whitespace_nowrap()
                                                         .line_height(px(terminal_font_size * terminal_line_height))
                                                         .bg(rgb(if selected { ACTIVE } else { BG }))
-                                                        .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |this, _, _, cx| {
+                                                        .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |this, _, window, cx| {
+                                                            // Text rows consume the pointer event; explicitly
+                                                            // restore the Terminal IME sink, not the old Explorer.
+                                                            this.focus_primary_mixed_terminal(cx);
+                                                            let focus = this.terminal_input.read(cx).focus_handle(cx);
+                                                            window.focus(&focus, cx);
                                                             this.begin_terminal_line_selection(row_index, cx);
                                                         }))
                                                         .on_mouse_move(cx.listener(move |this, _, _, cx| {
@@ -9149,6 +9154,21 @@ fn main() {
                             })
                             .detach();
                         }
+                        // Explorer shares the same Windows HWND as both Terminal
+                        // text sinks, so switching focus does not generate
+                        // WM_KILLFOCUS. Cancel its OS composition on GPUI blur
+                        // and remove only unfinished search preedit text.
+                        let explorer_focus = view.explorer_filter_input.read(cx).focus_handle(cx);
+                        cx.on_blur(&explorer_focus, window, |view, _, cx| {
+                            let result = win_ime::cancel_focused_composition();
+                            view.explorer_filter_input.update(cx, |input, cx| {
+                                input.discard_marked_preedit(cx);
+                            });
+                            if std::env::var_os("ALERA_GPUI_TSF_TRACE").is_some() {
+                                eprintln!("Alera GPUI TSF: explorer blur cancel={result:?}");
+                            }
+                        })
+                        .detach();
                         view.start_terminal_polling(cx);
                         // Restore saved Host tab previews immediately after
                         // Native window startup, rather than waiting for the

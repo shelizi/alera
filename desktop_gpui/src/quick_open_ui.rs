@@ -14,10 +14,25 @@ use std::ops::Range;
 use std::time::Instant;
 use unicode_segmentation::UnicodeSegmentation;
 
-// A delayed Windows TextInput callback must not enqueue a Terminal commit
-// after GPUI focus moved to Explorer, Settings, or the other pane.
-fn accepts_native_text_event(terminal_mode: bool, has_focus: bool) -> bool {
-    !terminal_mode || has_focus
+// A late Windows IME event must never enter *any* previously focused input.
+// Terminal and Explorer share a native HWND; OS focus alone cannot distinguish them.
+fn accepts_native_text_event(has_focus: bool) -> bool {
+    has_focus
+}
+
+/// Drop only the provisional marked text when an Explorer input loses focus.
+/// Previously committed query content must survive a Terminal focus switch.
+fn remove_marked_preedit(text: &mut String, marked: Option<Range<usize>>) -> Option<usize> {
+    let range = marked?;
+    if range.start > range.end
+        || range.end > text.len()
+        || !text.is_char_boundary(range.start)
+        || !text.is_char_boundary(range.end)
+    {
+        return None;
+    }
+    text.replace_range(range.clone(), "");
+    Some(range.start)
 }
 
 actions!(
@@ -110,6 +125,16 @@ impl QuickOpenInput {
         // duplicate marker from the previous Host session.
         self.terminal_commit_gate = TerminalTextCommitGate::default();
         cx.notify();
+    }
+
+    /// Cancel an uncommitted Windows IME preedit without erasing the user's
+    /// previously committed Explorer search query.
+    pub fn discard_marked_preedit(&mut self, cx: &mut Context<Self>) {
+        let marked = self.marked.take();
+        if let Some(cursor) = remove_marked_preedit(&mut self.text, marked) {
+            self.selection = cursor..cursor;
+            cx.notify();
+        }
     }
 
     /// Select a known local branch from the Git Graph without synthesizing
@@ -258,7 +283,7 @@ impl EntityInputHandler for QuickOpenInput {
                 self.terminal_mode, focused, text.chars().count()
             );
         }
-        if !accepts_native_text_event(self.terminal_mode, focused) {
+        if !accepts_native_text_event(focused) {
             if std::env::var_os("ALERA_GPUI_TSF_TRACE").is_some() {
                 eprintln!("Alera GPUI TSF: drop unfocused Terminal text commit");
             }
@@ -282,7 +307,7 @@ impl EntityInputHandler for QuickOpenInput {
                 self.terminal_mode, focused, text.chars().count()
             );
         }
-        if !accepts_native_text_event(self.terminal_mode, focused) {
+        if !accepts_native_text_event(focused) {
             if std::env::var_os("ALERA_GPUI_TSF_TRACE").is_some() {
                 eprintln!("Alera GPUI TSF: drop unfocused Terminal preedit");
             }
@@ -425,13 +450,23 @@ impl Render for QuickOpenInput {
 
 #[cfg(test)]
 mod tests {
-    use super::accepts_native_text_event;
+    use super::{accepts_native_text_event, remove_marked_preedit};
 
     #[test]
-    fn terminal_rejects_delayed_ime_after_blur_but_explorer_is_unchanged() {
-        assert!(accepts_native_text_event(true, true));
-        assert!(!accepts_native_text_event(true, false));
-        assert!(accepts_native_text_event(false, true));
-        assert!(accepts_native_text_event(false, false));
+    fn both_terminal_and_explorer_reject_delayed_ime_events_after_blur() {
+        assert!(accepts_native_text_event(true));
+        assert!(!accepts_native_text_event(false));
+    }
+
+    #[test]
+    fn blur_discards_only_uncommitted_zhuyin_without_erasing_committed_query() {
+        let mut query = "已搜尋ㄇ檔案".to_owned();
+        let start = "已搜尋".len();
+        assert_eq!(remove_marked_preedit(&mut query, Some(start..start + "ㄇ".len())), Some(start));
+        assert_eq!(query, "已搜尋檔案");
+        assert_eq!(remove_marked_preedit(&mut query, None), None);
+        assert_eq!(query, "已搜尋檔案");
+        assert_eq!(remove_marked_preedit(&mut query, Some(0..1)), None);
+        assert_eq!(query, "已搜尋檔案");
     }
 }
