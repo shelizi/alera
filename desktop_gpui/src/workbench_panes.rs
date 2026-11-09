@@ -31,6 +31,45 @@ pub enum PaneAxis {
     Vertical,
 }
 
+/// Capture the destination pane for a menu or pending Host RPC. A secondary
+/// guard is anchored to an existing tab so a dismissed/recreated split
+/// cannot accidentally inherit an old asynchronous attachment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PaneAttachGuard {
+    generation: u64,
+    pane: PaneSlot,
+    anchor: Option<WorkbenchTabIdentity>,
+}
+
+impl PaneAttachGuard {
+    pub fn capture(generation: u64, pane: PaneSlot, layout: &WorkbenchPaneLayout) -> Option<Self> {
+        if pane == PaneSlot::Secondary && !layout.has_secondary() {
+            return None;
+        }
+        Some(Self {
+            generation,
+            pane,
+            anchor: layout.active_in(pane).cloned(),
+        })
+    }
+
+    pub fn pane(&self) -> PaneSlot {
+        self.pane
+    }
+
+    pub fn still_valid(&self, generation: u64, layout: &WorkbenchPaneLayout) -> bool {
+        if generation != self.generation {
+            return false;
+        }
+        if self.pane == PaneSlot::Primary {
+            return true;
+        }
+        self.anchor.as_ref().is_some_and(|anchor| {
+            layout.has_secondary() && layout.tabs_in(PaneSlot::Secondary).contains(anchor)
+        })
+    }
+}
+
 /// Ordered tab identities for the primary and optional secondary pane, plus
 /// per-pane selection, pane focus and the split axis.
 ///
@@ -497,6 +536,46 @@ mod tests {
         assert_eq!(panes.close_candidates(&a, false), vec![d.clone()]);
         assert!(panes.close_candidates(&editor(999, 1), false).is_empty());
         assert_unique(&panes);
+    }
+
+    #[test]
+    fn pane_attach_guard_rejects_workspace_switch_and_recreated_secondary() {
+        let first = editor(4, 1);
+        let second = editor(4, 2);
+        let mut layout = WorkbenchPaneLayout::new();
+        layout.reconcile(&[first.clone(), second.clone()]);
+        assert!(PaneAttachGuard::capture(7, PaneSlot::Secondary, &layout).is_none());
+        let primary = PaneAttachGuard::capture(7, PaneSlot::Primary, &layout).unwrap();
+        assert!(layout.move_to(&second, PaneSlot::Secondary));
+        let secondary = PaneAttachGuard::capture(7, PaneSlot::Secondary, &layout).unwrap();
+        assert!(secondary.still_valid(7, &layout));
+        assert!(!secondary.still_valid(8, &layout));
+        assert!(primary.still_valid(7, &layout));
+        assert!(layout.move_to(&second, PaneSlot::Primary));
+        assert!(!secondary.still_valid(7, &layout));
+        assert!(layout.move_to(&first, PaneSlot::Secondary));
+        assert!(
+            !secondary.still_valid(7, &layout),
+            "stale menu cannot target recreated split"
+        );
+        assert!(primary.still_valid(7, &layout));
+        assert!(!primary.still_valid(8, &layout));
+    }
+
+    #[test]
+    fn pane_attach_guard_survives_other_selection_in_original_pane() {
+        let first = editor(1, 1);
+        let second = editor(1, 2);
+        let mut layout = WorkbenchPaneLayout::new();
+        layout.reconcile(&[first.clone(), second.clone()]);
+        assert!(layout.move_to(&first, PaneSlot::Secondary));
+        let target = PaneAttachGuard::capture(5, PaneSlot::Secondary, &layout).unwrap();
+        assert!(layout.move_to(&second, PaneSlot::Secondary));
+        assert!(layout.activate(&first));
+        assert!(target.still_valid(5, &layout));
+        assert_eq!(target.pane(), PaneSlot::Secondary);
+        assert!(layout.activate(&second));
+        assert!(target.still_valid(5, &layout));
     }
 
     #[test]

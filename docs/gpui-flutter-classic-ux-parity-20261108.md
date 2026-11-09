@@ -89,10 +89,32 @@ instead of the stale legacy `center_view` flag after session restore.
   model regressions, and Native type-checks pass. This is **not** a
   claim of pointer-level Windows GUI usability acceptance.
 
-**Remaining parity:** Secondary pane still needs its own full Classic +
-menu (especially new Terminal routing/attachment), pinned-tab grouping and
-Classic's optional two-row pinned layout. Precise Windows pane-tab pointer,
-keyboard focus and layout restoration acceptance remains outstanding.
+### Pane-scoped New Tab/Host attach follow-up (2026-11-09)
+
+- **Both pane strips** now expose the same GPUI Kit `+` menu with New
+  File, New Terminal, and Attach running Host session. The second pane no
+  longer relies on the first pane's `+` or only its overflow menu.
+- A New/Attach action carries the pane's workspace generation and (for
+  a split) one original tab identity. A stale menu or a delayed Host create
+  result may not silently target a switched workspace or a closed/recreated
+  secondary pane. Existing Host PTYs are **never terminated** as fallback.
+- New Terminal is one explicit Host create request followed by the
+  existing authenticated list confirmation. A pending request remembers
+  its origin pane; retry re-lists without another PTY create. Cancel clears
+  only Native waiting state. If the destination disappeared, Host session
+  remains available for manual Attach.
+- Attach checks the saved menu session against the latest live list using
+  **handle, Host workspace ID, Host tab ID and running state**; a recycled
+  handle alone cannot hijack a preview. Placement then updates the actual
+  pane membership/active identity. Menu clicks focus the corresponding
+  Terminal input surface.
+- The generation/anchor guard and exact Host identity match have
+  independent Rust unit regressions. These tests and compilation do not
+  replace real Windows mouse, keyboard, modal and Host acceptance.
+
+**Remaining parity:** Pinned-tab grouping and Classic's optional two-row
+pinned layout, Agent creation options in `+`, and reliable real Windows
+pane-tab pointer/IME/layout restoration acceptance remain outstanding.
 
 ## Explorer baseline and implemented slice
 

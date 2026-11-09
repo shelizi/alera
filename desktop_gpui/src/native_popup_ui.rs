@@ -18,7 +18,8 @@ impl Workbench {
     /// Host session list remains an action rather than pretending to be a tab.
     pub(super) fn kit_new_tab_menu(
         owner: gpui::WeakEntity<Self>,
-        running: Vec<(String, String)>,
+        target: Option<PaneAttachGuard>,
+        running: Vec<(TerminalSession, String)>,
         terminal_create_busy: bool,
         terminal_create_timed_out: bool,
     ) -> impl Fn(
@@ -28,55 +29,85 @@ impl Workbench {
     ) -> gpui_kit::component::menu::PopupMenu
            + 'static {
         move |mut menu, _, _| {
+            let Some(target) = target.clone() else {
+                return menu.label("Pane no longer available; reopen New Tab");
+            };
             let new_file_owner = owner.clone();
+            let new_file_target = target.clone();
             menu = menu.item(PopupMenuItem::new("New File").on_click(move |_, _, cx| {
-                let _ = new_file_owner.update(cx, |view, cx| view.new_editor(cx));
+                let _ = new_file_owner.update(cx, |view, cx| {
+                    if new_file_target.still_valid(view.workspace_generation, &view.mixed_panes) {
+                        view.new_editor_in_pane(new_file_target.pane(), cx);
+                    } else {
+                        view.model.set_status("Pane changed; reopen New Tab");
+                        cx.notify();
+                    }
+                });
             }));
             let new_terminal_owner = owner.clone();
+            let new_terminal_target = target.clone();
             menu = menu.item(
                 PopupMenuItem::new("New Terminal").on_click(move |_, _, cx| {
-                    let _ = new_terminal_owner.update(cx, |view, cx| view.create_host_terminal(cx));
+                    let _ = new_terminal_owner.update(cx, |view, cx| {
+                        view.create_host_terminal_in_pane(new_terminal_target.clone(), cx);
+                    });
                 }),
             );
             if terminal_create_timed_out {
                 let retry_owner = owner.clone();
-                menu = menu.item(PopupMenuItem::new("Retry terminal confirmation").on_click(
-                    move |_, _, cx| {
-                        let _ = retry_owner
-                            .update(cx, |view, cx| view.retry_host_terminal_confirmation(cx));
-                    },
-                ));
+                let retry_target = target.clone();
+                // Retrying is global, but the saved creation intent still
+                // determines which pane may receive the Host session.
+                menu = menu.item(
+                    PopupMenuItem::new("Recheck pending Host session (no new PTY)").on_click(
+                        move |_, _, cx| {
+                            let _ = retry_owner.update(cx, |view, cx| {
+                                if retry_target
+                                    .still_valid(view.workspace_generation, &view.mixed_panes)
+                                    && view.terminal_create_pane.is_some()
+                                {
+                                    view.retry_host_terminal_confirmation(cx);
+                                }
+                            });
+                        },
+                    ),
+                );
             }
             if terminal_create_busy {
                 let cancel_owner = owner.clone();
-                menu = menu.item(PopupMenuItem::new("Cancel waiting for terminal").on_click(
-                    move |_, _, cx| {
-                        let _ = cancel_owner
-                            .update(cx, |view, cx| view.cancel_host_terminal_confirmation(cx));
-                    },
-                ));
+                let cancel_target = target.clone();
+                // Local cancellation never terminates a Host PTY. Allow it
+                // from either current pane if the original pane was closed.
+                menu = menu.item(
+                    PopupMenuItem::new("Cancel pending request (keep Host PTY)").on_click(
+                        move |_, _, cx| {
+                            let _ = cancel_owner.update(cx, |view, cx| {
+                                if cancel_target
+                                    .still_valid(view.workspace_generation, &view.mixed_panes)
+                                    && view.terminal_create_pane.is_some()
+                                {
+                                    view.cancel_host_terminal_confirmation(cx);
+                                }
+                            });
+                        },
+                    ),
+                );
             }
             menu = menu.label("Attach running Host session");
             if running.is_empty() {
                 menu = menu.label("No running Host sessions");
             }
-            for (handle, title) in running.iter().cloned() {
+            for (expected, title) in running.iter().cloned() {
                 let owner = owner.clone();
-                menu = menu.item(PopupMenuItem::new(title).on_click(move |_, _, cx| {
+                let attach_target = target.clone();
+                menu = menu.item(PopupMenuItem::new(title).on_click(move |_, window, cx| {
                     let _ = owner.update(cx, |view, cx| {
-                        // Recheck Host identity at click-time. Refreshing the
-                        // menu must never attach to a recycled/stopped tab.
-                        if view
-                            .terminals
-                            .sessions
-                            .iter()
-                            .any(|session| session.running && session.handle == handle)
+                        // Recheck handle + Host workspace + tab ID and pane
+                        // generation at click time. Never follow reused IDs.
+                        if let Some(identity) =
+                            view.attach_live_terminal_to_pane(&expected, &attach_target, cx)
                         {
-                            view.explorer_preview_active = false;
-                            view.select_terminal(handle.clone(), cx);
-                        } else {
-                            view.model.set_status("Host session stopped; cannot attach");
-                            cx.notify();
+                            view.focus_mixed_tab(&identity, window, cx);
                         }
                     });
                 }));

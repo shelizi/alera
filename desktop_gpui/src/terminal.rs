@@ -39,6 +39,17 @@ impl TerminalSession {
         let state = if self.running { "●" } else { "○" };
         format!("{state} {name} · {}", self.handle)
     }
+
+    /// Menu snapshots must not attach a recycled handle to the wrong Host
+    /// workspace/tab. A valid snapshot and the latest authenticated list
+    /// must agree on all three identifiers and both be running.
+    pub fn matches_running_identity(&self, current: &TerminalSession) -> bool {
+        self.running
+            && current.running
+            && self.handle == current.handle
+            && self.workspace_id == current.workspace_id
+            && self.tab_id == current.tab_id
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1984,6 +1995,30 @@ impl TerminalDock {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn host_menu_target_requires_same_live_triple_not_just_reused_handle() {
+        let expected = TerminalSession {
+            handle: "h1".into(),
+            workspace_id: "workspace-a".into(),
+            tab_id: "tab-1".into(),
+            running: true,
+            agent_type: None,
+        };
+        assert!(expected.matches_running_identity(&expected));
+        let mut current = expected.clone();
+        current.tab_id = "tab-2".into();
+        assert!(!expected.matches_running_identity(&current));
+        current = expected.clone();
+        current.workspace_id = "workspace-b".into();
+        assert!(!expected.matches_running_identity(&current));
+        current = expected.clone();
+        current.running = false;
+        assert!(!expected.matches_running_identity(&current));
+        let mut stopped_snapshot = expected.clone();
+        stopped_snapshot.running = false;
+        assert!(!stopped_snapshot.matches_running_identity(&expected));
+    }
 
     #[test]
     fn native_ime_candidate_anchor_tracks_vt_cursor_inside_each_visible_pane() {

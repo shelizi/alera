@@ -57,8 +57,8 @@ use alera_gpui_desktop::terminal::{
     encode_terminal_key, estimate_terminal_viewport_with_line_height, raw_key_reply_may_drain,
     select_registered_host_workspace, terminal_ime_anchor_with_line_height, TerminalAutoResizeGate,
     TerminalCreateFlow, TerminalCreateTick, TerminalDock, TerminalLineSelection,
-    TerminalPollCadence, TerminalPollGate, TerminalTabContextTarget, TerminalViewMode,
-    TerminalViewportProposal, HOST_SESSION_LIST_SCOPE,
+    TerminalPollCadence, TerminalPollGate, TerminalSession, TerminalTabContextTarget,
+    TerminalViewMode, TerminalViewportProposal, HOST_SESSION_LIST_SCOPE,
 };
 use alera_gpui_desktop::terminal_panes::{TerminalPaneLayout, TerminalSplitDirection};
 use alera_gpui_desktop::terminal_stream_bridge::{
@@ -73,7 +73,9 @@ use alera_gpui_desktop::vt_screen::StyledRow;
 use alera_gpui_desktop::workbench_layout_store::{
     SavedWorkbenchAxis, SavedWorkbenchLayoutV1, SavedWorkbenchPane, WORKBENCH_LAYOUT_VERSION,
 };
-use alera_gpui_desktop::workbench_panes::{PaneAxis, PaneSlot, WorkbenchPaneLayout};
+use alera_gpui_desktop::workbench_panes::{
+    PaneAttachGuard, PaneAxis, PaneSlot, WorkbenchPaneLayout,
+};
 use alera_gpui_desktop::workbench_tabs::{
     WorkbenchTab, WorkbenchTabIdentity, WorkbenchTabKind, WorkbenchTabs,
 };
@@ -313,6 +315,14 @@ struct ExplorerContextMenu {
     path: Option<PathBuf>,
 }
 
+/// Correlate a pending Host create RPC with the pane that initiated it.
+/// The Host always owns the PTY; this only controls Native preview placement.
+#[derive(Clone, Debug)]
+struct PendingTerminalPane {
+    request_id: u64,
+    target: PaneAttachGuard,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RightSidebarView {
     Explorer,
@@ -479,6 +489,7 @@ struct Workbench {
     terminal_auto_resize: TerminalAutoResizeGate,
     terminal_line_selection: Option<TerminalLineSelection>,
     terminal_create_flow: TerminalCreateFlow,
+    terminal_create_pane: Option<PendingTerminalPane>,
     terminal_layout_restore: Option<TerminalLayout>,
     terminal_list_loading: bool,
     terminal_read_loading: Option<String>,
@@ -3048,6 +3059,7 @@ impl Workbench {
         self.terminal_line_selection = None;
         self.terminal_panes.reset();
         self.terminal_create_flow.cancel();
+        self.terminal_create_pane = None;
         self.load_terminal_layout();
         self.terminal_key_queue.clear();
         self.terminal_key_queue_target = None;
@@ -4008,7 +4020,12 @@ impl Workbench {
         }).detach();
     }
 
-    fn create_host_terminal(&mut self, cx: &mut Context<Self>) {
+    fn create_host_terminal_in_pane(&mut self, target: PaneAttachGuard, cx: &mut Context<Self>) {
+        if !target.still_valid(self.workspace_generation, &self.mixed_panes) {
+            self.terminals.status = "Workbench pane changed; reopen the New Tab menu".into();
+            cx.notify();
+            return;
+        }
         if self.terminal_create_flow.is_active() {
             self.terminals.status =
                 "A Host terminal request is pending; confirm, retry its listing, or cancel first"
@@ -4029,6 +4046,7 @@ impl Workbench {
         let Some(request_id) = self.terminal_create_flow.start_request() else {
             return;
         };
+        self.terminal_create_pane = Some(PendingTerminalPane { request_id, target });
         self.terminals.status =
             "Checking registered Host workspaces before creating terminal…".into();
         cx.notify();
@@ -4065,12 +4083,17 @@ impl Workbench {
                         if !view.terminal_create_flow.fail_request(request_id) {
                             return;
                         }
+                        if view.terminal_create_pane.as_ref().is_some_and(|pending| {
+                            pending.request_id == request_id
+                        }) {
+                            view.terminal_create_pane = None;
+                        }
                         view.terminals.status = if error.kind() == std::io::ErrorKind::InvalidData {
                             // The Host RPC may already have created a PTY,
                             // even when the CLI reply failed validation.
                             // Never encourage a second create as a retry.
                             format!(
-                                "Host terminal reply could not be verified: {error}. +                                 A session may already exist; use Attach existing before retrying New Terminal."
+                                "Host terminal reply could not be verified: {error}. A session may already exist; use Attach existing before retrying New Terminal."
                             )
                         } else {
                             format!("Cannot create Host terminal: {error}")
@@ -4094,6 +4117,7 @@ impl Workbench {
 
     fn cancel_host_terminal_confirmation(&mut self, cx: &mut Context<Self>) {
         if self.terminal_create_flow.cancel() {
+            self.terminal_create_pane = None;
             // An RPC in flight can still create a Host terminal. Dismiss
             // only the local expectation; never issue a Host kill request.
             self.terminals.status =
@@ -4141,7 +4165,28 @@ impl Workbench {
                                 .terminal_create_flow
                                 .confirm_sessions(&view.terminals.sessions)
                             {
-                                view.select_terminal(created.handle, cx);
+                                // Never redirect a delayed Host create result to
+                                // whichever pane currently has global focus.
+                                // Only the exact authenticated Host triple may
+                                // be previewed in the still-existing origin.
+                                let pending = view.terminal_create_pane.take();
+                                let session = view.terminals.sessions.iter()
+                                    .find(|session| created.matches_live_session(session))
+                                    .cloned();
+                                if let (Some(pending), Some(session)) = (pending, session) {
+                                    if !pending.target.still_valid(view.workspace_generation, &view.mixed_panes) {
+                                        view.terminals.status =
+                                            "Host terminal created, but its pane changed; use + → Attach existing (PTY kept alive)".into();
+                                    } else if view.attach_live_terminal_to_pane(
+                                        &session, &pending.target, cx,
+                                    ).is_none() {
+                                        view.terminals.status =
+                                            "Host terminal created but Native attach was refused; use + → Attach existing".into();
+                                    }
+                                } else {
+                                    view.terminals.status =
+                                        "Host terminal confirmed without a current pane request; use + → Attach existing".into();
+                                }
                             }
                             // Launch reply contains a Host workspace+tab id,
                             // not a trustworthy PTY handle. Resolve through
@@ -4181,6 +4226,100 @@ impl Workbench {
             .ok();
         })
         .detach();
+    }
+
+    /// Explicit + → Attach and confirmed + → New Terminal share this path.
+    /// A menu snapshot with only a recycled handle is never authorization
+    /// to attach an unrelated Host tab or steal focus from another pane.
+    fn attach_live_terminal_to_pane(
+        &mut self,
+        expected: &TerminalSession,
+        target: &PaneAttachGuard,
+        cx: &mut Context<Self>,
+    ) -> Option<WorkbenchTabIdentity> {
+        if !target.still_valid(self.workspace_generation, &self.mixed_panes) {
+            self.terminals.status = "Pane closed or moved; reopen its New Tab menu".into();
+            cx.notify();
+            return None;
+        }
+        // An authenticated Host refresh may have invalidated an old pane
+        // anchor without painting another GPUI frame yet. Reconcile *before*
+        // opening the new local preview so a stale secondary cannot cause
+        // that preview to be implicitly appended to Primary.
+        self.sync_mixed_tabs(cx);
+        if !target.still_valid(self.workspace_generation, &self.mixed_panes) {
+            self.terminals.status =
+                "Original pane changed; Host session remains available to Attach again".into();
+            cx.notify();
+            return None;
+        }
+        if self.terminals.session_list_is_stale()
+            || !self
+                .terminals
+                .sessions
+                .iter()
+                .any(|current| expected.matches_running_identity(current))
+        {
+            self.terminals.status =
+                "Host session changed or stopped; refresh and choose the exact session again"
+                    .into();
+            cx.notify();
+            return None;
+        }
+        self.select_terminal(expected.handle.clone(), cx);
+        let active_is_expected = self.terminals.active().is_some_and(|tab| {
+            tab.handle == expected.handle
+                && tab.workspace_id == expected.workspace_id
+                && tab.tab_id == expected.tab_id
+        });
+        if !active_is_expected {
+            self.terminals.status =
+                "Cannot attach Host preview: terminal limit or session changed".into();
+            cx.notify();
+            return None;
+        }
+        self.sync_mixed_tabs(cx);
+        if !target.still_valid(self.workspace_generation, &self.mixed_panes) {
+            self.terminals.status = "Pane changed before Host attachment completed".into();
+            cx.notify();
+            return None;
+        }
+        let active = self
+            .terminals
+            .active_tab
+            .and_then(|index| self.terminals.context_target_at(index))?;
+        if !self.terminals.context_target_is_live(&active) {
+            self.terminals.status = "Host session is no longer live".into();
+            cx.notify();
+            return None;
+        }
+        let identity = WorkbenchTabIdentity::Host(active);
+        let pane = target.pane();
+        let positioned = if self.mixed_panes.tabs_in(pane).contains(&identity) {
+            self.mixed_panes.activate(&identity);
+            true
+        } else {
+            self.mixed_panes.move_to(&identity, pane)
+        };
+        if !positioned {
+            self.terminals.status =
+                "Host preview opened, but pane placement failed; choose Attach again".into();
+            cx.notify();
+            return None;
+        }
+        self.mixed_tabs.select(&identity);
+        self.save_mixed_pane_layout(cx);
+        self.refresh_terminal_split_output(cx);
+        self.terminals.status = format!(
+            "Attached Host session in {} pane",
+            if pane == PaneSlot::Secondary {
+                "second"
+            } else {
+                "first"
+            }
+        );
+        cx.notify();
+        Some(identity)
     }
 
     fn select_terminal(&mut self, handle: String, cx: &mut Context<Self>) {
@@ -7817,15 +7956,22 @@ impl Render for Workbench {
                                                 let running = self.terminals.sessions.iter()
                                                     .filter(|session| session.running)
                                                     .map(|session| (
-                                                        session.handle.clone(),
+                                                        session.clone(),
                                                         format!("{} · {}", session.label(), session.workspace_id),
                                                     ))
                                                     .collect::<Vec<_>>();
-                                                icon_button("mixed-new-tab", UiIcon::Add, "New Tab", terminal_creating)
+                                                let target = PaneAttachGuard::capture(
+                                                    self.workspace_generation,
+                                                    PaneSlot::Primary,
+                                                    &self.mixed_panes,
+                                                );
+                                                icon_button("mixed-new-tab", UiIcon::Add, "New Tab", terminal_creating
+                                                    && self.terminal_create_pane.as_ref().is_some_and(|pending| pending.target.pane() == PaneSlot::Primary))
                                                     .w(px(28.0))
                                                     .h(px(28.0))
                                                     .dropdown_menu(Self::kit_new_tab_menu(
                                                         owner,
+                                                        target,
                                                         running,
                                                         terminal_create_busy,
                                                         terminal_create_timed_out,
@@ -7833,7 +7979,6 @@ impl Render for Workbench {
                                                     .on_open_change(move |open, _, cx| {
                                                         if *open {
                                                             let _ = refresh_owner.update(cx, |view, cx| {
-                                                                view.mixed_panes.focus_pane(PaneSlot::Primary);
                                                                 view.refresh_terminals(cx);
                                                             });
                                                         }
@@ -8254,6 +8399,40 @@ impl Render for Workbench {
                                                                 }
                                                             })),
                                                     )
+                                                    .child({
+                                                        let owner = cx.entity().downgrade();
+                                                        let refresh_owner = owner.clone();
+                                                        let running = self.terminals.sessions.iter()
+                                                            .filter(|session| session.running)
+                                                            .map(|session| (
+                                                                session.clone(),
+                                                                format!("{} · {}", session.label(), session.workspace_id),
+                                                            ))
+                                                            .collect::<Vec<_>>();
+                                                        let target = PaneAttachGuard::capture(
+                                                            self.workspace_generation,
+                                                            PaneSlot::Secondary,
+                                                            &self.mixed_panes,
+                                                        );
+                                                        icon_button("mixed-secondary-new-tab", UiIcon::Add, "New Tab in second pane", terminal_creating
+                                                            && self.terminal_create_pane.as_ref().is_some_and(|pending| pending.target.pane() == PaneSlot::Secondary))
+                                                            .w(px(28.0))
+                                                            .h(px(28.0))
+                                                            .dropdown_menu(Self::kit_new_tab_menu(
+                                                                owner,
+                                                                target,
+                                                                running,
+                                                                terminal_create_busy,
+                                                                terminal_create_timed_out,
+                                                            ))
+                                                            .on_open_change(move |open, _, cx| {
+                                                                if *open {
+                                                                    let _ = refresh_owner.update(cx, |view, cx| {
+                                                                        view.refresh_terminals(cx);
+                                                                    });
+                                                                }
+                                                            })
+                                                    })
                                                     .child(
                                                         icon_button("mixed-secondary-pane-actions", UiIcon::More, "Second pane actions", false)
                                                             .dropdown_menu(Self::kit_pane_actions_menu(
@@ -9525,6 +9704,7 @@ fn main() {
                             terminal_auto_resize: TerminalAutoResizeGate::default(),
                             terminal_line_selection: None,
                             terminal_create_flow: TerminalCreateFlow::default(),
+                            terminal_create_pane: None,
                             terminal_layout_restore: None,
                             terminal_list_loading: false,
                             terminal_read_loading: None,
