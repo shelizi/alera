@@ -92,6 +92,7 @@ class WorkspaceSourceControlController
   DateTime? _watcherReloadNotBefore;
   bool _watcherReloadInFlight = false;
   bool _watcherReloadQueued = false;
+  Completer<void>? _queuedManualRefresh;
   int _queuedWatcherReloads = 0;
   int _loadGeneration = 0;
   int _staleCompletionCount = 0;
@@ -111,7 +112,31 @@ class WorkspaceSourceControlController
     return _load();
   }
 
-  Future<void> refresh() => _run(.refresh, (_) async {});
+  /// Explicit refresh is never dropped while another Git action is busy.
+  /// A queued call completes only after its follow-up status read publishes.
+  Future<void> refresh() {
+    if (state.asData?.value.isBusy ?? false) {
+      return (_queuedManualRefresh ??= Completer<void>()).future;
+    }
+    // Publish the changes list first. Branch and stash metadata can follow
+    // without delaying a user-requested update to the visible files.
+    return _run(.refresh, (_) async {}, statusFirst: true);
+  }
+
+  void _drainQueuedManualRefresh() {
+    final queued = _queuedManualRefresh;
+    if (_disposed || queued == null || (state.asData?.value.isBusy ?? false)) {
+      return;
+    }
+    _queuedManualRefresh = null;
+    unawaited(
+      refresh().then(
+        (_) => queued.complete(),
+        onError: (Object error, StackTrace stack) =>
+            queued.completeError(error, stack),
+      ),
+    );
+  }
 
   Future<void> stage(String? filePath) => _run(
     .stage,
@@ -405,6 +430,7 @@ class WorkspaceSourceControlController
           _refreshRepositoryStateAfterFastAction(
             backend: backend,
             loadGeneration: loadGeneration,
+            includeStashes: action == WorkspaceSourceControlAction.refresh,
           ),
         );
       }
@@ -417,6 +443,7 @@ class WorkspaceSourceControlController
       }
       rethrow;
     } finally {
+      _drainQueuedManualRefresh();
       _scheduleQueuedWatcherReload();
     }
   }
@@ -437,30 +464,38 @@ class WorkspaceSourceControlController
   Future<void> _refreshRepositoryStateAfterFastAction({
     required GitSourceControlQueryPort backend,
     required int loadGeneration,
+    bool includeStashes = false,
   }) async {
     try {
-      final repositoryState = await backend.repositoryState(workspacePath);
+      final results = await Future.wait<Object>([
+        backend.repositoryState(workspacePath),
+        if (includeStashes) backend.listStashes(workspacePath),
+      ]);
       if (loadGeneration != _loadGeneration) return;
       final current = state.asData?.value;
       if (current == null || current.isBusy) return;
+      final repositoryState = results[0] as GitRepositoryState;
+      final stashes = includeStashes
+          ? results[1] as List<GitStashEntry>
+          : current.stashes;
       if (gitRepositoryStateValuesEqual(
-        current.repositoryState,
-        repositoryState,
-      )) {
+            current.repositoryState,
+            repositoryState,
+          ) &&
+          gitStashEntriesValuesEqual(current.stashes, stashes)) {
         return;
       }
       state = AsyncData(
         WorkspaceSourceControlState(
           status: current.status,
           repositoryState: repositoryState,
-          stashes: current.stashes,
+          stashes: stashes,
           revision: current.revision + 1,
         ),
       );
     } catch (_) {
-      // Stage/unstage already succeeded and status is current. Repository
-      // metadata is best-effort here and can be repaired by watcher/manual
-      // refresh without keeping the source-control UI busy.
+      // The updated file status remains visible even if metadata fails.
+      // A later watcher or manual refresh can repair metadata independently.
     }
   }
 
@@ -546,6 +581,11 @@ class WorkspaceSourceControlController
     _watcherReloadDebounceTimer = null;
     _watcherRestartTimer?.cancel();
     _watcherRestartTimer = null;
+    final pendingManualRefresh = _queuedManualRefresh;
+    _queuedManualRefresh = null;
+    if (pendingManualRefresh != null && !pendingManualRefresh.isCompleted) {
+      pendingManualRefresh.complete();
+    }
     final subscription = _watchSubscription;
     _watchSubscription = null;
     unawaited(subscription?.cancel());
@@ -607,6 +647,7 @@ class WorkspaceSourceControlController
         _queuedWatcherReloads = 0;
         _watcherReloadNotBefore = null;
       }
+      _drainQueuedManualRefresh();
       _scheduleQueuedWatcherReload();
     }
   }

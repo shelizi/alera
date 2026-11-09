@@ -91,12 +91,27 @@ extension _WorkspaceGitDiffPanelActions on _WorkspaceGitDiffPanelState {
   }
 
   Future<void> _refresh() async {
-    await widget.onRefreshRepository?.call();
-    if (!mounted) return;
-    await _run(
-      () => _notifier.refresh(),
-      successMessage: 'Source control refreshed',
-    );
+    // Source Control files take priority over the slower project/repository
+    // re-detection. Do not block a user-triggered status refresh on it.
+    final repositoryRefresh = widget.onRefreshRepository?.call();
+    try {
+      await _notifier.refresh();
+      if (mounted) {
+        AleraToast.show(
+          context,
+          message: 'Source control refreshed',
+          tone: .success,
+        );
+      }
+    } catch (error) {
+      if (mounted) {
+        AleraToast.show(context, message: _messageFor(error), tone: .error);
+      }
+    }
+    if (repositoryRefresh != null) {
+      // Project kind detection is independent of the changes-list refresh.
+      unawaited(repositoryRefresh.catchError((Object _) {}));
+    }
   }
 
   Future<void> _runToolbarAction(_SourceControlMenuAction action) async {
