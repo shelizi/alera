@@ -2,6 +2,7 @@
 //! Tests can build this library without the heavyweight GPUI renderer.
 pub mod agent_profiles;
 mod agent_runtime_bridge;
+pub mod ai_commit_bridge;
 pub mod edition;
 pub mod editor;
 pub mod editor_search;

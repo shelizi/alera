@@ -4,12 +4,14 @@ use crate::terminal_host::protocol::{
     DEFAULT_SCROLLBACK_BYTES, TERMINAL_HOST_COMMAND,
 };
 mod agent_profile;
+mod ai_assist;
 mod automation;
 mod mobile;
 mod text_source;
 mod workspace;
 
 pub use agent_profile::*;
+pub use ai_assist::*;
 pub use automation::*;
 pub use mobile::*;
 pub use text_source::*;
@@ -84,6 +86,9 @@ pub enum Command {
     /// Create, inspect, update, remove, reorder, and launch agent profiles.
     #[command(name = "agent-profile")]
     AgentProfile(AgentProfileCommand),
+    /// Explicit, read-only AI Commit generation using existing Host settings.
+    #[command(name = "ai-assist")]
+    AiAssist(AiAssistCommand),
 
     /// Inter-agent orchestration: messaging, task DAG, dispatch, gates, coordinator.
     Orchestration(OrchestrationCommand),

@@ -6,6 +6,7 @@ mod agent_profile_launch;
 mod agent_prompt_stdin_script;
 mod agent_quota;
 mod agent_status;
+mod ai_commit_commands;
 mod automation_autostart;
 mod automation_commands;
 mod automation_ssh_precheck;
@@ -164,6 +165,7 @@ async fn run(cli: Cli) -> i32 {
 
         Command::Automation(command) => automation_commands::run(command).await,
         Command::AgentProfile(command) => agent_profile_commands::run(command).await,
+        Command::AiAssist(command) => ai_commit_commands::run(command).await,
         Command::Orchestration(command) => {
             orchestration_commands::run_orchestration_command(command).await
         }
