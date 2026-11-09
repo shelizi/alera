@@ -1785,6 +1785,14 @@ impl TerminalDock {
         let Some(tab) = self.tabs.iter().find(|tab| tab.handle == ticket.handle) else {
             return false;
         };
+        // An authenticated Host stream now owns this preview's VT state.
+        // A CLI read started before that stream attached can have the *same*
+        // cursor, so cursor/generation equality alone cannot prevent it
+        // overwriting fresh stream output. Only a confirmed stream loss
+        // unlocks the full retained-Host-read fallback.
+        if tab.stream_attached && !tab.stream_fallback_pending {
+            return false;
+        }
         if ticket.generation != tab.generation || ticket.cursor != tab.next_cursor {
             return false;
         }
@@ -2346,6 +2354,37 @@ mod tests {
         assert!(dock.apply_workspace_read(4, &ticket, chunk("pty-1", 0, 9, "new host\n")));
         assert_eq!(dock.active().unwrap().output, "new host\n");
         assert_eq!(dock.active().unwrap().next_cursor, Some(9));
+    }
+
+    #[test]
+    fn late_cli_read_must_not_overwrite_authenticated_host_stream_snapshot() {
+        let mut dock = TerminalDock::for_workspace(13);
+        assert!(dock.apply_session_list(13, vec![session("pty-1")]));
+        assert!(dock.open("pty-1"));
+        let initial = dock.active_ticket().unwrap();
+        assert!(dock.apply_workspace_read(13, &initial, chunk("pty-1", 0, 30, "prior\n")));
+        let pending_legacy_read = dock.active_ticket().unwrap();
+        assert_eq!(pending_legacy_read.cursor, Some(30));
+        assert!(dock.apply_stream_snapshot(
+            "pty-1",
+            "workspace-1",
+            "tab-pty-1",
+            30,
+            24,
+            80,
+            b"stream\n"
+        ));
+        assert!(!dock.apply_workspace_read(
+            13,
+            &pending_legacy_read,
+            chunk("pty-1", 30, 36, "stale\n")
+        ));
+        assert_eq!(dock.active().unwrap().output, "stream\n");
+        dock.invalidate_stream_observers();
+        let recovery_read = dock.active_ticket().unwrap();
+        assert_eq!(recovery_read.cursor, None);
+        assert!(dock.apply_workspace_read(13, &recovery_read, chunk("pty-1", 0, 7, "host\n")));
+        assert_eq!(dock.active().unwrap().output, "host\n");
     }
 
     fn session(handle: &str) -> TerminalSession {

@@ -49,7 +49,9 @@ use alera_gpui_desktop::terminal::{
     TerminalTabContextTarget, TerminalViewMode, TerminalViewportProposal, HOST_SESSION_LIST_SCOPE,
 };
 use alera_gpui_desktop::terminal_panes::{TerminalPaneLayout, TerminalSplitDirection};
-use alera_gpui_desktop::terminal_stream_bridge::{NativeTerminalStreamBridge, StreamViewUpdate};
+use alera_gpui_desktop::terminal_stream_bridge::{
+    NativeTerminalStreamBridge, StreamViewUpdate, TerminalStreamRetryGate,
+};
 use alera_gpui_desktop::visual_tokens::{
     ACTIVE, BG, BORDER, BORDER_ACTIVE, ELEVATED, MUTED, PANEL, PROJECTS_SIDEBAR_WIDTH,
     RIGHT_SIDEBAR_WIDTH, SECTION_HEADER_HEIGHT, STATUS_BAR_HEIGHT, TAB_STRIP_HEIGHT, TEXT, TOOLBAR,
@@ -427,7 +429,7 @@ struct Workbench {
     terminal_poll: TerminalPollGate,
     terminal_poll_cadence: TerminalPollCadence,
     terminal_stream: Option<NativeTerminalStreamBridge>,
-    terminal_stream_unavailable: bool,
+    terminal_stream_retry: TerminalStreamRetryGate,
     terminal_stream_view_snapshot: Vec<(String, u64)>,
     terminal_tick: u64,
 }
@@ -2674,7 +2676,7 @@ impl Workbench {
         self.terminal_poll = TerminalPollGate::default();
         self.terminal_poll_cadence = TerminalPollCadence::default();
         self.terminal_stream = None;
-        self.terminal_stream_unavailable = false;
+        self.terminal_stream_retry.recovered(Instant::now());
         self.terminal_stream_view_snapshot.clear();
         self.terminal_list_loading = false;
         self.terminal_read_loading = None;
@@ -5075,7 +5077,7 @@ impl Workbench {
             // or feed a stale frame into a newly created emulator surface.
             self.terminal_stream = None;
             self.terminals.invalidate_stream_observers();
-            self.terminal_stream_unavailable = false;
+            self.terminal_stream_retry.recovered(Instant::now());
             self.terminal_stream_view_snapshot = live_views;
         }
         let mut visible = Vec::new();
@@ -5109,12 +5111,12 @@ impl Workbench {
         }
         if !visible.is_empty()
             && self.terminal_stream.is_none()
-            && !self.terminal_stream_unavailable
+            && self.terminal_stream_retry.can_attempt(Instant::now())
         {
             if let Some(cli) = self.runtime_bridge.as_ref() {
                 match NativeTerminalStreamBridge::start(cli) {
                     Ok(bridge) => self.terminal_stream = Some(bridge),
-                    Err(_) => self.terminal_stream_unavailable = true,
+                    Err(_) => self.terminal_stream_retry.failed(Instant::now()),
                 }
             }
         }
@@ -5147,6 +5149,7 @@ impl Workbench {
                         cols,
                         &bytes,
                     ) {
+                        self.terminal_stream_retry.recovered(Instant::now());
                         parsed_bytes += bytes.len();
                         repaint = true;
                     }
@@ -5186,7 +5189,7 @@ impl Workbench {
         if disconnected {
             self.terminal_stream = None;
             self.terminals.invalidate_stream_observers();
-            self.terminal_stream_unavailable = true;
+            self.terminal_stream_retry.failed(Instant::now());
         }
         if repaint {
             cx.notify();
@@ -8584,7 +8587,7 @@ fn main() {
                             terminal_poll: TerminalPollGate::default(),
                             terminal_poll_cadence: TerminalPollCadence::default(),
                             terminal_stream: None,
-                            terminal_stream_unavailable: false,
+                            terminal_stream_retry: TerminalStreamRetryGate::default(),
                             terminal_stream_view_snapshot: Vec::new(),
                             terminal_tick: 0,
                         };

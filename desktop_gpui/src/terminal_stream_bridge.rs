@@ -19,6 +19,47 @@ use std::time::{Duration, Instant};
 
 pub const STREAM_EVENT_BUDGET_PER_TICK: usize = 128;
 
+/// A failed private CLI/Host stream must not permanently disable push output.
+/// Retry only when a running Host tab is visible, with an exponential
+/// backoff to avoid child-process storms while a Host is unavailable.
+/// The fallback CLI reader remains in charge until an authenticated
+/// attachment succeeds and the stream snapshot is safely applied.
+#[derive(Debug, Clone)]
+pub struct TerminalStreamRetryGate {
+    failures: u32,
+    ready_at: Instant,
+}
+
+impl Default for TerminalStreamRetryGate {
+    fn default() -> Self {
+        Self::new(Instant::now())
+    }
+}
+
+impl TerminalStreamRetryGate {
+    pub fn new(now: Instant) -> Self {
+        Self {
+            failures: 0,
+            ready_at: now,
+        }
+    }
+
+    pub fn can_attempt(&self, now: Instant) -> bool {
+        now >= self.ready_at
+    }
+
+    pub fn failed(&mut self, now: Instant) {
+        let delay_seconds = 1_u64 << self.failures.min(5);
+        self.failures = self.failures.saturating_add(1);
+        self.ready_at = now + Duration::from_secs(delay_seconds);
+    }
+
+    pub fn recovered(&mut self, now: Instant) {
+        self.failures = 0;
+        self.ready_at = now;
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StreamSessionIdentity {
     pub session_id: String,
@@ -703,6 +744,31 @@ mod subscription_tests {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn dropped_private_stream_retries_with_bounded_backoff_and_resets_on_success() {
+        let start = Instant::now();
+        let mut gate = TerminalStreamRetryGate::new(start);
+        assert!(gate.can_attempt(start));
+        gate.failed(start);
+        assert!(!gate.can_attempt(start + Duration::from_millis(999)));
+        assert!(gate.can_attempt(start + Duration::from_secs(1)));
+        gate.failed(start + Duration::from_secs(1));
+        assert!(!gate.can_attempt(start + Duration::from_secs(2)));
+        assert!(gate.can_attempt(start + Duration::from_secs(3)));
+        let mut tick = start + Duration::from_secs(3);
+        for failure in 0..20 {
+            gate.failed(tick);
+            let delay = (4_u64 << failure.min(3)).min(32);
+            assert!(!gate.can_attempt(tick + Duration::from_secs(delay - 1)));
+            tick += Duration::from_secs(delay);
+            assert!(gate.can_attempt(tick));
+        }
+        gate.recovered(tick);
+        assert!(gate.can_attempt(tick));
+        gate.failed(tick);
+        assert!(gate.can_attempt(tick + Duration::from_secs(1)));
+    }
 
     #[test]
     fn native_observed_write_carries_original_view_lease_and_never_argv_text() {
