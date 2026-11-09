@@ -27,6 +27,9 @@ mod configuration_store;
 mod configuration_store_tests;
 mod configuration_validation;
 mod desktop_shared_settings;
+mod git_favorites_store;
+#[cfg(test)]
+mod git_favorites_store_tests;
 mod mobile_access_settings_row;
 #[cfg(test)]
 mod mobile_store_tests;

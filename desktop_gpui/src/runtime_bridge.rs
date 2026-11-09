@@ -205,6 +205,43 @@ impl RuntimeCliBridge {
         self.desktop_settings_command(&[OsString::from("get")])
     }
 
+    pub fn git_favorites_for_workspace(&self, root: &Path) -> io::Result<Value> {
+        self.desktop_settings_command(&[
+            OsString::from("favorites-get"),
+            OsString::from("--root-path"),
+            root.as_os_str().to_owned(),
+        ])
+    }
+
+    /// Seed only when an old Native file *actually existed* for this root.
+    /// The Host will never overwrite an existing Classic or GPUI scope.
+    pub fn git_favorites_seed_native(&self, root: &Path, branches: &[String]) -> io::Result<Value> {
+        self.desktop_settings_command(&[
+            OsString::from("favorites-seed"),
+            OsString::from("--root-path"),
+            root.as_os_str().to_owned(),
+            OsString::from("--branches"),
+            OsString::from(serde_json::to_string(branches)?),
+        ])
+    }
+
+    pub fn git_favorites_compare_and_set(
+        &self,
+        root: &Path,
+        expected: &[String],
+        value: &[String],
+    ) -> io::Result<Value> {
+        self.desktop_settings_command(&[
+            OsString::from("favorites-set"),
+            OsString::from("--root-path"),
+            root.as_os_str().to_owned(),
+            OsString::from("--expected"),
+            OsString::from(serde_json::to_string(expected)?),
+            OsString::from("--value"),
+            OsString::from(serde_json::to_string(value)?),
+        ])
+    }
+
     /// Older GPUI builds saved the default Agent Profile in Native JSON.
     /// Migrate at most once in the Host; the Host checks the existing catalog
     /// and prefers an already saved Classic selection.
@@ -307,7 +344,18 @@ impl RuntimeCliBridge {
         }
         let response: Value = serde_json::from_slice(&bytes)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-        if !response["values"].is_object() {
+        let favorites_request = args
+            .first()
+            .and_then(|arg| arg.to_str())
+            .is_some_and(|verb| verb.starts_with("favorites-"));
+        if favorites_request {
+            if !response["branches"].is_array() || !response["scopeKey"].is_string() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "Host returned invalid Git favorites scope or branch list",
+                ));
+            }
+        } else if !response["values"].is_object() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "Missing shared Settings values",

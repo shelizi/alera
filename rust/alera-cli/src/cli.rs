@@ -360,6 +360,28 @@ pub struct DesktopSettingsCommand {
 #[derive(Debug, Subcommand)]
 pub enum DesktopSettingsAction {
     Get,
+    /// Resolve exactly one registered Host project/worktree to its Git favorites.
+    FavoritesGet {
+        #[arg(long)]
+        root_path: String,
+    },
+    /// Import old Native per-workspace favorites only when Host scope is absent.
+    FavoritesSeed {
+        #[arg(long)]
+        root_path: String,
+        /// JSON array of branch names (no Git commands or repository mutation).
+        #[arg(long)]
+        branches: String,
+    },
+    /// Compare and set one Host-resolved repository's favorite branches.
+    FavoritesSet {
+        #[arg(long)]
+        root_path: String,
+        #[arg(long)]
+        expected: String,
+        #[arg(long)]
+        value: String,
+    },
     /// One-time upgrade of Native's former local Agent Profile preference.
     MigrateProfile {
         #[arg(long)]

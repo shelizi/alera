@@ -108,13 +108,11 @@ Classic main, publishing builds, and pushing to origin are separate actions.
 ## Remaining overlapping preferences requiring dedicated identity migration
 
 This phase **does not complete every possible future shared preference**.
-Classic's `favoriteBranchesByRepository` keys are composite
-`[projectId, relativeGitRoot]` strings; Native's `SavedGitFavorites`
-are keyed by its canonical workspace-root path in the preview SessionStore.
-Treating these as identical would leak or misassign favorites across linked
-worktrees and nested Git repositories. The next migration must resolve the
-Host project identity and relative Git root, then use an atomic Rust catalog
-with one-time per-repository seed and cross-window change notification.
+Git favorites now have a dedicated shared Rust Core owner with exact
+`[projectId, relativeGitRoot]` identity and Host-validated Native worktree
+resolution, insert-only Classic/GPUI legacy migration and per-scope CAS.
+See `shared-git-favorites-phase3.md`. The standalone worktree JSON is no
+longer a production write target.
 
 Native's preview recent-workspace/saved-project indexes also overlap Host
 project/workspace inventory and must be reconciled by immutable Runtime

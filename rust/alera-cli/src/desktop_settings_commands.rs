@@ -20,6 +20,50 @@ pub async fn run(command: DesktopSettingsCommand) -> i32 {
     };
     let (request, payload) = match command.action {
         DesktopSettingsAction::Get => ("desktopSettings.get", json!({})),
+        DesktopSettingsAction::FavoritesGet { root_path } => {
+            ("gitFavorites.forWorkspace", json!({"rootPath":root_path}))
+        }
+        DesktopSettingsAction::FavoritesSeed {
+            root_path,
+            branches,
+        } => {
+            let branches: Vec<String> = match serde_json::from_str::<Vec<String>>(&branches) {
+                Ok(v) if v.len() <= 80 => v,
+                _ => {
+                    return print_error("favorites seed requires JSON array of at most 80 branches")
+                }
+            };
+            (
+                "gitFavorites.seedNative",
+                json!({"rootPath":root_path,"branches":branches}),
+            )
+        }
+        DesktopSettingsAction::FavoritesSet {
+            root_path,
+            expected,
+            value,
+        } => {
+            let expected: Vec<String> = match serde_json::from_str::<Vec<String>>(&expected) {
+                Ok(v) if v.len() <= 80 => v,
+                _ => {
+                    return print_error(
+                        "favorites expected must be a JSON array of at most 80 branches",
+                    )
+                }
+            };
+            let value: Vec<String> = match serde_json::from_str::<Vec<String>>(&value) {
+                Ok(v) if v.len() <= 80 => v,
+                _ => {
+                    return print_error(
+                        "favorites value must be a JSON array of at most 80 branches",
+                    )
+                }
+            };
+            (
+                "gitFavorites.casForWorkspace",
+                json!({"rootPath":root_path,"expected":expected,"value":value}),
+            )
+        }
         DesktopSettingsAction::MigrateProfile { profile_id } => (
             "desktopSettings.seedNativeProfile",
             json!({"profileId":profile_id}),
@@ -123,5 +167,26 @@ mod tests {
                 ..
             })
         ));
+        for verb in ["favorites-get", "favorites-seed", "favorites-set"] {
+            let mut arguments = vec![
+                "alera",
+                "settings",
+                "--no-start",
+                "--json",
+                verb,
+                "--root-path",
+                "C:/repo",
+            ];
+            if verb == "favorites-seed" {
+                arguments.extend(["--branches", "[]"]);
+            }
+            if verb == "favorites-set" {
+                arguments.extend(["--expected", "[]", "--value", "[\"main\"]"]);
+            }
+            assert!(
+                crate::cli::Cli::try_parse_from(arguments).is_ok(),
+                "cannot parse {verb}"
+            );
+        }
     }
 }

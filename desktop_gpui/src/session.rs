@@ -136,8 +136,22 @@ fn validate_terminal_layout(layout: &TerminalLayout) -> io::Result<()> {
 }
 
 impl PreviewSessionStore {
-    /// Per-workspace Git Graph favorites; never modifies repository config or
-    /// Flutter's local preferences. Fail closed on corrupt or mismatched data.
+    /// A missing legacy file is *not* an explicit empty favorite selection:
+    /// don't let a new Native startup seed [] before Classic's first import.
+    pub fn has_legacy_git_favorites(&self, root: &Path) -> io::Result<bool> {
+        let canonical = dunce::canonicalize(root)?;
+        if canonical != root || !canonical.is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Git favorites root must be an existing canonical workspace",
+            ));
+        }
+        Ok(self.git_favorites_path(root).exists())
+    }
+
+    /// Test-only writer for exercising pre-Rust Native JSON migration fixtures.
+    /// Production GPUI cannot mutate this former second source of truth.
+    #[cfg(test)]
     pub fn save_git_favorites(&self, root: &Path, branches: &[String]) -> io::Result<()> {
         let canonical = dunce::canonicalize(root)?;
         if canonical != root || !canonical.is_dir() {
@@ -162,6 +176,8 @@ impl PreviewSessionStore {
         )
     }
 
+    /// Read-only old GPUI source, only used to seed absent Host favorites
+    /// during migration. Even cleared [] remains a meaningful legacy value.
     pub fn load_git_favorites(&self, root: &Path) -> io::Result<Vec<String>> {
         let canonical = dunce::canonicalize(root)?;
         if canonical != root || !canonical.is_dir() {
@@ -774,9 +790,12 @@ mod tests {
         let root_a = dunce::canonicalize(workspace_a.path()).unwrap();
         let root_b = dunce::canonicalize(workspace_b.path()).unwrap();
         let store = PreviewSessionStore::new(state.path());
+        assert!(!store.has_legacy_git_favorites(&root_a).unwrap());
+        assert!(!store.has_legacy_git_favorites(&root_b).unwrap());
         assert!(store.load_git_favorites(&root_a).unwrap().is_empty());
         let saved = vec!["main".into(), "origin/feature".into()];
         store.save_git_favorites(&root_a, &saved).unwrap();
+        assert!(store.has_legacy_git_favorites(&root_a).unwrap());
         let reopened = PreviewSessionStore::new(state.path());
         assert_eq!(reopened.load_git_favorites(&root_a).unwrap(), saved);
         assert!(reopened.load_git_favorites(&root_b).unwrap().is_empty());

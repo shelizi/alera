@@ -53,6 +53,21 @@ fn shared_desktop_settings_error(error: anyhow::Error) -> HostError {
         HostError::state(error.to_string())
     }
 }
+fn git_favorites_error(error: anyhow::Error) -> HostError {
+    if error
+        .to_string()
+        .contains("git_favorites_revision_conflict")
+    {
+        HostError::conflict(
+            "git_favorites_revision_conflict",
+            "Git favorites changed in another Alera desktop. Refresh and retry.",
+            json!({}),
+        )
+    } else {
+        HostError::state(error.to_string())
+    }
+}
+
 mod runtime_settings;
 mod runtime_settings_store;
 mod runtime_settings_validation;
@@ -771,6 +786,90 @@ impl ServerActor {
                     .await
                     .map_err(shared_desktop_settings_error)?;
                 self.broadcast_authenticated(event("runtimeSettingsChanged", json!({})));
+                Ok(result)
+            }
+            "gitFavorites.get" => {
+                self.require_auth(client_id)?;
+                self.runtime_store
+                    .git_favorites_snapshot()
+                    .await
+                    .map_err(git_favorites_error)
+            }
+            "gitFavorites.forWorkspace" => {
+                self.require_auth(client_id)?;
+                let root = payload["rootPath"]
+                    .as_str()
+                    .ok_or_else(|| HostError::state("Missing registered workspace path"))?;
+                self.runtime_store
+                    .git_favorites_for_workspace(root)
+                    .await
+                    .map_err(git_favorites_error)
+            }
+            "gitFavorites.seedClassic" => {
+                self.require_auth(client_id)?;
+                let result = self
+                    .runtime_store
+                    .git_favorites_seed_classic(&payload["scopes"])
+                    .await
+                    .map_err(git_favorites_error)?;
+                if result["changed"] == true {
+                    self.broadcast_authenticated(event("gitFavoritesChanged", json!({})));
+                }
+                Ok(result)
+            }
+            "gitFavorites.seedNative" => {
+                self.require_auth(client_id)?;
+                let root = payload["rootPath"]
+                    .as_str()
+                    .ok_or_else(|| HostError::state("Missing registered workspace path"))?;
+                let branches: Vec<String> = serde_json::from_value(payload["branches"].clone())
+                    .map_err(|_| HostError::state("Invalid Native Git favorites branches"))?;
+                let result = self
+                    .runtime_store
+                    .git_favorites_seed_native(root, &branches)
+                    .await
+                    .map_err(git_favorites_error)?;
+                if result["changed"] == true {
+                    self.broadcast_authenticated(event("gitFavoritesChanged", json!({})));
+                }
+                Ok(result)
+            }
+            "gitFavorites.compareAndSet" => {
+                self.require_auth(client_id)?;
+                let scope = payload["scopeKey"]
+                    .as_str()
+                    .ok_or_else(|| HostError::state("Missing Git favorites repository identity"))?;
+                let expected: Vec<String> = serde_json::from_value(payload["expected"].clone())
+                    .map_err(|_| HostError::state("Invalid prior Git favorites"))?;
+                let next: Vec<String> = serde_json::from_value(payload["value"].clone())
+                    .map_err(|_| HostError::state("Invalid next Git favorites"))?;
+                let result = self
+                    .runtime_store
+                    .git_favorites_compare_and_set(scope, &expected, &next)
+                    .await
+                    .map_err(git_favorites_error)?;
+                if result["changed"] == true {
+                    self.broadcast_authenticated(event("gitFavoritesChanged", json!({})));
+                }
+                Ok(result)
+            }
+            "gitFavorites.casForWorkspace" => {
+                self.require_auth(client_id)?;
+                let root = payload["rootPath"]
+                    .as_str()
+                    .ok_or_else(|| HostError::state("Missing registered workspace path"))?;
+                let expected: Vec<String> = serde_json::from_value(payload["expected"].clone())
+                    .map_err(|_| HostError::state("Invalid prior Git favorites"))?;
+                let next: Vec<String> = serde_json::from_value(payload["value"].clone())
+                    .map_err(|_| HostError::state("Invalid next Git favorites"))?;
+                let result = self
+                    .runtime_store
+                    .git_favorites_cas_for_workspace(root, &expected, &next)
+                    .await
+                    .map_err(git_favorites_error)?;
+                if result["changed"] == true {
+                    self.broadcast_authenticated(event("gitFavoritesChanged", json!({})));
+                }
                 Ok(result)
             }
             "mobile.runtimeSettings.get" => {

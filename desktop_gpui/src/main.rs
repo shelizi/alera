@@ -2,6 +2,7 @@
 mod editor_ui;
 mod native_action_dialog_ui;
 mod native_components;
+mod native_git_favorites_ui;
 mod native_popup_ui;
 mod native_settings_catalog_ui;
 mod native_shared_settings_ui;
@@ -358,6 +359,9 @@ struct Workbench {
     git_history: Option<GitHistorySnapshot>,
     git_history_open: bool,
     git_history_options: GitHistoryOptions,
+    git_favorites_busy: bool,
+    git_favorites_request: u64,
+    git_favorites_last_refresh: Instant,
     git_history_loading: bool,
     git_history_error: Option<String>,
     git_history_request: u64,
@@ -1456,27 +1460,7 @@ impl Workbench {
     }
 
     fn toggle_git_history_favorite(&mut self, branch: String, cx: &mut Context<Self>) {
-        let mut next = self.git_history_options.favorites.clone();
-        if let Some(index) = next.iter().position(|value| value == &branch) {
-            next.remove(index);
-        } else {
-            next.push(branch);
-        }
-        let result = self
-            .session_store
-            .as_ref()
-            .ok_or_else(|| std::io::Error::other("Native session storage unavailable"))
-            .and_then(|store| store.save_git_favorites(self.model.root(), &next));
-        match result {
-            Ok(()) => {
-                self.git_history_options.favorites = next;
-                self.refresh_git_history(cx);
-            }
-            Err(error) => {
-                self.git_history_error = Some(format!("Cannot persist Git favorites: {error}"))
-            }
-        }
-        cx.notify();
+        self.persist_shared_git_favorite(branch, cx);
     }
 
     fn preview_git_history(&mut self, request: GitReadRequest, cx: &mut Context<Self>) {
@@ -2597,15 +2581,11 @@ impl Workbench {
         self.git_history_loading = false;
         self.git_history_error = None;
         self.git_history_options = GitHistoryOptions::default();
-        if let Some(store) = &self.session_store {
-            match store.load_git_favorites(&canonical) {
-                Ok(favorites) => self.git_history_options.favorites = favorites,
-                Err(error) => {
-                    self.git_history_error =
-                        Some(format!("Native Git favorites cannot be loaded: {error}"))
-                }
-            }
-        }
+        self.git_favorites_busy = false;
+        self.git_favorites_request = self.git_favorites_request.wrapping_add(1);
+        self.git_favorites_last_refresh = Instant::now()
+            .checked_sub(Duration::from_secs(20))
+            .unwrap_or_else(Instant::now);
         self.git_history_request = self.git_history_request.wrapping_add(1);
         self.git_merge_armed = None;
         self.git_sensitive_armed = None;
@@ -2686,6 +2666,7 @@ impl Workbench {
         self.refresh_project_tree(cx);
         self.refresh_worktrees(cx);
         self.refresh_git(cx);
+        self.refresh_shared_git_favorites(cx);
         cx.notify();
     }
 
@@ -5388,6 +5369,12 @@ impl Workbench {
                         >= Duration::from_secs(settings_refresh_secs)
                     {
                         view.refresh_shared_desktop_settings(cx);
+                    }
+                    let favorites_refresh_secs = if view.git_history_open { 5 } else { 15 };
+                    if view.git_favorites_last_refresh.elapsed()
+                        >= Duration::from_secs(favorites_refresh_secs)
+                    {
+                        view.refresh_shared_git_favorites(cx);
                     }
                     if view.native_settings.editor_autosave_enabled && view.terminal_tick % 2 == 0 {
                         for editor in [view.editor.clone(), view.secondary_editor.clone()].into_iter().flatten() {
@@ -8531,19 +8518,6 @@ fn main() {
         .as_ref()
         .and_then(|store| store.saved_projects().ok())
         .unwrap_or_default();
-    let initial_git_favorites = match session_store
-        .as_ref()
-        .map(|store| store.load_git_favorites(model.root()))
-    {
-        Some(Ok(saved)) => saved,
-        Some(Err(error)) => {
-            model.set_status(format!(
-                "Native Git favorites could not be restored: {error}"
-            ));
-            Vec::new()
-        }
-        None => Vec::new(),
-    };
     let native_settings_store = session_store
         .as_ref()
         .map(|store| NativeSettingsStore::new(store.state_dir()));
@@ -8719,9 +8693,13 @@ fn main() {
                             git_history: None,
                             git_history_open: false,
                             git_history_options: GitHistoryOptions {
-                                favorites: initial_git_favorites,
                                 ..Default::default()
                             },
+                            git_favorites_busy: false,
+                            git_favorites_request: 0,
+                            git_favorites_last_refresh: Instant::now()
+                                .checked_sub(Duration::from_secs(20))
+                                .unwrap_or_else(Instant::now),
                             git_history_loading: false,
                             git_history_error: None,
                             git_history_request: 0,
@@ -8850,6 +8828,7 @@ fn main() {
                         view.refresh_project_tree(cx);
                         view.refresh_worktrees(cx);
                         view.refresh_git(cx);
+                        view.refresh_shared_git_favorites(cx);
                         view.refresh_agent_profiles(cx);
                         view.connect_mcp_ui_bridge(cx);
                     });

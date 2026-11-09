@@ -12,13 +12,16 @@ class RuntimeWorkbenchViewPrefsRepository({
 }) implements WorkbenchViewPrefsRepository {
   int? _revision;
   Map<String, bool>? _lastExplorerShared;
+  Map<String, List<String>>? _lastGitFavoritesShared;
+  Map<String, Set<String>>? _lastGitFavoritesView;
 
   @override
   Stream<WorkbenchViewPrefs> get changes => client.runtimeEvents
       .where(
         (event) =>
             event.name == 'workbenchViewPrefsChanged' ||
-            event.name == 'runtimeSettingsChanged',
+            event.name == 'runtimeSettingsChanged' ||
+            event.name == 'gitFavoritesChanged',
       )
       .asyncMap((_) => load());
 
@@ -33,12 +36,14 @@ class RuntimeWorkbenchViewPrefsRepository({
       _revision = (record['revision'] as num?)?.toInt() ?? 0;
       if (record['desktopInitialized'] != true) {
         await _writeShared(local);
-        final merged = await _loadExplorerShared(local);
+        final merged = await _loadGitFavoritesShared(
+          await _loadExplorerShared(local),
+        );
         await legacyRepository.save(merged);
         return await _forRuntime(merged);
       }
-      final merged = await _loadExplorerShared(
-        _mergeShared(local, _asMap(record['prefs'])),
+      final merged = await _loadGitFavoritesShared(
+        await _loadExplorerShared(_mergeShared(local, _asMap(record['prefs']))),
       );
       await legacyRepository.save(merged);
       return await _forRuntime(merged);
@@ -51,6 +56,10 @@ class RuntimeWorkbenchViewPrefsRepository({
         stackTrace,
       );
       _lastExplorerShared = null;
+      _lastGitFavoritesShared = null;
+      _lastGitFavoritesView = _snapshotFavoriteView(
+        local.favoriteBranchesByRepository,
+      );
       return _forRuntime(local);
     }
   }
@@ -84,6 +93,56 @@ class RuntimeWorkbenchViewPrefsRepository({
     } catch (error, stackTrace) {
       _lastExplorerShared = null;
       _log.fine('Shared Explorer preferences unavailable', error, stackTrace);
+      return prefs;
+    }
+  }
+
+  /// Migrate Classic's projectId/relativeGitRoot scoped branch favorites
+  /// without overriding a prior Native selection or a Host [] tombstone.
+  /// Unknown/removed projects stay in old Drift for recovery.
+  Future<WorkbenchViewPrefs> _loadGitFavoritesShared(
+    WorkbenchViewPrefs prefs,
+  ) async {
+    try {
+      final legacy = <String, Object?>{
+        for (final entry in prefs.favoriteBranchesByRepository.entries)
+          entry.key: (entry.value.toList()..sort()),
+      };
+      final response = _asMap(
+        await client.runtimeRequest(
+          'gitFavorites.seedClassic',
+          <String, Object?>{'scopes': legacy},
+        ),
+      );
+      if (response['scopes'] is! Map) {
+        throw StateError('Rust Host Git favorites API is unavailable');
+      }
+      final remote = _asMap(response['scopes']);
+      final shared = <String, List<String>>{};
+      for (final entry in remote.entries) {
+        if (entry.value is List &&
+            (entry.value as List).every((item) => item is String)) {
+          shared[entry.key] = (entry.value as List).cast<String>().toList();
+        }
+      }
+      final result = prefs.copyWith(
+        favoriteBranchesByRepository: {
+          ...prefs.favoriteBranchesByRepository,
+          for (final entry in shared.entries) entry.key: entry.value.toSet(),
+        },
+      );
+      _lastGitFavoritesShared = shared;
+      _lastGitFavoritesView = {
+        for (final entry in result.favoriteBranchesByRepository.entries)
+          entry.key: entry.value.toSet(),
+      };
+      return result;
+    } catch (error, stackTrace) {
+      _lastGitFavoritesShared = null;
+      _lastGitFavoritesView = _snapshotFavoriteView(
+        prefs.favoriteBranchesByRepository,
+      );
+      _log.fine('Shared Git favorites Host unavailable', error, stackTrace);
       return prefs;
     }
   }
@@ -128,9 +187,62 @@ class RuntimeWorkbenchViewPrefsRepository({
         });
       }
     }
+    await _writeGitFavoritesShared(prefs);
     await _writeShared(prefs);
     await legacyRepository.save(prefs);
     if (previous != null) _lastExplorerShared = current;
+  }
+
+  /// Update only the Git scopes the user actually changed. Comparing the
+  /// *visible* previous selection avoids resending orphaned old Drift keys
+  /// from a missing/removed project on unrelated pane layout edits.
+  Future<void> _writeGitFavoritesShared(WorkbenchViewPrefs prefs) async {
+    final shared = _lastGitFavoritesShared;
+    final previousView = _lastGitFavoritesView;
+    if (previousView == null) {
+      throw const SharedWorkbenchPreferenceUnavailable(
+        'Git favorites not loaded',
+      );
+    }
+    final current = prefs.favoriteBranchesByRepository;
+    final keys = <String>{...previousView.keys, ...current.keys};
+    for (final key in keys) {
+      final before = previousView[key] ?? const <String>{};
+      final next = current[key] ?? const <String>{};
+      if (before.length == next.length && before.containsAll(next)) {
+        continue;
+      }
+      if (shared == null) {
+        throw const SharedWorkbenchPreferenceUnavailable('Git favorites');
+      }
+      final expected = shared[key] ?? <String>[];
+      final value = next.toList()..sort();
+      Map<String, Object?> response;
+      try {
+        response = _asMap(
+          await client.runtimeRequest(
+            'gitFavorites.compareAndSet',
+            <String, Object?>{
+              'scopeKey': key,
+              'expected': expected,
+              'value': value,
+            },
+          ),
+        );
+      } on TerminalHostConflictException {
+        rethrow;
+      } catch (_) {
+        throw const SharedWorkbenchPreferenceUnavailable('Git favorites');
+      }
+      final readback = response['branches'];
+      if (readback is! List || !readback.every((item) => item is String)) {
+        throw const SharedWorkbenchPreferenceUnavailable(
+          'Git favorites readback',
+        );
+      }
+      shared[key] = readback.cast<String>().toList();
+      previousView[key] = next.toSet();
+    }
   }
 
   Future<void> _writeShared(WorkbenchViewPrefs prefs) async {
@@ -156,6 +268,10 @@ class RuntimeWorkbenchViewPrefsRepository({
     _revision = (record['revision'] as num?)?.toInt() ?? _revision;
   }
 }
+
+Map<String, Set<String>> _snapshotFavoriteView(
+  Map<String, Set<String>> favorites,
+) => {for (final entry in favorites.entries) entry.key: entry.value.toSet()};
 
 Map<String, bool> _explorerSharedValues(WorkbenchViewPrefs prefs) => {
   'explorer.showHiddenFiles': prefs.showHiddenFiles,
