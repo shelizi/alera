@@ -5225,6 +5225,8 @@ impl Workbench {
             stream.ensure_observing(session_id, workspace_id, tab_id);
         }
         let updates = stream.poll_updates();
+        #[cfg(debug_assertions)]
+        let isolated_update_count = updates.len();
         let parse_started = Instant::now();
         let mut parsed_bytes = 0;
         let mut repaint = false;
@@ -5301,6 +5303,33 @@ impl Workbench {
             self.terminal_stream = None;
             self.terminals.invalidate_stream_observers();
             self.terminal_stream_retry.failed(Instant::now());
+        }
+        #[cfg(debug_assertions)]
+        if std::env::var_os("ALERA_GPUI_ISOLATED_STREAM_DIAGNOSTICS").is_some() {
+            use std::sync::atomic::{AtomicU64, Ordering};
+            static LAST_REPORTED: AtomicU64 = AtomicU64::new(0);
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            if LAST_REPORTED.fetch_max(now, Ordering::Relaxed) < now {
+                let (queued, active, pending) = self
+                    .terminal_stream
+                    .as_ref()
+                    .map(|stream| stream.isolated_diagnostic_queues())
+                    .unwrap_or((0, 0, 0));
+                let tabs = self
+                    .terminals
+                    .tabs
+                    .iter()
+                    .map(|tab| (tab.next_cursor.unwrap_or(0), tab.running))
+                    .collect::<Vec<_>>();
+                eprintln!(
+                    "GPUI_STREAM_DIAG clock={now} stream={} updates={} bytes={} q={} active={} pending={} tabs={tabs:?}",
+                    self.terminal_stream.is_some(), isolated_update_count,
+                    parsed_bytes, queued, active, pending,
+                );
+            }
         }
         if repaint {
             cx.notify();

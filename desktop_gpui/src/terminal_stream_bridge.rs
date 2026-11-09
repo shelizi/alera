@@ -416,6 +416,17 @@ pub struct NativeTerminalStreamBridge {
 }
 
 impl NativeTerminalStreamBridge {
+    /// Test-only counters contain no Host token, PTY text, or Tab identities.
+    /// Never expose the private output bytes in diagnostic logs.
+    #[cfg(debug_assertions)]
+    pub fn isolated_diagnostic_queues(&self) -> (usize, usize, usize) {
+        (
+            self.ready_updates.len(),
+            self.subscriptions.active.len(),
+            self.subscriptions.pending.len(),
+        )
+    }
+
     pub fn start(cli: &RuntimeCliBridge) -> io::Result<Self> {
         let (executable, runtime_dir) = cli.agent_cli_paths();
         let mut process = windowless_command(executable);
