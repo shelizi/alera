@@ -165,6 +165,7 @@ enum GitUiAction {
     Unstage(PathBuf),
     StageMany(Vec<PathBuf>),
     UnstageMany(Vec<PathBuf>),
+    DiscardTracked(Vec<PathBuf>),
     Commit(String),
     SwitchBranch(String),
     MergeWithoutConflicts(String),
@@ -238,6 +239,15 @@ enum ExplorerAction {
     Copy,
     Duplicate,
     Delete,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GitChangeMenuAction {
+    Preview,
+    Stage,
+    Unstage,
+    Discard,
+    CopyPath,
 }
 
 #[derive(Clone, Copy)]
@@ -377,6 +387,7 @@ struct Workbench {
     git_snapshot: Option<GitSnapshot>,
     git_selected_changes: HashSet<alera_gpui_desktop::git_inspect::GitChangeRow>,
     git_selection_anchor: Option<alera_gpui_desktop::git_inspect::GitChangeRow>,
+    git_discard_armed: Option<Vec<PathBuf>>,
     git_history: Option<GitHistorySnapshot>,
     git_history_open: bool,
     git_history_options: GitHistoryOptions,
@@ -1373,6 +1384,89 @@ impl Workbench {
         self.git_selection_anchor = Some(row);
     }
 
+    /// The selected exact paths must be confirmed a second time. A change
+    /// in selection disarms the previous confirmation, and the writer still
+    /// validates status, paths and index before touching the working tree.
+    fn confirm_discard_git_paths(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
+        let mut paths = paths;
+        paths.sort();
+        paths.dedup();
+        if self.git_action_busy || paths.is_empty() || paths.len() > 120 {
+            self.git_action_status =
+                "Select one or more tracked unstaged changes to discard".into();
+            cx.notify();
+            return;
+        }
+        if self.git_discard_armed.as_ref() == Some(&paths) {
+            self.git_discard_armed = None;
+            self.run_git_action(GitUiAction::DiscardTracked(paths), cx);
+        } else {
+            self.git_sensitive_armed = None;
+            self.git_graph_remote_armed = None;
+            self.git_discard_armed = Some(paths.clone());
+            self.git_action_status = format!(
+                "Discard {} tracked unstaged file(s)? Click Confirm Discard again. Staged changes and untracked files remain. This cannot be undone.",
+                paths.len()
+            );
+            cx.notify();
+        }
+    }
+
+    fn run_git_change_menu_action(
+        &mut self,
+        row: alera_gpui_desktop::git_inspect::GitChangeRow,
+        action: GitChangeMenuAction,
+        cx: &mut Context<Self>,
+    ) {
+        let valid = self
+            .git_snapshot
+            .as_ref()
+            .is_some_and(|snapshot| snapshot.visible_rows("").contains(&row));
+        if !valid {
+            self.git_discard_armed = None;
+            self.git_action_status = "Git change list changed; refresh before continuing".into();
+            cx.notify();
+            return;
+        }
+        let multi = self.git_selected_changes.contains(&row);
+        let selected = if multi {
+            let mut rows = self
+                .git_selected_changes
+                .iter()
+                .filter(|entry| entry.area == row.area)
+                .map(|entry| entry.relative.clone())
+                .collect::<Vec<_>>();
+            rows.sort();
+            rows.dedup();
+            rows
+        } else {
+            vec![row.relative.clone()]
+        };
+        match action {
+            GitChangeMenuAction::Preview => self.preview_git_change(row.relative, cx),
+            GitChangeMenuAction::CopyPath => {
+                cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                    row.relative.to_string_lossy().into_owned(),
+                ));
+            }
+            GitChangeMenuAction::Stage if row.area.can_stage() => {
+                self.run_git_action(GitUiAction::StageMany(selected), cx);
+            }
+            GitChangeMenuAction::Unstage if row.area.can_unstage() => {
+                self.run_git_action(GitUiAction::UnstageMany(selected), cx);
+            }
+            GitChangeMenuAction::Discard
+                if row.area == alera_gpui_desktop::git_inspect::GitChangeArea::Changes =>
+            {
+                self.confirm_discard_git_paths(selected, cx);
+            }
+            _ => {
+                self.git_action_status = "Action is not supported for this Git status".into();
+                cx.notify();
+            }
+        }
+    }
+
     fn refresh_git(&mut self, cx: &mut Context<Self>) {
         if self.git_loading {
             return;
@@ -1694,6 +1788,46 @@ impl Workbench {
         self.refresh_git_history(cx);
     }
 
+    fn confirm_selected_branch_remote(&mut self, pull: bool, cx: &mut Context<Self>) {
+        if self.git_action_busy {
+            self.git_action_status = "Finish the current Git operation first".into();
+            cx.notify();
+            return;
+        }
+        let branch = self.git_branch_input.read(cx).query().trim().to_owned();
+        if !self
+            .native_branch_choices()
+            .iter()
+            .any(|name| name == &branch)
+        {
+            self.git_graph_remote_armed = None;
+            self.git_action_status = "Select an existing local branch to Pull or Push".into();
+            cx.notify();
+            return;
+        }
+        let pending = (branch.clone(), pull);
+        if self.git_graph_remote_armed.as_ref() == Some(&pending) {
+            self.git_graph_remote_armed = None;
+            self.run_git_action(
+                if pull {
+                    GitUiAction::PullSelected(branch)
+                } else {
+                    GitUiAction::PushSelected(branch)
+                },
+                cx,
+            );
+        } else {
+            self.git_graph_remote_armed = Some(pending);
+            self.git_sensitive_armed = None;
+            self.git_action_status = format!(
+                "Confirm {} of {branch} (no checkout or force). Click the selected-branch {} button again.",
+                if pull { "Pull" } else { "Push" },
+                if pull { "Pull" } else { "Push" }
+            );
+            cx.notify();
+        }
+    }
+
     fn toggle_git_history_favorite(&mut self, branch: String, cx: &mut Context<Self>) {
         let mut next = self.git_history_options.favorites.clone();
         if let Some(index) = next.iter().position(|value| value == &branch) {
@@ -1857,6 +1991,7 @@ impl Workbench {
             return;
         }
         self.git_sensitive_armed = None;
+        self.git_discard_armed = None;
         self.git_conflict_confirm_armed = false;
         self.git_conflict_loading = false;
         self.git_conflict_request = self.git_conflict_request.wrapping_add(1);
@@ -1889,6 +2024,9 @@ impl Workbench {
                         GitUiAction::UnstageMany(paths) => git
                             .unstage_files(&paths)
                             .map(|count| format!("Unstaged {count} selected files")),
+                        GitUiAction::DiscardTracked(paths) => git
+                            .discard_unstaged_tracked(&paths)
+                            .map(|count| format!("Restored {count} tracked file(s) from index; staged changes preserved")),
                         GitUiAction::Commit(message) => {
                             git.commit(&message).map(|id| format!("Committed {id}"))
                         }
@@ -2946,6 +3084,7 @@ impl Workbench {
         self.git_snapshot = None;
         self.git_selected_changes.clear();
         self.git_selection_anchor = None;
+        self.git_discard_armed = None;
         self.git_loading = false;
         self.git_history = None;
         self.git_history_loading = false;
@@ -6282,6 +6421,7 @@ impl Render for Workbench {
         let git_selected = self.git_selected_changes.clone();
         let mut git_stage_paths = Vec::new();
         let mut git_unstage_paths = Vec::new();
+        let mut git_discard_paths = Vec::new();
         for row in &git_changes {
             if !git_selected.contains(row) {
                 continue;
@@ -6292,11 +6432,18 @@ impl Render for Workbench {
             if row.area.can_unstage() {
                 git_unstage_paths.push(row.relative.clone());
             }
+            if row.area == alera_gpui_desktop::git_inspect::GitChangeArea::Changes {
+                git_discard_paths.push(row.relative.clone());
+            }
         }
         git_stage_paths.sort();
         git_stage_paths.dedup();
         git_unstage_paths.sort();
         git_unstage_paths.dedup();
+        git_discard_paths.sort();
+        git_discard_paths.dedup();
+        let git_discard_confirm = !git_discard_paths.is_empty()
+            && self.git_discard_armed.as_ref() == Some(&git_discard_paths);
         let git_selected_count = git_changes
             .iter()
             .filter(|row| git_selected.contains(*row))
@@ -7343,6 +7490,16 @@ impl Render for Workbench {
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.confirm_sensitive_git_action(ConfirmGitAction::PushUpstream, cx);
                                     })))
+                                .child(icon_button("git-pull-selected-branch", UiIcon::GitPull,
+                                    "Pull selected branch without checkout (fast-forward only; confirm twice)", false)
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.confirm_selected_branch_remote(true, cx);
+                                    })))
+                                .child(icon_button("git-push-selected-branch", UiIcon::GitPush,
+                                    "Push selected branch without checkout (no force; confirm twice)", false)
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.confirm_selected_branch_remote(false, cx);
+                                    })))
                                 .child({
                                     let owner = cx.entity().downgrade();
                                     let armed = self.git_sensitive_armed;
@@ -7521,6 +7678,14 @@ impl Render for Workbench {
                                                 this.run_git_action(GitUiAction::UnstageMany(git_unstage_paths.clone()), cx);
                                             }))
                                     ))
+                                    .when(!git_discard_paths.is_empty(), |bar| bar.child(
+                                        icon_button("git-discard-selected", if git_discard_confirm { UiIcon::Check } else { UiIcon::Delete },
+                                            if git_discard_confirm { "Confirm Discard selected unstaged tracked files" } else { "Discard selected unstaged tracked changes (confirm)" },
+                                            git_discard_confirm)
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                this.confirm_discard_git_paths(git_discard_paths.clone(), cx);
+                                            }))
+                                    ))
                                     .child(icon_button("git-clear-selected", UiIcon::Close, "Clear Git selection", false)
                                         .on_click(cx.listener(|this, _, _, cx| {
                                             this.git_selected_changes.clear();
@@ -7536,6 +7701,9 @@ impl Render for Workbench {
                                     .children(git_changes.into_iter().enumerate().map(|(i, change)| {
                                         let selected = git_selected.contains(&change);
                                         let clicked_row = change.clone();
+                                        let menu_row = change.clone();
+                                        let discard_armed = change.area == alera_gpui_desktop::git_inspect::GitChangeArea::Changes &&
+                                            self.git_discard_armed.as_ref().is_some_and(|paths| paths.contains(&change.relative));
                                         let visible_for_click = Arc::clone(&git_visible_rows);
                                         let label = format!("{} {} {}", change.area.title(), change.label, change.relative.display());
                                         let can_stage = change.area.can_stage();
@@ -7566,7 +7734,8 @@ impl Render for Workbench {
                                                         this.preview_git_change(relative.clone(), cx);
                                                     }
                                                     cx.notify();
-                                                })))
+                                                }))
+                                                .context_menu(Self::kit_git_change_menu(cx.entity().downgrade(), menu_row, discard_armed)))
                                             .when(can_stage, |row| row.child(icon_button(("git-stage-file", i), UiIcon::GitStage, "Stage this file for commit", false)
                                                 .on_click(cx.listener(move |this, _, _, cx| {
                                                     this.run_git_action(GitUiAction::Stage(stage_path.clone()), cx);
@@ -9226,6 +9395,7 @@ fn main() {
                             git_snapshot: None,
                             git_selected_changes: HashSet::new(),
                             git_selection_anchor: None,
+                            git_discard_armed: None,
                             git_history: None,
                             git_history_open: false,
                             git_history_options: GitHistoryOptions {

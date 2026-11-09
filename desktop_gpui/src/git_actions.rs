@@ -655,6 +655,74 @@ impl GitActions {
         Ok(path.to_path_buf())
     }
 
+    /// Explicitly confirmed discard of tracked, unstaged working-tree edits.
+    /// Restore from the current index, NEVER from HEAD: staged content must
+    /// remain staged. Untracked files are not removed by this API.
+    ///
+    /// Validate all paths before invoking one Git restore command so an
+    /// invalid/renamed/unsafe target cannot cause a partial batch restore.
+    pub fn discard_unstaged_tracked(&self, paths: &[PathBuf]) -> Result<usize, String> {
+        use git2::Status;
+        if paths.is_empty() || paths.len() > 120 {
+            return Err("Select between 1 and 120 tracked changed files to restore".into());
+        }
+        let mut selected = std::collections::BTreeSet::new();
+        for path in paths {
+            selected.insert(self.relative(path, true)?);
+        }
+        let index = self.repo.index().map_err(|error| error.to_string())?;
+        if index.has_conflicts() {
+            return Err("Resolve merge conflicts before discarding tracked edits".into());
+        }
+        let mut arguments = vec![
+            "restore".to_owned(),
+            "--worktree".to_owned(),
+            "--".to_owned(),
+        ];
+        for path in &selected {
+            let entry = index.get_path(path, 0).ok_or_else(|| {
+                format!(
+                    "{} is not tracked in the index; untracked files must be handled separately",
+                    path.display()
+                )
+            })?;
+            if !matches!(entry.mode, 0o100644 | 0o100755) {
+                return Err(format!("{} is not a regular tracked file", path.display()));
+            }
+            let status = self
+                .repo
+                .status_file(path)
+                .map_err(|error| error.to_string())?;
+            if !status.intersects(Status::WT_MODIFIED | Status::WT_DELETED)
+                || status.intersects(
+                    Status::WT_NEW
+                        | Status::WT_RENAMED
+                        | Status::WT_TYPECHANGE
+                        | Status::CONFLICTED,
+                )
+            {
+                return Err(format!(
+                    "{} no longer has safe unstaged tracked edits; refresh Git status",
+                    path.display()
+                ));
+            }
+            let name = path
+                .to_str()
+                .ok_or("Non-Unicode Git path is unsupported for native discard")?;
+            if name.len() > 1024 {
+                return Err("Git discard file path exceeds safety limit".into());
+            }
+            arguments.push(name.to_owned());
+        }
+        // One explicit command, exact relative paths after '--', no shell,
+        // no --hard, no index/ref modifications.
+        let argv = arguments.iter().map(String::as_str).collect::<Vec<_>>();
+        git_in_dir(&self.root, &argv).map_err(|error| {
+            format!("Git worktree restore failed; inspect Git status before retrying: {error}")
+        })?;
+        Ok(selected.len())
+    }
+
     /// Validate the entire selection before modifying the index. A failure
     /// must not leave a partially staged batch.
     pub fn stage_files(&self, paths: &[PathBuf]) -> Result<usize, String> {
@@ -1102,6 +1170,87 @@ mod tests {
             .unwrap()
             .get_path(Path::new("extra.txt"), 0)
             .is_none());
+    }
+
+    #[test]
+    fn discard_restores_only_unstaged_tracked_files_and_preserves_index() {
+        let (_dir, actions) = repo_fixture();
+        let root = actions.root();
+        // A file can have BOTH staged and unstaged changes. The discard must
+        // retain the staged snapshot rather than resetting to HEAD.
+        fs::write(root.join("a.txt"), "staged version").unwrap();
+        actions.stage_file(Path::new("a.txt")).unwrap();
+        fs::write(root.join("a.txt"), "unstaged version").unwrap();
+        fs::write(root.join("untracked.txt"), "do not touch").unwrap();
+        let staged = actions
+            .repo
+            .index()
+            .unwrap()
+            .get_path(Path::new("a.txt"), 0)
+            .unwrap()
+            .id;
+        assert_eq!(
+            actions
+                .discard_unstaged_tracked(&[PathBuf::from("a.txt")])
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            fs::read_to_string(root.join("a.txt")).unwrap(),
+            "staged version"
+        );
+        assert_eq!(
+            fs::read_to_string(root.join("untracked.txt")).unwrap(),
+            "do not touch"
+        );
+        assert_eq!(
+            actions
+                .repo
+                .index()
+                .unwrap()
+                .get_path(Path::new("a.txt"), 0)
+                .unwrap()
+                .id,
+            staged
+        );
+        assert!(actions
+            .repo
+            .status_file(Path::new("a.txt"))
+            .unwrap()
+            .contains(git2::Status::INDEX_MODIFIED));
+        assert!(!actions
+            .repo
+            .status_file(Path::new("a.txt"))
+            .unwrap()
+            .contains(git2::Status::WT_MODIFIED));
+    }
+
+    #[test]
+    fn discard_preflight_rejects_entire_batch_on_invalid_target() {
+        let (_dir, actions) = repo_fixture();
+        let root = actions.root();
+        fs::write(root.join("a.txt"), "keep this unstaged edit").unwrap();
+        fs::write(root.join("untracked.txt"), "private new file").unwrap();
+        for bad in ["untracked.txt", "../outside", ".git/config"] {
+            assert!(
+                actions
+                    .discard_unstaged_tracked(&[PathBuf::from("a.txt"), PathBuf::from(bad)])
+                    .is_err(),
+                "{bad}"
+            );
+            assert_eq!(
+                fs::read_to_string(root.join("a.txt")).unwrap(),
+                "keep this unstaged edit"
+            );
+            assert_eq!(
+                fs::read_to_string(root.join("untracked.txt")).unwrap(),
+                "private new file"
+            );
+        }
+        assert!(actions
+            .discard_unstaged_tracked(&[PathBuf::from("a.txt")])
+            .is_ok());
+        assert_eq!(fs::read_to_string(root.join("a.txt")).unwrap(), "before");
     }
 
     #[test]

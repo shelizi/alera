@@ -432,6 +432,53 @@ impl Workbench {
 
     /// Classic-style Git Graph branch context menu. Keep presentation in
     /// GPUI Kit and route every action through Workbench's existing handlers.
+    /// Git file actions live in GPUI Kit's contextual menu rather than a
+    /// permanent row of icons. Stage/Unstage work on selected files in the
+    /// target area; destructive discard always requires a second click.
+    pub(super) fn kit_git_change_menu(
+        owner: gpui::WeakEntity<Self>,
+        row: alera_gpui_desktop::git_inspect::GitChangeRow,
+        discard_armed: bool,
+    ) -> impl Fn(
+        gpui_kit::component::menu::PopupMenu,
+        &mut Window,
+        &mut Context<gpui_kit::component::menu::PopupMenu>,
+    ) -> gpui_kit::component::menu::PopupMenu
+           + 'static {
+        move |mut menu, _, _| {
+            let mut actions = vec![
+                ("Preview changes", GitChangeMenuAction::Preview),
+                ("Copy relative path", GitChangeMenuAction::CopyPath),
+            ];
+            if row.area.can_stage() {
+                actions.push(("Stage selected", GitChangeMenuAction::Stage));
+            }
+            if row.area.can_unstage() {
+                actions.push(("Unstage selected", GitChangeMenuAction::Unstage));
+            }
+            if row.area == alera_gpui_desktop::git_inspect::GitChangeArea::Changes {
+                actions.push((
+                    if discard_armed {
+                        "Confirm Discard unstaged changes"
+                    } else {
+                        "Discard unstaged changes (confirm)"
+                    },
+                    GitChangeMenuAction::Discard,
+                ));
+            }
+            for (label, action) in actions {
+                let owner = owner.clone();
+                let row = row.clone();
+                menu = menu.item(PopupMenuItem::new(label).on_click(move |_, _, cx| {
+                    let _ = owner.update(cx, |view, cx| {
+                        view.run_git_change_menu_action(row.clone(), action, cx);
+                    });
+                }));
+            }
+            menu
+        }
+    }
+
     pub(super) fn kit_git_graph_branch_menu(
         owner: gpui::WeakEntity<Self>,
         branch: String,
@@ -556,7 +603,7 @@ impl Workbench {
         }
     }
 
-    fn native_branch_choices(&self) -> Vec<String> {
+    pub(super) fn native_branch_choices(&self) -> Vec<String> {
         let Some(graph) = &self.git_history else {
             return Vec::new();
         };
