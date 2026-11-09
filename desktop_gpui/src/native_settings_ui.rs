@@ -10,6 +10,24 @@ use alera_gpui_desktop::settings_menu_catalog::{
 use gpui_kit::component::switch::Switch;
 
 impl Workbench {
+    fn change_native_two_row_tabs(&mut self, next: bool, cx: &mut Context<Self>) {
+        let Some(store) = self.native_settings_store.as_ref() else {
+            self.model
+                .set_status("Native Settings store is unavailable");
+            cx.notify();
+            return;
+        };
+        match store.compare_and_set_two_row_tabs(self.native_settings.editor_two_row_tabs, next) {
+            Ok(settings) => self.install_native_settings(settings, cx),
+            Err(error) => {
+                self.model.set_status(format!(
+                    "Two-row tabs preference not saved: {error}; reopen Settings to refresh"
+                ));
+                cx.notify();
+            }
+        }
+    }
+
     pub(super) fn open_kit_native_settings_dialog(
         owner: gpui::WeakEntity<Self>,
         window: &mut Window,
@@ -338,6 +356,19 @@ impl Workbench {
                     s.editor_autosave_enabled,
                     cx,
                 ))
+                .child(
+                    div()
+                        .p_3()
+                        .bg(rgb(PANEL))
+                        .child(
+                            Switch::new("native-editor-two-row-tabs")
+                                .label(tr(locale, "Two-row tabs"))
+                                .checked(s.editor_two_row_tabs)
+                                .on_change(cx.listener(|view, checked, _, cx| {
+                                    view.change_native_two_row_tabs(*checked, cx);
+                                })),
+                        ),
+                )
                 .child(self.native_settings_number_row(
                     "Tab Size",
                     "editor.tabSize",

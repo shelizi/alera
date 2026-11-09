@@ -244,6 +244,7 @@ enum ExplorerAction {
 #[derive(Clone, Copy)]
 enum MixedContextAction {
     Focus,
+    TogglePin,
     Close,
     CloseOthers,
     CloseToRight,
@@ -476,6 +477,9 @@ struct Workbench {
     agent_launch_busy: bool,
     agent_launch_request: u64,
     agent_pending_tab: Option<LaunchedAgentTab>,
+    /// Keep + → Agent's original pane across prompt entry and Host launch
+    /// confirmation; never attach to whichever tab happens to be focused.
+    agent_launch_pane: Option<PaneAttachGuard>,
     agent_status: String,
     terminals: TerminalDock,
     terminal_panes: TerminalPaneLayout,
@@ -3035,6 +3039,7 @@ impl Workbench {
         self.agent_launch_request = self.agent_launch_request.wrapping_add(1);
         self.agent_launch_busy = false;
         self.agent_pending_tab = None;
+        self.agent_launch_pane = None;
         self.agent_prompt_input
             .update(cx, |input, cx| input.clear(cx));
         self.agent_status = "Select an Agent Profile and enter a task".into();
@@ -3945,6 +3950,33 @@ impl Workbench {
         cx.notify();
     }
 
+    /// The + menu selects a real Host Agent Profile and opens the existing
+    /// task composer; it never launches an Agent before a task is submitted.
+    fn prepare_agent_in_pane(
+        &mut self,
+        profile_id: &str,
+        target: &PaneAttachGuard,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !target.still_valid(self.workspace_generation, &self.mixed_panes)
+            || !self
+                .agent_profiles
+                .iter()
+                .any(|profile| profile.id == profile_id)
+        {
+            self.agent_status = "Pane or Agent Profile changed; reopen + → Agent".into();
+            cx.notify();
+            return;
+        }
+        self.agent_launch_pane = Some(target.clone());
+        self.agent_selected_profile = Some(profile_id.to_owned());
+        self.runtime_details_open = true;
+        self.agent_status = "Enter an Agent task, then choose Launch Agent".into();
+        window.focus(&self.agent_prompt_input.read(cx).focus_handle(cx), cx);
+        cx.notify();
+    }
+
     fn launch_selected_agent(&mut self, cx: &mut Context<Self>) {
         if self.agent_launch_busy || self.agent_pending_tab.is_some() {
             self.agent_status =
@@ -3974,6 +4006,24 @@ impl Workbench {
             cx.notify();
             return;
         }
+        let selected_pane = self.agent_launch_pane.clone().or_else(|| {
+            PaneAttachGuard::capture(
+                self.workspace_generation,
+                self.mixed_panes.focused_pane(),
+                &self.mixed_panes,
+            )
+        });
+        let Some(selected_pane) = selected_pane else {
+            self.agent_status = "Original pane changed; reopen + → Agent".into();
+            cx.notify();
+            return;
+        };
+        if !selected_pane.still_valid(self.workspace_generation, &self.mixed_panes) {
+            self.agent_status = "Agent's original pane closed; reopen + → Agent".into();
+            cx.notify();
+            return;
+        }
+        self.agent_launch_pane = Some(selected_pane);
         if self.runtime_bridge.is_none() {
             self.runtime_bridge = RuntimeCliBridge::discover().ok();
         }
@@ -4009,6 +4059,7 @@ impl Workbench {
                         view.refresh_terminals(cx);
                     }
                     Err(error) => {
+                        view.agent_launch_pane = None;
                         view.agent_status = format!(
                             "Agent launch not confirmed: {error}. Check Attach existing before retrying; the Host might have created the tab"
                         );
@@ -4194,17 +4245,31 @@ impl Workbench {
                             // this to be an Agent session before opening.
                             let found_agent = view.agent_pending_tab.as_ref()
                                 .and_then(|pending| matching_agent_handle(pending, &view.terminals.sessions))
-                                .map(str::to_owned);
-                            if let Some(handle) = found_agent {
-                                view.select_terminal(handle.clone(), cx);
-                                let attached = view.terminals.active_tab
-                                    .and_then(|index| view.terminals.tabs.get(index))
-                                    .is_some_and(|tab| tab.handle == handle);
-                                if attached {
-                                    view.agent_pending_tab = None;
-                                    view.agent_status = "Agent Host tab confirmed and attached".into();
+                                .and_then(|handle| view.terminals.sessions.iter()
+                                    .find(|session| session.handle == handle && session.running)
+                                    .cloned());
+                            if let Some(session) = found_agent {
+                                let target = view.agent_launch_pane.clone();
+                                if let Some(target) = target.filter(|pane| {
+                                    pane.still_valid(view.workspace_generation, &view.mixed_panes)
+                                }) {
+                                    if view.attach_live_terminal_to_pane(&session, &target, cx).is_some() {
+                                        view.agent_pending_tab = None;
+                                        view.agent_launch_pane = None;
+                                        view.agent_status =
+                                            "Agent Host tab confirmed in original pane".into();
+                                    } else {
+                                        view.agent_status =
+                                            "Agent exists, but preview could not attach; close another tab and Refresh, or use + → Attach existing".into();
+                                    }
                                 } else {
-                                    view.agent_status = "Host Agent exists, but Native preview tabs are full; close one and Refresh".into();
+                                    // The Agent still belongs to Runtime Host.
+                                    // Never redirect a stale async reply to
+                                    // whichever pane now has keyboard focus.
+                                    view.agent_pending_tab = None;
+                                    view.agent_launch_pane = None;
+                                    view.agent_status =
+                                        "Agent created; origin pane closed. Use + → Attach existing to place it manually".into();
                                 }
                             }
                         }
@@ -5034,6 +5099,12 @@ impl Workbench {
                 .mixed_panes
                 .active_in(PaneSlot::Secondary)
                 .and_then(&key_for),
+            pinned_editors: self
+                .mixed_tabs
+                .pinned()
+                .iter()
+                .filter_map(&key_for)
+                .collect(),
         };
         if let Err(error) = saved.save_to_path(&path) {
             eprintln!("Alera GPUI: could not save mixed pane layout: {error}");
@@ -5124,6 +5195,13 @@ impl Workbench {
                 self.transfer_editor_to_pane(id, PaneSlot::Secondary, cx);
             }
         }
+        // Rehydrate only file-backed Editor pins after actual NativeEditor
+        // sessions have been installed/transferred. Host IDs never restore.
+        for (id, key) in &keys {
+            if saved.pinned_editors.contains(key) {
+                self.mixed_tabs.set_pinned(id, true);
+            }
+        }
         for wanted in [
             saved.primary_active_editor.as_ref(),
             saved.secondary_active_editor.as_ref(),
@@ -5159,6 +5237,7 @@ impl Workbench {
         tab: WorkbenchTab,
         pane: PaneSlot,
         selected: bool,
+        pinned: bool,
         drag_generation: u64,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
@@ -5220,6 +5299,7 @@ impl Workbench {
                             .child(title),
                     )
                     .when(tab.dirty, |entry| entry.child(div().text_xs().child("●")))
+                    .when(pinned, |entry| entry.child(icon(UiIcon::Pin, 12.0, MUTED)))
                     .when(!tab.running, |entry| {
                         entry.child(div().text_xs().text_color(rgb(MUTED)).child("○"))
                     })
@@ -5250,6 +5330,7 @@ impl Workbench {
                         cx.entity().downgrade(),
                         for_right,
                         secondary,
+                        pinned,
                     )),
             )
             .child(
@@ -5667,12 +5748,19 @@ impl Workbench {
         }
         match action {
             MixedContextAction::Focus => self.focus_mixed_tab(&id, window, cx),
+            MixedContextAction::TogglePin => {
+                let next = !self.mixed_tabs.is_pinned(&id);
+                if self.mixed_tabs.set_pinned(&id, next) {
+                    self.save_mixed_pane_layout(cx);
+                }
+            }
             MixedContextAction::Close => self.close_mixed_tab(&id, cx),
             MixedContextAction::CloseOthers | MixedContextAction::CloseToRight => {
-                for target in self
-                    .mixed_panes
-                    .close_candidates(&id, matches!(action, MixedContextAction::CloseToRight))
-                {
+                for target in self.mixed_panes.close_unpinned_candidates(
+                    &id,
+                    matches!(action, MixedContextAction::CloseToRight),
+                    self.mixed_tabs.pinned(),
+                ) {
                     // Editor dirty-buffer protection and Host PTY ownership
                     // are enforced by the original owners for every close.
                     self.close_mixed_tab(&target, cx);
@@ -6174,6 +6262,35 @@ impl Render for Workbench {
         let mixed_secondary_tabs = self
             .mixed_panes
             .visible_tabs_in(PaneSlot::Secondary, &mixed_tabs);
+        let pinned_ids = self.mixed_tabs.pinned().to_vec();
+        let (primary_pinned_tabs, primary_regular_tabs) =
+            self.mixed_tabs.partition_pins(mixed_primary_tabs);
+        let (secondary_pinned_tabs, secondary_regular_tabs) =
+            self.mixed_tabs.partition_pins(mixed_secondary_tabs);
+        let primary_two_rows =
+            self.native_settings.editor_two_row_tabs && !primary_pinned_tabs.is_empty();
+        let secondary_two_rows =
+            self.native_settings.editor_two_row_tabs && !secondary_pinned_tabs.is_empty();
+        // Classic only creates a second row when that pane has pinned tabs.
+        // In one-row mode keep the pins ahead of the regular scrolling tabs.
+        let mixed_primary_tabs = if primary_two_rows {
+            primary_regular_tabs
+        } else {
+            primary_pinned_tabs
+                .iter()
+                .cloned()
+                .chain(primary_regular_tabs)
+                .collect()
+        };
+        let mixed_secondary_tabs = if secondary_two_rows {
+            secondary_regular_tabs
+        } else {
+            secondary_pinned_tabs
+                .iter()
+                .cloned()
+                .chain(secondary_regular_tabs)
+                .collect()
+        };
         let mixed_split_horizontal = self.mixed_panes.axis() == PaneAxis::Horizontal;
         let mixed_secondary_identity = self.mixed_panes.active_in(PaneSlot::Secondary).cloned();
         let mixed_secondary_host = mixed_secondary_identity.as_ref().and_then(|id| match id {
@@ -7854,6 +7971,33 @@ impl Render for Workbench {
                             .flex_col()
                             .child(
                                 div()
+                                    .id("mixed-primary-pinned-tab-strip")
+                                    .when(primary_two_rows, |row| {
+                                        row.h(px(TAB_STRIP_HEIGHT))
+                                            .min_w_0()
+                                            .flex()
+                                            .items_center()
+                                            .overflow_x_scroll()
+                                            .pl_2()
+                                            .bg(rgb(TOOLBAR))
+                                            .border_b_1()
+                                            .border_color(rgb(BORDER))
+                                            .children(primary_pinned_tabs.into_iter().enumerate().map(|(index, tab)| {
+                                                let selected = mixed_primary_active.as_ref() == Some(&tab.identity);
+                                                Self::render_mixed_tab_chip(
+                                                    index + 512,
+                                                    tab,
+                                                    PaneSlot::Primary,
+                                                    selected,
+                                                    true,
+                                                    mixed_drag_generation,
+                                                    cx,
+                                                )
+                                            }))
+                                    }),
+                            )
+                            .child(
+                                div()
                                     .id("mixed-workbench-tab-strip")
                                     // Flutter Classic uses ONE 44px mixed content
                                     // strip. Terminal/Editor are tab kinds, not
@@ -7877,8 +8021,9 @@ impl Render for Workbench {
                                             .children(mixed_primary_tabs.into_iter().enumerate().map(|(index, tab)| {
                                                 let selected = !showing_explorer_preview
                                                     && mixed_primary_active.as_ref() == Some(&tab.identity);
+                                                let pinned = pinned_ids.contains(&tab.identity);
                                                 Self::render_mixed_tab_chip(
-                                                    index, tab, PaneSlot::Primary, selected,
+                                                    index, tab, PaneSlot::Primary, selected, pinned,
                                                     mixed_drag_generation, cx,
                                                 )
                                             }))
@@ -7965,6 +8110,7 @@ impl Render for Workbench {
                                                     PaneSlot::Primary,
                                                     &self.mixed_panes,
                                                 );
+                                                let profiles = self.agent_profiles.clone();
                                                 icon_button("mixed-new-tab", UiIcon::Add, "New Tab", terminal_creating
                                                     && self.terminal_create_pane.as_ref().is_some_and(|pending| pending.target.pane() == PaneSlot::Primary))
                                                     .w(px(28.0))
@@ -7973,6 +8119,7 @@ impl Render for Workbench {
                                                         owner,
                                                         target,
                                                         running,
+                                                        profiles,
                                                         terminal_create_busy,
                                                         terminal_create_timed_out,
                                                     ))
@@ -7980,6 +8127,7 @@ impl Render for Workbench {
                                                         if *open {
                                                             let _ = refresh_owner.update(cx, |view, cx| {
                                                                 view.refresh_terminals(cx);
+                                                                view.refresh_agent_profiles(cx);
                                                             });
                                                         }
                                                     })
@@ -8365,6 +8513,33 @@ impl Render for Workbench {
                                             .border_color(rgb(BORDER))
                                             .child(
                                                 div()
+                                                    .id("mixed-secondary-pinned-tab-strip")
+                                                    .when(secondary_two_rows, |row| {
+                                                        row.h(px(TAB_STRIP_HEIGHT))
+                                                            .min_w_0()
+                                                            .flex()
+                                                            .items_center()
+                                                            .overflow_x_scroll()
+                                                            .pl_2()
+                                                            .bg(rgb(TOOLBAR))
+                                                            .border_b_1()
+                                                            .border_color(rgb(BORDER))
+                                                            .children(secondary_pinned_tabs.into_iter().enumerate().map(|(index, tab)| {
+                                                                let selected = mixed_secondary_active.as_ref() == Some(&tab.identity);
+                                                                Self::render_mixed_tab_chip(
+                                                                    index + 512,
+                                                                    tab,
+                                                                    PaneSlot::Secondary,
+                                                                    selected,
+                                                                    true,
+                                                                    mixed_drag_generation,
+                                                                    cx,
+                                                                )
+                                                            }))
+                                                    }),
+                                            )
+                                            .child(
+                                                div()
                                                     .id("mixed-secondary-toolbar")
                                                     .h(px(TAB_STRIP_HEIGHT))
                                                     .px_2()
@@ -8384,8 +8559,9 @@ impl Render for Workbench {
                                                             .overflow_x_scroll()
                                                             .children(mixed_secondary_tabs.into_iter().enumerate().map(|(index, tab)| {
                                                                 let selected = mixed_secondary_active.as_ref() == Some(&tab.identity);
+                                                                let pinned = pinned_ids.contains(&tab.identity);
                                                                 Self::render_mixed_tab_chip(
-                                                                    index, tab, PaneSlot::Secondary, selected,
+                                                                    index, tab, PaneSlot::Secondary, selected, pinned,
                                                                     mixed_drag_generation, cx,
                                                                 )
                                                             }))
@@ -8414,6 +8590,7 @@ impl Render for Workbench {
                                                             PaneSlot::Secondary,
                                                             &self.mixed_panes,
                                                         );
+                                                        let profiles = self.agent_profiles.clone();
                                                         icon_button("mixed-secondary-new-tab", UiIcon::Add, "New Tab in second pane", terminal_creating
                                                             && self.terminal_create_pane.as_ref().is_some_and(|pending| pending.target.pane() == PaneSlot::Secondary))
                                                             .w(px(28.0))
@@ -8422,6 +8599,7 @@ impl Render for Workbench {
                                                                 owner,
                                                                 target,
                                                                 running,
+                                                                profiles,
                                                                 terminal_create_busy,
                                                                 terminal_create_timed_out,
                                                             ))
@@ -8429,6 +8607,7 @@ impl Render for Workbench {
                                                                 if *open {
                                                                     let _ = refresh_owner.update(cx, |view, cx| {
                                                                         view.refresh_terminals(cx);
+                                                                        view.refresh_agent_profiles(cx);
                                                                     });
                                                                 }
                                                             })
@@ -9218,6 +9397,7 @@ impl Render for Workbench {
                                         .child("Dismiss tracking")
                                         .on_click(cx.listener(|this, _, _, cx| {
                                             this.agent_pending_tab = None;
+                                            this.agent_launch_pane = None;
                                             this.agent_status = "Agent still belongs to Host; use Attach existing to find it".into();
                                             cx.notify();
                                         }))
@@ -9691,6 +9871,7 @@ fn main() {
                             agent_launch_busy: false,
                             agent_launch_request: 0,
                             agent_pending_tab: None,
+                            agent_launch_pane: None,
                             agent_status: "Select an Agent Profile and enter a task".into(),
                             terminals: TerminalDock::for_workspace(0),
                             terminal_panes: TerminalPaneLayout::default(),

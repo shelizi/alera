@@ -20,6 +20,7 @@ impl Workbench {
         owner: gpui::WeakEntity<Self>,
         target: Option<PaneAttachGuard>,
         running: Vec<(TerminalSession, String)>,
+        profiles: Vec<AgentProfileRow>,
         terminal_create_busy: bool,
         terminal_create_timed_out: bool,
     ) -> impl Fn(
@@ -53,6 +54,20 @@ impl Workbench {
                     });
                 }),
             );
+            if !profiles.is_empty() {
+                menu = menu.separator();
+            }
+            for profile in profiles.iter().cloned() {
+                let owner = owner.clone();
+                let agent_target = target.clone();
+                let id = profile.id;
+                let label = format!("New Agent · {} ({})", profile.name, profile.agent_type);
+                menu = menu.item(PopupMenuItem::new(label).on_click(move |_, window, cx| {
+                    let _ = owner.update(cx, |view, cx| {
+                        view.prepare_agent_in_pane(&id, &agent_target, window, cx);
+                    });
+                }));
+            }
             if terminal_create_timed_out {
                 let retry_owner = owner.clone();
                 let retry_target = target.clone();
@@ -336,6 +351,7 @@ impl Workbench {
         owner: gpui::WeakEntity<Self>,
         identity: WorkbenchTabIdentity,
         secondary: bool,
+        pinned: bool,
     ) -> impl Fn(
         gpui_kit::component::menu::PopupMenu,
         &mut Window,
@@ -345,6 +361,10 @@ impl Workbench {
         move |mut menu, _, _| {
             let actions = [
                 (MixedContextAction::Focus, "Focus"),
+                (
+                    MixedContextAction::TogglePin,
+                    if pinned { "Unpin Tab" } else { "Pin Tab" },
+                ),
                 (MixedContextAction::Close, "Close"),
                 (MixedContextAction::CloseOthers, "Close others"),
                 (MixedContextAction::CloseToRight, "Close to right"),

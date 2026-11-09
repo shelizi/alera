@@ -36,6 +36,8 @@ pub struct WorkbenchTabs {
     workspace_generation: u64,
     tabs: Vec<WorkbenchTab>,
     active: Option<WorkbenchTabIdentity>,
+    /// Native view-only pin projection. Never owns/terminates a Host PTY.
+    pinned: Vec<WorkbenchTabIdentity>,
 }
 
 impl WorkbenchTabs {
@@ -54,10 +56,41 @@ impl WorkbenchTabs {
         self.active.as_ref()
     }
 
+    pub fn pinned(&self) -> &[WorkbenchTabIdentity] {
+        &self.pinned
+    }
+
+    pub fn is_pinned(&self, id: &WorkbenchTabIdentity) -> bool {
+        self.pinned.contains(id)
+    }
+
+    /// Stale Editor epochs and recycled Host identities cannot be pinned.
+    pub fn set_pinned(&mut self, id: &WorkbenchTabIdentity, pinned: bool) -> bool {
+        if !self.contains(id) || self.is_pinned(id) == pinned {
+            return false;
+        }
+        if pinned {
+            self.pinned.push(id.clone());
+        } else {
+            self.pinned.retain(|candidate| candidate != id);
+        }
+        true
+    }
+
+    /// Stable, pane-ordered groups; no tab can appear in both visual rows.
+    pub fn partition_pins(
+        &self,
+        tabs: Vec<WorkbenchTab>,
+    ) -> (Vec<WorkbenchTab>, Vec<WorkbenchTab>) {
+        tabs.into_iter()
+            .partition(|tab| self.is_pinned(&tab.identity))
+    }
+
     pub fn reset(&mut self, generation: u64) {
         self.workspace_generation = generation;
         self.tabs.clear();
         self.active = None;
+        self.pinned.clear();
     }
 
     /// Preserve mixed order for surviving identities and append new tabs.
@@ -74,6 +107,8 @@ impl WorkbenchTabs {
         }
         self.tabs
             .retain(|tab| observed.iter().any(|item| item.identity == tab.identity));
+        self.pinned
+            .retain(|id| observed.iter().any(|tab| &tab.identity == id));
         for item in observed {
             if let Some(existing) = self
                 .tabs
@@ -172,6 +207,35 @@ mod tests {
             dirty: false,
             running: true,
         }
+    }
+
+    #[test]
+    fn pin_state_survives_metadata_refresh_but_not_close_or_workspace_switch() {
+        let first = editor(3, 1);
+        let second = editor(3, 2);
+        let (host, _) = host("pty-1", false);
+        let mut tabs = WorkbenchTabs::for_workspace(7);
+        tabs.reconcile(7, vec![first.clone(), host.clone(), second.clone()], None);
+        assert!(tabs.set_pinned(&host.identity, true));
+        assert!(tabs.set_pinned(&second.identity, true));
+        assert!(!tabs.set_pinned(&second.identity, true));
+        assert!(!tabs.set_pinned(&editor(9, 1).identity, true));
+        let (pinned, regular) = tabs.partition_pins(tabs.entries().to_vec());
+        assert_eq!(
+            pinned.iter().map(|tab| &tab.identity).collect::<Vec<_>>(),
+            vec![&host.identity, &second.identity]
+        );
+        assert_eq!(regular[0].identity, first.identity);
+        let mut changed = host.clone();
+        changed.title = "Updated title".into();
+        tabs.reconcile(7, vec![changed, second.clone(), first.clone()], None);
+        assert!(tabs.is_pinned(&host.identity));
+        tabs.reconcile(7, vec![second.clone(), first.clone()], None);
+        assert!(!tabs.is_pinned(&host.identity));
+        assert!(tabs.set_pinned(&second.identity, false));
+        assert!(tabs.set_pinned(&first.identity, true));
+        tabs.reconcile(8, vec![first.clone()], None);
+        assert!(!tabs.is_pinned(&first.identity));
     }
 
     #[test]

@@ -271,6 +271,19 @@ impl WorkbenchPaneLayout {
             .collect()
     }
 
+    /// Classic closes only unpinned tabs in the clicked pane for batch-close.
+    pub fn close_unpinned_candidates(
+        &self,
+        clicked: &WorkbenchTabIdentity,
+        to_right: bool,
+        pinned: &[WorkbenchTabIdentity],
+    ) -> Vec<WorkbenchTabIdentity> {
+        self.close_candidates(clicked, to_right)
+            .into_iter()
+            .filter(|id| !pinned.contains(id))
+            .collect()
+    }
+
     pub fn adjacent_tab(
         &self,
         clicked: &WorkbenchTabIdentity,
@@ -512,6 +525,33 @@ mod tests {
             panes.visible_tabs_in(PaneSlot::Primary, &remaining).len(),
             2
         );
+    }
+
+    #[test]
+    fn close_others_and_right_skip_pins_and_other_pane() {
+        let first = editor(6, 1);
+        let pinned = editor(6, 2);
+        let third = editor(6, 3);
+        let secondary = editor(6, 4);
+        let mut layout = WorkbenchPaneLayout::new();
+        layout.reconcile(&[
+            first.clone(),
+            pinned.clone(),
+            third.clone(),
+            secondary.clone(),
+        ]);
+        assert!(layout.move_to(&secondary, PaneSlot::Secondary));
+        assert_eq!(
+            layout.close_unpinned_candidates(&first, true, std::slice::from_ref(&pinned)),
+            vec![third.clone()]
+        );
+        assert_eq!(
+            layout.close_unpinned_candidates(&third, false, std::slice::from_ref(&pinned)),
+            vec![first.clone()]
+        );
+        assert!(layout
+            .close_unpinned_candidates(&secondary, false, &[])
+            .is_empty());
     }
 
     #[test]

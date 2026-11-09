@@ -26,6 +26,10 @@ pub struct NativeSettings {
     pub terminal_font_size: f64,
     pub editor_autosave_enabled: bool,
     pub editor_tab_size: u64,
+    /// UI-only preference; Classic also keeps twoRowTabs local to its UI.
+    /// Kept out of the Host MCP scalar contract.
+    #[serde(default)]
+    pub editor_two_row_tabs: bool,
     /// Native Explorer-only preferences. Never exposed to Host MCP setting
     /// updates and never shared with the Classic Flutter preferences file.
     #[serde(default = "default_explorer_show_hidden")]
@@ -53,6 +57,7 @@ impl Default for NativeSettings {
             terminal_font_size: 13.0,
             editor_autosave_enabled: false,
             editor_tab_size: 4,
+            editor_two_row_tabs: false,
             explorer_show_hidden: default_explorer_show_hidden(),
             explorer_show_ignored: false,
             confirm_project_removal: true,
@@ -442,6 +447,30 @@ impl NativeSettingsStore {
         Ok(readback)
     }
 
+    /// UI-only local preference: never expose the Classic-specific toggle
+    /// as an MCP-writable Host shared scalar without a Core contract.
+    pub fn compare_and_set_two_row_tabs(
+        &self,
+        expected: bool,
+        next: bool,
+    ) -> io::Result<NativeSettings> {
+        let _lock = self.lock()?;
+        let mut settings = self.read()?;
+        if settings.editor_two_row_tabs != expected {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "Native two-row tabs preference changed in another window",
+            ));
+        }
+        settings.editor_two_row_tabs = next;
+        self.persist(&settings)?;
+        let readback = self.read()?;
+        if readback.editor_two_row_tabs != next {
+            return Err(io::Error::other("Native two-row tabs readback mismatch"));
+        }
+        Ok(readback)
+    }
+
     fn lock(&self) -> io::Result<SettingsFileLock> {
         let parent = self
             .path
@@ -501,6 +530,30 @@ impl Drop for SettingsFileLock {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn two_row_tabs_is_default_off_and_persists_via_native_only_cas() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = NativeSettingsStore::new(dir.path());
+        assert!(!store.read().unwrap().editor_two_row_tabs);
+        assert!(
+            store
+                .compare_and_set_two_row_tabs(false, true)
+                .unwrap()
+                .editor_two_row_tabs
+        );
+        assert!(store.read().unwrap().editor_two_row_tabs);
+        assert!(store.compare_and_set_two_row_tabs(false, true).is_err());
+        assert!(
+            !store
+                .compare_and_set_two_row_tabs(true, false)
+                .unwrap()
+                .editor_two_row_tabs
+        );
+        assert!(!store.read().unwrap().editor_two_row_tabs);
+        assert!(!NativeSettings::writable("editor.twoRowTabs"));
+        assert_eq!(NativeSettings::default().get("editor.twoRowTabs"), None);
+    }
 
     #[test]
     fn shared_host_snapshot_validates_all_twenty_nine_fields_without_erasing_native_only_data() {

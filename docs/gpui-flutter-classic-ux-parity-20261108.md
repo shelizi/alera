@@ -112,9 +112,40 @@ instead of the stale legacy `center_view` flag after session restore.
   independent Rust unit regressions. These tests and compilation do not
   replace real Windows mouse, keyboard, modal and Host acceptance.
 
-**Remaining parity:** Pinned-tab grouping and Classic's optional two-row
-pinned layout, Agent creation options in `+`, and reliable real Windows
-pane-tab pointer/IME/layout restoration acceptance remain outstanding.
+### Tab pinning / optional two-row layout follow-up (2026-11-09)
+
+- Each real Terminal, Agent and Editor Tab now supports Pin Tab / Unpin Tab
+  in the same GPUI Kit right-click menu, with a pinned Codicon marker.
+  Pin metadata follows current exact workspace/Host/Editor identity and
+  survives tab title/status refresh. Closed/recycled Host tabs are not
+  silently re-pinned under a reused handle.
+- Each pane visually groups its pinned tabs before regular tabs. The
+  editor's Native-local Two-row tabs switch uses atomic, readback-checked
+  Native Settings storage; only panes with at least one pinned tab get
+  a separate 44px first row, matching Classic's default single-row rule.
+- Close Others and Close to Right skip pinned tabs in the *clicked pane*;
+  explicitly closing a pinned tab still uses the ordinary, safe underlying
+  Editor/Host preview close action.
+- File-backed Editor pins persist in a backward-compatible optional
+  `pinned_editors` field in the existing V1 layout. Only validated keys
+  already represented in the pane layout may restore; no Host handles
+  are written to that Editor-only snapshot.
+- Both `+` menus now also list available, Host-validated Agent Profiles
+  (display name and Agent type only). Selecting an Agent opens the existing
+  Profile task composer and remembers the pane; it does **not** launch an
+  Agent until the user submits a task. When Runtime Host confirms the
+  exact Agent workspace/tab identity, Native attaches the session only
+  to its surviving original pane. Closing/recreating that pane instead
+  leaves the Host Agent alive for explicit Attach.
+
+**Remaining parity:** Classic's pin state is Runtime Host-owned whereas
+Native Host/Agent pins here are view-local and not synchronized across
+Classic and GPUI or app restart. Editor two-row preference is Native-local
+and not yet shared through the Rust Core desktop settings contract.
+Classic detects installed Agent CLIs directly; GPUI currently lists
+Host Agent Profiles and asks for a task rather than reproducing every
+Classic Agent selection shortcut. Real Windows pane-tab pointer,
+IME and layout restoration acceptance remain outstanding.
 
 ## Explorer baseline and implemented slice
 
