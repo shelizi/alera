@@ -156,6 +156,8 @@ fn explorer_status_badge(badge: Option<ExplorerGitBadge>) -> gpui::Div {
 enum GitUiAction {
     Stage(PathBuf),
     Unstage(PathBuf),
+    StageMany(Vec<PathBuf>),
+    UnstageMany(Vec<PathBuf>),
     Commit(String),
     SwitchBranch(String),
     MergeWithoutConflicts(String),
@@ -351,6 +353,8 @@ struct Workbench {
     content_searched_query: String,
     content_request: u64,
     git_snapshot: Option<GitSnapshot>,
+    git_selected_changes: HashSet<alera_gpui_desktop::git_inspect::GitChangeRow>,
+    git_selection_anchor: Option<alera_gpui_desktop::git_inspect::GitChangeRow>,
     git_history: Option<GitHistorySnapshot>,
     git_history_open: bool,
     git_history_options: GitHistoryOptions,
@@ -1303,6 +1307,47 @@ impl Workbench {
         self.observe_native_editor(&editor, cx);
     }
 
+    fn select_git_change(
+        &mut self,
+        row: alera_gpui_desktop::git_inspect::GitChangeRow,
+        visible: &[alera_gpui_desktop::git_inspect::GitChangeRow],
+        toggle: bool,
+        shift: bool,
+    ) {
+        if !visible.contains(&row) {
+            return;
+        }
+        if shift {
+            if let Some(anchor) = self.git_selection_anchor.as_ref() {
+                if anchor.area == row.area {
+                    if let (Some(from), Some(to)) = (
+                        visible.iter().position(|entry| entry == anchor),
+                        visible.iter().position(|entry| entry == &row),
+                    ) {
+                        if !toggle {
+                            self.git_selected_changes.clear();
+                        }
+                        for entry in &visible[from.min(to)..=from.max(to)] {
+                            if entry.area == row.area && self.git_selected_changes.len() < 120 {
+                                self.git_selected_changes.insert(entry.clone());
+                            }
+                        }
+                        return;
+                    }
+                }
+            }
+        }
+        if toggle {
+            if !self.git_selected_changes.remove(&row) && self.git_selected_changes.len() < 120 {
+                self.git_selected_changes.insert(row.clone());
+            }
+        } else {
+            self.git_selected_changes.clear();
+            self.git_selected_changes.insert(row.clone());
+        }
+        self.git_selection_anchor = Some(row);
+    }
+
     fn refresh_git(&mut self, cx: &mut Context<Self>) {
         if self.git_loading {
             return;
@@ -1569,6 +1614,12 @@ impl Workbench {
                             git.unstage_file(&path)?;
                             Ok("Unstaged selected file".to_string())
                         }
+                        GitUiAction::StageMany(paths) => git
+                            .stage_files(&paths)
+                            .map(|count| format!("Staged {count} selected files")),
+                        GitUiAction::UnstageMany(paths) => git
+                            .unstage_files(&paths)
+                            .map(|count| format!("Unstaged {count} selected files")),
                         GitUiAction::Commit(message) => {
                             git.commit(&message).map(|id| format!("Committed {id}"))
                         }
@@ -1608,6 +1659,8 @@ impl Workbench {
                         view.git_conflict_selected = None;
                         view.git_conflict_confirm_armed = false;
                         view.git_snapshot = None;
+                        view.git_selected_changes.clear();
+                        view.git_selection_anchor = None;
                         view.refresh_git(cx);
                         if view.git_history_open {
                             view.git_history_loading = false;
@@ -2616,6 +2669,8 @@ impl Workbench {
         self.content_searched_query.clear();
         self.content_request = self.content_request.wrapping_add(1);
         self.git_snapshot = None;
+        self.git_selected_changes.clear();
+        self.git_selection_anchor = None;
         self.git_loading = false;
         self.git_history = None;
         self.git_history_loading = false;
@@ -5945,6 +6000,29 @@ impl Render for Workbench {
             .as_ref()
             .map(|snapshot| snapshot.visible_rows(&git_filter))
             .unwrap_or_default();
+        let git_visible_rows = Arc::new(git_changes.clone());
+        let git_selected = self.git_selected_changes.clone();
+        let mut git_stage_paths = Vec::new();
+        let mut git_unstage_paths = Vec::new();
+        for row in &git_changes {
+            if !git_selected.contains(row) {
+                continue;
+            }
+            if row.area.can_stage() {
+                git_stage_paths.push(row.relative.clone());
+            }
+            if row.area.can_unstage() {
+                git_unstage_paths.push(row.relative.clone());
+            }
+        }
+        git_stage_paths.sort();
+        git_stage_paths.dedup();
+        git_unstage_paths.sort();
+        git_unstage_paths.dedup();
+        let git_selected_count = git_changes
+            .iter()
+            .filter(|row| git_selected.contains(*row))
+            .count();
         let git_action_busy = self.git_action_busy;
         let git_sensitive_armed = self.git_sensitive_armed;
         let git_action_status = self.git_action_status.clone();
@@ -7055,12 +7133,41 @@ impl Render for Workbench {
                                 .text_color(rgb(MUTED))
                                 .child(if git_action_busy { "Git operation running…".to_owned() } else { git_action_status }))
                             .child(git_filter_input)
+                            .when(git_selected_count > 0, |panel| panel.child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .text_xs()
+                                    .child(format!("{git_selected_count} selected"))
+                                    .when(!git_stage_paths.is_empty(), |bar| bar.child(
+                                        icon_button("git-stage-selected", UiIcon::GitStage, "Stage selected files", false)
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                this.run_git_action(GitUiAction::StageMany(git_stage_paths.clone()), cx);
+                                            }))
+                                    ))
+                                    .when(!git_unstage_paths.is_empty(), |bar| bar.child(
+                                        icon_button("git-unstage-selected", UiIcon::GitUnstage, "Unstage selected files", false)
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                this.run_git_action(GitUiAction::UnstageMany(git_unstage_paths.clone()), cx);
+                                            }))
+                                    ))
+                                    .child(icon_button("git-clear-selected", UiIcon::Close, "Clear Git selection", false)
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.git_selected_changes.clear();
+                                            this.git_selection_anchor = None;
+                                            cx.notify();
+                                        })))
+                            ))
                             .child(
                                 div()
                                     .id("git-change-list")
                                     .max_h(px(135.0))
                                     .overflow_y_scroll()
                                     .children(git_changes.into_iter().enumerate().map(|(i, change)| {
+                                        let selected = git_selected.contains(&change);
+                                        let clicked_row = change.clone();
+                                        let visible_for_click = Arc::clone(&git_visible_rows);
                                         let label = format!("{} {} {}", change.area.title(), change.label, change.relative.display());
                                         let can_stage = change.area.can_stage();
                                         let can_unstage = change.area.can_unstage();
@@ -7074,6 +7181,7 @@ impl Render for Workbench {
                                             .gap_2()
                                             .py_1()
                                             .text_xs()
+                                            .bg(rgb(if selected { ACTIVE } else { PANEL }))
                                             .hover(|style| style.bg(rgb(ACTIVE)))
                                             .child(div()
                                                 .id(("git-change-preview", i))
@@ -7081,8 +7189,14 @@ impl Render for Workbench {
                                                 .min_w_0()
                                                 .cursor_pointer()
                                                 .child(label)
-                                                .on_click(cx.listener(move |this, _, _, cx| {
-                                                    this.preview_git_change(relative.clone(), cx);
+                                                .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
+                                                    let modifiers = event.modifiers();
+                                                    let multi = modifiers.control || modifiers.platform;
+                                                    this.select_git_change(clicked_row.clone(), visible_for_click.as_ref(), multi, modifiers.shift);
+                                                    if !multi && !modifiers.shift {
+                                                        this.preview_git_change(relative.clone(), cx);
+                                                    }
+                                                    cx.notify();
                                                 })))
                                             .when(can_stage, |row| row.child(icon_button(("git-stage-file", i), UiIcon::GitStage, "Stage this file for commit", false)
                                                 .on_click(cx.listener(move |this, _, _, cx| {
@@ -8741,6 +8855,8 @@ fn main() {
                             content_searched_query: String::new(),
                             content_request: 0,
                             git_snapshot: None,
+                            git_selected_changes: HashSet::new(),
+                            git_selection_anchor: None,
                             git_history: None,
                             git_history_open: false,
                             git_history_options: GitHistoryOptions {

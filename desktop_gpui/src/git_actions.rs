@@ -550,6 +550,67 @@ impl GitActions {
         Ok(path.to_path_buf())
     }
 
+    /// Validate the entire selection before modifying the index. A failure
+    /// must not leave a partially staged batch.
+    pub fn stage_files(&self, paths: &[PathBuf]) -> Result<usize, String> {
+        if paths.is_empty() || paths.len() > 120 {
+            return Err("Select between 1 and 120 files to stage".into());
+        }
+        let mut selected = std::collections::BTreeSet::new();
+        for path in paths {
+            selected.insert(self.relative(path, true)?);
+        }
+        let mut index = self.repo.index().map_err(|error| error.to_string())?;
+        for path in &selected {
+            let file = self.root.join(path);
+            if file.exists() {
+                index.add_path(path).map_err(|error| error.to_string())?;
+            } else if index.get_path(path, 0).is_some() {
+                index.remove_path(path).map_err(|error| error.to_string())?;
+            } else {
+                return Err(format!("Cannot stage missing file {}", path.display()));
+            }
+        }
+        index.write().map_err(|error| error.to_string())?;
+        Ok(selected.len())
+    }
+
+    /// Git resets selected index paths only; working files are preserved.
+    pub fn unstage_files(&self, paths: &[PathBuf]) -> Result<usize, String> {
+        if paths.is_empty() || paths.len() > 120 {
+            return Err("Select between 1 and 120 files to unstage".into());
+        }
+        let mut selected = std::collections::BTreeSet::new();
+        for path in paths {
+            selected.insert(self.relative(path, true)?);
+        }
+        let index = self.repo.index().map_err(|error| error.to_string())?;
+        if selected
+            .iter()
+            .any(|path| index.get_path(path, 0).is_none())
+        {
+            return Err("Selected file is not staged; refresh the Git changes list".into());
+        }
+        drop(index);
+        match self.repo.head() {
+            Ok(head) => {
+                let commit = head.peel_to_commit().map_err(|error| error.to_string())?;
+                self.repo
+                    .reset_default(Some(commit.as_object()), &selected)
+                    .map_err(|error| error.to_string())?;
+            }
+            Err(error) if error.code() == git2::ErrorCode::UnbornBranch => {
+                let mut index = self.repo.index().map_err(|error| error.to_string())?;
+                for path in &selected {
+                    index.remove_path(path).map_err(|error| error.to_string())?;
+                }
+                index.write().map_err(|error| error.to_string())?;
+            }
+            Err(error) => return Err(error.to_string()),
+        }
+        Ok(selected.len())
+    }
+
     pub fn stage_file(&self, path: &Path) -> Result<(), String> {
         let path = self.relative(path, true)?;
         let mut index = self.repo.index().map_err(|error| error.to_string())?;
@@ -921,6 +982,54 @@ mod tests {
             .unwrap()
             .get_path(Path::new("extra.txt"), 0)
             .is_none());
+    }
+
+    #[test]
+    fn batch_staging_validates_all_paths_before_writing_index() {
+        let (_dir, actions) = repo_fixture();
+        fs::write(actions.root().join("a.txt"), "changed").unwrap();
+        fs::write(actions.root().join("new.txt"), "new").unwrap();
+        assert!(actions
+            .stage_files(&[PathBuf::from("a.txt"), PathBuf::from("../outside")])
+            .is_err());
+        let index = actions.repo.index().unwrap();
+        let initial = index.get_path(Path::new("a.txt"), 0).unwrap().id;
+        let head = actions.repo.head().unwrap().peel_to_tree().unwrap();
+        assert_eq!(initial, head.get_path(Path::new("a.txt")).unwrap().id());
+        drop(index);
+        assert_eq!(
+            actions
+                .stage_files(&[
+                    PathBuf::from("a.txt"),
+                    PathBuf::from("new.txt"),
+                    PathBuf::from("a.txt")
+                ])
+                .unwrap(),
+            2
+        );
+        let index = actions.repo.index().unwrap();
+        assert!(index.get_path(Path::new("new.txt"), 0).is_some());
+        drop(index);
+        assert_eq!(
+            actions
+                .unstage_files(&[PathBuf::from("a.txt"), PathBuf::from("new.txt")])
+                .unwrap(),
+            2
+        );
+        assert!(actions
+            .repo
+            .index()
+            .unwrap()
+            .get_path(Path::new("new.txt"), 0)
+            .is_none());
+        assert_eq!(
+            fs::read_to_string(actions.root().join("a.txt")).unwrap(),
+            "changed"
+        );
+        assert_eq!(
+            fs::read_to_string(actions.root().join("new.txt")).unwrap(),
+            "new"
+        );
     }
 
     #[test]
