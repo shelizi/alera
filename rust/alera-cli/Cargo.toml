@@ -59,6 +59,7 @@ toml_edit = "0.25.13"
 url = "2.5.8"
 dirs = "6.0.0"
 dunce = "1.0.5"
+tempfile = "3.27.0"
 regex = "1.13.1"
 git2 = { version = "0.21.0", default-features = false }
 ignore = "0.4.33"

@@ -25,6 +25,9 @@ pub enum AiAssistAction {
 pub struct AiCommitMessageArgs {
     #[arg(long, value_name = "workspace-path")]
     pub workspace: std::path::PathBuf,
+    /// Local branch shown during the Native preview, guarding same-HEAD switches.
+    #[arg(long = "expected-branch")]
+    pub expected_branch: String,
     /// Exact HEAD object shown during the Native preview.
     #[arg(long = "expected-head")]
     pub expected_head: String,

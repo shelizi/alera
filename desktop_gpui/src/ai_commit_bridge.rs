@@ -16,7 +16,9 @@ use std::time::{Duration, Instant};
 const MAX_JSON_BYTES: u64 = 80 * 1024;
 const WAIT_STEP: Duration = Duration::from_millis(40);
 const MAX_CLI_WAIT: Duration = Duration::from_secs(650);
-const CANCEL_GRACE: Duration = Duration::from_secs(3);
+// Allow the CLI's Windows taskkill descendant sweep (up to four seconds)
+// to finish before force-killing its controlling process.
+const CANCEL_GRACE: Duration = Duration::from_secs(8);
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -37,6 +39,8 @@ fn args_for(runtime: &Path, root: &Path, plan: &GitStagedCommitPrompt) -> Vec<Os
         "commit-message".into(),
         "--workspace".into(),
         root.as_os_str().to_os_string(),
+        "--expected-branch".into(),
+        plan.branch.clone().into(),
         "--expected-head".into(),
         plan.head_oid.clone().into(),
         "--expected-index".into(),
@@ -180,6 +184,7 @@ mod tests {
             .join(" ");
         assert!(text.contains("ai-assist --no-start --json"));
         assert!(text.contains("--expected-head"));
+        assert!(text.contains("--expected-branch feature"));
         assert!(text.contains("--expected-index"));
         assert!(!text.contains("SECRET"));
         assert!(!text.contains("custom"));
