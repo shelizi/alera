@@ -37,7 +37,10 @@ use alera_gpui_desktop::git_graph_layout::{layout_git_graph, GraphCommit};
 use alera_gpui_desktop::git_history::{
     compare_git_refs, preview_commit, GitHistoryOptions, GitHistorySnapshot,
 };
-use alera_gpui_desktop::git_inspect::{read_file_diff, GitSnapshot};
+use alera_gpui_desktop::git_inspect::{
+    read_file_diff, read_file_diff_for_area, read_git_original_for_area, GitChangeArea,
+    GitRefreshGate, GitSnapshot,
+};
 use alera_gpui_desktop::git_sidebar_layout::{
     layout_git_sidebar, section_keys, FolderKey, GitSidebarEntry, GitSidebarGroupMode,
     GitSidebarOptions, GitSidebarViewMode, SectionKey,
@@ -253,6 +256,7 @@ enum ExplorerAction {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum GitChangeMenuAction {
     Preview,
+    Original,
     Stage,
     Unstage,
     Discard,
@@ -426,6 +430,7 @@ struct Workbench {
     git_action_request: u64,
     git_action_status: String,
     git_loading: bool,
+    git_refresh_gate: GitRefreshGate,
     git_error: Option<String>,
     git_diff: Option<String>,
     git_branch_comparison: Option<BranchFileComparison>,
@@ -903,7 +908,7 @@ impl Workbench {
                     if let Ok(relative) = path.strip_prefix(self.model.root()) {
                         let relative = relative.to_path_buf();
                         self.right_sidebar_view = RightSidebarView::Git;
-                        self.preview_git_change(relative, cx);
+                        self.preview_git_change(relative, None, false, cx);
                     }
                 }
             }
@@ -1534,7 +1539,14 @@ impl Workbench {
             vec![row.relative.clone()]
         };
         match action {
-            GitChangeMenuAction::Preview => self.preview_git_change(row.relative, cx),
+            GitChangeMenuAction::Preview => {
+                self.preview_git_change(row.relative, Some(row.area), false, cx)
+            }
+            GitChangeMenuAction::Original
+                if matches!(row.area, GitChangeArea::Staged | GitChangeArea::Changes) =>
+            {
+                self.preview_git_change(row.relative, Some(row.area), true, cx);
+            }
             GitChangeMenuAction::CopyPath => {
                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(
                     row.relative.to_string_lossy().into_owned(),
@@ -1559,9 +1571,15 @@ impl Workbench {
     }
 
     fn refresh_git(&mut self, cx: &mut Context<Self>) {
-        if self.git_loading {
+        // A second manual click during a running refresh must not disappear.
+        // Coalesce repeated requests and reread after the first snapshot.
+        if !self.git_refresh_gate.request() {
             return;
         }
+        self.spawn_git_refresh(cx);
+    }
+
+    fn spawn_git_refresh(&mut self, cx: &mut Context<Self>) {
         let root = self.model.root().to_path_buf();
         let generation = self.workspace_generation;
         self.git_loading = true;
@@ -1572,6 +1590,12 @@ impl Workbench {
                 .await;
             view.update(cx, |view, cx| {
                 if view.workspace_generation != generation {
+                    return;
+                }
+                if view.git_refresh_gate.complete() {
+                    // Suppress an obsolete result; the queued refresh must be
+                    // the visible state after any in-flight file change.
+                    view.spawn_git_refresh(cx);
                     return;
                 }
                 view.git_loading = false;
@@ -2463,7 +2487,13 @@ impl Workbench {
         }
     }
 
-    fn preview_git_change(&mut self, relative: PathBuf, cx: &mut Context<Self>) {
+    fn preview_git_change(
+        &mut self,
+        relative: PathBuf,
+        area: Option<GitChangeArea>,
+        original: bool,
+        cx: &mut Context<Self>,
+    ) {
         self.git_diff_request = self.git_diff_request.wrapping_add(1);
         let ticket = self.git_diff_request;
         let generation = self.workspace_generation;
@@ -2472,7 +2502,16 @@ impl Workbench {
         self.git_diff_loading = true;
         cx.spawn(async move |view, cx| {
             let result = cx
-                .background_spawn(async move { read_file_diff(&root, &relative) })
+                .background_spawn(async move {
+                    match (area, original) {
+                        (Some(area), true) => read_git_original_for_area(&root, &relative, area),
+                        (Some(area), false) => read_file_diff_for_area(&root, &relative, area),
+                        (None, false) => read_file_diff(&root, &relative),
+                        (None, true) => {
+                            Err("Select a Git change row to view its exact original".into())
+                        }
+                    }
+                })
                 .await;
             view.update(cx, |view, cx| {
                 if view.workspace_generation != generation || view.git_diff_request != ticket {
@@ -3317,6 +3356,7 @@ impl Workbench {
         self.git_sidebar_options.collapsed_sections.clear();
         self.git_sidebar_options.collapsed_folders.clear();
         self.git_loading = false;
+        self.git_refresh_gate.reset();
         self.git_history = None;
         self.git_history_loading = false;
         self.git_history_error = None;
@@ -8074,6 +8114,7 @@ impl Render for Workbench {
                                         };
                                         let selected = git_selected.contains(&change);
                                         let clicked_row = change.clone();
+                                        let preview_area = change.area;
                                         let menu_row = change.clone();
                                         let discard_armed = change.area == alera_gpui_desktop::git_inspect::GitChangeArea::Changes &&
                                             self.git_discard_armed.as_ref().is_some_and(|paths| paths.contains(&change.relative));
@@ -8114,7 +8155,7 @@ impl Render for Workbench {
                                                     let multi = modifiers.control || modifiers.platform;
                                                     this.select_git_change(clicked_row.clone(), visible_for_click.as_ref(), multi, modifiers.shift);
                                                     if !multi && !modifiers.shift {
-                                                        this.preview_git_change(relative.clone(), cx);
+                                                        this.preview_git_change(relative.clone(), Some(preview_area), false, cx);
                                                     }
                                                     cx.notify();
                                                 }))
@@ -9818,6 +9859,7 @@ fn main() {
                             git_action_request: 0,
                             git_action_status: String::new(),
                             git_loading: false,
+                            git_refresh_gate: GitRefreshGate::default(),
                             git_error: None,
                             git_diff: None,
                             git_branch_comparison: None,

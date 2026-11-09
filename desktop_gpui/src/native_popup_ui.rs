@@ -450,6 +450,16 @@ impl Workbench {
                 ("Preview changes", GitChangeMenuAction::Preview),
                 ("Copy relative path", GitChangeMenuAction::CopyPath),
             ];
+            if matches!(
+                row.area,
+                alera_gpui_desktop::git_inspect::GitChangeArea::Staged
+                    | alera_gpui_desktop::git_inspect::GitChangeArea::Changes
+            ) {
+                actions.push((
+                    "View original (HEAD / Index)",
+                    GitChangeMenuAction::Original,
+                ));
+            }
             if row.area.can_stage() {
                 actions.push(("Stage selected", GitChangeMenuAction::Stage));
             }

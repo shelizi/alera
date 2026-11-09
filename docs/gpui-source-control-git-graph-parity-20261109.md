@@ -14,10 +14,10 @@
 |---|---|---|---|
 | Source Control status | Staged / Changes / Untracked / conflicts, correct file status | Area-aware snapshot and file filter; same path can occur twice | P0 completed in dedicated branch |
 | Source Control selection | Ctrl/Cmd toggle, Shift range, batch stage / unstage / discard | Ctrl/Shift batch stage/unstage and confirmed tracked-only unstaged discard | P0 core complete; native UI acceptance pending |
-| Source Control context menu | Stage, unstage, discard, open diff/original, copy path, open externally | GPUI Kit context menu: preview, stage, unstage, copy relative path, guarded discard tracked unstaged | P0 core complete; original and external editor P1 |
+| Source Control context menu | Stage, unstage, discard, open diff/original, copy path, open externally | Area-aware Staged/Changes diff, read-only Git original at HEAD/Index in preview, Stage/Unstage/copy path/guarded discard | P0 core + original preview implemented; external editor and full file tab pending |
 | Source Control layout | Flat/tree grouping, collapsible sections and folders, filtered counts, manual refresh | Native grouped/unified + flat/tree, section/folder collapse, accurate totals and refresh | P0 implemented; Windows UI acceptance pending |
 | Source Control commits | Message validation, commit staged, amend / suggested message | Commit staged supported | P1 amend and optional AI if configured |
-| Git refresh | Timely repository / FS watcher updates, manual refresh reliable | Native refresh click and async snapshot | P0 bounded refresh on Git operations; P1 watcher |
+| Git refresh | Timely repository / FS watcher updates, manual refresh reliable | Async snapshot + coalesced extra read when refresh pressed during in-flight scan; guards old workspace generation | P0 manual refresh queue implemented; P1 filesystem watcher and Windows smoke pending |
 | Git Graph ref list | Current ref first, favorites, local/remote/tag tabs; filters | Local/remote branches with favorites and selectable Git tags (lightweight + annotated), current ref sorted first | P1 tag listing implemented; filtering and dedicated tabs remain |
 | Git Graph branch right-click | Switch/worktree, compare, rename, pull, push, merge, rebase, archive, delete | Native History/Compare both directions/Worktree/Switch/Merge prepare/Copy, selected Pull/Push and safe inactive-local-branch rename | P1 core implemented; active-branch rename and destructive actions remain later |
 | Git Graph commit right-click | Preview, copy SHA/subject, branch/tag/worktree at commit, cherry-pick/revert/merge, resets etc. | Preview + copy SHA/subject, exact-commit branch creation or lightweight tag creation with explicit name/confirmation | P1 branch/tag complete; worktree-at-commit and destructive actions later |
@@ -34,8 +34,10 @@
 - [x] Add area-group section headers, filtered/total counts, collapse/expand-all and flat/tree toggle, including collapsed folder rows in tree mode.
 - [x] Add targeted two-click guarded discard for tracked unstaged changes from index, preserving staged state and all untracked files; unsupported/untracked deletion intentionally refused. Untracked removal requires a separate, explicit trash workflow.
 - [x] Add GPUI Kit right-click menu for one/multiple Git files: Stage, Unstage, confirmed tracked-only Discard, copy relative path and preview diff.
-- [ ] Add open original Git blob from Source Control, external editor integration and dedicated untracked-trash confirmation.
-- [ ] Verify manual refresh when a previous refresh is in flight; reconcile snapshot generation and watched file changes.
+- [x] Add Stage-specific diff preview (HEAD -> index) and Changes-specific diff preview (index -> worktree), plus original Git Blob (HEAD/Index) in Source Control read-only preview.
+- [ ] Add full read-only original-file editor tab, external editor integration and dedicated untracked-trash confirmation.
+- [x] Coalesce manual refresh requests when a previous snapshot is in-flight; discard obsolete first result and refresh again; reset pending queue across workspace switches. Dedicated in-flight UI smoke still pending.
+- [ ] Implement low-latency FS/Git watcher refresh with event coalescing, bounded retry and freshness checks.
 
 ## Phase 2 — Git Graph first-class Native functionality
 
