@@ -12,6 +12,7 @@ application window is accessed.
 
 import base64
 import argparse
+import hashlib
 import json
 import os
 from collections import deque
@@ -191,7 +192,8 @@ def wait_host_control(path, process, timeout=25):
             raise SmokeError(f"Isolated Host exited during startup: {process.returncode}")
         try:
             control = json.loads(path.read_text(encoding="utf-8"))
-            if control.get("port") and control.get("token"):
+            if (control.get("port") and control.get("token")
+                    and control.get("pid") == process.pid):
                 return control
         except (OSError, ValueError):
             pass
@@ -287,8 +289,85 @@ def interrupt_only_native_private_stream(native_process, executable, profile,
     raise SmokeError("Native did not respawn the private Host stream after interruption")
 
 
+def unique_native_stream_pid(native_process, executable, profile, timeout=16,
+                             excluded_pid=None):
+    """Find one exact scoped CLI child of this *disposable* Native GUI."""
+    import psutil
+
+    expected_exe = os.path.normcase(str(executable.resolve()))
+    expected_runtime = os.path.normcase(str(profile.resolve()))
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if native_process.poll() is not None:
+            raise SmokeError("Native GUI exited during Host recovery")
+        try:
+            descendants = psutil.Process(native_process.pid).children(recursive=True)
+        except psutil.NoSuchProcess as error:
+            raise SmokeError("Disposable Native GUI disappeared") from error
+        matched = []
+        for child in descendants:
+            if child.pid == excluded_pid:
+                continue
+            try:
+                args = child.cmdline()
+                if (os.path.normcase(child.exe()) == expected_exe
+                        and "terminal" in args and "stream" in args
+                        and "--no-start" in args
+                        and any(os.path.normcase(arg) == expected_runtime for arg in args)):
+                    matched.append(child.pid)
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+        if len(matched) == 1:
+            return matched[0]
+        time.sleep(0.2)
+    raise SmokeError("Native never owned exactly one new private Host stream")
+
+
+def isolated_worker_identity(profile, session_id):
+    """Read ONLY the disposable runtime's persisted worker identity."""
+    name = hashlib.sha256(session_id.encode("utf-8")).hexdigest() + ".json"
+    record = json.loads((profile / "pty-workers" / name).read_text(encoding="utf-8"))
+    pid = int(record["workerPid"])
+    shell_pid = int(record["shellPid"])
+    if pid <= 0 or shell_pid <= 0:
+        raise SmokeError("Invalid isolated worker identity")
+    return pid, shell_pid
+
+
+def stop_only_isolated_worker(executable, pid):
+    """Fallback teardown if Host crash left a test Worker orphan.
+
+    Never search by image name or stop an unverified PID. The process must
+    still be running exactly this experimental executable in Worker mode.
+    """
+    import psutil
+    try:
+        worker = psutil.Process(pid)
+        if (os.path.normcase(worker.exe()) != os.path.normcase(str(executable.resolve()))
+                or "__alera-terminal-pty-worker" not in worker.cmdline()):
+            return
+        descendants = worker.children(recursive=True)
+        for child in descendants:
+            child.kill()
+        worker.kill()
+        psutil.wait_procs(descendants + [worker], timeout=5)
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        pass
+
+
+def isolated_worker_process_alive(executable, pid):
+    import psutil
+    try:
+        process = psutil.Process(pid)
+        return (process.is_running()
+                and os.path.normcase(process.exe()) == os.path.normcase(str(executable.resolve()))
+                and "__alera-terminal-pty-worker" in process.cmdline())
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        return False
+
+
 def run_smoke(executable, native_app=None, hold_seconds=25,
-              native_reconnect=False):
+              native_reconnect=False, native_host_restart=False):
     run_marker = uuid.uuid4().hex[:14]
     checks = []
     with tempfile.TemporaryDirectory(prefix="alera_gpui_stream_isolated_") as temp:
@@ -299,8 +378,7 @@ def run_smoke(executable, native_app=None, hold_seconds=25,
         workspace.mkdir()
         control_file = profile / "runtime-host.json"
         token = uuid.uuid4().hex + uuid.uuid4().hex
-        host = subprocess.Popen(
-            [
+        host_args = [
                 str(executable),
                 "runtime-host",
                 "--runtime-dir",
@@ -312,22 +390,30 @@ def run_smoke(executable, native_app=None, hold_seconds=25,
                 "--persistent",
                 "--login-shell",
                 "false",
-            ],
+            ]
+        host_env = {**os.environ, "ALERA_RUNTIME_DIR": str(profile)}
+        if native_host_restart:
+            # Only this disposable Host may keep its own PTY Worker alive
+            # when its supervisor crashes. Production settings are untouched.
+            host_env["ALERA_TERMINAL_WORKER_PROCESS"] = "1"
+        host = subprocess.Popen(
+            host_args,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
             stdin=subprocess.DEVNULL,
-            env={**os.environ, "ALERA_RUNTIME_DIR": str(profile)},
+            env=host_env,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         # Never leave a Windows stderr file locked by an inherited PTY worker.
         # Keep only bounded, token-redacted in-memory diagnostics on failure.
         host_diagnostics = deque(maxlen=24)
-        def collect_host_stderr():
-            for line in iter(host.stderr.readline, b""):
+        def collect_host_stderr(process):
+            for line in iter(process.stderr.readline, b""):
                 host_diagnostics.append(line.decode("utf-8", errors="replace"))
-        threading.Thread(target=collect_host_stderr, daemon=True).start()
+        threading.Thread(target=collect_host_stderr, args=(host,), daemon=True).start()
         session_id = None
         second_session_id = None
+        isolated_worker_pids = set()
         stream = None
         control = None
         native_process = None
@@ -485,6 +571,14 @@ def run_smoke(executable, native_app=None, hold_seconds=25,
                 "tabId": second["tab"]["id"],
                 "viewLeaseId": "second-pane-" + run_marker,
             }
+            initial_workers = {}
+            if native_host_restart:
+                for target in (session_id, second_session_id):
+                    worker = isolated_worker_identity(profile, target)
+                    initial_workers[target] = worker
+                    isolated_worker_pids.add(worker[0])
+                if initial_workers[session_id][0] == initial_workers[second_session_id][0]:
+                    raise SmokeError("Test Host reused the same worker for two PTYs")
             if second_identity["sessionId"] == session_id or second_identity["tabId"] == tab_id:
                 raise SmokeError("Second PTY reused the first session or tab identity")
             stream.send(13, "observe", second_identity)
@@ -586,6 +680,93 @@ def run_smoke(executable, native_app=None, hold_seconds=25,
                             f"ISOLATED_NATIVE_STREAM_RECONNECTED old={old_pid} new={new_pid}",
                             flush=True,
                         )
+                    if native_host_restart:
+                        original_relay_pid = unique_native_stream_pid(
+                            native_process, executable, profile
+                        )
+                        original_host_pid = host.pid
+                        # Only the Host Popen owned by this test is killed;
+                        # the two disposable Worker processes intentionally
+                        # remain alive under the isolated runtime profile.
+                        host.kill()
+                        host.wait(timeout=10)
+                        print(
+                            f"ISOLATED_TEST_HOST_CRASHED pid={original_host_pid}",
+                            flush=True,
+                        )
+                        time.sleep(0.6)
+                        host = subprocess.Popen(
+                            host_args,
+                            stdin=subprocess.DEVNULL,
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.PIPE,
+                            env=host_env,
+                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                        )
+                        threading.Thread(
+                            target=collect_host_stderr, args=(host,), daemon=True
+                        ).start()
+                        control = wait_host_control(control_file, host)
+                        # This is intentionally a strict E2E check: Native
+                        # must not need an external createOrAttach that could
+                        # mint an unexpected Shell. It may only reobserve
+                        # Host-owned, previously authenticated sessions.
+                        restored = False
+                        # Native backs off stream retries as far as 32s.
+                        # Allow more than two maximum-delay retry periods
+                        # before declaring genuine failure to auto-recover.
+                        deadline = time.monotonic() + 75
+                        while time.monotonic() < deadline:
+                            if native_process.poll() is not None:
+                                raise SmokeError("GUI exited when disposable Host restarted")
+                            try:
+                                state_a = checked_cli(
+                                    executable, profile, "terminal", "--no-start",
+                                    "read", "--handle", session_id, timeout=4,
+                                )
+                                state_b = checked_cli(
+                                    executable, profile, "terminal", "--no-start",
+                                    "read", "--handle", second_session_id, timeout=4,
+                                )
+                                restored = (state_a.get("running") is True
+                                            and state_b.get("running") is True)
+                            except (SmokeError, subprocess.TimeoutExpired):
+                                restored = False
+                            if restored:
+                                break
+                            time.sleep(0.5)
+                        if not restored:
+                            workers_still_alive = all(
+                                isolated_worker_identity(profile, identity) == initial_workers[identity]
+                                and isolated_worker_process_alive(
+                                    executable, initial_workers[identity][0]
+                                )
+                                for identity in (session_id, second_session_id)
+                            )
+                            raise SmokeError(
+                                "Native/Host did not automatically recover both persisted "
+                                "PTY workers after actual Host crash (75s); "
+                                f"original_workers_alive={workers_still_alive}; "
+                                "recovery-only attach gap remains"
+                            )
+                        for identity in (session_id, second_session_id):
+                            if isolated_worker_identity(profile, identity) != initial_workers[identity]:
+                                raise SmokeError("Host restarted/replaced a PTY Worker or Shell")
+                        # A CLI relay may reconnect its own socket without
+                        # replacing its process. Unlike an explicit private
+                        # CLI kill, Host restart does not require a new PID.
+                        relay = unique_native_stream_pid(
+                            native_process, executable, profile
+                        )
+                        checks.append(
+                            "Native reobserved both original PTYs after actual isolated Host crash/restart"
+                        )
+                        print(
+                            f"ISOLATED_NATIVE_HOST_RESTORED host={host.pid} "
+                            f"relay={relay} initial_relay={original_relay_pid} "
+                            "workers_preserved=2",
+                            flush=True,
+                        )
                     until = time.monotonic() + hold_seconds
                     while time.monotonic() < until:
                         if native_process.poll() is not None:
@@ -652,6 +833,8 @@ def run_smoke(executable, native_app=None, hold_seconds=25,
                     except subprocess.TimeoutExpired:
                         host.kill()
                         host.wait(timeout=3)
+            for worker_pid in isolated_worker_pids:
+                stop_only_isolated_worker(executable, worker_pid)
 
 
 if __name__ == "__main__":
@@ -660,20 +843,25 @@ if __name__ == "__main__":
     parser.add_argument("--native-app", type=Path, help="optional GPUI exe to launch with an isolated preview tab")
     parser.add_argument("--native-reconnect", action="store_true",
                         help="kill only this Native GUI's scoped private relay and verify automatic respawn")
+    parser.add_argument("--native-host-restart", action="store_true",
+                        help="crash only disposable Host, verify Worker/Shell identity and Native reattach")
     parser.add_argument("--hold-seconds", type=int, default=25)
     args = parser.parse_args()
     if not args.cli.is_file() or (args.native_app is not None and not args.native_app.is_file()):
         parser.error("CLI and optional Native app paths must be existing executable files")
     if not 1 <= args.hold_seconds <= 180:
         parser.error("--hold-seconds must be between 1 and 180")
-    if args.native_reconnect and args.native_app is None:
-        parser.error("--native-reconnect requires --native-app")
+    if (args.native_reconnect or args.native_host_restart) and args.native_app is None:
+        parser.error("Native fault injection requires --native-app")
+    if args.native_reconnect and args.native_host_restart:
+        parser.error("Use only one Native fault injection mode per isolated run")
     try:
         results = run_smoke(
             args.cli.resolve(), native_app=args.native_app.resolve()
             if args.native_app is not None else None,
             hold_seconds=args.hold_seconds,
             native_reconnect=args.native_reconnect,
+            native_host_restart=args.native_host_restart,
         )
     except (SmokeError, OSError, KeyError, ValueError, subprocess.TimeoutExpired) as error:
         print(f"FAIL: isolated Terminal stream smoke: {error}", file=sys.stderr)

@@ -121,3 +121,21 @@ TDD：`delayed_ime_commit_must_match_focused_pane_and_active_host_identity` 首�
 - 新編譯的 Native 實機重驗：主窗格注音候選清單已落在可見游標旁，不再固定在頂端。第二個窄窗格也有自己的注音候選清單並能完成選字；候選清單會因螢幕邊緣改往上顯示。窗格間在*尚未選字*時切換，曾短暫同時看到兩份 IME 候選清單；選字後消失，仍值得另外驗收組字取消的焦點交接。
 
 **驗收界線**：以上成功證明測試專用 CLI stream 自動恢復、兩個真實 Host PTY 仍存在、Windows Primary/Secondary 的注音候選與提交。尚未完成 GPUI 視窗全路徑 Host 真正崩潰／重啟、不重複指令的自動恢復、IME 中途換窗的取消策略、實機 p50/p95 和更長時間 TUI 背壓。Native 仍 `supported=false`；這批變更不包含 Classic、正式 Host、main、推送或發布。
+
+## 2026-11-09：實際 OS 焦點防護與 Host crash/restart RED 驗收
+
+### GPUI Unicode TextInput：明確核對 OS 鍵盤焦點
+
+發現僅使用 `mixed_panes.focused_pane()` 和 `TerminalDock.active_tab` 仍有保護缺口：點到右側 Explorer／設定後，舊 Terminal 保持最後被選取的 Host 身分，若 Windows IME 遲到的 TextInput 提交觸發原 observer，仍可能被送入 PTY。新增 `authorizes_native_terminal_commit`，TDD 先因方法不存在而 RED、補齊後 GREEN；改用 GPUI `cx.observe_in` 取得視窗，在提交當下核對 **`input.focus_handle().is_focused(window)` + pane + Host 完整身分**，失焦的提交只丟棄、不送 Host。點回任何 Terminal 或切成 Editor 時清除殘留待提交組字與 ASCII 去重記錄。這不聲稱能直接關閉 Windows 系統本身浮動的候選視窗。
+
+Windows Native `cargo check` 與 `cargo build` PASS，Rust 函式庫 **324/324 PASS**，隔離 GPUI GUI 與兩個真實 Host Session 的正常 smoke **11/11 PASS**。實際桌面驗證：先向 Terminal 輸入，再點 Explorer 搜尋鍵入注音；Explorer 出現候選而 Terminal 內容未收到該批字元；從第二窗格的原生 TextInput 提交後輸入顯示在第二 PTY，而非第一 PTY。這是針對輸入路由的局部驗證，未涵蓋跨窗格未提交 IME 的所有 Windows TSF 角落行為。
+
+### 真正 Runtime Host 異常結束：原 Worker 還活著，但 Native 尚無法自動附著
+
+新增測試工具 `--native-host-restart`（必須同時指定 `--native-app`）：只建立**臨時 Runtime、兩個專用 PTY、獨立 GPUI 視窗**，只為這個測試 Host 開啟 `ALERA_TERMINAL_WORKER_PROCESS=1`。測試專用 Host 由其 `Popen` 精確 PID 強制結束並重新啟動，從臨時 runtime 的 SHA-256 session Worker 紀錄驗證原 Worker／Shell 身分；teardown 僅針對專用 Host PID 樹及嚴格核對執行檔與 Worker 模式的原 Worker PID。**無全域停止或掃描正式 Host 的行為。**
+
+驗收結果 **RED（尚未通過）**：初版等待 22 秒時無法自動恢復，為排除 Native 最高 32 秒串流重試退避的干擾，把觀察時間延長到 **75 秒**。重測仍回報 `original_workers_alive=True`，新測試 Host 存活，但原兩個 Session 在 CLI／Native 端未自動重新恢復，所以這不是 PTY Worker/Shell 遺失。測試刻意**不**使用可能新建 Shell 的 `createOrAttach` 代替自動恢復，避免把重建 Shell 假裝成恢復成功。
+
+原始碼定位：`terminal.observeExisting` 只允許正在 Host `sessions` map 的 PTY；Host crash 後記憶體 Session map 被清空，持久 Worker 在另一個程序，必須先由 Host 可信任路徑執行 recover-only，才能安全重新 observe。原 `createOrAttach` 可能在無法 recover 時啟動新的 Worker/Shell，不應直接成為 GPUI 背景恢復 API。
+
+**後續設計門檻：**需在專用整合分支設計受 Host 身分與權限保護的「只恢復已存在 Worker」能力（建議語意 `recoverExistingWorker`）：驗證已註冊的 `sessionId`／`workspaceId`／`tabId`、私有 Worker registry 的身份、PID／創建時間與存活驗證；Worker 缺失／過期／身份不符時回傳明確錯誤，**絕不可 fallback 為 spawn Shell**；成功後 Native 重新取得新的 Host view lease 與 VT snapshot，依序測試雙 PTY、重試退避、舊 CLI read 競態、無重複執行、進程零殘留。實作前保持 `supported=false`，也不允許改正式 Host、合併 main、推送或發布。
