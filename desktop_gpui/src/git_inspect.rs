@@ -449,6 +449,112 @@ pub fn read_git_original_for_area(
     Ok(format!("{label}: {}\n\n{body}", relative.display()))
 }
 
+/// An immutable Git blob snapshot suitable for a dedicated read-only tab.
+/// Unlike a worktree editor buffer it has no save path, drafts or write API.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitOriginalSnapshot {
+    pub relative: PathBuf,
+    pub area: GitChangeArea,
+    pub blob_oid: String,
+    pub content: String,
+}
+
+impl GitOriginalSnapshot {
+    pub fn title(&self) -> String {
+        let filename = self
+            .relative
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy();
+        let revision = match self.area {
+            GitChangeArea::Staged => "HEAD",
+            GitChangeArea::Changes => "INDEX",
+            GitChangeArea::Untracked | GitChangeArea::Conflicts => "invalid",
+        };
+        format!("{filename} · {revision} · {}", &self.blob_oid[..8])
+    }
+}
+
+/// Resolve an original Git blob with its exact object identity. New files,
+/// untracked paths, conflicted paths, binaries and too-large snapshots are
+/// rejected instead of opening a writable surrogate or synthetic message.
+pub fn read_git_original_snapshot(
+    workspace: &Path,
+    relative: &Path,
+    area: GitChangeArea,
+) -> Result<GitOriginalSnapshot, String> {
+    if !safe_relative(relative) {
+        return Err("Unsafe Git original path".into());
+    }
+    let repo = git2::Repository::discover(workspace).map_err(|e| e.to_string())?;
+    let root = dunce::canonicalize(repo.workdir().ok_or("No Git working tree")?)
+        .map_err(|e| e.to_string())?;
+    let workspace = dunce::canonicalize(workspace).map_err(|e| e.to_string())?;
+    if root != workspace {
+        return Err("Original requires the currently selected worktree root".into());
+    }
+    let status = repo.status_file(relative).map_err(|e| e.to_string())?;
+    if status.contains(git2::Status::CONFLICTED) {
+        return Err("Unresolved conflicts require the merge resolution view".into());
+    }
+    let id = match area {
+        GitChangeArea::Staged => {
+            if !status.intersects(
+                git2::Status::INDEX_NEW
+                    | git2::Status::INDEX_MODIFIED
+                    | git2::Status::INDEX_DELETED
+                    | git2::Status::INDEX_RENAMED
+                    | git2::Status::INDEX_TYPECHANGE,
+            ) {
+                return Err("Staged Git row is stale; refresh Source Control".into());
+            }
+            let tree = repo
+                .head()
+                .and_then(|head| head.peel_to_tree())
+                .map_err(|_| "No original HEAD revision exists".to_string())?;
+            tree.get_path(relative)
+                .map_err(|_| "New file: no committed HEAD original".to_string())?
+                .id()
+        }
+        GitChangeArea::Changes => {
+            if !status.intersects(
+                git2::Status::WT_MODIFIED
+                    | git2::Status::WT_DELETED
+                    | git2::Status::WT_RENAMED
+                    | git2::Status::WT_TYPECHANGE,
+            ) {
+                return Err("Unstaged Git row is stale; refresh Source Control".into());
+            }
+            let index = repo.index().map_err(|e| e.to_string())?;
+            index
+                .get_path(relative, 0)
+                .ok_or("No indexed original for this changed file")?
+                .id
+        }
+        GitChangeArea::Untracked | GitChangeArea::Conflicts => {
+            return Err("Untracked or conflicted files have no single Git original".into());
+        }
+    };
+    let blob = repo
+        .find_blob(id)
+        .map_err(|_| "Git original is not a regular blob".to_string())?;
+    if blob.content().len() > MAX_PATCH_BYTES {
+        return Err("Git original exceeds the bounded read-only text tab size".into());
+    }
+    if blob.is_binary() || blob.content().contains(&0) {
+        return Err("Binary Git original cannot be displayed as text".into());
+    }
+    let content = std::str::from_utf8(blob.content())
+        .map_err(|_| "Git original is not valid UTF-8".to_string())?
+        .to_owned();
+    Ok(GitOriginalSnapshot {
+        relative: relative.to_path_buf(),
+        area,
+        blob_oid: id.to_string(),
+        content,
+    })
+}
+
 fn append_diff(diff: &git2::Diff<'_>, out: &mut String) -> Result<(), String> {
     diff.print(git2::DiffFormat::Patch, |_, _, line| {
         if out.len() < MAX_PATCH_BYTES {
@@ -517,6 +623,57 @@ mod tests {
             .any(|r| r.area == GitChangeArea::Untracked && r.relative == Path::new("new.txt")));
         assert_eq!(snapshot.visible_rows("SHARED").len(), 2);
         assert!(snapshot.visible_rows("nonexistent").is_empty());
+    }
+
+    #[test]
+    fn immutable_original_snapshots_keep_exact_head_and_index_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        repo.config()
+            .unwrap()
+            .set_bool("core.autocrlf", false)
+            .unwrap();
+        fs::write(dir.path().join("same.txt"), "committed\n").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new("same.txt")).unwrap();
+        let sig = git2::Signature::now("Test", "test@example.invalid").unwrap();
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "initial", &tree, &[])
+            .unwrap();
+        drop(tree);
+        fs::write(dir.path().join("same.txt"), "staged\n").unwrap();
+        index.add_path(Path::new("same.txt")).unwrap();
+        index.write().unwrap();
+        drop(index);
+        fs::write(dir.path().join("same.txt"), "working\n").unwrap();
+        let head =
+            read_git_original_snapshot(dir.path(), Path::new("same.txt"), GitChangeArea::Staged)
+                .unwrap();
+        let indexed =
+            read_git_original_snapshot(dir.path(), Path::new("same.txt"), GitChangeArea::Changes)
+                .unwrap();
+        assert_eq!(head.content, "committed\n");
+        assert_eq!(indexed.content, "staged\n");
+        assert_ne!(head.blob_oid, indexed.blob_oid);
+        assert!(head.title().contains("HEAD"));
+        assert!(indexed.title().contains("INDEX"));
+        assert_eq!(
+            fs::read_to_string(dir.path().join("same.txt")).unwrap(),
+            "working\n"
+        );
+        fs::write(dir.path().join("untracked.txt"), "untracked").unwrap();
+        assert!(read_git_original_snapshot(
+            dir.path(),
+            Path::new("untracked.txt"),
+            GitChangeArea::Untracked
+        )
+        .is_err());
+        assert!(read_git_original_snapshot(
+            dir.path(),
+            Path::new("../escape"),
+            GitChangeArea::Staged
+        )
+        .is_err());
     }
 
     #[test]

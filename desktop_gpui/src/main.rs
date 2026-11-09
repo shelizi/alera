@@ -43,6 +43,7 @@ use alera_gpui_desktop::git_inspect::{
     read_file_diff, read_file_diff_for_area, read_git_original_for_area, GitChangeArea,
     GitRefreshGate, GitSnapshot,
 };
+use alera_gpui_desktop::git_original_tabs::GitOriginalTabs;
 use alera_gpui_desktop::git_sidebar_layout::{
     layout_git_sidebar, section_keys, FolderKey, GitSidebarEntry, GitSidebarGroupMode,
     GitSidebarOptions, GitSidebarViewMode, SectionKey,
@@ -262,6 +263,8 @@ enum ExplorerAction {
 enum GitChangeMenuAction {
     Preview,
     Original,
+    OpenWorkingFile,
+    OpenExternal,
     Stage,
     Unstage,
     Discard,
@@ -403,6 +406,9 @@ struct Workbench {
     content_searched_query: String,
     content_request: u64,
     git_snapshot: Option<GitSnapshot>,
+    git_original_tabs: GitOriginalTabs,
+    git_original_active: bool,
+    git_original_request: u64,
     git_selected_changes: HashSet<alera_gpui_desktop::git_inspect::GitChangeRow>,
     git_selection_anchor: Option<alera_gpui_desktop::git_inspect::GitChangeRow>,
     git_discard_armed: Option<Vec<PathBuf>>,
@@ -564,6 +570,7 @@ impl Workbench {
         cx: &mut Context<Self>,
     ) {
         self.explorer_context_menu = None;
+        self.git_original_active = false;
         self.explorer_selection = Some(path.to_path_buf());
         self.explorer_delete_confirmed = false;
         self.explorer_delete_pending = None;
@@ -1561,7 +1568,48 @@ impl Workbench {
             GitChangeMenuAction::Original
                 if matches!(row.area, GitChangeArea::Staged | GitChangeArea::Changes) =>
             {
-                self.preview_git_change(row.relative, Some(row.area), true, cx);
+                self.open_git_original_tab(row.relative, row.area, cx);
+            }
+            GitChangeMenuAction::OpenWorkingFile => {
+                let path = self.model.root().join(&row.relative);
+                if self.model.open_path(&path) {
+                    self.git_original_active = false;
+                    self.open_editor(cx);
+                    self.model
+                        .set_status(format!("Opened worktree file {}", row.relative.display()));
+                } else {
+                    self.model.set_status("Worktree file is missing or cannot be opened; no Git original was modified");
+                }
+                cx.notify();
+            }
+            GitChangeMenuAction::OpenExternal => {
+                let root = self.model.root().to_path_buf();
+                let relative = row.relative;
+                let generation = self.workspace_generation;
+                cx.spawn(async move |view, cx| {
+                    let result = cx
+                        .background_spawn(async move {
+                            alera_gpui_desktop::git_external_open::launch_external_file(
+                                &root, &relative,
+                            )
+                        })
+                        .await;
+                    view.update(cx, |view, cx| {
+                        if view.workspace_generation != generation {
+                            return;
+                        }
+                        view.model.set_status(match result {
+                            Ok(()) => {
+                                "Opened worktree file with external editor or default application"
+                                    .into()
+                            }
+                            Err(error) => format!("External application refused: {error}"),
+                        });
+                        cx.notify();
+                    })
+                    .ok();
+                })
+                .detach();
             }
             GitChangeMenuAction::CopyPath => {
                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(
@@ -2759,6 +2807,68 @@ impl Workbench {
         }
     }
 
+    fn open_git_original_tab(
+        &mut self,
+        relative: PathBuf,
+        area: GitChangeArea,
+        cx: &mut Context<Self>,
+    ) {
+        self.git_original_request = self.git_original_request.wrapping_add(1);
+        let request = self.git_original_request;
+        let generation = self.workspace_generation;
+        let root = self.model.root().to_path_buf();
+        cx.spawn(async move |view, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    alera_gpui_desktop::git_inspect::read_git_original_snapshot(
+                        &root, &relative, area,
+                    )
+                })
+                .await;
+            view.update(cx, |view, cx| {
+                if view.workspace_generation != generation || view.git_original_request != request {
+                    return;
+                }
+                match result.and_then(|snapshot| view.git_original_tabs.open(snapshot)) {
+                    Ok(_) => {
+                        // Read-only Git versions do not enter NativeEditor at
+                        // all and cannot become Save/Save As, draft or PTY tabs.
+                        view.git_original_active = true;
+                        view.explorer_preview_active = false;
+                        view.center_view = CenterView::Editor;
+                        view.model.set_status(
+                            "Opened immutable Git original; editing and saving are disabled",
+                        );
+                    }
+                    Err(error) => view
+                        .model
+                        .set_status(format!("Cannot open Git original: {error}")),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn focus_git_original_tab(&mut self, instance: u64, cx: &mut Context<Self>) {
+        if self.git_original_tabs.activate(instance) {
+            self.git_original_active = true;
+            self.explorer_preview_active = false;
+            self.center_view = CenterView::Editor;
+            cx.notify();
+        }
+    }
+
+    fn close_git_original_tab(&mut self, instance: u64, cx: &mut Context<Self>) {
+        if self.git_original_tabs.close(instance) {
+            if self.git_original_tabs.active().is_none() {
+                self.git_original_active = false;
+            }
+            cx.notify();
+        }
+    }
+
     fn preview_git_change(
         &mut self,
         relative: PathBuf,
@@ -3110,6 +3220,7 @@ impl Workbench {
     }
 
     fn open_editor(&mut self, cx: &mut Context<Self>) {
+        self.git_original_active = false;
         let Some(path) = self.model.selected_path().map(PathBuf::from) else {
             self.model.set_status("Choose a text file before editing");
             cx.notify();
@@ -3622,6 +3733,9 @@ impl Workbench {
         self.content_searched_query.clear();
         self.content_request = self.content_request.wrapping_add(1);
         self.git_snapshot = None;
+        self.git_original_tabs.reset();
+        self.git_original_active = false;
+        self.git_original_request = self.git_original_request.wrapping_add(1);
         self.git_selected_changes.clear();
         self.git_selection_anchor = None;
         self.git_discard_armed = None;
@@ -5875,6 +5989,7 @@ impl Workbench {
         }
         self.mixed_tab_context = None;
         self.explorer_preview_active = false;
+        self.git_original_active = false;
         self.mixed_tabs.select(id);
         self.mixed_panes.activate(id);
         match id {
@@ -6512,6 +6627,13 @@ impl Render for Workbench {
         }
         let terminal_font_size = self.native_settings.terminal_font_size as f32;
         let mixed_tabs = self.mixed_tabs.entries().to_vec();
+        let git_original_tabs = self.git_original_tabs.entries().to_vec();
+        let active_git_original = if self.git_original_active {
+            self.git_original_tabs.active().cloned()
+        } else {
+            None
+        };
+        let git_original_is_active = active_git_original.is_some();
         let mixed_active = self.mixed_tabs.active().cloned();
         let mixed_secondary_tab_ids = self.mixed_panes.tabs_in(PaneSlot::Secondary).to_vec();
         let mixed_secondary_active = self.mixed_panes.active_in(PaneSlot::Secondary).cloned();
@@ -6652,10 +6774,12 @@ impl Render for Workbench {
         // On restart the old read-only preview owner may restore tabs before
         // any NativeEditor/Host mixed tab exists. Classic opens the selected
         // restored file, not a misleading empty Terminal behind file chips.
-        let showing_explorer_preview = (self.explorer_preview_active
-            || self.mixed_tabs.entries().is_empty())
+        let showing_explorer_preview = !git_original_is_active
+            && (self.explorer_preview_active || self.mixed_tabs.entries().is_empty())
             && self.model.active_document().is_some();
-        let center_is_editor = if showing_explorer_preview {
+        let center_is_editor = if git_original_is_active {
+            true
+        } else if showing_explorer_preview {
             true
         } else if active_primary_identity.is_some() {
             primary_is_editor
@@ -6663,10 +6787,12 @@ impl Render for Workbench {
             // Empty workbench fallback only; a real tab selection owns mode.
             self.center_view == CenterView::Editor
         };
-        let show_editor_toolbar = center_is_editor || mixed_editor_in_secondary;
+        let show_editor_toolbar =
+            (center_is_editor || mixed_editor_in_secondary) && !git_original_is_active;
         let editor = self.editor.clone();
         let toolbar_editor = self.focused_editor();
-        let has_native_editor = toolbar_editor.is_some() && !showing_explorer_preview;
+        let has_native_editor =
+            toolbar_editor.is_some() && !showing_explorer_preview && !git_original_is_active;
         let secondary_native_editor = if mixed_editor_in_secondary {
             self.secondary_editor.clone()
         } else {
@@ -8704,6 +8830,34 @@ impl Render for Workbench {
                                                             })),
                                                     )
                                             }))
+                                            .children(git_original_tabs.into_iter().enumerate().map(|(index, tab)| {
+                                                let id = tab.instance;
+                                                let active = active_git_original.as_ref().is_some_and(|selected| selected.instance == id);
+                                                let title = tab.title();
+                                                div()
+                                                    .id(("git-original-tab", index))
+                                                    .h(px(32.0)).mr_2().px_1()
+                                                    .flex().items_center().rounded_md().border_1()
+                                                    .border_color(rgb(if active { BORDER_ACTIVE } else { BORDER }))
+                                                    .bg(rgb(if active { ELEVATED } else { TOOLBAR }))
+                                                    .child(div()
+                                                        .id(("git-original-tab-select", index))
+                                                        .min_w_0().max_w(px(210.0)).flex()
+                                                        .items_center().gap_1().px_1()
+                                                        .cursor_pointer().text_sm()
+                                                        .text_color(rgb(if active { TEXT } else { MUTED }))
+                                                        .child(icon(UiIcon::File, 12.0, MUTED))
+                                                        .child(div().truncate().child(title))
+                                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                                            this.focus_git_original_tab(id, cx);
+                                                        })))
+                                                    .child(icon_button(("git-original-tab-close", index),
+                                                        UiIcon::Close, "Close immutable Git original", false)
+                                                        .w(px(22.0)).h(px(22.0))
+                                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                                            this.close_git_original_tab(id, cx);
+                                                        })))
+                                            }))
                                             // Legacy Explorer preview tabs belong
                                             // to the same visual strip, never a
                                             // second line beneath live tabs.
@@ -8743,6 +8897,7 @@ impl Render for Workbench {
                                                             )
                                                             .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
                                                                 this.model.activate_tab(index);
+                                                                this.git_original_active = false;
                                                                 if event.click_count() >= 2 && transient {
                                                                     if let Some(path) = this.model.selected_path().map(PathBuf::from) {
                                                                         this.click_explorer_file(&path, true, window, cx);
@@ -8911,7 +9066,20 @@ impl Render for Workbench {
                                             .flex()
                                             .flex_col()
                             .child(
-                                if let Some(editor) = editor.clone().filter(|_| !showing_explorer_preview) {
+                                if let Some(original) = active_git_original.clone() {
+                                    div().id("git-original-readonly-view")
+                                        .flex_1().min_h_0().flex().flex_col()
+                                        .bg(rgb(BG))
+                                        .child(div().px_4().py_2().bg(rgb(PANEL))
+                                            .text_xs().text_color(rgb(TEXT))
+                                            .child(format!("Read-only Git original · {}", original.description())))
+                                        .child(div().id("git-original-readonly-scroll")
+                                            .flex_1().min_h_0().overflow_y_scroll()
+                                            .p_4().text_sm().font_family("JetBrains Mono")
+                                            .text_color(rgb(TEXT))
+                                            .child(original.snapshot.content))
+                                        .into_any_element()
+                                } else if let Some(editor) = editor.clone().filter(|_| !showing_explorer_preview) {
                                     div()
                                         .flex_1()
                                         .min_h_0()
@@ -10239,6 +10407,9 @@ fn main() {
                             content_searched_query: String::new(),
                             content_request: 0,
                             git_snapshot: None,
+                            git_original_tabs: GitOriginalTabs::default(),
+                            git_original_active: false,
+                            git_original_request: 0,
                             git_selected_changes: HashSet::new(),
                             git_selection_anchor: None,
                             git_discard_armed: None,

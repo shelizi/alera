@@ -14,7 +14,7 @@
 |---|---|---|---|
 | Source Control status | Staged / Changes / Untracked / conflicts, correct file status | Area-aware snapshot and file filter; same path can occur twice | P0 completed in dedicated branch |
 | Source Control selection | Ctrl/Cmd toggle, Shift range, batch stage / unstage / discard | Ctrl/Shift batch stage/unstage and confirmed tracked-only unstaged discard | P0 core complete; native UI acceptance pending |
-| Source Control context menu | Stage, unstage, discard, open diff/original, copy path, open externally | Area-aware Staged/Changes diff, read-only Git original at HEAD/Index in preview, Stage/Unstage/copy path/guarded discard | P0 core + original preview implemented; external editor and full file tab pending |
+| Source Control context menu | Stage, unstage, discard, open diff/original, copy path, open externally | Stage-aware diff; immutable HEAD/Index snapshot tabs in shared strip; open actual worktree file in native editor or external application, stage/unstage/discard/copy | Core + original read-only tab + external open implemented; UI acceptance pending |
 | Source Control layout | Flat/tree grouping, collapsible sections and folders, filtered counts, manual refresh | Native grouped/unified + flat/tree, section/folder collapse, accurate totals and refresh | P0 implemented; Windows UI acceptance pending |
 | Source Control commits | Message validation, commit staged, amend / suggested message | Commit staged supported | P1 amend and optional AI if configured |
 | Git refresh | Timely repository / FS watcher updates, manual refresh reliable | notify 8.2 worktree + common Git-dir watcher; source-control updates on file changes, Git Graph ref history reload on external branch/Tag/HEAD changes, generation-safe single-flight refresh and manual fallback | P1 status and Graph invalidation implemented; sustained Windows UI/large-repo smoke pending |
@@ -35,7 +35,9 @@
 - [x] Add targeted two-click guarded discard for tracked unstaged changes from index, preserving staged state and all untracked files; unsupported/untracked deletion intentionally refused. Untracked removal requires a separate, explicit trash workflow.
 - [x] Add GPUI Kit right-click menu for one/multiple Git files: Stage, Unstage, confirmed tracked-only Discard, copy relative path and preview diff.
 - [x] Add Stage-specific diff preview (HEAD -> index) and Changes-specific diff preview (index -> worktree), plus original Git Blob (HEAD/Index) in Source Control read-only preview.
-- [ ] Add full read-only original-file editor tab, external editor integration and dedicated untracked-trash confirmation.
+- [x] Add dedicated in-memory immutable Git original tabs showing exact HEAD/Index blob with close/focus, no Save/Save As/draft/Undo, separate from editable NativeEditor and no worktree writes.
+- [x] Add Open Worktree File in Alera and Open Externally (optional ALERA_EXTERNAL_EDITOR executable, otherwise OS-associated app); canonical path confinement and symlink safety.
+- [ ] Add dedicated untracked-trash confirmation and copy selected revision to new editable scratch on explicit request.
 - [x] Coalesce manual refresh requests when a previous snapshot is in-flight; discard obsolete first result and refresh again; reset pending queue across workspace switches. Dedicated in-flight UI smoke still pending.
 - [x] Add scoped notify filesystem watcher for worktree and common Git metadata with bounded event channels, 250ms quiet window/1400ms maximum delay, linked-worktree Git ref detection, and coalesced Graph refresh on external branch/Tag/HEAD changes.
 - [ ] Verify sustained large-repository Windows watch throughput and recover from platform watcher disconnects; add optional reconciliation fallback.

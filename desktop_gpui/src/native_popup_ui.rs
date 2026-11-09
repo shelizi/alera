@@ -448,6 +448,14 @@ impl Workbench {
         move |mut menu, _, _| {
             let mut actions = vec![
                 ("Preview changes", GitChangeMenuAction::Preview),
+                (
+                    "Open worktree file in Alera",
+                    GitChangeMenuAction::OpenWorkingFile,
+                ),
+                (
+                    "Open worktree file externally",
+                    GitChangeMenuAction::OpenExternal,
+                ),
                 ("Copy relative path", GitChangeMenuAction::CopyPath),
             ];
             if matches!(
@@ -456,7 +464,7 @@ impl Workbench {
                     | alera_gpui_desktop::git_inspect::GitChangeArea::Changes
             ) {
                 actions.push((
-                    "View original (HEAD / Index)",
+                    "Open Git original in read-only tab (HEAD / Index)",
                     GitChangeMenuAction::Original,
                 ));
             }
