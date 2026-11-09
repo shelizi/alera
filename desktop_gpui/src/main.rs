@@ -412,6 +412,7 @@ struct Workbench {
     git_graph_ref_tab: GitGraphRefTab,
     git_history_options: GitHistoryOptions,
     git_history_loading: bool,
+    git_history_watch_pending: bool,
     git_history_error: Option<String>,
     git_history_request: u64,
     git_merge_armed: Option<String>,
@@ -1599,13 +1600,22 @@ impl Workbench {
     }
 
     fn pump_git_watch(&mut self, cx: &mut Context<Self>) {
-        let now = Instant::now();
-        if self
+        let changes = self
             .git_watch_service
             .as_mut()
-            .is_some_and(|watch| watch.poll(now))
-        {
+            .map(|watch| watch.poll(Instant::now()))
+            .unwrap_or_default();
+        if changes.status {
             self.refresh_git(cx);
+        }
+        if changes.graph && self.git_history_open {
+            if self.git_history_loading {
+                // A ref changed during an existing Graph read. The callback
+                // runs one final read so an older snapshot cannot win.
+                self.git_history_watch_pending = true;
+            } else {
+                self.refresh_git_history(cx);
+            }
         }
     }
 
@@ -1693,6 +1703,7 @@ impl Workbench {
                     return;
                 }
                 view.git_history_loading = false;
+                let refresh_after = std::mem::take(&mut view.git_history_watch_pending);
                 let mut applied = false;
                 match result {
                     Ok(history) => {
@@ -1723,6 +1734,9 @@ impl Workbench {
                     } else {
                         "MCP: Native Git Graph failed or is not visible".into()
                     };
+                }
+                if refresh_after && view.git_history_open {
+                    view.refresh_git_history(cx);
                 }
                 cx.notify();
             })
@@ -3617,6 +3631,7 @@ impl Workbench {
         self.git_refresh_gate.reset();
         self.git_history = None;
         self.git_history_loading = false;
+        self.git_history_watch_pending = false;
         self.git_history_error = None;
         self.git_history_options = GitHistoryOptions::default();
         self.git_graph_ref_tab = GitGraphRefTab::Local;
@@ -10236,6 +10251,7 @@ fn main() {
                                 ..Default::default()
                             },
                             git_history_loading: false,
+                            git_history_watch_pending: false,
                             git_history_error: None,
                             git_history_request: 0,
                             git_merge_armed: None,
