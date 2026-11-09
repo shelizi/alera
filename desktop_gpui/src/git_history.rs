@@ -289,6 +289,25 @@ impl GitHistorySnapshot {
     }
 
     pub fn load_filtered(workspace: &Path, options: &GitHistoryOptions) -> Result<Self, String> {
+        Self::load_filtered_cancellable(workspace, options, || false)
+    }
+
+    /// Cooperative cancellation for obsolete background reads. A cancelled
+    /// scan returns no partial snapshot and never updates repository state.
+    /// UI callers cancel the previous token when a newer request starts.
+    pub fn load_filtered_cancellable(
+        workspace: &Path,
+        options: &GitHistoryOptions,
+        cancelled: impl Fn() -> bool,
+    ) -> Result<Self, String> {
+        fn check_cancelled(cancelled: &impl Fn() -> bool) -> Result<(), String> {
+            if cancelled() {
+                Err("Git Graph history scan cancelled".into())
+            } else {
+                Ok(())
+            }
+        }
+        check_cancelled(&cancelled)?;
         let search = options.search_query.as_deref().map(GitGraphSearch::parse);
         if search
             .as_ref()
@@ -300,6 +319,7 @@ impl GitHistorySnapshot {
         }
         let search = search.filter(GitGraphSearch::can_search_commits);
         let (repo, filter) = history_repo_and_path_filter(workspace, options)?;
+        check_cancelled(&cancelled)?;
         let current = repo
             .head()
             .ok()
@@ -316,6 +336,7 @@ impl GitHistorySnapshot {
             })
             .map_err(|e| e.to_string())?
         {
+            check_cancelled(&cancelled)?;
             let (branch, kind) = branch.map_err(|e| e.to_string())?;
             let Some(name) = branch.name().map_err(|e| e.to_string())?.map(str::to_owned) else {
                 continue;
@@ -365,6 +386,7 @@ impl GitHistorySnapshot {
             .references_glob("refs/tags/*")
             .map_err(|e| e.to_string())?
         {
+            check_cancelled(&cancelled)?;
             let reference = item.map_err(|e| e.to_string())?;
             let Some(name) = reference
                 .name()
@@ -468,6 +490,7 @@ impl GitHistorySnapshot {
             usize::MAX
         };
         for oid in walk {
+            check_cancelled(&cancelled)?;
             if scanned >= scan_limit {
                 truncated = true;
                 scan_limit_reached = true;
@@ -477,6 +500,7 @@ impl GitHistorySnapshot {
             let oid = oid.map_err(|e| e.to_string())?;
             let commit = repo.find_commit(oid).map_err(|e| e.to_string())?;
             if let Some(filter) = &filter {
+                check_cancelled(&cancelled)?;
                 let first_parent = if commit.parent_count() > 0 {
                     Some(commit.parent(0).map_err(|error| error.to_string())?)
                 } else {
@@ -554,6 +578,7 @@ impl GitHistorySnapshot {
                 labels,
             });
         }
+        check_cancelled(&cancelled)?;
         if search.is_none()
             && filter
                 .as_ref()
@@ -757,7 +782,68 @@ pub fn compare_git_refs(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
     use std::fs;
+
+    #[test]
+    fn full_history_search_can_cancel_during_walk_without_changing_git_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        let signature = git2::Signature::now("Cancel Test", "cancel@example.invalid").unwrap();
+        let mut parent: Option<Oid> = None;
+        for n in 0..135 {
+            fs::write(dir.path().join("history.txt"), format!("{n}")).unwrap();
+            let mut index = repo.index().unwrap();
+            index.add_path(Path::new("history.txt")).unwrap();
+            let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+            let parents = parent
+                .map(|id| vec![repo.find_commit(id).unwrap()])
+                .unwrap_or_default();
+            parent = Some(
+                repo.commit(
+                    Some("HEAD"),
+                    &signature,
+                    &signature,
+                    &format!("revision {n}"),
+                    &tree,
+                    &parents.iter().collect::<Vec<_>>(),
+                )
+                .unwrap(),
+            );
+        }
+        let original_head = repo.head().unwrap().target();
+        let original_file = fs::read(dir.path().join("history.txt")).unwrap();
+        let calls = Cell::new(0);
+        let options = GitHistoryOptions {
+            search_query: Some("message:this-will-not-match".into()),
+            ..Default::default()
+        };
+        let error = GitHistorySnapshot::load_filtered_cancellable(dir.path(), &options, || {
+            calls.set(calls.get() + 1);
+            calls.get() > 40
+        })
+        .unwrap_err();
+        assert_eq!(error, "Git Graph history scan cancelled");
+        assert!(calls.get() > 40);
+        assert_eq!(repo.head().unwrap().target(), original_head);
+        assert_eq!(
+            fs::read(dir.path().join("history.txt")).unwrap(),
+            original_file
+        );
+        assert!(repo.statuses(None).unwrap().is_empty());
+    }
+
+    #[test]
+    fn pre_cancelled_history_scan_never_opens_repository() {
+        let options = GitHistoryOptions::default();
+        let error = GitHistorySnapshot::load_filtered_cancellable(
+            Path::new("this-repository-does-not-exist"),
+            &options,
+            || true,
+        )
+        .unwrap_err();
+        assert_eq!(error, "Git Graph history scan cancelled");
+    }
 
     #[test]
     fn bounded_history_load_more_includes_older_commits_without_moving_head() {

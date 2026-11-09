@@ -106,6 +106,7 @@ use quick_open_ui::{bind_quick_open_keys, QuickOpenInput};
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -451,6 +452,8 @@ struct Workbench {
     git_history_watch_pending: bool,
     git_history_error: Option<String>,
     git_history_request: u64,
+    /// Cancels the previous background Graph scan when a newer view wins.
+    git_history_cancel: Arc<AtomicBool>,
     git_merge_armed: Option<String>,
     git_graph_remote_armed: Option<(String, bool)>, // true = Pull, false = Push
     git_branch_delete_armed: Option<String>,
@@ -1826,13 +1829,20 @@ impl Workbench {
         let root = self.model.root().to_path_buf();
         let generation = self.workspace_generation;
         let options = self.git_history_options.clone();
+        let cancelled = Arc::new(AtomicBool::new(false));
+        self.git_history_cancel.store(true, Ordering::Release);
+        self.git_history_cancel = Arc::clone(&cancelled);
         self.git_history_request = self.git_history_request.wrapping_add(1);
         let request = self.git_history_request;
         self.git_history_loading = true;
         self.git_history_error = None;
         cx.spawn(async move |view, cx| {
             let result = cx
-                .background_spawn(async move { GitHistorySnapshot::load_filtered(&root, &options) })
+                .background_spawn(async move {
+                    GitHistorySnapshot::load_filtered_cancellable(&root, &options, || {
+                        cancelled.load(Ordering::Acquire)
+                    })
+                })
                 .await;
             view.update(cx, |view, cx| {
                 if view.workspace_generation != generation || view.git_history_request != request {
@@ -1954,6 +1964,11 @@ impl Workbench {
         self.git_history_open = !self.git_history_open;
         if self.git_history_open {
             self.refresh_git_history(cx);
+        } else {
+            self.git_history_cancel.store(true, Ordering::Release);
+            self.git_history_request = self.git_history_request.wrapping_add(1);
+            self.git_history_loading = false;
+            self.git_history_watch_pending = false;
         }
         cx.notify();
     }
@@ -4329,6 +4344,7 @@ impl Workbench {
             }
         }
         self.git_history_request = self.git_history_request.wrapping_add(1);
+        self.git_history_cancel.store(true, Ordering::Release);
         self.git_amend_preview = None;
         self.git_amend_loading = false;
         self.git_amend_request = self.git_amend_request.wrapping_add(1);
@@ -8622,7 +8638,11 @@ impl Render for Workbench {
                                             })))
                                         .when(git_graph_full_search_active, |row| row.child(
                                             icon_button("git-graph-exit-full-search", UiIcon::History,
-                                                "Return to paged Git Graph", false)
+                                                if self.git_history_loading {
+                                                    "Stop active full-history scan and return to paged Git Graph"
+                                                } else {
+                                                    "Return to paged Git Graph"
+                                                }, false)
                                                 .on_click(cx.listener(|this, _, _, cx| {
                                                     this.exit_git_history_search(cx);
                                                 }))
@@ -11202,6 +11222,7 @@ fn main() {
                             git_history_watch_pending: false,
                             git_history_error: None,
                             git_history_request: 0,
+                            git_history_cancel: Arc::new(AtomicBool::new(false)),
                             git_merge_armed: None,
                             git_graph_remote_armed: None,
                             git_branch_delete_armed: None,
