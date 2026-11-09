@@ -724,6 +724,41 @@ pub struct TerminalTab {
     parse_budget: TerminalParseBudget,
     generation: u64,
     decoder: TextDecoder,
+    stream_utf8_pending: Vec<u8>,
+    stream_attached: bool,
+    stream_fallback_pending: bool,
+}
+
+/// Host output events contain raw PTY bytes; unlike CLI terminal.read JSON
+/// they are not guaranteed to stop at a UTF-8 character boundary.
+fn decode_terminal_stream_text(pending: &mut Vec<u8>, bytes: &[u8]) -> String {
+    pending.extend_from_slice(bytes);
+    let mut output = String::new();
+    loop {
+        match std::str::from_utf8(pending) {
+            Ok(text) => {
+                output.push_str(text);
+                pending.clear();
+                break;
+            }
+            Err(error) => {
+                let valid = error.valid_up_to();
+                if valid > 0 {
+                    output.push_str(std::str::from_utf8(&pending[..valid]).unwrap_or_default());
+                }
+                if let Some(invalid) = error.error_len() {
+                    output.push('\u{fffd}');
+                    pending.drain(..valid + invalid);
+                } else {
+                    // A valid prefix followed by a partial Unicode sequence:
+                    // only retain the handful of incomplete trailing bytes.
+                    pending.drain(..valid);
+                    break;
+                }
+            }
+        }
+    }
+    output
 }
 
 /// Stable target for a Terminal tab context action. The same opaque Host
@@ -941,6 +976,10 @@ pub fn raw_key_reply_may_drain(
 }
 
 impl TerminalTab {
+    pub fn view_generation(&self) -> u64 {
+        self.generation
+    }
+
     fn new(session: &TerminalSession, generation: u64) -> Self {
         Self {
             handle: session.handle.clone(),
@@ -957,12 +996,28 @@ impl TerminalTab {
             parse_budget: TerminalParseBudget::default(),
             generation,
             decoder: TextDecoder::default(),
+            stream_utf8_pending: Vec::new(),
+            stream_attached: false,
+            stream_fallback_pending: false,
         }
     }
 
     fn apply(&mut self, chunk: TerminalChunk) -> bool {
         if self.handle != chunk.handle {
             return false;
+        }
+        if self.stream_fallback_pending {
+            // A stream snapshot may contain synthetic VT restore bytes rather
+            // than a byte-for-byte replay of Host scrollback. Start the next
+            // polled read from Host's actual retained cursor, never append
+            // it to stale partial stream-rendered output.
+            self.output.clear();
+            self.screen.reset();
+            self.decoder = TextDecoder::default();
+            self.stream_utf8_pending.clear();
+            self.parse_budget = TerminalParseBudget::default();
+            self.stream_fallback_pending = false;
+            self.stream_attached = false;
         }
         if let Some(last) = self.next_cursor {
             if chunk.next_cursor < last {
@@ -971,6 +1026,7 @@ impl TerminalTab {
                 self.output.clear();
                 self.decoder = TextDecoder::default();
                 self.screen.reset();
+                self.stream_utf8_pending.clear();
                 self.parse_budget = TerminalParseBudget::default();
                 self.next_cursor = None;
                 self.running = chunk.running;
@@ -984,6 +1040,7 @@ impl TerminalTab {
         if chunk.truncated {
             self.decoder = TextDecoder::default();
             self.screen.reset();
+            self.stream_utf8_pending.clear();
             self.parse_budget = TerminalParseBudget::default();
             self.output
                 .push_str("\n[Earlier terminal scrollback was truncated]\n");
@@ -1305,6 +1362,92 @@ impl TerminalDock {
 
     pub fn workspace_generation(&self) -> u64 {
         self.workspace_generation
+    }
+
+    /// Preserve the old screen until a safe CLI read arrives, but force that
+    /// read to restore Host scrollback from scratch after stream loss.
+    pub fn invalidate_stream_observers(&mut self) {
+        for tab in &mut self.tabs {
+            if tab.stream_attached {
+                tab.next_cursor = None;
+                tab.stream_fallback_pending = true;
+            }
+        }
+    }
+
+    fn live_stream_tab_mut(
+        &mut self,
+        session_id: &str,
+        workspace_id: &str,
+        tab_id: &str,
+    ) -> Option<&mut TerminalTab> {
+        if !self.sessions.iter().any(|session| {
+            session.running
+                && session.handle == session_id
+                && session.workspace_id == workspace_id
+                && session.tab_id == tab_id
+        }) {
+            return None;
+        }
+        self.tabs.iter_mut().find(|tab| {
+            tab.handle == session_id && tab.workspace_id == workspace_id && tab.tab_id == tab_id
+        })
+    }
+
+    /// Replace an existing Terminal's emulator state from an authenticated
+    /// Host observation. Never creates a new preview or shell implicitly.
+    pub fn apply_stream_snapshot(
+        &mut self,
+        session_id: &str,
+        workspace_id: &str,
+        tab_id: &str,
+        output_cursor: u64,
+        bytes: &[u8],
+    ) -> bool {
+        let Some(tab) = self.live_stream_tab_mut(session_id, workspace_id, tab_id) else {
+            return false;
+        };
+        tab.output.clear();
+        tab.screen.reset();
+        tab.decoder = TextDecoder::default();
+        tab.stream_utf8_pending.clear();
+        tab.parse_budget = TerminalParseBudget::default();
+        let text = decode_terminal_stream_text(&mut tab.stream_utf8_pending, bytes);
+        tab.screen.feed(&text);
+        tab.decoder.append(&mut tab.output, &text);
+        tab.next_cursor = Some(output_cursor);
+        tab.running = true;
+        tab.stream_attached = true;
+        tab.stream_fallback_pending = false;
+        true
+    }
+
+    /// Append exactly one ordered Host output frame, retaining UTF-8 split
+    /// bytes and using its *byte* count to advance the absolute Host cursor.
+    pub fn apply_stream_output(
+        &mut self,
+        session_id: &str,
+        workspace_id: &str,
+        tab_id: &str,
+        bytes: &[u8],
+    ) -> bool {
+        if bytes.is_empty() {
+            return false;
+        }
+        let Some(tab) = self.live_stream_tab_mut(session_id, workspace_id, tab_id) else {
+            return false;
+        };
+        let started = Instant::now();
+        let text = decode_terminal_stream_text(&mut tab.stream_utf8_pending, bytes);
+        tab.screen.feed(&text);
+        tab.decoder.append(&mut tab.output, &text);
+        tab.parse_budget
+            .observe(Instant::now(), bytes.len(), started.elapsed());
+        tab.next_cursor = tab
+            .next_cursor
+            .map(|cursor| cursor.saturating_add(bytes.len() as u64));
+        tab.stream_attached = true;
+        true
     }
 
     pub fn context_target_at(&self, index: usize) -> Option<TerminalTabContextTarget> {
@@ -2000,6 +2143,49 @@ mod tests {
         truncated.truncated = true;
         assert!(truncated_tab.apply(truncated));
         assert_eq!(truncated_tab.parse_budget.max_read_bytes(), 16 * 1024);
+    }
+
+    #[test]
+    fn host_push_preserves_split_unicode_and_rejects_recycled_session_identity() {
+        let mut dock = TerminalDock::for_workspace(3);
+        assert!(dock.apply_session_list(3, vec![session("pty-1")]));
+        assert!(dock.open("pty-1"));
+        assert!(dock.apply_stream_snapshot("pty-1", "workspace-1", "tab-pty-1", 120, b"hello\n"));
+        let unicode = "貓".as_bytes();
+        assert!(dock.apply_stream_output("pty-1", "workspace-1", "tab-pty-1", &unicode[..1]));
+        assert!(dock.apply_stream_output("pty-1", "workspace-1", "tab-pty-1", &unicode[1..]));
+        assert!(dock.active().unwrap().output.contains("貓"));
+        assert_eq!(dock.active().unwrap().next_cursor, Some(120 + 3));
+
+        let before = dock.active().unwrap().output.clone();
+        assert!(!dock.apply_stream_output("pty-1", "other-worktree", "tab-pty-1", b"stale"));
+        assert_eq!(dock.active().unwrap().output, before);
+        assert!(!dock.apply_stream_snapshot("pty-1", "workspace-1", "other-tab", 999, b"wrong"));
+        assert_eq!(dock.active().unwrap().next_cursor, Some(123));
+    }
+
+    #[test]
+    fn disconnected_host_stream_resets_next_cli_read_without_duplicate_snapshot() {
+        let mut dock = TerminalDock::for_workspace(4);
+        assert!(dock.apply_session_list(4, vec![session("pty-1")]));
+        assert!(dock.open("pty-1"));
+        assert!(dock.apply_stream_snapshot(
+            "pty-1",
+            "workspace-1",
+            "tab-pty-1",
+            500,
+            b"old state\n"
+        ));
+        assert!(dock.apply_stream_output("pty-1", "workspace-1", "tab-pty-1", b"new"));
+        dock.invalidate_stream_observers();
+        let ticket = dock.active_ticket().expect("Host session remains live");
+        assert_eq!(
+            ticket.cursor, None,
+            "recovery must reread authoritative retained output"
+        );
+        assert!(dock.apply_workspace_read(4, &ticket, chunk("pty-1", 0, 9, "new host\n")));
+        assert_eq!(dock.active().unwrap().output, "new host\n");
+        assert_eq!(dock.active().unwrap().next_cursor, Some(9));
     }
 
     fn session(handle: &str) -> TerminalSession {

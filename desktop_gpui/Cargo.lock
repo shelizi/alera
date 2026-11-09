@@ -154,6 +154,7 @@ name = "alera-gpui-desktop"
 version = "0.1.0"
 dependencies = [
  "alera-core",
+ "base64",
  "dunce",
  "git2",
  "gpui-kit",
@@ -2057,7 +2058,7 @@ dependencies = [
  "log",
  "presser",
  "thiserror 2.0.21",
- "windows 0.61.3",
+ "windows 0.62.2",
 ]
 
 [[package]]
@@ -2959,7 +2960,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.61.2",
+ "windows-core 0.62.2",
 ]
 
 [[package]]

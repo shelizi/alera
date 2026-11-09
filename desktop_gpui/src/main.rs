@@ -49,6 +49,7 @@ use alera_gpui_desktop::terminal::{
     TerminalTabContextTarget, TerminalViewMode, TerminalViewportProposal, HOST_SESSION_LIST_SCOPE,
 };
 use alera_gpui_desktop::terminal_panes::{TerminalPaneLayout, TerminalSplitDirection};
+use alera_gpui_desktop::terminal_stream_bridge::{NativeTerminalStreamBridge, StreamViewUpdate};
 use alera_gpui_desktop::visual_tokens::{
     ACTIVE, BG, BORDER, BORDER_ACTIVE, ELEVATED, MUTED, PANEL, PROJECTS_SIDEBAR_WIDTH,
     RIGHT_SIDEBAR_WIDTH, SECTION_HEADER_HEIGHT, STATUS_BAR_HEIGHT, TAB_STRIP_HEIGHT, TEXT, TOOLBAR,
@@ -425,6 +426,9 @@ struct Workbench {
     terminal_split_read_loading: bool,
     terminal_poll: TerminalPollGate,
     terminal_poll_cadence: TerminalPollCadence,
+    terminal_stream: Option<NativeTerminalStreamBridge>,
+    terminal_stream_unavailable: bool,
+    terminal_stream_view_snapshot: Vec<(String, u64)>,
     terminal_tick: u64,
 }
 
@@ -2669,6 +2673,9 @@ impl Workbench {
         self.terminal_input.update(cx, |input, cx| input.clear(cx));
         self.terminal_poll = TerminalPollGate::default();
         self.terminal_poll_cadence = TerminalPollCadence::default();
+        self.terminal_stream = None;
+        self.terminal_stream_unavailable = false;
+        self.terminal_stream_view_snapshot.clear();
         self.terminal_list_loading = false;
         self.terminal_read_loading = None;
         self.terminal_split_read_loading = false;
@@ -4116,6 +4123,8 @@ impl Workbench {
             return;
         }
         let handle = tab.handle.clone();
+        let workspace_id = tab.workspace_id.clone();
+        let tab_id = tab.tab_id.clone();
         let sent_target = active_target.expect("live active terminal target exists");
         let generation = self.workspace_generation;
         let mut text = String::new();
@@ -4130,6 +4139,29 @@ impl Workbench {
         }
         if text.is_empty() {
             return;
+        }
+        // Native's authenticated CLI stream is long-lived. Once this exact
+        // Host tab is observed, raw input never needs per-key CLI spawn.
+        let stream_result = self.terminal_stream.as_mut().and_then(|stream| {
+            if stream.is_observing(&handle, &workspace_id, &tab_id) {
+                Some(stream.write_observed(&handle, &workspace_id, &tab_id, text.as_bytes()))
+            } else {
+                None
+            }
+        });
+        match stream_result {
+            Some(true) => {
+                self.terminal_key_sending = false;
+                cx.notify();
+                return;
+            }
+            Some(false) => {
+                // Keep byte/keystroke ordering when the bounded private IPC
+                // pipe is saturated; never race it with a new CLI process.
+                self.terminal_key_queue.push_front(text);
+                return;
+            }
+            None => {}
         }
         self.terminal_key_sending = true;
         cx.spawn(async move |view, cx| {
@@ -4179,6 +4211,13 @@ impl Workbench {
     fn refresh_terminal_output(&mut self, cx: &mut Context<Self>) {
         if self.terminal_read_loading.is_some() {
             return;
+        }
+        if let Some(tab) = self.terminals.active() {
+            if self.terminal_stream.as_ref().is_some_and(|bridge| {
+                bridge.is_observing(&tab.handle, &tab.workspace_id, &tab.tab_id)
+            }) {
+                return;
+            }
         }
         let Some(bridge) = self.runtime_bridge.clone() else {
             self.terminals.status = "CLI unavailable".into();
@@ -4944,6 +4983,13 @@ impl Workbench {
         let Some(ticket) = self.terminals.ticket_at(index) else {
             return;
         };
+        if let Some(tab) = self.terminals.tabs.get(index) {
+            if self.terminal_stream.as_ref().is_some_and(|bridge| {
+                bridge.is_observing(&tab.handle, &tab.workspace_id, &tab.tab_id)
+            }) {
+                return;
+            }
+        }
         if self.terminals.active_ticket().as_ref() == Some(&ticket) {
             return;
         }
@@ -5001,6 +5047,137 @@ impl Workbench {
         .detach();
     }
 
+    fn pump_native_terminal_stream(&mut self, cx: &mut Context<Self>) {
+        let live_views: Vec<_> = self
+            .terminals
+            .tabs
+            .iter()
+            .map(|tab| (tab.handle.clone(), tab.view_generation()))
+            .collect();
+        if live_views != self.terminal_stream_view_snapshot {
+            // Closing/reopening a preview invalidates its old output cursor
+            // even if the Host later reuses the same handle. Re-observe with
+            // a fresh private CLI connection; never reuse the old view lease
+            // or feed a stale frame into a newly created emulator surface.
+            self.terminal_stream = None;
+            self.terminals.invalidate_stream_observers();
+            self.terminal_stream_unavailable = false;
+            self.terminal_stream_view_snapshot = live_views;
+        }
+        let mut visible = Vec::new();
+        if let Some(tab) = self.terminals.active() {
+            if tab.running {
+                visible.push((
+                    tab.handle.clone(),
+                    tab.workspace_id.clone(),
+                    tab.tab_id.clone(),
+                ));
+            }
+        }
+        let split_index = if self.mixed_panes.has_secondary() {
+            self.mixed_panes
+                .background_host_target()
+                .and_then(|target| self.terminals.index_for_context(target))
+        } else {
+            self.terminal_panes.secondary_index(&self.terminals)
+        };
+        if let Some(tab) = split_index.and_then(|index| self.terminals.tabs.get(index)) {
+            if tab.running && !visible.iter().any(|(id, _, _)| id == &tab.handle) {
+                visible.push((
+                    tab.handle.clone(),
+                    tab.workspace_id.clone(),
+                    tab.tab_id.clone(),
+                ));
+            }
+        }
+        if visible.is_empty() && self.terminal_stream.is_none() {
+            return;
+        }
+        if !visible.is_empty()
+            && self.terminal_stream.is_none()
+            && !self.terminal_stream_unavailable
+        {
+            if let Some(cli) = self.runtime_bridge.as_ref() {
+                match NativeTerminalStreamBridge::start(cli) {
+                    Ok(bridge) => self.terminal_stream = Some(bridge),
+                    Err(_) => self.terminal_stream_unavailable = true,
+                }
+            }
+        }
+        let Some(stream) = self.terminal_stream.as_mut() else {
+            return;
+        };
+        for (session_id, workspace_id, tab_id) in &visible {
+            stream.ensure_observing(session_id, workspace_id, tab_id);
+        }
+        let updates = stream.poll_updates();
+        let parse_started = Instant::now();
+        let mut parsed_bytes = 0;
+        let mut repaint = false;
+        let mut disconnected = false;
+        for update in updates {
+            match update {
+                StreamViewUpdate::Snapshot {
+                    identity,
+                    bytes,
+                    cursor,
+                } => {
+                    if self.terminals.apply_stream_snapshot(
+                        &identity.session_id,
+                        &identity.workspace_id,
+                        &identity.tab_id,
+                        cursor,
+                        &bytes,
+                    ) {
+                        parsed_bytes += bytes.len();
+                        repaint = true;
+                    }
+                }
+                StreamViewUpdate::Output { identity, bytes } => {
+                    if self.terminals.apply_stream_output(
+                        &identity.session_id,
+                        &identity.workspace_id,
+                        &identity.tab_id,
+                        &bytes,
+                    ) {
+                        parsed_bytes += bytes.len();
+                        self.terminal_poll_cadence.record_activity(Instant::now());
+                        repaint = true;
+                    }
+                }
+                StreamViewUpdate::Failed(reason) => {
+                    // A resync, failed lease, or refused input invalidates
+                    // incremental output. Rehydrate from retained Host
+                    // scrollback instead of keeping the broken stream alive.
+                    disconnected = true;
+                    self.terminals.status =
+                        format!("Terminal stream: {reason}; switching to CLI read fallback");
+                    repaint = true;
+                }
+                StreamViewUpdate::Disconnected => {
+                    disconnected = true;
+                    self.terminals.status =
+                        "Terminal stream disconnected; using existing CLI polling".into();
+                    repaint = true;
+                }
+            }
+        }
+        if let Some(stream) = self.terminal_stream.as_mut() {
+            stream.note_ui_parse(parsed_bytes, parse_started.elapsed());
+        }
+        if disconnected {
+            self.terminal_stream = None;
+            self.terminals.invalidate_stream_observers();
+            self.terminal_stream_unavailable = true;
+        }
+        if repaint {
+            cx.notify();
+        }
+        if !self.terminal_key_sending && !self.terminal_key_queue.is_empty() {
+            self.flush_terminal_key_queue(cx);
+        }
+    }
+
     fn start_terminal_polling(&mut self, cx: &mut Context<Self>) {
         // Foreground Host output must not wait for housekeeping (1.5s).
         // The cadence adapts from 100ms during input/output to 350ms idle,
@@ -5011,6 +5188,7 @@ impl Workbench {
                 .await;
             if view
                 .update(cx, |view, cx| {
+                    view.pump_native_terminal_stream(cx);
                     let foreground = view.center_view == CenterView::Terminal
                         || view.mixed_panes.background_host_target().is_some();
                     if (view.terminals.active_ticket().is_none()
@@ -8371,6 +8549,9 @@ fn main() {
                             terminal_split_read_loading: false,
                             terminal_poll: TerminalPollGate::default(),
                             terminal_poll_cadence: TerminalPollCadence::default(),
+                            terminal_stream: None,
+                            terminal_stream_unavailable: false,
+                            terminal_stream_view_snapshot: Vec::new(),
                             terminal_tick: 0,
                         };
                         workbench.restore_scratch_tabs(cx);
