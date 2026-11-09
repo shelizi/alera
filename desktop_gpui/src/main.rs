@@ -28,7 +28,7 @@ use alera_gpui_desktop::explorer_git_badges::{ExplorerGitBadge, ExplorerGitBadge
 use alera_gpui_desktop::explorer_ops::{
     ExplorerClipboardBatch, ExplorerClipboardMode, ExplorerDeleteBatch, ExplorerFiles,
 };
-use alera_gpui_desktop::explorer_selection::ExplorerMultiSelection;
+use alera_gpui_desktop::explorer_selection::{ExplorerMultiSelection, ExplorerNavigation};
 use alera_gpui_desktop::explorer_visibility::ExplorerVisibilityOptions;
 use alera_gpui_desktop::file_search::WorkspaceFileIndex;
 use alera_gpui_desktop::git_actions::{GitActions, GitConflictChoice, GitConflictPlan};
@@ -110,7 +110,15 @@ actions!(
         ExplorerSelectAll,
         ExplorerRename,
         ExplorerDelete,
-        ExplorerRefresh
+        ExplorerRefresh,
+        ExplorerUp,
+        ExplorerDown,
+        ExplorerFirst,
+        ExplorerLast,
+        ExplorerOpen,
+        ExplorerPreview,
+        ExplorerNewFile,
+        ExplorerNewFolder
     ]
 );
 
@@ -1897,6 +1905,236 @@ impl Workbench {
         }
     }
 
+    /// Exactly the rows rendered by the active Explorer view, so keyboard
+    /// navigation cannot select a filtered-out or collapsed file.
+    fn visible_explorer_paths(&self, cx: &Context<Self>) -> Vec<PathBuf> {
+        let query = self
+            .explorer_filter_input
+            .read(cx)
+            .query()
+            .trim()
+            .to_owned();
+        if !query.is_empty() {
+            return self
+                .file_index
+                .as_ref()
+                .filter(|index| index.root() == self.model.root())
+                .map(|index| index.search_explorer(&query, 200))
+                .unwrap_or_default()
+                .into_iter()
+                .map(|hit| hit.path)
+                .collect();
+        }
+        if self.tree_mode {
+            if let Some(tree) = &self.tree {
+                return tree
+                    .rows()
+                    .iter()
+                    .map(|row| self.model.root().join(&row.relative_path))
+                    .collect();
+            }
+        }
+        self.model
+            .entries()
+            .iter()
+            .map(|entry| entry.path.clone())
+            .collect()
+    }
+
+    fn navigate_explorer_keyboard(
+        &mut self,
+        direction: ExplorerNavigation,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let visible = self.visible_explorer_paths(cx);
+        if visible.is_empty() {
+            // Empty filter results keep keyboard focus in the editable
+            // search field so the user can immediately correct the query.
+            return;
+        }
+        if !self.explorer_keyboard_focus.is_focused(window) {
+            // A permanent Classic-style filter must be usable without a
+            // mouse: Down leaves the search box for the matching rows.
+            // Never steal an unfinished Windows IME composition.
+            let from_filter = {
+                let input = self.explorer_filter_input.read(cx);
+                input.focus_handle(cx).is_focused(window) && !input.composing()
+            };
+            if direction != ExplorerNavigation::Next || !from_filter {
+                return;
+            }
+            window.focus(&self.explorer_keyboard_focus, cx);
+        }
+        if let Some(path) = self.explorer_multi_selection.navigate(
+            self.explorer_selection.as_deref(),
+            &visible,
+            direction,
+        ) {
+            self.explorer_selection = Some(path);
+            self.explorer_delete_confirmed = false;
+            self.explorer_delete_pending = None;
+            self.explorer_context_menu = None;
+            cx.notify();
+        }
+    }
+
+    fn explorer_up_action(&mut self, _: &ExplorerUp, window: &mut Window, cx: &mut Context<Self>) {
+        self.navigate_explorer_keyboard(ExplorerNavigation::Previous, window, cx);
+    }
+
+    fn explorer_down_action(
+        &mut self,
+        _: &ExplorerDown,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.navigate_explorer_keyboard(ExplorerNavigation::Next, window, cx);
+    }
+
+    fn explorer_first_action(
+        &mut self,
+        _: &ExplorerFirst,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.navigate_explorer_keyboard(ExplorerNavigation::First, window, cx);
+    }
+
+    fn explorer_last_action(
+        &mut self,
+        _: &ExplorerLast,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.navigate_explorer_keyboard(ExplorerNavigation::Last, window, cx);
+    }
+
+    fn explorer_open_action(
+        &mut self,
+        _: &ExplorerOpen,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.explorer_keyboard_focus.is_focused(window) {
+            return;
+        }
+        let Some(path) = self.explorer_selection.clone() else {
+            return;
+        };
+        if !self.visible_explorer_paths(cx).contains(&path) {
+            self.model
+                .set_status("Selected Explorer row is no longer visible");
+            cx.notify();
+            return;
+        }
+        let target =
+            ExplorerFiles::new(self.model.root()).and_then(|files| files.reveal_target(&path));
+        match target {
+            Ok(path) if path.is_file() => self.click_explorer_file(&path, true, window, cx),
+            Ok(path) if path.is_dir() => {
+                let filtered = !self
+                    .explorer_filter_input
+                    .read(cx)
+                    .query()
+                    .trim()
+                    .is_empty();
+                if filtered {
+                    self.tree_mode = true;
+                    if let Some(tree) = &mut self.tree {
+                        if let Ok(relative) = path.strip_prefix(self.model.root()) {
+                            if let Err(error) = tree.reveal_directory(relative) {
+                                self.model
+                                    .set_status(format!("Cannot reveal folder: {error}"));
+                            }
+                        }
+                    }
+                    self.explorer_filter_input
+                        .update(cx, |input, cx| input.clear(cx));
+                } else if self.tree_mode {
+                    if let Some(tree) = &mut self.tree {
+                        if let Ok(relative) = path.strip_prefix(self.model.root()) {
+                            if let Err(error) = tree.toggle(relative) {
+                                self.model
+                                    .set_status(format!("Cannot open folder: {error}"));
+                            }
+                        }
+                    }
+                } else if let Some(index) = self
+                    .model
+                    .entries()
+                    .iter()
+                    .position(|entry| entry.path == path)
+                {
+                    self.model.open_entry(index);
+                    self.persist_session();
+                }
+                cx.notify();
+            }
+            Ok(_) => {
+                self.model
+                    .set_status("Selected Explorer item is unsupported");
+                cx.notify();
+            }
+            Err(error) => {
+                self.model
+                    .set_status(format!("Cannot open Explorer item: {error}"));
+                cx.notify();
+            }
+        }
+    }
+
+    fn explorer_preview_action(
+        &mut self,
+        _: &ExplorerPreview,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.explorer_keyboard_focus.is_focused(window) {
+            return;
+        }
+        let Some(path) = self.explorer_selection.clone() else {
+            return;
+        };
+        if !self.visible_explorer_paths(cx).contains(&path) {
+            self.model
+                .set_status("Selected Explorer row is no longer visible");
+            cx.notify();
+            return;
+        }
+        match ExplorerFiles::new(self.model.root()).and_then(|files| files.reveal_target(&path)) {
+            Ok(path) if path.is_file() => self.click_explorer_file(&path, false, window, cx),
+            Ok(_) => {}
+            Err(error) => {
+                self.model
+                    .set_status(format!("Cannot preview Explorer item: {error}"));
+                cx.notify();
+            }
+        }
+    }
+
+    fn explorer_new_file_action(
+        &mut self,
+        _: &ExplorerNewFile,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.explorer_keyboard_focus.is_focused(window) {
+            self.begin_explorer_action(ExplorerAction::NewFile, window, cx);
+        }
+    }
+
+    fn explorer_new_folder_action(
+        &mut self,
+        _: &ExplorerNewFolder,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.explorer_keyboard_focus.is_focused(window) {
+            self.begin_explorer_action(ExplorerAction::NewFolder, window, cx);
+        }
+    }
+
     fn explorer_select_all_action(
         &mut self,
         _: &ExplorerSelectAll,
@@ -1906,37 +2144,7 @@ impl Workbench {
         if !self.explorer_keyboard_focus.is_focused(window) {
             return;
         }
-        let query = self
-            .explorer_filter_input
-            .read(cx)
-            .query()
-            .trim()
-            .to_owned();
-        let visible: Vec<PathBuf> = if !query.is_empty() {
-            self.file_index
-                .as_ref()
-                .map(|index| index.search_explorer(&query, 200))
-                .unwrap_or_default()
-                .into_iter()
-                .map(|hit| hit.path)
-                .collect()
-        } else if self.tree_mode {
-            self.tree
-                .as_ref()
-                .map(|tree| {
-                    tree.rows()
-                        .iter()
-                        .map(|row| self.model.root().join(&row.relative_path))
-                        .collect()
-                })
-                .unwrap_or_default()
-        } else {
-            self.model
-                .entries()
-                .iter()
-                .map(|entry| entry.path.clone())
-                .collect()
-        };
+        let visible = self.visible_explorer_paths(cx);
         let count = self.explorer_multi_selection.select_visible_all(&visible);
         self.explorer_selection = self
             .explorer_multi_selection
@@ -6285,6 +6493,14 @@ impl Render for Workbench {
             .on_action(cx.listener(Self::explorer_rename_action))
             .on_action(cx.listener(Self::explorer_delete_action))
             .on_action(cx.listener(Self::explorer_refresh_action))
+            .on_action(cx.listener(Self::explorer_up_action))
+            .on_action(cx.listener(Self::explorer_down_action))
+            .on_action(cx.listener(Self::explorer_first_action))
+            .on_action(cx.listener(Self::explorer_last_action))
+            .on_action(cx.listener(Self::explorer_open_action))
+            .on_action(cx.listener(Self::explorer_preview_action))
+            .on_action(cx.listener(Self::explorer_new_file_action))
+            .on_action(cx.listener(Self::explorer_new_folder_action))
             .flex()
             .flex_col()
             .bg(rgb(BG))
@@ -8959,6 +9175,16 @@ fn main() {
                 KeyBinding::new("f2", ExplorerRename, Some("AleraGpuiExplorer")),
                 KeyBinding::new("delete", ExplorerDelete, Some("AleraGpuiExplorer")),
                 KeyBinding::new("f5", ExplorerRefresh, Some("AleraGpuiExplorer")),
+                KeyBinding::new("up", ExplorerUp, Some("AleraGpuiExplorer")),
+                KeyBinding::new("down", ExplorerDown, Some("AleraGpuiExplorer")),
+                KeyBinding::new("home", ExplorerFirst, Some("AleraGpuiExplorer")),
+                KeyBinding::new("end", ExplorerLast, Some("AleraGpuiExplorer")),
+                KeyBinding::new("enter", ExplorerOpen, Some("AleraGpuiExplorer")),
+                KeyBinding::new("space", ExplorerPreview, Some("AleraGpuiExplorer")),
+                KeyBinding::new("ctrl-n", ExplorerNewFile, Some("AleraGpuiExplorer")),
+                KeyBinding::new("cmd-n", ExplorerNewFile, Some("AleraGpuiExplorer")),
+                KeyBinding::new("ctrl-shift-n", ExplorerNewFolder, Some("AleraGpuiExplorer")),
+                KeyBinding::new("cmd-shift-n", ExplorerNewFolder, Some("AleraGpuiExplorer")),
                 KeyBinding::new("ctrl-shift-f", ToggleContentSearch, None),
                 KeyBinding::new("cmd-shift-f", ToggleContentSearch, None),
             ]);
