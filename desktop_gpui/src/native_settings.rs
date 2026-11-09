@@ -26,8 +26,8 @@ pub struct NativeSettings {
     pub terminal_font_size: f64,
     pub editor_autosave_enabled: bool,
     pub editor_tab_size: u64,
-    /// UI-only preference; Classic also keeps twoRowTabs local to its UI.
-    /// Kept out of the Host MCP scalar contract.
+    /// Legacy Native JSON fallback. When Host is available, Rust Core's
+    /// editor.twoRowTabs is authoritative for both Classic and GPUI.
     #[serde(default)]
     pub editor_two_row_tabs: bool,
     /// Native Explorer-only preferences. Never exposed to Host MCP setting
@@ -140,6 +140,7 @@ impl NativeSettings {
                 "terminal.fontSize" => self.terminal_font_size = value.as_f64().unwrap(),
                 "editor.autosaveEnabled" => self.editor_autosave_enabled = value.as_bool().unwrap(),
                 "editor.tabSize" => self.editor_tab_size = value.as_u64().unwrap(),
+                "editor.twoRowTabs" => self.editor_two_row_tabs = value.as_bool().unwrap(),
                 "general.confirmProjectRemoval" => {
                     self.confirm_project_removal = value.as_bool().unwrap()
                 }
@@ -177,6 +178,7 @@ impl NativeSettings {
             "terminal.fontSize" => json!(self.terminal_font_size),
             "editor.autosaveEnabled" => json!(self.editor_autosave_enabled),
             "editor.tabSize" => json!(self.editor_tab_size),
+            "editor.twoRowTabs" => json!(self.editor_two_row_tabs),
             "general.confirmProjectRemoval" => json!(self.confirm_project_removal),
             "general.confirmWorkspaceRemoval" => json!(self.confirm_workspace_removal),
             "general.autoArchiveWorkspacesAfterDays" => {
@@ -204,6 +206,7 @@ impl NativeSettings {
         match path {
             "general.autoGitFetchEnabled"
             | "editor.autosaveEnabled"
+            | "editor.twoRowTabs"
             | "explorer.showHiddenFiles"
             | "explorer.showIgnoredFiles"
             | "general.confirmProjectRemoval"
@@ -296,6 +299,12 @@ impl NativeSettingsStore {
         Self {
             path: state_dir.join(SETTINGS_FILENAME),
         }
+    }
+
+    /// Only an actual legacy file can seed the Host; the first-run default
+    /// must not accidentally win over a Classic preference.
+    pub fn has_saved_state(&self) -> bool {
+        self.path.is_file()
     }
 
     /// An absent file means first run. A corrupt or future-version file
@@ -532,10 +541,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn two_row_tabs_is_default_off_and_persists_via_native_only_cas() {
+    fn legacy_two_row_tabs_persists_for_one_time_host_migration_only() {
         let dir = tempfile::tempdir().unwrap();
         let store = NativeSettingsStore::new(dir.path());
         assert!(!store.read().unwrap().editor_two_row_tabs);
+        assert!(!store.has_saved_state());
         assert!(
             store
                 .compare_and_set_two_row_tabs(false, true)
@@ -543,6 +553,7 @@ mod tests {
                 .editor_two_row_tabs
         );
         assert!(store.read().unwrap().editor_two_row_tabs);
+        assert!(store.has_saved_state());
         assert!(store.compare_and_set_two_row_tabs(false, true).is_err());
         assert!(
             !store
@@ -552,11 +563,14 @@ mod tests {
         );
         assert!(!store.read().unwrap().editor_two_row_tabs);
         assert!(!NativeSettings::writable("editor.twoRowTabs"));
-        assert_eq!(NativeSettings::default().get("editor.twoRowTabs"), None);
+        assert_eq!(
+            NativeSettings::default().get("editor.twoRowTabs"),
+            Some(json!(false))
+        );
     }
 
     #[test]
-    fn shared_host_snapshot_validates_all_twenty_nine_fields_without_erasing_native_only_data() {
+    fn shared_host_snapshot_validates_all_thirty_fields_without_erasing_native_only_data() {
         let mut state = NativeSettings::default();
         state.explorer_show_ignored = true;
         state.default_agent_profile_id = Some("managed_codex".to_owned());
@@ -567,6 +581,7 @@ mod tests {
             "terminal.fontSize":17.0,
             "editor.autosaveEnabled":true,
             "editor.tabSize":8,
+            "editor.twoRowTabs":true,
             "general.confirmProjectRemoval":false,
             "general.confirmWorkspaceRemoval":true,
             "general.autoArchiveWorkspacesAfterDays":60,
@@ -597,6 +612,7 @@ mod tests {
         );
         assert_eq!(state.terminal_font_size, 17.0);
         assert_eq!(state.editor_tab_size, 8);
+        assert!(state.editor_two_row_tabs);
         assert!(!state.auto_git_fetch_enabled);
         assert!(!state.confirm_project_removal);
         assert!(state.confirm_workspace_removal);
@@ -615,6 +631,9 @@ mod tests {
         invalid_exclusions["values"]["editor.quickOpenExcludedDirectories"] =
             json!(["target", "TARGET"]);
         assert!(state.apply_shared_snapshot(&invalid_exclusions).is_err());
+        let mut invalid_two_row = snapshot.clone();
+        invalid_two_row["values"]["editor.twoRowTabs"] = json!("true");
+        assert!(state.apply_shared_snapshot(&invalid_two_row).is_err());
         assert_eq!(
             state, previous,
             "Invalid extended settings must not partially install"

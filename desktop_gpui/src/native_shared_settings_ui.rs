@@ -154,7 +154,11 @@ impl Workbench {
             return;
         };
         let migration_needed = !self.settings_native_profile_migrated;
-        let (old_native_profile, old_hidden, old_ignored) = if migration_needed {
+        let old_two_row_exists = self
+            .native_settings_store
+            .as_ref()
+            .is_some_and(|store| store.has_saved_state());
+        let (old_native_profile, old_hidden, old_ignored, old_two_row) = if migration_needed {
             match self
                 .native_settings_store
                 .as_ref()
@@ -164,6 +168,7 @@ impl Workbench {
                     stored.default_agent_profile_id,
                     stored.explorer_show_hidden,
                     stored.explorer_show_ignored,
+                    old_two_row_exists.then_some(stored.editor_two_row_tabs),
                 ),
                 Some(Err(error)) => {
                     self.settings_shared_error = Some(format!(
@@ -176,10 +181,11 @@ impl Workbench {
                     None,
                     self.native_settings.explorer_show_hidden,
                     self.native_settings.explorer_show_ignored,
+                    None,
                 ),
             }
         } else {
-            (None, false, false)
+            (None, false, false, None)
         };
         self.settings_shared_busy = true;
         self.settings_shared_last_refresh = Instant::now();
@@ -193,6 +199,9 @@ impl Workbench {
                         // previous Explorer choices are imported once.
                         bridge.desktop_settings_migrate_explorer(old_hidden, old_ignored)?;
                         bridge.desktop_settings_migrate_profile(old_native_profile.as_deref())?;
+                        if let Some(enabled) = old_two_row {
+                            bridge.desktop_settings_migrate_two_row(enabled)?;
+                        }
                     }
                     bridge.desktop_settings_snapshot()
                 })

@@ -597,6 +597,7 @@ void main() {
     final seeded =
         host.payloads['desktopSettings.seedLocal']!.single['values']! as Map;
     expect(seeded['general.language'], 'traditionalChinese');
+    expect(seeded['editor.twoRowTabs'], isFalse);
 
     final edited = loaded.copyWith(
       general: loaded.general.copyWith(
@@ -642,6 +643,55 @@ void main() {
       reason: 'Shared safety and profile settings are already CAS-owned by the Rust Runtime Host',
     );
   });
+
+  test(
+    'Two-row Tab preference migrates locally and uses the shared Host CAS',
+    () async {
+      final legacy = _MemorySettingsRepository()
+        ..settings = AleraSettings.defaults.copyWith(
+          editor: AleraSettings.defaults.editor.copyWith(twoRowTabs: true),
+        );
+      final host = _RecordingRuntimeHostClient()..configurationSupported = true;
+      host.responses['desktopSettings.seedLocal'] = {
+        'values': {'editor.twoRowTabs': false},
+      };
+      host.responses['runtimeSettings.get'] = {
+        'workspaceDirectory': '/tab-settings',
+      };
+      final repo = RuntimeSettingsRepository(
+        client: host,
+        legacyRepository: legacy,
+      );
+      final loaded = await repo.load();
+      expect(
+        loaded.editor.twoRowTabs,
+        isFalse,
+        reason: 'An existing Host value wins over an old Classic local value',
+      );
+      final seed =
+          host.payloads['desktopSettings.seedLocal']!.single['values']! as Map;
+      expect(seed['editor.twoRowTabs'], isTrue);
+
+      final changed = loaded.copyWith(
+        editor: loaded.editor.copyWith(twoRowTabs: true),
+      );
+      await repo.compareAndSetSharedDesktopChanges(loaded, changed);
+      expect(host.payloads['desktopSettings.compareAndSetBatch'], [
+        {
+          'changes': [
+            {
+              'path': 'editor.twoRowTabs',
+              'expectedValue': false,
+              'value': true,
+            },
+          ],
+        },
+      ]);
+      await repo.save(changed);
+      expect(host.payloads['configuration.settings.update'], isNull);
+      expect(host.payloads['runtimeSettings.update'], isNull);
+    },
+  );
 }
 
 final class _RecordingRuntimeHostClient

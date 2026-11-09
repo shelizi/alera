@@ -2,13 +2,14 @@
 //! This contract is intentionally free of the runtime/sqlite feature so the
 //! Native frontend, CLI and Host can all depend on one Rust Core vocabulary.
 //! Adding a path requires a Rust owner/validator and Classic migration test.
-pub const SHARED_DESKTOP_PATHS: [&str; 29] = [
+pub const SHARED_DESKTOP_PATHS: [&str; 30] = [
     "general.language",
     "general.autoGitFetchEnabled",
     "general.autoGitFetchIntervalMinutes",
     "terminal.fontSize",
     "editor.autosaveEnabled",
     "editor.tabSize",
+    "editor.twoRowTabs",
     "general.confirmProjectRemoval",
     "general.confirmWorkspaceRemoval",
     "general.autoArchiveWorkspacesAfterDays",
@@ -36,13 +37,14 @@ pub const SHARED_DESKTOP_PATHS: [&str; 29] = [
 
 /// CLI/Agent-facing writes stay narrower than owner-backed Classic Settings.
 /// An Agent cannot silently disable destructive confirmation switches.
-pub const CLI_WRITABLE_PATHS: [&str; 26] = [
+pub const CLI_WRITABLE_PATHS: [&str; 27] = [
     "general.language",
     "general.autoGitFetchEnabled",
     "general.autoGitFetchIntervalMinutes",
     "terminal.fontSize",
     "editor.autosaveEnabled",
     "editor.tabSize",
+    "editor.twoRowTabs",
     "agents.defaultAgentProfileId",
     "explorer.showHiddenFiles",
     "explorer.showIgnoredFiles",
@@ -188,6 +190,8 @@ mod tests {
         let unique: HashSet<_> = SHARED_DESKTOP_PATHS.into_iter().collect();
         assert_eq!(unique.len(), SHARED_DESKTOP_PATHS.len());
         assert!(CLI_WRITABLE_PATHS.iter().all(|path| unique.contains(path)));
+        assert!(cli_writable("editor.twoRowTabs"));
+        assert!(!extended_portable("editor.twoRowTabs"));
         assert!(!cli_writable("general.confirmProjectRemoval"));
         assert!(!cli_writable("general.confirmWorkspaceRemoval"));
         assert!(!cli_writable("general.autoArchiveWorkspacesAfterDays"));

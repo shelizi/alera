@@ -75,6 +75,10 @@ pub async fn run(command: DesktopSettingsCommand) -> i32 {
             "desktopSettings.seedExplorer",
             json!({"showHidden":show_hidden,"showIgnored":show_ignored}),
         ),
+        DesktopSettingsAction::MigrateTwoRow { enabled } => (
+            "desktopSettings.seedLocal",
+            json!({"values":{"editor.twoRowTabs":enabled}}),
+        ),
         DesktopSettingsAction::Set {
             path,
             expected,
@@ -164,6 +168,23 @@ mod tests {
                     show_hidden: true,
                     show_ignored: false,
                 },
+                ..
+            })
+        ));
+        let two_row = crate::cli::Cli::try_parse_from([
+            "alera",
+            "settings",
+            "--no-start",
+            "--json",
+            "migrate-two-row",
+            "--enabled",
+            "true",
+        ])
+        .unwrap();
+        assert!(matches!(
+            two_row.command,
+            crate::cli::Command::Settings(crate::cli::DesktopSettingsCommand {
+                action: crate::cli::DesktopSettingsAction::MigrateTwoRow { enabled: true },
                 ..
             })
         ));

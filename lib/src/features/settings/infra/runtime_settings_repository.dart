@@ -57,6 +57,7 @@ class RuntimeSettingsRepository({
               'general.autoGitFetchEnabled': legacy.general.autoGitFetchEnabled,
               'general.autoGitFetchIntervalMinutes':
                   legacy.general.autoGitFetchIntervalMinutes,
+              'editor.twoRowTabs': legacy.editor.twoRowTabs,
             },
           }),
         );
@@ -289,6 +290,7 @@ const _sharedDesktopPaths = <String>[
   'terminal.fontSize',
   'editor.autosaveEnabled',
   'editor.tabSize',
+  'editor.twoRowTabs',
   'general.confirmProjectRemoval',
   'general.confirmWorkspaceRemoval',
   'general.autoArchiveWorkspacesAfterDays',
@@ -323,6 +325,7 @@ Object? _sharedDesktopValue(
   'terminal.fontSize' => settings.terminal.fontSize,
   'editor.autosaveEnabled' => settings.editor.autosaveEnabled,
   'editor.tabSize' => settings.editor.tabSize,
+  'editor.twoRowTabs' => settings.editor.twoRowTabs,
   'general.confirmProjectRemoval' => settings.general.confirmProjectRemoval,
   'general.confirmWorkspaceRemoval' => settings.general.confirmWorkspaceRemoval,
   'general.autoArchiveWorkspacesAfterDays' =>
@@ -520,6 +523,9 @@ AleraSettings _applySharedDesktopValues(
           : current.terminal.clipboardOnSelect,
     ),
     editor: current.editor.copyWith(
+      twoRowTabs: values['editor.twoRowTabs'] is bool
+          ? values['editor.twoRowTabs'] as bool
+          : current.editor.twoRowTabs,
       autosaveEnabled: values['editor.autosaveEnabled'] is bool
           ? values['editor.autosaveEnabled'] as bool
           : current.editor.autosaveEnabled,

@@ -11,21 +11,7 @@ use gpui_kit::component::switch::Switch;
 
 impl Workbench {
     fn change_native_two_row_tabs(&mut self, next: bool, cx: &mut Context<Self>) {
-        let Some(store) = self.native_settings_store.as_ref() else {
-            self.model
-                .set_status("Native Settings store is unavailable");
-            cx.notify();
-            return;
-        };
-        match store.compare_and_set_two_row_tabs(self.native_settings.editor_two_row_tabs, next) {
-            Ok(settings) => self.install_native_settings(settings, cx),
-            Err(error) => {
-                self.model.set_status(format!(
-                    "Two-row tabs preference not saved: {error}; reopen Settings to refresh"
-                ));
-                cx.notify();
-            }
-        }
+        self.change_shared_desktop_setting("editor.twoRowTabs", serde_json::json!(next), cx);
     }
 
     pub(super) fn open_kit_native_settings_dialog(

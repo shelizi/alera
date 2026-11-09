@@ -276,6 +276,16 @@ impl RuntimeCliBridge {
         ])
     }
 
+    /// Seed a persisted Native-only choice without overwriting Classic's
+    /// existing Rust value. Never writes the legacy Native JSON.
+    pub fn desktop_settings_migrate_two_row(&self, enabled: bool) -> io::Result<Value> {
+        self.desktop_settings_command(&[
+            OsString::from("migrate-two-row"),
+            OsString::from("--enabled"),
+            OsString::from(enabled.to_string()),
+        ])
+    }
+
     pub fn desktop_settings_compare_and_set(
         &self,
         path: &str,

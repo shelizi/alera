@@ -120,8 +120,9 @@ instead of the stale legacy `center_view` flag after session restore.
   survives tab title/status refresh. Closed/recycled Host tabs are not
   silently re-pinned under a reused handle.
 - Each pane visually groups its pinned tabs before regular tabs. The
-  editor's Native-local Two-row tabs switch uses atomic, readback-checked
-  Native Settings storage; only panes with at least one pinned tab get
+  Two-row tabs switch now uses Rust Core's `editor.twoRowTabs` local
+  desktop setting with Host-authenticated field-level compare-and-set
+  and readback; only panes with at least one pinned tab get
   a separate 44px first row, matching Classic's default single-row rule.
 - Close Others and Close to Right skip pinned tabs in the *clicked pane*;
   explicitly closing a pinned tab still uses the ordinary, safe underlying
@@ -140,8 +141,14 @@ instead of the stale legacy `center_view` flag after session restore.
 
 **Remaining parity:** Classic's pin state is Runtime Host-owned whereas
 Native Host/Agent pins here are view-local and not synchronized across
-Classic and GPUI or app restart. Editor two-row preference is Native-local
-and not yet shared through the Rust Core desktop settings contract.
+Classic and GPUI or app restart. The two-row *preference*, unlike those
+Host/Agent pin identities, is now a reviewed shared Rust Core scalar.
+Classic seeds its old local value only when absent and uses field-scoped CAS;
+GPUI migrates a previously persisted Native JSON value only if the old
+file exists, then reads/writes through the same Host owner. An offline or
+older Host/CLI fails closed rather than claiming the two-row change saved.
+This requires deploying compatible CLI/Host binaries together; the current
+integration branch does not update the running production Host.
 Classic detects installed Agent CLIs directly; GPUI currently lists
 Host Agent Profiles and asks for a task rather than reproducing every
 Classic Agent selection shortcut. Real Windows pane-tab pointer,

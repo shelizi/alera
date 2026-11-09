@@ -27,6 +27,7 @@ fn local_path(path: &str) -> bool {
         "general.language"
             | "general.autoGitFetchEnabled"
             | "general.autoGitFetchIntervalMinutes"
+            | "editor.twoRowTabs"
             | "explorer.showHiddenFiles"
             | "explorer.showIgnoredFiles"
     )
@@ -52,6 +53,7 @@ fn default_value(path: &str) -> Result<Value> {
         "terminal.fontSize" => json!(13.0),
         "editor.autosaveEnabled" => json!(false),
         "editor.tabSize" => json!(4),
+        "editor.twoRowTabs" => json!(false),
         "general.confirmProjectRemoval" => json!(true),
         "general.confirmWorkspaceRemoval" => json!(true),
         "general.autoArchiveWorkspacesAfterDays" => json!(30),
@@ -97,6 +99,7 @@ fn validate(path: &str, value: &Value) -> Result<()> {
         }),
         "general.autoGitFetchEnabled"
         | "editor.autosaveEnabled"
+        | "editor.twoRowTabs"
         | "explorer.showHiddenFiles"
         | "explorer.showIgnoredFiles"
         | "general.confirmProjectRemoval"
@@ -273,11 +276,11 @@ impl RuntimeStore {
         Ok(snapshot)
     }
 
-    /// Import only the three Classic local-only values on first contact.
+    /// Import only reviewed Classic/Native local-only values on first contact.
     /// If GPUI already saved a value, late Classic migration never replaces it.
     pub async fn desktop_shared_seed_local(&self, fields: &Value) -> Result<Value> {
         let fields = fields.as_object().context("Local seed must be an object")?;
-        if fields.len() > 5 {
+        if fields.len() > 6 {
             bail!("Too many local desktop settings");
         }
         for (path, value) in fields {
@@ -467,6 +470,65 @@ mod tests {
             expected_value: expected,
             value,
         }
+    }
+
+    #[tokio::test]
+    async fn classic_and_native_share_two_row_tabs_with_stale_writer_rejection() {
+        let dir = tempfile::tempdir().unwrap();
+        let classic = RuntimeStore::open(dir.path()).await.unwrap();
+        let native = RuntimeStore::open(dir.path()).await.unwrap();
+        let initial = classic.desktop_shared_settings_snapshot().await.unwrap();
+        assert_eq!(initial["values"]["editor.twoRowTabs"], false);
+        assert_eq!(initial["present"]["editor.twoRowTabs"], false);
+
+        let migrated = classic
+            .desktop_shared_seed_local(&json!({"editor.twoRowTabs": true}))
+            .await
+            .unwrap();
+        assert_eq!(migrated["values"]["editor.twoRowTabs"], true);
+        assert_eq!(migrated["present"]["editor.twoRowTabs"], true);
+        // A later Native-only migration cannot overwrite Classic's choice.
+        native
+            .desktop_shared_seed_local(&json!({"editor.twoRowTabs": false}))
+            .await
+            .unwrap();
+        assert_eq!(
+            native
+                .desktop_shared_setting("editor.twoRowTabs")
+                .await
+                .unwrap(),
+            true
+        );
+
+        native
+            .desktop_shared_compare_and_set("editor.twoRowTabs", &json!(true), &json!(false))
+            .await
+            .unwrap();
+        assert_eq!(
+            classic
+                .desktop_shared_setting("editor.twoRowTabs")
+                .await
+                .unwrap(),
+            false
+        );
+        assert!(classic
+            .desktop_shared_compare_and_set("editor.twoRowTabs", &json!(true), &json!(false))
+            .await
+            .is_err());
+        assert!(classic
+            .desktop_shared_compare_and_set("editor.twoRowTabs", &json!(false), &json!("false"))
+            .await
+            .is_err());
+        drop(classic);
+        drop(native);
+        let restarted = RuntimeStore::open(dir.path()).await.unwrap();
+        assert_eq!(
+            restarted
+                .desktop_shared_setting("editor.twoRowTabs")
+                .await
+                .unwrap(),
+            false
+        );
     }
 
     async fn create_profile(store: &RuntimeStore, id: &str) {

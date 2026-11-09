@@ -7,9 +7,10 @@ The GPUI Settings dialog uses the Classic navigation and row catalog, but
 with authenticated, per-field CAS**. A row is not independently writable
 from Native JSON or Flutter Drift. A stale edit fails and reloads Host truth.
 
-Rust's reviewed `SHARED_DESKTOP_PATHS` contract now has **28 fields**:
-the existing 12 plus 16 previously Classic-portable general/Terminal/Editor/
-Agent appearance, notification and behavior preferences.
+Rust's reviewed `SHARED_DESKTOP_PATHS` contract now has **30 fields**:
+the original 12, 16 previously Classic-portable general/Terminal/Editor/
+Agent preferences, the Quick Open excluded-directory list, and the
+Classic/Native local `editor.twoRowTabs` toggle.
 
 The additional sixteen fields:
 - `general.showTrayIcon`, `showDockBadge`, `showTrayBadge`

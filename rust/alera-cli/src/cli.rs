@@ -394,6 +394,11 @@ pub enum DesktopSettingsAction {
         #[arg(long, action = clap::ArgAction::Set)]
         show_ignored: bool,
     },
+    /// Import the previous Native-only two-row Tab preference if Rust has none.
+    MigrateTwoRow {
+        #[arg(long, action = clap::ArgAction::Set)]
+        enabled: bool,
+    },
     Set {
         #[arg(long)]
         path: String,
