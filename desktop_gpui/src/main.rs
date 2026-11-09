@@ -35,7 +35,7 @@ use alera_gpui_desktop::git_branch_compare::{
     CompareDirection,
 };
 use alera_gpui_desktop::git_graph_layout::{layout_git_graph, GraphCommit};
-use alera_gpui_desktop::git_graph_search::GitGraphSearch;
+use alera_gpui_desktop::git_graph_search::{GitGraphRefTab, GitGraphSearch};
 use alera_gpui_desktop::git_history::{
     compare_git_refs, preview_commit, GitHistoryOptions, GitHistorySnapshot,
 };
@@ -409,6 +409,7 @@ struct Workbench {
     git_sidebar_options: GitSidebarOptions,
     git_history: Option<GitHistorySnapshot>,
     git_history_open: bool,
+    git_graph_ref_tab: GitGraphRefTab,
     git_history_options: GitHistoryOptions,
     git_history_loading: bool,
     git_history_error: Option<String>,
@@ -1728,6 +1729,18 @@ impl Workbench {
             .ok();
         })
         .detach();
+        cx.notify();
+    }
+
+    fn select_git_graph_ref_tab(&mut self, tab: GitGraphRefTab, cx: &mut Context<Self>) {
+        if self.git_graph_ref_tab == tab {
+            return;
+        }
+        self.git_graph_ref_tab = tab;
+        if tab.needs_remote_history() && !self.git_history_options.all_branches {
+            self.git_history_options.all_branches = true;
+            self.refresh_git_history(cx);
+        }
         cx.notify();
     }
 
@@ -3606,6 +3619,7 @@ impl Workbench {
         self.git_history_loading = false;
         self.git_history_error = None;
         self.git_history_options = GitHistoryOptions::default();
+        self.git_graph_ref_tab = GitGraphRefTab::Local;
         if let Some(store) = &self.session_store {
             match store.load_git_favorites(&canonical) {
                 Ok(favorites) => self.git_history_options.favorites = favorites,
@@ -7024,6 +7038,7 @@ impl Render for Workbench {
         let git_worktree_commit_armed = self.git_worktree_commit_armed.is_some();
         let git_rename_armed = self.git_rename_armed.is_some();
         let git_graph_open = self.git_history_open;
+        let git_graph_ref_tab = self.git_graph_ref_tab;
         let git_graph_all_branches = self.git_history_options.all_branches;
         let git_graph_favorites_only = self.git_history_options.favorites_only;
         let git_graph_selected_ref = self.git_history_options.selected_ref.clone();
@@ -7054,7 +7069,7 @@ impl Render for Workbench {
                 history
                     .branches
                     .iter()
-                    .filter(|row| graph_query.branch(row))
+                    .filter(|row| git_graph_ref_tab.shows_branch(row) && graph_query.branch(row))
                     .cloned()
                     .collect::<Vec<_>>()
             })
@@ -7066,11 +7081,13 @@ impl Render for Workbench {
                 history
                     .tags
                     .iter()
-                    .filter(|row| graph_query.tag(row))
+                    .filter(|row| git_graph_ref_tab.shows_tag() && graph_query.tag(row))
                     .cloned()
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
+        let git_ref_results_empty =
+            self.git_history.is_some() && git_branch_rows.is_empty() && git_tag_rows.is_empty();
         let git_commit_rows = self
             .git_history
             .as_ref()
@@ -7936,6 +7953,9 @@ impl Render for Workbench {
                                                 this.git_history_options.all_branches = !this.git_history_options.all_branches;
                                                 if !this.git_history_options.all_branches {
                                                     this.git_history_options.favorites_only = false;
+                                                    if matches!(this.git_graph_ref_tab, GitGraphRefTab::All | GitGraphRefTab::Remote) {
+                                                        this.git_graph_ref_tab = GitGraphRefTab::Local;
+                                                    }
                                                 }
                                                 this.refresh_git_history(cx);
                                             })))
@@ -7961,7 +7981,31 @@ impl Render for Workbench {
                                             .on_click(cx.listener(|this, _, _, cx| {
                                                 this.set_git_history_ref(None, cx);
                                             }))))
-                                    .child(div().text_xs().text_color(rgb(TEXT)).child("Branches · click name to select history, star to favorite"))
+                                    .child(div().flex().items_center().gap_1()
+                                        .children([
+                                            GitGraphRefTab::All,
+                                            GitGraphRefTab::Local,
+                                            GitGraphRefTab::Remote,
+                                            GitGraphRefTab::Tags,
+                                        ].into_iter().enumerate().map(|(index, tab)| {
+                                            div().id(("git-graph-ref-tab", index))
+                                                .px_2().py_1().text_xs()
+                                                .cursor_pointer()
+                                                .bg(rgb(if tab == git_graph_ref_tab { ACTIVE } else { PANEL }))
+                                                .text_color(rgb(if tab == git_graph_ref_tab { TEXT } else { MUTED }))
+                                                .hover(|style| style.bg(rgb(ACTIVE)))
+                                                .child(tab.label())
+                                                .on_click(cx.listener(move |this, _, _, cx| {
+                                                    this.select_git_graph_ref_tab(tab, cx);
+                                                }))
+                                        })))
+                                    .when(git_ref_results_empty, |panel| panel.child(
+                                        div().text_xs().text_color(rgb(MUTED))
+                                            .child("No matching refs in this tab. Try another tab or clear search.")
+                                    ))
+                                    .when(git_graph_ref_tab != GitGraphRefTab::Tags, |panel| panel.child(
+                                        div().text_xs().text_color(rgb(TEXT)).child("Branches · click name to select history, star to favorite")
+                                    ))
                                     .child(div()
                                         .id("git-graph-branches")
                                         .max_h(px(85.0))
@@ -10186,6 +10230,7 @@ fn main() {
                             git_sidebar_options: GitSidebarOptions::default(),
                             git_history: None,
                             git_history_open: false,
+                            git_graph_ref_tab: GitGraphRefTab::Local,
                             git_history_options: GitHistoryOptions {
                                 favorites: initial_git_favorites,
                                 ..Default::default()

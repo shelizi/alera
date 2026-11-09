@@ -2,6 +2,46 @@
 //! Git refs or source-control selections. Rows retain their original IDs.
 use crate::git_history::{GitBranchRow, GitCommitRow, GitTagRow};
 
+/// Ref navigation is a UI-only projection. It never alters the selected
+/// reference or the underlying Git History options, including favorites.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum GitGraphRefTab {
+    All,
+    #[default]
+    Local,
+    Remote,
+    Tags,
+}
+
+impl GitGraphRefTab {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::All => "All",
+            Self::Local => "Local",
+            Self::Remote => "Remote",
+            Self::Tags => "Tags",
+        }
+    }
+
+    pub fn shows_branch(self, branch: &GitBranchRow) -> bool {
+        match self {
+            Self::All => true,
+            Self::Local => !branch.remote,
+            Self::Remote => branch.remote,
+            Self::Tags => false,
+        }
+    }
+
+    pub fn shows_tag(self) -> bool {
+        matches!(self, Self::All | Self::Tags)
+    }
+
+    /// Remote tab must request remote refs from Git History before rendering.
+    pub fn needs_remote_history(self) -> bool {
+        matches!(self, Self::All | Self::Remote)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GitGraphSearchScope {
     All,
@@ -129,6 +169,31 @@ mod tests {
             parent_ids: vec![],
             labels: vec!["refs/heads/main".into()],
         }
+    }
+
+    #[test]
+    fn ref_tabs_isolate_local_remote_and_tags_without_changing_rows() {
+        let local = branch();
+        let mut remote = local.clone();
+        remote.remote = true;
+        let tag = tag();
+        assert!(GitGraphRefTab::All.shows_branch(&local));
+        assert!(GitGraphRefTab::All.shows_branch(&remote));
+        assert!(GitGraphRefTab::All.shows_tag());
+        assert!(GitGraphRefTab::Local.shows_branch(&local));
+        assert!(!GitGraphRefTab::Local.shows_branch(&remote));
+        assert!(!GitGraphRefTab::Local.shows_tag());
+        assert!(GitGraphRefTab::Remote.shows_branch(&remote));
+        assert!(!GitGraphRefTab::Remote.shows_branch(&local));
+        assert!(!GitGraphRefTab::Remote.shows_tag());
+        assert!(!GitGraphRefTab::Tags.shows_branch(&local));
+        assert!(!GitGraphRefTab::Tags.shows_branch(&remote));
+        assert!(GitGraphRefTab::Tags.shows_tag());
+        assert!(GitGraphRefTab::Remote.needs_remote_history());
+        assert!(GitGraphRefTab::All.needs_remote_history());
+        assert!(!GitGraphRefTab::Local.needs_remote_history());
+        assert_eq!(GitGraphRefTab::default(), GitGraphRefTab::Local);
+        assert_eq!(tag.name, "v1.2.3");
     }
 
     #[test]
