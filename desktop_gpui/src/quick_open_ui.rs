@@ -32,7 +32,7 @@ pub fn bind_quick_open_keys(cx: &mut App) {
 pub struct QuickOpenInput {
     focus: FocusHandle,
     text: String,
-    placeholder: &'static str,
+    placeholder: String,
     terminal_mode: bool,
     selection: Range<usize>,
     marked: Option<Range<usize>>,
@@ -45,11 +45,11 @@ impl QuickOpenInput {
         Self::with_placeholder("Type to filter files…", cx)
     }
 
-    pub fn with_placeholder(placeholder: &'static str, cx: &mut Context<Self>) -> Self {
+    pub fn with_placeholder(placeholder: impl Into<String>, cx: &mut Context<Self>) -> Self {
         Self {
             focus: cx.focus_handle(),
             text: String::new(),
-            placeholder,
+            placeholder: placeholder.into(),
             terminal_mode: false,
             selection: 0..0,
             marked: None,
@@ -66,6 +66,12 @@ impl QuickOpenInput {
 
     pub fn query(&self) -> &str {
         &self.text
+    }
+
+    /// Change a localized hint without changing the user's search query.
+    pub fn set_placeholder(&mut self, value: impl Into<String>, cx: &mut Context<Self>) {
+        self.placeholder = value.into();
+        cx.notify();
     }
 
     pub fn composing(&self) -> bool {

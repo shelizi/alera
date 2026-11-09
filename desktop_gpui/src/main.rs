@@ -3,10 +3,12 @@ mod editor_ui;
 mod native_action_dialog_ui;
 mod native_components;
 mod native_popup_ui;
+mod native_settings_catalog_ui;
 mod native_settings_ui;
 mod native_ui_icons;
 mod native_ui_theme;
 mod quick_open_ui;
+mod win_ime;
 
 // GPUI Kit re-exports its pinned GPUI runtime. Use a single version of all
 // GPUI types throughout Native instead of mixing gpui 0.2.x and gpui-pre.
@@ -37,6 +39,7 @@ use alera_gpui_desktop::mcp_ui_bridge::{
 use alera_gpui_desktop::mcp_workspace_creation::HostManagedWorkspaceRequest;
 use alera_gpui_desktop::model::WorkbenchModel;
 use alera_gpui_desktop::native_modal::NativeModalSize;
+use alera_gpui_desktop::native_i18n::UiLocale;
 use alera_gpui_desktop::native_settings::{NativeSettings, NativeSettingsStore};
 use alera_gpui_desktop::project_search::{ContentMatch, ProjectSearch};
 use alera_gpui_desktop::project_tree::{collect_project_tree, ProjectTreeGroup};
@@ -402,6 +405,9 @@ struct Workbench {
     settings_section: Option<String>,
     settings_modal_focus: gpui::FocusHandle,
     settings_kit_dialog_open: bool,
+    /// The preview language changes only visible text, never host settings.
+    settings_menu_locale: UiLocale,
+    settings_menu_search: Entity<QuickOpenInput>,
     last_auto_git_fetch: Instant,
     agent_profiles: Vec<AgentProfileRow>,
     agent_profiles_loading: bool,
@@ -8653,6 +8659,9 @@ fn main() {
                             cx.notify();
                         })
                         .detach();
+                        let settings_menu_search =
+                            cx.new(|cx| QuickOpenInput::with_placeholder("Search settings", cx));
+                        cx.observe(&settings_menu_search, |_, _, cx| cx.notify()).detach();
                         let mut workbench = Workbench {
                             tree: WorkspaceTree::new_with_options(model.root(), initial_visibility)
                                 .ok(),
@@ -8765,6 +8774,8 @@ fn main() {
                             settings_section: None,
                             settings_modal_focus: cx.focus_handle(),
                             settings_kit_dialog_open: false,
+                            settings_menu_locale: UiLocale::English,
+                            settings_menu_search,
                             last_auto_git_fetch: Instant::now(),
                             agent_profiles: Vec::new(),
                             agent_profiles_loading: false,
@@ -8807,6 +8818,22 @@ fn main() {
                         workbench
                     });
                     view.update(cx, |view, cx| {
+                        // Each GPUI input surface shares one Windows HWND; a
+                        // logical focus switch does not emit WM_KILLFOCUS.
+                        for input in [
+                            view.terminal_input.clone(),
+                            view.secondary_terminal_input.clone(),
+                        ] {
+                            let focus = input.read(cx).focus_handle(cx);
+                            cx.on_blur(&focus, window, |view, _, cx| {
+                                let result = win_ime::cancel_focused_composition();
+                                if std::env::var_os("ALERA_GPUI_TSF_TRACE").is_some() {
+                                    eprintln!("Alera GPUI TSF: blur cancel={result:?}");
+                                }
+                                view.clear_terminal_text_inputs(cx);
+                            })
+                            .detach();
+                        }
                         view.start_terminal_polling(cx);
                         // Restore saved Host tab previews immediately after
                         // Native window startup, rather than waiting for the

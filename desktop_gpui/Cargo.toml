@@ -29,6 +29,7 @@ serde_json = "1"
 base64 = "0.22.1"
 vt100 = "=0.18.1"
 unicode-segmentation = "1.12"
+rust-i18n = "=4.2.4"
 
 [dev-dependencies]
 tempfile = "3.27.0"

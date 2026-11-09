@@ -2,6 +2,11 @@
 //! Host-authorized MCP commands. A visible screen must precede open_settings
 //! success, and every local change is a durable compare-and-set.
 use super::*;
+use alera_gpui_desktop::native_i18n::tr;
+use alera_gpui_desktop::settings_menu_catalog::{
+    has_connected_native_controls, matching_sections_localized, section as catalog_section,
+    SettingsNavGroup, SettingsSection,
+};
 use gpui_kit::component::switch::Switch;
 
 impl Workbench {
@@ -19,6 +24,12 @@ impl Workbench {
                 }
             }
             let viewport = window.viewport_size();
+            let locale = owner
+                .upgrade()
+                .map(|entity| entity.read(cx).settings_menu_locale)
+                .unwrap_or_default();
+            let metrics = NativeModalSize::Settings
+                .resolve(f32::from(viewport.width), f32::from(viewport.height));
             let content = owner
                 .upgrade()
                 .and_then(|entity| {
@@ -33,8 +44,8 @@ impl Workbench {
                 .unwrap_or_else(|| div().into_any_element());
             let for_cancel = owner.clone();
             dialog
-                .title("Settings")
-                .w(px(960.))
+                .title(tr(locale, "Settings"))
+                .w(px(metrics.width))
                 .centered()
                 .close_button(false)
                 .overlay_closable(true)
@@ -56,15 +67,20 @@ impl Workbench {
         section: &str,
         cx: &mut Context<Self>,
     ) -> Result<(), &'static str> {
-        if !matches!(
-            section,
-            "application" | "terminal" | "editor" | "agents" | "agentProfiles"
-        ) {
+        if catalog_section(section).is_none() {
             return Err("ui_not_ready");
         }
-        let store = self.native_settings_store.as_ref().ok_or("ui_not_ready")?;
-        let settings = store.read().map_err(|_| "ui_operation_failed")?;
-        self.install_native_settings(settings, cx);
+        // Preserve existing connected Native controls; all remaining Classic
+        // sections are catalog previews and never open a preference store.
+        if has_connected_native_controls(section) {
+            let store = self.native_settings_store.as_ref().ok_or("ui_not_ready")?;
+            let settings = store.read().map_err(|_| "ui_operation_failed")?;
+            self.install_native_settings(settings, cx);
+        }
+        if self.settings_section.is_none() {
+            self.settings_menu_search
+                .update(cx, |input, cx| input.clear(cx));
+        }
         self.explorer_context_menu = None;
         self.mixed_tab_context = None;
         self.quick_open = None;
@@ -117,7 +133,7 @@ impl Workbench {
             .text_color(rgb(if active { TEXT } else { MUTED }))
             .text_sm()
             .when(!compact, |row| row.w_full())
-            .child(label)
+            .child(tr(self.settings_menu_locale, label))
             .on_click(cx.listener(move |view, _, _window, cx| {
                 if let Err(code) = view.show_native_settings_section(id, cx) {
                     view.model
@@ -183,7 +199,7 @@ impl Workbench {
             .bg(rgb(PANEL))
             .child(
                 Switch::new(path)
-                    .label(label)
+                    .label(tr(self.settings_menu_locale, label))
                     .checked(value)
                     .on_change(cx.listener(move |view, checked, _, cx| {
                         view.change_native_setting(path, serde_json::json!(*checked), cx);
@@ -217,7 +233,7 @@ impl Workbench {
             .justify_between()
             .p_3()
             .bg(rgb(PANEL))
-            .child(div().text_sm().child(label))
+            .child(div().text_sm().child(tr(self.settings_menu_locale, label)))
             .child(
                 div()
                     .flex()
@@ -268,7 +284,14 @@ impl Workbench {
         viewport_height: f32,
         cx: &mut Context<Self>,
     ) -> Option<gpui::AnyElement> {
-        let section = self.settings_section.as_deref()?;
+        let requested = self.settings_section.as_deref()?;
+        let locale = self.settings_menu_locale;
+        let query = self.settings_menu_search.read(cx).query().to_owned();
+        let visible = matching_sections_localized(&query, locale);
+        let selected: Option<&'static SettingsSection> = catalog_section(requested)
+            .filter(|selected| visible.iter().any(|entry| entry.id == selected.id))
+            .or_else(|| visible.first().copied());
+        let section = selected.map(|selected| selected.id).unwrap_or("");
         let s = &self.native_settings;
         let agent_profiles = self.agent_profiles.clone();
         let selected_profile = self.agent_selected_profile.clone();
@@ -286,13 +309,13 @@ impl Workbench {
                 .flex_col()
                 .gap_2()
                 .child(self.native_settings_bool_row(
-                    "Automatically fetch Git references",
+                    "Automatically Fetch Git Remotes",
                     "general.autoGitFetchEnabled",
                     s.auto_git_fetch_enabled,
                     cx,
                 ))
                 .child(self.native_settings_number_row(
-                    "Auto Git fetch interval (minutes)",
+                    "Auto Git Fetch Interval",
                     "general.autoGitFetchIntervalMinutes",
                     s.auto_git_fetch_interval_minutes as f64,
                     1.0,
@@ -309,7 +332,7 @@ impl Workbench {
                 .into_any_element(),
             "terminal" => div()
                 .child(self.native_settings_number_row(
-                    "Terminal text size (px)",
+                    "Font Size",
                     "terminal.fontSize",
                     s.terminal_font_size,
                     1.0,
@@ -323,13 +346,13 @@ impl Workbench {
                 .flex_col()
                 .gap_2()
                 .child(self.native_settings_bool_row(
-                    "Autosave idle file-backed editor buffers after 3 seconds",
+                    "Autosave",
                     "editor.autosaveEnabled",
                     s.editor_autosave_enabled,
                     cx,
                 ))
                 .child(self.native_settings_number_row(
-                    "Spaces inserted with Tab",
+                    "Tab Size",
                     "editor.tabSize",
                     s.editor_tab_size as f64,
                     1.0,
@@ -347,13 +370,13 @@ impl Workbench {
                         .flex()
                         .items_center()
                         .justify_between()
-                        .child(div().text_sm().child("Running Agent sessions (Runtime Host)"))
+                        .child(div().text_sm().child(tr(locale, "Running Agent sessions (Runtime Host)")))
                         .child(
                             div()
                                 .id("native-agents-refresh")
                                 .cursor_pointer()
                                 .text_sm()
-                                .child("Refresh")
+                                .child(tr(locale, "Refresh"))
                                 .on_click(cx.listener(|view, _, _, cx| {
                                     view.refresh_terminals(cx);
                                 })),
@@ -416,13 +439,13 @@ impl Workbench {
                         .flex()
                         .items_center()
                         .justify_between()
-                        .child(div().text_sm().child("Host Agent Profiles"))
+                        .child(div().text_sm().child(tr(locale, "Host Agent Profiles")))
                         .child(
                             div()
                                 .id("native-agent-profiles-refresh")
                                 .cursor_pointer()
                                 .text_sm()
-                                .child("Refresh")
+                                .child(tr(locale, "Refresh"))
                                 .on_click(cx.listener(|view, _, _, cx| {
                                     view.refresh_agent_profiles(cx);
                                 })),
@@ -437,7 +460,7 @@ impl Workbench {
                         "{} · {} · {}",
                         profile.name,
                         profile.agent_type,
-                        if profile.managed { "Managed" } else { "Command" }
+                        if profile.managed { tr(locale, "Managed") } else { tr(locale, "Command") }
                     );
                     let selected = selected_profile.as_deref() == Some(id.as_str());
                     let is_default = default_profile.as_deref() == Some(id.as_str());
@@ -501,17 +524,11 @@ impl Workbench {
                     },
                 ))
                 .into_any_element(),
-            _ => return None,
+            _ => div().into_any_element(),
         };
         let metrics = NativeModalSize::Settings.resolve(viewport_width, viewport_height);
         let compact = metrics.stacked_navigation;
-        let categories = [
-            ("application", "Application"),
-            ("terminal", "Terminal"),
-            ("editor", "Editor"),
-            ("agents", "Agents"),
-            ("agentProfiles", "Agent Profiles"),
-        ];
+        let has_native_controls = has_connected_native_controls(section);
         let navigation = div()
             .id("native-settings-sidebar")
             .flex()
@@ -520,31 +537,46 @@ impl Workbench {
             .when(compact, |sidebar| {
                 sidebar
                     .w_full()
-                    .h(px(58.0))
+                    .h(px(215.0))
                     .border_b_1()
                     .border_color(rgb(BORDER))
             })
             .when(!compact, |sidebar| {
                 sidebar
-                    .w(px(244.0))
+                    .w(px(260.0))
                     .h_full()
                     .border_r_1()
                     .border_color(rgb(BORDER))
             })
-            .when(!compact, |sidebar| {
-                sidebar.child(
-                    div()
-                        .h(px(54.0))
-                        .px_4()
-                        .flex()
-                        .items_center()
-                        .border_b_1()
-                        .border_color(rgb(BORDER))
-                        .text_sm()
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .child("Settings"),
-                )
-            })
+            .child(
+                div()
+                    .h(px(48.0))
+                    .px_4()
+                    .flex()
+                    .items_center()
+                    .border_b_1()
+                    .border_color(rgb(BORDER))
+                    .text_sm()
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .child(tr(locale, "Settings")),
+            )
+            .child(self.render_settings_language_preview(cx))
+            .child(
+                div()
+                    .px_3()
+                    .py_2()
+                    .border_b_1()
+                    .border_color(rgb(BORDER))
+                    .child(
+                        div()
+                            .rounded_md()
+                            .border_1()
+                            .border_color(rgb(BORDER))
+                            .bg(rgb(TOOLBAR))
+                            .px_2()
+                            .child(self.settings_menu_search.clone()),
+                    ),
+            )
             .child(
                 div()
                     .id("native-settings-nav")
@@ -555,14 +587,53 @@ impl Workbench {
                     .when(!compact, |nav| {
                         nav.flex_col().flex_1().min_h_0().overflow_y_scroll()
                     })
-                    .children(categories.into_iter().map(|(id, label)| {
-                        self.native_settings_nav_item(id, label, section == id, compact, cx)
-                    })),
+                    .children(
+                        [SettingsNavGroup::Preferences, SettingsNavGroup::Resources]
+                            .into_iter()
+                            .enumerate()
+                            .map(|(group_index, group)| {
+                                let items = visible
+                                    .iter()
+                                    .copied()
+                                    .filter(|item| item.nav_group == group)
+                                    .collect::<Vec<_>>();
+                                div()
+                                    .id(("native-settings-nav-group", group_index))
+                                    .flex()
+                                    .flex_col()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .px_3()
+                                            .py_1()
+                                            .text_xs()
+                                            .text_color(rgb(MUTED))
+                                            .child(tr(locale, group.title())),
+                                    )
+                                    .children(items.into_iter().map(|item| {
+                                        self.native_settings_nav_item(
+                                            item.id,
+                                            item.title,
+                                            section == item.id,
+                                            compact,
+                                            cx,
+                                        )
+                                    }))
+                            }),
+                    ),
             );
-        let heading = categories
-            .iter()
-            .find_map(|(id, title)| (*id == section).then_some(*title))
-            .unwrap_or("Settings");
+        let heading = selected
+            .map(|selected| tr(locale, selected.title))
+            .unwrap_or_else(|| tr(locale, "Settings"));
+        let preview = selected
+            .map(|selected| self.render_settings_catalog_preview(selected, locale))
+            .unwrap_or_else(|| {
+                div()
+                    .text_sm()
+                    .text_color(rgb(MUTED))
+                    .child(tr(locale, "No matching settings."))
+                    .into_any_element()
+            });
         let content = div()
             .id("native-settings-content")
             .flex_1()
@@ -572,25 +643,63 @@ impl Workbench {
             .flex_col()
             .child(
                 div()
-                    .h(px(44.0))
                     .px_4()
+                    .py_3()
                     .flex()
-                    .items_center()
-                    .justify_between()
+                    .flex_col()
+                    .gap_2()
                     .border_b_1()
                     .border_color(rgb(BORDER))
-                    .child(div().text_sm().child(heading))
                     .child(
-                        icon_button(
-                            "native-settings-close",
-                            UiIcon::Close,
-                            "Close settings",
-                            false,
-                        )
-                        .on_click(cx.listener(|view, _, window, cx| {
-                            view.dismiss_native_settings(window, cx);
-                        })),
-                    ),
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .text_lg()
+                                    .child(heading),
+                            )
+                            .child(
+                                icon_button(
+                                    "native-settings-close",
+                                    UiIcon::Close,
+                                    "Close settings",
+                                    false,
+                                )
+                                .on_click(cx.listener(
+                                    |view, _, window, cx| {
+                                        view.dismiss_native_settings(window, cx);
+                                    },
+                                )),
+                            ),
+                    )
+                    .children(selected.map(|selected| {
+                        div()
+                            .text_xs()
+                            .text_color(rgb(MUTED))
+                            .child(tr(locale, selected.description))
+                    }))
+                    .children(selected.filter(|selected| selected.show_group_chips).map(
+                        |selected| {
+                            div().flex().flex_wrap().gap_2().children(
+                                selected.groups.iter().enumerate().map(|(index, group)| {
+                                    div()
+                                        .id(("native-settings-group-chip", index))
+                                        .rounded_md()
+                                        .border_1()
+                                        .border_color(rgb(BORDER))
+                                        .bg(rgb(PANEL))
+                                        .px_2()
+                                        .py_1()
+                                        .text_xs()
+                                        .text_color(rgb(MUTED))
+                                        .child(tr(locale, group.title))
+                                }),
+                            )
+                        },
+                    )),
             )
             .child(
                 div()
@@ -599,7 +708,24 @@ impl Workbench {
                     .min_h_0()
                     .overflow_y_scroll()
                     .p_4()
-                    .child(rows),
+                    .flex()
+                    .flex_col()
+                    .gap_4()
+                    .child(preview)
+                    .children(has_native_controls.then(|| {
+                        div()
+                            .id("native-settings-connected-controls")
+                            .flex()
+                            .flex_col()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .child(tr(locale, "Connected Native Controls")),
+                            )
+                            .child(rows)
+                    })),
             )
             .children(self.native_settings_error.clone().map(|error| {
                 div()
@@ -616,12 +742,18 @@ impl Workbench {
                     .py_2()
                     .text_xs()
                     .text_color(rgb(MUTED))
-                    .child("Native preferences are stored separately from Alera Classic."),
+                    .child(tr(
+                        locale,
+                        "Catalog preview only · existing Native controls below may change settings",
+                    )),
             );
         let body = div()
             .id("native-settings-panel")
             .flex()
             .flex_1()
+            // Reserve the Kit dialog title/chrome height while keeping the
+            // classic 92%-of-viewport Settings body scrollable.
+            .h(px((metrics.height - 72.0).max(0.0)))
             .min_h_0()
             .key_context("AleraNativeModal")
             .track_focus(&self.settings_modal_focus)

@@ -1,5 +1,7 @@
 //! UI-agnostic workbench state and native desktop application services.
 //! Tests can build this library without the heavyweight GPUI renderer.
+rust_i18n::i18n!("locales", fallback = "en");
+
 pub mod agent_profiles;
 mod agent_runtime_bridge;
 pub mod edition;
@@ -20,7 +22,9 @@ pub mod mcp_ui_bridge;
 pub mod mcp_workspace_creation;
 pub mod model;
 pub mod native_modal;
+pub mod native_i18n;
 pub mod native_settings;
+pub mod settings_menu_catalog;
 pub mod project_search;
 pub mod project_tree;
 pub mod runtime_bridge;
