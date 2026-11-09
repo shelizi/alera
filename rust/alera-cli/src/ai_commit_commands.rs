@@ -546,13 +546,19 @@ mod tests {
             "only staged diff".into(),
             controller,
         );
-        let (result, ()) = tokio::time::timeout(Duration::from_secs(6), async {
+        // Windows may spend four seconds terminating descendants before
+        // reaping the test child. This is bounded, not an indefinite wait.
+        let (result, ()) = tokio::time::timeout(Duration::from_secs(12), async {
             tokio::join!(operation, finish_controller)
         })
         .await
         .expect("cancellation must not leave a child running");
         assert!(result.unwrap_err().to_string().contains("cancelled"));
-        assert!(started.elapsed() < Duration::from_secs(5));
+        assert!(
+            started.elapsed() < Duration::from_secs(9),
+            "cancellation cleanup took {:?}",
+            started.elapsed()
+        );
     }
 
     #[tokio::test]
@@ -560,7 +566,7 @@ mod tests {
         let (controller, _writer) = tokio::io::duplex(8);
         let started = tokio::time::Instant::now();
         let result = tokio::time::timeout(
-            Duration::from_secs(6),
+            Duration::from_secs(12),
             call_read_only_agent_with_controller(
                 fixture_agent_plan(1),
                 "only staged diff".into(),
@@ -570,6 +576,10 @@ mod tests {
         .await
         .expect("timeout must not leave a child running");
         assert!(result.unwrap_err().to_string().contains("timed out"));
-        assert!(started.elapsed() < Duration::from_secs(5));
+        assert!(
+            started.elapsed() < Duration::from_secs(9),
+            "timeout cleanup took {:?}",
+            started.elapsed()
+        );
     }
 }
