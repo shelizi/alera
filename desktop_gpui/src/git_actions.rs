@@ -1,7 +1,8 @@
 //! Explicit, worktree-scoped Git writers. The GPUI render path never calls
 //! this module; a native click starts a bounded background operation.
-//! No command invokes reset --hard, rebase, shell or force push. Merges use
-//! explicit local git2 operations and refuse unresolved conflicts.
+//! No command invokes reset --hard, rebase, shell or force push. A guarded
+//! soft reset uses atomic compare-and-swap to preserve the index/worktree.
+//! Merges use explicit local git2 operations and refuse unresolved conflicts.
 use alera_core::git_cli::git_in_dir;
 use git2::{build::CheckoutBuilder, BranchType, Index, Oid, Repository, StatusOptions};
 use std::collections::HashMap;
@@ -89,6 +90,19 @@ pub struct GitAmendPreview {
     pub staged_tree_oid: String,
     pub current_message: String,
     pub replacement_message: String,
+}
+
+/// Rewinds only the selected, checked-out local branch ref. A soft reset
+/// leaves the index and working files unchanged. The exact old HEAD and
+/// tracked upstream are rechecked immediately before the atomic ref update.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GitSoftResetPreview {
+    pub current_branch: String,
+    pub current_oid: String,
+    pub target_oid: String,
+    pub target_subject: String,
+    pub removed_commits: usize,
+    pub upstream_oid: Option<String>,
 }
 
 /// An explicitly selected untracked regular file's immutable content check.
@@ -184,6 +198,140 @@ pub struct GitActions {
 }
 
 impl GitActions {
+    pub fn preview_soft_reset(&self, sha: &str) -> Result<GitSoftResetPreview, String> {
+        if sha.len() != 40 || !sha.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err("Soft reset requires a full 40-character commit hash".into());
+        }
+        if self.repo.state() != git2::RepositoryState::Clean {
+            return Err("Finish or abort the current Git operation before resetting".into());
+        }
+        self.require_clean_worktree().map_err(|_| {
+            "Soft reset requires a clean worktree and index, including untracked files".to_string()
+        })?;
+        let head = self.repo.head().map_err(|error| error.to_string())?;
+        if !head.is_branch() {
+            return Err("Soft reset requires a checked-out local branch".into());
+        }
+        let branch = head
+            .shorthand()
+            .map_err(|_| "Cannot identify current local branch")?
+            .to_owned();
+        if !valid_branch(&branch)
+            || matches!(
+                branch.as_str(),
+                "main" | "master" | "develop" | "development"
+            )
+        {
+            return Err("Soft reset is disabled on protected or invalid branches".into());
+        }
+        let current = head
+            .peel_to_commit()
+            .map_err(|error| error.to_string())?
+            .id();
+        let target = Oid::from_str(sha).map_err(|error| error.to_string())?;
+        let target_commit = self
+            .repo
+            .find_commit(target)
+            .map_err(|_| "Selected reset commit is not available".to_string())?;
+        if target == current
+            || !self
+                .repo
+                .graph_descendant_of(current, target)
+                .map_err(|error| error.to_string())?
+        {
+            return Err("Soft reset only permits an older ancestor of the current HEAD".into());
+        }
+        let (removed_commits, behind) = self
+            .repo
+            .graph_ahead_behind(current, target)
+            .map_err(|error| error.to_string())?;
+        if behind != 0 || removed_commits == 0 || removed_commits > 512 {
+            return Err(
+                "Soft reset refuses non-ancestor targets or more than 512 rewritten commits".into(),
+            );
+        }
+        let local = self
+            .repo
+            .find_branch(&branch, BranchType::Local)
+            .map_err(|error| error.to_string())?;
+        let upstream = match local.upstream() {
+            Ok(upstream) => Some(
+                upstream
+                    .get()
+                    .peel_to_commit()
+                    .map_err(|_| "Configured upstream is not a valid commit".to_string())?
+                    .id(),
+            ),
+            Err(error) if error.code() == git2::ErrorCode::NotFound => None,
+            Err(error) => return Err(format!("Cannot verify configured upstream: {error}")),
+        };
+        if let Some(remote) = upstream {
+            let current_contains_remote = remote == current
+                || self
+                    .repo
+                    .graph_descendant_of(current, remote)
+                    .map_err(|error| error.to_string())?;
+            let target_contains_remote = remote == target
+                || self
+                    .repo
+                    .graph_descendant_of(target, remote)
+                    .map_err(|error| error.to_string())?;
+            if !current_contains_remote || !target_contains_remote {
+                return Err(
+                    "Soft reset would rewrite published or divergent upstream history".into(),
+                );
+            }
+        }
+        Ok(GitSoftResetPreview {
+            current_branch: branch,
+            current_oid: current.to_string(),
+            target_oid: target.to_string(),
+            target_subject: target_commit
+                .summary()
+                .ok()
+                .flatten()
+                .unwrap_or("(no subject)")
+                .chars()
+                .take(110)
+                .collect(),
+            removed_commits,
+            upstream_oid: upstream.map(|id| id.to_string()),
+        })
+    }
+
+    pub fn apply_soft_reset(&self, plan: &GitSoftResetPreview) -> Result<String, String> {
+        let fresh = self.preview_soft_reset(&plan.target_oid)?;
+        if &fresh != plan {
+            return Err("Soft reset preview is stale; refresh and review again".into());
+        }
+        let branch_ref = format!("refs/heads/{}", plan.current_branch);
+        let reflog_message = format!(
+            "alera native soft reset: {} to {}",
+            &plan.current_oid[..8],
+            &plan.target_oid[..8],
+        );
+        git_in_dir(
+            &self.root,
+            &[
+                "update-ref",
+                "-m",
+                &reflog_message,
+                &branch_ref,
+                &plan.target_oid,
+                &plan.current_oid,
+            ],
+        )
+        .map_err(|_| {
+            "Atomic soft reset refused: branch advanced or Git ref is locked".to_string()
+        })?;
+        Ok(format!(
+            "Soft reset {} from {} to {}; index and worktree untouched (reflog available)",
+            plan.current_branch,
+            &plan.current_oid[..8],
+            &plan.target_oid[..8]
+        ))
+    }
+
     fn conflicting_merge_index(&self, source: &str) -> Result<(String, Oid, Oid, Index), String> {
         if !valid_branch(source) {
             return Err("Enter a valid local source branch".into());
@@ -1849,6 +1997,112 @@ mod tests {
         let root = dunce::canonicalize(dir.path()).unwrap();
         let actions = GitActions::open(&root).unwrap();
         (dir, actions)
+    }
+
+    fn soft_reset_fixture() -> (tempfile::TempDir, GitActions, Oid, Oid) {
+        let (dir, actions) = repo_fixture();
+        let root = actions.root.clone();
+        drop(actions);
+        let repo = Repository::open(&root).unwrap();
+        let first = repo.head().unwrap().peel_to_commit().unwrap();
+        repo.branch("feature/reset", &first, false).unwrap();
+        repo.set_head("refs/heads/feature/reset").unwrap();
+        fs::write(root.join("a.txt"), "after").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new("a.txt")).unwrap();
+        index.write().unwrap();
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let sig = Signature::now("Fixture", "fixture@example.invalid").unwrap();
+        let second = repo
+            .commit(Some("HEAD"), &sig, &sig, "second", &tree, &[&first])
+            .unwrap();
+        let first_oid = first.id();
+        drop(tree);
+        drop(first);
+        drop(repo);
+        (dir, GitActions::open(&root).unwrap(), first_oid, second)
+    }
+
+    #[test]
+    fn soft_reset_preserves_index_and_worktree_and_records_reflog() {
+        let (_dir, actions, first, second) = soft_reset_fixture();
+        let before = fs::read(actions.root.join("a.txt")).unwrap();
+        let index_tree = actions.repo.index().unwrap().write_tree().unwrap();
+        let plan = actions.preview_soft_reset(&first.to_string()).unwrap();
+        assert_eq!(plan.current_oid, second.to_string());
+        assert_eq!(plan.removed_commits, 1);
+        assert_eq!(plan.upstream_oid, None);
+        let message = actions.apply_soft_reset(&plan).unwrap();
+        assert!(message.contains("index and worktree untouched"));
+        assert_eq!(actions.repo.head().unwrap().target(), Some(first));
+        assert_eq!(fs::read(actions.root.join("a.txt")).unwrap(), before);
+        assert_eq!(
+            actions.repo.index().unwrap().write_tree().unwrap(),
+            index_tree
+        );
+        assert_eq!(
+            actions
+                .repo
+                .reflog("refs/heads/feature/reset")
+                .unwrap()
+                .get(0)
+                .unwrap()
+                .id_new(),
+            first
+        );
+        assert!(actions.preview_soft_reset(&first.to_string()).is_err());
+    }
+
+    #[test]
+    fn soft_reset_rejects_stale_head_dirty_files_and_nonancestor_targets() {
+        let (_dir, actions, first, _second) = soft_reset_fixture();
+        assert!(actions.preview_soft_reset("HEAD~1").is_err());
+        let plan = actions.preview_soft_reset(&first.to_string()).unwrap();
+        fs::write(actions.root.join("untracked.tmp"), "new").unwrap();
+        assert!(actions.preview_soft_reset(&first.to_string()).is_err());
+        assert!(actions.apply_soft_reset(&plan).is_err());
+        fs::remove_file(actions.root.join("untracked.tmp")).unwrap();
+        let head = actions.repo.head().unwrap().peel_to_commit().unwrap();
+        let tree = head.tree().unwrap();
+        let sig = Signature::now("Fixture", "fixture@example.invalid").unwrap();
+        actions
+            .repo
+            .commit(Some("HEAD"), &sig, &sig, "third", &tree, &[&head])
+            .unwrap();
+        assert!(actions.apply_soft_reset(&plan).is_err());
+        assert!(actions.repo.head().unwrap().target().is_some());
+    }
+
+    #[test]
+    fn soft_reset_blocks_upstream_published_commits_and_protected_branches() {
+        let (_dir, actions, first, second) = soft_reset_fixture();
+        actions
+            .repo
+            .remote("origin", "https://example.invalid/repo.git")
+            .unwrap();
+        actions
+            .repo
+            .reference("refs/remotes/origin/feature/reset", second, true, "fixture")
+            .unwrap();
+        actions
+            .repo
+            .config()
+            .unwrap()
+            .set_str("branch.feature/reset.remote", "origin")
+            .unwrap();
+        actions
+            .repo
+            .config()
+            .unwrap()
+            .set_str("branch.feature/reset.merge", "refs/heads/feature/reset")
+            .unwrap();
+        assert!(actions.preview_soft_reset(&first.to_string()).is_err());
+        actions
+            .repo
+            .branch("main", &actions.repo.find_commit(second).unwrap(), false)
+            .unwrap();
+        actions.repo.set_head("refs/heads/main").unwrap();
+        assert!(actions.preview_soft_reset(&first.to_string()).is_err());
     }
 
     #[test]

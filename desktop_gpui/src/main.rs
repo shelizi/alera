@@ -28,7 +28,7 @@ use alera_gpui_desktop::explorer_visibility::ExplorerVisibilityOptions;
 use alera_gpui_desktop::file_search::WorkspaceFileIndex;
 use alera_gpui_desktop::git_actions::{
     GitActions, GitAmendPreview, GitCommitApplyKind, GitCommitApplyPreview, GitCommitRefKind,
-    GitConflictChoice, GitConflictPlan, GitUntrackedTrashCandidate,
+    GitConflictChoice, GitConflictPlan, GitSoftResetPreview, GitUntrackedTrashCandidate,
 };
 use alera_gpui_desktop::git_branch_compare::{
     compare_branch_files, diff_compared_file, original_compared_file, BranchFileComparison,
@@ -191,6 +191,7 @@ enum GitUiAction {
     DeleteMergedBranch(String),
     CreateCommitRef(GitCommitRefKind, String, String),
     ApplyCommitPreview(GitCommitApplyPreview),
+    ApplySoftReset(GitSoftResetPreview),
     CreateWorktreeAtCommit(String, String),
     PullSelected(String),
     PushSelected(String),
@@ -440,6 +441,10 @@ struct Workbench {
     git_commit_apply_armed: bool,
     git_commit_apply_loading: bool,
     git_commit_apply_request: u64,
+    git_soft_reset_preview: Option<GitSoftResetPreview>,
+    git_soft_reset_armed: bool,
+    git_soft_reset_loading: bool,
+    git_soft_reset_request: u64,
     git_worktree_commit_target: Option<String>,
     git_worktree_commit_armed: Option<(String, String)>,
     git_worktree_commit_input: Entity<QuickOpenInput>,
@@ -2290,6 +2295,10 @@ impl Workbench {
         self.git_commit_apply_preview = None;
         self.git_commit_apply_armed = false;
         self.git_commit_apply_loading = true;
+        self.git_soft_reset_request = self.git_soft_reset_request.wrapping_add(1);
+        self.git_soft_reset_preview = None;
+        self.git_soft_reset_armed = false;
+        self.git_soft_reset_loading = false;
         self.git_commit_ref_target = None;
         self.git_commit_ref_armed = None;
         self.git_worktree_commit_target = None;
@@ -2373,6 +2382,110 @@ impl Workbench {
         self.git_commit_apply_preview = None;
         self.git_commit_apply_loading = false;
         self.git_commit_apply_armed = false;
+        cx.notify();
+    }
+
+    fn preview_git_soft_reset(&mut self, oid: String, cx: &mut Context<Self>) {
+        if self.git_action_busy
+            || !self
+                .git_history
+                .as_ref()
+                .is_some_and(|history| history.commits.iter().any(|row| row.oid == oid))
+        {
+            self.git_action_status = "Soft reset target is stale or Git is busy".into();
+            cx.notify();
+            return;
+        }
+        if self.editor_dirty(cx) {
+            self.git_action_status = "Save unsaved editor buffers before reset preview".into();
+            cx.notify();
+            return;
+        }
+        let root = self.model.root().to_path_buf();
+        let generation = self.workspace_generation;
+        self.git_soft_reset_request = self.git_soft_reset_request.wrapping_add(1);
+        let request = self.git_soft_reset_request;
+        self.git_soft_reset_preview = None;
+        self.git_soft_reset_armed = false;
+        self.git_soft_reset_loading = true;
+        self.git_commit_apply_preview = None;
+        self.git_commit_apply_armed = false;
+        self.git_commit_apply_request = self.git_commit_apply_request.wrapping_add(1);
+        cx.spawn(async move |view, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    GitActions::open(&root)?.preview_soft_reset(&oid)
+                })
+                .await;
+            view.update(cx, |view, cx| {
+                if view.workspace_generation != generation
+                    || view.git_soft_reset_request != request
+                {
+                    return;
+                }
+                view.git_soft_reset_loading = false;
+                match result {
+                    Ok(preview) => {
+                        view.git_action_status = format!(
+                            "Soft reset preview: {} unpublished commit(s) on {}. Review and confirm twice.",
+                            preview.removed_commits, preview.current_branch
+                        );
+                        view.git_soft_reset_preview = Some(preview);
+                    }
+                    Err(error) => {
+                        view.git_soft_reset_preview = None;
+                        view.git_action_status = format!("Soft reset preview refused: {error}");
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn confirm_git_soft_reset(&mut self, cx: &mut Context<Self>) {
+        let Some(preview) = self.git_soft_reset_preview.clone() else {
+            return;
+        };
+        if self.git_action_busy || self.git_soft_reset_loading {
+            self.git_action_status = "Finish the current Git operation first".into();
+            cx.notify();
+            return;
+        }
+        if !self.git_history.as_ref().is_some_and(|history| {
+            history
+                .commits
+                .iter()
+                .any(|row| row.oid == preview.target_oid)
+        }) {
+            self.cancel_git_soft_reset(cx);
+            self.git_action_status = "Git Graph changed; refresh and preview reset again".into();
+            cx.notify();
+            return;
+        }
+        if !self.git_soft_reset_armed {
+            self.git_soft_reset_armed = true;
+            self.git_action_status = format!(
+                "Confirm Soft Reset {} from {} to {} ({} commit(s)). Index/files remain unchanged; click Confirm again.",
+                preview.current_branch,
+                &preview.current_oid[..8],
+                &preview.target_oid[..8],
+                preview.removed_commits
+            );
+            cx.notify();
+            return;
+        }
+        self.git_soft_reset_armed = false;
+        self.run_git_action(GitUiAction::ApplySoftReset(preview), cx);
+    }
+
+    fn cancel_git_soft_reset(&mut self, cx: &mut Context<Self>) {
+        self.git_soft_reset_request = self.git_soft_reset_request.wrapping_add(1);
+        self.git_soft_reset_preview = None;
+        self.git_soft_reset_loading = false;
+        self.git_soft_reset_armed = false;
         cx.notify();
     }
 
@@ -2701,6 +2814,10 @@ impl Workbench {
         }
         self.git_sensitive_armed = None;
         self.git_discard_armed = None;
+        self.git_soft_reset_request = self.git_soft_reset_request.wrapping_add(1);
+        self.git_soft_reset_preview = None;
+        self.git_soft_reset_loading = false;
+        self.git_soft_reset_armed = false;
         self.git_conflict_confirm_armed = false;
         self.git_conflict_loading = false;
         self.git_conflict_request = self.git_conflict_request.wrapping_add(1);
@@ -2764,6 +2881,7 @@ impl Workbench {
                             git.create_ref_at_commit(kind, &oid, &name)
                         }
                         GitUiAction::ApplyCommitPreview(preview) => git.apply_commit_preview(&preview),
+                        GitUiAction::ApplySoftReset(plan) => git.apply_soft_reset(&plan),
                         GitUiAction::CreateWorktreeAtCommit(oid, branch) => {
                             let manager = alera_gpui_desktop::worktree_manager::WorktreeManager::discover(&root)
                                 .map_err(|error| error.to_string())?;
@@ -2803,6 +2921,8 @@ impl Workbench {
                         view.git_commit_ref_armed = None;
                         view.git_commit_apply_preview = None;
                         view.git_commit_apply_armed = false;
+                        view.git_soft_reset_preview = None;
+                        view.git_soft_reset_armed = false;
                         view.git_worktree_commit_target = None;
                         view.git_worktree_commit_armed = None;
                         view.git_worktree_commit_input.update(cx, |input, cx| input.clear(cx));
@@ -4056,6 +4176,10 @@ impl Workbench {
         self.git_commit_apply_armed = false;
         self.git_commit_apply_loading = false;
         self.git_commit_apply_request = self.git_commit_apply_request.wrapping_add(1);
+        self.git_soft_reset_preview = None;
+        self.git_soft_reset_armed = false;
+        self.git_soft_reset_loading = false;
+        self.git_soft_reset_request = self.git_soft_reset_request.wrapping_add(1);
         self.git_worktree_commit_target = None;
         self.git_worktree_commit_armed = None;
         self.git_worktree_commit_input
@@ -7465,6 +7589,9 @@ impl Render for Workbench {
         let git_commit_apply_preview = self.git_commit_apply_preview.clone();
         let git_commit_apply_armed = self.git_commit_apply_armed;
         let git_commit_apply_loading = self.git_commit_apply_loading;
+        let git_soft_reset_preview = self.git_soft_reset_preview.clone();
+        let git_soft_reset_armed = self.git_soft_reset_armed;
+        let git_soft_reset_loading = self.git_soft_reset_loading;
         let git_worktree_commit_target = self.git_worktree_commit_target.clone();
         let git_worktree_commit_input = self.git_worktree_commit_input.clone();
         let git_worktree_commit_armed = self.git_worktree_commit_armed.is_some();
@@ -8384,6 +8511,39 @@ impl Render for Workbench {
                                                     "Cancel commit preview; nothing changed", false)
                                                     .on_click(cx.listener(|this, _, _, cx| {
                                                         this.cancel_git_commit_apply(cx);
+                                                    }))))
+                                    ))
+                                    .when(git_soft_reset_loading, |panel| panel.child(
+                                        div().text_xs().text_color(rgb(MUTED))
+                                            .child("Checking Soft Reset safety (no Git refs changed)...")
+                                    ))
+                                    .when_some(git_soft_reset_preview, |panel, preview| panel.child(
+                                        div().flex().flex_col().gap_1()
+                                            .child(div().text_xs().text_color(rgb(TEXT))
+                                                .child(format!(
+                                                    "Soft Reset {}: {} to {} ({} commit(s))",
+                                                    preview.current_branch,
+                                                    &preview.current_oid[..8],
+                                                    &preview.target_oid[..8],
+                                                    preview.removed_commits,
+                                                )))
+                                            .child(div().text_xs().text_color(rgb(MUTED))
+                                                .child(format!(
+                                                    "{} · Work files and Index stay intact; previous tip remains in reflog.",
+                                                    preview.target_subject,
+                                                )))
+                                            .child(div().flex().items_center().gap_1()
+                                                .child(icon_button("git-soft-reset-confirm",
+                                                    if git_soft_reset_armed { UiIcon::Check } else { UiIcon::History },
+                                                    if git_soft_reset_armed { "Confirm Soft Reset now" } else { "Review Soft Reset and confirm twice" },
+                                                    git_soft_reset_armed)
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.confirm_git_soft_reset(cx);
+                                                    })))
+                                                .child(icon_button("git-soft-reset-cancel", UiIcon::Close,
+                                                    "Cancel Soft Reset preview; nothing changed", false)
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.cancel_git_soft_reset(cx);
                                                     }))))
                                     ))
                                     .when_some(git_commit_ref_target, |panel, (oid, kind)| panel.child(
@@ -10834,6 +10994,10 @@ fn main() {
                             git_commit_apply_armed: false,
                             git_commit_apply_loading: false,
                             git_commit_apply_request: 0,
+                            git_soft_reset_preview: None,
+                            git_soft_reset_armed: false,
+                            git_soft_reset_loading: false,
+                            git_soft_reset_request: 0,
                             git_worktree_commit_target: None,
                             git_worktree_commit_armed: None,
                             git_worktree_commit_input: cx.new(|cx| {

@@ -598,9 +598,8 @@ impl Workbench {
         }
     }
 
-    /// Commit menu: read-only preview/copy plus explicit creation of new
-    /// refs at an existing commit. Never checkout, reset, cherry-pick or
-    /// change the index from this menu.
+    /// Commit menu only prepares explicit, validated Git operations. The
+    /// actual soft reset is only reachable after a separate double-confirm.
     pub(super) fn kit_git_graph_commit_menu(
         owner: gpui::WeakEntity<Self>,
         oid: String,
@@ -700,6 +699,17 @@ impl Workbench {
                     });
                 }));
             }
+            let reset_owner = owner.clone();
+            let reset_oid = oid.clone();
+            menu = menu.item(
+                PopupMenuItem::new("Soft reset current branch here (preview)...").on_click(
+                    move |_, _, cx| {
+                        let _ = reset_owner.update(cx, |view, cx| {
+                            view.preview_git_soft_reset(reset_oid.clone(), cx);
+                        });
+                    },
+                ),
+            );
             let create_worktree = owner.clone();
             let worktree_sha = oid.clone();
             menu = menu.item(PopupMenuItem::new("Create Worktree at commit…").on_click(
