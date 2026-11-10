@@ -320,3 +320,27 @@
 1. 在經核准的隔離 Windows GUI 中開啟大於 32 KiB 的已暫存及未暫存 Patch：在放大 Kit Dialog 直接翻頁、返回上一頁、切換選取檔案／Workspace、關閉視窗，核對內容及 Git Index 完全不變。
 2. 下一輪可改進中心區可讀性，例如含行號／Hunk 跳轉的中央唯讀檔案 Diff，應保留嚴格的每頁資源限制並另做長行效能測試。
 3. 回到 Classic／GPUI 共同設定與 Tab Pin CAS：隔離 Host 的 `editor.twoRowTabs` 與 `tab.pin.cas` 雙向持久化、雙 Pane Dirty／Undo、Windows 注音候選窗與多 DPI 實機驗收。
+
+## 十二、第七輪續作：Git Diff 雙側行號與 Hunk 快速定位（2026-11-10）
+
+本輪由驗證基線 `67701ed73` 建立獨立 Worktree `feat/gpui-git-hunk-line-ux-20261110`，只修改 Native GPUI 的 `desktop_gpui/src/native_action_dialog_ui.rs`。既有 32 KiB／頁、32 頁、100,000 筆 Git Patch 記錄安全限制與 Git Index/HEAD 唯讀行為未變。
+
+| 工作包 | 來源提交 | GPUI 整合提交 | 實作內容 |
+| --- | --- | --- | --- |
+| P1-03 Git Unified Diff 雙側行號 | `800d327d0` | `44f91e448` | 放大 Kit Dialog 對每頁前 400 行，依可見 `@@ -old[,count] +new[,count] @@` 標頭追蹤原檔／修改後行號；新增行僅遞增新檔、刪除行僅遞增原檔、Context 同時遞增；`+++`／`---`／`No newline` 標記不計算。跨檔案、合併式 `@@@` 或頁首沒有 `@@` 時，行號留白，不猜測不存在的前頁座標 |
+| P1-03 Kit Hunk 快速定位 | 同上 | 同上 | 前 400 個已獨立渲染的行建立真正可捲動的 ScrollHandle 目標，最多 12 個 `-old / +new` 按鈕，點擊跳至對應 Hunk 標頭，不按估算像素定位；超出 400 行的內容仍以原始純文字顯示，不額外生成大量 UI 元件 |
+
+### Rust 與 Windows 整合驗證
+
+- 新增 4 項 Native Unit 回歸：多段 Hunk old/new 行號、續頁／`@@@`／無效標頭不造假、400 行／12 個按鈕跳轉索引上限、多檔 Patch 不沿用上一檔座標。Git Dialog 專項 **8/8** 通過。
+- 獨立 Worktree `cargo check --offline --locked --bin alera-gpui-desktop -j 2`、Windows Native `cargo build` 通過，Library **382/382**、Binary **16/16**，均 0 failed。
+- 整合產品程式碼 `44f91e448`：重新執行 `cargo build --offline --locked --bin alera-gpui-desktop -j 2` 成功，Rust Library **382/382**、Binary **16/16** 皆通過；只出現既有 Windows linker stdout 資訊警告。EXE：`D:/c/gpui/debug/alera-gpui-desktop.exe`，2026-11-10 約 17:37。
+- **GUI NOT RUN**：目前未獲工作區政策核准啟動隔離 Windows GPUI 圖形程式；`ScrollHandle` 的真實滑鼠點擊、橫向捲動、Hunk 對齊、長行／多 DPI／800×600 表現及動態分頁刷新，仍不能由編譯或單元測試代替。此輪只能確認原生編譯與行號／Hunk 定位邏輯。
+- **限制：**行號與 Hunk 快捷鍵只涵蓋當前頁前 400 行，最多 12 個按鈕；更後面的文字照常可讀，但尚無該區塊的快速定位和行號。對續頁缺少 Header 的 Diff 不會偽造行號。中央雙欄完整 Diff 尚未完成，`P1-03 PARTIAL`、`supported=false` 維持。
+- 沒有修改 Classic `main`、正式 Runtime Host／PTY、既有 smoke/cache 資料；未 Push、未部署、未發行。
+
+### 下一輪優先項目
+
+1. 在授權隔離 Windows GUI 環境，驗證放大 Kit Diff 的前 400 行雙側行號、Hunk 定位、Previous/Next 頁切換、狹窄視窗與高 DPI 的實際表現。
+2. 評估獨立中央唯讀 Diff Pane 的完整行號／Hunk 虛擬化，保留有界每頁資料及事件取消防護，並讓未顯示的遠端頁可以安全導覽。
+3. 驗證 Classic／GPUI 共用設定和 `tab.pin.cas`／`editor.twoRowTabs` Host 同步、跨 Pane Dirty／Undo、Windows 注音輸入。全部 Gate 通過前不調整 `supported=false`。
