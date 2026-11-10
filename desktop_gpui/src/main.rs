@@ -2,6 +2,7 @@
 mod editor_ui;
 mod native_action_dialog_ui;
 mod native_agent_quota_ui;
+mod native_center_git_diff_ui;
 mod native_components;
 mod native_git_favorites_ui;
 mod native_history_sync_ui;
@@ -130,7 +131,7 @@ use alera_gpui_desktop::worktree_manager::{
 use editor_ui::{bind_editor_keys, NativeEditor};
 use gpui::{
     actions, div, prelude::*, px, rgb, size, App, Bounds, Context, Entity, Focusable, KeyBinding,
-    PathPromptOptions, ScrollHandle, Window, WindowBounds, WindowOptions,
+    PathPromptOptions, ScrollHandle, UniformListScrollHandle, Window, WindowBounds, WindowOptions,
 };
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenuItem};
@@ -604,6 +605,14 @@ struct Workbench {
     git_diff_loading: bool,
     git_diff_request: u64,
     git_file_diff_paging: Option<GitFileDiffPaging>,
+    /// A temporary, read-only center projection; never owns or replaces an
+    /// Editor buffer, mixed tab or Host Terminal session.
+    center_git_diff_source: Option<native_action_dialog_ui::GitDialogFileSource>,
+    center_git_diff_scroll: UniformListScrollHandle,
+    center_git_diff_hunk: Option<usize>,
+    /// Parsed once on each bounded Git page response, shared with visible
+    /// virtual-list renders while Terminal/Host UI events keep arriving.
+    center_git_diff_rows: Arc<Vec<native_center_git_diff_ui::CenterGitDiffRow>>,
     workspace_generation: u64,
     editor_epoch: u64,
     mixed_tabs: WorkbenchTabs,
@@ -3134,6 +3143,9 @@ impl Workbench {
         self.git_diff_request = self.git_diff_request.wrapping_add(1);
         let ticket = self.git_diff_request;
         self.git_file_diff_paging = None;
+        self.center_git_diff_source = None;
+        self.center_git_diff_hunk = None;
+        self.center_git_diff_rows = Arc::new(Vec::new());
         self.git_diff = None;
         self.git_diff_loading = true;
         cx.spawn(async move |view, cx| {
@@ -3899,7 +3911,7 @@ impl Workbench {
     ) {
         // A general Git preview can use the independently bounded patch
         // pager; exact Staged/Changes/Original previews retain their area.
-        if area.is_none() && !original {
+        if native_center_git_diff_ui::uses_paged_git_preview(area, original) {
             self.preview_git_change_paged(relative, cx);
             return;
         }
@@ -3941,6 +3953,9 @@ impl Workbench {
     fn preview_git_change_paged(&mut self, relative: PathBuf, cx: &mut Context<Self>) {
         // A new click is a new dialog source even if it chooses the same file.
         // Paging preserves its source ticket, but re-selection invalidates it.
+        self.center_git_diff_source = None;
+        self.center_git_diff_hunk = None;
+        self.center_git_diff_rows = Arc::new(Vec::new());
         self.git_file_diff_paging = None;
         self.load_git_file_diff_page(relative, 0, Vec::new(), cx);
     }
@@ -3981,6 +3996,11 @@ impl Workbench {
         let ticket = self.git_diff_request;
         let generation = self.workspace_generation;
         let root = self.model.root().to_path_buf();
+        if self.center_git_diff_is_current() {
+            self.center_git_diff_hunk = None;
+            self.center_git_diff_scroll
+                .scroll_to_item(0, gpui::ScrollStrategy::Top);
+        }
         let source_ticket = self
             .git_file_diff_paging
             .as_ref()
@@ -4007,12 +4027,15 @@ impl Workbench {
                 view.git_diff_loading = false;
                 match result {
                     Ok(page) => {
+                        view.center_git_diff_rows =
+                            Arc::new(native_center_git_diff_ui::center_git_diff_rows(&page.text));
                         if let Some(paging) = view.git_file_diff_paging.as_mut() {
                             paging.next_line = page.next_line;
                         }
                         view.git_diff = Some(page.text);
                     }
                     Err(error) => {
+                        view.center_git_diff_rows = Arc::new(Vec::new());
                         view.git_file_diff_paging = None;
                         view.git_diff = Some(format!("Diff unavailable: {error}"));
                     }
@@ -5252,6 +5275,9 @@ impl Workbench {
         self.git_diff_loading = false;
         self.git_diff_request = self.git_diff_request.wrapping_add(1);
         self.git_file_diff_paging = None;
+        self.center_git_diff_source = None;
+        self.center_git_diff_hunk = None;
+        self.center_git_diff_rows = Arc::new(Vec::new());
         // Agent profiles are Host-owned, but selection and an in-flight
         // launch response must never attach to a different GPUI workspace.
         self.agent_profiles_request = self.agent_profiles_request.wrapping_add(1);
@@ -7867,6 +7893,13 @@ impl Workbench {
             cx.notify();
             return;
         }
+        // The temporary read-only Diff only covers the primary viewport.
+        // Selecting a primary Editor/Terminal tab restores it immediately,
+        // while interactions with the secondary pane can continue alongside.
+        if self.mixed_panes.tabs_in(PaneSlot::Primary).contains(id) {
+            self.center_git_diff_source = None;
+            self.center_git_diff_hunk = None;
+        }
         self.mixed_tab_context = None;
         self.explorer_preview_active = false;
         self.git_original_active = false;
@@ -9711,6 +9744,10 @@ impl Render for Workbench {
                     && !self.git_diff_loading,
             )
         });
+        let show_center_git_diff = native_center_git_diff_ui::should_show_center_git_diff_view(
+            git_original_is_active,
+            self.center_git_diff_is_current(),
+        );
 
         div()
             .size_full()
@@ -11314,6 +11351,20 @@ impl Render for Workbench {
                                     } else {
                                         div().text_xs().text_color(rgb(MUTED))
                                             .child("Expand diff").into_any_element()
+                                    })
+                                    .child(if git_diff_expand_available && git_file_page.is_some() {
+                                        div()
+                                            .id("git-diff-open-center")
+                                            .cursor_pointer()
+                                            .text_xs()
+                                            .text_color(rgb(TEXT))
+                                            .child("Center")
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.open_center_git_diff(cx);
+                                            }))
+                                            .into_any_element()
+                                    } else {
+                                        div().into_any_element()
                                     }),
                             )
                             .child(if let Some((page, can_previous, can_next)) = git_file_page {
@@ -11617,7 +11668,7 @@ impl Render for Workbench {
                                     .justify_between()
                                     .text_sm()
                                     .text_color(rgb(MUTED))
-                                    .when(!show_editor_toolbar, |panel| panel.hidden())
+                                    .when(!show_editor_toolbar || show_center_git_diff, |panel| panel.hidden())
                                     .child(
                                         div()
                                             .flex_1()
@@ -11715,6 +11766,8 @@ impl Render for Workbench {
                                             .text_color(rgb(TEXT))
                                             .child(original.snapshot.content))
                                         .into_any_element()
+                                } else if show_center_git_diff {
+                                    self.render_center_git_diff(cx)
                                 } else if let Some(editor) = editor.clone().filter(|_| !showing_explorer_preview) {
                                     div()
                                         .flex_1()
@@ -11749,7 +11802,7 @@ impl Render for Workbench {
                                     .min_h_0()
                                     .flex()
                                     .flex_col()
-                                    .when(center_is_editor, |panel| panel.hidden())
+                                    .when(center_is_editor || show_center_git_diff, |panel| panel.hidden())
                                     .border_t_1()
                                     .border_color(rgb(BORDER))
                                     .bg(rgb(BG))
@@ -13411,6 +13464,10 @@ fn main() {
                             git_diff_loading: false,
                             git_diff_request: 0,
                             git_file_diff_paging: None,
+                            center_git_diff_source: None,
+                            center_git_diff_scroll: UniformListScrollHandle::new(),
+                            center_git_diff_hunk: None,
+                            center_git_diff_rows: Arc::new(Vec::new()),
                             workspace_generation: 0,
                             editor_epoch: 0,
                             mixed_tabs: WorkbenchTabs::for_workspace(0),

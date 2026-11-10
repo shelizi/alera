@@ -52,7 +52,7 @@ fn summarize_git_patch(patch: &str) -> GitPatchSummary {
     summary
 }
 
-fn git_patch_line_color(line: &str) -> u32 {
+pub(super) fn git_patch_line_color(line: &str) -> u32 {
     if line.starts_with("@@ ") || line.starts_with("@@@ ") {
         0x83b7ed
     } else if line.starts_with('+') && !line.starts_with("+++") {
@@ -74,11 +74,11 @@ fn git_patch_line_color(line: &str) -> u32 {
 /// page may begin inside a hunk: until its first valid @@ header, leave both
 /// coordinates blank rather than inventing the previous page's line numbers.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct GitDiffDisplayRow<'a> {
-    text: &'a str,
-    old: Option<usize>,
-    new: Option<usize>,
-    hunk: Option<(usize, usize)>,
+pub(super) struct GitDiffDisplayRow<'a> {
+    pub(super) text: &'a str,
+    pub(super) old: Option<usize>,
+    pub(super) new: Option<usize>,
+    pub(super) hunk: Option<(usize, usize)>,
 }
 
 fn parse_unified_hunk_header(line: &str) -> Option<(usize, usize)> {
@@ -99,12 +99,12 @@ fn parse_unified_hunk_header(line: &str) -> Option<(usize, usize)> {
     Some((parse_start(old, '-')?, parse_start(new, '+')?))
 }
 
-fn visible_git_diff_rows(patch: &str) -> Vec<GitDiffDisplayRow<'_>> {
+pub(super) fn parse_git_diff_rows(patch: &str, limit: usize) -> Vec<GitDiffDisplayRow<'_>> {
     let mut old = None;
     let mut new = None;
     patch
         .lines()
-        .take(MAX_COLORED_PATCH_LINES)
+        .take(limit)
         .map(|line| {
             if let Some((from, to)) = parse_unified_hunk_header(line) {
                 old = Some(from);
@@ -148,6 +148,10 @@ fn visible_git_diff_rows(patch: &str) -> Vec<GitDiffDisplayRow<'_>> {
         .collect()
 }
 
+fn visible_git_diff_rows(patch: &str) -> Vec<GitDiffDisplayRow<'_>> {
+    parse_git_diff_rows(patch, MAX_COLORED_PATCH_LINES)
+}
+
 fn visible_git_hunk_targets(rows: &[GitDiffDisplayRow<'_>]) -> Vec<(usize, usize, usize)> {
     rows.iter()
         .enumerate()
@@ -160,13 +164,13 @@ fn visible_git_hunk_targets(rows: &[GitDiffDisplayRow<'_>]) -> Vec<(usize, usize
 /// new source ticket, even when the path happens to be the same spelling.
 /// Workspace switching also invalidates the dialog's file source.
 #[derive(Clone)]
-struct GitDialogFileSource {
-    workspace_generation: u64,
-    source_ticket: u64,
-    relative: PathBuf,
+pub(super) struct GitDialogFileSource {
+    pub(super) workspace_generation: u64,
+    pub(super) source_ticket: u64,
+    pub(super) relative: PathBuf,
 }
 
-fn git_dialog_file_source_matches(
+pub(super) fn git_dialog_file_source_matches(
     current_generation: u64,
     current: Option<&GitFileDiffPaging>,
     expected: &GitDialogFileSource,
