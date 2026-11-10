@@ -269,3 +269,29 @@
 1. 取得授權的隔離 Windows GUI 執行環境，實測 Git Diff 小尺寸與高 DPI 的換行／橫捲、完整關閉，以及切換 Workspace 後只顯示原快照；確認不修改 Git。
 2. 規劃安全、完整的中央檔案差異（可針對單檔分頁擷取／分塊載入，嚴格限制記憶體與 Git 路徑），不可移除容量限制而只把整段 Patch 放進畫面。
 3. 回到 P0-01／02／03：實機雙 Pane Dirty／Undo／釘選與 `tab.pin.cas`／`editor.twoRowTabs` 的 Classic／GPUI 共用 Host 同步；在驗證前 `supported=false`。
+
+## 十、第五輪續作：大型 Git 檔案差異的安全分頁（2026-11-10）
+
+以 `73c5e7a27` 為基準，建立獨立 Worktree `feat/gpui-git-diff-paged-20261110`，在不變更 Classic 與正式 Runtime Host 的前提下，改善上輪「超過 32 KiB 只能看到截斷快照」的限制。**此功能是單檔唯讀 Patch 分頁，並非已完成中央雙欄完整 Diff。**
+
+| 項目 | 來源 Commit | 整合 Commit | 完成內容 |
+| --- | --- | --- | --- |
+| P1-03 Git 單檔 Patch 分頁 | `9b57c2bcf` | `062b5aca4` | `git_inspect.rs` 新增 `read_file_diff_page`：單頁保留最多 32 KiB 的 Git Patch，依 Git Patch 記錄行游標讀取下一頁，支援已追蹤檔案的 Staged／Unstaged 狀態，不把完整大型差異一次存在記憶體 |
+| P1-03 GPUI 分頁操作 | 同上 | 同上 | Git 側欄選取變更檔案後顯示 `Previous`／`Next` 及目前頁數；最多 32 頁並限制掃描 100,000 筆 Patch 記錄；既有 Expand Dialog 可放大目前選取的單頁快照 |
+| P1-03 容量／編碼邊界 | 同上 | 同上 | 巨大單行只顯示受限片段並標記 clipped；Untracked 檔案恰好 32 KiB 加上標頭後，依然截斷到安全範圍且明確標記，不會無聲超出頁面上限 |
+
+### 實測證據與重要限制
+
+- **Git 9/9 專項案例通過**，包含大型繁中／Emoji 已追蹤 Patch 分頁後仍可讀到最後一行、已暫存 2,000 行的 Patch 分頁且 HEAD／Index／原檔不變、上頁重讀、超長單行片段提示、越界路徑與最大行游標拒絕。
+- Untracked 檔案剛好 32 KiB（另外有顯示標頭）時，修正前 RED 測試失敗：沒有截斷提示；修正後 GREEN。檔案內容保持不變。
+- 整合產品程式碼 `062b5aca4`：Windows Native `cargo build --offline --locked --bin alera-gpui-desktop -j 2` 成功，Rust Library **382/382** 與 Native Binary **11/11** 通過，均 0 failed。EXE：`D:/c/gpui/debug/alera-gpui-desktop.exe`，本機建置時間 2026-11-10 17:15。
+- 每頁均**重新讀取目前 Git 工作樹**，不會跨頁拼接成宣稱一致的單一不可變快照；檔案在翻頁間修改時應重新點選檔案從第一頁閱讀。頁數與掃描上限屬防護機制，**不能宣稱超過上限的差異已完整顯示**。
+- `Git History`、分支 Compare、MCP 比較與 Workspace 切換會清除檔案分頁狀態，並使用既有的 request ticket／workspace generation 守衛拒絕過期回應；分頁不附加任何 Stage／Commit／寫入功能。
+- **Windows GUI NOT RUN**：前輪 Native 啟動曾因 Coding MCP 工作區安全限制被拒。本輪完成 Windows Build 和 Rust 測試，但沒有獲得獨立 GUI／隔離 Host 的核准驗收；因此不能宣稱實體滑鼠切頁、狹窄側欄排版、放大視窗切頁及大視窗橫捲已通過。
+- Classic `main`、正式 Host／PTY、既有 Smoke 資料、Git 寫入行為不變；未 Push、未合併 `main`、未部署或發行，`supported=false` 維持。
+
+### 下一階段
+
+1. 在有正式授權的隔離 Windows 桌面實測 Previous／Next／Expand 的互動，確認窄側欄、翻頁後重新開啟 Expand、已暫存與未暫存狀態切換及 Workspace 改變不會造成舊頁混入。
+2. 評估真正可視化中央 Diff（選取檔案後中央編輯區顯示左右差異、來源行號與 Hunk 導航），使用有界緩衝區或分頁讀取，並建立重繪／極長檔案效能測試。
+3. 繼續驗收 `editor.twoRowTabs`、`tab.pin.cas` Classic／GPUI 雙向 Host 同步、雙 Pane Dirty／Undo、Windows 注音與高 DPI；通過前不可將 `supported` 設為 true。
