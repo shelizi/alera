@@ -11,6 +11,7 @@ pub(super) fn can_expand_read_only_diff(patch: Option<&str>, loading: bool) -> b
 }
 
 const MAX_COLORED_PATCH_LINES: usize = 400;
+const MAX_HUNK_JUMP_BUTTONS: usize = 12;
 
 /// Keep the expanded preview entirely inside the display, including the
 /// dialog title and its read-only explanation. Never use a fixed desktop-only
@@ -69,6 +70,92 @@ fn git_patch_line_color(line: &str) -> u32 {
     }
 }
 
+/// Git's old/new coordinates for a visible unified-diff record. A bounded
+/// page may begin inside a hunk: until its first valid @@ header, leave both
+/// coordinates blank rather than inventing the previous page's line numbers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct GitDiffDisplayRow<'a> {
+    text: &'a str,
+    old: Option<usize>,
+    new: Option<usize>,
+    hunk: Option<(usize, usize)>,
+}
+
+fn parse_unified_hunk_header(line: &str) -> Option<(usize, usize)> {
+    let rest = line.strip_prefix("@@ ")?;
+    let (old, rest) = rest.split_once(' ')?;
+    let (new, tail) = rest.split_once(' ')?;
+    if !tail.starts_with("@@") {
+        return None;
+    }
+    let parse_start = |token: &str, sign: char| {
+        token
+            .strip_prefix(sign)?
+            .split(',')
+            .next()?
+            .parse::<usize>()
+            .ok()
+    };
+    Some((parse_start(old, '-')?, parse_start(new, '+')?))
+}
+
+fn visible_git_diff_rows(patch: &str) -> Vec<GitDiffDisplayRow<'_>> {
+    let mut old = None;
+    let mut new = None;
+    patch
+        .lines()
+        .take(MAX_COLORED_PATCH_LINES)
+        .map(|line| {
+            if let Some((from, to)) = parse_unified_hunk_header(line) {
+                old = Some(from);
+                new = Some(to);
+                return GitDiffDisplayRow {
+                    text: line,
+                    old: None,
+                    new: None,
+                    hunk: Some((from, to)),
+                };
+            }
+            let mut row = GitDiffDisplayRow {
+                text: line,
+                old: None,
+                new: None,
+                hunk: None,
+            };
+            if line.starts_with("diff --git ")
+                || line.starts_with("@@@ ")
+                || line.starts_with("index ")
+            {
+                // Combined diffs need their own multi-parent line model.
+                old = None;
+                new = None;
+            } else if line.starts_with("---") || line.starts_with("+++") {
+                // Git file markers are metadata, not deleted/added lines.
+            } else if line.starts_with(' ') {
+                row.old = old;
+                row.new = new;
+                old = old.and_then(|line| line.checked_add(1));
+                new = new.and_then(|line| line.checked_add(1));
+            } else if line.starts_with('-') {
+                row.old = old;
+                old = old.and_then(|line| line.checked_add(1));
+            } else if line.starts_with('+') {
+                row.new = new;
+                new = new.and_then(|line| line.checked_add(1));
+            }
+            row
+        })
+        .collect()
+}
+
+fn visible_git_hunk_targets(rows: &[GitDiffDisplayRow<'_>]) -> Vec<(usize, usize, usize)> {
+    rows.iter()
+        .enumerate()
+        .filter_map(|(row, entry)| entry.hunk.map(|(old, new)| (row, old, new)))
+        .take(MAX_HUNK_JUMP_BUTTONS)
+        .collect()
+}
+
 /// A dialog can navigate one selected file only. A new file selection gets a
 /// new source ticket, even when the path happens to be the same spelling.
 /// Workspace switching also invalidates the dialog's file source.
@@ -112,6 +199,7 @@ impl Workbench {
                 relative: paging.relative.clone(),
             });
         let owner = cx.entity().downgrade();
+        let patch_scroll = ScrollHandle::new();
         window.open_dialog(cx, move |dialog, window, cx| {
             let (visible_patch, page_controls) = if let Some(source) = source.as_ref() {
                 owner
@@ -157,15 +245,42 @@ impl Workbench {
             let (dialog_width, scroll_height) =
                 expanded_git_diff_size(f32::from(viewport.width), f32::from(viewport.height));
             let summary = summarize_git_patch(&visible_patch);
-            let colored_lines = visible_patch
-                .lines()
-                .take(MAX_COLORED_PATCH_LINES)
-                .map(|line| {
+            let visible_rows = visible_git_diff_rows(&visible_patch);
+            let hunk_targets = visible_git_hunk_targets(&visible_rows);
+            let colored_lines = visible_rows
+                .iter()
+                .map(|row| {
                     div()
                         .w_full()
-                        .whitespace_nowrap()
-                        .text_color(rgb(git_patch_line_color(line)))
-                        .child(line.to_owned())
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            div()
+                                .w(px(54.0))
+                                .flex()
+                                .justify_end()
+                                .text_xs()
+                                .text_color(rgb(MUTED))
+                                .child(row.old.map_or_else(String::new, |line| line.to_string())),
+                        )
+                        .child(
+                            div()
+                                .w(px(54.0))
+                                .flex()
+                                .justify_end()
+                                .text_xs()
+                                .text_color(rgb(MUTED))
+                                .child(row.new.map_or_else(String::new, |line| line.to_string())),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .whitespace_nowrap()
+                                .text_color(rgb(git_patch_line_color(row.text)))
+                                .child(row.text.to_owned()),
+                        )
                 })
                 .collect::<Vec<_>>();
             let plain_remainder = visible_patch
@@ -270,6 +385,56 @@ impl Workbench {
                                         }),
                                 )
                         }))
+                        .children((!hunk_targets.is_empty()).then(|| {
+                            div()
+                                .w_full()
+                                .flex()
+                                .flex_col()
+                                .gap_1()
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(rgb(MUTED))
+                                        .child(format!(
+                                            "Jump to hunk · {} of {} in this page (first {} lines)",
+                                            hunk_targets.len(),
+                                            summary.hunks,
+                                            MAX_COLORED_PATCH_LINES
+                                        )),
+                                )
+                                .child(
+                                    div()
+                                        .id("git-diff-hunk-toolbar")
+                                        .w_full()
+                                        .flex()
+                                        .items_center()
+                                        .gap_2()
+                                        .max_h(px(36.0))
+                                        .overflow_y_scroll()
+                                        .overflow_x_scroll()
+                                        .children(hunk_targets.into_iter().map(|(row, old, new)| {
+                                            let jump_scroll = patch_scroll.clone();
+                                            let notify_owner = owner.clone();
+                                            div()
+                                                .id(("git-diff-hunk-jump", row))
+                                                .cursor_pointer()
+                                                .text_xs()
+                                                .text_color(rgb(0x83b7ed))
+                                                .child(format!("-{old} / +{new}"))
+                                                .on_click(move |_, _, cx| {
+                                                    jump_scroll.scroll_to_item(row);
+                                                    let _ = notify_owner
+                                                        .update(cx, |_, cx| cx.notify());
+                                                })
+                                        })),
+                                )
+                        }))
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(rgb(MUTED))
+                                .child("Old / New line numbers follow visible @@ headers only. A continuation page without a header does not guess line positions."),
+                        )
                         .children(has_plain_remainder.then(|| {
                             div()
                                 .text_xs()
@@ -279,26 +444,25 @@ impl Workbench {
                         .child(
                             div()
                                 .id(("expanded-git-diff-scroll", page_controls.map_or(0, |value| value.0)))
+                                .track_scroll(&patch_scroll)
                                 .w_full()
                                 .max_h(px(scroll_height))
                                 .overflow_y_scroll()
                                 .overflow_x_scroll()
+                                .flex()
+                                .flex_col()
                                 .font_family("Consolas")
                                 .text_sm()
                                 .whitespace_nowrap()
-                                .child(
+                                .children(colored_lines)
+                                .children(has_plain_remainder.then(|| {
                                     div()
-                                        .flex()
-                                        .flex_col()
-                                        .children(colored_lines)
-                                        .children(has_plain_remainder.then(|| {
-                                            div()
-                                                .mt_2()
-                                                .whitespace_nowrap()
-                                                .text_color(rgb(MUTED))
-                                                .child(plain_remainder)
-                                        })),
-                                ),
+                                        .mt_2()
+                                        .pl(px(116.0))
+                                        .whitespace_nowrap()
+                                        .text_color(rgb(MUTED))
+                                        .child(plain_remainder)
+                                })),
                         ),
                 )
         });
@@ -594,7 +758,8 @@ impl Workbench {
 mod git_preview_tests {
     use super::{
         can_expand_read_only_diff, expanded_git_diff_size, git_dialog_file_source_matches,
-        git_patch_line_color, summarize_git_patch, GitDialogFileSource, GitFileDiffPaging,
+        git_patch_line_color, parse_unified_hunk_header, summarize_git_patch,
+        visible_git_diff_rows, visible_git_hunk_targets, GitDialogFileSource, GitFileDiffPaging,
     };
 
     #[test]
@@ -691,5 +856,103 @@ mod git_preview_tests {
             Some(&paging),
             &expected
         ));
+    }
+
+    #[test]
+    fn git_diff_gutter_tracks_old_and_new_line_numbers_through_multiple_hunks() {
+        let patch = concat!(
+            "diff --git a/main.rs b/main.rs\n",
+            "--- a/main.rs\n",
+            "+++ b/main.rs\n",
+            "@@ -10,3 +20,4 @@ fn run()\n",
+            " context\n",
+            "-removed\n",
+            "+added\n",
+            "+another\n",
+            " context after\n",
+            "\\ No newline at end of file\n",
+            "@@ -100,1 +111,2 @@\n",
+            "-previous\n",
+            "+replaced\n",
+            "+additional\n"
+        );
+        let rows = visible_git_diff_rows(patch);
+        let coords = rows
+            .iter()
+            .map(|row| (row.old, row.new))
+            .collect::<Vec<_>>();
+        assert_eq!(coords[1], (None, None));
+        assert_eq!(coords[2], (None, None));
+        assert_eq!(rows[3].hunk, Some((10, 20)));
+        assert_eq!(coords[4], (Some(10), Some(20)));
+        assert_eq!(coords[5], (Some(11), None));
+        assert_eq!(coords[6], (None, Some(21)));
+        assert_eq!(coords[7], (None, Some(22)));
+        assert_eq!(coords[8], (Some(12), Some(23)));
+        assert_eq!(coords[9], (None, None));
+        assert_eq!(rows[10].hunk, Some((100, 111)));
+        assert_eq!(coords[11], (Some(100), None));
+        assert_eq!(coords[12], (None, Some(111)));
+        assert_eq!(coords[13], (None, Some(112)));
+    }
+
+    #[test]
+    fn git_diff_gutter_does_not_invent_positions_without_hunk_or_for_combined_diff() {
+        let continuation = visible_git_diff_rows(
+            " context from prior page\n-removed\n+added\n@@ -0,0 +1,1 @@\n+created\n",
+        );
+        assert!(continuation[..3]
+            .iter()
+            .all(|row| row.old.is_none() && row.new.is_none()));
+        assert_eq!((continuation[4].old, continuation[4].new), (None, Some(1)));
+        let combined = visible_git_diff_rows("@@@ -1,3 -2,3 +1,4 @@@\n-removed\n+added\n");
+        assert!(combined
+            .iter()
+            .all(|row| row.old.is_none() && row.new.is_none()));
+        assert_eq!(
+            parse_unified_hunk_header("@@ -24 +31 @@ context"),
+            Some((24, 31))
+        );
+        assert_eq!(parse_unified_hunk_header("@@@ -1 -2 +3 @@@"), None);
+        assert_eq!(parse_unified_hunk_header("@@ broken +31 @@"), None);
+    }
+
+    #[test]
+    fn git_hunk_jumps_target_direct_visible_rows_and_limit_button_count() {
+        let long_patch = (0..450)
+            .map(|row| {
+                if row % 20 == 0 {
+                    format!("@@ -{} +{} @@\n", row + 1, row + 1)
+                } else {
+                    " context\n".to_string()
+                }
+            })
+            .collect::<String>();
+        let rows = visible_git_diff_rows(&long_patch);
+        assert_eq!(rows.len(), 400);
+        let targets = visible_git_hunk_targets(&rows);
+        assert_eq!(targets.len(), 12);
+        assert_eq!(targets.first().copied(), Some((0, 1, 1)));
+        assert_eq!(targets.last().copied(), Some((220, 221, 221)));
+        assert!(targets.iter().all(|(row, _, _)| *row < rows.len()));
+        // The scroll list has one direct child per visible row, so the
+        // browser-independent target is the row index, not a pixel estimate.
+        assert_eq!(targets[5].0, 100);
+        assert!(summarize_git_patch(&long_patch).hunks > targets.len());
+    }
+
+    #[test]
+    fn git_line_gutter_does_not_leak_line_numbers_across_diff_files() {
+        let rows = visible_git_diff_rows(concat!(
+            "@@ -2 +9 @@\n",
+            " before\n",
+            "diff --git a/next.rs b/next.rs\n",
+            "+no header yet\n",
+            "@@ -10 +12 @@\n",
+            "+new file line\n"
+        ));
+        assert_eq!((rows[1].old, rows[1].new), (Some(2), Some(9)));
+        assert_eq!((rows[3].old, rows[3].new), (None, None));
+        assert_eq!((rows[5].old, rows[5].new), (None, Some(12)));
     }
 }
