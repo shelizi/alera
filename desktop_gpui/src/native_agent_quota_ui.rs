@@ -122,7 +122,9 @@ fn quota_overview_status(loading: bool, failed: bool, has_entries: bool) -> &'st
 
 #[cfg(test)]
 mod quota_ui_tests {
-    use super::{light_current_color_icon, quota_overview_status};
+    use super::{
+        light_current_color_icon, quota_overview_status, quota_pin_button_label, quota_status_label,
+    };
     use std::sync::OnceLock;
 
     #[test]
@@ -135,6 +137,21 @@ mod quota_ui_tests {
         .unwrap();
         assert!(result.contains("#EAEAEA"));
         assert!(!result.contains("currentColor"));
+    }
+
+    #[test]
+    fn status_bar_exposes_stale_or_unavailable_readings() {
+        assert_eq!(quota_status_label("ok"), None);
+        assert_eq!(quota_status_label("stale"), Some("Stale"));
+        assert_eq!(quota_status_label("error"), Some("Unavailable"));
+    }
+
+    #[test]
+    fn unavailable_shared_host_does_not_offer_a_misleading_pin_action() {
+        assert_eq!(quota_pin_button_label(false, true), "Pin N/A");
+        assert_eq!(quota_pin_button_label(false, false), "Pin N/A");
+        assert_eq!(quota_pin_button_label(true, true), "Unpin");
+        assert_eq!(quota_pin_button_label(true, false), "Pin");
     }
 
     #[test]
@@ -159,6 +176,26 @@ fn quota_reading_color(status: &str, reading: &QuotaReading) -> u32 {
         Some(value) if value <= 10.0 => 0xeb9a9a,
         Some(value) if value <= 30.0 => 0xe9bd80,
         _ => TEXT,
+    }
+}
+
+/// Percentages may remain cached after a provider refresh fails. The status
+/// bar must not make a stale percentage look like a current reading.
+fn quota_status_label(status: &str) -> Option<&'static str> {
+    match status {
+        "ok" => None,
+        "stale" => Some("Stale"),
+        _ => Some("Unavailable"),
+    }
+}
+
+fn quota_pin_button_label(shared_host_supports_pins: bool, pinned: bool) -> &'static str {
+    if !shared_host_supports_pins {
+        "Pin N/A"
+    } else if pinned {
+        "Unpin"
+    } else {
+        "Pin"
     }
 }
 
@@ -404,6 +441,14 @@ impl Workbench {
                         .iter()
                         .map(|reading| quota_reading_element(&snapshot.status, reading)),
                 )
+                .when(snapshot.status != "ok", |chip| {
+                    chip.child(
+                        div()
+                            .text_xs()
+                            .text_color(rgb(MUTED))
+                            .child(quota_status_label(&snapshot.status).unwrap_or("Unavailable")),
+                    )
+                })
                 .on_hover(cx.listener(move |view, hovering, _, cx| {
                     if *hovering {
                         view.quota_popover_open = true;
@@ -511,6 +556,9 @@ impl Workbench {
             entries.retain(|row| &row.key() == account);
         }
         let unpinned = self.quota_unpinned_keys();
+        let pins_available = self
+            .settings_extra_values
+            .contains_key("agents.quotaUnpinnedKeys");
         let status =
             quota_overview_status(loading, self.quota_error.is_some(), !entries.is_empty());
         #[cfg(all(feature = "quota-visual-fixture", debug_assertions))]
@@ -577,7 +625,15 @@ impl Workbench {
                                     })),
                             ),
                     )
-                    .child(div().text_xs().text_color(rgb(MUTED)).child(status)),
+                    .child(div().text_xs().text_color(rgb(MUTED)).child(status))
+                    .when(!pins_available, |header| {
+                        header.child(
+                            div()
+                                .text_xs()
+                                .text_color(rgb(MUTED))
+                                .child("Pin sync needs an updated Classic Runtime Host"),
+                        )
+                    }),
             )
             .child(
                 div()
@@ -650,23 +706,32 @@ impl Workbench {
                                             .child(
                                                 div()
                                                     .id(("native-quota-pin-account", index))
-                                                    .cursor_pointer()
                                                     .px_2()
                                                     .py_1()
                                                     .text_xs()
-                                                    .text_color(rgb(if pinned {
+                                                    .text_color(rgb(if pins_available && pinned {
                                                         TEXT
                                                     } else {
                                                         MUTED
                                                     }))
-                                                    .child(if pinned { "Unpin" } else { "Pin" })
-                                                    .on_click(move |_, _, cx| {
-                                                        let _ = pin_owner.update(cx, |view, cx| {
-                                                            view.toggle_quota_pin(
-                                                                pin_key.clone(),
-                                                                cx,
-                                                            );
-                                                        });
+                                                    .child(quota_pin_button_label(
+                                                        pins_available,
+                                                        pinned,
+                                                    ))
+                                                    .when(pins_available, |button| {
+                                                        button.cursor_pointer().on_click(
+                                                            move |_, _, cx| {
+                                                                let _ = pin_owner.update(
+                                                                    cx,
+                                                                    |view, cx| {
+                                                                        view.toggle_quota_pin(
+                                                                            pin_key.clone(),
+                                                                            cx,
+                                                                        );
+                                                                    },
+                                                                );
+                                                            },
+                                                        )
                                                     }),
                                             )
                                             .child(

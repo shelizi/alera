@@ -10152,7 +10152,17 @@ fn main() {
                                 .unwrap_or_else(Instant::now),
                             quota_request: 0,
                             quota_enabled_order: None,
-                            quota_popover_open: false,
+                            // Test-only: show a *live Host* overview on launch
+                            // when the Windows remote mouse cannot reach the
+                            // small status-bar target. No effect in release.
+                            quota_popover_open: cfg!(all(
+                                feature = "quota-visual-fixture",
+                                debug_assertions
+                            )) && std::env::var(
+                                "ALERA_GPUI_QUOTA_LIVE_PREVIEW_OPEN",
+                            )
+                            .as_deref()
+                                == Ok("1"),
                             quota_popover_account: None,
                             mcp_ui_bridge: None,
                             mcp_ui_window_id: NativeMcpUiBridge::new_window_id(),

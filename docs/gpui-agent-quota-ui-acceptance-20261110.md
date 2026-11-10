@@ -91,3 +91,17 @@ Classic 編輯區顯示：`Terminal host unavailable: Terminal host connection c
 - 以 `ALERA_GPUI_QUOTA_VISUAL_FIXTURE=agy` 直接打開 AGY 的隔離測試帳號詳情，在 Windows 畫面確認五組實際排版：`G·5H 97%`、`G·W 70%`、`C/G·5H 35%`、`C/G·W 6%`、`Ar·W 88%`，其中 6% 顯示低額度警示色；刷新／釘選鈕仍位於可見範圍。
 - 進一步在測試版的狀態列及浮動面板加上 `DEMO quotas`／`SYNTHETIC TEST DATA` 提示，與實際讀取 Host 的正式版明確區分；此提示變更為測試專屬路徑，不會出現在預設建置。
 - 全套 GPUI 測試 `cargo test --offline --lib --bin alera-gpui-desktop`：Library **388/388**、Native UI Binary **19/19** 全數通過，包括測試資料的 10 Provider／13 帳號完整性及 Codex SVG 深色主題修正。
+
+## 第四輪：真正連接 Classic Host 的額度驗收（2026-11-10）
+
+本輪在同一個 `integrate/gpui-p0p1p2-20261108` worktree，使用 `4fefa31bc` 的 GPUI Runtime 目錄選擇修正、同一 worktree 編譯的 `alera.exe`，**不啟用合成數據**，直接向仍執行的 Classic Host 讀取額度。
+
+- Classic Host 位於 `%APPDATA%/dev.leynier/Alera/terminal_host`，可連線 `host.json` 所指向的 2050 埠。GPUI 視窗底部已實際顯示 Claude Code 與 Codex 真實 Host 快照（不保證每筆值都是最新）。
+- `alera quota --no-start --json --runtime-dir <ClassicRuntime> config` 回傳啟用順序：`claude,codex,kimi,grok,agy,zai,devin`。對應 `snapshot` 回傳 **7 種 Provider**，AGY 的 `buckets` 有 **5 組**；Codex、Grok、AGY、Devin 回傳 `ok`，Claude 回傳 `stale`（OAuth 用量來源不可用），Kimi 與 Z.ai 為 `stale`（相關 API Key／額度來源未設定）。這些來源異常不是 GPUI 的連線問題。
+- 只有具備 `quota-visual-fixture` Cargo feature **且是 debug 建置**時，設定 `ALERA_GPUI_QUOTA_LIVE_PREVIEW_OPEN=1` 可在測試視窗啟動時展開**真實 Host** 額度面板，與 `ALERA_GPUI_QUOTA_VISUAL_FIXTURE` 合成資料模式不同。預設及 release 不會自動展開；測試也沒有改變 Host 設定。
+- 已實際看到面板中的 Claude、Codex、Kimi、Grok、AGY 用量與來源錯誤，額度列加入明確 `Stale`／`Unavailable` 標示，避免使用者誤把舊百分比視作即時；浮動面板在狀態列上方、內部項目有清單捲動。
+- 當前 Classic Host 確實拒絕新版共用設定呼叫，回傳 `Unknown terminal host request: desktopSettings.get`。因此在舊 Host 執行期間，GPUI 的跨版本額度釘選**尚不可用**。已讓面板顯示 `Pin N/A` 與需更新 Host 的提示，取消無法完成的釘選點擊；若 Host 支援共用欄位，原 Rust CAS 釘選操作仍可使用。
+- 遠端滑鼠測試的主要問題來自檢視器呈現圖片與 `coordinate_reference.image_width` 的縮放差異。改用與實際圖片大小一致的座標參考後，已可點開浮動面板，點擊面板內部時面板不再意外收起；惟**尚未證明** UI 的 `Refresh all` 與逐帳號刷新在所有 Provider 都可成功更新，亦未進行 Classic 與 GPUI 釘選跨視窗實際同步測試。
+- Rust 全套回歸：`cargo test --offline --lib --bin alera-gpui-desktop`，Library **390/390**、Native UI **21/21** 通過；`cargo check --offline --bin alera-gpui-desktop --features quota-visual-fixture` 通過。這些測試不會啟動第二個 Host。
+
+**安全界線：** Classic Host（及既有 PTY、Agent）、安裝中的 Classic、使用者既有其他 worktree 未被重啟、刪除或覆蓋；所有實機測試執行檔只保留在目前 worktree 暫存目錄並於驗收後清除。
