@@ -339,6 +339,29 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn visual_fixture_covers_ten_provider_logos_multiple_accounts_and_agy_five_metrics() {
+        let raw: Value =
+            serde_json::from_str(include_str!("../tests/fixtures/agent-quotas-visual.json"))
+                .unwrap();
+        let snapshots = parse_quota_snapshots(&raw).unwrap();
+        let mut unique = std::collections::HashSet::new();
+        for row in &snapshots {
+            unique.insert(row.provider.as_str());
+            assert!(!row.readings().is_empty());
+        }
+        assert_eq!(unique.len(), PROVIDERS.len());
+        assert_eq!(snapshots.len(), 13);
+        let agy = snapshots.iter().find(|s| s.provider == "agy").unwrap();
+        assert_eq!(agy.readings().len(), 5);
+        assert_eq!(agy.readings()[0].label, "G·5H");
+        let unpinned = vec!["claude:work".to_owned(), "grok".to_owned()];
+        let visible = status_bar_quotas(&snapshots, None, &unpinned);
+        assert_eq!(visible.len(), 11);
+        assert!(!visible.iter().any(|row| row.pin_key() == "claude:work"));
+        assert!(!visible.iter().any(|row| row.pin_key() == "grok"));
+    }
+
+    #[test]
     fn retains_five_antigravity_buckets_and_clamps_remaining() {
         let values = parse_quota_snapshots(&json!({ "snapshots": [{
             "provider": "antigravity", "accountId": "default", "displayName": "AGY", "status": "ok",

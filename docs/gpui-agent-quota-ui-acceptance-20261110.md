@@ -67,3 +67,15 @@ Classic 編輯區顯示：`Terminal host unavailable: Terminal host connection c
 - 本機既有 Runtime Host 仍離線：`alera quota --no-start --json snapshot` 回傳 `Existing Alera Runtime Host is not running`。**無法證明**真實額度、AGY 五組資料、跨視窗即時釘選同步、個別帳號刷新與多 Provider 圖示的最終視覺效果。
 - Classic 的「Open Usage」完整統計、Codex 重置等擴充操作不是本輪額度狀態列對齊範圍，尚未宣稱對齊。
 - 所有測試執行檔只暫存在 worktree，測試後清除；正式 Classic／Runtime Host／main 分支無變動。
+
+## 第三輪：狀態列真實排版驗收（隔離測試資料）
+
+- 既有 Runtime Host 再次以 `cargo run --offline -p alera-cli -- quota --no-start --json snapshot` 讀取確認，仍回覆 `Existing Alera Runtime Host is not running`，本輪沒有啟動、覆蓋或重啟它。
+- 補充明確**關閉預設**的 `desktop_gpui` Cargo feature `quota-visual-fixture`；只有「有此 feature」+「debug_assertions」+「ALERA_GPUI_QUOTA_VISUAL_FIXTURE 環境變數」同時符合，才會讀取編譯內建的固定 JSON 測試資料。正式 release 即使開此 feature 也不會啟用測試資料。所有數字純屬合成，絕不可當成任何真實帳號用量。
+- 測試 JSON 放在 `desktop_gpui/tests/fixtures/agent-quotas-visual.json`：13 個帳號、覆蓋 10 種供應商；Claude 5H／Weekly／Fable，Codex 主副帳號，AGY 五組讀數，MiniMax G/V，OpenCode Go/Zen 與高低額度百分比。測試時兩個樣本帳號取消釘選；釘選的狀態列不顯示它們，但浮動總覽仍可見。
+- **Windows 桌面實機觀察**：一般視窗及最大化尺寸下，狀態列直接顯示 Claude／Codex 多帳號、Kimi／Cursor／Antigravity 等的數值，窄視窗不擠掉分支選單，額度採水平捲動容納其餘項目。浮動清單的多帳號、Unpin／Pin、重新整理、Reset 描述與低額度警示色均可呈現；已測試其視覺位置及版面，沒有用 fake 資料接上正式 Host。
+- 發現並修正原有 Codex、Grok SVG 的 `currentColor` 在 GPUI 深色主題下變成深色、難以辨識，保留原版路徑，僅將 CSS 顏色字串轉成淺色，並使用一次性靜態快取，不增加執行時檔案相依。
+- 由於 Windows 遠端自動化滑鼠座標仍有不穩定情況，改讓**僅測試版**在啟動時展開浮動面板；這可驗證畫面，**不構成已手動點擊所有刷新／釘選按鈕的證據**。各 pin/排序邏輯另由單元及跨連線資料庫測試覆蓋。
+- 以 `ALERA_GPUI_QUOTA_VISUAL_FIXTURE=agy` 直接打開 AGY 的隔離測試帳號詳情，在 Windows 畫面確認五組實際排版：`G·5H 97%`、`G·W 70%`、`C/G·5H 35%`、`C/G·W 6%`、`Ar·W 88%`，其中 6% 顯示低額度警示色；刷新／釘選鈕仍位於可見範圍。
+- 進一步在測試版的狀態列及浮動面板加上 `DEMO quotas`／`SYNTHETIC TEST DATA` 提示，與實際讀取 Host 的正式版明確區分；此提示變更為測試專屬路徑，不會出現在預設建置。
+- 全套 GPUI 測試 `cargo test --offline --lib --bin alera-gpui-desktop`：Library **388/388**、Native UI Binary **19/19** 全數通過，包括測試資料的 10 Provider／13 帳號完整性及 Codex SVG 深色主題修正。

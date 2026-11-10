@@ -7,24 +7,47 @@ use std::sync::OnceLock;
 
 /// Embed the exact provider artwork already shipped by Classic. Avoid
 /// hand-drawn monograms or runtime file paths that break portable builds.
+/// Some upstream SVG assets use CSS currentColor, which defaults to black
+/// in GPUI's direct SVG renderer; replace just that CSS token for dark UI.
+fn light_current_color_icon(
+    original: &'static str,
+    cache: &'static OnceLock<Vec<u8>>,
+) -> &'static [u8] {
+    cache
+        .get_or_init(|| original.replace("currentColor", "#EAEAEA").into_bytes())
+        .as_slice()
+}
+
 fn quota_provider_icon(provider: &str, size: f32) -> gpui::AnyElement {
     match provider {
         "claude" => gpui::svg()
             .data(include_bytes!("../../assets/agents/claude.svg"))
             .size(px(size))
             .into_any_element(),
-        "codex" => gpui::svg()
-            .data(include_bytes!("../../assets/agents/codex.svg"))
-            .size(px(size))
-            .into_any_element(),
+        "codex" => {
+            static SVG: OnceLock<Vec<u8>> = OnceLock::new();
+            gpui::svg()
+                .data(light_current_color_icon(
+                    include_str!("../../assets/agents/codex.svg"),
+                    &SVG,
+                ))
+                .size(px(size))
+                .into_any_element()
+        }
         "kimi" => gpui::svg()
             .data(include_bytes!("../../assets/agents/kimi.svg"))
             .size(px(size))
             .into_any_element(),
-        "grok" => gpui::svg()
-            .data(include_bytes!("../../assets/agents/grok.svg"))
-            .size(px(size))
-            .into_any_element(),
+        "grok" => {
+            static SVG: OnceLock<Vec<u8>> = OnceLock::new();
+            gpui::svg()
+                .data(light_current_color_icon(
+                    include_str!("../../assets/agents/grok.svg"),
+                    &SVG,
+                ))
+                .size(px(size))
+                .into_any_element()
+        }
         "minimax" => gpui::svg()
             .data(include_bytes!("../../assets/agents/minimax.svg"))
             .size(px(size))
@@ -99,7 +122,20 @@ fn quota_overview_status(loading: bool, failed: bool, has_entries: bool) -> &'st
 
 #[cfg(test)]
 mod quota_ui_tests {
-    use super::quota_overview_status;
+    use super::{light_current_color_icon, quota_overview_status};
+    use std::sync::OnceLock;
+
+    #[test]
+    fn original_codex_svg_current_color_is_converted_for_dark_ui() {
+        static SVG: OnceLock<Vec<u8>> = OnceLock::new();
+        let result = std::str::from_utf8(light_current_color_icon(
+            include_str!("../../assets/agents/codex.svg"),
+            &SVG,
+        ))
+        .unwrap();
+        assert!(result.contains("#EAEAEA"));
+        assert!(!result.contains("currentColor"));
+    }
 
     #[test]
     fn missing_host_without_previous_readings_does_not_claim_stale_data() {
@@ -148,6 +184,45 @@ fn quota_reading_element(status: &str, reading: &QuotaReading) -> gpui::AnyEleme
 }
 
 impl Workbench {
+    /// Test-only local preview. Requires BOTH an explicit feature and an
+    /// environment opt-in in a debug executable; release binaries never
+    /// substitute fixture percentages for Host-owned measurements.
+    #[cfg(all(feature = "quota-visual-fixture", debug_assertions))]
+    fn quota_visual_fixture_enabled() -> bool {
+        std::env::var_os("ALERA_GPUI_QUOTA_VISUAL_FIXTURE").is_some()
+    }
+
+    #[cfg(all(feature = "quota-visual-fixture", debug_assertions))]
+    fn refresh_quota_visual_fixture(&mut self, cx: &mut Context<Self>) {
+        let payload: serde_json::Value =
+            serde_json::from_str(include_str!("../tests/fixtures/agent-quotas-visual.json"))
+                .expect("fixed test fixture must contain valid JSON");
+        self.quota_snapshots = parse_quota_snapshots(&payload)
+            .expect("fixed test fixture must have quota snapshot rows");
+        self.quota_enabled_order = Some(
+            [
+                "claude", "codex", "kimi", "grok", "cursor", "agy", "minimax", "zai", "devin",
+                "opencode",
+            ]
+            .iter()
+            .map(|id| id.to_string())
+            .collect(),
+        );
+        self.quota_error = None;
+        self.quota_loading = false;
+        self.quota_last_refresh = Instant::now();
+        self.quota_popover_open = true;
+        self.quota_popover_account = (std::env::var("ALERA_GPUI_QUOTA_VISUAL_FIXTURE").as_deref()
+            == Ok("agy"))
+        .then(|| "agy:default".to_owned());
+        // Seed sample unpinned profiles for visual review. This is not
+        // persisted and never sent to a Runtime Host.
+        self.settings_extra_values
+            .entry("agents.quotaUnpinnedKeys")
+            .or_insert_with(|| serde_json::json!(["claude:work", "grok"]));
+        cx.notify();
+    }
+
     fn quota_unpinned_keys(&self) -> Vec<String> {
         self.settings_extra_values
             .get("agents.quotaUnpinnedKeys")
@@ -163,6 +238,21 @@ impl Workbench {
     }
 
     fn toggle_quota_pin(&mut self, key: String, cx: &mut Context<Self>) {
+        #[cfg(all(feature = "quota-visual-fixture", debug_assertions))]
+        if Self::quota_visual_fixture_enabled() {
+            let mut unpinned = self.quota_unpinned_keys();
+            if unpinned.iter().any(|existing| existing == &key) {
+                unpinned.retain(|existing| existing != &key);
+            } else {
+                unpinned.push(key);
+            }
+            self.settings_extra_values.insert(
+                "agents.quotaUnpinnedKeys".into(),
+                serde_json::json!(unpinned),
+            );
+            cx.notify();
+            return;
+        }
         if !self
             .settings_extra_values
             .contains_key("agents.quotaUnpinnedKeys")
@@ -194,6 +284,11 @@ impl Workbench {
         account: Option<(String, String)>,
         cx: &mut Context<Self>,
     ) {
+        #[cfg(all(feature = "quota-visual-fixture", debug_assertions))]
+        if Self::quota_visual_fixture_enabled() {
+            self.refresh_quota_visual_fixture(cx);
+            return;
+        }
         if self.quota_loading {
             return;
         }
@@ -267,6 +362,12 @@ impl Workbench {
             "Quotas"
         } else {
             "◎"
+        };
+        #[cfg(all(feature = "quota-visual-fixture", debug_assertions))]
+        let label = if Self::quota_visual_fixture_enabled() {
+            "DEMO quotas"
+        } else {
+            label
         };
         let unpinned_keys = self.quota_unpinned_keys();
         let chips = alera_gpui_desktop::agent_quota::status_bar_quotas(
@@ -412,6 +513,12 @@ impl Workbench {
         let unpinned = self.quota_unpinned_keys();
         let status =
             quota_overview_status(loading, self.quota_error.is_some(), !entries.is_empty());
+        #[cfg(all(feature = "quota-visual-fixture", debug_assertions))]
+        let status = if Self::quota_visual_fixture_enabled() {
+            "SYNTHETIC TEST DATA - not actual quota"
+        } else {
+            status
+        };
         div()
             .w_full()
             .flex()

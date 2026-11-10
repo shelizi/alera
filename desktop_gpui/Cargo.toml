@@ -18,6 +18,9 @@ resolver = "2"
 [features]
 default = ["native-ui"]
 native-ui = ["dep:gpui-kit"]
+# Explicitly opt-in visual QA build only; never enabled by default or
+# in a release build. The app does not contact the real Host in fixture mode.
+quota-visual-fixture = []
 
 [dependencies]
 gpui-kit = { version = "=0.9.0", optional = true }
