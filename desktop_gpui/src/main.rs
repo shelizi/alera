@@ -6964,6 +6964,10 @@ impl Render for Workbench {
                 "Select a changed file to preview its patch".to_string()
             }
         });
+        let git_diff_expand_available = native_action_dialog_ui::can_expand_read_only_diff(
+            self.git_diff.as_deref(),
+            self.git_diff_loading,
+        );
 
         div()
             .size_full()
@@ -8018,6 +8022,29 @@ impl Render for Workbench {
                                                     this.run_git_action(GitUiAction::Unstage(unstage_path.clone()), cx);
                                                 })))
                                     })),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .gap_2()
+                                    .child(div().text_xs().text_color(rgb(MUTED)).child("Patch preview · read-only"))
+                                    .child(if git_diff_expand_available {
+                                        div()
+                                            .id("git-diff-expand")
+                                            .cursor_pointer()
+                                            .text_xs()
+                                            .text_color(rgb(TEXT))
+                                            .child("Expand diff")
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.open_kit_git_diff_dialog(window, cx);
+                                            }))
+                                            .into_any_element()
+                                    } else {
+                                        div().text_xs().text_color(rgb(MUTED))
+                                            .child("Expand diff").into_any_element()
+                                    }),
                             )
                             .child(
                                 div()

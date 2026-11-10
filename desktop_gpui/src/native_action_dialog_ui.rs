@@ -5,7 +5,60 @@
 use super::*;
 use native_components::action_button;
 
+/// The expanded viewport only displays an already-fetched read-only patch.
+pub(super) fn can_expand_read_only_diff(patch: Option<&str>, loading: bool) -> bool {
+    !loading && patch.is_some_and(|text| !text.trim().is_empty())
+}
+
 impl Workbench {
+    /// Present a captured bounded Git patch in a larger read-only dialog.
+    /// A later Workspace switch cannot replace this snapshot or mutate Git.
+    pub(super) fn open_kit_git_diff_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !can_expand_read_only_diff(self.git_diff.as_deref(), self.git_diff_loading) {
+            self.model
+                .set_status("Select a Git change and finish loading its patch first");
+            cx.notify();
+            return;
+        }
+        let Some(patch) = self.git_diff.clone() else {
+            return;
+        };
+        window.open_dialog(cx, move |dialog, _, _| {
+            dialog
+                .title("Git patch · expanded read-only preview")
+                .w(px(760.0))
+                .centered()
+                .close_button(true)
+                .on_cancel(|_, _, _| true)
+                .on_ok(|_, _, _| true)
+                .child(
+                    div()
+                        .w_full()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(rgb(MUTED))
+                                .child("Snapshot only · up to 32 KiB · no staging or Git writes"),
+                        )
+                        .child(
+                            div()
+                                .id("expanded-git-diff-scroll")
+                                .w_full()
+                                .max_h(px(430.0))
+                                .overflow_y_scroll()
+                                .overflow_x_scroll()
+                                .font_family("Consolas")
+                                .text_sm()
+                                .text_color(rgb(TEXT))
+                                .child(patch.clone()),
+                        ),
+                )
+        });
+    }
+
     pub(super) fn open_kit_quick_open_dialog(
         &mut self,
         window: &mut Window,
@@ -289,5 +342,22 @@ impl Workbench {
         // GPUI Kit Dialog owns the backdrop, key focus, Escape and viewport
         // clamping. The Workbench only renders the guarded action content.
         Some(body.into_any_element())
+    }
+}
+
+#[cfg(test)]
+mod git_preview_tests {
+    use super::can_expand_read_only_diff;
+
+    #[test]
+    fn expanded_git_preview_requires_loaded_nonempty_snapshot() {
+        assert!(!can_expand_read_only_diff(None, false));
+        assert!(!can_expand_read_only_diff(Some(""), false));
+        assert!(!can_expand_read_only_diff(Some(" \n\t"), false));
+        assert!(!can_expand_read_only_diff(Some("diff --git a/x b/x"), true));
+        assert!(can_expand_read_only_diff(
+            Some("diff --git a/x b/x\n+updated\n"),
+            false
+        ));
     }
 }
