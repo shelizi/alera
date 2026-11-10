@@ -156,6 +156,12 @@ instead of the stale legacy `center_view` flag after session restore.
   readback before updating the chip, and rejects workspace switches,
   closed/recycled sessions, stale revisions and unsupported older Hosts.
   No secret Agent command or PTY receipt is exposed by the CLI projection.
+- The Native CLI bridge must dispatch response schemas by command: `pin-list`
+  returns a minimal **array**, `pin-set` returns one minimal **object**,
+  while ordinary Settings requests still return `values`. Previously both
+  valid pin replies failed the generic Settings response validator, leaving
+  Host pin UI unavailable even when the CAS succeeded. Format dispatch and
+  strict identity/secret-free parsing are covered by Native regressions.
 - File-backed Native Editor pins remain Native layout-owned, because
   Native Editor buffers are not the same Host-backed Editor Tab records
   used by Classic. They must not be conflated by file path alone.

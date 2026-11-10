@@ -406,23 +406,7 @@ impl RuntimeCliBridge {
         }
         let response: Value = serde_json::from_slice(&bytes)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-        let favorites_request = args
-            .first()
-            .and_then(|arg| arg.to_str())
-            .is_some_and(|verb| verb.starts_with("favorites-"));
-        if favorites_request {
-            if !response["branches"].is_array() || !response["scopeKey"].is_string() {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "Host returned invalid Git favorites scope or branch list",
-                ));
-            }
-        } else if !response["values"].is_object() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "Missing shared Settings values",
-            ));
-        }
+        validate_desktop_settings_response(args.first().and_then(|arg| arg.to_str()), &response)?;
         Ok(response)
     }
 
@@ -1379,9 +1363,72 @@ fn default_runtime_dir() -> PathBuf {
         .join("runtime")
 }
 
+/// Settings CLI shares a transport but different verbs have intentionally
+/// different secret-free result contracts. Never interpret a pin-list array
+/// or pin-set projection as a full DesktopSettings snapshot.
+fn validate_desktop_settings_response(verb: Option<&str>, response: &Value) -> io::Result<()> {
+    let valid = match verb {
+        Some("pin-list") => response.is_array(),
+        Some("pin-set") => response.is_object(),
+        Some(verb) if verb.starts_with("favorites-") => {
+            response["branches"].is_array() && response["scopeKey"].is_string()
+        }
+        _ => response["values"].is_object(),
+    };
+    if !valid {
+        return Err(io::Error::new(
+            ErrorKind::InvalidData,
+            "Host returned invalid Settings/Tab pin response for requested verb",
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn desktop_settings_bridge_accepts_both_host_pin_reply_shapes() {
+        let pin = serde_json::json!({
+            "workspaceId": "ws-1",
+            "id": "tab-1",
+            "updatedAt": "2026-11-10T01:23:45.001Z",
+            "pinned": true,
+            "terminalSessionId": "host-pty-1"
+        });
+        let list = serde_json::json!([pin.clone()]);
+        assert!(validate_desktop_settings_response(Some("pin-list"), &list).is_ok());
+        assert!(validate_desktop_settings_response(Some("pin-set"), &pin).is_ok());
+        assert!(validate_desktop_settings_response(Some("pin-list"), &pin).is_err());
+        assert!(validate_desktop_settings_response(Some("pin-set"), &list).is_err());
+        // The secret-free pin projection must never satisfy the existing
+        // Settings snapshot contract, nor the Git favorites contract.
+        assert!(validate_desktop_settings_response(Some("get"), &pin).is_err());
+        assert!(validate_desktop_settings_response(Some("favorites-get"), &pin).is_err());
+        assert!(validate_desktop_settings_response(
+            Some("get"),
+            &serde_json::json!({"values": {"editor.twoRowTabs": false}})
+        )
+        .is_ok());
+        assert!(validate_desktop_settings_response(
+            Some("favorites-get"),
+            &serde_json::json!({"scopeKey": "project:1", "branches": []})
+        )
+        .is_ok());
+        // The strict parsers still reject injected Agent secrets or an
+        // incorrect workspace/terminal identity after shape dispatch.
+        assert!(crate::host_tab_pins::parse_pin_snapshot(&list, "ws-other").is_err());
+        let unsafe_reply = serde_json::json!([{
+            "workspaceId": "ws-1",
+            "id": "tab-1",
+            "updatedAt": "2026-11-10T01:23:45.001Z",
+            "pinned": true,
+            "terminalSessionId": "host-pty-1",
+            "initialCommand": "secret"
+        }]);
+        assert!(crate::host_tab_pins::parse_pin_snapshot(&unsafe_reply, "ws-1").is_err());
+    }
 
     #[test]
     fn interprets_existing_cli_runtime_status_contract() {
