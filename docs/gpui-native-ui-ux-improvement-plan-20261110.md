@@ -344,3 +344,29 @@
 1. 在授權隔離 Windows GUI 環境，驗證放大 Kit Diff 的前 400 行雙側行號、Hunk 定位、Previous/Next 頁切換、狹窄視窗與高 DPI 的實際表現。
 2. 評估獨立中央唯讀 Diff Pane 的完整行號／Hunk 虛擬化，保留有界每頁資料及事件取消防護，並讓未顯示的遠端頁可以安全導覽。
 3. 驗證 Classic／GPUI 共用設定和 `tab.pin.cas`／`editor.twoRowTabs` Host 同步、跨 Pane Dirty／Undo、Windows 注音輸入。全部 Gate 通過前不調整 `supported=false`。
+
+## 十三、第八輪續作：中央區域唯讀 Diff 虛擬清單（2026-11-10）
+
+由上一輪整合 HEAD `0a1900867` 建立 `feat/gpui-git-center-view-20261110` 專用 Worktree；本輪的新功能只涉及 Native GPUI 的中央檢視，不修改 Core Git 寫入、Classic Flutter、正式 Runtime Host／PTY。
+
+| 工作項目 | 原始 Commit | 完成範圍 |
+| --- | --- | --- |
+| 中央 Git Diff 可關閉預覽 | `7de085dce` | 右側 Git 改動檔案預覽新增 `Center`，在主要中央窗格顯示目前唯讀 Patch 頁面；保留原 Mixed Editor／Terminal 實體及未儲存的 Buffer／Undo／Host Session，按 `Close Diff` 或重新選取主窗格 Tab 即恢復原本內容，第二窗格操作不受此預覽影響 |
+| 全頁有界虛擬列表 | 同上 | 新增 `native_center_git_diff_ui.rs`，復用已測試的 Unified Diff 舊檔／新檔行號與 Hunk 解析，使用 GPUI `uniform_list` 只繪製可見行；不再限制於彈出視窗的前 400 行；單頁文字仍依既有 `read_file_diff_page` 最多 32 KiB、最多 32 頁與 100,000 Patch 記錄限制 |
+| 分頁／Hunk 導覽與效能 | 同上 | 中央可操作 Previous／Next Page、Previous／Next Hunk，使用 `UniformListScrollHandle` 跳往真正的 Hunk 索引；每次只在通過 `workspace_generation`／`source_ticket` 的非同步回應後解析並快取目前頁，避免 Terminal 定期重繪時重複解析 32 KiB 差異；單一顯示行最長 4096 字元，超出只裁剪中央視覺，完整受限原文仍可在 Expand Dialog 查看 |
+| 安全與來源防護 | 同上 | 單檔中心預覽只能在已載入的合法 Git File Paging 下開啟。重選檔案、切換 History／Workspace、自動失效或來源 Ticket 不符時，不會將舊差異套到新的預覽；維持唯讀，不新增任何 Stage、Commit、Reset 或磁碟寫入 |
+
+### 測試證據與整合狀態
+
+- 新增 2 項 Native Binary 單元測試，驗證中央頁面在第 400 行後仍能定位 Hunk，及超長 Unicode 行的顯示限制與容量防護；**2/2 通過**。既有 Git Diff／Editor／Terminal 測試均保留。
+- 在 `feat/gpui-git-center-view-20261110` 完成 Native `cargo check --offline --locked --bin alera-gpui-desktop -j 2`、Windows `cargo build --offline --locked --bin alera-gpui-desktop -j 2`、完整 Rust Library **382/382** 與 Native Binary **18/18**，全部通過；限定檔案 Rustfmt 和 Git 差異空白檢查亦通過。
+- **並行開發防護：**要整合到 `integrate/gpui-p0p1p2-20261108` 時，偵測到另一條 Agent Quota 工作線已在該 Worktree 修改 `main.rs`、`lib.rs`、`runtime_bridge.rs` 及 CLI 相關檔案，另有尚未追蹤的新檔與 Cargo 編譯作業。為避免覆寫、暫存或提交對方的工作，**沒有對原共用整合分支執行 Cherry-pick**。
+- 改為建立乾淨的獨立整合分支 `integrate/gpui-center-diff-20261110`，直接以已驗證的 `7de085dce` 為 HEAD，保留與 `0a1900867` 相同基線。**目前已完成獨立整合，不代表合併進原本共用的 `integrate/gpui-p0p1p2-20261108`。**待其他工作線完成並變乾淨時，應先比對雙方 `main.rs` 再整合並重跑完整測試。
+- **Windows GUI NOT RUN：**因工作區先前禁止未授權的 Windows Native GUI 啟動，本輪只有 Windows 原生建置及 Rust 邏輯測試，中央／右側切換、捲動、Hunk 按鈕、800×600、高 DPI、實機 Dirty／Undo 與 PTY 並行保留尚需授權實測。共用 `D:/c/gpui` Cargo Target 可能同時由另一工作線編譯，不應僅憑目前 EXE 時戳判定它一定來自本輪。
+- 目前是**中央 Unified Diff 唯讀檢視**，並非左右兩份原檔真正 Side-by-side Compare。跨頁仍為即時重新讀取，並非單一不可變 Patch Snapshot。沒有 Push、Release、部署、Classic `main` 合併或正式 Host 修改，`P1-03 PARTIAL`、`supported=false` 保持。
+
+### 下一輪建議
+
+1. 原共用整合 Worktree 的 Agent Quota 修改完成並提交後，將本輪 `7de085dce` 按衝突檢查安全合併，尤其先確認雙方 `desktop_gpui/src/main.rs`。
+2. 在核准的隔離 Windows 桌面驗證中央 Diff 開關、主窗格選 Tab 返回、第二窗格 Dirty／Undo、Hunk 大範圍虛擬捲動及長行顯示。
+3. 再實作 Side-by-side 比對與真正 Hunk 全檔跨頁導覽，配合分頁來源一致性與頁面安全容量上限；完成後才可考慮關閉 `P1-03` Gate。
