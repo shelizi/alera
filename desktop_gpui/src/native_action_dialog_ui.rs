@@ -69,9 +69,30 @@ fn git_patch_line_color(line: &str) -> u32 {
     }
 }
 
+/// A dialog can navigate one selected file only. A new file selection gets a
+/// new source ticket, even when the path happens to be the same spelling.
+/// Workspace switching also invalidates the dialog's file source.
+#[derive(Clone)]
+struct GitDialogFileSource {
+    workspace_generation: u64,
+    source_ticket: u64,
+    relative: PathBuf,
+}
+
+fn git_dialog_file_source_matches(
+    current_generation: u64,
+    current: Option<&GitFileDiffPaging>,
+    expected: &GitDialogFileSource,
+) -> bool {
+    current_generation == expected.workspace_generation
+        && current.is_some_and(|paging| {
+            paging.source_ticket == expected.source_ticket && paging.relative == expected.relative
+        })
+}
+
 impl Workbench {
-    /// Present a captured bounded Git patch in a larger read-only dialog.
-    /// A later Workspace switch cannot replace this snapshot or mutate Git.
+    /// Show a read-only Git patch. File patches follow the selected page with
+    /// guarded in-dialog navigation; history/compare patches stay immutable.
     pub(super) fn open_kit_git_diff_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !can_expand_read_only_diff(self.git_diff.as_deref(), self.git_diff_loading) {
             self.model
@@ -82,12 +103,61 @@ impl Workbench {
         let Some(patch) = self.git_diff.clone() else {
             return;
         };
-        window.open_dialog(cx, move |dialog, window, _| {
+        let source = self
+            .git_file_diff_paging
+            .as_ref()
+            .map(|paging| GitDialogFileSource {
+                workspace_generation: self.workspace_generation,
+                source_ticket: paging.source_ticket,
+                relative: paging.relative.clone(),
+            });
+        let owner = cx.entity().downgrade();
+        window.open_dialog(cx, move |dialog, window, cx| {
+            let (visible_patch, page_controls) = if let Some(source) = source.as_ref() {
+                owner
+                    .upgrade()
+                    .and_then(|entity| {
+                        entity.update(cx, |view, _| {
+                            if !git_dialog_file_source_matches(
+                                view.workspace_generation,
+                                view.git_file_diff_paging.as_ref(),
+                                source,
+                            ) {
+                                return None;
+                            }
+                            let paging = view.git_file_diff_paging.as_ref()?;
+                            let page = paging.previous_starts.len() + 1;
+                            let can_previous =
+                                !view.git_diff_loading && !paging.previous_starts.is_empty();
+                            let can_next = !view.git_diff_loading
+                                && paging.next_line.is_some()
+                                && paging.previous_starts.len() < 31;
+                            let content = if view.git_diff_loading {
+                                "Loading read-only Git patch page…".to_owned()
+                            } else {
+                                view.git_diff
+                                    .clone()
+                                    .unwrap_or_else(|| "Git patch page is unavailable".to_owned())
+                            };
+                            Some((content, (page, can_previous, can_next)))
+                        })
+                    })
+                    .map(|(content, controls)| (content, Some(controls)))
+                    .unwrap_or_else(|| {
+                        (
+                            "The selected Git file or Workspace changed. Close and reopen Diff."
+                                .to_owned(),
+                            None,
+                        )
+                    })
+            } else {
+                (patch.clone(), None)
+            };
             let viewport = window.viewport_size();
             let (dialog_width, scroll_height) =
                 expanded_git_diff_size(f32::from(viewport.width), f32::from(viewport.height));
-            let summary = summarize_git_patch(&patch);
-            let colored_lines = patch
+            let summary = summarize_git_patch(&visible_patch);
+            let colored_lines = visible_patch
                 .lines()
                 .take(MAX_COLORED_PATCH_LINES)
                 .map(|line| {
@@ -98,12 +168,17 @@ impl Workbench {
                         .child(line.to_owned())
                 })
                 .collect::<Vec<_>>();
-            let plain_remainder = patch
+            let plain_remainder = visible_patch
                 .lines()
                 .skip(MAX_COLORED_PATCH_LINES)
                 .collect::<Vec<_>>()
                 .join("\n");
             let has_plain_remainder = !plain_remainder.is_empty();
+            let preview_kind = if source.is_some() {
+                "Read-only current page"
+            } else {
+                "Read-only snapshot"
+            };
             dialog
                 .title("Git patch · expanded read-only preview")
                 .w(px(dialog_width))
@@ -122,10 +197,79 @@ impl Workbench {
                                 .text_xs()
                                 .text_color(rgb(MUTED))
                                 .child(format!(
-                                    "Read-only snapshot · {} file(s) · {} hunk(s) · +{} / -{} · up to 32 KiB",
+                                    "{preview_kind} · {} file(s) · {} hunk(s) · +{} / -{} · up to 32 KiB",
                                     summary.files, summary.hunks, summary.added, summary.removed
                                 )),
                         )
+                        .children(page_controls.map(|(page, can_previous, can_next)| {
+                            let previous_owner = owner.clone();
+                            let previous_source = source.clone().expect("file page source");
+                            let next_owner = owner.clone();
+                            let next_source = source.clone().expect("file page source");
+                            div()
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .gap_2()
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(rgb(MUTED))
+                                        .child(format!("Page {page} · live Git, not a frozen cross-page snapshot")),
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap_3()
+                                        .child(if can_previous {
+                                            div()
+                                                .id("dialog-git-diff-previous-page")
+                                                .cursor_pointer()
+                                                .text_sm()
+                                                .text_color(rgb(TEXT))
+                                                .child("Previous")
+                                                .on_click(move |_, _, cx| {
+                                                    let _ = previous_owner.update(cx, |view, cx| {
+                                                        if git_dialog_file_source_matches(
+                                                            view.workspace_generation,
+                                                            view.git_file_diff_paging.as_ref(),
+                                                            &previous_source,
+                                                        ) {
+                                                            view.change_git_file_diff_page(false, cx);
+                                                        }
+                                                    });
+                                                })
+                                                .into_any_element()
+                                        } else {
+                                            div().text_sm().text_color(rgb(MUTED))
+                                                .child("Previous").into_any_element()
+                                        })
+                                        .child(if can_next {
+                                            div()
+                                                .id("dialog-git-diff-next-page")
+                                                .cursor_pointer()
+                                                .text_sm()
+                                                .text_color(rgb(TEXT))
+                                                .child("Next")
+                                                .on_click(move |_, _, cx| {
+                                                    let _ = next_owner.update(cx, |view, cx| {
+                                                        if git_dialog_file_source_matches(
+                                                            view.workspace_generation,
+                                                            view.git_file_diff_paging.as_ref(),
+                                                            &next_source,
+                                                        ) {
+                                                            view.change_git_file_diff_page(true, cx);
+                                                        }
+                                                    });
+                                                })
+                                                .into_any_element()
+                                        } else {
+                                            div().text_sm().text_color(rgb(MUTED))
+                                                .child("Next").into_any_element()
+                                        }),
+                                )
+                        }))
                         .children(has_plain_remainder.then(|| {
                             div()
                                 .text_xs()
@@ -134,7 +278,7 @@ impl Workbench {
                         }))
                         .child(
                             div()
-                                .id("expanded-git-diff-scroll")
+                                .id(("expanded-git-diff-scroll", page_controls.map_or(0, |value| value.0)))
                                 .w_full()
                                 .max_h(px(scroll_height))
                                 .overflow_y_scroll()
@@ -449,8 +593,8 @@ impl Workbench {
 #[cfg(test)]
 mod git_preview_tests {
     use super::{
-        can_expand_read_only_diff, expanded_git_diff_size, git_patch_line_color,
-        summarize_git_patch,
+        can_expand_read_only_diff, expanded_git_diff_size, git_dialog_file_source_matches,
+        git_patch_line_color, summarize_git_patch, GitDialogFileSource, GitFileDiffPaging,
     };
 
     #[test]
@@ -502,5 +646,50 @@ mod git_preview_tests {
             git_patch_line_color("+++ b/one.rs"),
             git_patch_line_color("+new")
         );
+    }
+
+    #[test]
+    fn expanded_dialog_only_navigates_its_original_file_selection() {
+        let expected = GitDialogFileSource {
+            workspace_generation: 42,
+            source_ticket: 7,
+            relative: "src/dirty.rs".into(),
+        };
+        let mut paging = GitFileDiffPaging {
+            relative: "src/dirty.rs".into(),
+            source_ticket: 7,
+            start_line: 0,
+            next_line: Some(750),
+            previous_starts: Vec::new(),
+        };
+        assert!(git_dialog_file_source_matches(42, Some(&paging), &expected));
+
+        // Paging advances the request ticket but must keep the file's source
+        // identity until the user selects another preview.
+        paging.previous_starts.push(0);
+        paging.start_line = 750;
+        paging.next_line = Some(1_500);
+        assert!(git_dialog_file_source_matches(42, Some(&paging), &expected));
+
+        assert!(!git_dialog_file_source_matches(
+            43,
+            Some(&paging),
+            &expected
+        ));
+        assert!(!git_dialog_file_source_matches(42, None, &expected));
+        paging.relative = "src/other.rs".into();
+        assert!(!git_dialog_file_source_matches(
+            42,
+            Some(&paging),
+            &expected
+        ));
+        paging.relative = expected.relative.clone();
+        paging.source_ticket += 1;
+        // Re-selecting the same filename cannot let an old dialog advance it.
+        assert!(!git_dialog_file_source_matches(
+            42,
+            Some(&paging),
+            &expected
+        ));
     }
 }

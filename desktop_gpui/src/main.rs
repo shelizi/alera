@@ -339,6 +339,9 @@ enum RightSidebarView {
 #[derive(Clone)]
 struct GitFileDiffPaging {
     relative: PathBuf,
+    /// Stable for this file selection, even as each page request increments
+    /// git_diff_request. Re-selecting the same filename gets a fresh identity.
+    source_ticket: u64,
     start_line: usize,
     next_line: Option<usize>,
     previous_starts: Vec<usize>,
@@ -1904,6 +1907,9 @@ impl Workbench {
     }
 
     fn preview_git_change(&mut self, relative: PathBuf, cx: &mut Context<Self>) {
+        // A new click is a new dialog source even if it chooses the same file.
+        // Paging preserves its source ticket, but re-selection invalidates it.
+        self.git_file_diff_paging = None;
         self.load_git_file_diff_page(relative, 0, Vec::new(), cx);
     }
 
@@ -1943,8 +1949,15 @@ impl Workbench {
         let ticket = self.git_diff_request;
         let generation = self.workspace_generation;
         let root = self.model.root().to_path_buf();
+        let source_ticket = self
+            .git_file_diff_paging
+            .as_ref()
+            .filter(|current| current.relative == relative)
+            .map(|current| current.source_ticket)
+            .unwrap_or(ticket);
         self.git_file_diff_paging = Some(GitFileDiffPaging {
             relative: relative.clone(),
+            source_ticket,
             start_line,
             next_line: None,
             previous_starts,
