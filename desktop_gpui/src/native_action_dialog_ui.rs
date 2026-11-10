@@ -10,6 +10,65 @@ pub(super) fn can_expand_read_only_diff(patch: Option<&str>, loading: bool) -> b
     !loading && patch.is_some_and(|text| !text.trim().is_empty())
 }
 
+const MAX_COLORED_PATCH_LINES: usize = 400;
+
+/// Keep the expanded preview entirely inside the display, including the
+/// dialog title and its read-only explanation. Never use a fixed desktop-only
+/// width when GPUI runs at 800x600 or with high display scaling.
+fn expanded_git_diff_size(viewport_width: f32, viewport_height: f32) -> (f32, f32) {
+    let width = (viewport_width * 0.90)
+        .clamp(280.0, 1080.0)
+        .min((viewport_width - 32.0).max(240.0));
+    let scroll_height = (viewport_height * 0.65)
+        .clamp(180.0, 680.0)
+        .min((viewport_height - 160.0).max(140.0));
+    (width, scroll_height)
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct GitPatchSummary {
+    files: usize,
+    hunks: usize,
+    added: usize,
+    removed: usize,
+}
+
+/// Exclude unified-diff +++/--- file markers from line counts. These totals
+/// describe the captured bounded patch, not necessarily the entire file.
+fn summarize_git_patch(patch: &str) -> GitPatchSummary {
+    let mut summary = GitPatchSummary::default();
+    for line in patch.lines() {
+        if line.starts_with("diff --git ") {
+            summary.files += 1;
+        } else if line.starts_with("@@ ") || line.starts_with("@@@ ") {
+            summary.hunks += 1;
+        } else if line.starts_with('+') && !line.starts_with("+++") {
+            summary.added += 1;
+        } else if line.starts_with('-') && !line.starts_with("---") {
+            summary.removed += 1;
+        }
+    }
+    summary
+}
+
+fn git_patch_line_color(line: &str) -> u32 {
+    if line.starts_with("@@ ") || line.starts_with("@@@ ") {
+        0x83b7ed
+    } else if line.starts_with('+') && !line.starts_with("+++") {
+        0x84c59a
+    } else if line.starts_with('-') && !line.starts_with("---") {
+        0xeb9a9a
+    } else if line.starts_with("diff --git ")
+        || line.starts_with("+++")
+        || line.starts_with("---")
+        || line.starts_with("… diff preview truncated")
+    {
+        0xe9bd80
+    } else {
+        TEXT
+    }
+}
+
 impl Workbench {
     /// Present a captured bounded Git patch in a larger read-only dialog.
     /// A later Workspace switch cannot replace this snapshot or mutate Git.
@@ -23,10 +82,31 @@ impl Workbench {
         let Some(patch) = self.git_diff.clone() else {
             return;
         };
-        window.open_dialog(cx, move |dialog, _, _| {
+        window.open_dialog(cx, move |dialog, window, _| {
+            let viewport = window.viewport_size();
+            let (dialog_width, scroll_height) =
+                expanded_git_diff_size(f32::from(viewport.width), f32::from(viewport.height));
+            let summary = summarize_git_patch(&patch);
+            let colored_lines = patch
+                .lines()
+                .take(MAX_COLORED_PATCH_LINES)
+                .map(|line| {
+                    div()
+                        .w_full()
+                        .whitespace_nowrap()
+                        .text_color(rgb(git_patch_line_color(line)))
+                        .child(line.to_owned())
+                })
+                .collect::<Vec<_>>();
+            let plain_remainder = patch
+                .lines()
+                .skip(MAX_COLORED_PATCH_LINES)
+                .collect::<Vec<_>>()
+                .join("\n");
+            let has_plain_remainder = !plain_remainder.is_empty();
             dialog
                 .title("Git patch · expanded read-only preview")
-                .w(px(760.0))
+                .w(px(dialog_width))
                 .centered()
                 .close_button(true)
                 .on_cancel(|_, _, _| true)
@@ -41,19 +121,40 @@ impl Workbench {
                             div()
                                 .text_xs()
                                 .text_color(rgb(MUTED))
-                                .child("Snapshot only · up to 32 KiB · no staging or Git writes"),
+                                .child(format!(
+                                    "Read-only snapshot · {} file(s) · {} hunk(s) · +{} / -{} · up to 32 KiB",
+                                    summary.files, summary.hunks, summary.added, summary.removed
+                                )),
                         )
+                        .children(has_plain_remainder.then(|| {
+                            div()
+                                .text_xs()
+                                .text_color(rgb(MUTED))
+                                .child("Color highlighting is limited to the first 400 lines; remaining patch text is still displayed.")
+                        }))
                         .child(
                             div()
                                 .id("expanded-git-diff-scroll")
                                 .w_full()
-                                .max_h(px(430.0))
+                                .max_h(px(scroll_height))
                                 .overflow_y_scroll()
                                 .overflow_x_scroll()
                                 .font_family("Consolas")
                                 .text_sm()
-                                .text_color(rgb(TEXT))
-                                .child(patch.clone()),
+                                .whitespace_nowrap()
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .children(colored_lines)
+                                        .children(has_plain_remainder.then(|| {
+                                            div()
+                                                .mt_2()
+                                                .whitespace_nowrap()
+                                                .text_color(rgb(MUTED))
+                                                .child(plain_remainder)
+                                        })),
+                                ),
                         ),
                 )
         });
@@ -347,7 +448,10 @@ impl Workbench {
 
 #[cfg(test)]
 mod git_preview_tests {
-    use super::can_expand_read_only_diff;
+    use super::{
+        can_expand_read_only_diff, expanded_git_diff_size, git_patch_line_color,
+        summarize_git_patch,
+    };
 
     #[test]
     fn expanded_git_preview_requires_loaded_nonempty_snapshot() {
@@ -359,5 +463,44 @@ mod git_preview_tests {
             Some("diff --git a/x b/x\n+updated\n"),
             false
         ));
+    }
+
+    #[test]
+    fn expanded_git_diff_respects_small_and_large_display_bounds() {
+        let (small_width, small_scroll) = expanded_git_diff_size(800.0, 600.0);
+        assert!((320.0..=768.0).contains(&small_width));
+        assert!((180.0..=440.0).contains(&small_scroll));
+        let (large_width, large_scroll) = expanded_git_diff_size(3840.0, 2160.0);
+        assert_eq!(large_width, 1080.0);
+        assert_eq!(large_scroll, 680.0);
+    }
+
+    #[test]
+    fn diff_counts_exclude_file_markers_and_color_rows_by_hunk_and_change() {
+        let patch = concat!(
+            "diff --git a/one.rs b/one.rs\n",
+            "--- a/one.rs\n",
+            "+++ b/one.rs\n",
+            "@@ -1,2 +1,3 @@\n",
+            " unchanged\n",
+            "-old\n",
+            "+new\n",
+            "+extra\n",
+            "\u{2026} diff preview truncated\n"
+        );
+        let counts = summarize_git_patch(patch);
+        assert_eq!(
+            (counts.files, counts.hunks, counts.added, counts.removed),
+            (1, 1, 2, 1)
+        );
+        assert_ne!(git_patch_line_color("+new"), git_patch_line_color("-old"));
+        assert_ne!(
+            git_patch_line_color("@@ -1 +1 @@"),
+            git_patch_line_color(" unchanged")
+        );
+        assert_ne!(
+            git_patch_line_color("+++ b/one.rs"),
+            git_patch_line_color("+new")
+        );
     }
 }
