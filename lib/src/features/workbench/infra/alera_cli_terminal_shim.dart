@@ -3,7 +3,7 @@ import 'dart:io';
 import 'package:alera/src/shared/infra/runtime/alera_cli_sidecar.dart';
 import 'package:alera/src/shared/infra/files/posix_file_mode.dart';
 import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
+import 'package:alera/src/shared/infra/storage/alera_support_directory.dart';
 
 typedef ApplicationSupportDirectoryResolver = Future<Directory> Function();
 
@@ -15,7 +15,7 @@ class AleraCliTerminalShimService({
   this
     : _cliResolver = cliResolver ?? DefaultAleraCliResolver(),
       _applicationSupportDirectory =
-          applicationSupportDirectory ?? getApplicationSupportDirectory,
+          applicationSupportDirectory ?? aleraApplicationSupportDirectory,
       _operatingSystem = operatingSystem ?? Platform.operatingSystem;
 
   final AleraCliResolver _cliResolver;

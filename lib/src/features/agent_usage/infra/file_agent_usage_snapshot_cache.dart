@@ -5,7 +5,7 @@ import 'dart:isolate';
 import 'package:alera/src/features/agent_usage/application/agent_usage_snapshot_cache.dart';
 import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
+import 'package:alera/src/shared/infra/storage/alera_support_directory.dart';
 
 typedef AgentUsageSupportDirectoryResolver = Future<Directory> Function();
 
@@ -14,7 +14,7 @@ class FileAgentUsageSnapshotCache({
 }) implements AgentUsageSnapshotCache {
   this
     : _applicationSupportDirectory =
-          applicationSupportDirectory ?? getApplicationSupportDirectory;
+          applicationSupportDirectory ?? aleraApplicationSupportDirectory;
 
   // Older apps map unknown providers to Codex; they must reject Grok snapshots.
   static const int _schemaVersion = 2;

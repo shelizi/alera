@@ -6,7 +6,7 @@ import 'package:alera/src/rust/api/agent_runtime_overlay.dart' as native;
 import 'package:crypto/crypto.dart';
 import 'package:meta/meta.dart';
 import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
+import 'package:alera/src/shared/infra/storage/alera_support_directory.dart';
 
 part 'agent_runtime_overlay_prepare.dart';
 part 'agent_runtime_overlay_wrappers.dart';
@@ -48,7 +48,7 @@ final class AgentRuntimeOverlayService({
               ? ManagedAgentHookPlatform.windows
               : ManagedAgentHookPlatform.posix),
       _applicationSupportDirectory =
-          applicationSupportDirectory ?? getApplicationSupportDirectory,
+          applicationSupportDirectory ?? aleraApplicationSupportDirectory,
       _nativePreparer = nativePreparer ?? native.prepareAgentRuntimeOverlay,
       _nativeCleaner = nativeCleaner ?? native.clearAgentRuntimeOverlays;
 

@@ -124,3 +124,17 @@ Classic 編輯區顯示：`Terminal host unavailable: Terminal host connection c
 - 測試 Host 正常停止後，透過相同隔離 Runtime 重新啟動；首個立即讀取遭遇啟動就緒時序問題，後續獨立 `settings get --no-start` 成功，釘選數量 2 且與重啟前一致。沒有發生資料遺失。隨後 `runtime stop` 正常回報 `stopped=true`、`forced=false`、`activeSessions=0`、`activeAgents=0`、`activeJobs=0`。
 
 **剩餘正式環境阻塞：** 目前執行中的 11 月 7 日 Classic Host 仍不認得 `desktopSettings.get`，必須規劃安全升級或接管流程，才可在真正 Classic 與 GPUI 雙視窗中驗收即時釘選同步。此輪沒有對它執行升級；未配置額度來源的 Provider 也不會因 UI 修正而自動變成有效資料。
+
+## 第六輪：雙桌面隔離驗收前置與正式 Host 保護（2026-11-10）
+
+- 重用原整合 worktree；本輪開始時分支 HEAD 為 `dc4f9ecf3`、追蹤檔案乾淨，正式 Classic Host PID `19748` 仍存在。沒有替換、停止、重啟或升級正式 Host。
+- 發現 Classic 雖已在 `alera_support_directory.dart` 提供編譯期 `ALERA_E2E_SUPPORT_DIR` 隔離路徑，但 Agent 額度代理等 17 個檔案仍直接呼叫 `getApplicationSupportDirectory()`，隔離版可能讀寫正式快取或支援檔。已將這 17 個呼叫改由同一個 `aleraApplicationSupportDirectory()` 入口解析；沒有指定編譯期參數時仍回退原系統路徑。
+- 目前 `lib/` 僅隔離入口本身仍直接呼叫 `getApplicationSupportDirectory()`；此處只表示排除了這一類直接呼叫，不代表已審核所有原生程式、Flutter 插件或 HOME 依賴的其他資料路徑。
+- 首次 Windows Build Storage 預備檢查拒絕將 `rust/target` 直接覆蓋既有 `D:\c\t`，未刪除任一端；改採獨立本機 `D:\gq\t` 後，Cargo 快取搬移達本輪 180 秒命令期限仍未完成。原有遷移紀錄須保留供下輪安全續作，不能任意刪除來源或目的地。`dart format --output=none --set-exit-if-changed` 亦在 90 秒期限內沒有回傳結果；本輪**只有**靜態路徑搜尋與 `git diff --check` 通過，Dart 格式、靜態分析、單元測試與真正雙 GUI 測試均**未通過驗收／未取得完成結果**。
+
+### 下一個真正的雙 GUI 驗收 Gate
+
+1. 使用全新且不含真實憑證的測試 Runtime／支援目錄，Classic 測試建置須明確帶入 `--dart-define=ALERA_E2E_SUPPORT_DIR=<isolated-support>`；GPUI 的 `ALERA_RUNTIME_DIR` 須指向其 `terminal_host` 子目錄，並讓兩版使用已驗證的新版 CLI/Host。測試前需再次核對兩份控制檔路徑沒有落到正式 `%APPDATA%/dev.leynier/Alera/terminal_host`。
+2. 隔離環境啟動兩個**實際 GUI** 後，驗證 Classic 取消釘選 → GPUI 状態列同步、GPUI 重新釘選 → Classic 同步、舊版快照寫入時 CAS 衝突拒絕與重讀回復，再驗證兩個 GUI 重啟後釘選持久化；觀察同步延遲並保存可追溯的實機證據。
+3. GPUI 點擊全部／單帳號刷新，對照隔離 Host 回傳且確認無其他帳號遺失；真正的 Provider 用量須連向合法設定的資料來源，無額度來源時只核對 `stale`／`unavailable`，不可將合成資料冒充為真實值。
+4. 測試 Host 只能停止隔離的執行個體。若要在正式 Classic 與 GPUI 實作共用釘選，必須獨立規劃 Host 升級、活躍 PTY／Agent 接管、失敗回滾與設定備份；正式 Host 未更新前，這項同步仍未驗收。
