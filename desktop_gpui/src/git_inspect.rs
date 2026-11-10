@@ -184,4 +184,64 @@ mod tests {
             .contains("測試文字"));
         assert!(read_file_diff(temp.path(), Path::new("../escape")).is_err());
     }
+
+    #[test]
+    fn staged_patch_preview_does_not_change_head_index_or_worktree_bytes() {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(temp.path()).unwrap();
+        let relative = Path::new("example.rs");
+        let file = temp.path().join(relative);
+        fs::write(&file, "fn main() { println!(\"before\"); }\n").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(relative).unwrap();
+        let base_tree_id = index.write_tree().unwrap();
+        index.write().unwrap();
+        let base_tree = repo.find_tree(base_tree_id).unwrap();
+        let signature = git2::Signature::now("Alera QA", "test@local.invalid").unwrap();
+        repo.commit(
+            Some("HEAD"),
+            &signature,
+            &signature,
+            "baseline",
+            &base_tree,
+            &[],
+        )
+        .unwrap();
+        drop(base_tree);
+        fs::write(&file, "fn main() { println!(\"staged\"); }\n").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(relative).unwrap();
+        index.write().unwrap();
+        let staged_id = index.get_path(relative, 0).unwrap().id;
+        drop(index);
+
+        let head_before = repo.head().unwrap().target().unwrap();
+        let bytes_before = fs::read(&file).unwrap();
+        let patch = read_file_diff(temp.path(), relative).unwrap();
+        assert!(
+            patch.contains("+fn main() { println!(\"staged\"); }"),
+            "{patch}"
+        );
+        assert_eq!(repo.head().unwrap().target(), Some(head_before));
+        assert_eq!(
+            repo.index().unwrap().get_path(relative, 0).unwrap().id,
+            staged_id
+        );
+        assert_eq!(fs::read(file).unwrap(), bytes_before);
+    }
+
+    #[test]
+    fn untracked_large_patch_is_bounded_and_cannot_escape_workspace() {
+        let temp = tempfile::tempdir().unwrap();
+        git2::Repository::init(temp.path()).unwrap();
+        let path = temp.path().join("large-untracked.txt");
+        let text = "x".repeat(MAX_PATCH_BYTES + 2048);
+        fs::write(&path, &text).unwrap();
+        let message = read_file_diff(temp.path(), Path::new("large-untracked.txt")).unwrap();
+        assert!(message.contains("too large"), "{message}");
+        assert!(message.len() < MAX_PATCH_BYTES);
+        assert_eq!(fs::read_to_string(&path).unwrap(), text);
+        assert!(read_file_diff(temp.path(), Path::new("../large-untracked.txt")).is_err());
+        assert!(read_file_diff(temp.path(), &path).is_err());
+    }
 }
