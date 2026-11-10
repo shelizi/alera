@@ -279,8 +279,22 @@ impl EditorTabs {
     /// Open `path` as its own tab. An editor already holding that file is
     /// focused and its buffer is left untouched.
     pub fn open_file(&mut self, root: &Path, path: &Path) -> io::Result<OpenEffect> {
-        if let Some(index) = self.matching_tab(Some(path)) {
-            return Ok(self.focus(index));
+        // Resolve spelling aliases before checking capacity: the editor may
+        // already own a dirty file through a different path spelling, and
+        // opening that same buffer must not allocate a second tab or fail at
+        // MAX_EDITOR_TABS. Require the same canonical workspace root so an
+        // aliased path from another workspace cannot reuse this document.
+        if let (Ok(canonical_root), Ok(canonical_path)) =
+            (dunce::canonicalize(root), dunce::canonicalize(path))
+        {
+            if canonical_path.starts_with(&canonical_root) {
+                if let Some(index) = self.tabs.iter().position(|tab| {
+                    tab.workspace_root() == Some(canonical_root.as_path())
+                        && tab.target_path() == Some(canonical_path.as_path())
+                }) {
+                    return Ok(self.focus(index));
+                }
+            }
         }
         self.push_session(|session| session.open_file(root, path))
     }
@@ -1192,6 +1206,70 @@ mod tests {
         assert_eq!(target.document().unwrap().content(), "disk\nalpha");
         assert!(target.document().unwrap().is_dirty());
         assert_eq!(fs::read_to_string(&file).unwrap(), "disk\n");
+    }
+
+    #[test]
+    fn full_secondary_pane_reopens_moved_dirty_file_by_canonical_alias_without_duplication() {
+        let workspace = tempfile::tempdir().unwrap();
+        let root = workspace.path();
+        let file = root.join("moved.txt");
+        fs::write(&file, "disk\n").unwrap();
+        fs::create_dir(root.join("sub")).unwrap();
+        let mut primary = EditorTabs::new(None);
+        let mut secondary = EditorTabs::new(None);
+        primary.open_file(root, &file).unwrap();
+        let instance = primary.tab_instance_at(0).unwrap();
+        primary
+            .document_mut()
+            .unwrap()
+            .replace(None, "unsaved")
+            .unwrap();
+        let before_history = primary.document().unwrap().history_depth();
+        let transferred = primary.take_for_pane(instance).unwrap();
+        secondary.insert_from_pane(transferred).unwrap();
+        assert!(primary.is_empty());
+        for _ in 1..MAX_EDITOR_TABS {
+            secondary.open_scratch(root).unwrap();
+        }
+        assert_eq!(secondary.tab_labels().len(), MAX_EDITOR_TABS);
+        assert_ne!(secondary.active_index(), Some(0));
+
+        // A spelling alias of an already-open dirty file must reuse the
+        // owning pane's original instance, even at the tab capacity limit.
+        secondary
+            .open_file(root, &root.join("sub").join("..").join("moved.txt"))
+            .expect("alias should focus the existing dirty tab instead of allocating");
+        assert_eq!(secondary.tab_labels().len(), MAX_EDITOR_TABS);
+        assert_eq!(secondary.active_index(), Some(0));
+        assert_eq!(secondary.tab_instance_at(0), Some(instance));
+        assert_eq!(secondary.document().unwrap().content(), "disk\nunsaved");
+        assert!(secondary.document().unwrap().is_dirty());
+        assert_eq!(
+            secondary.document().unwrap().history_depth(),
+            before_history
+        );
+        assert_eq!(fs::read_to_string(&file).unwrap(), "disk\n");
+        secondary.document_mut().unwrap().undo();
+        assert_eq!(secondary.document().unwrap().content(), "disk\n");
+    }
+
+    #[test]
+    fn existing_dirty_file_is_not_reused_under_another_workspace_root() {
+        let workspace = tempfile::tempdir().unwrap();
+        let unrelated = tempfile::tempdir().unwrap();
+        let file = workspace.path().join("owned.txt");
+        fs::write(&file, "disk\n").unwrap();
+        let mut tabs = EditorTabs::new(None);
+        tabs.open_file(workspace.path(), &file).unwrap();
+        let instance = tabs.tab_instance_at(0).unwrap();
+        tabs.document_mut().unwrap().replace(None, "dirty").unwrap();
+
+        assert!(tabs.open_file(unrelated.path(), &file).is_err());
+        assert_eq!(tabs.tab_labels().len(), 1);
+        assert_eq!(tabs.tab_instance_at(0), Some(instance));
+        assert_eq!(tabs.document().unwrap().content(), "disk\ndirty");
+        assert!(tabs.document().unwrap().is_dirty());
+        assert_eq!(fs::read_to_string(file).unwrap(), "disk\n");
     }
 
     #[test]
