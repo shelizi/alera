@@ -193,3 +193,30 @@
 - **P0-02／P0-03** 尚需相容隔離 Host／CLI 下實際 `tab.pin.cas`、`editor.twoRowTabs` 與 Classic/GPUI 雙向設定 CAS 同步；Host 離線時不可把提示改良等同於可保存設定。
 - **P1-01／P1-03／P1-04** 的 Editor chrome 精簡、中央可閱讀 Git Diff、完整長檔名與高密度 Tab 視覺仍未完成。
 - 真 Windows IME／DPI、Git Stage／Commit／Graph、Terminal／Agent 與多作業系統發行 Gate **未包含在本輪完成清單**；`supported=false` 維持。
+
+## 七、第二輪平行作業：Git Diff 擴展閱讀與 Dirty 跨 Pane 防護（2026-11-10）
+
+本輪以 `8a370d56f` 為基線，獨立建立 `feat/gpui-git-expanded-diff-flashmax-20261110b` 與 `feat/gpui-dirty-pane-guard-flashmax-20261110b` 兩個 Worktree，同時啟動 Devin `swe-2-flash-max`。兩個 Agent 完成原始碼探索，但在受限執行期限內**未交付可整合的修改**；下列實際產品修正與測試由整合協調流程在隔離分支完成，不能誤記為 Agent 產生的程式碼。
+
+| 工作包 | 來源提交 | 整合提交 | 本輪實際結果 |
+| --- | --- | --- | --- |
+| P1-03 Git Diff 安全回歸 | `cb282bb42` | `dc85e20e6` | 新增 staged patch 唯讀、HEAD／Index／檔案不變、超大 untracked 限制與越界拒絕測試；3/3 專項測試通過 |
+| P1-03 Git Diff 擴展預覽 | `b1276512e` | `537684336` | 在側欄 Patch 區增加 `Expand diff`，以 GPUI Kit Dialog 顯示寬 760px、最高 430px 的可捲動等寬字體唯讀快照；不可在載入中或空資料時開啟；1/1 Binary 專項測試通過 |
+| P0-01 Dirty Editor 路徑別名安全 | `465dd573c` | `57da7edba` | 修正已滿 24 個 Tab 的第二 Pane 遇到 `sub/../file` 路徑別名時誤報容量滿的缺陷；需比對 canonical workspace root，保留原 Instance、Dirty、Undo 與磁碟內容；新增跨 Workspace 拒絕測試 |
+
+### RED／GREEN 實證與最後整合測試
+
+- 對 Dirty Editor 的 `full_secondary_pane_reopens_moved_dirty_file_by_canonical_alias_without_duplication` 測試先在未修正程式**失敗**：`Editor tab limit reached`。完成 canonical file/root 比對後，同一測試**通過**；第二個不同 Workspace root 的拒絕測試也通過。
+- 整合 Commit `537684336`：Native Windows Build 成功，Library **372/372**、Binary **9/9**。
+- 最終產品程式碼 Commit `57da7edba`：`cargo build --offline --locked --bin alera-gpui-desktop -j 2` 成功，Library **374/374**、Binary **9/9**，均為 0 failed。編譯僅回報 Windows linker stdout 訊息。
+- 本次建置 EXE 為 `D:/c/gpui/debug/alera-gpui-desktop.exe`（2026-11-10 16:48 本機），對應產品原始碼 `57da7edba`；後續僅文件提交不需要重新編譯。
+- **GUI BLOCKED / NOT RUN**：本次工具工作區政策阻擋 `Start-Process`，訊息為「workspace scope 禁止通过子进程写入 Workspace 外部路径」。未嘗試放寬政策；不能宣稱新的 Expand Dialog 經 Windows 滑鼠實測。前一輪的單 Pane Tab GUI 驗收仍保留，不可拿來代替新功能的本輪實測。
+- 本輪建立的隔離 Git QA 資料夾 `.worktrees/gpui-git-expanded-diff-flashmax-20261110b/.gpui-git-diff-qa-20261110/` 尚保留（untracked），因安全政策拒絕遞迴刪除巢狀 `.git`；另有 `%TEMP%/alera-gpui-gitdiff-qa-20261110b` 暫存資料。兩者均為測試資料，不包含在任何整合提交，**需由具授權的維護者確認後清理**。
+- Classic `main`、正式 Runtime Host／PTY、Git Stage／Unstage／Commit 的生產路徑、既有 smoke 資料均未修改；未 push、未 Release。
+
+### 下一階段 Gate（尚未通過）
+
+- P1-03：使用本輪新 Build 在真 Windows GUI 開啟 Git Diff 放大視窗，檢查長 Patch、橫向捲動、關閉、Workspace 切換時的唯讀快照；更完整的中央 Diff、雙欄高亮仍未實作。
+- P0-01：實際雙 Pane 開檔／Dirty／Undo／Save As、Pinned Tab 與關閉操作須測過，不能以 Library Test 單獨認定完整驗收。
+- P0-02／P0-03：隔離相容 Host 下 `tab.pin.cas`、`editor.twoRowTabs` 及 Classic／GPUI 雙向同步尚未完成。
+- P1-05：Windows 注音真候選窗、800×600 及多 DPI 和其他操作一致性測試仍待執行。**`supported=false` 維持。**
