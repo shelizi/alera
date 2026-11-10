@@ -8895,7 +8895,7 @@ impl Render for Workbench {
                                                 div()
                                                     .text_xs()
                                                     .text_color(rgb(MUTED))
-                                                    .child("Classic catalog unavailable · showing local projects"),
+                                                    .child("Classic unavailable"),
                                             )
                                             .child(
                                                 div()
