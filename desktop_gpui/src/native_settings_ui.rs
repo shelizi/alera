@@ -744,9 +744,28 @@ impl Workbench {
                 div()
                     .px_4()
                     .py_2()
-                    .text_sm()
-                    .text_color(rgb(MUTED))
-                    .child(format!("Classic / GPUI settings sync unavailable: {error}"))
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_sm()
+                            .text_color(rgb(MUTED))
+                            .child(format!("Classic / GPUI settings sync unavailable: {error}")),
+                    )
+                    .child(
+                        native_components::action_button(
+                            "native-settings-host-retry",
+                            "Retry",
+                            false,
+                            false,
+                        )
+                        .on_click(cx.listener(|view, _, _, cx| {
+                            view.refresh_shared_desktop_settings(cx);
+                        })),
+                    )
             }))
             .child(
                 div()

@@ -239,6 +239,12 @@ impl Workbench {
         value: serde_json::Value,
         cx: &mut Context<Self>,
     ) {
+        if self.settings_shared_error.is_some() {
+            self.model
+                .set_status("Rust Host settings are unavailable; refresh before editing");
+            cx.notify();
+            return;
+        }
         if !self.settings_native_profile_migrated {
             self.model
                 .set_status("Load Rust Host settings before editing");

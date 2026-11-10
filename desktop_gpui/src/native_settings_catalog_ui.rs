@@ -20,11 +20,13 @@ enum CatalogHostState {
     Ready,
 }
 
-fn catalog_host_state(migrated: bool, has_error: bool) -> CatalogHostState {
-    if migrated {
-        CatalogHostState::Ready
+fn catalog_host_state(migrated: bool, has_error: bool, refreshing: bool) -> CatalogHostState {
+    if refreshing {
+        CatalogHostState::Loading
     } else if has_error {
         CatalogHostState::Unavailable
+    } else if migrated {
+        CatalogHostState::Ready
     } else {
         CatalogHostState::Loading
     }
@@ -75,15 +77,20 @@ fn render_unavailable_row(
 }
 
 impl Workbench {
+    fn shared_catalog_state(&self) -> CatalogHostState {
+        catalog_host_state(
+            self.settings_native_profile_migrated,
+            self.settings_shared_error.is_some(),
+            self.settings_shared_busy,
+        )
+    }
+
     /// Pending label for Host-backed rows before the shared snapshot
     /// installs: loading vs unreachable Host, in the same row chrome as
     /// unsupported catalog previews.
     fn render_host_state_row(&self, row: &PreviewRow) -> gpui::AnyElement {
         let locale = self.settings_menu_locale;
-        let status = match catalog_host_state(
-            self.settings_native_profile_migrated,
-            self.settings_shared_error.is_some(),
-        ) {
+        let status = match self.shared_catalog_state() {
             CatalogHostState::Unavailable => tr(locale, "Rust Host settings unavailable"),
             _ => tr(locale, "Loading Rust Host settings"),
         };
@@ -253,7 +260,7 @@ impl Workbench {
         section: &'static str,
         row: &PreviewRow,
     ) -> Option<gpui::AnyElement> {
-        if !self.settings_native_profile_migrated {
+        if self.shared_catalog_state() != CatalogHostState::Ready {
             return match (section, row.title) {
                 (
                     "application",
@@ -416,7 +423,7 @@ impl Workbench {
             return Some(self.render_project_management_setting(cx));
         }
         let path = shared_setting_row_path(section, row.title)?;
-        if !self.settings_native_profile_migrated {
+        if self.shared_catalog_state() != CatalogHostState::Ready {
             return Some(self.render_host_state_row(row));
         }
         let value = self
@@ -511,6 +518,7 @@ impl Workbench {
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let selected = self.settings_menu_language.as_str();
+        let writable = self.shared_catalog_state() == CatalogHostState::Ready;
         div()
             .id("native-settings-language-preview")
             .flex()
@@ -533,7 +541,6 @@ impl Workbench {
                 .map(|(index, (preference, label))| {
                     div()
                         .id(("native-settings-locale-option", index))
-                        .cursor_pointer()
                         .rounded_md()
                         .px_2()
                         .py_1()
@@ -544,15 +551,18 @@ impl Workbench {
                         } else {
                             PANEL
                         }))
-                        .hover(|style| style.bg(rgb(ACTIVE)))
                         .child(label)
-                        .on_click(cx.listener(move |view, _, _, cx| {
-                            view.change_shared_desktop_setting(
-                                "general.language",
-                                serde_json::json!(preference),
-                                cx,
-                            );
-                        }))
+                        .when(writable, |item| {
+                            item.cursor_pointer()
+                                .hover(|style| style.bg(rgb(ACTIVE)))
+                                .on_click(cx.listener(move |view, _, _, cx| {
+                                    view.change_shared_desktop_setting(
+                                        "general.language",
+                                        serde_json::json!(preference),
+                                        cx,
+                                    );
+                                }))
+                        })
                 }),
             )
             .into_any_element()
@@ -564,17 +574,34 @@ mod tests {
     use super::{catalog_host_state, CatalogHostState};
 
     #[test]
-    fn installed_snapshot_stays_ready_even_after_a_later_refresh_error() {
-        assert_eq!(catalog_host_state(true, false), CatalogHostState::Ready);
-        assert_eq!(catalog_host_state(true, true), CatalogHostState::Ready);
+    fn installed_snapshot_is_not_writable_when_runtime_host_disconnects() {
+        assert_eq!(
+            catalog_host_state(true, false, false),
+            CatalogHostState::Ready
+        );
+        assert_eq!(
+            catalog_host_state(true, true, false),
+            CatalogHostState::Unavailable
+        );
+        assert_eq!(
+            catalog_host_state(true, true, true),
+            CatalogHostState::Loading
+        );
     }
 
     #[test]
     fn missing_snapshot_reports_loading_until_the_host_reports_failure() {
-        assert_eq!(catalog_host_state(false, false), CatalogHostState::Loading);
         assert_eq!(
-            catalog_host_state(false, true),
+            catalog_host_state(false, false, false),
+            CatalogHostState::Loading
+        );
+        assert_eq!(
+            catalog_host_state(false, true, false),
             CatalogHostState::Unavailable
+        );
+        assert_eq!(
+            catalog_host_state(false, true, true),
+            CatalogHostState::Loading
         );
     }
 }
