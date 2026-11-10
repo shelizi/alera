@@ -244,3 +244,28 @@
 1. 在已授權且隔離的 Windows GUI／Runtime Host 環境，測試 Settings：先連線→斷線→控制項停用→按 Retry→Host 恢復→重新可編輯與 CAS 讀回。
 2. 在 Classic／GPUI 分別切換 `editor.twoRowTabs` 與 Pin，確認左右兩 Pane 獨立釘選列、釘選不被 Close Others／Right 誤關、重啟持久化；完成後才可結案 P0-02。
 3. 補完 Git Diff 放大視窗 GUI 點擊、捲動、Workspace 切換，以及 Editor Dirty／Undo／IME 實機驗收。
+
+## 九、第四輪續作：Git Diff 可讀性與截斷警示（2026-11-10）
+
+以第三輪最後的 `b6a77c888` 為基線，建立互不干擾的 `fix/gpui-git-diff-bounds-20261110` 與 `feat/gpui-git-diff-readable-ui-20261110` Worktree。本輪安排 SWE-2 Flash Max 在 UI 工作樹平行調查；它只完成程式閱讀，未產生可整合的修改，因非互動權限要求而停止；兩項修正均由整合協調流程在獨立工作樹實作，並經完整驗證後 Cherry-pick。
+
+| 工作包 | 原始提交 | 整合提交 | 完成內容 |
+| --- | --- | --- | --- |
+| P1-03 已追蹤 Patch 截斷警示 | `e26a7c4a7` | `a06ca076e` | 修正 32 KiB 預覽剛好抵達上限時，ASCII Patch 可能被無提示截斷；統一以明確 `… diff preview truncated` 提醒，限制 UTF-8 邊界，維持 HEAD／Index／原檔唯讀 |
+| P1-03 展開 Diff 可讀性 | `5ee383cf9` | `1399a18fc` | Kit 唯讀視窗依顯示寬高自適應（小視窗與 4K）；顯示已載入快照中的檔案／Hunk／新增／刪除統計，前 400 行使用不同顏色，剩餘內容仍以純文字保留，並明確告知上色上限 |
+
+### TDD 與整合驗證
+
+- `oversized_tracked_ascii_patch_explicitly_reports_truncation_without_writes` 測試修正前 **RED：0/1 failed**，錯誤為沒有截斷警告；修正後 **GREEN：1/1 passed**。另測試大段繁體中文及 Emoji 截斷，確認合法 UTF-8、明確提醒、輸出長度受限且原檔不變。
+- `git_inspect::tests` **5/5** 全部通過；完整獨立工作樹 Rust Library **378/378** 通過。
+- `native_action_dialog_ui::git_preview_tests` **3/3** 通過，驗證 800×600／3840×2160 寬高邊界、Unified Diff 行數統計不把 `+++`／`---` 算成變更、上下文／新增／刪除／Hunk 色彩不同。
+- 最終整合產品程式碼 `1399a18fc`：Windows `cargo build --offline --locked --bin alera-gpui-desktop -j 2` 成功，`cargo test --quiet --offline --locked --no-default-features --lib -j 2` **378/378 passed**、`cargo test --quiet --offline --locked --bin alera-gpui-desktop -j 2` **11/11 passed**，全部 0 failed；只有資訊性 Windows linker stdout 警告。
+- Windows 建置產物 `D:/c/gpui/debug/alera-gpui-desktop.exe`，本機時間 2026-11-10 17:05；文件更新不影響已編譯產品。
+- **GUI NOT RUN：** 此輪沒有取得上輪被工作區安全政策限制的 Windows GUI 執行權限。以上「響應式 800×600」為尺寸純函式測試，不是實際滑鼠／顯示縮放驗收。仍需測試真實視窗內換頁、捲動、Ctrl+C、對話框關閉及長行橫向閱讀。
+- 此版本仍**不是中央完整雙欄 Diff**，上限仍為 32 KiB 的唯讀 Patch 快照；不能用統計及視覺改善宣稱超過上限的內容已全部讀取。Host／PTY、Classic `main`、原有 smoke 暫存資料不變，未 Push／Release，`supported=false` 維持。
+
+### 尚待解決的 Gate
+
+1. 取得授權的隔離 Windows GUI 執行環境，實測 Git Diff 小尺寸與高 DPI 的換行／橫捲、完整關閉，以及切換 Workspace 後只顯示原快照；確認不修改 Git。
+2. 規劃安全、完整的中央檔案差異（可針對單檔分頁擷取／分塊載入，嚴格限制記憶體與 Git 路徑），不可移除容量限制而只把整段 Patch 放進畫面。
+3. 回到 P0-01／02／03：實機雙 Pane Dirty／Undo／釘選與 `tab.pin.cas`／`editor.twoRowTabs` 的 Classic／GPUI 共用 Host 同步；在驗證前 `supported=false`。
