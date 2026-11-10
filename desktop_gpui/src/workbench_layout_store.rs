@@ -286,6 +286,36 @@ mod tests {
     }
 
     #[test]
+    fn pinned_editor_moved_between_panes_survives_restart_and_drops_closed_pin() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("workbench-layout.json");
+        let mut state = sample();
+        state.pinned_editors = vec!["editor:7:1".into(), "editor:8:3".into()];
+        state.primary_editors.retain(|key| key != "editor:7:1");
+        state.secondary_editors.insert(0, "editor:7:1".into());
+        state.save_to_path(&path).unwrap();
+        let restored = SavedWorkbenchLayoutV1::load_from_path(&path)
+            .unwrap()
+            .expect("layout persisted");
+        assert_eq!(restored.secondary_editors, vec!["editor:7:1", "editor:8:3"]);
+        assert_eq!(restored.pinned_editors, vec!["editor:7:1", "editor:8:3"]);
+        assert_eq!(
+            restored.primary_active_editor.as_deref(),
+            Some("editor:7:2")
+        );
+
+        let mut closed = restored;
+        closed.secondary_editors.retain(|key| key != "editor:7:1");
+        closed.pinned_editors.push("editor:7:1".into());
+        closed.save_to_path(&path).unwrap();
+        let without_closed = SavedWorkbenchLayoutV1::load_from_path(&path)
+            .unwrap()
+            .expect("layout still persisted");
+        assert_eq!(without_closed.pinned_editors, vec!["editor:8:3"]);
+        assert_eq!(without_closed.secondary_editors, vec!["editor:8:3"]);
+    }
+
+    #[test]
     fn repeated_save_replaces_existing_layout_atomically_on_windows() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("layout.json");

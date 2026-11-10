@@ -555,6 +555,57 @@ mod tests {
     }
 
     #[test]
+    fn per_pane_pinned_close_targets_survive_reorder_and_duplicate_instance_numbers() {
+        // Two editor mounts can use the same instance number in different
+        // epochs. Pin and batch-close decisions must compare full identities
+        // and must never touch the opposite pane.
+        let primary_active = editor(7, 1);
+        let primary_pinned = editor(7, 2);
+        let secondary_pinned = editor(8, 1);
+        let secondary_unpinned = editor(8, 3);
+        let secondary_active = editor(8, 4);
+        let mut panes = WorkbenchPaneLayout::new();
+        panes.reconcile(&[
+            primary_active.clone(),
+            primary_pinned.clone(),
+            secondary_pinned.clone(),
+            secondary_unpinned.clone(),
+            secondary_active.clone(),
+        ]);
+        for tab in [&secondary_pinned, &secondary_unpinned, &secondary_active] {
+            assert!(panes.move_to(tab, PaneSlot::Secondary));
+        }
+        let pinned = vec![primary_pinned.clone(), secondary_pinned.clone()];
+        assert!(panes
+            .close_unpinned_candidates(&primary_active, false, &pinned)
+            .is_empty());
+        assert_eq!(
+            panes.close_unpinned_candidates(&secondary_unpinned, false, &pinned),
+            vec![secondary_active.clone()]
+        );
+        assert!(panes.reorder_within(&secondary_active, &secondary_pinned));
+        assert_eq!(
+            panes.close_unpinned_candidates(&secondary_active, true, &pinned),
+            vec![secondary_unpinned.clone()]
+        );
+        expect(
+            &panes,
+            PaneSlot::Primary,
+            &[primary_active.clone(), primary_pinned.clone()],
+        );
+        expect(
+            &panes,
+            PaneSlot::Secondary,
+            &[
+                secondary_active.clone(),
+                secondary_pinned.clone(),
+                secondary_unpinned.clone(),
+            ],
+        );
+        assert_unique(&panes);
+    }
+
+    #[test]
     fn context_actions_only_target_neighbors_in_the_clicked_pane() {
         let a = editor(3, 1);
         let b = editor(3, 2);
