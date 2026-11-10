@@ -105,3 +105,22 @@ Classic 編輯區顯示：`Terminal host unavailable: Terminal host connection c
 - Rust 全套回歸：`cargo test --offline --lib --bin alera-gpui-desktop`，Library **390/390**、Native UI **21/21** 通過；`cargo check --offline --bin alera-gpui-desktop --features quota-visual-fixture` 通過。這些測試不會啟動第二個 Host。
 
 **安全界線：** Classic Host（及既有 PTY、Agent）、安裝中的 Classic、使用者既有其他 worktree 未被重啟、刪除或覆蓋；所有實機測試執行檔只保留在目前 worktree 暫存目錄並於驗收後清除。
+
+## 第五輪：真實刷新與隔離新版 Host 的釘選寫入驗收（2026-11-10）
+
+保留仍在執行的 Classic Host，不更換它的二進位檔、不修改其 SQLite 設定，也不重啟其 Terminal／PTY。所有測試在既有 GPUI 整合 worktree 進行。
+
+### 對現有 Classic Host 的刷新
+
+- 使用本 worktree 編譯的 CLI，對已存在的 Classic Host 執行 `quota --no-start --json --runtime-dir <ClassicRuntime> snapshot --force-refresh` **一次**。約 3 秒完成，前後都保留 7 個 Provider；AGY、Codex、Devin、Grok 的 `updatedAt` 改變且 `status=ok`，Claude 維持 `stale`（認證錯誤），Kimi／Z.ai 維持 `stale`（未設定額度來源）。沒有把這些狀態假裝成即時值。
+- 再執行一次 `snapshot --force-refresh --provider codex --account-id default`，指定回應只有 **1 筆 Codex**；隨後使用不強制刷新的完整快照查詢，仍保留原來 **7 種 Provider**，沒有因單項刷新而遺失其他資料。
+- 此處驗證 Host RPC 與快照保存；未宣稱已逐一實機點擊所有 GPUI 面板刷新鈕。
+
+### 隔離新版 Host 的真正雙連線測試
+
+- 只在新建的 `.quota-refresh-live-test/isolated-host` 目錄啟動新版 Alera Terminal Host，控制檔／SQLite／認證 Token 與實際 Classic 完全分離。初次 `desktopSettings.get` 回傳 **31 個欄位**，`agents.quotaUnpinnedKeys=[]` 且 `present=false`。
+- 在 `rust/alera-cli/src/runtime_host_client.rs` 加入需明確 `--ignored` 執行的雙 RPC client 測試 `isolated_host_quota_pin_roundtrip_via_two_authenticated_clients`。測試使用 Path guard，拒絕非 `.quota-refresh-live-test/isolated-host` 的目錄；**1/1 通過**。
+- 測試涵蓋第一個 client 的 Classic-style `desktopSettings.seedLocal`、第二個 client 讀到釘選、重複 seed 不覆蓋新版資料、第二個 client 的 `desktopSettings.compareAndSetBatch`、第一個 client 重新讀到更新後資料、舊版 expected CAS 拒絕、非法 pin key 拒絕、其他設定不變。這驗證兩條已認證的 RPC 連線，**不等於兩個實際 GUI 都已操作完成**。
+- 測試 Host 正常停止後，透過相同隔離 Runtime 重新啟動；首個立即讀取遭遇啟動就緒時序問題，後續獨立 `settings get --no-start` 成功，釘選數量 2 且與重啟前一致。沒有發生資料遺失。隨後 `runtime stop` 正常回報 `stopped=true`、`forced=false`、`activeSessions=0`、`activeAgents=0`、`activeJobs=0`。
+
+**剩餘正式環境阻塞：** 目前執行中的 11 月 7 日 Classic Host 仍不認得 `desktopSettings.get`，必須規劃安全升級或接管流程，才可在真正 Classic 與 GPUI 雙視窗中驗收即時釘選同步。此輪沒有對它執行升級；未配置額度來源的 Provider 也不會因 UI 修正而自動變成有效資料。

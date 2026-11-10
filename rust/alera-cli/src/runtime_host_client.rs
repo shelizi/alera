@@ -404,6 +404,120 @@ mod tests {
         RUNTIME_HOST_ORCHESTRATION_TERMINAL_INSPECTION_CAPABILITY,
     };
 
+    /// Explicitly invoked against an isolated freshly started Host. This
+    /// exercises the real authenticated RPC path used by both desktops, not
+    /// just the RuntimeStore unit tests. Never targets a user's live Host.
+    #[tokio::test]
+    #[ignore = "requires ALERA_ISOLATED_QUOTA_PIN_TEST_DIR and a separate test-only Host"]
+    async fn isolated_host_quota_pin_roundtrip_via_two_authenticated_clients() {
+        let dir = std::path::PathBuf::from(
+            std::env::var_os("ALERA_ISOLATED_QUOTA_PIN_TEST_DIR")
+                .expect("isolated test Host path is required"),
+        );
+        assert_eq!(
+            dir.file_name().and_then(|name| name.to_str()),
+            Some("isolated-host"),
+            "refuse to run against any real Runtime Host directory"
+        );
+        assert!(
+            dir.components()
+                .any(|part| part.as_os_str() == ".quota-refresh-live-test"),
+            "only the dedicated worktree-local test Runtime directory is allowed"
+        );
+        let mut classic = RuntimeHostRpcClient::connect(&dir)
+            .await
+            .unwrap()
+            .expect("isolated Host must already be running");
+        let empty = classic
+            .request_value_with_deadline("desktopSettings.get", &json!({}), 15_000)
+            .await
+            .unwrap();
+        let path = "agents.quotaUnpinnedKeys";
+        assert_eq!(empty["values"][path], json!([]));
+        assert_eq!(empty["present"][path], false);
+
+        let original = json!(["claude:default", "agy", "codex:work"]);
+        let seeded = classic
+            .request_value_with_deadline(
+                "desktopSettings.seedLocal",
+                &json!({"values": {"agents.quotaUnpinnedKeys": original}}),
+                15_000,
+            )
+            .await
+            .unwrap();
+        assert_eq!(seeded["values"][path], original);
+        assert_eq!(seeded["present"][path], true);
+
+        let mut gpui = RuntimeHostRpcClient::connect(&dir)
+            .await
+            .unwrap()
+            .expect("second authenticated client must attach to existing test Host");
+        let read = gpui
+            .request_value_with_deadline("desktopSettings.get", &json!({}), 15_000)
+            .await
+            .unwrap();
+        assert_eq!(read["values"][path], original);
+        let attempted_late_seed = gpui
+            .request_value_with_deadline(
+                "desktopSettings.seedLocal",
+                &json!({"values": {"agents.quotaUnpinnedKeys": ["grok"]}}),
+                15_000,
+            )
+            .await
+            .unwrap();
+        assert_eq!(attempted_late_seed["values"][path], original);
+
+        let updated = json!(["claude:default", "codex:work"]);
+        let changed = gpui
+            .request_value_with_deadline(
+                "desktopSettings.compareAndSetBatch",
+                &json!({"changes": [{
+                    "path": path, "expectedValue": original, "value": updated
+                }]}),
+                15_000,
+            )
+            .await
+            .unwrap();
+        assert_eq!(changed["values"][path], updated);
+
+        let read_back = classic
+            .request_value_with_deadline("desktopSettings.get", &json!({}), 15_000)
+            .await
+            .unwrap();
+        assert_eq!(read_back["values"][path], updated);
+        assert!(
+            classic
+                .request_value_with_deadline(
+                    "desktopSettings.compareAndSetBatch",
+                    &json!({"changes": [{
+                        "path": path, "expectedValue": original, "value": []
+                    }]}),
+                    15_000,
+                )
+                .await
+                .is_err(),
+            "a stale Classic view must not overwrite GPUI's newer pins"
+        );
+        assert!(
+            gpui.request_value_with_deadline(
+                "desktopSettings.compareAndSetBatch",
+                &json!({"changes": [{
+                    "path": path, "expectedValue": updated, "value": ["unsupported"]
+                }]}),
+                15_000,
+            )
+            .await
+            .is_err(),
+            "invalid pin keys must be rejected by the Host"
+        );
+        let final_state = gpui
+            .request_value_with_deadline("desktopSettings.get", &json!({}), 15_000)
+            .await
+            .unwrap();
+        assert_eq!(final_state["values"][path], updated);
+        assert_eq!(final_state["values"]["editor.twoRowTabs"], false);
+    }
+
     fn control(capabilities: &[&str]) -> RuntimeHostControl {
         RuntimeHostControl {
             protocol_version: PROTOCOL_VERSION,
