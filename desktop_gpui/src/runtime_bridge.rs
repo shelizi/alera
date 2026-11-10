@@ -1474,16 +1474,52 @@ fn parse_status(bytes: &[u8]) -> io::Result<RuntimeStatus> {
 }
 
 fn default_runtime_dir() -> PathBuf {
-    // Match rust/alera-cli/src/main.rs:runtime_dir without depending on
-    // Alera's private CLI implementation or duplicating its auth mechanism.
-    if let Some(value) = std::env::var_os("ALERA_RUNTIME_DIR").filter(|value| !value.is_empty()) {
-        return PathBuf::from(value);
-    }
+    // Classic Flutter stores its active Host under the app support directory,
+    // NOT at the standalone CLI fallback ~/.alera/runtime. Prefer that
+    // existing Host when no explicit runtime was requested. GPUI still never
+    // reads the Host's authentication token or starts a second Host.
     let home: Option<OsString> =
         std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"));
-    PathBuf::from(home.unwrap_or_else(|| OsString::from(".")))
+    let standalone_cli_dir = PathBuf::from(home.unwrap_or_else(|| OsString::from(".")))
         .join(".alera")
-        .join("runtime")
+        .join("runtime");
+    #[cfg(windows)]
+    let classic_dir = std::env::var_os("APPDATA")
+        .map(PathBuf::from)
+        .map(|appdata| {
+            appdata
+                .join("dev.leynier")
+                .join("Alera")
+                .join("terminal_host")
+        });
+    #[cfg(not(windows))]
+    let classic_dir: Option<PathBuf> = None;
+    choose_runtime_dir(
+        std::env::var_os("ALERA_RUNTIME_DIR")
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from),
+        classic_dir,
+        standalone_cli_dir,
+    )
+}
+
+fn choose_runtime_dir(
+    explicit: Option<PathBuf>,
+    classic: Option<PathBuf>,
+    standalone_cli: PathBuf,
+) -> PathBuf {
+    if let Some(path) = explicit {
+        return path;
+    }
+    // Only inspect control-file *presence*. The authenticated CLI decides
+    // whether the Host is live/compatible. Reading host.json in GPUI would
+    // expose a credential that belongs exclusively to the Host and CLI.
+    if let Some(path) = classic {
+        if path.join("host.json").is_file() {
+            return path;
+        }
+    }
+    standalone_cli
 }
 
 /// Settings CLI shares a transport but different verbs have intentionally
@@ -1510,6 +1546,48 @@ fn validate_desktop_settings_response(verb: Option<&str>, response: &Value) -> i
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn discovers_classic_host_before_stale_standalone_cli_runtime() {
+        let root = tempfile::tempdir().unwrap();
+        let classic = root
+            .path()
+            .join("dev.leynier")
+            .join("Alera")
+            .join("terminal_host");
+        let standalone = root.path().join(".alera").join("runtime");
+        std::fs::create_dir_all(&classic).unwrap();
+        std::fs::create_dir_all(&standalone).unwrap();
+        std::fs::write(standalone.join("runtime-host.json"), "{}").unwrap();
+        assert_eq!(
+            choose_runtime_dir(None, Some(classic.clone()), standalone.clone()),
+            standalone,
+            "missing Classic host.json keeps standalone CLI fallback",
+        );
+        std::fs::write(classic.join("host.json"), "{}").unwrap();
+        assert_eq!(
+            choose_runtime_dir(None, Some(classic.clone()), standalone),
+            classic,
+            "Classic Host takes precedence over stale standalone control files",
+        );
+    }
+
+    #[test]
+    fn explicit_runtime_dir_wins_over_classic_autodiscovery() {
+        let root = tempfile::tempdir().unwrap();
+        let explicit = root.path().join("custom");
+        let classic = root.path().join("Classic").join("terminal_host");
+        std::fs::create_dir_all(&classic).unwrap();
+        std::fs::write(classic.join("host.json"), "{}").unwrap();
+        assert_eq!(
+            choose_runtime_dir(
+                Some(explicit.clone()),
+                Some(classic),
+                root.path().join("standalone"),
+            ),
+            explicit
+        );
+    }
 
     #[test]
     fn desktop_settings_bridge_accepts_both_host_pin_reply_shapes() {

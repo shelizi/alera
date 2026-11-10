@@ -1,5 +1,17 @@
 # GPUI Agent 額度 UI：Windows 實機對照（2026-11-10）
 
+## 後續釐清：不是 Classic Host 故障，而是 GPUI 指向不同 Runtime 目錄
+
+經進一步以 Windows 程序、Runtime 控制檔、監聽埠及 **不啟動 Host** 的 CLI 額度查詢交叉比對，已修正前面「Host 離線」的初步判斷：
+
+- **Classic Host 仍正常存在**：實際 Runtime 目錄是 `%APPDATA%/dev.leynier/Alera/terminal_host`，本次檢查的程序 PID 19748（啟動於 11 月 7 日），其 `host.json` 指向 2050 埠；Owner PID 與程序相符，並可建立本機 TCP 連線。
+- **錯誤來源**：GPUI 的 `default_runtime_dir()` 沿用獨立 Rust CLI 的 `%USERPROFILE%/.alera/runtime`。該目錄留有另一個 `runtime-host.json`（11 月 9 日），Owner PID 36180 已不存在、2019 埠無監聽，因此 `quota --no-start` 只對該目錄報 `Existing Alera Runtime Host is not running`。**不能據此宣稱 Classic Host 掛掉**。
+- **真正的額度查詢驗證成功**：使用當前 worktree 編譯的新版 CLI、明確指定 Classic Runtime 目錄執行 `quota --no-start --json --runtime-dir <ClassicRuntime> snapshot`，成功獲得 7 種 Provider 快照：AGY、Codex、Devin、Grok 回傳 `ok`（AGY 五組額度），Claude、Kimi、Z.ai 含 `stale`。這些是 Host 回傳的狀態標記，並非推測。
+- **GPUI 程式修復**：沒有 `ALERA_RUNTIME_DIR` 指定時，Windows 會優先選擇存在 `host.json` 的 Classic Runtime 目錄；明確指定仍優先，找不到 Classic 控制檔才回退獨立 Rust CLI 預設路徑。GPUI **不讀控制檔 token，也不啟動／重啟 Host**；由受控 CLI 完成認證。
+- **測試**：`cargo test --offline --lib runtime_bridge::tests` 10/10 通過（含 Classic 與舊 standalone 路徑競合、使用者明確指定的覆蓋優先權）；全套 `cargo test --offline --lib --bin alera-gpui-desktop`：Library 390/390、Native UI 19/19 通過。Windows `cargo check --offline --bin alera-gpui-desktop` 通過。未更改執行中的 Classic Host／PTY；尚未以這次修正版 GPUI 完成真實帳號 UI 截圖驗收。
+
+下方「Host 離線」為本輪修正前、**針對錯誤 Runtime 路徑**的當時觀察記錄，不再作為 Classic Host 全域狀態判定。
+
 ## 範圍與環境
 
 - 重用 `integrate/gpui-p0p1p2-20261108` worktree；對照機器同時開啟 Classic 與新編譯的 GPUI。
