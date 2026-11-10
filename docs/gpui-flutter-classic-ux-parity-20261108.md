@@ -161,6 +161,11 @@ instead of the stale legacy `center_view` flag after session restore.
   an unknown workspace ID from a local preview. The background refresh is
   bounded to 24 distinct registered owners and rechecks live Tab/PTY identity
   before reflecting the pin in the mixed strip.
+- The asynchronous refresh records exactly which Host Tab targets and
+  registered Workspace owners it queried. A Tab attached while that read is
+  running is not painted as unpinned from the outdated snapshot; Native
+  immediately schedules a catch-up Host read. Explicit Attach also requests
+  fresh pin metadata without starting a Host or PTY.
 - The Native CLI bridge must dispatch response schemas by command: `pin-list`
   returns a minimal **array**, `pin-set` returns one minimal **object**,
   while ordinary Settings requests still return `values`. Previously both

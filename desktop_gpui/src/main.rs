@@ -37,7 +37,9 @@ use alera_gpui_desktop::git_history::{
     compare_git_refs, compare_local_branch, preview_commit, GitHistoryOptions, GitHistorySnapshot,
 };
 use alera_gpui_desktop::git_inspect::{read_file_diff, GitSnapshot};
-use alera_gpui_desktop::host_tab_pins::{host_pin_query_workspaces, HostTabPinSnapshot};
+use alera_gpui_desktop::host_tab_pins::{
+    host_pin_owner_coverage, host_pin_query_workspaces, HostPinOwnerCoverage, HostTabPinSnapshot,
+};
 use alera_gpui_desktop::mcp_ui_bridge::{
     matching_host_tab_handle, NativeMcpUiBridge, NativeMcpUiCommand, NativeMcpUiEvent,
 };
@@ -4388,6 +4390,10 @@ impl Workbench {
         self.mixed_tabs.select(&identity);
         self.save_mixed_pane_layout(cx);
         self.refresh_terminal_split_output(cx);
+        // Explicit Attach can happen just after the last Host pin read.
+        // Query its authoritative state now rather than showing a default
+        // unpinned chip until the next periodic session poll.
+        self.refresh_host_tab_pins(cx);
         self.terminals.status = format!(
             "Attached Host session in {} pane",
             if pane == PaneSlot::Secondary {

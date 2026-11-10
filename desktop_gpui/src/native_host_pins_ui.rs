@@ -11,14 +11,18 @@ impl Workbench {
             return;
         };
         let root = self.model.root().to_path_buf();
-        let attached_workspace_ids: Vec<String> = self
+        let attached_targets: Vec<TerminalTabContextTarget> = self
             .mixed_tabs
             .entries()
             .iter()
             .filter_map(|tab| match &tab.identity {
-                WorkbenchTabIdentity::Host(target) => Some(target.workspace_id().to_owned()),
+                WorkbenchTabIdentity::Host(target) => Some(target.clone()),
                 WorkbenchTabIdentity::Editor { .. } => None,
             })
+            .collect();
+        let attached_workspace_ids: Vec<String> = attached_targets
+            .iter()
+            .map(|target| target.workspace_id().to_owned())
             .collect();
         let generation = self.workspace_generation;
         self.host_pins_loading = true;
@@ -52,7 +56,7 @@ impl Workbench {
                     for workspace_id in &workspaces {
                         pins.extend(bridge.host_tab_pin_list(workspace_id)?);
                     }
-                    Ok::<_, std::io::Error>(pins)
+                    Ok::<_, std::io::Error>((workspaces, registered, attached_targets, pins))
                 })
                 .await;
             view.update(cx, |view, cx| {
@@ -61,12 +65,13 @@ impl Workbench {
                 }
                 view.host_pins_loading = false;
                 match result {
-                    Ok(pins) => {
+                    Ok((queried_workspaces, registered, attached_targets, pins)) => {
                         view.host_pins_error = None;
                         let map: HashMap<_, _> = pins
                             .into_iter()
                             .map(|pin| ((pin.workspace_id.clone(), pin.id.clone()), pin))
                             .collect();
+                        let mut needs_catchup = false;
                         let ids: Vec<_> = view
                             .mixed_tabs
                             .entries()
@@ -77,6 +82,28 @@ impl Workbench {
                             let WorkbenchTabIdentity::Host(target) = &id else {
                                 continue;
                             };
+                            if !attached_targets.contains(target) {
+                                // A newly attached or recycled Host tab after
+                                // the request began cannot be inferred from
+                                // the stale snapshot of its previous scope.
+                                needs_catchup = true;
+                                continue;
+                            }
+                            match host_pin_owner_coverage(
+                                target.workspace_id(),
+                                &queried_workspaces,
+                                &registered,
+                            ) {
+                                HostPinOwnerCoverage::Queried => {}
+                                HostPinOwnerCoverage::RegisteredButUnqueried => {
+                                    needs_catchup = true;
+                                    continue;
+                                }
+                                HostPinOwnerCoverage::Unregistered => {
+                                    view.mixed_tabs.set_pinned(&id, false);
+                                    continue;
+                                }
+                            }
                             let key =
                                 (target.workspace_id().to_owned(), target.tab_id().to_owned());
                             let pinned = map
@@ -86,6 +113,12 @@ impl Workbench {
                             view.mixed_tabs.set_pinned(&id, pinned);
                         }
                         view.host_pin_snapshots = map;
+                        if needs_catchup {
+                            // A new tab/owner appeared during the async read.
+                            // Re-read its registered owner instead of
+                            // accidentally painting a false unpin.
+                            view.refresh_host_tab_pins(cx);
+                        }
                     }
                     Err(error) => {
                         // An old/offline Host cannot authorize a new CAS.

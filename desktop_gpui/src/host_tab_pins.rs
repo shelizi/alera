@@ -85,6 +85,30 @@ pub fn host_pin_query_workspaces(
     result
 }
 
+/// A late-attached Host tab might appear while an asynchronous pin refresh
+/// is in flight. An unqueried registered owner needs a follow-up refresh,
+/// never an assumed false pin from the previous scope.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HostPinOwnerCoverage {
+    Queried,
+    RegisteredButUnqueried,
+    Unregistered,
+}
+
+pub fn host_pin_owner_coverage(
+    workspace_id: &str,
+    queried: &[String],
+    registered: &[RegisteredHostWorkspace],
+) -> HostPinOwnerCoverage {
+    if queried.iter().any(|id| id == workspace_id) {
+        HostPinOwnerCoverage::Queried
+    } else if registered.iter().any(|item| item.id == workspace_id) {
+        HostPinOwnerCoverage::RegisteredButUnqueried
+    } else {
+        HostPinOwnerCoverage::Unregistered
+    }
+}
+
 pub fn parse_pin_readback(
     value: &Value,
     original: &HostTabPinSnapshot,
@@ -141,6 +165,35 @@ mod tests {
         assert!(
             host_pin_query_workspaces(Some("unregistered"), &["unknown".into()], &registered)
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn mid_refresh_registered_attachment_requires_catchup_instead_of_false_unpin() {
+        let registered = [
+            RegisteredHostWorkspace {
+                id: "root".into(),
+                path: "C:/root".into(),
+            },
+            RegisteredHostWorkspace {
+                id: "newly-attached".into(),
+                path: "C:/attached".into(),
+            },
+        ];
+        let old_scope = vec!["root".into()];
+        assert_eq!(
+            host_pin_owner_coverage("root", &old_scope, &registered),
+            HostPinOwnerCoverage::Queried
+        );
+        assert_eq!(
+            host_pin_owner_coverage("newly-attached", &old_scope, &registered),
+            HostPinOwnerCoverage::RegisteredButUnqueried,
+            "newly attached tabs must not be marked unpinned from old scoped replies"
+        );
+        assert_eq!(
+            host_pin_owner_coverage("unknown", &old_scope, &registered),
+            HostPinOwnerCoverage::Unregistered,
+            "an unregistered workspace must never authorize another Host query"
         );
     }
 
