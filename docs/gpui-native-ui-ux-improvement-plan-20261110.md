@@ -220,3 +220,27 @@
 - P0-01：實際雙 Pane 開檔／Dirty／Undo／Save As、Pinned Tab 與關閉操作須測過，不能以 Library Test 單獨認定完整驗收。
 - P0-02／P0-03：隔離相容 Host 下 `tab.pin.cas`、`editor.twoRowTabs` 及 Classic／GPUI 雙向同步尚未完成。
 - P1-05：Windows 注音真候選窗、800×600 及多 DPI 和其他操作一致性測試仍待執行。**`supported=false` 維持。**
+
+## 八、第三輪續作：Host 斷線設定 Fail-closed 與跨 Pane Pin 測試（2026-11-10）
+
+延續上一輪的「共用設定與釘選／雙列 Tab」未完成項目。由驗證基線 `a3e02f622` 建立兩條獨立 Worktree：`fix/gpui-settings-stale-host-20261110` 與 `test/gpui-pinned-tab-flashmax-20261110`。後者使用 Devin `swe-2-flash-max` 進行釘選 Tab 測試分析，但因非互動式工具確認遭拒，**未產生可用程式差異**，已停止該 Agent；實際修正與測試均由整合協調流程完成，不將結果誤記為 Agent 實作。
+
+| 內容 | 來源 Commit | GPUI 整合 Commit | 實際完成與界線 |
+| --- | --- | --- | --- |
+| P0-03 Host 離線／快取設定保護 | `16ce682b9` | `32f6c01bc` | 當 Rust Host 刷新失敗，即使曾成功載入過 snapshot，也不將舊值顯示為可編輯；刷新時先顯示 Loading，斷線時顯示 Unavailable，拒絕使用舊快取送出 CAS；App Language 選項同步停用，設定錯誤提示新增 Retry |
+| P0-02 跨 Pane 釘選保護回歸 | `8eeda2c15` | `9ecbfaa24` | 新增兩項 Rust 測試：各 Pane Close Others／Close Right 保留釘選、跨 Pane 不誤關且順序正確；釘選 Editor 移動到第二 Pane、儲存重啟與關閉後過期 Pin 清理 |
+
+### 驗證結果
+
+- 獨立設定分支 `native_settings_catalog_ui::tests` 2/2 通過；Native Binary 9/9 通過。
+- 獨立釘選測試分支 Rust Library **376/376** 通過（相較上一輪 374，新增兩項）。
+- 最終整合產品程式碼 HEAD `9ecbfaa24`，`cargo build --offline --locked --bin alera-gpui-desktop -j 2` 通過，完整 Library **376/376**、Binary **9/9**，全部 0 failed。
+- Windows EXE 路徑 `D:/c/gpui/debug/alera-gpui-desktop.exe`，建置時間 2026-11-10 16:56（台灣本機）。後續文件提交不會改變該產品程式碼。
+- **真 Windows GUI／隔離 Host 驗收仍未執行**：未再繞過前輪工作區對 Native 子程序啟動的安全限制；僅能宣告 Build／Rust 測試通過。沒有驗證 Classic／GPUI 雙向 CAS、`tab.pin.cas`、`editor.twoRowTabs` 的隔離 Host 認證同步、實際兩列 Tab 視覺與 800×600／多 DPI。
+- Classic `main`、正式 Runtime Host／PTY、既有 smoke fixture 不變；未 push／merge `main`／release，`supported=false` 保持。
+
+### 下一步
+
+1. 在已授權且隔離的 Windows GUI／Runtime Host 環境，測試 Settings：先連線→斷線→控制項停用→按 Retry→Host 恢復→重新可編輯與 CAS 讀回。
+2. 在 Classic／GPUI 分別切換 `editor.twoRowTabs` 與 Pin，確認左右兩 Pane 獨立釘選列、釘選不被 Close Others／Right 誤關、重啟持久化；完成後才可結案 P0-02。
+3. 補完 Git Diff 放大視窗 GUI 點擊、捲動、Workspace 切換，以及 Editor Dirty／Undo／IME 實機驗收。
