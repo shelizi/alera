@@ -163,5 +163,33 @@
 ## 五、狀態與維護
 
 - **目前完成**：完成此份可執行改善方案；已取得新版 Windows GUI 的 Explorer／Editor／Quick Open／Settings／Pin Tab 初步證據，以及 `Ctrl+S` 寫入後讀檔驗證。
-- **目前未完成**：本文列出的產品修正、隔離 Host 交叉驗收、最新 Git 寫入路徑與正式發行 Gate。
+- **目前未完成**：下列未關閉的產品工作包、隔離 Host 交叉驗收、最新 Git 寫入路徑與正式發行 Gate。部分已通過的項目見第六節，不得把局部改善當成完整功能對齊。
 - 每修一項，在此文件更新工作包狀態、實測時間、修正 Commit、對應測試／畫面；不要把「預計」改寫為「已完成」而無證據。
+
+## 六、SWE-2 Flash Max 平行開發與整合紀錄（2026-11-10）
+
+實作基準：`6ed0b5f80`；本輪產品驗證 HEAD：`48090ecd6`。四個開發工作樹相互隔離，僅將驗證通過的局部修正 Cherry-pick 至 `integrate/gpui-p0p1p2-20261108`。**這不是合併 Flutter Classic `main` 或正式 Release。**
+
+| 工作線 | 執行方式與來源 Commit | 整合 Commit | 狀態／限制 |
+| --- | --- | --- | --- |
+| P0-01 Preview／Editor 去重 | SWE-2 Flash Max：`d3f4d9b5c`，修改 `main.rs`、`model.rs`、`session.rs` | `84516fd80` | 模型／儲存回歸及 Windows 單 Pane GUI 主要重現案例通過；雙 Pane Dirty／釘選仍待驗收 |
+| P0-03 Settings Host 離線提示 | SWE-2 Flash Max：`e325ff9d9`，修改 `native_settings_catalog_ui.rs` | `1f0f78a31` | 區分 Loading／Unavailable／Ready，沒有新增獨立設定儲存；與真實相容 Host 同步及四語系仍未驗收 |
+| P1-02 Projects Catalog 降級與重試 | 側欄 Flash Max 工作線未產生可用變更，由整合協調流程在獨立 Worktree 補寫 `207cf2a65`、視覺修正 `8f1b015af` | `b4ee2e6e6`、`48090ecd6` | 本地項目保留，精簡離線標籤／Details／Retry；窄窗版面與 Details 點擊已 GUI 驗證 |
+| P1-03 Git Diff 擴展閱讀 | Flash Max 曾進行分析但未產生可驗證程式差異 | 無 | **NOT DONE**，不得宣稱 Git Diff 已對齊 Classic |
+
+### 合併版本測試證據
+
+- Windows Native `cargo build --offline --locked --bin alera-gpui-desktop -j 2` 成功，產物為 `D:/c/gpui/debug/alera-gpui-desktop.exe`，在 `48090ecd6` 重新編譯。
+- `cargo test --quiet --offline --locked --no-default-features --lib -j 2`：**370 passed / 0 failed**（基線 368）。
+- `cargo test --quiet --offline --locked --bin alera-gpui-desktop -j 2`：**8 passed / 0 failed**（設定 Host 狀態 2 項專項測試通過）。
+- Windows GUI 使用獨立暫存資料與刻意不存在的 CLI：`README.md` 單擊預覽後雙擊編輯，**只留下 1 個同名 Tab**；`Ctrl+P` 選取長檔名檔案後總共 **2 個 Tab**；再次選取相同檔案仍維持 2 個，顯示重用既有 Editor。
+- 同一個隔離 Workspace 重啟後，狀態列確認 `Restored 2 editable file tab(s) into GPUI panes`，GUI 沒有重複 Tab。
+- Host 離線時設定頁實際顯示 `Rust Host settings unavailable`，而不是永遠 `Waiting for Rust Host settings`。窄側欄新版顯示 `Classic unavailable`、`Details`、刷新圖示；Details 會將 CLI 不可用的原因顯示於狀態列。
+- 本輪測試環境使用的暫存 QA 資料夾已在 GUI 關閉後移除；原本 `.gpui-smoke-20261108/` 與 `desktop_gpui/tests/__pycache__/` 均未清理或寫入。正式 Runtime Host／PTY 與 Classic `main` 不變。
+
+### 未關閉的驗收風險
+
+- **P0-01** 尚需跨兩 Pane 的同檔檢視、Dirty／Undo／釘選、Save As 覆蓋原預覽及競態保護實機驗證，才能把整個工作包打勾。
+- **P0-02／P0-03** 尚需相容隔離 Host／CLI 下實際 `tab.pin.cas`、`editor.twoRowTabs` 與 Classic/GPUI 雙向設定 CAS 同步；Host 離線時不可把提示改良等同於可保存設定。
+- **P1-01／P1-03／P1-04** 的 Editor chrome 精簡、中央可閱讀 Git Diff、完整長檔名與高密度 Tab 視覺仍未完成。
+- 真 Windows IME／DPI、Git Stage／Commit／Graph、Terminal／Agent 與多作業系統發行 Gate **未包含在本輪完成清單**；`supported=false` 維持。
