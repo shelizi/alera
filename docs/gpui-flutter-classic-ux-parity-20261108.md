@@ -2,6 +2,8 @@
 
 Date: 2026-11-08. Branch: `integrate/gpui-p0p1p2-20261108`.
 
+**2026-11-10 Windows GUI 複測與待改善工作單：** [GPUI Native UI/UX 改善計畫](gpui-native-ui-ux-improvement-plan-20261110.md)。該文件區分實機 PASS／FAIL、Host 離線 BLOCKED 與尚未執行項目，不代表目前已通過驗收。
+
 The **original Flutter desktop edition is the interaction specification**.
 GPUI may use different layout/rendering primitives and colors, but may not
 invent a second user workflow merely because implementing it is easier.

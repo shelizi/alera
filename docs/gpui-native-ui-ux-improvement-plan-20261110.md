@@ -1,0 +1,167 @@
+# Alera GPUI Native UI/UX 實機複測與改善計畫（2026-11-10）
+
+> 狀態：**待實作／待驗收（PLAN）**，不是功能完成宣告。
+> 目標分支：`integrate/gpui-p0p1p2-20261108`。基準 HEAD：`05ab11257903d97ad945994594cb208e5f29497e`（2026-11-10 11:57 +08:00）。
+> 產品標準：**Flutter Classic 的行為與操作路徑優先；Native 不需要像素完全一致，但不能為了實作方便而另造操作流程。**
+> 規格來源：[`gpui-flutter-classic-ux-parity-20261108.md`](gpui-flutter-classic-ux-parity-20261108.md)；左側管理 [`gpui-left-project-worktree-parity-20261109.md`](gpui-left-project-worktree-parity-20261109.md)；既有總體 Gate [`gpui-desktop-detailed-execution-plan-20261107.md`](gpui-desktop-detailed-execution-plan-20261107.md)。
+
+## 一、驗收基準及證據邊界
+
+### 環境
+- 作業系統：實際 Windows 桌面，顯示器實體解析度 3840 × 2160；實機畫面以 1600 × 900 JPEG 縮圖檢視。縮圖不能取代完整 DPI／字形驗證。
+- 原始碼：既有 GPUI 整合 Worktree `.worktrees/integrate-gpui-p0p1p2-20261108`；未動 Classic `main`。
+- 命令：在 `desktop_gpui` 執行 `cargo build --offline --locked --bin alera-gpui-desktop -j 2`，Cargo 回報成功；第二次 JSON compiler-artifact 顯示 Native 目標 `fresh=true`、產物 `D:/c/gpui/debug/alera-gpui-desktop.exe`。產物時間戳為 2026-11-10 11:56:41，**沒有內嵌 Commit 識別的獨立佐證**；後續要求啟動畫面／診斷資訊顯示編譯 HEAD，避免僅憑 Cargo fresh 判斷版本。
+- 測試專案：獨立、可拋棄的 `.gpui-ux-retest-20261110`，含自己建立的 `.git`、`main`、`feature/ux-review`、README、繁中、長檔名、Modified 及 Untracked 檔案。
+- 隔離設定：`ALERA_GPUI_STATE_DIR`、`ALERA_RUNTIME_DIR` 指向測試目錄；不啟動、不重設、不終止正式 Runtime Host／PTY；不操作實際工作樹的 Git 寫入指令。
+- 證據口徑：以下「實測」只表示本輪 Windows GUI 觀察；「原始碼存在」或「舊版觀察」不可直接算作最新 GUI 驗收完成。
+
+### 最新實測矩陣
+
+| ID | 功能／情境 | 結果 | 實際發現與證據邊界 |
+| --- | --- | --- | --- |
+| QA-01 | 開啟最新 Native、Explorer 單擊預覽 | PASS | Windows GUI 可開啟；`README.md` 預覽顯示正確繁體中文。 |
+| QA-02 | 預覽 `README.md` 後雙擊編輯 | **FAIL（UX）** | 出現兩個 `README.md` Tab，而不是把臨時預覽轉成／重用單一正式 Editor Tab。 |
+| QA-03 | `Ctrl+P` 搜尋長檔名並開啟 | **PARTIAL** | Quick Open 篩選與長路徑列正常；開啟後出現兩個同名長檔名 Tab，需查是預覽＋Editor 並存還是重複文件實例。 |
+| QA-04 | Editor 輸入、`Ctrl+S`、磁碟內容校驗 | PASS | 測試檔可新增 `LATEST_BUILD_UI_QA_20261110` 並保存，重新讀檔內容相符。 |
+| QA-05 | 左側 Projects/Worktrees | **PARTIAL／改善** | 有常駐搜尋欄，隔離專案下清單較上一輪精簡；Host/CLI catalog 離線時顯示 `Project catalog unavailable: Alera CLI catalog query failed`，需改善離線提示，非直接定性為資料損壞。 |
+| QA-06 | Tab 右鍵功能及釘選 | **PARTIAL** | 第一個 `README.md` 右鍵可見 `Pin Tab`，可觸發；其他 Tab 類型及跨窗格行為需逐一實測。 |
+| QA-07 | 設定分類及本地化選項 | **PARTIAL／改善** | 最新版已呈現完整 Classic 分類及 System/EN/繁中/簡中/日文選項；選擇繁中後，多項設定內容仍顯示英文，需驗證真正應用語言與部分內容是否僅 catalog 預覽。 |
+| QA-08 | 共用 Settings、雙列 Tab 開關 | BLOCKED | 測試時正式 Rust Host 未運作，欄位顯示 `Waiting for Rust Host settings`，`Two-row tabs` 顯示 `Not available in GPUI yet`；必須改以**隔離且相容**的 CLI/Host 重測 CAS、讀回與持久化，不能聲稱已失效或通過。 |
+| QA-09 | 雙窗格、分割後標題／Tab | **PARTIAL（本輪未完整重測）** | 前一輪實機曾見窄視窗內容與頂部文字嚴重擁擠；本輪確認新版 Tab menu，但未取得可判定的完整分割＋復原證據。 |
+| QA-10 | 右側 Git 檔案差異／Stage／Commit／Graph | **NOT RUN（最新 GUI 寫入路徑）** | 前輪舊版顯示狹窄側欄 patch 不易讀；新版尚未完成同一情境全流程測試。只能在獨立 Git fixture 動寫入。 |
+| QA-11 | Terminal／Agent／IME 的 Host 實際操作 | BLOCKED | 隔離預覽使用 offline Host，不得以顯示 `Host offline` 取代 Terminal/Agent 或真實注音候選窗驗收。 |
+| QA-12 | 重啟後版面、釘選、修改中的 Editor | NOT RUN | 需在可拋棄的狀態目錄進行二次啟動及身分持久化驗證。 |
+
+### 驗證狀態原則
+- **PASS**：操作及預期副作用可觀察，必要時含磁碟／Host 讀回。
+- **FAIL**：實機重現且與 Classic 行為或操作直覺不同。
+- **PARTIAL**：有可用操作但缺少其他條件，或只比對到部分介面。
+- **BLOCKED**：需要未提供的相容隔離 Host、CLI 或真實 IME／環境。
+- **NOT RUN**：尚未測試；不得因 Rust 單測、`cargo check` 或文件宣稱而變成 PASS。
+
+## 二、優先改善工作包
+
+### P0-01｜同一檔案的 Preview → Editor／Quick Open 不得產生意外的重複 Tab
+
+**現況／重現**
+1. 開啟隔離 Git 專案，Explorer 單擊 `README.md`。
+2. 同檔案雙擊進入 Editor，出現兩個同名 Tab。
+3. `Ctrl+P` 篩選 `long` 並選擇長檔名 Rust 檔案，也可看到兩個同名 Tab。
+
+**設計決策**：同一 Pane 的單次開檔動作應重用現有 canonical file-backed Editor，並按 Classic 既有 Preview 提升語意轉換；臨時預覽不能錯當永久 Tab。不同 Pane 若明確要求同檔分割檢視，允許不同 view，但應遵守文件／Unsaved／Undo 權屬契約，不能默默建立兩個不一致的可編輯 buffer。先確認兩個 Tab 究竟分別屬於 Preview／Editor 何種 identity，再修最小根因；不可為了隱藏重複而任意關閉含未儲存內容的 Tab。
+
+**預計檢查**：`desktop_gpui/src/main.rs`、`editor_tabs.rs`、`editor_session.rs`、`workbench_tabs.rs`、`workbench_panes.rs`、`quick_open_ui.rs`（最後一項依實際存在確認）。
+
+**驗收 Gate**
+- Explorer 預覽 → 同檔雙擊、`Ctrl+P` 重開、同檔再次開啟各循環 10 次；**同 Pane 不新增意外重複 Tab**。
+- 臨時預覽點其他檔案會被安全替換；已固定／編輯／Dirty 的內容不被覆蓋。
+- 各 Pane 明確開同檔後切換、移動、儲存、Undo、關閉、重啟仍保留正確身份與資料。
+- 加入檔案 ID／Pane ID／Preview Promotion 的 Rust 回歸測試，並實際 Windows 滑鼠驗收。
+
+### P0-02｜分割視窗與 Tab 釘選語意對齊 Classic
+
+**現況**：本輪 Pin Tab 有可操作入口，但雙列設定與 Host 讀回未驗證；前輪窄視窗曾見長標題、兩個 Pane 的 Editor 狀態文字擁擠。
+
+**改善**：每 Pane 一組獨立 Mixed Tab Strip（Terminal／Agent／Editor）；作用於該 Pane 的右鍵移動、關閉其他／右側、拖曳與釘選；一般 Tab 不得排到釘選 Tab 之前；兩列模式只有「設定啟用＋該 Pane 有釘選項」才出現。視窗狹窄時採省略、Tooltip、可捲動及合理最小寬度，不讓一 Pane 覆蓋另一 Pane 的按鈕或文字。
+
+**預計檢查**：`workbench_tabs.rs`、`workbench_panes.rs`、`native_host_pins_ui.rs`、`host_tab_pins.rs`、`main.rs`、`workbench_layout_store.rs`、`native_shared_settings_ui.rs`。
+
+**驗收 Gate**
+- 1200×800 與 800×600（另跑系統 100%／150%／200% DPI）分別操作 Split／Unsplit，沒有重疊、失焦或消失的必要控制。
+- 在左／右 Pane 各建立 Editor＋Terminal（需隔離 Host）並移動、關閉、重新開啟；操作只影響正確 Pane。
+- Pin／Unpin、Close Others／Close Right、拖曳跨 Pane、重啟復原，均核對 Tab identity；含 Host 工作階段不因 Native Tab 關閉而被誤終止。
+- Compatible Host/CLI 下驗證 Classic／GPUI 雙向 `tab.pin.cas` 與 `editor.twoRowTabs` 讀回；**不使用正式 Runtime Host**。
+
+### P0-03｜設定畫面「列出分類」與「設定生效」必須分開驗收
+
+**現況**：分類與語言切換器已存在，但離線時多個欄位為等待讀取或不可用；不能把分類齊全等同功能已完成。
+
+**改善**：設定分成可用（可讀／可寫且讀回成功）、唯讀預覽（明示原因）、Host 離線（重試／連線提示）、尚未實作（禁止假按鈕）。Classic 與 GPUI 共用項的唯一真相應在 Rust Core／Host，Frontend 只維護 UI 個別狀態；CAS 版本衝突要告知並可重新載入，不以 Native JSON 偷代 Host 成功。语言切換要實際套用到選單／欄位／狀態，不只是下拉選擇器。
+
+**預計檢查**：`native_settings_catalog_ui.rs`、`native_settings_ui.rs`、`native_settings.rs`、`native_shared_settings_ui.rs`、`settings_menu_catalog.rs`、`runtime_bridge.rs`、Rust Core `desktop_settings_contract`。
+
+**驗收 Gate**
+- 有相容隔離 Host 的四種語系及 Classic/GPUI 各改一次 → Host 讀回 → 雙窗同步 → 重啟復原，含競態 CAS 測試。
+- Host 不存在時，顯示「尚未連線／不可修改」而非永遠旋轉；不可假成功；有可見重試途徑。
+- 15 個分類逐一記錄「已接實際功能／僅預覽／缺少」，不可把全部列為完成。
+
+### P1-01｜Editor 工具資訊分層，提升畫面有效內容比例
+
+**問題**：`Native UTF-8 text editor (experimental)`、Undo/Redo 數字、草稿安全提示等持續佔用頂部多行，窄畫面特別凌亂。
+
+**改善**：將檔名與關鍵行列／Dirty／儲存狀態縮成可辨識的單列工具資訊；詳情／非阻斷診斷改至狀態列、Tooltip 或明確的資訊面板。**草稿僅本機明文**屬實質風險，不得直接刪除提醒，應改成適當位置且仍能被使用者查到。Find/Replace 按需展開，不應擠壓第二窗格。
+
+**驗收**：同一文字檔在 1200×800、800×600 比較 Classic/Native 編輯首屏可見行數；無不合理換行、控件重疊；Save／Undo／Redo、草稿提示仍可用。
+
+### P1-02｜左側專案／Worktree 搜尋、離線回退及資訊密度
+
+**現況**：新版已新增 Search projects / worktrees 且隔離專案清單更緊湊；但 Runtime catalog 不可用時在主要區域直接顯示技術性錯誤。
+
+**改善**：保持 Classic 分組、釘選、最近項目與 Worktree 辨識；錯誤訊息區分 Host 離線、CLI 舊版、授權失敗、空列表，保留 local preview，提供可見但不遮擋清單的重新整理／診斷。沒有資料不等於 `Detached HEAD` 清單，截斷名稱需 Tooltip／完整路徑可取用。
+
+**驗收**：0／1／20+ Worktree，長路徑、巢狀分組、搜尋、收合、跨 Workspace 切換；Host 離線→恢復後列表與當前選取一致。不得自動移除或修剪 Worktree。
+
+### P1-03｜Git 差異預覽與 Classic 檔案操作路徑
+
+**問題來源**：舊版實機的窄側欄 Raw Patch 不易閱讀；本輪最新版尚無完整 Stage／Commit GUI 實測。
+
+**改善**：右側維持 Compact Changes／Staged／Untracked 樹與操作；點檔案時以**中央可讀 Diff View**（或可切換完整檢視）呈現，而非強迫在窄 sidebar 閱讀 Raw Patch。保持 Explorer 相同搜尋與檔案選取語意，明確標示 Git worktree root、操作對象、未追蹤檔案的安全刪除與提交預覽；不可用「Refresh」假裝操作成功。
+
+**預計檢查**：`git_actions.rs`、`git_history.rs`、`git_inspect.rs`、`main.rs`，Classic `workspace_git_diff_panel_*.dart`。
+
+**驗收**：**僅隔離 Git repo** 實測 Modified／Untracked 篩選、差異、Stage／Unstage、提交訊息預覽、取消、Refresh、Git Graph 進出。拒絕 root 身分不符時在按下變更按鈕**之前**提示，並保持檔案／Git index 不變。不得對使用者 Alera 工作樹提交。
+
+### P1-04｜長檔名、Tab 與 Quick Open 呈現
+
+**現況**：`Ctrl+P` 可找到 `src/a_very_long_filename_for_explorer_quickopen_tab_layout_validation.rs`；Tab 標題因寬度而截斷。
+
+**改善**：長檔名自動省略，但懸浮可見完整檔名與相對路徑；不同檔名同名時以路徑辨識；選中 Tab 易辨識且 close/dirty/pin 標記不重疊。Quick Open 清單依路徑分層顯示，避免超長名稱蓋掉 keyboard focus 指示。
+
+**驗收**：10、50、100 個 Tab＋極長檔名、單／雙 Pane、Quick Open 鍵盤上下選擇，無視覺重疊或誤關閉；實際 Windows 點擊與快捷鍵驗收。
+
+### P1-05｜輸入法、焦點與多 DPI 的正常使用路徑
+
+在 Explorer filter、Quick Open、Editor、兩側 Terminal 逐一驗收 Windows 注音的組字、選字、焦點切換與取消。當輸入法組字中，快捷鍵不得搶走候選窗或把未確認文字送入另一個 Pane。可另以小畫家等 OS 控制組驗證自動化滑鼠路由，**不能把桌面自動化注入失敗當成產品缺陷**。
+
+### P2｜完整 Classic 進階對齊
+- Git Graph 進階操作、跨分支比較／合併、Worktree 衝突、外部編輯器、OS 拖放、完整 Agent Profile 啟動／附加與 MCP 定向多窗。
+- 重啟時兩窗格、釘選、dirty draft、搜尋條件與選取狀態的正確復原。
+- macOS/Linux 的字形、IME、快捷鍵與原生視窗互動（另建平台 Gate）。
+
+## 三、執行順序與分工邊界
+
+| 順序 | 工作包 | 最小交付 | 拒絕條件 |
+| --- | --- | --- | --- |
+| 1 | P0-01 Preview/Editor 身分 | 先新增重現測試，再改最小 Tab/Session 路由並 GUI 重測 | 丟失 Dirty、創建兩個互相矛盾的 buffer |
+| 2 | P0-02 Pane／Pin／Two-row | 每 Pane 佈局正確＋隔離 Host Pin CAS 實測 | 把 Host session 當可隨意關閉的 Native Tab |
+| 3 | P0-03 共用設定 | Host 相容版本、讀寫 CAS／離線 UI／語言真正套用 | 假成功、把 Host 欄位偷偷寫入 Native 私有設定 |
+| 4 | P1-01、04 編輯器與 Tab 視覺 | 精簡 chrome、長檔名適配、保存與 Undo 不中斷 | 刪除安全警告、按鈕不可見或不可點 |
+| 5 | P1-02 專案／Worktree | 搜尋分組、狀態提示、離線回退 | 錯把 CLI 離線當刪除 Workspace |
+| 6 | P1-03 Git | 可讀 Diff、完整安全操作 GUI smoke | 未隔離實際 Git 寫入、誤刪 Untracked |
+| 7 | P1-05、P2 | 真 Windows IME、多 DPI、Host/Agent/Graph 進階覆蓋 | 只靠 model test 或螢幕截圖宣告完成 |
+
+### 每張工作單的完成定義
+1. 記錄實際 `HEAD`、初始 `git status --short` 與修改檔案白名單；保留其他人 WIP／原始 smoke fixture。
+2. 先 RED（重現）、再 GREEN（專項 Rust 測試）、最後 Windows EXE Build＋GUI pointer/keyboard。不得以 Cargo 成功代替 GUI。
+3. 測試至少涵蓋正常操作、Workspace 切換、重啟、取消、錯誤／離線與雙窗格；任何 Host 操作都使用單獨臨時 Runtime。
+4. 記錄 `PASS / FAIL / BLOCKED / NOT RUN`、Windows／DPI／語言、程序 PID、測試 EXE 的 source HEAD、重現步驟、前後畫面與是否有磁碟／Host 讀回。
+5. 不動 Flutter Classic `main`、正式 Runtime Host／PTY；無使用者明確要求不合併 `main`、不 push、不 tag、不 release；`supported=false` 直到正式 Gate 關閉。
+6. 不修改安全限制來消除錯誤；跨 Workspace、Host Tab 世代、Git worktree root 身分失配都必須 fail closed。
+
+## 四、下一輪實際驗收清單
+
+- [ ] QA-02：同檔預覽／開啟／Quick Open 在同 Pane 去重；Dirty 安全。
+- [ ] QA-03：長檔名 Tab／Quick Open 視覺及點擊目標。
+- [ ] QA-06：Editor、Terminal、Agent Tab 右鍵 Pin／Unpin，Close Others／Right，左右獨立 Pane。
+- [ ] QA-08：隔離相容 Runtime Host 下 `editor.twoRowTabs`、`tab.pin.cas`、Classic/GPUI 同步與離線恢復。
+- [ ] QA-09：1200×800、800×600 分割／復原及 100/150/200% DPI。
+- [ ] QA-10：隔離 Git repo 中 Diff／Stage／Unstage／Commit／Graph／Refresh，無對 Alera repo 寫入。
+- [ ] QA-11：隔離 Host Terminal/Agent 與 Windows 注音真實候選窗／焦點路由。
+- [ ] QA-12：儲存、重啟、草稿恢復、外部檔案衝突、雙 Pane 持久化。
+- [ ] 實際與 Classic 相同操作逐項比對，紀錄結果及未測項目。
+
+## 五、狀態與維護
+
+- **目前完成**：完成此份可執行改善方案；已取得新版 Windows GUI 的 Explorer／Editor／Quick Open／Settings／Pin Tab 初步證據，以及 `Ctrl+S` 寫入後讀檔驗證。
+- **目前未完成**：本文列出的產品修正、隔離 Host 交叉驗收、最新 Git 寫入路徑與正式發行 Gate。
+- 每修一項，在此文件更新工作包狀態、實測時間、修正 Commit、對應測試／畫面；不要把「預計」改寫為「已完成」而無證據。
