@@ -4,6 +4,38 @@ use super::*;
 use alera_gpui_desktop::agent_quota::{merge_quota_snapshots, parse_quota_snapshots, QuotaReading};
 use std::io;
 
+fn quota_overview_status(loading: bool, failed: bool, has_entries: bool) -> &'static str {
+    if loading {
+        "Refreshing from the existing Host…"
+    } else if failed && !has_entries {
+        "Quota unavailable · connect to the existing Runtime Host"
+    } else if failed {
+        "Last refresh failed; previous readings are stale"
+    } else if !has_entries {
+        "No quota data returned from Runtime Host"
+    } else {
+        "Provider quotas · remaining percent"
+    }
+}
+
+#[cfg(test)]
+mod quota_ui_tests {
+    use super::quota_overview_status;
+
+    #[test]
+    fn missing_host_without_previous_readings_does_not_claim_stale_data() {
+        assert!(quota_overview_status(false, true, false).contains("unavailable"));
+        assert!(!quota_overview_status(false, true, false).contains("previous readings"));
+    }
+
+    #[test]
+    fn prior_readings_are_only_stale_after_a_failed_refresh() {
+        assert!(quota_overview_status(false, true, true).contains("stale"));
+        assert!(quota_overview_status(true, true, true).starts_with("Refreshing"));
+        assert!(quota_overview_status(false, false, false).starts_with("No quota data"));
+    }
+}
+
 fn quota_reading_color(status: &str, reading: &QuotaReading) -> u32 {
     if status != "ok" {
         return MUTED;
@@ -212,15 +244,11 @@ impl Workbench {
         let refresh_owner = owner.clone();
         let loading = self.quota_loading;
         let entries = self.quota_snapshots.clone();
-        let status = if loading {
-            "Refreshing from the existing Host…"
-        } else if self.quota_error.is_some() {
-            "Last refresh failed; previous readings are stale"
-        } else if entries.is_empty() {
-            "No quota data returned from Runtime Host"
-        } else {
-            "Provider quotas · remaining percent"
-        };
+        let status = quota_overview_status(
+            loading,
+            self.quota_error.is_some(),
+            !entries.is_empty(),
+        );
         div()
             .w_full()
             .flex()

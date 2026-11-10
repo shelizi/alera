@@ -9771,7 +9771,14 @@ impl Render for Workbench {
                     .bg(rgb(TOOLBAR))
                     .text_sm()
                     .text_color(rgb(MUTED))
-                    .child(status)
+                    .child(
+                        div()
+                            .id("native-runtime-status")
+                            .max_w(px(320.0))
+                            .min_w_0()
+                            .overflow_hidden()
+                            .child(status),
+                    )
                     .child(self.render_native_quota_status(cx))
                     .child(self.render_kit_branch_dropdown(
                         "status-branch-picker",
