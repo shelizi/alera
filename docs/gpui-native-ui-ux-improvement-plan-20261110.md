@@ -295,3 +295,28 @@
 1. 在有正式授權的隔離 Windows 桌面實測 Previous／Next／Expand 的互動，確認窄側欄、翻頁後重新開啟 Expand、已暫存與未暫存狀態切換及 Workspace 改變不會造成舊頁混入。
 2. 評估真正可視化中央 Diff（選取檔案後中央編輯區顯示左右差異、來源行號與 Hunk 導航），使用有界緩衝區或分頁讀取，並建立重繪／極長檔案效能測試。
 3. 繼續驗收 `editor.twoRowTabs`、`tab.pin.cas` Classic／GPUI 雙向 Host 同步、雙 Pane Dirty／Undo、Windows 注音與高 DPI；通過前不可將 `supported` 設為 true。
+
+## 十一、第六輪續作：放大 Diff 視窗內直接翻頁（2026-11-10）
+
+由上一輪最後驗證的 `9fe39bfad` 建立獨立 `feat/gpui-git-dialog-paging-20261110` Worktree。本輪先處理放大 Git Diff 視窗只有靜態單頁的操作落差；未修改 Patch 分頁讀取引擎、Classic UI 或正式 Host。
+
+| 工作包 | 原始提交 | 整合提交 | 實作 |
+| --- | --- | --- | --- |
+| P1-03 Kit 放大 Diff 的 Previous／Next | `5d5e2b6a4` | `29c24887b` | 保留原本 32 KiB 單頁上限，Kit 放大視窗直接呈現目前檔案頁面及可用的 Previous／Next，背景讀取時先停用控制。讀取完成後只替換目前頁面；更換頁面也使用不同滾動區身分 |
+| P1-03 放大視窗來源驗證 | 同上 | 同上 | 以 `workspace_generation`、檔案相對路徑及新的 `source_ticket` 鎖定對話框；同檔案重新選取也換新票證。舊視窗在切換檔案、Workspace 或 Git History／Compare 後只顯示來源已變更提示，不再對新來源送出翻頁請求；按鈕 callback 再做一次條件查核 |
+| P1-03 比較來源分離 | 同上 | 同上 | Git History／分支 Compare 仍在 Kit Dialog 顯示開啟當下的唯讀快照，不誤套檔案分頁選擇；檔案分頁標記為 `Read-only current page` 與 `live Git`，避免被視為跨頁不可變快照 |
+
+### 驗證與尚未通過的 Gate
+
+- 獨立 Worktree：`cargo check --offline --locked --bin alera-gpui-desktop -j 2` 成功；增加一項來源識別測試，證明同檔案翻頁保留原視窗身分，而變更 Workspace generation、切換檔案、清空 paging 或重新選取相同檔名後均拒絕操作。Native Kit Dialog 專項 **4/4** 通過。
+- 完整獨立分支 Windows Native Build 通過，Library **382/382**、Binary **12/12** 通過；Rustfmt scoped check 及 `git diff --check` 通過。
+- 整合產品程式碼 `29c24887b` 重新執行 Windows Native Build、Library **382/382**、Binary **12/12**，全數 0 failed；本機 EXE `D:/c/gpui/debug/alera-gpui-desktop.exe`，2026-11-10 約 17:27。
+- **Windows GUI NOT RUN**：沒有取得新授權可啟動隔離 Windows GPUI 桌面程式，故對話框真正的滑鼠 Previous／Next、非同步刷新、捲動位置、800×600／高 DPI、來源失效顯示仍需實機驗證。Rust 編譯／測試不可代替 UI 視覺驗收。
+- 32 KiB／頁、32 頁及 100,000 Patch 記錄掃描限制均保留。原始資料每頁以目前 Git 工作樹重新讀取，不應被誤認為同一不可變 Git 快照。中央雙欄完整 Diff 尚未實作，仍是 `P1-03 PARTIAL`。
+- 未推送、未部署、未合併 Classic `main`、未更動正式 Runtime Host／PTY 或已存在的 smoke/cache 資料，`supported=false` 不變。
+
+### 後續優先項目
+
+1. 在經核准的隔離 Windows GUI 中開啟大於 32 KiB 的已暫存及未暫存 Patch：在放大 Kit Dialog 直接翻頁、返回上一頁、切換選取檔案／Workspace、關閉視窗，核對內容及 Git Index 完全不變。
+2. 下一輪可改進中心區可讀性，例如含行號／Hunk 跳轉的中央唯讀檔案 Diff，應保留嚴格的每頁資源限制並另做長行效能測試。
+3. 回到 Classic／GPUI 共同設定與 Tab Pin CAS：隔離 Host 的 `editor.twoRowTabs` 與 `tab.pin.cas` 雙向持久化、雙 Pane Dirty／Undo、Windows 注音候選窗與多 DPI 實機驗收。
