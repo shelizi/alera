@@ -1,5 +1,5 @@
 //! Secret-free, identity-checked Host Tab pin metadata. Never owns a PTY.
-use crate::terminal::{TerminalSession, TerminalTabContextTarget};
+use crate::terminal::{RegisteredHostWorkspace, TerminalSession, TerminalTabContextTarget};
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashSet;
@@ -62,6 +62,29 @@ pub fn parse_pin_snapshot(value: &Value, workspace: &str) -> io::Result<Vec<Host
     Ok(result)
 }
 
+/// Query the active root plus other registered Host workspaces that own an
+/// attached Native Terminal/Agent preview. A Host session's workspace ID
+/// alone is not authorization to query an unregistered or recycled owner.
+/// Keep first-seen order so root remains first, and never duplicate queries.
+pub fn host_pin_query_workspaces(
+    root_workspace: Option<&str>,
+    attached_workspace_ids: &[String],
+    registered: &[RegisteredHostWorkspace],
+) -> Vec<String> {
+    let allowed: HashSet<&str> = registered.iter().map(|item| item.id.as_str()).collect();
+    let mut seen = HashSet::new();
+    let mut result = Vec::new();
+    for id in root_workspace
+        .into_iter()
+        .chain(attached_workspace_ids.iter().map(String::as_str))
+    {
+        if allowed.contains(id) && seen.insert(id) {
+            result.push(id.to_owned());
+        }
+    }
+    result
+}
+
 pub fn parse_pin_readback(
     value: &Value,
     original: &HostTabPinSnapshot,
@@ -88,6 +111,38 @@ pub fn parse_pin_readback(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn pin_refresh_includes_registered_attached_workspaces_without_trusting_unknown_ids() {
+        let registered = [
+            RegisteredHostWorkspace {
+                id: "root".into(),
+                path: "C:/root".into(),
+            },
+            RegisteredHostWorkspace {
+                id: "attached".into(),
+                path: "C:/other".into(),
+            },
+        ];
+        let observed = vec![
+            "attached".to_owned(),
+            "attached".to_owned(),
+            "unknown".to_owned(),
+            "root".to_owned(),
+        ];
+        assert_eq!(
+            host_pin_query_workspaces(Some("root"), &observed, &registered),
+            ["root", "attached"]
+        );
+        assert_eq!(
+            host_pin_query_workspaces(None, &observed, &registered),
+            ["attached", "root"]
+        );
+        assert!(
+            host_pin_query_workspaces(Some("unregistered"), &["unknown".into()], &registered)
+                .is_empty()
+        );
+    }
 
     #[test]
     fn only_secret_free_workspace_scoped_pin_snapshots_are_accepted() {

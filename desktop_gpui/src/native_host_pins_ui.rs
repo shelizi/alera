@@ -11,6 +11,15 @@ impl Workbench {
             return;
         };
         let root = self.model.root().to_path_buf();
+        let attached_workspace_ids: Vec<String> = self
+            .mixed_tabs
+            .entries()
+            .iter()
+            .filter_map(|tab| match &tab.identity {
+                WorkbenchTabIdentity::Host(target) => Some(target.workspace_id().to_owned()),
+                WorkbenchTabIdentity::Editor { .. } => None,
+            })
+            .collect();
         let generation = self.workspace_generation;
         self.host_pins_loading = true;
         self.host_pins_request = self.host_pins_request.wrapping_add(1);
@@ -18,12 +27,32 @@ impl Workbench {
         cx.spawn(async move |view, cx| {
             let result = cx
                 .background_spawn(async move {
-                    // Resolve the current root through the authenticated Host
-                    // catalog instead of trusting a saved or UI-supplied id.
+                    // Resolve every owner through the authenticated Host
+                    // catalog. The active root may not itself be registered
+                    // when the user has manually attached another Workspace.
                     let registered = bridge.list_registered_workspaces()?;
-                    let workspace_id = select_registered_host_workspace(&root, &registered)?;
-                    let pins = bridge.host_tab_pin_list(&workspace_id)?;
-                    Ok::<_, std::io::Error>((workspace_id, pins))
+                    let root_workspace = match select_registered_host_workspace(&root, &registered)
+                    {
+                        Ok(id) => Some(id),
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                        Err(error) => return Err(error),
+                    };
+                    let workspaces = host_pin_query_workspaces(
+                        root_workspace.as_deref(),
+                        &attached_workspace_ids,
+                        &registered,
+                    );
+                    if workspaces.is_empty() || workspaces.len() > 24 {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            "No registered Host Tab owners, or too many attached Workspaces",
+                        ));
+                    }
+                    let mut pins = Vec::new();
+                    for workspace_id in &workspaces {
+                        pins.extend(bridge.host_tab_pin_list(workspace_id)?);
+                    }
+                    Ok::<_, std::io::Error>(pins)
                 })
                 .await;
             view.update(cx, |view, cx| {
@@ -32,7 +61,7 @@ impl Workbench {
                 }
                 view.host_pins_loading = false;
                 match result {
-                    Ok((workspace_id, pins)) => {
+                    Ok(pins) => {
                         view.host_pins_error = None;
                         let map: HashMap<_, _> = pins
                             .into_iter()
@@ -48,9 +77,6 @@ impl Workbench {
                             let WorkbenchTabIdentity::Host(target) = &id else {
                                 continue;
                             };
-                            if target.workspace_id() != workspace_id {
-                                continue;
-                            }
                             let key =
                                 (target.workspace_id().to_owned(), target.tab_id().to_owned());
                             let pinned = map

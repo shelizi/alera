@@ -37,7 +37,7 @@ use alera_gpui_desktop::git_history::{
     compare_git_refs, compare_local_branch, preview_commit, GitHistoryOptions, GitHistorySnapshot,
 };
 use alera_gpui_desktop::git_inspect::{read_file_diff, GitSnapshot};
-use alera_gpui_desktop::host_tab_pins::HostTabPinSnapshot;
+use alera_gpui_desktop::host_tab_pins::{host_pin_query_workspaces, HostTabPinSnapshot};
 use alera_gpui_desktop::mcp_ui_bridge::{
     matching_host_tab_handle, NativeMcpUiBridge, NativeMcpUiCommand, NativeMcpUiEvent,
 };

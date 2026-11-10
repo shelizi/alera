@@ -156,6 +156,11 @@ instead of the stale legacy `center_view` flag after session restore.
   readback before updating the chip, and rejects workspace switches,
   closed/recycled sessions, stale revisions and unsupported older Hosts.
   No secret Agent command or PTY receipt is exposed by the CLI projection.
+- Native also loads Host pin metadata for exact registered workspace IDs of
+  manually attached Terminal/Agent tabs in other Workspaces; it never trusts
+  an unknown workspace ID from a local preview. The background refresh is
+  bounded to 24 distinct registered owners and rechecks live Tab/PTY identity
+  before reflecting the pin in the mixed strip.
 - The Native CLI bridge must dispatch response schemas by command: `pin-list`
   returns a minimal **array**, `pin-set` returns one minimal **object**,
   while ordinary Settings requests still return `values`. Previously both
@@ -168,9 +173,11 @@ instead of the stale legacy `center_view` flag after session restore.
 
 **Remaining parity:** Host/Agent pin sync requires compatible rebuilt
 Runtime Host and CLI binaries and a real Windows Classic/GPUI acceptance
-pass; the production Host is unchanged. Pins for manually attached Host tabs
-belonging to a different workspace than the current root are not yet
-projected by the root-scoped Native pin refresh. The two-row *preference*
+pass; the production Host is unchanged. Real disposable Host + Classic-equivalent
+RPC + Native CLI pin-list/pin-set/restart validation is available via
+`python desktop_gpui/tests/test_host_tab_pin_rpc.py --cli <branch-alera.exe>`;
+it uses a private runtime and never launches a PTY or a GUI, so it is not
+a substitute for the visual Windows acceptance pass. The two-row *preference*
 is already a reviewed shared Rust Core scalar.
 Classic seeds its old local value only when absent and uses field-scoped CAS;
 GPUI migrates a previously persisted Native JSON value only if the old
