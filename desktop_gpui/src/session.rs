@@ -858,6 +858,28 @@ mod tests {
     }
 
     #[test]
+    fn editor_owned_preview_release_is_not_restored_as_a_file_tab() {
+        let workspace = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let owned = workspace.path().join("owned.txt");
+        let kept = workspace.path().join("kept.txt");
+        fs::write(&owned, "editor buffer").unwrap();
+        fs::write(&kept, "preview only").unwrap();
+        let store = PreviewSessionStore::new(state.path());
+        let mut model = WorkbenchModel::new(workspace.path()).unwrap();
+        assert!(model.open_path(&owned));
+        assert!(model.open_path(&kept));
+        // The editable workbench now owns `owned`; its preview slot is gone.
+        assert!(model.release_path(&owned));
+        assert_eq!(model.tabs().len(), 1);
+        store.save(&model).unwrap();
+        let mut reopened = WorkbenchModel::new(workspace.path()).unwrap();
+        assert_eq!(store.restore(&mut reopened).unwrap(), 1);
+        assert_eq!(reopened.tabs().len(), 1);
+        assert_eq!(reopened.tabs()[0].path, kept);
+    }
+
+    #[test]
     fn native_git_favorites_survive_restart_and_stay_scoped_to_canonical_workspace() {
         let state = tempfile::tempdir().unwrap();
         let workspace_a = tempfile::tempdir().unwrap();

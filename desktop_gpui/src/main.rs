@@ -577,6 +577,13 @@ impl Workbench {
                 }
                 self.persist_session();
             }
+        } else if let Some((pane, instance)) = self.editor_instance_for_path(path, cx) {
+            // A file already owned by a live editor buffer is reused, never
+            // shadowed by a second read-only preview chip for the same path.
+            self.focus_editor_instance(pane, instance, cx);
+            self.explorer_preview_active = false;
+            self.model
+                .set_status("Focused existing editor buffer; no duplicate opened");
         } else if self.model.preview_path(path) {
             self.explorer_preview_active = true;
             self.center_view = CenterView::Editor;
@@ -1311,6 +1318,39 @@ impl Workbench {
             .or_else(|| self.secondary_editor.clone())
     }
 
+    /// The pane and opaque tab instance already editing `path`, if any.
+    /// Canonical-path comparison lets preview/promotion reuse the live
+    /// buffer instead of opening a second tab for the same file.
+    fn editor_instance_for_path(&self, path: &Path, cx: &Context<Self>) -> Option<(PaneSlot, u64)> {
+        let canonical = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        [PaneSlot::Primary, PaneSlot::Secondary]
+            .into_iter()
+            .find_map(|pane| {
+                let owner = self.editor_for_pane(pane)?;
+                owner
+                    .read(cx)
+                    .file_backed_tab_instances()
+                    .into_iter()
+                    .find(|(_, open)| open == &canonical)
+                    .map(|(instance, _)| (pane, instance))
+            })
+    }
+
+    /// Focus the exact live editor tab `instance` in `pane` and make it the
+    /// workbench's active mixed tab.
+    fn focus_editor_instance(&mut self, pane: PaneSlot, instance: u64, cx: &mut Context<Self>) {
+        if let Some(owner) = self.editor_for_pane(pane) {
+            owner.update(cx, |editor, cx| {
+                editor.activate_tab_instance(instance, cx);
+            });
+        }
+        self.mixed_panes.activate(&WorkbenchTabIdentity::Editor {
+            editor_epoch: self.editor_epoch,
+            instance,
+        });
+        self.center_view = CenterView::Editor;
+    }
+
     fn all_editor_files_and_active(
         &self,
         cx: &Context<Self>,
@@ -1350,11 +1390,18 @@ impl Workbench {
                 workbench.secondary_editor = None;
             }
             let (files, active) = workbench.all_editor_files_and_active(cx);
-            let changed = files != workbench.editor_file_layout_snapshot
-                || active != workbench.editor_active_layout_snapshot;
+            let files_changed = files != workbench.editor_file_layout_snapshot;
+            let changed = files_changed || active != workbench.editor_active_layout_snapshot;
             workbench.editor_file_layout_snapshot = files;
             workbench.editor_active_layout_snapshot = active;
             if changed && workbench.mixed_layout_restore.is_none() {
+                if files_changed {
+                    // A live editor buffer is canonical for its path; drop
+                    // any read-only preview chip that would duplicate it.
+                    for (_, path) in &workbench.editor_file_layout_snapshot {
+                        workbench.model.release_path(path);
+                    }
+                }
                 workbench.sync_mixed_tabs(cx);
                 workbench.save_mixed_pane_layout(cx);
             }
@@ -2431,28 +2478,15 @@ impl Workbench {
         let root = self.model.root().to_path_buf();
         // Never open the same disk file as two independent mutable buffers.
         // If a pane already owns it, focus that exact existing document.
-        for pane in [PaneSlot::Primary, PaneSlot::Secondary] {
-            if let Some(owner) = self.editor_for_pane(pane) {
-                if let Some((instance, _)) = owner
-                    .read(cx)
-                    .file_backed_tab_instances()
-                    .into_iter()
-                    .find(|(_, open)| open == &path)
-                {
-                    owner.update(cx, |editor, cx| {
-                        editor.activate_tab_instance(instance, cx);
-                    });
-                    self.mixed_panes.activate(&WorkbenchTabIdentity::Editor {
-                        editor_epoch: self.editor_epoch,
-                        instance,
-                    });
-                    self.center_view = CenterView::Editor;
-                    self.model
-                        .set_status("Focused existing editor buffer; no duplicate opened");
-                    cx.notify();
-                    return;
-                }
-            }
+        if let Some((pane, instance)) = self.editor_instance_for_path(&path, cx) {
+            self.focus_editor_instance(pane, instance, cx);
+            // The editable buffer is the single canonical tab for this
+            // path; release any read-only preview chip that would duplicate it.
+            self.model.release_path(&path);
+            self.model
+                .set_status("Focused existing editor buffer; no duplicate opened");
+            cx.notify();
+            return;
         }
         if self.editor.is_none() {
             let mut tabs = EditorTabs::new(self.draft_store());
@@ -2460,6 +2494,7 @@ impl Workbench {
                 Ok(effect) => {
                     self.model.set_status(effect.status());
                     self.install_editor(tabs, cx);
+                    self.model.release_path(&path);
                     self.center_view = CenterView::Editor;
                 }
                 Err(error) => self.model.set_status(format!(
@@ -2477,6 +2512,7 @@ impl Workbench {
         match result {
             Ok(effect) => {
                 self.model.set_status(effect.status());
+                self.model.release_path(&path);
                 self.center_view = CenterView::Editor;
             }
             Err(error) => self.model.set_status(format!(
@@ -5141,6 +5177,7 @@ impl Workbench {
         };
         let root = self.model.root().to_path_buf();
         let mut restored = 0_usize;
+        let mut restored_files = Vec::new();
         for key in saved
             .primary_editors
             .iter()
@@ -5159,14 +5196,21 @@ impl Workbench {
                     .is_ok()
                 {
                     restored += 1;
+                    restored_files.push(path);
                 }
             } else {
                 let mut tabs = EditorTabs::new(self.draft_store());
                 if tabs.open_file(&root, &path).is_ok() {
                     self.install_editor(tabs, cx);
                     restored += 1;
+                    restored_files.push(path);
                 }
             }
+        }
+        // A file restored into a real editor buffer is owned by that tab;
+        // drop any read-only preview tab that would render as a duplicate.
+        for path in restored_files {
+            self.model.release_path(&path);
         }
         if restored > 0 {
             let desired = if saved.focused_pane == SavedWorkbenchPane::Secondary {
