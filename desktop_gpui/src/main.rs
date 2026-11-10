@@ -8842,8 +8842,48 @@ impl Render for Workbench {
                                             ),
                                     )
                                     .child(if let Some(error) = runtime_catalog_error {
-                                        div().text_xs().text_color(rgb(MUTED))
-                                            .child(format!("Project catalog unavailable · {error}"))
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .justify_between()
+                                            .gap_2()
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(rgb(MUTED))
+                                                    .child("Classic catalog unavailable · showing local projects"),
+                                            )
+                                            .child(
+                                                div()
+                                                    .flex()
+                                                    .items_center()
+                                                    .gap_2()
+                                                    .child(
+                                                        div()
+                                                            .id("project-catalog-details")
+                                                            .cursor_pointer()
+                                                            .text_xs()
+                                                            .text_color(rgb(MUTED))
+                                                            .child("Details")
+                                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                                this.model.set_status(format!(
+                                                                    "Classic catalog query failed: {error}"
+                                                                ));
+                                                                cx.notify();
+                                                            })),
+                                                    )
+                                                    .child(
+                                                        icon_button(
+                                                            "project-catalog-inline-retry",
+                                                            UiIcon::Refresh,
+                                                            "Retry Classic catalog synchronization",
+                                                            project_tree_loading,
+                                                        )
+                                                        .on_click(cx.listener(|this, _, _, cx| {
+                                                            this.refresh_project_tree(cx);
+                                                        })),
+                                                    ),
+                                            )
                                             .into_any_element()
                                     } else {
                                         div().h(px(0.0)).into_any_element()
