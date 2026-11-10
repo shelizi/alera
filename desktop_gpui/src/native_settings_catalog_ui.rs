@@ -7,6 +7,29 @@ use alera_gpui_desktop::settings_menu_catalog::{
     shared_setting_row_path, PreviewRow, SettingsSection,
 };
 
+/// Fail-closed Host state for catalog rows backed by the shared Rust
+/// snapshot. Until the first snapshot installs, a row may only report that
+/// the Host is still loading or unreachable — never imply a saved value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CatalogHostState {
+    /// First snapshot fetch is in flight or has not reported yet.
+    Loading,
+    /// The last Host contact failed; controls stay disabled until retry.
+    Unavailable,
+    /// Snapshot installed; real controls may render.
+    Ready,
+}
+
+fn catalog_host_state(migrated: bool, has_error: bool) -> CatalogHostState {
+    if migrated {
+        CatalogHostState::Ready
+    } else if has_error {
+        CatalogHostState::Unavailable
+    } else {
+        CatalogHostState::Loading
+    }
+}
+
 /// An unsupported preview must never impersonate an interactive setting.
 fn render_unavailable_row(
     row: &PreviewRow,
@@ -52,6 +75,48 @@ fn render_unavailable_row(
 }
 
 impl Workbench {
+    /// Pending label for Host-backed rows before the shared snapshot
+    /// installs: loading vs unreachable Host, in the same row chrome as
+    /// unsupported catalog previews.
+    fn render_host_state_row(&self, row: &PreviewRow) -> gpui::AnyElement {
+        let locale = self.settings_menu_locale;
+        let status = match catalog_host_state(
+            self.settings_native_profile_migrated,
+            self.settings_shared_error.is_some(),
+        ) {
+            CatalogHostState::Unavailable => tr(locale, "Rust Host settings unavailable"),
+            _ => tr(locale, "Loading Rust Host settings"),
+        };
+        div()
+            .p_3()
+            .bg(rgb(PANEL))
+            .flex()
+            .items_center()
+            .gap_4()
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(rgb(TEXT))
+                            .child(tr(locale, row.title)),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(rgb(MUTED))
+                            .child(tr(locale, row.detail)),
+                    ),
+            )
+            .child(div().text_xs().text_color(rgb(MUTED)).child(status))
+            .into_any_element()
+    }
+
     fn render_project_management_setting(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         div()
             .p_3()
@@ -196,15 +261,7 @@ impl Workbench {
                     | "Confirm Workspace Removal"
                     | "Auto-Archive After Inactivity"
                     | "App Language",
-                ) => Some(
-                    div()
-                        .p_3()
-                        .bg(rgb(PANEL))
-                        .text_xs()
-                        .text_color(rgb(MUTED))
-                        .child("Waiting for Rust Host settings")
-                        .into_any_element(),
-                ),
+                ) => Some(self.render_host_state_row(row)),
                 _ => None,
             };
         }
@@ -360,23 +417,7 @@ impl Workbench {
         }
         let path = shared_setting_row_path(section, row.title)?;
         if !self.settings_native_profile_migrated {
-            return Some(
-                div()
-                    .p_3()
-                    .bg(rgb(PANEL))
-                    .child(
-                        div()
-                            .text_sm()
-                            .child(tr(self.settings_menu_locale, row.title)),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(rgb(MUTED))
-                            .child("Waiting for Rust Host settings"),
-                    )
-                    .into_any_element(),
-            );
+            return Some(self.render_host_state_row(row));
         }
         let value = self
             .native_settings
@@ -515,5 +556,25 @@ impl Workbench {
                 }),
             )
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{catalog_host_state, CatalogHostState};
+
+    #[test]
+    fn installed_snapshot_stays_ready_even_after_a_later_refresh_error() {
+        assert_eq!(catalog_host_state(true, false), CatalogHostState::Ready);
+        assert_eq!(catalog_host_state(true, true), CatalogHostState::Ready);
+    }
+
+    #[test]
+    fn missing_snapshot_reports_loading_until_the_host_reports_failure() {
+        assert_eq!(catalog_host_state(false, false), CatalogHostState::Loading);
+        assert_eq!(
+            catalog_host_state(false, true),
+            CatalogHostState::Unavailable
+        );
     }
 }
