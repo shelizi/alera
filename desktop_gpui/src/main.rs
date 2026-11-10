@@ -1,6 +1,7 @@
 //! Experimental Alera desktop shell powered by native GPUI (no Flutter/WebView).
 mod editor_ui;
 mod native_action_dialog_ui;
+mod native_agent_quota_ui;
 mod native_components;
 mod native_git_favorites_ui;
 mod native_host_pins_ui;
@@ -21,6 +22,7 @@ extern crate gpui_kit as gpui;
 use alera_gpui_desktop::agent_profiles::{
     matching_agent_handle, AgentProfileRow, LaunchedAgentTab,
 };
+use alera_gpui_desktop::agent_quota::QuotaSnapshot;
 use alera_gpui_desktop::edition::NATIVE_APP_NAME;
 use alera_gpui_desktop::editor::EditorDraftStore;
 use alera_gpui_desktop::editor_tabs::{EditorTabs, SaveAllReport, MAX_EDITOR_TABS};
@@ -462,6 +464,11 @@ struct Workbench {
     runtime_bridge: Option<RuntimeCliBridge>,
     runtime_status: String,
     runtime_loading: bool,
+    quota_snapshots: Vec<QuotaSnapshot>,
+    quota_loading: bool,
+    quota_error: Option<String>,
+    quota_last_refresh: Instant,
+    quota_request: u64,
     mcp_ui_bridge: Option<NativeMcpUiBridge>,
     mcp_ui_window_id: String,
     mcp_ui_status: String,
@@ -6302,6 +6309,13 @@ impl Workbench {
                     {
                         view.refresh_shared_desktop_settings(cx);
                     }
+                    let quota_interval = if view.quota_error.is_some() { 45 }
+                        else { alera_gpui_desktop::agent_quota::REFRESH_INTERVAL_SECS };
+                    if !view.quota_loading
+                        && view.quota_last_refresh.elapsed() >= Duration::from_secs(quota_interval)
+                    {
+                        view.refresh_agent_quotas(false, None, cx);
+                    }
                     let favorites_refresh_secs = if view.git_history_open { 5 } else { 15 };
                     if view.git_favorites_last_refresh.elapsed()
                         >= Duration::from_secs(favorites_refresh_secs)
@@ -9758,6 +9772,7 @@ impl Render for Workbench {
                     .text_sm()
                     .text_color(rgb(MUTED))
                     .child(status)
+                    .child(self.render_native_quota_status(cx))
                     .child(self.render_kit_branch_dropdown(
                         "status-branch-picker",
                         format!("{} · {}", branch, NATIVE_APP_NAME),
@@ -10117,6 +10132,15 @@ fn main() {
                             runtime_bridge,
                             runtime_status,
                             runtime_loading: false,
+                            quota_snapshots: Vec::new(),
+                            quota_loading: false,
+                            quota_error: None,
+                            quota_last_refresh: Instant::now()
+                                .checked_sub(Duration::from_secs(
+                                    alera_gpui_desktop::agent_quota::REFRESH_INTERVAL_SECS,
+                                ))
+                                .unwrap_or_else(Instant::now),
+                            quota_request: 0,
                             mcp_ui_bridge: None,
                             mcp_ui_window_id: NativeMcpUiBridge::new_window_id(),
                             mcp_ui_status: "Waiting for existing Runtime Host".into(),
@@ -10188,6 +10212,7 @@ fn main() {
                         workbench.load_mixed_pane_layout();
                         workbench.restore_file_tabs_from_pane_layout(cx);
                         workbench.refresh_shared_desktop_settings(cx);
+                        workbench.refresh_agent_quotas(false, None, cx);
                         workbench
                     });
                     view.update(cx, |view, cx| {

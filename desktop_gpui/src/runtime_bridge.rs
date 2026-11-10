@@ -13,6 +13,8 @@ use std::time::{Duration, Instant};
 
 const MAX_RESPONSE_BYTES: u64 = 128 * 1024;
 const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+const QUOTA_TIMEOUT: Duration = Duration::from_secs(70);
+const MAX_QUOTA_RESPONSE_BYTES: u64 = 512 * 1024;
 
 /// `alera terminal` invocation that never auto-starts an unknown Host.
 pub fn terminal_cli_arguments(runtime_dir: &Path, args: &[OsString]) -> Vec<OsString> {
@@ -96,6 +98,74 @@ impl RuntimeCliBridge {
             executable: executable.into(),
             runtime_dir: runtime_dir.into(),
         }
+    }
+
+    /// Read Classic's Host quota snapshot. Native never starts a Host, reads
+    /// credentials, or invokes an agent CLI directly.
+    pub fn agent_quota_snapshot(
+        &self,
+        force_refresh: bool,
+        provider: Option<&str>,
+        account_id: Option<&str>,
+    ) -> io::Result<Value> {
+        if provider.is_none() && account_id.is_some() {
+            return Err(io::Error::new(ErrorKind::InvalidInput, "Quota account requires provider"));
+        }
+        if provider.is_some_and(|value| value.len() > 32 || !value.bytes().all(|b| b.is_ascii_lowercase())) ||
+           account_id.is_some_and(|value| value.is_empty() || value.len() > 256) {
+            return Err(io::Error::new(ErrorKind::InvalidInput, "Invalid quota filter"));
+        }
+        if !self.runtime_dir.join("host.json").is_file()
+            && !self.runtime_dir.join("runtime-host.json").is_file()
+        {
+            return Err(io::Error::new(ErrorKind::NotConnected, "Classic Runtime Host is not running"));
+        }
+        let mut args = vec![
+            OsString::from("quota"),
+            OsString::from("--no-start"),
+            OsString::from("--json"),
+            OsString::from("--runtime-dir"),
+            self.runtime_dir.as_os_str().to_os_string(),
+            OsString::from("snapshot"),
+        ];
+        if force_refresh {
+            args.push(OsString::from("--force-refresh"));
+        }
+        if let Some(provider) = provider {
+            args.extend([OsString::from("--provider"), OsString::from(provider)]);
+        }
+        if let Some(account_id) = account_id {
+            args.extend([OsString::from("--account-id"), OsString::from(account_id)]);
+        }
+        let mut child = windowless_command(&self.executable)
+            .args(&args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()?;
+        let stdout = child.stdout.take().ok_or_else(|| io::Error::other("Quota CLI stdout missing"))?;
+        let reader = thread::spawn(move || -> io::Result<Vec<u8>> {
+            let mut bytes = Vec::new();
+            stdout.take(MAX_QUOTA_RESPONSE_BYTES + 1).read_to_end(&mut bytes)?;
+            Ok(bytes)
+        });
+        let status = match wait_with_timeout(&mut child, QUOTA_TIMEOUT) {
+            Ok(status) => status,
+            Err(error) => { let _ = reader.join(); return Err(error); }
+        };
+        let bytes = reader.join().map_err(|_| io::Error::other("Quota CLI reader panicked"))??;
+        if !status.success() {
+            return Err(io::Error::other("Quota unavailable: existing Runtime Host/CLI is offline or incompatible"));
+        }
+        if bytes.len() as u64 > MAX_QUOTA_RESPONSE_BYTES {
+            return Err(io::Error::new(ErrorKind::InvalidData, "Quota response exceeds 512 KiB"));
+        }
+        let result: Value = serde_json::from_slice(&bytes)
+            .map_err(|error| io::Error::new(ErrorKind::InvalidData, error))?;
+        if !result.get("snapshots").is_some_and(Value::is_array) {
+            return Err(io::Error::new(ErrorKind::InvalidData, "Invalid quota snapshot payload"));
+        }
+        Ok(result)
     }
 
     /// Internal subprocess parameters; the Agent adapter still checks for an

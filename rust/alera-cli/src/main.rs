@@ -5,6 +5,7 @@ mod agent_profile_input;
 mod agent_profile_launch;
 mod agent_prompt_stdin_script;
 mod agent_quota;
+mod agent_quota_commands;
 mod agent_status;
 mod automation_autostart;
 mod automation_commands;
@@ -156,6 +157,7 @@ async fn run(cli: Cli) -> i32 {
         Command::TerminalHost(args) => runtime_host_command::run(args).await,
         Command::Runtime(command) => runtime_commands::run_runtime_command(command).await,
         Command::Settings(command) => desktop_settings_commands::run(command).await,
+        Command::Quota(command) => agent_quota_commands::run(command).await,
         Command::Project(command) => run_project_command(command).await,
         Command::Workspace(command) => run_workspace_command(command).await,
         Command::Tag(command) => run_tag_command(command).await,

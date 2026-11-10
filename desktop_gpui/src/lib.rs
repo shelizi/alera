@@ -3,6 +3,7 @@
 rust_i18n::i18n!("locales", fallback = "en");
 
 pub mod agent_profiles;
+pub mod agent_quota;
 mod agent_runtime_bridge;
 pub mod edition;
 pub mod editor;

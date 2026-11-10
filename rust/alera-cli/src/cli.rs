@@ -58,6 +58,8 @@ pub enum Command {
     Runtime(RuntimeCommand),
     /// Read or compare-and-set the reviewed cross-desktop settings projection.
     Settings(DesktopSettingsCommand),
+    /// Inspect the existing Runtime Host's agent quota snapshots (read-only).
+    Quota(AgentQuotaCommand),
 
     /// Create, list, update, and remove runtime-owned projects.
     Project(ProjectCommand),
@@ -343,6 +345,32 @@ pub struct OutputArgs {
     /// Print machine-readable JSON.
     #[arg(long = "json")]
     pub json: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct AgentQuotaCommand {
+    #[command(flatten)]
+    pub runtime: RuntimeDirArgs,
+    #[command(flatten)]
+    pub output: OutputArgs,
+    /// Required: never start a Host or a provider CLI from Native's bridge.
+    #[arg(long = "no-start", default_value_t = false)]
+    pub no_start: bool,
+    #[command(subcommand)]
+    pub action: AgentQuotaAction,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum AgentQuotaAction {
+    /// Read the same Host-owned snapshot used by Classic's status bar.
+    Snapshot {
+        #[arg(long)]
+        force_refresh: bool,
+        #[arg(long)]
+        provider: Option<String>,
+        #[arg(long, requires = "provider")]
+        account_id: Option<String>,
+    },
 }
 
 #[derive(Debug, Args)]
