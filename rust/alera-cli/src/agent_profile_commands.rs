@@ -30,11 +30,23 @@ pub(crate) async fn run(command: AgentProfileCommand) -> i32 {
 
 async fn run_command(command: AgentProfileCommand) -> Result<()> {
     let json_output = command.output.json;
-    let mut client = RuntimeHostRpcClient::connect_or_start_with_required_capability(
-        &crate::runtime_dir(&command.runtime),
-        RUNTIME_HOST_AGENT_PROFILES_CAPABILITY,
-    )
-    .await?;
+    let runtime = crate::runtime_dir(&command.runtime);
+    let mut client = if command.no_start {
+        RuntimeHostRpcClient::connect_with_required_capability(
+            &runtime,
+            RUNTIME_HOST_AGENT_PROFILES_CAPABILITY,
+        )
+        .await?
+        .ok_or_else(|| {
+            anyhow!("No running compatible Runtime Host; --no-start forbids automatic startup")
+        })?
+    } else {
+        RuntimeHostRpcClient::connect_or_start_with_required_capability(
+            &runtime,
+            RUNTIME_HOST_AGENT_PROFILES_CAPABILITY,
+        )
+        .await?
+    };
     match command.action {
         AgentProfileAction::List => {
             let (payload, profiles) = list_profiles(&mut client).await?;

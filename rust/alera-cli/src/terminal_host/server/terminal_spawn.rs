@@ -529,6 +529,7 @@ impl ServerActor {
             working_directory,
             &self.runtime_dir,
             allow_reconnect,
+            false, // explicit create/restart retains its existing mint policy
             &launch,
             cols,
             rows,

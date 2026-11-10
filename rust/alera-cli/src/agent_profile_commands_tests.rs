@@ -1,6 +1,35 @@
 use chrono::Utc;
+use clap::Parser;
 
 use super::*;
+
+#[test]
+fn agent_profile_cli_supports_explicit_no_start_without_changing_legacy_default() {
+    use crate::cli::{Cli, Command};
+    let normal = Cli::try_parse_from(["alera", "agent-profile", "--json", "list"]).unwrap();
+    let Command::AgentProfile(normal) = normal.command else {
+        panic!("not a profile command")
+    };
+    assert!(!normal.no_start, "legacy CLI behavior remains opt-in");
+    let native = Cli::try_parse_from([
+        "alera",
+        "agent-profile",
+        "--no-start",
+        "--json",
+        "--runtime-dir",
+        "test-runtime",
+        "launch",
+        "--profile-id=prof_1",
+        "--workspace=ws_1",
+        "--prompt-stdin",
+    ])
+    .unwrap();
+    let Command::AgentProfile(native) = native.command else {
+        panic!("not a profile command")
+    };
+    assert!(native.no_start);
+    assert!(matches!(native.action, AgentProfileAction::Launch(_)));
+}
 
 fn profile(id: &str, name: &str, revision: i64) -> AgentProfile {
     AgentProfile {

@@ -1,11 +1,13 @@
 use alera_core::runtime::{AutomationActor, RuntimeStore, WorkspaceTabRecord};
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use crate::terminal_host::host_error::{HostError, HostResult};
 use crate::terminal_host::protocol::{int_or, require_object, TerminalHostLaunch};
 use crate::terminal_host::session::Session;
 
+use super::pty_event_forwarder::forward_pty_event;
 use super::requests::require_string;
+use super::terminal_startup_commands::terminal_session_id;
 use super::workspace_tab_requests::WorkspaceTabStoreHandler;
 use super::ServerActor;
 
@@ -41,6 +43,278 @@ impl<'a> TerminalAttachPersistence<'a> {
 }
 
 impl ServerActor {
+    /// Recovery of a hidden Native preview is deliberately *not* a view
+    /// subscription. It restores only an authenticated, still-live Worker
+    /// into the Host Session map, allowing inactive tabs to survive a Host
+    /// crash without subscribing their high-volume TUI output.
+    pub(super) async fn recover_existing_worker(
+        &mut self,
+        _client_id: u64,
+        payload: &Value,
+    ) -> HostResult<Value> {
+        let session_id = require_string(payload, "sessionId")?;
+        let workspace_id = require_string(payload, "workspaceId")?;
+        let tab_id = require_string(payload, "tabId")?;
+        self.verify_terminal_attachment_owner(&session_id, &workspace_id, &tab_id)
+            .await?;
+        if let Some(session) = self.sessions.get(&session_id) {
+            if !session.running()
+                || session.workspace_id != workspace_id
+                || session.tab_id != tab_id
+            {
+                return Err(HostError::state(
+                    "A stopped or moved Terminal cannot be recovered by Native background observation",
+                ));
+            }
+            return Ok(json!({"sessionId": session_id, "running": true, "recovered": false}));
+        }
+        self.recover_only_existing_worker_for_observation(&session_id, &workspace_id, &tab_id)
+            .await?;
+        Ok(json!({"sessionId": session_id, "running": true, "recovered": true}))
+    }
+
+    /// Reconstitute an in-memory Host Session from a verified, already-live
+    /// Worker. This method may only run for authenticated observation and
+    /// cannot mint a process if the Worker registry is missing or changed.
+    async fn recover_only_existing_worker_for_observation(
+        &mut self,
+        session_id: &str,
+        workspace_id: &str,
+        tab_id: &str,
+    ) -> HostResult<()> {
+        if self.sessions.contains_key(session_id) {
+            return Err(HostError::state(
+                "A stopped Host Session cannot be reminted during Native observation",
+            ));
+        }
+        // A Worker token/manifest alone is not sufficient authority: verify
+        // the durable owner triple against the authenticated Runtime Store.
+        let stored = self
+            .runtime_store
+            .find_workspace_tab(tab_id)
+            .await
+            .map_err(|error| HostError::state(error.to_string()))?
+            .ok_or_else(|| {
+                HostError::state("A missing registered Terminal tab cannot recover its PTY Worker")
+            })?;
+        if stored.workspace_id != workspace_id || terminal_session_id(&stored) != session_id {
+            return Err(HostError::state(
+                "PTY Worker recovery owner does not match registered Workspace/Tab/Session",
+            ));
+        }
+        #[cfg(any(windows, unix))]
+        if !crate::terminal_host::session::pty_worker::has_recoverable_worker(
+            &self.runtime_dir,
+            session_id,
+            tab_id,
+        ) {
+            return Err(HostError::state(
+                "No verified live PTY Worker exists; refusing to create a Shell",
+            ));
+        }
+        #[cfg(not(any(windows, unix)))]
+        return Err(HostError::state(
+            "PTY Worker recovery is unsupported on this platform",
+        ));
+
+        let max_bytes = self.config.scrollback_bytes as usize;
+        let (snapshot, previous_cursor) = self
+            .take_terminal_restart_state(session_id, workspace_id, tab_id, max_bytes)
+            .await;
+        // Never pass Native-supplied shell/command/environment into recovery.
+        // Session::start(recover_only=true) is a second, race-safe no-spawn
+        // guard even if the Worker disappears after the registry check.
+        let launch = TerminalHostLaunch {
+            label: "Existing Worker (no launch)".into(),
+            shell: "__alera_recover_only_never_spawn__".into(),
+            arguments: Vec::new(),
+            environment: Default::default(),
+        };
+        let inbox = self.inbox.clone();
+        let reader_id = session_id.to_owned();
+        let restored = Session::start(
+            session_id.to_owned(),
+            workspace_id.to_owned(),
+            tab_id.to_owned(),
+            String::new(),
+            &self.runtime_dir,
+            true,
+            true,
+            &launch,
+            80,
+            24,
+            max_bytes,
+            &snapshot,
+            previous_cursor,
+            &self.history,
+            move |event| forward_pty_event(&inbox, &reader_id, event),
+        )
+        .await?;
+        self.sessions.insert(session_id.to_owned(), restored);
+        Ok(())
+    }
+
+    /// Native clients may subscribe to a *currently running* PTY only.
+    ///
+    /// Unlike createOrAttach this verb can never remint a stopped Host
+    /// session, spawn a shell, or claim another window's view lease.
+    pub(super) async fn observe_existing_terminal(
+        &mut self,
+        client_id: u64,
+        payload: &Value,
+    ) -> HostResult<Value> {
+        let session_id = require_string(payload, "sessionId")?;
+        let workspace_id = require_string(payload, "workspaceId")?;
+        let tab_id = require_string(payload, "tabId")?;
+        let lease = payload
+            .get("viewLeaseId")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty() && value.len() <= 128)
+            .ok_or_else(|| {
+                HostError::format("Native Terminal observation requires a valid viewLeaseId.")
+            })?;
+        let resume_cursor = payload.get("resumeCursor").and_then(Value::as_u64);
+        // After a Host crash the original Worker remains alive, but the Host
+        // Session map is empty. Rebuild strictly from that same live Worker;
+        // observation is NEVER permission to create a new Shell.
+        if !self.sessions.contains_key(&session_id) {
+            self.verify_terminal_attachment_owner(&session_id, &workspace_id, &tab_id)
+                .await?;
+            self.recover_only_existing_worker_for_observation(&session_id, &workspace_id, &tab_id)
+                .await?;
+        }
+        let existing = self
+            .sessions
+            .get(&session_id)
+            .ok_or_else(|| HostError::state("Cannot observe a missing Terminal PTY."))?;
+        if !existing.running() {
+            return Err(HostError::state(
+                "Cannot observe a stopped Terminal PTY; no process was started.",
+            ));
+        }
+        self.verify_terminal_attachment_owner(&session_id, &workspace_id, &tab_id)
+            .await?;
+        let existing = self
+            .sessions
+            .get(&session_id)
+            .ok_or_else(|| HostError::state("Terminal PTY disappeared during observation."))?;
+        if !existing.running() {
+            return Err(HostError::state("Terminal PTY stopped during observation."));
+        }
+        if !existing.can_register_view_lease(client_id, lease) {
+            return Err(HostError::state(
+                "Terminal view lease belongs to another Host client.",
+            ));
+        }
+        self.note_terminal_human_takeover(client_id, &tab_id).await;
+        self.attach_running_terminal(client_id, &session_id, Some(lease), resume_cursor)
+    }
+
+    /// Classic Flutter and Native GPUI share one durable automation takeover
+    /// policy. A human App attachment must outlive automation-run cleanup,
+    /// while an agent/CLI attachment is not allowed to protect its own tab.
+    async fn note_terminal_human_takeover(&self, client_id: u64, tab_id: &str) {
+        let persistence = TerminalAttachPersistence::new(&self.runtime_store);
+        if let Ok(Some(tab)) = persistence.find_tab(tab_id).await {
+            if tab.payload.get("automationOwned").and_then(Value::as_bool) != Some(true) {
+                return;
+            }
+            let run_id = tab
+                .payload
+                .get("automationRunId")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            let _ = persistence.touch_tab(tab).await;
+            if let Some(run_id) = run_id {
+                let (mobile, local_role, id, human_client) = self
+                    .clients
+                    .get(&client_id)
+                    .map(|client| {
+                        (
+                            client.kind == super::ClientKind::Mobile,
+                            client.local_role,
+                            client
+                                .mobile_device_id
+                                .clone()
+                                .or_else(|| Some(client_id.to_string())),
+                            client.kind == super::ClientKind::Mobile
+                                || (client.kind == super::ClientKind::Local
+                                    && client.local_role
+                                        == super::client_delivery::LocalClientRole::App),
+                        )
+                    })
+                    .unwrap_or((
+                        false,
+                        super::client_delivery::LocalClientRole::Cli,
+                        None,
+                        false,
+                    ));
+                if human_client {
+                    let actor = super::automation_actor::actor_for_client(mobile, local_role, id);
+                    let _ = persistence.mark_run_taken_over(&run_id, actor).await;
+                }
+            }
+        }
+    }
+
+    /// Shared live-PTY attach contract for Classic and Native. Every delta is
+    /// delivered on the Host output lane; snapshots use the response lane.
+    fn attach_running_terminal(
+        &mut self,
+        client_id: u64,
+        session_id: &str,
+        view_lease_id: Option<&str>,
+        resume_cursor: Option<u64>,
+    ) -> HostResult<Value> {
+        self.flush_all_output(session_id);
+        if let Some(cursor) = resume_cursor {
+            let retained = self
+                .sessions
+                .get_mut(session_id)
+                .expect("live PTY checked by caller")
+                .attach_at_output_cursor(client_id, cursor);
+            if retained {
+                if let Some(view) = view_lease_id {
+                    self.sessions
+                        .get_mut(session_id)
+                        .expect("live PTY checked by caller")
+                        .register_view_lease(client_id, view);
+                } else {
+                    self.sessions
+                        .get_mut(session_id)
+                        .expect("live PTY checked by caller")
+                        .mark_unscoped_attachment(client_id);
+                }
+                let data = {
+                    let session = self.sessions.get(session_id).expect("live PTY checked");
+                    let (base_cursor, _) = session.output_stream_range();
+                    session.buffer.slice_from((cursor - base_cursor) as usize)
+                };
+                if data.is_empty()
+                    || self.send_terminal_output(
+                        session_id,
+                        client_id,
+                        crate::terminal_host::client::ClientFrame::Output {
+                            session_id: session_id.to_owned(),
+                            data,
+                        },
+                    )
+                {
+                    let session = self.sessions.get(session_id).expect("live PTY checked");
+                    return Ok(session.delta_attachment_payload(true));
+                }
+            }
+        }
+        let session = self.sessions.get_mut(session_id).expect("live PTY checked");
+        session.attach(client_id);
+        if let Some(view) = view_lease_id {
+            session.register_view_lease(client_id, view);
+        } else {
+            session.mark_unscoped_attachment(client_id);
+        }
+        Ok(session.attachment_payload(false, self.config.restore_snapshot_bytes as usize))
+    }
+
     /// The display workspace may differ from the original process working
     /// directory. Only validate this when reminting a dead PTY or explicitly
     /// restarting one; a live process must still be attachable if its old
@@ -134,59 +408,8 @@ impl ServerActor {
             }
         }
 
-        // Attaching a user client to a tab created for an automation is the
-        // durable takeover signal. It prevents a later successful completion
-        // from deleting a tab the user has started using.
-        let persistence = TerminalAttachPersistence::new(&self.runtime_store);
-        if let Ok(Some(tab)) = persistence.find_tab(&tab_id).await {
-            if tab
-                .payload
-                .get("automationOwned")
-                .and_then(Value::as_bool)
-                .unwrap_or(false)
-            {
-                let run_id = tab
-                    .payload
-                    .get("automationRunId")
-                    .and_then(Value::as_str)
-                    .map(str::to_string);
-                let _ = persistence.touch_tab(tab).await;
-                if let Some(run_id) = run_id.as_deref() {
-                    let (mobile, local_role, id, human_client) = self
-                        .clients
-                        .get(&client_id)
-                        .map(|client| {
-                            (
-                                client.kind == super::ClientKind::Mobile,
-                                client.local_role,
-                                client
-                                    .mobile_device_id
-                                    .clone()
-                                    .or_else(|| Some(client_id.to_string())),
-                                client.kind == super::ClientKind::Mobile
-                                    || (client.kind == super::ClientKind::Local
-                                        && client.local_role
-                                            == super::client_delivery::LocalClientRole::App),
-                            )
-                        })
-                        .unwrap_or((
-                            false,
-                            super::client_delivery::LocalClientRole::Cli,
-                            None,
-                            false,
-                        ));
-                    if human_client {
-                        let actor =
-                            super::automation_actor::actor_for_client(mobile, local_role, id);
-                        // Only a desktop or authenticated mobile client counts
-                        // as a user takeover. The automation CLI is a local
-                        // client too, but it must not preserve its own cleanup
-                        // target.
-                        let _ = persistence.mark_run_taken_over(run_id, actor).await;
-                    }
-                }
-            }
-        }
+        // The human takeover marker must be identical for Classic and Native.
+        self.note_terminal_human_takeover(client_id, &tab_id).await;
 
         let max_bytes = self.config.scrollback_bytes as usize;
         let restore_bytes = self.config.restore_snapshot_bytes as usize;
@@ -196,66 +419,12 @@ impl ServerActor {
         if self.sessions.contains_key(&session_id) {
             let running = self.sessions.get(&session_id).is_some_and(Session::running);
             if running {
-                self.flush_all_output(&session_id);
-                if let Some(cursor) = resume_cursor {
-                    let retained = self
-                        .sessions
-                        .get_mut(&session_id)
-                        .expect("just checked")
-                        .attach_at_output_cursor(client_id, cursor);
-                    if retained {
-                        if let Some(view) = view_lease_id {
-                            self.sessions
-                                .get_mut(&session_id)
-                                .expect("just checked")
-                                .register_view_lease(client_id, view);
-                        } else {
-                            self.sessions
-                                .get_mut(&session_id)
-                                .expect("just checked")
-                                .mark_unscoped_attachment(client_id);
-                        }
-                        let data = {
-                            let session = self.sessions.get(&session_id).expect("just checked");
-                            let (base_cursor, _) = session.output_stream_range();
-                            session.buffer.slice_from((cursor - base_cursor) as usize)
-                        };
-                        if data.is_empty()
-                            || self.send_terminal_output(
-                                &session_id,
-                                client_id,
-                                crate::terminal_host::client::ClientFrame::Output {
-                                    session_id: session_id.clone(),
-                                    data,
-                                },
-                            )
-                        {
-                            let session = self.sessions.get(&session_id).expect("just checked");
-                            return Ok(session.delta_attachment_payload(true));
-                        }
-
-                        // The terminal lane is backpressured. Do not acknowledge
-                        // a delta that never reached the client: reset the
-                        // delivery cursor to the current end and send the
-                        // scrollback through the control reply instead.
-                        let session = self.sessions.get_mut(&session_id).expect("just checked");
-                        session.attach(client_id);
-                        if let Some(view) = view_lease_id {
-                            session.register_view_lease(client_id, view);
-                        } else {
-                            session.mark_unscoped_attachment(client_id);
-                        }
-                        return Ok(session.attachment_payload(false, restore_bytes));
-                    }
-                }
-                let session = self.sessions.get_mut(&session_id).expect("just checked");
-                session.attach(client_id);
-                if let Some(view) = view_lease_id {
-                    session.register_view_lease(client_id, view);
-                } else {
-                    session.mark_unscoped_attachment(client_id);
-                }
-                return Ok(session.attachment_payload(false, restore_bytes));
+                return self.attach_running_terminal(
+                    client_id,
+                    &session_id,
+                    view_lease_id,
+                    resume_cursor,
+                );
             }
         }
         // Do not remint a shell if an authenticated worker outlived Host.

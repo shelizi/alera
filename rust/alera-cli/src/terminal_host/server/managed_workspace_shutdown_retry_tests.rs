@@ -187,6 +187,7 @@ async fn start_terminal(
         fixture.workspace.path.clone(),
         fixture._root.path(),
         false,
+        false,
         &crate::terminal_host::protocol::TerminalHostLaunch {
             label: "Test".into(),
             shell: "/bin/sh".into(),

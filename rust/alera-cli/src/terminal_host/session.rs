@@ -208,6 +208,7 @@ impl Session {
         working_directory: String,
         runtime_dir: &std::path::Path,
         allow_reconnect: bool,
+        recover_only: bool,
         launch: &TerminalHostLaunch,
         cols: u16,
         rows: u16,
@@ -230,6 +231,29 @@ impl Session {
             let worker_workspace_id = workspace_id.clone();
             let worker_tab_id = tab_id.clone();
             tokio::task::spawn_blocking(move || {
+                if recover_only {
+                    // Critical no-mint boundary: observing a Worker after a
+                    // Host crash must *never* call spawn_pty or spawn_worker_pty,
+                    // even when its registry disappeared during the attach.
+                    if !pty_worker::enabled() || cfg!(test) {
+                        return Err(HostError::state(
+                            "Existing PTY Worker recovery is unavailable; no Shell was started",
+                        ));
+                    }
+                    return pty_worker::try_recover_worker(
+                        &worker_runtime_dir,
+                        &terminal_handle,
+                        &worker_tab_id,
+                        cols,
+                        rows,
+                        initial_output_stream_bytes,
+                    )?
+                    .ok_or_else(|| {
+                        HostError::state(
+                            "Existing PTY Worker is gone; refusing to create a replacement Shell",
+                        )
+                    });
+                }
                 if pty_worker::enabled() && !cfg!(test) {
                     if allow_reconnect {
                         if let Some(existing) = pty_worker::try_recover_worker(

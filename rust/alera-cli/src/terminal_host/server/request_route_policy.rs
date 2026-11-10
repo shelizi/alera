@@ -88,6 +88,7 @@ pub(super) enum WorkspaceDeferredOperation {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum TerminalDeferredOperation {
     Write,
+    WriteObserved,
     PulseConfigure,
 }
 
@@ -430,6 +431,9 @@ pub(super) fn request_route_policy(request_type: &str) -> RequestRoutePolicy {
         "write" => mobile_conflicting_deferred_job(DeferredJobRoute::Terminal(
             TerminalDeferredOperation::Write,
         )),
+        "terminal.writeObserved" => local_conflicting_deferred_job(DeferredJobRoute::Terminal(
+            TerminalDeferredOperation::WriteObserved,
+        )),
         "terminal.pulse.configure" => local_conflicting_deferred_job(DeferredJobRoute::Terminal(
             TerminalDeferredOperation::PulseConfigure,
         )),
@@ -464,6 +468,8 @@ pub(super) fn request_route_policy(request_type: &str) -> RequestRoutePolicy {
         "hostDirectory.list" => mobile_deferred(DeferredReadRoute::HostDirectoryList),
 
         "createOrAttach"
+        | "terminal.observeExisting"
+        | "terminal.recoverExistingWorker"
         | "layout.remove"
         | "layout.upsert"
         | "linkedReview.remove"

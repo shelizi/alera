@@ -235,6 +235,9 @@ impl ServerActor {
                     TerminalDeferredOperation::Write => {
                         self.queue_terminal_input(client_id, request_id, payload)?
                     }
+                    TerminalDeferredOperation::WriteObserved => {
+                        self.queue_observed_terminal_input(client_id, request_id, payload)?
+                    }
                     TerminalDeferredOperation::PulseConfigure => {
                         self.start_terminal_pulse_configuration(client_id, request_id, payload)
                             .await?;

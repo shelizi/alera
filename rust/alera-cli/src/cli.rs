@@ -4,12 +4,14 @@ use crate::terminal_host::protocol::{
     DEFAULT_SCROLLBACK_BYTES, TERMINAL_HOST_COMMAND,
 };
 mod agent_profile;
+mod ai_assist;
 mod automation;
 mod mobile;
 mod text_source;
 mod workspace;
 
 pub use agent_profile::*;
+pub use ai_assist::*;
 pub use automation::*;
 pub use mobile::*;
 pub use text_source::*;
@@ -84,11 +86,25 @@ pub enum Command {
     /// Create, inspect, update, remove, reorder, and launch agent profiles.
     #[command(name = "agent-profile")]
     AgentProfile(AgentProfileCommand),
+    /// Explicit, read-only AI Commit generation using existing Host settings.
+    #[command(name = "ai-assist")]
+    AiAssist(AiAssistCommand),
 
     /// Inter-agent orchestration: messaging, task DAG, dispatch, gates, coordinator.
     Orchestration(OrchestrationCommand),
     /// Expose authorized Alera capabilities over MCP stdio to local agents.
     Mcp(McpCommand),
+    /// Private, Host-authenticated UI-event relay for Alera Native GPUI.
+    #[command(name = "native-ui-bridge", hide = true)]
+    NativeUiBridge(NativeUiBridgeCommand),
+}
+
+#[derive(Debug, Args)]
+pub struct NativeUiBridgeCommand {
+    #[command(flatten)]
+    pub runtime: RuntimeDirArgs,
+    #[arg(long = "window-id", value_name = "id")]
+    pub window_id: String,
 }
 
 #[derive(Debug, Args)]
@@ -111,12 +127,24 @@ pub struct TerminalCommand {
     pub runtime: RuntimeDirArgs,
     #[command(flatten)]
     pub output: OutputArgs,
+    /// Only connect to an already-running runtime host; never auto-start one.
+    #[arg(long = "no-start", default_value_t = false)]
+    pub no_start: bool,
     #[command(subcommand)]
     pub action: TerminalAction,
 }
 
 #[derive(Debug, Subcommand)]
 pub enum TerminalAction {
+    /// Long-lived authenticated Host event transport for the native GPUI app.
+    /// JSON commands/events are exchanged on stdin/stdout; never starts Host.
+    Stream,
+    /// List registered Host workspaces without starting the Host.
+    Workspaces,
+    /// Create a new Runtime Host terminal in an existing Workspace.
+    Create(TerminalCreateArgs),
+    /// Resize an existing Host terminal without claiming mobile driver lease.
+    Resize(TerminalResizeArgs),
     /// List live terminal sessions.
     List(crate::cli_orchestration::OrchestrationTerminalListArgs),
     /// Show one terminal session.
@@ -131,6 +159,23 @@ pub enum TerminalAction {
     Write(TerminalWriteArgs),
     /// Attach an interactive native terminal client to an existing session.
     Attach(TerminalAttachArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct TerminalCreateArgs {
+    /// Host Workspace ID only; a filesystem path is not accepted.
+    #[arg(long = "workspace-id")]
+    pub workspace_id: String,
+}
+
+#[derive(Debug, Args)]
+pub struct TerminalResizeArgs {
+    #[arg(long)]
+    pub handle: String,
+    #[arg(long)]
+    pub cols: u16,
+    #[arg(long)]
+    pub rows: u16,
 }
 
 #[derive(Debug, Args)]

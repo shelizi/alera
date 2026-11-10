@@ -6,6 +6,7 @@ mod agent_profile_launch;
 mod agent_prompt_stdin_script;
 mod agent_quota;
 mod agent_status;
+mod ai_commit_commands;
 mod automation_autostart;
 mod automation_commands;
 mod automation_ssh_precheck;
@@ -30,6 +31,7 @@ mod managed_workspace_tests;
 mod mcp;
 mod mobile_access;
 mod native_credential_entry;
+mod native_ui_bridge;
 mod netbird;
 mod orchestration_command_summaries;
 mod orchestration_commands;
@@ -50,6 +52,7 @@ mod tailscale;
 mod terminal_alias_commands;
 mod terminal_attach;
 mod terminal_host;
+mod terminal_stream;
 mod workspace_context;
 mod workspace_pinning;
 mod workspace_registration;
@@ -162,30 +165,132 @@ async fn run(cli: Cli) -> i32 {
 
         Command::Automation(command) => automation_commands::run(command).await,
         Command::AgentProfile(command) => agent_profile_commands::run(command).await,
+        Command::AiAssist(command) => ai_commit_commands::run(command).await,
         Command::Orchestration(command) => {
             orchestration_commands::run_orchestration_command(command).await
         }
         Command::Mcp(command) => mcp::run(command).await,
+        Command::NativeUiBridge(command) => native_ui_bridge::run(command).await,
     }
 }
 
 async fn run_terminal_command(command: TerminalCommand) -> i32 {
+    if matches!(
+        &command.action,
+        TerminalAction::Workspaces
+            | TerminalAction::Create(_)
+            | TerminalAction::Resize(_)
+            | TerminalAction::Stream
+    ) && !command.no_start
+    {
+        eprintln!("terminal workspaces/create/resize/stream requires --no-start (existing authenticated Host)");
+        return USAGE_EXIT_CODE;
+    }
     let required_capability = terminal_alias_commands::required_capability(&command.action);
-    let client = match required_capability {
-        Some(capability) => {
-            RuntimeHostRpcClient::connect_or_start_with_required_capability(
-                &runtime_dir(&command.runtime),
-                capability,
-            )
-            .await
+    let runtime_path = runtime_dir(&command.runtime);
+    let client = if command.no_start {
+        let existing = match required_capability {
+            // The persistent stream represents a real desktop App view;
+            // human ownership is important for automation-owned Terminal
+            // takeover, unlike one-off CLI inspection commands.
+            None if matches!(&command.action, TerminalAction::Stream) => {
+                RuntimeHostRpcClient::connect_native_ui_app(&runtime_path).await
+            }
+            Some(capability) => {
+                RuntimeHostRpcClient::connect_with_required_capability(&runtime_path, capability)
+                    .await
+            }
+            None => RuntimeHostRpcClient::connect(&runtime_path).await,
+        };
+        match existing {
+            Ok(Some(client)) => Ok(client),
+            Ok(None) => Err(anyhow::anyhow!(
+                "no running compatible Alera runtime host; --no-start prevents auto-start"
+            )),
+            Err(error) => Err(error),
         }
-        None => runtime_host_required(&command.runtime).await,
+    } else {
+        match required_capability {
+            Some(capability) => {
+                RuntimeHostRpcClient::connect_or_start_with_required_capability(
+                    &runtime_path,
+                    capability,
+                )
+                .await
+            }
+            None => runtime_host_required(&command.runtime).await,
+        }
     };
     let mut client = match client {
         Ok(client) => client,
         Err(error) => return print_error(error),
     };
     match command.action {
+        TerminalAction::Stream => terminal_stream::run(client).await,
+        TerminalAction::Workspaces => match client
+            .request_value("workspace.listAll", &json!({}))
+            .await
+        {
+            Ok(serde_json::Value::Array(items)) if items.len() <= 256 => {
+                print_value(
+                    &json!({"items": items}),
+                    command.output.json,
+                    "Host workspaces listed",
+                );
+                0
+            }
+            Ok(_) => print_error(anyhow::anyhow!(
+                "Host workspace list is malformed or exceeds the 256 item limit"
+            )),
+            Err(error) => print_error(error),
+        },
+        TerminalAction::Create(args) => {
+            let id = args.workspace_id;
+            if id.is_empty()
+                || id.len() > 256
+                || !id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':'))
+            {
+                eprintln!("Invalid registered Host Workspace ID");
+                return USAGE_EXIT_CODE;
+            }
+            match client
+                .request_value("terminal.create", &json!({"workspaceId": id}))
+                .await
+            {
+                Ok(value) => {
+                    print_value(&value, command.output.json, "Runtime Host terminal created");
+                    0
+                }
+                Err(error) => print_error(error),
+            }
+        }
+        TerminalAction::Resize(args) => {
+            let valid_handle = !args.handle.is_empty()
+                && args.handle.len() <= 128
+                && args.handle.bytes().all(|byte| {
+                    byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':')
+                });
+            if !valid_handle || !(20..=512).contains(&args.cols) || !(5..=200).contains(&args.rows) {
+                eprintln!("Invalid existing terminal handle or viewport; cols 20–512, rows 5–200");
+                return USAGE_EXIT_CODE;
+            }
+            match client
+                .request_value("resize", &json!({
+                    "sessionId": args.handle,
+                    "cols": args.cols,
+                    "rows": args.rows,
+                }))
+                .await
+            {
+                Ok(value) => {
+                    print_value(&value, command.output.json, "Host resize requested");
+                    0
+                }
+                Err(error) => print_error(error),
+            }
+        }
         action @ (TerminalAction::List(_)
         | TerminalAction::Show(_)
         | TerminalAction::Wait(_)

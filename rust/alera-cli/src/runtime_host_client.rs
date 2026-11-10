@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::Path;
 use std::process::Stdio;
@@ -28,11 +29,13 @@ const RUNTIME_CONTROL_FILE_NAME: &str = "runtime-host.json";
 const CONNECT_TIMEOUT: Duration = Duration::from_millis(750);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
+const MAX_PENDING_UI_EVENTS: usize = 32;
 
 pub(crate) struct RuntimeHostRpcClient {
     reader: Lines<BufReader<OwnedReadHalf>>,
     writer: OwnedWriteHalf,
     next_request_id: i64,
+    pending_ui_events: VecDeque<Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -55,6 +58,31 @@ struct RuntimeHostFrame {
 }
 
 impl RuntimeHostRpcClient {
+    /// Transfer an already authenticated, no-start local connection to the
+    /// Native stdin/stdout event pump. Neither GPUI nor the pump sees the
+    /// Host control-file token or gains the ability to start another Host.
+    pub(crate) fn into_terminal_stream_parts(
+        self,
+    ) -> (Lines<BufReader<OwnedReadHalf>>, OwnedWriteHalf, i64) {
+        (self.reader, self.writer, self.next_request_id)
+    }
+
+    /// Connect as a local Alera App (not CLI) to accept Host-authorized UI
+    /// commands. Never starts the Host; the CLI owns its control-file token.
+    pub(crate) async fn connect_native_ui_app(runtime_dir: &Path) -> Result<Option<Self>> {
+        for control_path in [
+            runtime_dir.join(CONTROL_FILE_NAME),
+            runtime_dir.join(RUNTIME_CONTROL_FILE_NAME),
+        ] {
+            if let Some(client) =
+                Self::connect_control_file_for_role(&control_path, None, true).await?
+            {
+                return Ok(Some(client));
+            }
+        }
+        Ok(None)
+    }
+
     pub(crate) async fn connect(runtime_dir: &Path) -> Result<Option<Self>> {
         Self::connect_with_capability(runtime_dir, None).await
     }
@@ -166,6 +194,14 @@ impl RuntimeHostRpcClient {
         control_path: &Path,
         required_capability: Option<&str>,
     ) -> Result<Option<Self>> {
+        Self::connect_control_file_for_role(control_path, required_capability, false).await
+    }
+
+    async fn connect_control_file_for_role(
+        control_path: &Path,
+        required_capability: Option<&str>,
+        native_ui_app: bool,
+    ) -> Result<Option<Self>> {
         let contents = match tokio::fs::read_to_string(control_path).await {
             Ok(contents) => contents,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -182,7 +218,7 @@ impl RuntimeHostRpcClient {
             return Ok(None);
         }
 
-        let Some(client) = Self::connect_control(&control).await? else {
+        let Some(client) = Self::connect_control(&control, native_ui_app).await? else {
             return Ok(None);
         };
         if !control.is_usable(required_capability) {
@@ -195,7 +231,10 @@ impl RuntimeHostRpcClient {
         Ok(Some(client))
     }
 
-    async fn connect_control(control: &RuntimeHostControl) -> Result<Option<Self>> {
+    async fn connect_control(
+        control: &RuntimeHostControl,
+        native_ui_app: bool,
+    ) -> Result<Option<Self>> {
         let address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), control.port);
         let stream = match timeout(CONNECT_TIMEOUT, TcpStream::connect(address)).await {
             Ok(Ok(stream)) => stream,
@@ -206,8 +245,12 @@ impl RuntimeHostRpcClient {
             reader: BufReader::new(read_half).lines(),
             writer: write_half,
             next_request_id: 1,
+            pending_ui_events: VecDeque::new(),
         };
-        let hello = control_hello_payload(control);
+        let mut hello = control_hello_payload(control);
+        if native_ui_app {
+            hello["clientKind"] = json!("app");
+        }
         match timeout(REQUEST_TIMEOUT, client.request_value("hello", &hello)).await {
             Ok(Ok(_)) => Ok(Some(client)),
             Ok(Err(_)) | Err(_) => Ok(None),
@@ -273,6 +316,13 @@ impl RuntimeHostRpcClient {
                 return Err(anyhow!("runtime host closed the connection"));
             };
             let frame: RuntimeHostFrame = serde_json::from_str(&line)?;
+            if frame.event.as_deref() == Some("mcpUiCommand") {
+                if self.pending_ui_events.len() < MAX_PENDING_UI_EVENTS {
+                    self.pending_ui_events
+                        .push_back(frame.payload.unwrap_or(Value::Null));
+                }
+                continue;
+            }
             if frame.event.is_some() {
                 continue;
             }
@@ -288,6 +338,23 @@ impl RuntimeHostRpcClient {
                     .error
                     .unwrap_or_else(|| "runtime host request failed".to_string())
             ));
+        }
+    }
+
+    /// Receive one Host-pushed, request-specific MCP UI command on this
+    /// authenticated local App connection. Ordinary responses aren't events.
+    pub(crate) async fn next_native_ui_command(&mut self) -> Result<Option<Value>> {
+        if let Some(event) = self.pending_ui_events.pop_front() {
+            return Ok(Some(event));
+        }
+        loop {
+            let Some(line) = self.reader.next_line().await? else {
+                return Ok(None);
+            };
+            let frame: RuntimeHostFrame = serde_json::from_str(&line)?;
+            if frame.event.as_deref() == Some("mcpUiCommand") {
+                return Ok(Some(frame.payload.unwrap_or(Value::Null)));
+            }
         }
     }
 }
@@ -397,6 +464,21 @@ mod tests {
 
         assert_eq!(payload["clientKind"], json!("cli"));
         assert!(payload.get("supportedTabKinds").is_none());
+    }
+
+    #[test]
+    fn native_app_role_is_explicit_and_default_cli_role_remains_unchanged() {
+        let control = control(&[
+            RUNTIME_HOST_CAPABILITY,
+            RUNTIME_HOST_BOOTSTRAP_CAPABILITY,
+            RUNTIME_HOST_MANAGED_WORKSPACE_CAPABILITY,
+        ]);
+        let normal = control_hello_payload(&control);
+        assert_eq!(normal["clientKind"], "cli");
+        let mut native = control_hello_payload(&control);
+        native["clientKind"] = json!("app");
+        assert_eq!(native["clientKind"], "app");
+        assert_eq!(normal["clientKind"], "cli");
     }
 
     #[tokio::test]

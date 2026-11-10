@@ -1,0 +1,91 @@
+name: GPUI Native Desktop (Experimental)
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'desktop_gpui/**'
+      - 'rust/alera-core/**'
+      - 'rust/alera-cli/src/cli.rs'
+      - 'rust/alera-cli/src/main.rs'
+      - 'rust/alera-cli/src/cli_tests.rs'
+      - '.github/workflows/gpui-desktop.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gpui-desktop-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+# Independent of the Flutter release build. Never publish native GPUI assets.
+jobs:
+  model-tests:
+    name: Headless model tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          submodules: false
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.98.0'
+      - name: Check formatting
+        shell: bash
+        run: cargo fmt --manifest-path desktop_gpui/Cargo.toml --all -- --check
+      - name: Verify model without GPUI graphics
+        run: cargo test --manifest-path desktop_gpui/Cargo.toml --no-default-features --lib --locked
+
+  windows-native:
+    name: Native Windows GPUI compile
+    runs-on: windows-latest
+    timeout-minutes: 65
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          submodules: false
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.98.0'
+      - name: Type-check UI and model
+        run: cargo check --manifest-path desktop_gpui/Cargo.toml --all-targets --locked
+      - name: Compile native GPUI executable
+        run: cargo build --manifest-path desktop_gpui/Cargo.toml --locked
+      - name: Assert binary exists
+        shell: pwsh
+        run: |
+          if (-not (Test-Path 'desktop_gpui/target/debug/alera-gpui-desktop.exe')) {
+            throw 'Missing native GPUI executable'
+          }
+
+  cli-no-start:
+    name: Verify terminal CLI guard and isolated live Host (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          submodules: false
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.98.0'
+      - name: Verify terminal CLI no-start parser
+        run: cargo test --manifest-path rust/Cargo.toml -p alera-cli terminal_no_start_requires_explicit_opt_in_and_parses_for_read_and_list --locked
+      - name: Build experimental Alera CLI
+        run: cargo build --manifest-path rust/Cargo.toml -p alera-cli --bin alera --locked
+      - name: Run isolated live Runtime Host / terminal cursor regression
+        shell: pwsh
+        run: |
+          $env:ALERA_GPUI_TEST_CLI = (Resolve-Path 'rust/target/debug/alera.exe').Path
+          cargo test --manifest-path desktop_gpui/Cargo.toml --no-default-features --test live_runtime_host --locked -- --ignored --nocapture
