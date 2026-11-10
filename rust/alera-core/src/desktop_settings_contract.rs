@@ -2,7 +2,7 @@
 //! This contract is intentionally free of the runtime/sqlite feature so the
 //! Native frontend, CLI and Host can all depend on one Rust Core vocabulary.
 //! Adding a path requires a Rust owner/validator and Classic migration test.
-pub const SHARED_DESKTOP_PATHS: [&str; 30] = [
+pub const SHARED_DESKTOP_PATHS: [&str; 31] = [
     "general.language",
     "general.autoGitFetchEnabled",
     "general.autoGitFetchIntervalMinutes",
@@ -33,11 +33,12 @@ pub const SHARED_DESKTOP_PATHS: [&str; 30] = [
     "agents.agentStatusFinishedNotificationsEnabled",
     "agents.showTabTitlesInSidebar",
     "editor.quickOpenExcludedDirectories",
+    "agents.quotaUnpinnedKeys",
 ];
 
 /// CLI/Agent-facing writes stay narrower than owner-backed Classic Settings.
 /// An Agent cannot silently disable destructive confirmation switches.
-pub const CLI_WRITABLE_PATHS: [&str; 27] = [
+pub const CLI_WRITABLE_PATHS: [&str; 28] = [
     "general.language",
     "general.autoGitFetchEnabled",
     "general.autoGitFetchIntervalMinutes",
@@ -65,9 +66,38 @@ pub const CLI_WRITABLE_PATHS: [&str; 27] = [
     "agents.agentStatusFinishedNotificationsEnabled",
     "agents.showTabTitlesInSidebar",
     "editor.quickOpenExcludedDirectories",
+    "agents.quotaUnpinnedKeys",
 ];
 
 /// Already-Classic-portable, reviewed non-secret UI fields.
+/// Classic's quota pin key format. Account identifiers are opaque and are
+/// never interpreted as executable paths or authentication tokens.
+pub fn valid_quota_unpinned_keys(value: &serde_json::Value) -> bool {
+    let Some(keys) = value.as_array() else {
+        return false;
+    };
+    if keys.len() > 128 {
+        return false;
+    }
+    let mut seen = std::collections::HashSet::new();
+    keys.iter().all(|entry| {
+        let Some(key) = entry.as_str() else {
+            return false;
+        };
+        let supported = matches!(
+            key,
+            "codex" | "kimi" | "grok" | "cursor" | "agy" | "minimax" | "zai" | "devin"
+        ) || ["claude:", "codex:", "opencode:"]
+            .iter()
+            .any(|prefix| key.strip_prefix(prefix).is_some_and(|id| !id.is_empty()));
+        supported
+            && key.len() <= 300
+            && key == key.trim()
+            && !key.chars().any(char::is_control)
+            && seen.insert(key)
+    })
+}
+
 pub fn extended_portable(path: &str) -> bool {
     matches!(
         path,
@@ -191,6 +221,7 @@ mod tests {
         assert_eq!(unique.len(), SHARED_DESKTOP_PATHS.len());
         assert!(CLI_WRITABLE_PATHS.iter().all(|path| unique.contains(path)));
         assert!(cli_writable("editor.twoRowTabs"));
+        assert!(cli_writable("agents.quotaUnpinnedKeys"));
         assert!(!extended_portable("editor.twoRowTabs"));
         assert!(!cli_writable("general.confirmProjectRemoval"));
         assert!(!cli_writable("general.confirmWorkspaceRemoval"));
@@ -225,5 +256,25 @@ mod tests {
             "editor.quickOpenExcludedDirectories",
             &serde_json::json!(["../escape"])
         ));
+    }
+
+    #[test]
+    fn quota_pin_keys_accept_classic_account_ids_and_reject_duplicates_or_controls() {
+        assert!(valid_quota_unpinned_keys(&serde_json::json!([
+            "claude:default",
+            "codex",
+            "codex:secondary-profile",
+            "agy",
+            "opencode:go"
+        ])));
+        assert!(!valid_quota_unpinned_keys(&serde_json::json!([
+            "claude:", "unknown"
+        ])));
+        assert!(!valid_quota_unpinned_keys(&serde_json::json!([
+            "agy", "agy"
+        ])));
+        assert!(!valid_quota_unpinned_keys(&serde_json::json!([
+            "codex:bad\nname"
+        ])));
     }
 }

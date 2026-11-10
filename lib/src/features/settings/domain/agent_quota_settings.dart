@@ -2,8 +2,9 @@ part of 'alera_settings.dart';
 
 // Ownership: the per-host quota fields the runtime host needs are pushed as
 // `agentQuotas` in `runtimeSettings.update` (runtime operational), while
-// Selected account ids and `unpinnedQuotaKeys` stay local-only preferences and
-// are merged back from the local repository on every load.
+// Selected account ids stay Classic-local UI preferences. Per-account
+// `unpinnedQuotaKeys` is migrated once to Rust desktop shared settings and
+// read back for both Classic and GPUI; older Hosts keep the local fallback.
 
 /// Canonicalizes quota provider ids until the agent descriptor registry is
 /// available through FRB on the Dart side.

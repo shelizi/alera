@@ -120,7 +120,10 @@ impl Workbench {
         })?;
         let extended = values
             .iter()
-            .filter(|(path, _)| alera_core::desktop_settings_contract::extended_portable(path))
+            .filter(|(path, _)| {
+                alera_core::desktop_settings_contract::extended_portable(path)
+                    || path.as_str() == "agents.quotaUnpinnedKeys"
+            })
             .map(|(path, value)| (path.clone(), value.clone()))
             .collect();
         if self.agent_selected_profile.is_none() {
@@ -265,8 +268,15 @@ impl Workbench {
         };
         let expected = if path == "general.language" {
             serde_json::json!(self.settings_menu_language)
-        } else if alera_core::desktop_settings_contract::extended_portable(path) {
-            if !alera_core::desktop_settings_contract::valid_extended_portable(path, &value) {
+        } else if alera_core::desktop_settings_contract::extended_portable(path)
+            || path == "agents.quotaUnpinnedKeys"
+        {
+            let valid = if path == "agents.quotaUnpinnedKeys" {
+                alera_core::desktop_settings_contract::valid_quota_unpinned_keys(&value)
+            } else {
+                alera_core::desktop_settings_contract::valid_extended_portable(path, &value)
+            };
+            if !valid {
                 self.model
                     .set_status("Invalid shared portable settings value");
                 cx.notify();

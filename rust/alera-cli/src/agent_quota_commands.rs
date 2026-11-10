@@ -19,28 +19,59 @@ fn validate_quota_response(response: &Value) -> Result<(), &'static str> {
     }
 }
 
+/// Filter Host runtime settings to provider IDs only; environment values
+/// remain private to the Runtime Host.
+fn quota_display_config(response: &Value) -> Result<Value, &'static str> {
+    let providers = response
+        .get("agentQuotas")
+        .and_then(|quotas| quotas.get("enabledProviders"))
+        .and_then(Value::as_array)
+        .ok_or("Host quota configuration is unavailable")?;
+    if providers.len() > PROVIDERS.len() {
+        return Err("Quota provider list exceeds limits");
+    }
+    let mut seen = std::collections::HashSet::new();
+    let mut safe = Vec::with_capacity(providers.len());
+    for provider in providers {
+        let id = provider.as_str().ok_or("Invalid quota provider ID")?;
+        if !PROVIDERS.contains(&id) || !seen.insert(id) {
+            return Err("Unknown or duplicate quota provider ID");
+        }
+        safe.push(id);
+    }
+    Ok(json!({"enabledProviders": safe}))
+}
+
 pub async fn run(command: AgentQuotaCommand) -> i32 {
     if !command.no_start {
         eprintln!("Quota inspection requires --no-start and an existing Runtime Host");
         return USAGE_EXIT_CODE;
     }
-    let AgentQuotaAction::Snapshot {
-        force_refresh,
-        provider,
-        account_id,
-    } = command.action;
-    if provider
-        .as_ref()
-        .is_some_and(|provider| !PROVIDERS.contains(&provider.as_str()))
-    {
-        return print_error("Unknown quota provider");
-    }
-    if account_id
-        .as_ref()
-        .is_some_and(|account| account.trim().is_empty() || account.len() > 256)
-    {
-        return print_error("Invalid quota account");
-    }
+    let (method, payload) = match command.action {
+        AgentQuotaAction::Snapshot {
+            force_refresh,
+            provider,
+            account_id,
+        } => {
+            if provider
+                .as_ref()
+                .is_some_and(|provider| !PROVIDERS.contains(&provider.as_str()))
+            {
+                return print_error("Unknown quota provider");
+            }
+            if account_id
+                .as_ref()
+                .is_some_and(|account| account.trim().is_empty() || account.len() > 256)
+            {
+                return print_error("Invalid quota account");
+            }
+            (
+                "agentQuota.snapshot",
+                json!({"forceRefresh": force_refresh, "provider": provider, "accountId": account_id}),
+            )
+        }
+        AgentQuotaAction::Config => ("runtimeSettings.get", json!({})),
+    };
     let runtime = runtime_dir(&command.runtime);
     let Some(mut client) = (match RuntimeHostRpcClient::connect(&runtime).await {
         Ok(client) => client,
@@ -48,15 +79,17 @@ pub async fn run(command: AgentQuotaCommand) -> i32 {
     }) else {
         return print_error("Existing Alera Runtime Host is not running");
     };
-    let payload = json!({
-        "forceRefresh": force_refresh,
-        "provider": provider,
-        "accountId": account_id,
-    });
     match client
-        .request_value_with_deadline("agentQuota.snapshot", &payload, QUOTA_DEADLINE_MS)
+        .request_value_with_deadline(method, &payload, QUOTA_DEADLINE_MS)
         .await
     {
+        Ok(value) if method == "runtimeSettings.get" => match quota_display_config(&value) {
+            Ok(safe) => {
+                print_value(&safe, command.output.json, "Quota display order fetched");
+                0
+            }
+            Err(error) => print_error(error),
+        },
         Ok(value) => match validate_quota_response(&value) {
             Ok(()) => {
                 print_value(&value, command.output.json, "Agent quotas fetched");
@@ -98,7 +131,10 @@ mod tests {
             force_refresh,
             provider,
             account_id,
-        } = command.action;
+        } = command.action
+        else {
+            panic!("expected snapshot")
+        };
         assert!(force_refresh);
         assert_eq!(provider.as_deref(), Some("agy"));
         assert_eq!(account_id.as_deref(), Some("default"));
@@ -111,6 +147,30 @@ mod tests {
             "default"
         ])
         .is_err());
+    }
+
+    #[test]
+    fn quota_config_returns_only_allowlisted_provider_ids() {
+        let raw = json!({"agentQuotas":{
+            "enabledProviders":["agy","claude","codex"],
+            "environment":{"zaiBaseUrl":"private-endpoint"}
+        }});
+        assert_eq!(
+            quota_display_config(&raw).unwrap(),
+            json!({"enabledProviders":["agy","claude","codex"]})
+        );
+        assert!(quota_display_config(&json!({"agentQuotas":{
+            "enabledProviders":["claude","claude"]
+        }}))
+        .is_err());
+        let parsed = Cli::try_parse_from(["alera", "quota", "--no-start", "config"]).unwrap();
+        assert!(matches!(
+            parsed.command,
+            Command::Quota(AgentQuotaCommand {
+                action: AgentQuotaAction::Config,
+                ..
+            })
+        ));
     }
 
     #[test]

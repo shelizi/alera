@@ -168,6 +168,59 @@ impl RuntimeCliBridge {
         Ok(result)
     }
 
+    /// Return only the Host-configured enabled provider order. No environment
+    /// keys, credentials, profile command lines or other Host fields.
+    pub fn agent_quota_enabled_order(&self) -> io::Result<Vec<String>> {
+        if !self.runtime_dir.join("host.json").is_file()
+            && !self.runtime_dir.join("runtime-host.json").is_file()
+        {
+            return Err(io::Error::new(ErrorKind::NotConnected, "Classic Runtime Host is offline"));
+        }
+        let mut child = windowless_command(&self.executable)
+            .arg("quota")
+            .arg("--no-start")
+            .arg("--json")
+            .arg("--runtime-dir")
+            .arg(&self.runtime_dir)
+            .arg("config")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()?;
+        let stdout = child.stdout.take().ok_or_else(|| io::Error::other("Quota config stdout missing"))?;
+        let reader = thread::spawn(move || -> io::Result<Vec<u8>> {
+            let mut bytes = Vec::new();
+            stdout.take(MAX_QUOTA_RESPONSE_BYTES + 1).read_to_end(&mut bytes)?;
+            Ok(bytes)
+        });
+        let status = match wait_with_timeout(&mut child, QUOTA_TIMEOUT) {
+            Ok(status) => status,
+            Err(error) => { let _ = reader.join(); return Err(error); }
+        };
+        let bytes = reader.join().map_err(|_| io::Error::other("Quota config reader panicked"))??;
+        if !status.success() || bytes.len() as u64 > MAX_QUOTA_RESPONSE_BYTES {
+            return Err(io::Error::other("Quota config unavailable: existing Host or CLI is incompatible"));
+        }
+        let response: Value = serde_json::from_slice(&bytes)
+            .map_err(|error| io::Error::new(ErrorKind::InvalidData, error))?;
+        let order = response["enabledProviders"]
+            .as_array()
+            .ok_or_else(|| io::Error::new(ErrorKind::InvalidData, "Missing quota display order"))?;
+        if order.len() > 10 {
+            return Err(io::Error::new(ErrorKind::InvalidData, "Too many quota providers"));
+        }
+        let allowed = ["claude", "codex", "kimi", "grok", "cursor", "agy", "minimax", "zai", "devin", "opencode"];
+        let mut safe = Vec::<String>::new();
+        for value in order {
+            let id = value.as_str().ok_or_else(|| io::Error::new(ErrorKind::InvalidData, "Invalid quota ID"))?;
+            if !allowed.contains(&id) || safe.iter().any(|existing| existing == id) {
+                return Err(io::Error::new(ErrorKind::InvalidData, "Unsupported quota ID"));
+            }
+            safe.push(id.to_owned());
+        }
+        Ok(safe)
+    }
+
     /// Internal subprocess parameters; the Agent adapter still checks for an
     /// existing Host and can invoke only strict no-start CLI verbs.
     pub(crate) fn agent_cli_paths(&self) -> (&Path, &Path) {

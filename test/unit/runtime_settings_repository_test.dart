@@ -644,6 +644,102 @@ void main() {
     );
   });
 
+  test('Classic quota pin preferences migrate to Rust and use account-scoped CAS', () async {
+    final legacy = _MemorySettingsRepository();
+    legacy.settings = AleraSettings.defaults.copyWith(
+      agents: AleraSettings.defaults.agents.copyWith(
+        quotas: AgentQuotaSettings.defaults.withHost(
+          'local',
+          const AgentQuotaHostSettings(
+            selectedClaudeProfile: 'work',
+            unpinnedQuotaKeys: <String>['claude:work'],
+          ),
+        ),
+      ),
+    );
+    final host = _RecordingRuntimeHostClient();
+    host.responses['desktopSettings.seedLocal'] = {
+      'values': {
+        'agents.quotaUnpinnedKeys': <String>['agy'],
+      },
+    };
+    host.responses['runtimeSettings.get'] = {
+      'workspaceDirectory': '/quota-preferences',
+    };
+    final repo = RuntimeSettingsRepository(
+      client: host,
+      legacyRepository: legacy,
+    );
+    final loaded = await repo.load();
+    expect(loaded.agents.quotas.forHost('local').selectedClaudeProfile, 'work');
+    expect(
+      loaded.agents.quotas.forHost('local').unpinnedQuotaKeys,
+      ['agy'],
+      reason:
+          'Previously saved Rust quota pins win over a late Classic local seed',
+    );
+    final seeds = host.payloads['desktopSettings.seedLocal']!;
+    expect(seeds, hasLength(2));
+    expect(seeds.last['values'], {
+      'agents.quotaUnpinnedKeys': ['claude:work'],
+    });
+    final next = loaded.copyWith(
+      agents: loaded.agents.copyWith(
+        quotas: loaded.agents.quotas.withHost(
+          'local',
+          loaded.agents.quotas
+              .forHost('local')
+              .copyWith(unpinnedQuotaKeys: ['agy', 'codex']),
+        ),
+      ),
+    );
+    await repo.compareAndSetSharedDesktopChanges(loaded, next);
+    expect(host.payloads['desktopSettings.compareAndSetBatch'], [
+      {
+        'changes': [
+          {
+            'path': 'agents.quotaUnpinnedKeys',
+            'expectedValue': ['agy'],
+            'value': ['agy', 'codex'],
+          },
+        ],
+      },
+    ]);
+  });
+
+  test('older Host keeps Classic quota pin preference as local-only', () async {
+    final legacy = _MemorySettingsRepository();
+    final host = _RecordingRuntimeHostClient();
+    host.responses['desktopSettings.seedLocal'] = {
+      'values': {'editor.twoRowTabs': false},
+    };
+    host.responses['runtimeSettings.get'] = {
+      'workspaceDirectory': '/older-runtime-host',
+    };
+    final repository = RuntimeSettingsRepository(
+      client: host,
+      legacyRepository: legacy,
+    );
+    final loaded = await repository.load();
+    expect(host.payloads['desktopSettings.seedLocal'], hasLength(1),
+        reason: 'Old Host must not see unknown quota pin migration keys');
+    final changed = loaded.copyWith(
+      agents: loaded.agents.copyWith(
+        quotas: loaded.agents.quotas.withHost(
+          'local',
+          loaded.agents.quotas.forHost('local').copyWith(
+            unpinnedQuotaKeys: ['agy'],
+          ),
+        ),
+      ),
+    );
+    await repository.compareAndSetSharedDesktopChanges(loaded, changed);
+    expect(host.payloads['desktopSettings.compareAndSetBatch'], isNull);
+    await repository.save(changed);
+    expect(legacy.settings.agents.quotas.forHost('local').unpinnedQuotaKeys,
+        ['agy']);
+  });
+
   test(
     'Two-row Tab preference migrates locally and uses the shared Host CAS',
     () async {

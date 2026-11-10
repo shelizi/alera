@@ -371,6 +371,8 @@ pub enum AgentQuotaAction {
         #[arg(long, requires = "provider")]
         account_id: Option<String>,
     },
+    /// Return a secret-free projection of Host quota provider ordering.
+    Config,
 }
 
 #[derive(Debug, Args)]

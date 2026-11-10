@@ -40,3 +40,30 @@ Classic 編輯區顯示：`Terminal host unavailable: Terminal host connection c
 3. 由 GPUI 實際操作單一帳號刷新、全部刷新、列表溢出、窄視窗布局及 Host 中斷重連，確認不會錯誤標示數值為最新。
 
 本文件描述**已實際看到的畫面與 CLI 回應**；未操作到的功能保留為「未驗收」，不是通過。
+
+## 第二輪補齊：Classic 額度列對齊（2026-11-10）
+
+這一輪仍使用原 GPUI 整合 worktree，不啟動／替換 Runtime Host，也不修改安裝中的 Classic。
+
+### 已實作
+
+1. **原版 Provider 圖示**：GPUI 直接編入既有 Classic 的十種 Agent Logo（SVG／PNG），避免執行期依賴 Flutter 素材目錄；狀態列及總覽均使用。已通過 Windows 編譯，**由於 Host 離線，尚無法在真實多 Provider 畫面逐一視覺驗證**。
+2. **共用釘選設定**：由 Rust Core Runtime Store（`agents.quotaUnpinnedKeys`）管理，Classic 首次啟動將既有 Drift 釘選選項 seed-only 遷移，GPUI 使用同一份 Host CAS 欄位級讀寫。釘選鍵遵守 Classic 的 `claude:<account>`、`codex`／`codex:<account>`、`opencode:<account>` 等格式。舊 Host 未支援該欄位時，Classic 保留本機運作；GPUI 則拒絕離線寫入，避免雙份設定不一致。
+3. **排序／顯示**：GPUI 的狀態列僅顯示已釘選帳號，總覽顯示全部；CLI 用 `quota --no-start config` 向既有 Host 讀取排序，**只回傳**白名單的 enabled provider IDs，不將 Host 的環境參數／Key 交給 GPUI。Host 未連線時使用 Classic 預設排序；Host 明確停用全部 Provider 時保持空清單。
+4. **Classic 式浮動面板**：不再使用中央對話框，改由狀態列懸停／點擊開啟上方浮動總覽；有各帳號釘選、單項刷新、全部刷新與關閉操作，點擊其他區域可收起。
+
+### 實際驗證
+
+- Rust Core `desktop_settings_contract` 釘選鍵驗證：通過。
+- Rust Core `runtime` 功能開啟後，兩個 RuntimeStore 連線測試：Classic seed、GPUI CAS 修改、Classic 讀回、stale CAS 拒絕、重啟保留與其他欄位不變，**1/1 通過**。
+- GPUI 的帳號釘選鍵及排序單元測試：**1/1 通過**；錯誤／stale 文案 GUI 測試：**2/2 通過**。
+- CLI 的 `quota` 操作及 secret-free 配置投影測試：**3/3 通過**。
+- Flutter 的 RuntimeSettingsRepository 測試：**16/16 通過**，含新版 Host 釘選遷移、舊版 Host 的本機回退；Dart analyzer 無問題。
+- GPUI Rust Library 全套回歸 **387/387 通過**；包含修正共享設定快照對新增 pin 欄位的驗證，並接受舊版 Host 未提供此可選欄位的相容模式。Windows GPUI `cargo check --offline --bin alera-gpui-desktop` 通過。
+- **Windows 3840×2160 桌面實機**：GPUI 新版浮動面板能從狀態列上方開啟；點面板外可關閉。原版一開始因離線文案太長而擠掉關閉鈕，已拆成「標題 + 刷新 + 關閉」及「狀態訊息」兩列並重新編譯；重新實測後，關閉鈕可見且實際點擊有效。
+
+### 尚未驗收／範圍外
+
+- 本機既有 Runtime Host 仍離線：`alera quota --no-start --json snapshot` 回傳 `Existing Alera Runtime Host is not running`。**無法證明**真實額度、AGY 五組資料、跨視窗即時釘選同步、個別帳號刷新與多 Provider 圖示的最終視覺效果。
+- Classic 的「Open Usage」完整統計、Codex 重置等擴充操作不是本輪額度狀態列對齊範圍，尚未宣稱對齊。
+- 所有測試執行檔只暫存在 worktree，測試後清除；正式 Classic／Runtime Host／main 分支無變動。

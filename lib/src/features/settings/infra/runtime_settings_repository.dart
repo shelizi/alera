@@ -17,11 +17,13 @@ class RuntimeSettingsRepository({
   Map<String, Object?>? _lastLoadedPortable;
   Map<String, Object?>? _lastLoadedRuntime;
   bool _sharedDesktopAvailable = false;
+  bool _sharedQuotaPinsAvailable = false;
 
   @override
   Future<AleraSettings> load() async {
     var legacy = await legacyRepository.load();
     _sharedDesktopAvailable = false;
+    _sharedQuotaPinsAvailable = false;
     try {
       await beforeAccess?.call();
       if (await _supportsConfiguration()) {
@@ -63,6 +65,27 @@ class RuntimeSettingsRepository({
         );
         sharedDesktop = _asMap(imported['values']);
         _sharedDesktopAvailable = true;
+        // Migrate the Classic per-account quota pins into the same Rust owner
+        // as GPUI. The Host seeds only absent values, so a GPUI edit wins over
+        // a late Classic start. Older Hosts still keep Classic's Drift pins.
+        if (sharedDesktop.containsKey('agents.quotaUnpinnedKeys')) {
+          try {
+            final quotaSeed = _asMap(
+              await client.runtimeRequest('desktopSettings.seedLocal', {
+                'values': {
+                  'agents.quotaUnpinnedKeys': legacy.agents.quotas
+                      .forHost('local')
+                      .unpinnedQuotaKeys,
+                },
+              }),
+            );
+            sharedDesktop = _asMap(quotaSeed['values']);
+            _sharedQuotaPinsAvailable =
+                sharedDesktop['agents.quotaUnpinnedKeys'] is List;
+          } catch (_) {
+            // Backward-compatible with older Host versions.
+          }
+        }
       } catch (_) {
         // A running older Host cannot synchronize shared preferences yet.
         // Keep Classic's Drift values rather than breaking Settings startup.
@@ -146,6 +169,9 @@ class RuntimeSettingsRepository({
     if (!_sharedDesktopAvailable) return;
     final changes = <Map<String, Object?>>[];
     for (final path in _sharedDesktopPaths) {
+      if (path == 'agents.quotaUnpinnedKeys' && !_sharedQuotaPinsAvailable) {
+        continue;
+      }
       final expected = _sharedDesktopValue(previous, path);
       final value = _sharedDesktopValue(next, path);
       // List-valued shared fields (Quick Open excluded names) must use
@@ -312,6 +338,7 @@ const _sharedDesktopPaths = <String>[
   'agents.agentStatusFinishedNotificationsEnabled',
   'agents.showTabTitlesInSidebar',
   'editor.quickOpenExcludedDirectories',
+  'agents.quotaUnpinnedKeys',
 ];
 
 Object? _sharedDesktopValue(
@@ -351,6 +378,8 @@ Object? _sharedDesktopValue(
   'agents.showTabTitlesInSidebar' => settings.agents.showTabTitlesInSidebar,
   'editor.quickOpenExcludedDirectories' =>
     settings.editor.quickOpenExcludedDirectories,
+  'agents.quotaUnpinnedKeys' =>
+    settings.agents.quotas.forHost('local').unpinnedQuotaKeys,
   _ => throw ArgumentError.value(path, 'path', 'Unsupported desktop setting'),
 };
 
@@ -454,6 +483,7 @@ AleraSettings _applySharedDesktopValues(
   final autosaveDelay = values['editor.autosaveDelaySeconds'];
   final excludedDirs = values['editor.quickOpenExcludedDirectories'];
   final cursorShape = values['terminal.cursorShape'];
+  final quotaPins = values['agents.quotaUnpinnedKeys'];
   return current.copyWith(
     general: current.general.copyWith(
       language: language,
@@ -564,6 +594,19 @@ AleraSettings _applySharedDesktopValues(
               values.containsKey('agents.defaultAgentProfileId')
               ? _optionalRuntimeString(values['agents.defaultAgentProfileId'])
               : current.agents.defaultAgentProfileId,
+        )
+        .copyWith(
+          quotas:
+              quotaPins is List && quotaPins.every((entry) => entry is String)
+              ? current.agents.quotas.withHost(
+                  'local',
+                  current.agents.quotas
+                      .forHost('local')
+                      .copyWith(
+                        unpinnedQuotaKeys: List<String>.from(quotaPins),
+                      ),
+                )
+              : current.agents.quotas,
         ),
   );
 }

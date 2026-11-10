@@ -84,12 +84,17 @@ impl NativeSettings {
             })?;
         let mut required = Vec::new();
         for path in alera_core::desktop_settings_contract::SHARED_DESKTOP_PATHS {
-            let value = values.get(path).ok_or_else(|| {
-                io::Error::new(
+            let Some(value) = values.get(path) else {
+                if path == "agents.quotaUnpinnedKeys" {
+                    // Existing Host binaries without the new optional quota
+                    // preference must not break all other shared settings.
+                    continue;
+                }
+                return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
                     "Incomplete shared desktop Settings snapshot",
-                )
-            })?;
+                ));
+            };
             if path == "general.language" {
                 if !value.as_str().is_some_and(|v| {
                     matches!(
@@ -111,6 +116,13 @@ impl NativeSettings {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidData,
                         "Invalid shared Host default Agent Profile ID",
+                    ));
+                }
+            } else if path == "agents.quotaUnpinnedKeys" {
+                if !alera_core::desktop_settings_contract::valid_quota_unpinned_keys(value) {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "Invalid shared quota pins",
                     ));
                 }
             } else if alera_core::desktop_settings_contract::extended_portable(path) {
@@ -570,7 +582,7 @@ mod tests {
     }
 
     #[test]
-    fn shared_host_snapshot_validates_all_thirty_fields_without_erasing_native_only_data() {
+    fn shared_host_snapshot_validates_quota_pin_field_without_erasing_native_only_data() {
         let mut state = NativeSettings::default();
         state.explorer_show_ignored = true;
         state.default_agent_profile_id = Some("managed_codex".to_owned());
@@ -604,7 +616,8 @@ mod tests {
             "agents.agentStatusNotificationsEnabled":true,
             "agents.agentStatusFinishedNotificationsEnabled":false,
             "agents.showTabTitlesInSidebar":true,
-            "editor.quickOpenExcludedDirectories":["node_modules","target","Generated"]
+            "editor.quickOpenExcludedDirectories":["node_modules","target","Generated"],
+            "agents.quotaUnpinnedKeys":["claude:default","agy"]
         }});
         assert_eq!(
             state.apply_shared_snapshot(&snapshot).unwrap(),
@@ -624,6 +637,19 @@ mod tests {
             Some("host_codex")
         );
         let previous = state.clone();
+        let mut invalid_pins = snapshot.clone();
+        invalid_pins["values"]["agents.quotaUnpinnedKeys"] = json!(["agy", "agy"]);
+        assert!(state.apply_shared_snapshot(&invalid_pins).is_err());
+        let mut old_host = snapshot.clone();
+        old_host["values"]
+            .as_object_mut()
+            .unwrap()
+            .remove("agents.quotaUnpinnedKeys");
+        assert_eq!(
+            state.apply_shared_snapshot(&old_host).unwrap(),
+            "traditionalChinese",
+            "Older Host without quota-pins key should still provide other shared settings",
+        );
         let mut invalid_extended = snapshot.clone();
         invalid_extended["values"]["terminal.cursorShape"] = json!("unexpected");
         assert!(state.apply_shared_snapshot(&invalid_extended).is_err());

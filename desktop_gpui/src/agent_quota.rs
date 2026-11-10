@@ -91,6 +91,17 @@ impl QuotaSnapshot {
         format!("{}:{}", self.provider, self.account_id)
     }
 
+    /// Exact pin key used by Classic's AgentQuotaHostSettings.quotaPinKey.
+    pub fn pin_key(&self) -> String {
+        match self.provider.as_str() {
+            "claude" | "opencode" => format!("{}:{}", self.provider, self.account_id),
+            "codex" if self.account_id != "default" => {
+                format!("codex:{}", self.account_id)
+            }
+            _ => self.provider.clone(),
+        }
+    }
+
     pub fn provider_label(&self) -> &'static str {
         PROVIDERS
             .iter()
@@ -158,6 +169,30 @@ impl QuotaSnapshot {
         readings.sort_by_key(|reading| reading.order);
         readings
     }
+}
+
+/// Classic status-bar visibility follows the shared per-account pin list
+/// and the Host's enabled provider order; the overview shows every row.
+pub fn status_bar_quotas<'a>(
+    snapshots: &'a [QuotaSnapshot],
+    enabled_order: Option<&[String]>,
+    unpinned_keys: &[String],
+) -> Vec<&'a QuotaSnapshot> {
+    let mut visible: Vec<&QuotaSnapshot> = snapshots
+        .iter()
+        .filter(|row| {
+            enabled_order.is_none_or(|order| order.iter().any(|p| p == &row.provider))
+                && !unpinned_keys.iter().any(|key| key == &row.pin_key())
+        })
+        .collect();
+    visible.sort_by_key(|row| {
+        let index = enabled_order
+            .and_then(|order| order.iter().position(|id| id == &row.provider))
+            .or_else(|| PROVIDERS.iter().position(|(id, _)| *id == row.provider))
+            .unwrap_or(usize::MAX);
+        (index, row.account_id != "default", row.account_id.clone())
+    });
+    visible
 }
 
 fn short_label(provider: &str, label: &str) -> String {
@@ -361,6 +396,39 @@ mod tests {
         }]}))
         .unwrap();
         assert_eq!(values[0].readings()[0].value, "-");
+    }
+
+    #[test]
+    fn classic_pin_keys_and_provider_order_are_account_scoped() {
+        let snapshots = parse_quota_snapshots(&json!({"snapshots":[
+            {"provider":"claude","accountId":"default","status":"ok"},
+            {"provider":"claude","accountId":"work","displayName":"Work","status":"ok"},
+            {"provider":"codex","accountId":"default","status":"ok"},
+            {"provider":"agy","accountId":"default","status":"ok"},
+            {"provider":"opencode","accountId":"go","status":"ok"}
+        ]}))
+        .unwrap();
+        assert_eq!(snapshots[0].pin_key(), "claude:default");
+        assert_eq!(snapshots[1].pin_key(), "claude:work");
+        assert_eq!(snapshots[2].pin_key(), "codex");
+        assert_eq!(snapshots[3].pin_key(), "agy");
+        assert_eq!(snapshots[4].pin_key(), "opencode:go");
+        let ordered = status_bar_quotas(
+            &snapshots,
+            Some(&[
+                "agy".into(),
+                "claude".into(),
+                "codex".into(),
+                "opencode".into(),
+            ]),
+            &["claude:default".into(), "opencode:go".into()],
+        );
+        assert_eq!(
+            ordered.iter().map(|row| row.key()).collect::<Vec<_>>(),
+            vec!["agy:default", "claude:work", "codex:default"]
+        );
+        assert!(status_bar_quotas(&snapshots, Some(&[]), &[]).is_empty());
+        assert_eq!(status_bar_quotas(&snapshots, None, &[]).len(), 5);
     }
 
     #[test]

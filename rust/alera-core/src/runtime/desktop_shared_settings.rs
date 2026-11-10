@@ -30,6 +30,7 @@ fn local_path(path: &str) -> bool {
             | "editor.twoRowTabs"
             | "explorer.showHiddenFiles"
             | "explorer.showIgnoredFiles"
+            | "agents.quotaUnpinnedKeys"
     )
 }
 
@@ -58,6 +59,7 @@ fn default_value(path: &str) -> Result<Value> {
         "general.confirmWorkspaceRemoval" => json!(true),
         "general.autoArchiveWorkspacesAfterDays" => json!(30),
         "agents.defaultAgentProfileId" => Value::Null,
+        "agents.quotaUnpinnedKeys" => json!([]),
         "explorer.showHiddenFiles" => json!(false),
         "explorer.showIgnoredFiles" => json!(false),
         "general.showTrayIcon" => json!(true),
@@ -84,6 +86,12 @@ fn default_value(path: &str) -> Result<Value> {
 }
 
 fn validate(path: &str, value: &Value) -> Result<()> {
+    if path == "agents.quotaUnpinnedKeys" {
+        if crate::desktop_settings_contract::valid_quota_unpinned_keys(value) {
+            return Ok(());
+        }
+        bail!("Invalid quota pin keys");
+    }
     if crate::desktop_settings_contract::extended_portable(path) {
         if crate::desktop_settings_contract::valid_extended_portable(path, value) {
             return Ok(());
@@ -280,7 +288,7 @@ impl RuntimeStore {
     /// If GPUI already saved a value, late Classic migration never replaces it.
     pub async fn desktop_shared_seed_local(&self, fields: &Value) -> Result<Value> {
         let fields = fields.as_object().context("Local seed must be an object")?;
-        if fields.len() > 6 {
+        if fields.len() > 7 {
             bail!("Too many local desktop settings");
         }
         for (path, value) in fields {
@@ -528,6 +536,74 @@ mod tests {
                 .await
                 .unwrap(),
             false
+        );
+    }
+
+    #[tokio::test]
+    async fn classic_and_gpui_share_quota_pin_keys_without_losing_other_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        let classic = RuntimeStore::open(dir.path()).await.unwrap();
+        let gpui = RuntimeStore::open(dir.path()).await.unwrap();
+        let initial = classic.desktop_shared_settings_snapshot().await.unwrap();
+        assert_eq!(initial["values"]["agents.quotaUnpinnedKeys"], json!([]));
+        assert_eq!(initial["present"]["agents.quotaUnpinnedKeys"], false);
+
+        let classic_pins = json!(["claude:default", "agy", "codex:work"]);
+        let migrated = classic
+            .desktop_shared_seed_local(&json!({"agents.quotaUnpinnedKeys": classic_pins}))
+            .await
+            .unwrap();
+        assert_eq!(migrated["values"]["agents.quotaUnpinnedKeys"], classic_pins);
+        assert_eq!(migrated["present"]["agents.quotaUnpinnedKeys"], true);
+        // A late Classic startup with stale local preferences cannot overwrite GPUI.
+        gpui.desktop_shared_seed_local(&json!({"agents.quotaUnpinnedKeys": ["grok"]}))
+            .await
+            .unwrap();
+        assert_eq!(
+            gpui.desktop_shared_setting("agents.quotaUnpinnedKeys")
+                .await
+                .unwrap(),
+            classic_pins,
+        );
+        let updated = json!(["claude:default", "codex:work"]);
+        gpui.desktop_shared_compare_and_set("agents.quotaUnpinnedKeys", &classic_pins, &updated)
+            .await
+            .unwrap();
+        assert_eq!(
+            classic
+                .desktop_shared_setting("agents.quotaUnpinnedKeys")
+                .await
+                .unwrap(),
+            updated,
+        );
+        assert!(classic
+            .desktop_shared_compare_and_set("agents.quotaUnpinnedKeys", &classic_pins, &json!([]))
+            .await
+            .is_err());
+        assert!(gpui
+            .desktop_shared_compare_and_set(
+                "agents.quotaUnpinnedKeys",
+                &updated,
+                &json!(["unsupported"])
+            )
+            .await
+            .is_err());
+        assert_eq!(
+            classic
+                .desktop_shared_setting("editor.twoRowTabs")
+                .await
+                .unwrap(),
+            json!(false),
+        );
+        drop(classic);
+        drop(gpui);
+        let restarted = RuntimeStore::open(dir.path()).await.unwrap();
+        assert_eq!(
+            restarted
+                .desktop_shared_setting("agents.quotaUnpinnedKeys")
+                .await
+                .unwrap(),
+            updated,
         );
     }
 
