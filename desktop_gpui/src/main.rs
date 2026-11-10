@@ -36,7 +36,7 @@ use alera_gpui_desktop::git_actions::{GitActions, GitConflictChoice, GitConflict
 use alera_gpui_desktop::git_history::{
     compare_git_refs, compare_local_branch, preview_commit, GitHistoryOptions, GitHistorySnapshot,
 };
-use alera_gpui_desktop::git_inspect::{read_file_diff, GitSnapshot};
+use alera_gpui_desktop::git_inspect::{read_file_diff_page, GitSnapshot};
 use alera_gpui_desktop::host_tab_pins::{
     host_pin_owner_coverage, host_pin_query_workspaces, HostPinOwnerCoverage, HostTabPinSnapshot,
 };
@@ -334,6 +334,16 @@ enum RightSidebarView {
     Git,
 }
 
+/// File-patch-only navigation. History/branch compare previews must never
+/// inherit a file's paging cursor, and pages are replaced, not concatenated.
+#[derive(Clone)]
+struct GitFileDiffPaging {
+    relative: PathBuf,
+    start_line: usize,
+    next_line: Option<usize>,
+    previous_starts: Vec<usize>,
+}
+
 struct Workbench {
     model: WorkbenchModel,
     center_view: CenterView,
@@ -433,6 +443,7 @@ struct Workbench {
     git_diff: Option<String>,
     git_diff_loading: bool,
     git_diff_request: u64,
+    git_file_diff_paging: Option<GitFileDiffPaging>,
     workspace_generation: u64,
     editor_epoch: u64,
     mixed_tabs: WorkbenchTabs,
@@ -1631,6 +1642,7 @@ impl Workbench {
         let generation = self.workspace_generation;
         self.git_diff_request = self.git_diff_request.wrapping_add(1);
         let ticket = self.git_diff_request;
+        self.git_file_diff_paging = None;
         self.git_diff = None;
         self.git_diff_loading = true;
         cx.spawn(async move |view, cx| {
@@ -1892,23 +1904,74 @@ impl Workbench {
     }
 
     fn preview_git_change(&mut self, relative: PathBuf, cx: &mut Context<Self>) {
+        self.load_git_file_diff_page(relative, 0, Vec::new(), cx);
+    }
+
+    fn change_git_file_diff_page(&mut self, forward: bool, cx: &mut Context<Self>) {
+        if self.git_diff_loading {
+            return;
+        }
+        let Some(state) = self.git_file_diff_paging.as_ref() else {
+            return;
+        };
+        let mut previous = state.previous_starts.clone();
+        let next_start = if forward {
+            if previous.len() >= 31 {
+                return;
+            }
+            let Some(next) = state.next_line else { return };
+            previous.push(state.start_line);
+            next
+        } else {
+            let Some(previous_start) = previous.pop() else {
+                return;
+            };
+            previous_start
+        };
+        let relative = state.relative.clone();
+        self.load_git_file_diff_page(relative, next_start, previous, cx);
+    }
+
+    fn load_git_file_diff_page(
+        &mut self,
+        relative: PathBuf,
+        start_line: usize,
+        previous_starts: Vec<usize>,
+        cx: &mut Context<Self>,
+    ) {
         self.git_diff_request = self.git_diff_request.wrapping_add(1);
         let ticket = self.git_diff_request;
         let generation = self.workspace_generation;
         let root = self.model.root().to_path_buf();
+        self.git_file_diff_paging = Some(GitFileDiffPaging {
+            relative: relative.clone(),
+            start_line,
+            next_line: None,
+            previous_starts,
+        });
         self.git_diff = None;
         self.git_diff_loading = true;
         cx.spawn(async move |view, cx| {
             let result = cx
-                .background_spawn(async move { read_file_diff(&root, &relative) })
+                .background_spawn(async move { read_file_diff_page(&root, &relative, start_line) })
                 .await;
             view.update(cx, |view, cx| {
                 if view.workspace_generation != generation || view.git_diff_request != ticket {
                     return;
                 }
                 view.git_diff_loading = false;
-                view.git_diff =
-                    Some(result.unwrap_or_else(|error| format!("Diff unavailable: {error}")));
+                match result {
+                    Ok(page) => {
+                        if let Some(paging) = view.git_file_diff_paging.as_mut() {
+                            paging.next_line = page.next_line;
+                        }
+                        view.git_diff = Some(page.text);
+                    }
+                    Err(error) => {
+                        view.git_file_diff_paging = None;
+                        view.git_diff = Some(format!("Diff unavailable: {error}"));
+                    }
+                }
                 cx.notify();
             })
             .ok();
@@ -3077,6 +3140,7 @@ impl Workbench {
         self.git_diff = None;
         self.git_diff_loading = false;
         self.git_diff_request = self.git_diff_request.wrapping_add(1);
+        self.git_file_diff_paging = None;
         // Agent profiles are Host-owned, but selection and an in-flight
         // launch response must never attach to a different GPUI workspace.
         self.agent_profiles_request = self.agent_profiles_request.wrapping_add(1);
@@ -3742,6 +3806,7 @@ impl Workbench {
         let generation = self.workspace_generation;
         let root = self.model.root().to_path_buf();
         self.git_history_open = true;
+        self.git_file_diff_paging = None;
         self.git_diff_loading = true;
         self.git_diff = None;
         self.model
@@ -6968,6 +7033,15 @@ impl Render for Workbench {
             self.git_diff.as_deref(),
             self.git_diff_loading,
         );
+        let git_file_page = self.git_file_diff_paging.as_ref().map(|page| {
+            (
+                page.previous_starts.len() + 1,
+                !page.previous_starts.is_empty() && !self.git_diff_loading,
+                page.next_line.is_some()
+                    && page.previous_starts.len() < 31
+                    && !self.git_diff_loading,
+            )
+        });
 
         div()
             .size_full()
@@ -8046,6 +8120,64 @@ impl Render for Workbench {
                                             .child("Expand diff").into_any_element()
                                     }),
                             )
+                            .child(if let Some((page, can_previous, can_next)) = git_file_page {
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(rgb(MUTED))
+                                            .child(format!("Page {page} · live Git · 32 KiB/page")),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .gap_2()
+                                            .child(if can_previous {
+                                                div()
+                                                    .id("git-diff-previous-page")
+                                                    .cursor_pointer()
+                                                    .text_xs()
+                                                    .text_color(rgb(TEXT))
+                                                    .child("Previous")
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.change_git_file_diff_page(false, cx);
+                                                    }))
+                                                    .into_any_element()
+                                            } else {
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(rgb(MUTED))
+                                                    .child("Previous")
+                                                    .into_any_element()
+                                            })
+                                            .child(if can_next {
+                                                div()
+                                                    .id("git-diff-next-page")
+                                                    .cursor_pointer()
+                                                    .text_xs()
+                                                    .text_color(rgb(TEXT))
+                                                    .child("Next")
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.change_git_file_diff_page(true, cx);
+                                                    }))
+                                                    .into_any_element()
+                                            } else {
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(rgb(MUTED))
+                                                    .child("Next")
+                                                    .into_any_element()
+                                            }),
+                                    )
+                                    .into_any_element()
+                            } else {
+                                div().into_any_element()
+                            })
                             .child(
                                 div()
                                     .id("git-diff-scroll")
@@ -9956,6 +10088,7 @@ fn main() {
                             git_diff: None,
                             git_diff_loading: false,
                             git_diff_request: 0,
+                            git_file_diff_paging: None,
                             workspace_generation: 0,
                             editor_epoch: 0,
                             mixed_tabs: WorkbenchTabs::for_workspace(0),
