@@ -100,13 +100,14 @@ pub fn read_file_diff(workspace: &Path, relative: &Path) -> Result<String, Strin
         .diff_index_to_workdir(None, Some(&mut options))
         .map_err(|e| e.to_string())?;
     let mut output = String::new();
-    append_diff(&diff, &mut output)?;
+    let mut truncated = false;
+    append_diff(&diff, &mut output, &mut truncated)?;
     if output.is_empty() {
         let tree = repo.head().ok().and_then(|head| head.peel_to_tree().ok());
         let staged = repo
             .diff_tree_to_index(tree.as_ref(), None, Some(&mut options))
             .map_err(|e| e.to_string())?;
-        append_diff(&staged, &mut output)?;
+        append_diff(&staged, &mut output, &mut truncated)?;
     }
     if output.is_empty() {
         // Untracked files don't participate in Git's index-to-workdir diff.
@@ -124,23 +125,41 @@ pub fn read_file_diff(workspace: &Path, relative: &Path) -> Result<String, Strin
             .map_err(|_| "Binary or non-UTF-8 file; preview unavailable".to_string())?;
         output = format!("Untracked (read-only): {}\n{}", relative.display(), text);
     }
-    if output.len() > MAX_PATCH_BYTES {
-        output.truncate(output.floor_char_boundary(MAX_PATCH_BYTES));
+    if truncated {
         output.push_str("\n… diff preview truncated");
     }
     Ok(output)
 }
 
-fn append_diff(diff: &git2::Diff<'_>, out: &mut String) -> Result<(), String> {
+fn append_diff(
+    diff: &git2::Diff<'_>,
+    out: &mut String,
+    truncated: &mut bool,
+) -> Result<(), String> {
     diff.print(git2::DiffFormat::Patch, |_, _, line| {
-        if out.len() < MAX_PATCH_BYTES {
-            if matches!(line.origin(), '+' | '-' | ' ') {
-                out.push(line.origin());
+        if *truncated {
+            return true;
+        }
+        if matches!(line.origin(), '+' | '-' | ' ') {
+            if out.len() == MAX_PATCH_BYTES {
+                *truncated = true;
+                return true;
             }
-            let available = MAX_PATCH_BYTES.saturating_sub(out.len());
-            let bytes = line.content();
-            let raw = String::from_utf8_lossy(&bytes[..bytes.len().min(available)]);
+            out.push(line.origin());
+        }
+        let available = MAX_PATCH_BYTES.saturating_sub(out.len());
+        let bytes = line.content();
+        let raw = String::from_utf8_lossy(&bytes[..bytes.len().min(available)]);
+        if raw.len() <= available {
             out.push_str(&raw);
+        } else {
+            // A sliced multibyte UTF-8 codepoint can expand to U+FFFD.
+            // Preserve a valid UTF-8 boundary without exceeding the limit.
+            out.push_str(&raw[..raw.floor_char_boundary(available)]);
+            *truncated = true;
+        }
+        if bytes.len() > available {
+            *truncated = true;
         }
         true
     })
@@ -243,5 +262,69 @@ mod tests {
         assert_eq!(fs::read_to_string(&path).unwrap(), text);
         assert!(read_file_diff(temp.path(), Path::new("../large-untracked.txt")).is_err());
         assert!(read_file_diff(temp.path(), &path).is_err());
+    }
+
+    #[test]
+    fn oversized_tracked_ascii_patch_explicitly_reports_truncation_without_writes() {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(temp.path()).unwrap();
+        let relative = Path::new("large-ascii.txt");
+        let path = temp.path().join(relative);
+        fs::write(&path, "baseline\n").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(relative).unwrap();
+        let tree_oid = index.write_tree().unwrap();
+        index.write().unwrap();
+        drop(index);
+        let tree = repo.find_tree(tree_oid).unwrap();
+        let signature = git2::Signature::now("Alera QA", "test@local.invalid").unwrap();
+        repo.commit(Some("HEAD"), &signature, &signature, "baseline", &tree, &[])
+            .unwrap();
+        drop(tree);
+        let content = "plain ASCII content in a tracked change\n".repeat(3_000);
+        fs::write(&path, &content).unwrap();
+        let head_before = repo.head().unwrap().target();
+        let index_before = repo.index().unwrap().get_path(relative, 0).unwrap().id;
+
+        let preview = read_file_diff(temp.path(), relative).unwrap();
+        assert!(preview.starts_with("diff --git "), "{preview:?}");
+        assert!(
+            preview.ends_with("\n… diff preview truncated"),
+            "A partial tracked patch must carry a visible truncation warning"
+        );
+        assert!(preview.len() <= MAX_PATCH_BYTES + 64);
+        assert!(preview.is_char_boundary(preview.len()));
+        assert_eq!(fs::read_to_string(path).unwrap(), content);
+        assert_eq!(repo.head().unwrap().target(), head_before);
+        assert_eq!(
+            repo.index().unwrap().get_path(relative, 0).unwrap().id,
+            index_before
+        );
+    }
+
+    #[test]
+    fn truncated_tracked_unicode_patch_stays_valid_utf8_and_bounded() {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(temp.path()).unwrap();
+        let relative = Path::new("unicode.txt");
+        let file = temp.path().join(relative);
+        fs::write(&file, "original\n").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(relative).unwrap();
+        let tree_id = index.write_tree().unwrap();
+        index.write().unwrap();
+        drop(index);
+        let tree = repo.find_tree(tree_id).unwrap();
+        let sig = git2::Signature::now("Alera QA", "test@local.invalid").unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "initial", &tree, &[])
+            .unwrap();
+        drop(tree);
+        let content = "中文修改🙂\n".repeat(6_000);
+        fs::write(&file, &content).unwrap();
+        let patch = read_file_diff(temp.path(), relative).unwrap();
+        assert!(patch.ends_with("\n… diff preview truncated"));
+        assert!(patch.len() <= MAX_PATCH_BYTES + 64);
+        assert!(patch.is_char_boundary(patch.len()));
+        assert_eq!(fs::read_to_string(file).unwrap(), content);
     }
 }
