@@ -24,7 +24,8 @@ use alera_gpui_desktop::agent_profiles::{
 };
 use alera_gpui_desktop::agent_quota::QuotaSnapshot;
 use alera_gpui_desktop::agent_status_notifications::{
-    validated_notice_target, AgentNotice, AgentNotificationDelivery, AgentNotificationPolicy,
+    enabled_notice_sessions, validated_notice_target, AgentNotice, AgentNotificationDelivery,
+    AgentNotificationPolicy,
 };
 #[cfg(windows)]
 use alera_gpui_desktop::agent_windows_notifications::WindowsAgentToastPresenter;
@@ -541,6 +542,12 @@ struct Workbench {
     /// toast is emitted until explicit Native-only ownership is confirmed.
     agent_notification_delivery: AgentNotificationDelivery,
     agent_notification_clock: Instant,
+    /// Separate Host-owned operational Hook settings; unlike the portable
+    /// notification toggle, these live in runtimeSettings.agentStatusHooks.
+    agent_hook_switches: Option<HashMap<String, bool>>,
+    agent_hook_switches_loading: bool,
+    agent_hook_switches_request: u64,
+    agent_hook_switches_last_refresh: Instant,
     #[cfg(windows)]
     agent_windows_toast: WindowsAgentToastPresenter,
     agent_toast_activation: Option<AgentNotice>,
@@ -6129,6 +6136,53 @@ impl Workbench {
         .detach();
     }
 
+    fn refresh_agent_hook_switches(&mut self, cx: &mut Context<Self>) {
+        if self.agent_hook_switches_loading {
+            return;
+        }
+        self.agent_hook_switches_last_refresh = Instant::now();
+        if self.runtime_bridge.is_none() {
+            self.runtime_bridge = RuntimeCliBridge::discover().ok();
+        }
+        let Some(bridge) = self.runtime_bridge.clone() else {
+            self.agent_hook_switches = None;
+            self.agent_notification_delivery.on_host_reconnected();
+            return;
+        };
+        self.agent_hook_switches_loading = true;
+        self.agent_hook_switches_request = self.agent_hook_switches_request.wrapping_add(1);
+        let request = self.agent_hook_switches_request;
+        cx.spawn(async move |view, cx| {
+            let result = cx
+                .background_spawn(async move { bridge.agent_hook_settings_snapshot() })
+                .await;
+            view.update(cx, |view, cx| {
+                if view.agent_hook_switches_request != request {
+                    return;
+                }
+                view.agent_hook_switches_loading = false;
+                match result {
+                    Ok(switches) => {
+                        if view.agent_hook_switches.as_ref() != Some(&switches) {
+                            view.agent_notification_delivery.on_host_reconnected();
+                        }
+                        view.agent_hook_switches = Some(switches);
+                    }
+                    Err(_) => {
+                        // Older Host/CLI, malformed readback or disconnected:
+                        // never infer which hooks were enabled.
+                        view.agent_hook_switches = None;
+                        view.agent_notification_delivery.on_host_reconnected();
+                    }
+                }
+                view.observe_agent_notification_status();
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     fn native_agent_notification_policy(&self) -> AgentNotificationPolicy {
         // The runtime Host is the only settings owner. Missing, stale or
         // incompatible settings fail closed, never invent an opt-in.
@@ -6143,10 +6197,10 @@ impl Workbench {
             .get("agents.agentStatusFinishedNotificationsEnabled")
             .and_then(serde_json::Value::as_bool)
             == Some(true);
+        let enabled_sessions =
+            enabled_notice_sessions(&self.terminals.sessions, self.agent_hook_switches.as_ref());
         let has_hook = !self.terminals.session_list_is_stale()
-            && self
-                .terminals
-                .sessions
+            && enabled_sessions
                 .iter()
                 .any(|s| s.running && s.agent_type.is_some() && s.agent_state.is_some());
         // Classic currently owns production Toast delivery. Only an
@@ -6166,17 +6220,21 @@ impl Workbench {
     fn observe_agent_notification_status(&mut self) {
         let policy = self.native_agent_notification_policy();
         let now_ms = self.agent_notification_clock.elapsed().as_millis() as u64;
+        let enabled_sessions =
+            enabled_notice_sessions(&self.terminals.sessions, self.agent_hook_switches.as_ref());
         self.agent_notification_delivery
-            .observe(&self.terminals.sessions, now_ms, policy);
+            .observe(&enabled_sessions, now_ms, policy);
     }
 
     fn flush_agent_notification_delivery(&mut self, cx: &mut Context<Self>) {
         self.observe_agent_notification_status();
         let policy = self.native_agent_notification_policy();
         let now_ms = self.agent_notification_clock.elapsed().as_millis() as u64;
-        let notices =
-            self.agent_notification_delivery
-                .drain(&self.terminals.sessions, now_ms, policy);
+        let enabled_sessions =
+            enabled_notice_sessions(&self.terminals.sessions, self.agent_hook_switches.as_ref());
+        let notices = self
+            .agent_notification_delivery
+            .drain(&enabled_sessions, now_ms, policy);
         if !notices.is_empty() {
             #[cfg(windows)]
             if let Err(error) = self.agent_windows_toast.show(&notices) {
@@ -6512,6 +6570,14 @@ impl Workbench {
                         >= Duration::from_secs(settings_refresh_secs)
                     {
                         view.refresh_shared_desktop_settings(cx);
+                    }
+                    let hook_refresh_secs =
+                        if view.settings_section.is_some() { 3 } else { 15 };
+                    if !view.agent_hook_switches_loading
+                        && view.agent_hook_switches_last_refresh.elapsed()
+                            >= Duration::from_secs(hook_refresh_secs)
+                    {
+                        view.refresh_agent_hook_switches(cx);
                     }
                     let quota_interval = if view.quota_error.is_some() { 45 }
                         else { alera_gpui_desktop::agent_quota::REFRESH_INTERVAL_SECS };
@@ -10442,6 +10508,12 @@ fn main() {
                             agent_presence_event_generation: 0,
                             agent_notification_delivery: AgentNotificationDelivery::new(),
                             agent_notification_clock: Instant::now(),
+                            agent_hook_switches: None,
+                            agent_hook_switches_loading: false,
+                            agent_hook_switches_request: 0,
+                            agent_hook_switches_last_refresh: Instant::now()
+                                .checked_sub(Duration::from_secs(30))
+                                .unwrap_or_else(Instant::now),
                             #[cfg(windows)]
                             agent_windows_toast: WindowsAgentToastPresenter::new(),
                             agent_toast_activation: None,

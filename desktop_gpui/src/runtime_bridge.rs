@@ -4,6 +4,7 @@
 use crate::host_tab_pins::{parse_pin_readback, parse_pin_snapshot, HostTabPinSnapshot};
 use alera_core::child_process::windowless_command;
 use serde_json::Value;
+use std::collections::HashMap;
 use std::ffi::OsString;
 use std::io::{self, ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
@@ -109,16 +110,27 @@ impl RuntimeCliBridge {
         account_id: Option<&str>,
     ) -> io::Result<Value> {
         if provider.is_none() && account_id.is_some() {
-            return Err(io::Error::new(ErrorKind::InvalidInput, "Quota account requires provider"));
+            return Err(io::Error::new(
+                ErrorKind::InvalidInput,
+                "Quota account requires provider",
+            ));
         }
-        if provider.is_some_and(|value| value.len() > 32 || !value.bytes().all(|b| b.is_ascii_lowercase())) ||
-           account_id.is_some_and(|value| value.is_empty() || value.len() > 256) {
-            return Err(io::Error::new(ErrorKind::InvalidInput, "Invalid quota filter"));
+        if provider
+            .is_some_and(|value| value.len() > 32 || !value.bytes().all(|b| b.is_ascii_lowercase()))
+            || account_id.is_some_and(|value| value.is_empty() || value.len() > 256)
+        {
+            return Err(io::Error::new(
+                ErrorKind::InvalidInput,
+                "Invalid quota filter",
+            ));
         }
         if !self.runtime_dir.join("host.json").is_file()
             && !self.runtime_dir.join("runtime-host.json").is_file()
         {
-            return Err(io::Error::new(ErrorKind::NotConnected, "Classic Runtime Host is not running"));
+            return Err(io::Error::new(
+                ErrorKind::NotConnected,
+                "Classic Runtime Host is not running",
+            ));
         }
         let mut args = vec![
             OsString::from("quota"),
@@ -143,27 +155,45 @@ impl RuntimeCliBridge {
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()?;
-        let stdout = child.stdout.take().ok_or_else(|| io::Error::other("Quota CLI stdout missing"))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| io::Error::other("Quota CLI stdout missing"))?;
         let reader = thread::spawn(move || -> io::Result<Vec<u8>> {
             let mut bytes = Vec::new();
-            stdout.take(MAX_QUOTA_RESPONSE_BYTES + 1).read_to_end(&mut bytes)?;
+            stdout
+                .take(MAX_QUOTA_RESPONSE_BYTES + 1)
+                .read_to_end(&mut bytes)?;
             Ok(bytes)
         });
         let status = match wait_with_timeout(&mut child, QUOTA_TIMEOUT) {
             Ok(status) => status,
-            Err(error) => { let _ = reader.join(); return Err(error); }
+            Err(error) => {
+                let _ = reader.join();
+                return Err(error);
+            }
         };
-        let bytes = reader.join().map_err(|_| io::Error::other("Quota CLI reader panicked"))??;
+        let bytes = reader
+            .join()
+            .map_err(|_| io::Error::other("Quota CLI reader panicked"))??;
         if !status.success() {
-            return Err(io::Error::other("Quota unavailable: existing Runtime Host/CLI is offline or incompatible"));
+            return Err(io::Error::other(
+                "Quota unavailable: existing Runtime Host/CLI is offline or incompatible",
+            ));
         }
         if bytes.len() as u64 > MAX_QUOTA_RESPONSE_BYTES {
-            return Err(io::Error::new(ErrorKind::InvalidData, "Quota response exceeds 512 KiB"));
+            return Err(io::Error::new(
+                ErrorKind::InvalidData,
+                "Quota response exceeds 512 KiB",
+            ));
         }
         let result: Value = serde_json::from_slice(&bytes)
             .map_err(|error| io::Error::new(ErrorKind::InvalidData, error))?;
         if !result.get("snapshots").is_some_and(Value::is_array) {
-            return Err(io::Error::new(ErrorKind::InvalidData, "Invalid quota snapshot payload"));
+            return Err(io::Error::new(
+                ErrorKind::InvalidData,
+                "Invalid quota snapshot payload",
+            ));
         }
         Ok(result)
     }
@@ -174,7 +204,10 @@ impl RuntimeCliBridge {
         if !self.runtime_dir.join("host.json").is_file()
             && !self.runtime_dir.join("runtime-host.json").is_file()
         {
-            return Err(io::Error::new(ErrorKind::NotConnected, "Classic Runtime Host is offline"));
+            return Err(io::Error::new(
+                ErrorKind::NotConnected,
+                "Classic Runtime Host is offline",
+            ));
         }
         let mut child = windowless_command(&self.executable)
             .arg("quota")
@@ -187,19 +220,31 @@ impl RuntimeCliBridge {
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()?;
-        let stdout = child.stdout.take().ok_or_else(|| io::Error::other("Quota config stdout missing"))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| io::Error::other("Quota config stdout missing"))?;
         let reader = thread::spawn(move || -> io::Result<Vec<u8>> {
             let mut bytes = Vec::new();
-            stdout.take(MAX_QUOTA_RESPONSE_BYTES + 1).read_to_end(&mut bytes)?;
+            stdout
+                .take(MAX_QUOTA_RESPONSE_BYTES + 1)
+                .read_to_end(&mut bytes)?;
             Ok(bytes)
         });
         let status = match wait_with_timeout(&mut child, QUOTA_TIMEOUT) {
             Ok(status) => status,
-            Err(error) => { let _ = reader.join(); return Err(error); }
+            Err(error) => {
+                let _ = reader.join();
+                return Err(error);
+            }
         };
-        let bytes = reader.join().map_err(|_| io::Error::other("Quota config reader panicked"))??;
+        let bytes = reader
+            .join()
+            .map_err(|_| io::Error::other("Quota config reader panicked"))??;
         if !status.success() || bytes.len() as u64 > MAX_QUOTA_RESPONSE_BYTES {
-            return Err(io::Error::other("Quota config unavailable: existing Host or CLI is incompatible"));
+            return Err(io::Error::other(
+                "Quota config unavailable: existing Host or CLI is incompatible",
+            ));
         }
         let response: Value = serde_json::from_slice(&bytes)
             .map_err(|error| io::Error::new(ErrorKind::InvalidData, error))?;
@@ -207,14 +252,25 @@ impl RuntimeCliBridge {
             .as_array()
             .ok_or_else(|| io::Error::new(ErrorKind::InvalidData, "Missing quota display order"))?;
         if order.len() > 10 {
-            return Err(io::Error::new(ErrorKind::InvalidData, "Too many quota providers"));
+            return Err(io::Error::new(
+                ErrorKind::InvalidData,
+                "Too many quota providers",
+            ));
         }
-        let allowed = ["claude", "codex", "kimi", "grok", "cursor", "agy", "minimax", "zai", "devin", "opencode"];
+        let allowed = [
+            "claude", "codex", "kimi", "grok", "cursor", "agy", "minimax", "zai", "devin",
+            "opencode",
+        ];
         let mut safe = Vec::<String>::new();
         for value in order {
-            let id = value.as_str().ok_or_else(|| io::Error::new(ErrorKind::InvalidData, "Invalid quota ID"))?;
+            let id = value
+                .as_str()
+                .ok_or_else(|| io::Error::new(ErrorKind::InvalidData, "Invalid quota ID"))?;
             if !allowed.contains(&id) || safe.iter().any(|existing| existing == id) {
-                return Err(io::Error::new(ErrorKind::InvalidData, "Unsupported quota ID"));
+                return Err(io::Error::new(
+                    ErrorKind::InvalidData,
+                    "Unsupported quota ID",
+                ));
             }
             safe.push(id.to_owned());
         }
@@ -335,6 +391,14 @@ impl RuntimeCliBridge {
     /// already running Host; this does not read RuntimeStore SQLite directly.
     pub fn desktop_settings_snapshot(&self) -> io::Result<Value> {
         self.desktop_settings_command(&[OsString::from("get")])
+    }
+
+    /// Read-only Host Hook flags, through a secret-free CLI projection.
+    /// An older CLI/Host or malformed reply fails closed; no inference from
+    /// a running Agent process may silently enable native notifications.
+    pub fn agent_hook_settings_snapshot(&self) -> io::Result<HashMap<String, bool>> {
+        let response = self.desktop_settings_command(&[OsString::from("agent-hooks-get")])?;
+        parse_agent_hook_settings_snapshot(&response)
     }
 
     pub fn git_favorites_for_workspace(&self, root: &Path) -> io::Result<Value> {
@@ -1525,8 +1589,52 @@ fn choose_runtime_dir(
 /// Settings CLI shares a transport but different verbs have intentionally
 /// different secret-free result contracts. Never interpret a pin-list array
 /// or pin-set projection as a full DesktopSettings snapshot.
+fn parse_agent_hook_settings_snapshot(response: &Value) -> io::Result<HashMap<String, bool>> {
+    let fields = response.as_object().ok_or_else(|| {
+        io::Error::new(
+            ErrorKind::InvalidData,
+            "Host Agent Hooks reply is not an object",
+        )
+    })?;
+    if fields.len() != 2
+        || response.get("kind").and_then(Value::as_str) != Some("agentHookSettings")
+    {
+        return Err(io::Error::new(
+            ErrorKind::InvalidData,
+            "Unexpected Host Hook response",
+        ));
+    }
+    let hooks = response
+        .get("agentStatusHooks")
+        .and_then(Value::as_object)
+        .filter(|map| map.len() <= 64)
+        .ok_or_else(|| io::Error::new(ErrorKind::InvalidData, "Invalid Host Hook switches"))?;
+    let mut parsed = HashMap::with_capacity(hooks.len());
+    for (agent, enabled) in hooks {
+        if agent.is_empty()
+            || agent.len() > 64
+            || !agent.bytes().all(|byte| {
+                byte.is_ascii_lowercase()
+                    || byte.is_ascii_digit()
+                    || matches!(byte, b'.' | b'-' | b'_')
+            })
+        {
+            return Err(io::Error::new(
+                ErrorKind::InvalidData,
+                "Invalid Host Agent identity",
+            ));
+        }
+        let enabled = enabled
+            .as_bool()
+            .ok_or_else(|| io::Error::new(ErrorKind::InvalidData, "Invalid Host Hook boolean"))?;
+        parsed.insert(agent.clone(), enabled);
+    }
+    Ok(parsed)
+}
+
 fn validate_desktop_settings_response(verb: Option<&str>, response: &Value) -> io::Result<()> {
     let valid = match verb {
+        Some("agent-hooks-get") => parse_agent_hook_settings_snapshot(response).is_ok(),
         Some("pin-list") => response.is_array(),
         Some("pin-set") => response.is_object(),
         Some(verb) if verb.starts_with("favorites-") => {
@@ -1644,6 +1752,38 @@ mod tests {
         assert!(RuntimeStatus::Running { active_sessions: 2 }
             .label()
             .contains("2 active"));
+    }
+
+    #[test]
+    fn native_hook_settings_snapshot_is_strict_boolean_read_only_and_fail_closed() {
+        let safe = serde_json::json!({
+            "kind":"agentHookSettings",
+            "agentStatusHooks":{"codex":true,"claude":false,"grok":true}
+        });
+        let parsed = parse_agent_hook_settings_snapshot(&safe).unwrap();
+        assert_eq!(parsed.get("codex"), Some(&true));
+        assert_eq!(parsed.get("claude"), Some(&false));
+        assert!(!parsed.contains_key("unknown"));
+        assert!(
+            parse_agent_hook_settings_snapshot(&serde_json::json!({
+                "kind":"agentHookSettings","agentStatusHooks":{}
+            }))
+            .unwrap()
+            .is_empty(),
+            "default Host Hook settings are all disabled"
+        );
+        assert!(validate_desktop_settings_response(Some("agent-hooks-get"), &safe).is_ok());
+        for unsafe_reply in [
+            serde_json::json!({"kind":"agentHookSettings","agentStatusHooks":{"codex":"true"}}),
+            serde_json::json!({"kind":"agentHookSettings","agentStatusHooks":{"codex":true},"apiKey":"SECRET"}),
+            serde_json::json!({"kind":"desktopSettings","agentStatusHooks":{"codex":true}}),
+            serde_json::json!({"kind":"agentHookSettings","agentStatusHooks":{"BAD\nKEY":true}}),
+        ] {
+            assert!(
+                parse_agent_hook_settings_snapshot(&unsafe_reply).is_err(),
+                "unexpected Host response must not turn on Native Hook notifications"
+            );
+        }
     }
 
     #[test]

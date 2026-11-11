@@ -10,6 +10,31 @@ pub const NOTIFICATION_COALESCE_MS: u64 = 3_000;
 pub const NOTIFICATION_MAX_COALESCE_MS: u64 = 10_000;
 const MAX_NOTICE_SESSIONS: usize = 128;
 
+/// Apply the runtime Host's per-Provider Hook switches before notification
+/// tracking; absent/unknown/malformed configuration always means OFF.
+/// Classic's Hook settings are independent of its portable notification
+/// preferences. A running PTY alone is not proof Hooks are enabled.
+pub fn enabled_notice_sessions(
+    sessions: &[TerminalSession],
+    hook_switches: Option<&HashMap<String, bool>>,
+) -> Vec<TerminalSession> {
+    let Some(enabled) = hook_switches else {
+        return Vec::new();
+    };
+    sessions
+        .iter()
+        .take(MAX_NOTICE_SESSIONS)
+        .filter(|session| {
+            session.running
+                && session
+                    .agent_type
+                    .as_deref()
+                    .is_some_and(|name| enabled.get(&name.to_ascii_lowercase()) == Some(&true))
+        })
+        .cloned()
+        .collect()
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct AgentIdentity {
     session_id: String,
@@ -610,6 +635,46 @@ mod tests {
             );
         }
         assert!(validated_notice_target(&target, &[]).is_none());
+    }
+
+    #[test]
+    fn per_agent_hook_flags_from_host_filter_native_notifications_and_fail_closed() {
+        let codex = session("h1", "t1", Some(AgentActivityState::Working));
+        let mut claude = session("h2", "t2", Some(AgentActivityState::Working));
+        claude.agent_type = Some("claude".into());
+        let mut flags = HashMap::from([("codex".to_string(), true), ("claude".to_string(), false)]);
+        assert!(
+            enabled_notice_sessions(&[codex.clone(), claude.clone()], None).is_empty(),
+            "no Host settings is NOT implicit permission"
+        );
+        let filtered = enabled_notice_sessions(&[codex.clone(), claude.clone()], Some(&flags));
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].handle, "h1");
+        let mut delivery = AgentNotificationDelivery::new();
+        let owner = AgentNotificationPolicy {
+            hooks_enabled: true,
+            notifications_enabled: true,
+            include_finished: false,
+            native_owns_delivery: true,
+        };
+        delivery.observe(&filtered, 0, owner);
+        let mut waiting_codex = codex.clone();
+        waiting_codex.agent_state = Some(AgentActivityState::Waiting);
+        claude.agent_state = Some(AgentActivityState::Waiting);
+        let filtered =
+            enabled_notice_sessions(&[waiting_codex.clone(), claude.clone()], Some(&flags));
+        delivery.observe(&filtered, 1_000, owner);
+        assert_eq!(
+            delivery.drain(&filtered, 4_000, owner).len(),
+            1,
+            "only enabled Codex Hook can notify"
+        );
+        flags.insert("codex".into(), false);
+        let now_disabled =
+            enabled_notice_sessions(&[waiting_codex.clone(), claude.clone()], Some(&flags));
+        assert!(now_disabled.is_empty());
+        delivery.observe(&now_disabled, 5_000, owner);
+        assert!(delivery.drain(&now_disabled, 6_000, owner).is_empty());
     }
 
     #[test]

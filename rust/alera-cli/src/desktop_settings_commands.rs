@@ -26,6 +26,35 @@ fn native_pin_projection(record: &Value) -> Option<Value> {
     }))
 }
 
+/// Never expose the full runtimeSettings.get reply to the GPUI process:
+/// it may include executable paths, user prompts, credentials and AI Assist
+/// configuration. Emit only the bounded flat Host Hook boolean map.
+fn native_agent_hooks_projection(record: &Value) -> Result<Value, &'static str> {
+    let hooks = record
+        .get("agentStatusHooks")
+        .and_then(Value::as_object)
+        .ok_or("Host Hook Settings payload missing")?;
+    if hooks.len() > 64 {
+        return Err("Too many Host Hook switches");
+    }
+    let mut allowed = serde_json::Map::with_capacity(hooks.len());
+    for (agent, enabled) in hooks {
+        if agent.is_empty()
+            || agent.len() > 64
+            || !agent.bytes().all(|byte| {
+                byte.is_ascii_lowercase()
+                    || byte.is_ascii_digit()
+                    || matches!(byte, b'.' | b'-' | b'_')
+            })
+        {
+            return Err("Invalid Host Hook agent ID");
+        }
+        let enabled = enabled.as_bool().ok_or("Nonboolean Host Hook switch")?;
+        allowed.insert(agent.to_string(), json!(enabled));
+    }
+    Ok(json!({"kind":"agentHookSettings", "agentStatusHooks":allowed}))
+}
+
 pub async fn run(command: DesktopSettingsCommand) -> i32 {
     if !command.no_start {
         eprintln!("Shared settings require --no-start and an existing Runtime Host");
@@ -40,6 +69,7 @@ pub async fn run(command: DesktopSettingsCommand) -> i32 {
     };
     let (request, payload) = match command.action {
         DesktopSettingsAction::Get => ("desktopSettings.get", json!({})),
+        DesktopSettingsAction::AgentHooksGet => ("runtimeSettings.get", json!({})),
         DesktopSettingsAction::FavoritesGet { root_path } => {
             ("gitFavorites.forWorkspace", json!({"rootPath":root_path}))
         }
@@ -165,7 +195,12 @@ pub async fn run(command: DesktopSettingsCommand) -> i32 {
         Ok(data) => {
             // The Host's CAS response is a complete Tab for Classic. The
             // CLI is Native's low-trust readback, so never print its payload.
-            let safe = if request == "tab.pin.cas" {
+            let safe = if request == "runtimeSettings.get" {
+                match native_agent_hooks_projection(&data) {
+                    Ok(projection) => projection,
+                    Err(error) => return print_error(error),
+                }
+            } else if request == "tab.pin.cas" {
                 match native_pin_projection(&data) {
                     Some(projection) => projection,
                     None => return print_error("Invalid Host Tab pin readback"),
@@ -209,6 +244,55 @@ mod tests {
             "payload": {"pinned": true}
         }))
         .is_none());
+    }
+
+    #[test]
+    fn agent_hook_readback_is_boolean_only_and_never_leaks_runtime_secrets() {
+        let host = json!({
+            "revision": 19,
+            "agentStatusHooks": {"codex": true, "claude": false, "grok": true},
+            "aiAssist": {"apiKey":"VERY_SECRET", "prompt":"Do not disclose"},
+            "agentQuotas": {"tokens":"PRIVATE"},
+            "automation": {"privateKey":"BAD"}
+        });
+        let projected = super::native_agent_hooks_projection(&host).unwrap();
+        assert_eq!(projected["kind"], "agentHookSettings");
+        assert_eq!(projected["agentStatusHooks"]["codex"], true);
+        assert_eq!(projected["agentStatusHooks"]["claude"], false);
+        assert_eq!(projected.as_object().unwrap().len(), 2);
+        let text = projected.to_string();
+        for secret in ["VERY_SECRET", "Do not disclose", "PRIVATE", "BAD", "apiKey"] {
+            assert!(!text.contains(secret));
+        }
+        assert!(super::native_agent_hooks_projection(&json!({"revision":19})).is_err());
+        assert!(super::native_agent_hooks_projection(&json!({
+            "agentStatusHooks": {"codex": "yes"}
+        }))
+        .is_err());
+        assert!(super::native_agent_hooks_projection(&json!({
+            "agentStatusHooks": {"bad\nname": true}
+        }))
+        .is_err());
+    }
+
+    #[test]
+    fn agent_hook_readback_cli_requires_no_start_and_cannot_mutate_host() {
+        let command = crate::cli::Cli::try_parse_from([
+            "alera",
+            "settings",
+            "--no-start",
+            "--json",
+            "agent-hooks-get",
+        ])
+        .unwrap();
+        assert!(matches!(
+            command.command,
+            crate::cli::Command::Settings(crate::cli::DesktopSettingsCommand {
+                no_start: true,
+                action: crate::cli::DesktopSettingsAction::AgentHooksGet,
+                ..
+            })
+        ));
     }
 
     #[test]

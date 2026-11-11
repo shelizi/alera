@@ -390,6 +390,9 @@ pub struct DesktopSettingsCommand {
 #[derive(Debug, Subcommand)]
 pub enum DesktopSettingsAction {
     Get,
+    /// Read only Host-enabled Agent Hook switches (no Runtime settings,
+    /// AI Assist data, provider credentials or change authority).
+    AgentHooksGet,
     /// Resolve exactly one registered Host project/worktree to its Git favorites.
     FavoritesGet {
         #[arg(long)]
