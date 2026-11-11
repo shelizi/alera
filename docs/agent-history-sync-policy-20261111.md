@@ -44,6 +44,10 @@ does not erase any previously copied history.
   history layout, keyring/profile isolation, and cross-account native resume.
   The mode and group data model can already represent AGY accounts.
 
+- Stale-history detection: when a session continues after initial mirroring,
+  an exact complete-line prefix is reported as stale in Host warnings.
+  The mirror never overwrites either account's native transcript.
+
 ## Explicit limitations / gates
 
 1. Copying a transcript is **not proof** native CLI resume will accept it on a

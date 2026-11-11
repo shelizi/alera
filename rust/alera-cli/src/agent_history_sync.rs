@@ -31,6 +31,7 @@ struct MirrorStats {
     copied: usize,
     skipped: usize,
     conflicts: usize,
+    stale: usize,
 }
 
 pub(crate) fn spawn(runtime_store: RuntimeStore) -> tokio::task::JoinHandle<()> {
@@ -55,9 +56,10 @@ pub(crate) fn spawn(runtime_store: RuntimeStore) -> tokio::task::JoinHandle<()> 
             })
             .await
             {
-                Ok(stats) if stats.conflicts > 0 => tracing::warn!(
+                Ok(stats) if stats.conflicts > 0 || stats.stale > 0 => tracing::warn!(
                     conflicts = stats.conflicts,
-                    "agent history sync kept conflicting transcripts unchanged"
+                    stale = stats.stale,
+                    "agent history sync kept conflicting or stale transcripts unchanged"
                 ),
                 Err(_) => tracing::warn!("agent history sync worker failed"),
                 _ => {}
@@ -193,7 +195,17 @@ fn mirror_pair(
             let target_file = target.history_root.join(&child);
             if let Ok(existing) = fs::symlink_metadata(&target_file) {
                 if let Ok(original) = fs::symlink_metadata(&path) {
-                    if existing.len() != original.len() || !existing.file_type().is_file() {
+                    if !existing.file_type().is_file() || !original.file_type().is_file() {
+                        stats.conflicts += 1;
+                    } else if existing.len() < original.len() {
+                        if is_complete_line_prefix(&target_file, &path) {
+                            stats.stale += 1;
+                        } else {
+                            stats.conflicts += 1;
+                        }
+                    } else if existing.len() > original.len()
+                        && !is_complete_line_prefix(&path, &target_file)
+                    {
                         stats.conflicts += 1;
                     }
                 }
@@ -207,6 +219,28 @@ fn mirror_pair(
             }
         }
     }
+}
+
+/// Only classify an already existing transcript as a stale mirror if both
+/// inputs are normal bounded files and the shorter JSONL ends at a line break.
+/// Never mutate either file from this check.
+fn is_complete_line_prefix(shorter: &Path, longer: &Path) -> bool {
+    let (Ok(short), Ok(long)) = (fs::symlink_metadata(shorter), fs::symlink_metadata(longer))
+    else {
+        return false;
+    };
+    if !short.file_type().is_file()
+        || !long.file_type().is_file()
+        || short.len() == 0
+        || short.len() >= long.len()
+        || long.len() > MAX_FILE_BYTES
+    {
+        return false;
+    }
+    let (Ok(prefix), Ok(full)) = (fs::read(shorter), fs::read(longer)) else {
+        return false;
+    };
+    prefix.last() == Some(&b'\n') && full.starts_with(&prefix)
 }
 
 #[derive(PartialEq, Eq)]
@@ -407,6 +441,26 @@ mod tests {
         assert_eq!(stats.copied, 0);
         assert!(stats.conflicts >= 1);
         assert_eq!(fs::read_to_string(target).unwrap(), "other-account history");
+    }
+
+    #[test]
+    fn later_messages_are_reported_as_stale_and_never_overwrite_a_native_copy() {
+        let (_, accounts) = fixture();
+        let policy = RuntimeAgentHistorySyncSettings::default();
+        assert_eq!(
+            mirror_accounts(&policy, &accounts, Duration::ZERO).copied,
+            1
+        );
+        let source = accounts[0].history_root.join("2026/11/first.jsonl");
+        let target = accounts[1].history_root.join("2026/11/first.jsonl");
+        let original = fs::read(&source).unwrap();
+        let mut extended = original.clone();
+        extended.extend_from_slice(b"{\"type\":\"followup\"}\n");
+        fs::write(&source, extended).unwrap();
+        let stats = mirror_accounts(&policy, &accounts, Duration::ZERO);
+        assert_eq!(stats.copied, 0);
+        assert_eq!(stats.stale, 1);
+        assert_eq!(fs::read(target).unwrap(), original);
     }
 
     #[test]
