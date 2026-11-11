@@ -138,3 +138,17 @@ Classic 編輯區顯示：`Terminal host unavailable: Terminal host connection c
 2. 隔離環境啟動兩個**實際 GUI** 後，驗證 Classic 取消釘選 → GPUI 状態列同步、GPUI 重新釘選 → Classic 同步、舊版快照寫入時 CAS 衝突拒絕與重讀回復，再驗證兩個 GUI 重啟後釘選持久化；觀察同步延遲並保存可追溯的實機證據。
 3. GPUI 點擊全部／單帳號刷新，對照隔離 Host 回傳且確認無其他帳號遺失；真正的 Provider 用量須連向合法設定的資料來源，無額度來源時只核對 `stale`／`unavailable`，不可將合成資料冒充為真實值。
 4. 測試 Host 只能停止隔離的執行個體。若要在正式 Classic 與 GPUI 實作共用釘選，必須獨立規劃 Host 升級、活躍 PTY／Agent 接管、失敗回滾與設定備份；正式 Host 未更新前，這項同步仍未驗收。
+
+## 第七輪：Windows 建置環境恢復與 Classic 測試（2026-11-11）
+
+- 在 `e43ee3106` 上恢復上輪中斷的 Windows build-storage 遷移：原準備腳本帶入獨立 Cargo 目標 `D:\gq\t` 後以 exit 0 完成，`rust/target`、`cloud/target`、Flutter `build` 等目錄已改為本機磁碟 junction；沒有合併到 `D:\c\t`、刪除原使用者快取或替換正式 Host。
+- 將 17 個更動過的 Dart 檔案交給直接 SDK `dart format --output=none --set-exit-if-changed` 檢查，結果為 **17 files、0 changed、exit 0**。
+- 執行 Flutter 針對性回歸：`alera_support_directory_test.dart`、`runtime_settings_repository_test.dart`、`agent_quota_settings_test.dart`、`agent_quota_refresh_test.dart`，**27/27 通過，exit 0**。涵蓋跨版本 Host 欄位、quota pin 遷移與 CAS、單項刷新不丟失其他快照、刷新失敗只將受影響資料標為 stale。
+- 另執行三組 Flutter UI Widget 測試：`agent_quota_status_bar_test.dart`、`agent_quota_overview_panel_test.dart`、`agent_quota_preview_test.dart`，**22/22 通過，exit 0**。涵蓋狀態列帳號隔離、Provider 排序、釘選互動、逐 Agent 刷新與面板呈現；與上面四組單元測試合計 **49/49**。這些是 Flutter Widget 回歸，並非 GPUI／Classic 雙原生 UI 實測。
+- `dart analyze` 的全 `lib/` 與單檔分析曾停滯，其中單檔程序回報 `The analysis server crashed unexpectedly`。快取恢復後重試單檔仍未能正常完成；此項應記為 **Analyzer 未通過驗收**，不應誤寫為沒有型別錯誤。
+- Windows Debug CMake 首先回報 `No CMAKE_CXX_COMPILER`；深入 `CMakeConfigureLog.yaml` 發現真實原因是 MSBuild `FileTracker` 的 `MSB4018` 路徑初始化例外。執行環境缺少標準 Windows 路徑變數（例如 `ALLUSERSPROFILE`、`CommonProgramFiles`、`SystemDrive`）。只對測試子程序補齊必要路徑並載入 Visual Studio 2026 `vcvars64.bat` 後，`CompilerIdCXX.vcxproj` **成功編譯，exit 0**。沒有修改使用者環境或安裝 Visual Studio。
+- 曾以編譯期 `ALERA_E2E_SUPPORT_DIR=D:/alera-build/checkouts/384f5d721cb4/quota-dual-gui-20261111/classic` 嘗試 Windows Debug 版，經補齊 MSBuild 環境後，仍於 **780 秒固定執行期限**內未完成原生 sidecar 的 `alera-cli` 主程式編譯；建置程序最後回報 `could not compile alera-cli (bin "alera")`、`Build process failed`，**狀態為 timed_out／exit 1**。過程觀察到 `rustc` 正在編譯 `alera-cli/src/main.rs`、記憶體約 2.5 GB，未取得可用的 Classic Debug App，也沒有可歸因於本次 Dart 支援路徑修改的 Rust 編譯診斷。不得將這次建置視為通過，更不得啟動未完成的輸出。
+- 安全補充：遠端工具的 Workspace 沙箱**拒絕**一般程序直接寫入上述 `D:` 測試資料路徑。因此即使第一次 Debug 產物完成，也**不可直接啟動**：真正雙 GUI 測試必須改用 worktree 內已建立的 `.quota-ui-test/dual-20261111/classic`（`terminal_host` 位於其下）和 `.quota-ui-test/dual-20261111/native`，重新編譯帶入該絕對路徑，並在 CMake 子程序設定 `ALERA_E2E_DESKTOP=1`，確保 App ID 不會與任何既有 Alera Dev 衝突。
+- 將標準 Windows 路徑變數只補入編譯子程序後，CMake／MSBuild 確實通過 compiler probe。Windows 全量 Debug 的剩餘阻塞已收斂到 `cargo build --locked -p alera-cli --profile dev` 原生編譯的時限，須以可重用 Cargo 快取與受控較長編譯資源再驗證，**不得跳過最終連結或直接使用舊版 sidecar 冒充新版**。須使用正確的隔離 worktree 路徑與 `ALERA_E2E_DESKTOP=1` 重新建立可安全啟動的測試產物。
+
+正式使用中的 Classic Host PID `19748` 與 PTY 應維持原狀。本輪未授權升級正式 Host、合併 `main`、推送或部署。
