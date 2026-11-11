@@ -4,7 +4,7 @@
 //! their existing owners. This projection owns only tab-strip order/focus.
 //! Closing a preview never becomes a Runtime Host PTY termination request.
 
-use crate::terminal::TerminalTabContextTarget;
+use crate::terminal::{AgentActivityState, TerminalTabContextTarget};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkbenchTabIdentity {
@@ -26,6 +26,8 @@ pub struct WorkbenchTab {
     pub title: String,
     pub dirty: bool,
     pub running: bool,
+    pub agent_state: Option<AgentActivityState>,
+    pub interrupted: bool,
 }
 
 /// A single ordered strip for all three kinds of tabs. Reconciliation takes
@@ -168,7 +170,7 @@ impl WorkbenchTabs {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::terminal::{TerminalDock, TerminalSession};
+    use crate::terminal::{AgentActivityState, TerminalDock, TerminalSession};
 
     fn host(handle: &str, agent: bool) -> (WorkbenchTab, TerminalDock) {
         let mut dock = TerminalDock::for_workspace(7);
@@ -193,6 +195,8 @@ mod tests {
                 title: handle.into(),
                 dirty: false,
                 running: true,
+                agent_state: None,
+                interrupted: false,
             },
             dock,
         )
@@ -208,6 +212,8 @@ mod tests {
             title: format!("file-{instance}"),
             dirty: false,
             running: true,
+            agent_state: None,
+            interrupted: false,
         }
     }
 
@@ -262,6 +268,36 @@ mod tests {
         assert_eq!(tabs.active(), Some(&agent.identity));
         assert_eq!(original_host.sessions.len(), 1);
         assert_eq!(agent_host.sessions.len(), 1);
+    }
+
+    #[test]
+    fn agent_hook_status_changes_update_the_same_tab_without_claiming_pty_ownership() {
+        let (mut agent, host) = host("pty-agent-1", true);
+        let id = agent.identity.clone();
+        let mut tabs = WorkbenchTabs::for_workspace(7);
+        agent.agent_state = Some(AgentActivityState::Waiting);
+        tabs.reconcile(7, vec![agent.clone()], Some(id.clone()));
+        assert_eq!(
+            tabs.entries()[0].agent_state,
+            Some(AgentActivityState::Waiting)
+        );
+        assert!(tabs.entries()[0].running);
+        agent.agent_state = Some(AgentActivityState::Blocked);
+        tabs.reconcile(7, vec![agent.clone()], Some(id.clone()));
+        assert_eq!(tabs.entries().len(), 1);
+        assert_eq!(
+            tabs.entries()[0].agent_state,
+            Some(AgentActivityState::Blocked)
+        );
+        agent.agent_state = None;
+        tabs.reconcile(7, vec![agent], Some(id.clone()));
+        assert_eq!(tabs.entries()[0].agent_state, None);
+        assert_eq!(tabs.active(), Some(&id));
+        assert_eq!(
+            host.sessions.len(),
+            1,
+            "status refresh must not close a Host PTY"
+        );
     }
 
     #[test]

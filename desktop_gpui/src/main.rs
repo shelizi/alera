@@ -61,19 +61,19 @@ use alera_gpui_desktop::runtime_catalog::RuntimeCatalog;
 use alera_gpui_desktop::session::{PreviewSessionStore, TerminalLayout, TerminalLayoutTab};
 use alera_gpui_desktop::terminal::{
     encode_terminal_key, estimate_terminal_viewport_with_line_height, raw_key_reply_may_drain,
-    select_registered_host_workspace, terminal_ime_anchor_with_line_height, TerminalAutoResizeGate,
-    TerminalCreateFlow, TerminalCreateTick, TerminalDock, TerminalLineSelection,
-    TerminalPollCadence, TerminalPollGate, TerminalSession, TerminalTabContextTarget,
-    TerminalViewMode, TerminalViewportProposal, HOST_SESSION_LIST_SCOPE,
+    select_registered_host_workspace, terminal_ime_anchor_with_line_height, AgentActivityState,
+    TerminalAutoResizeGate, TerminalCreateFlow, TerminalCreateTick, TerminalDock,
+    TerminalLineSelection, TerminalPollCadence, TerminalPollGate, TerminalSession,
+    TerminalTabContextTarget, TerminalViewMode, TerminalViewportProposal, HOST_SESSION_LIST_SCOPE,
 };
 use alera_gpui_desktop::terminal_panes::{TerminalPaneLayout, TerminalSplitDirection};
 use alera_gpui_desktop::terminal_stream_bridge::{
     NativeTerminalStreamBridge, StreamViewUpdate, TerminalStreamRetryGate,
 };
 use alera_gpui_desktop::visual_tokens::{
-    ACTIVE, BG, BORDER, BORDER_ACTIVE, ELEVATED, MUTED, PANEL, PROJECTS_SIDEBAR_WIDTH,
-    RIGHT_SIDEBAR_WIDTH, SECTION_HEADER_HEIGHT, STATUS_BAR_HEIGHT, TAB_STRIP_HEIGHT, TEXT, TOOLBAR,
-    TOP_BAR_HEIGHT,
+    ACTIVE, AGENT_BLOCKED, AGENT_DONE, AGENT_WAITING, AGENT_WORKING, BG, BORDER, BORDER_ACTIVE,
+    ELEVATED, MUTED, PANEL, PROJECTS_SIDEBAR_WIDTH, RIGHT_SIDEBAR_WIDTH, SECTION_HEADER_HEIGHT,
+    STATUS_BAR_HEIGHT, TAB_STRIP_HEIGHT, TEXT, TOOLBAR, TOP_BAR_HEIGHT,
 };
 use alera_gpui_desktop::vt_screen::StyledRow;
 use alera_gpui_desktop::workbench_layout_store::{
@@ -5407,6 +5407,22 @@ impl Workbench {
             WorkbenchTabKind::Terminal | WorkbenchTabKind::Agent => UiIcon::Terminal,
             WorkbenchTabKind::Editor => UiIcon::File,
         };
+        let status_color = tab.agent_state.map(|state| match state {
+            AgentActivityState::Working => AGENT_WORKING,
+            AgentActivityState::Waiting => AGENT_WAITING,
+            AgentActivityState::Blocked => AGENT_BLOCKED,
+            AgentActivityState::Done => AGENT_DONE,
+        });
+        let status_text = tab
+            .agent_state
+            .map(|state| {
+                if state == AgentActivityState::Done && tab.interrupted {
+                    "interrupted"
+                } else {
+                    state.label()
+                }
+            })
+            .unwrap_or("");
         let title = tab.title;
         let for_click = identity.clone();
         let for_middle = identity.clone();
@@ -5450,6 +5466,16 @@ impl Workbench {
                             .child(title),
                     )
                     .when(tab.dirty, |entry| entry.child(div().text_xs().child("●")))
+                    .when(status_color.is_some(), |entry| {
+                        entry.child(
+                            div()
+                                .max_w(px(78.0))
+                                .truncate()
+                                .text_xs()
+                                .text_color(rgb(status_color.unwrap_or(MUTED)))
+                                .child(format!("● {status_text}")),
+                        )
+                    })
                     .when(pinned, |entry| entry.child(icon(UiIcon::Pin, 12.0, MUTED)))
                     .when(!tab.running, |entry| {
                         entry.child(div().text_xs().text_color(rgb(MUTED)).child("○"))
@@ -5505,12 +5531,12 @@ impl Workbench {
                 continue;
             };
             let identity = WorkbenchTabIdentity::Host(target);
-            let is_agent = self.terminals.sessions.iter().any(|session| {
+            let agent_session = self.terminals.sessions.iter().find(|session| {
                 session.handle == tab.handle
                     && session.workspace_id == tab.workspace_id
                     && session.tab_id == tab.tab_id
-                    && session.agent_type.is_some()
             });
+            let is_agent = agent_session.is_some_and(|session| session.agent_type.is_some());
             observed.push(WorkbenchTab {
                 identity: identity.clone(),
                 kind: if is_agent {
@@ -5521,6 +5547,12 @@ impl Workbench {
                 title: tab.title.clone(),
                 dirty: false,
                 running: tab.running,
+                agent_state: if is_agent {
+                    agent_session.and_then(|session| session.agent_state)
+                } else {
+                    None
+                },
+                interrupted: is_agent && agent_session.is_some_and(|session| session.interrupted),
             });
             if self.center_view == CenterView::Terminal && self.terminals.active_tab == Some(index)
             {
@@ -5548,6 +5580,8 @@ impl Workbench {
                         title: label.title,
                         dirty: label.dirty,
                         running: true,
+                        agent_state: None,
+                        interrupted: false,
                     });
                 }
             }

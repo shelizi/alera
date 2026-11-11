@@ -496,6 +496,8 @@ mod tests {
                 kind: WorkbenchTabKind::Editor,
                 dirty: true,
                 running: true,
+                agent_state: None,
+                interrupted: false,
             })
             .collect::<Vec<_>>();
         assert_eq!(
