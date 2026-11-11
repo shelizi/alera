@@ -33,7 +33,7 @@
 | H1 | 四態資料模型／安全解析 | Host 回傳四態、缺狀態／未知狀態、Session 停止、錯誤 Workspace/Tab、身分重用 | 顯示與解析四態；無法確證時 unknown，絕不把 running 當 working | **PARTIAL：解析 GREEN；Host 身分競態待 H3** | `terminal.rs` RED=E0609/E0433；全套 Library **392/392 PASS** |
 | H2 | GPUI 版面渲染 | Tab 與左欄顏色、Tooltip、等待／阻塞、重繪後復原 | 四態顯示／無重疊、其他 Tab 不變 | **PARTIAL：Tab 投影與色彩 GREEN；左欄/Tooltip/GUI 尚未驗收** | Library **394/394 PASS**，Native `cargo check --bin alera-gpui-desktop` PASS |
 | H3 | Host Presence 同步 | 首次快照、delta、亂序、重連、失聯、取消、切換 Workspace／世代 | 唯一 Host 真相、增量正確、過期請求拒絕 | TODO | — |
-| H4 | 通知規則 | 60s cooldown、3s/10s coalesce、done toggle、初始化／重連不補發、關閉 Session 去重 | 純 Rust 可重現與無資料競態 | TODO | — |
+| H4 | 通知規則 | 60s cooldown、3s/10s coalesce、done toggle、初始化／重連不補發、關閉 Session 去重 | 純 Rust 可重現與無資料競態 | **PARTIAL：純 Rust 決策 5/5 PASS；尚未接進原生通知投遞** | `agent_status_notifications.rs`：RED E0433，GREEN **5/5**，Library **399/399 PASS** |
 | H5 | Windows OS 通知／點擊 | 許可、關閉通知、同時兩版去重、Windows AppId 不污染 Classic、點通知定位正確 Pane/Tab | 具體隔離桌面通知可見且導航安全 | TODO | — |
 | H6 | 設定與跨版本 | Host 設定讀寫 CAS、停用、舊 Host、離線錯誤與重試 | 設定真實生效、Classic / GPUI 行為一致 | TODO | — |
 | H7 | 完整驗收 Gate | Windows Native Build、Rust 全套、隔離 Host 真 Hook、四態點擊、兩版同時使用、DPI/IME | 逐項 GUI PASS；`supported` 才能另案評估 | TODO | — |
@@ -55,6 +55,7 @@
 | 2026-11-11 初始 | 建立功能基準與規格 | 未執行 | 未執行 | 未執行 | H1 模型測試起步 |
 | 2026-11-11 H1-1 | `TerminalSession` 保留 Host `agentState` 四態及 `interrupted`，未證實的狀態保持 None | `cargo test --lib host_agent_status_ --no-default-features`：編譯失敗 E0609/E0433（7 診斷），符合預期 RED | 指定 **1/1 PASS**，完整 `cargo test --offline --locked --no-default-features --lib -j 2` **392/392 PASS**（含 unknown 退化測試） | 未跑最新 GUI | H2 Tab 狀態標示與狀態變換 |
 | 2026-11-11 H2-1 | `WorkbenchTab` 增加 Host 狀態和 interrupted，左右 Pane 的 Chip 根據 Classic info/warning/error/success 顯示 | `agent_hook_status_changes_update_the_same_tab_without_claiming_pty_ownership` 編譯 RED E0609 | `cargo test --offline --locked --no-default-features --lib -j 2` **394/394 PASS**；`cargo check --offline --locked --bin alera-gpui-desktop -j 2` **exit 0** | 未實際 Windows GUI 點擊；左側 Project/Worktree 狀態尚未實作 | H3 Host 動態更新與 H4 通知判斷 |
+| 2026-11-11 H4-1 | 新增純 Rust `AgentNotificationTracker`／`AgentNoticeCoalescer`，匹配 Classic 60 秒冷卻、3/10 秒合併；初始快照忽略、受控 Done、Session 重用拒絕、停用設定不補送 | 新 5 個測試因 `AgentNotificationTracker`／`AgentNoticeCoalescer` 不存在編譯 RED E0433 | 先修 Hash key 型別，再跑專項 **5/5 PASS**，全套 Library **399/399 PASS** | **尚未連接 OS 通知**；此階段只有決策層，不可宣稱 GPUI 已會跳 Toast | H3 資料驅動與 H5 OS Adapter |
 
 ## 尚未解決
 

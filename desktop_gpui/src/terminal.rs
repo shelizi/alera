@@ -27,7 +27,7 @@ const MAX_HOST_PATH_BYTES: usize = 4096;
 /// Host-confirmed Agent Hook status. This is independent of the PTY process
 /// running flag: a live session may be waiting for user approval, blocked, or
 /// finished with the current turn.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum AgentActivityState {
     Working,
     Waiting,
