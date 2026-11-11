@@ -178,6 +178,8 @@ mod tests {
             tab_id: format!("tab-{handle}"),
             running: true,
             agent_type: agent.then(|| "Codex".to_string()),
+            agent_state: None,
+            interrupted: false,
         }]);
         dock.open(handle);
         (

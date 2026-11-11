@@ -24,6 +24,38 @@ const MAX_TRANSCRIPT_BYTES: usize = 48 * 1024;
 const MAX_HOST_WORKSPACES: usize = 256;
 const MAX_HOST_PATH_BYTES: usize = 4096;
 
+/// Host-confirmed Agent Hook status. This is independent of the PTY process
+/// running flag: a live session may be waiting for user approval, blocked, or
+/// finished with the current turn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AgentActivityState {
+    Working,
+    Waiting,
+    Blocked,
+    Done,
+}
+
+impl AgentActivityState {
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw {
+            "working" => Some(Self::Working),
+            "waiting" => Some(Self::Waiting),
+            "blocked" => Some(Self::Blocked),
+            "done" => Some(Self::Done),
+            _ => None,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Working => "working",
+            Self::Waiting => "waiting",
+            Self::Blocked => "blocked",
+            Self::Done => "done",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TerminalSession {
     pub handle: String,
@@ -31,13 +63,31 @@ pub struct TerminalSession {
     pub tab_id: String,
     pub running: bool,
     pub agent_type: Option<String>,
+    /// None means unconfirmed/unknown, never implicitly 'working'.
+    pub agent_state: Option<AgentActivityState>,
+    pub interrupted: bool,
 }
 
 impl TerminalSession {
     pub fn label(&self) -> String {
         let name = self.agent_type.as_deref().unwrap_or("Terminal");
         let state = if self.running { "●" } else { "○" };
-        format!("{state} {name} · {}", self.handle)
+        let activity = self
+            .agent_state
+            .map(|state| {
+                if state == AgentActivityState::Done && self.interrupted {
+                    " · interrupted"
+                } else {
+                    match state {
+                        AgentActivityState::Working => " · working",
+                        AgentActivityState::Waiting => " · waiting",
+                        AgentActivityState::Blocked => " · blocked",
+                        AgentActivityState::Done => " · done",
+                    }
+                }
+            })
+            .unwrap_or("");
+        format!("{state} {name}{activity} · {}", self.handle)
     }
 
     /// Menu snapshots must not attach a recycled handle to the wrong Host
@@ -478,6 +528,14 @@ pub fn parse_terminal_list(value: &Value) -> io::Result<Vec<TerminalSession>> {
             .and_then(Value::as_str)
             .filter(|agent| agent.len() <= 64)
             .map(ToString::to_string);
+        // The status is trustworthy only for a live, positively identified
+        // Agent. A plain Terminal or stopped PTY has no current Hook state.
+        let agent_state = (running && agent_type.is_some())
+            .then(|| item.get("agentState").and_then(Value::as_str))
+            .flatten()
+            .and_then(AgentActivityState::parse);
+        let interrupted = agent_state == Some(AgentActivityState::Done)
+            && item.get("interrupted").and_then(Value::as_bool) == Some(true);
         if sessions
             .iter()
             .any(|session: &TerminalSession| session.handle == handle)
@@ -490,6 +548,8 @@ pub fn parse_terminal_list(value: &Value) -> io::Result<Vec<TerminalSession>> {
             tab_id: tab_id.to_string(),
             running,
             agent_type,
+            agent_state,
+            interrupted,
         });
     }
     Ok(sessions)
@@ -2014,6 +2074,8 @@ mod tests {
             tab_id: "tab-1".into(),
             running: true,
             agent_type: None,
+            agent_state: None,
+            interrupted: false,
         };
         assert!(expected.matches_running_identity(&expected));
         let mut current = expected.clone();
@@ -2552,6 +2614,8 @@ mod tests {
             tab_id: format!("tab-{handle}"),
             running: true,
             agent_type: Some("codex".into()),
+            agent_state: None,
+            interrupted: false,
         }
     }
 
@@ -2853,6 +2917,53 @@ mod tests {
         assert!(!items[1].running);
         assert!(parse_terminal_list(&json!({"items":[{"handle": "bad\\nvalue"}]})).is_err());
         assert!(parse_terminal_list(&json!({"kind":"terminals"})).is_err());
+    }
+
+    #[test]
+    fn host_agent_status_distinguishes_four_states_from_process_running() {
+        let items = ["working", "waiting", "blocked", "done"]
+            .into_iter()
+            .enumerate()
+            .map(|(i, state)| {
+                json!({
+                    "handle":format!("term-{i}"), "workspaceId":"workspace-1",
+                    "tabId":format!("tab-{i}"), "running":true,
+                    "agentType":"claude", "agentState":state,
+                    "interrupted":state == "done"
+                })
+            })
+            .collect::<Vec<_>>();
+        let parsed = parse_terminal_list(&json!({"items":items})).unwrap();
+        assert_eq!(
+            parsed.iter().map(|s| s.agent_state).collect::<Vec<_>>(),
+            vec![
+                Some(AgentActivityState::Working),
+                Some(AgentActivityState::Waiting),
+                Some(AgentActivityState::Blocked),
+                Some(AgentActivityState::Done),
+            ]
+        );
+        assert!(parsed[1].running, "a waiting agent still owns a live PTY");
+        assert!(parsed[1].label().contains("waiting"));
+        assert!(parsed[3].interrupted);
+        assert!(parsed[3].label().contains("interrupted"));
+    }
+
+    #[test]
+    fn unproven_or_stopped_agent_status_never_defaults_to_working() {
+        let parsed = parse_terminal_list(&json!({"items":[
+            {"handle":"p1","workspaceId":"w","tabId":"t1","running":true,
+             "agentType":"codex"},
+            {"handle":"p2","workspaceId":"w","tabId":"t2","running":true,
+             "agentType":"codex","agentState":"future-extension"},
+            {"handle":"p3","workspaceId":"w","tabId":"t3","running":false,
+             "agentType":"codex","agentState":"working"},
+            {"handle":"p4","workspaceId":"w","tabId":"t4","running":true,
+             "agentType":null,"agentState":"waiting"}
+        ]}))
+        .unwrap();
+        assert!(parsed.iter().all(|s| s.agent_state.is_none()));
+        assert!(parsed.iter().all(|s| !s.label().contains("working")));
     }
 
     #[test]

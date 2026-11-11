@@ -440,6 +440,8 @@ mod tests {
             tab_id: format!("tab-{handle}"),
             running: true,
             agent_type: None,
+            agent_state: None,
+            interrupted: false,
         }]);
         dock.open(handle);
         WorkbenchTabIdentity::Host(dock.context_target_at(0).unwrap())

@@ -30,7 +30,7 @@
 | ID | 階段 | 先做的 RED 測試 | GREEN 定義 | 目前 | Commit / 證據 |
 |---|---|---|---|---|---|
 | H0 | 建立規格／隔離工作樹 | N/A | 檔案落地、基準與保護驗證 | DONE | 規格首版，隔離 feature worktree |
-| H1 | 四態資料模型／安全解析 | Host 回傳四態、缺狀態／未知狀態、Session 停止、錯誤 Workspace/Tab、身分重用 | 顯示與解析四態；無法確證時 unknown，絕不把 running 當 working | TODO | — |
+| H1 | 四態資料模型／安全解析 | Host 回傳四態、缺狀態／未知狀態、Session 停止、錯誤 Workspace/Tab、身分重用 | 顯示與解析四態；無法確證時 unknown，絕不把 running 當 working | **PARTIAL：解析 GREEN；Host 身分競態待 H3** | `terminal.rs` RED=E0609/E0433；全套 Library **392/392 PASS** |
 | H2 | GPUI 版面渲染 | Tab 與左欄顏色、Tooltip、等待／阻塞、重繪後復原 | 四態顯示／無重疊、其他 Tab 不變 | TODO | — |
 | H3 | Host Presence 同步 | 首次快照、delta、亂序、重連、失聯、取消、切換 Workspace／世代 | 唯一 Host 真相、增量正確、過期請求拒絕 | TODO | — |
 | H4 | 通知規則 | 60s cooldown、3s/10s coalesce、done toggle、初始化／重連不補發、關閉 Session 去重 | 純 Rust 可重現與無資料競態 | TODO | — |
@@ -53,6 +53,7 @@
 | 日期／輪次 | 修改 | RED | GREEN／Build | GUI／Host | 下一步 |
 |---|---|---|---|---|---|
 | 2026-11-11 初始 | 建立功能基準與規格 | 未執行 | 未執行 | 未執行 | H1 模型測試起步 |
+| 2026-11-11 H1-1 | `TerminalSession` 保留 Host `agentState` 四態及 `interrupted`，未證實的狀態保持 None | `cargo test --lib host_agent_status_ --no-default-features`：編譯失敗 E0609/E0433（7 診斷），符合預期 RED | 指定 **1/1 PASS**，完整 `cargo test --offline --locked --no-default-features --lib -j 2` **392/392 PASS**（含 unknown 退化測試） | 未跑最新 GUI | H2 Tab 狀態標示與狀態變換 |
 
 ## 尚未解決
 
