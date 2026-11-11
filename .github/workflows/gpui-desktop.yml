@@ -9,6 +9,9 @@ on:
       - 'rust/alera-cli/src/cli.rs'
       - 'rust/alera-cli/src/main.rs'
       - 'rust/alera-cli/src/cli_tests.rs'
+      - 'rust/alera-cli/src/agent_hook_cas_contract.rs'
+      - 'rust/alera-cli/src/desktop_settings_commands.rs'
+      - 'scripts/agent-hook-cas-contract-tests/**'
       - '.github/workflows/gpui-desktop.yml'
 
 permissions:
@@ -40,6 +43,8 @@ jobs:
       - name: Check formatting
         shell: bash
         run: cargo fmt --manifest-path desktop_gpui/Cargo.toml --all -- --check
+      - name: Verify CLI Hook CAS contract from exact production source (no Host)
+        run: cargo test --manifest-path scripts/agent-hook-cas-contract-tests/Cargo.toml --locked
       - name: Verify model without GPUI graphics
         run: cargo test --manifest-path desktop_gpui/Cargo.toml --no-default-features --lib --locked
 

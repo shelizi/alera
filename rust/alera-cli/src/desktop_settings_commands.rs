@@ -26,85 +26,13 @@ fn native_pin_projection(record: &Value) -> Option<Value> {
     }))
 }
 
-/// Never expose the full runtimeSettings.get reply to the GPUI process:
-/// it may include executable paths, user prompts, credentials and AI Assist
-/// configuration. Emit only the bounded flat Host Hook boolean map.
-fn valid_hook_agent_id(agent: &str) -> bool {
-    !agent.is_empty()
-        && agent.len() <= 64
-        && agent.bytes().all(|byte| {
-            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'-' | b'_')
-        })
-}
-
-fn native_agent_hooks_projection(record: &Value) -> Result<Value, &'static str> {
-    let revision = record
-        .get("revision")
-        .and_then(Value::as_i64)
-        .filter(|revision| *revision >= 0 && *revision < i64::MAX)
-        .ok_or("Host Hook Settings revision missing or invalid")?;
-    let hooks = record
-        .get("agentStatusHooks")
-        .and_then(Value::as_object)
-        .ok_or("Host Hook Settings payload missing")?;
-    if hooks.len() > 64 {
-        return Err("Too many Host Hook switches");
-    }
-    let mut allowed = serde_json::Map::with_capacity(hooks.len());
-    for (agent, enabled) in hooks {
-        if !valid_hook_agent_id(agent) {
-            return Err("Invalid Host Hook agent ID");
-        }
-        let enabled = enabled.as_bool().ok_or("Nonboolean Host Hook switch")?;
-        allowed.insert(agent.to_string(), json!(enabled));
-    }
-    Ok(json!({
-        "kind":"agentHookSettings", "revision":revision,
-        "agentStatusHooks":allowed
-    }))
-}
-
-/// The Host's runtimeSettings.update performs the final revision check in
-/// one BEGIN IMMEDIATE SQLite transaction. This preflight is an additional
-/// compare of the observed Provider value, not a replacement for Host CAS.
-/// Only `agentStatusHooks` and `expectedRevision` are ever transmitted.
-fn native_agent_hook_cas_payload(
-    raw_host: &Value,
-    agent: &str,
-    expected_revision: i64,
-    expected_enabled: bool,
-    enabled: bool,
-) -> Result<Option<Value>, &'static str> {
-    if !valid_hook_agent_id(agent) || !(0..i64::MAX).contains(&expected_revision) {
-        return Err("Invalid Agent Hook ID or expected revision");
-    }
-    let sanitized = native_agent_hooks_projection(raw_host)?;
-    if sanitized["revision"].as_i64() != Some(expected_revision) {
-        return Err("Host Hook settings changed; refresh before retrying");
-    }
-    let mut switches = sanitized["agentStatusHooks"]
-        .as_object()
-        .cloned()
-        .ok_or("Host Hook switches invalid")?;
-    let old = switches
-        .get(agent)
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    if old != expected_enabled {
-        return Err("Host Agent Hook changed; refresh before retrying");
-    }
-    if old == enabled {
-        return Ok(None);
-    }
-    if !switches.contains_key(agent) && switches.len() >= 64 {
-        return Err("Host Hook settings limit reached");
-    }
-    switches.insert(agent.to_owned(), json!(enabled));
-    Ok(Some(json!({
-        "expectedRevision": expected_revision,
-        "agentStatusHooks": switches
-    })))
-}
+// The exact Hook CAS contract is compiled by both this CLI and the
+// small isolated offline test harness; no duplicated production logic.
+#[path = "agent_hook_cas_contract.rs"]
+mod hook_cas_contract;
+use hook_cas_contract::{
+    native_agent_hook_cas_payload, native_agent_hook_cas_readback, native_agent_hooks_projection,
+};
 
 pub async fn run(command: DesktopSettingsCommand) -> i32 {
     if !command.no_start {
@@ -286,19 +214,10 @@ pub async fn run(command: DesktopSettingsCommand) -> i32 {
                     Err(error) => return print_error(error),
                 }
             } else if request == "runtimeSettings.update" {
-                let projected = match native_agent_hooks_projection(&data) {
-                    Ok(value) => value,
+                match native_agent_hook_cas_readback(&data, &payload) {
+                    Ok(projection) => projection,
                     Err(error) => return print_error(error),
-                };
-                let expected_next = payload["expectedRevision"]
-                    .as_i64()
-                    .and_then(|v| v.checked_add(1));
-                if projected["revision"].as_i64() != expected_next
-                    || projected["agentStatusHooks"] != payload["agentStatusHooks"]
-                {
-                    return print_error("Host Hook CAS readback did not confirm the update");
                 }
-                projected
             } else if request == "tab.pin.cas" {
                 match native_pin_projection(&data) {
                     Some(projection) => projection,
