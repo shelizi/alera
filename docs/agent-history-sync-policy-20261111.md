@@ -61,6 +61,23 @@ does not erase any previously copied history.
 6. Remote Host history is not silently moved between machines. Cloud sync
    and cross-provider handoff are separate features.
 
+## GPUI/Classic shared settings integration (2026-11-12)
+
+- GPUI adds Settings > History Sync, including all/separate/groups and
+  per-account group editors. It does not duplicate the policy in Native's
+  independent preferences JSON.
+- Native GPUI invokes the reviewed `alera runtime --json history-sync` CLI
+  surface. The CLI attaches only to an already-running, authenticated Runtime
+  Host; read/update use the authoritative `runtimeSettings` RPC.
+- Writes use `expectedRevision` to fail on concurrent Classic or GPUI edits
+  and verify the Host's returned `historySync` before reporting success.
+- GPUI displays Host version/offline errors without falling back to a
+  divergent Native policy. Press Refresh after external settings changes.
+- Group names are edited for the known Codex/Claude accounts and AGY
+  default account. AGY mirroring remains unverified and disabled.
+- UI and Rust bridges are experimental until GPUI build checks and a
+  disposable Host / two-client read-update-readback smoke test pass.
+
 ## TDD checklist
 
 - Rust policy default migration, separate and grouped matching, serde roundtrip.

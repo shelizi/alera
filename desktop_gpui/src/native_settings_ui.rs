@@ -58,7 +58,7 @@ impl Workbench {
     ) -> Result<(), &'static str> {
         if !matches!(
             section,
-            "application" | "terminal" | "editor" | "agents" | "agentProfiles"
+            "historySync" | "application" | "terminal" | "editor" | "agents" | "agentProfiles"
         ) {
             return Err("ui_not_ready");
         }
@@ -74,6 +74,7 @@ impl Workbench {
         self.settings_section = Some(section.to_owned());
         match section {
             "agents" => self.refresh_terminals(cx),
+            "historySync" => self.refresh_shared_history_sync(cx),
             "agentProfiles" => self.refresh_agent_profiles(cx),
             _ => {}
         }
@@ -501,6 +502,7 @@ impl Workbench {
                     },
                 ))
                 .into_any_element(),
+            "historySync" => self.render_history_sync_settings(cx),
             _ => return None,
         };
         let metrics = NativeModalSize::Settings.resolve(viewport_width, viewport_height);
@@ -510,6 +512,7 @@ impl Workbench {
             ("terminal", "Terminal"),
             ("editor", "Editor"),
             ("agents", "Agents"),
+            ("historySync", "History Sync"),
             ("agentProfiles", "Agent Profiles"),
         ];
         let navigation = div()
@@ -616,7 +619,7 @@ impl Workbench {
                     .py_2()
                     .text_xs()
                     .text_color(rgb(MUTED))
-                    .child("Native preferences are stored separately from Alera Classic."),
+                    .child("Native UI preferences are local; Agent History Sync is shared through the Runtime Host."),
             );
         let body = div()
             .id("native-settings-panel")

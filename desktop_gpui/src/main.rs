@@ -2,6 +2,7 @@
 mod editor_ui;
 mod native_action_dialog_ui;
 mod native_components;
+mod native_history_sync_ui;
 mod native_popup_ui;
 mod native_settings_ui;
 mod native_ui_icons;
@@ -55,6 +56,9 @@ use alera_gpui_desktop::git_sidebar_layout::{
     GitSidebarOptions, GitSidebarViewMode, SectionKey,
 };
 use alera_gpui_desktop::git_watch::GitWatchService;
+use alera_gpui_desktop::history_sync_bridge::{
+    HistorySyncAccount, HistorySyncMode, HistorySyncSnapshot,
+};
 use alera_gpui_desktop::mcp_ui_bridge::{
     matching_host_tab_handle, NativeMcpUiBridge, NativeMcpUiCommand, NativeMcpUiEvent,
 };
@@ -541,6 +545,13 @@ struct Workbench {
     native_settings_store: Option<NativeSettingsStore>,
     native_settings: NativeSettings,
     native_settings_error: Option<String>,
+    history_sync_snapshot: Option<HistorySyncSnapshot>,
+    history_sync_loading: bool,
+    history_sync_busy: bool,
+    history_sync_request: u64,
+    history_sync_status: String,
+    history_sync_edit: Option<HistorySyncAccount>,
+    history_sync_input: Entity<QuickOpenInput>,
     settings_section: Option<String>,
     settings_modal_focus: gpui::FocusHandle,
     settings_kit_dialog_open: bool,
@@ -11645,6 +11656,15 @@ fn main() {
                             native_settings_store,
                             native_settings,
                             native_settings_error,
+                            history_sync_snapshot: None,
+                            history_sync_loading: false,
+                            history_sync_busy: false,
+                            history_sync_request: 0,
+                            history_sync_status: String::new(),
+                            history_sync_edit: None,
+                            history_sync_input: cx.new(|cx| {
+                                QuickOpenInput::with_placeholder("Group (empty = independent)", cx)
+                            }),
                             settings_section: None,
                             settings_modal_focus: cx.focus_handle(),
                             settings_kit_dialog_open: false,

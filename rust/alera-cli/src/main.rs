@@ -1,6 +1,6 @@
 mod agent_account_environment;
-mod agent_history_sync;
 mod agent_descriptor_export;
+mod agent_history_sync;
 mod agent_profile_commands;
 mod agent_profile_input;
 mod agent_profile_launch;
@@ -45,6 +45,7 @@ mod pty_job_bootstrap;
 mod runtime_archive;
 mod runtime_clear;
 mod runtime_commands;
+mod runtime_history_sync_cli;
 mod runtime_host_client;
 mod runtime_host_command;
 mod ssh_bootstrap;
