@@ -6395,7 +6395,10 @@ impl Workbench {
                         }
                         TerminalCreateTick::None => {}
                     }
-                    if view.terminal_tick % 10 == 1 {
+                    if alera_gpui_desktop::terminal::agent_presence_refresh_due(
+                        view.terminal_tick,
+                        &view.terminals.sessions,
+                    ) {
                         view.refresh_terminals(cx);
                     }
                 })

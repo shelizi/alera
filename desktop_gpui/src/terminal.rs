@@ -102,6 +102,16 @@ impl TerminalSession {
     }
 }
 
+/// Uses the existing authenticated no-start Host Terminal list as a bounded
+/// status-refresh fallback. Live Agents refresh every 3s, otherwise every 15s.
+/// This does not create a new Host, Hook receiver or Terminal session.
+pub fn agent_presence_refresh_due(tick: u64, sessions: &[TerminalSession]) -> bool {
+    let active_agent = sessions
+        .iter()
+        .any(|session| session.running && session.agent_type.is_some());
+    tick % if active_agent { 2 } else { 10 } == 1
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TerminalChunk {
     pub handle: String,
@@ -2964,6 +2974,20 @@ mod tests {
         .unwrap();
         assert!(parsed.iter().all(|s| s.agent_state.is_none()));
         assert!(parsed.iter().all(|s| !s.label().contains("working")));
+    }
+
+    #[test]
+    fn active_agent_status_polls_faster_without_spinning_when_host_is_idle() {
+        let mut active = session("h1");
+        active.agent_state = Some(AgentActivityState::Waiting);
+        let mut stopped = active.clone();
+        stopped.running = false;
+        assert!(agent_presence_refresh_due(1, &[active.clone()]));
+        assert!(!agent_presence_refresh_due(2, &[active.clone()]));
+        assert!(agent_presence_refresh_due(3, &[active]));
+        assert!(!agent_presence_refresh_due(3, &[stopped]));
+        assert!(agent_presence_refresh_due(11, &[]));
+        assert!(!agent_presence_refresh_due(12, &[]));
     }
 
     #[test]

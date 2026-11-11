@@ -317,4 +317,38 @@ mod tests {
         assert_eq!(batch[0].state, AgentActivityState::Blocked);
         assert!(coalescer.drain_if_ready(20_000).is_empty());
     }
+
+    #[test]
+    fn continuous_status_churn_cannot_delay_notifications_beyond_ten_seconds() {
+        let mut coalescer = AgentNoticeCoalescer::new();
+        let notice = AgentNotice {
+            session_id: "h1".into(),
+            workspace_id: "w1".into(),
+            tab_id: "tab1".into(),
+            agent_type: "codex".into(),
+            state: AgentActivityState::Waiting,
+        };
+        for now in [1_000, 3_000, 5_000, 7_000, 9_000, 10_500] {
+            coalescer.enqueue(vec![notice.clone()], now);
+            assert!(coalescer.drain_if_ready(now).is_empty());
+        }
+        assert_eq!(coalescer.drain_if_ready(11_000), vec![notice]);
+    }
+
+    #[test]
+    fn resolved_attention_cancels_queued_notification_before_delivery() {
+        let mut coalescer = AgentNoticeCoalescer::new();
+        coalescer.enqueue(
+            vec![AgentNotice {
+                session_id: "h1".into(),
+                workspace_id: "w1".into(),
+                tab_id: "tab1".into(),
+                agent_type: "codex".into(),
+                state: AgentActivityState::Waiting,
+            }],
+            1_000,
+        );
+        coalescer.discard("h1");
+        assert!(coalescer.drain_if_ready(12_000).is_empty());
+    }
 }
