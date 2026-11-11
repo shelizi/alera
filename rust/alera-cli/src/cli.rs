@@ -393,6 +393,19 @@ pub enum DesktopSettingsAction {
     /// Read only Host-enabled Agent Hook switches (no Runtime settings,
     /// AI Assist data, provider credentials or change authority).
     AgentHooksGet,
+    /// Compare-and-set one Hook provider using the already-running Host's
+    /// atomic runtimeSettings expectedRevision; never submit a full Settings
+    /// object or permit an unobserved toggle.
+    AgentHooksCas {
+        #[arg(long)]
+        agent_id: String,
+        #[arg(long)]
+        expected_revision: i64,
+        #[arg(long, action = clap::ArgAction::Set)]
+        expected_enabled: bool,
+        #[arg(long, action = clap::ArgAction::Set)]
+        enabled: bool,
+    },
     /// Resolve exactly one registered Host project/worktree to its Git favorites.
     FavoritesGet {
         #[arg(long)]

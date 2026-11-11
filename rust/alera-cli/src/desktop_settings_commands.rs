@@ -29,7 +29,20 @@ fn native_pin_projection(record: &Value) -> Option<Value> {
 /// Never expose the full runtimeSettings.get reply to the GPUI process:
 /// it may include executable paths, user prompts, credentials and AI Assist
 /// configuration. Emit only the bounded flat Host Hook boolean map.
+fn valid_hook_agent_id(agent: &str) -> bool {
+    !agent.is_empty()
+        && agent.len() <= 64
+        && agent.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'-' | b'_')
+        })
+}
+
 fn native_agent_hooks_projection(record: &Value) -> Result<Value, &'static str> {
+    let revision = record
+        .get("revision")
+        .and_then(Value::as_i64)
+        .filter(|revision| *revision >= 0 && *revision < i64::MAX)
+        .ok_or("Host Hook Settings revision missing or invalid")?;
     let hooks = record
         .get("agentStatusHooks")
         .and_then(Value::as_object)
@@ -39,20 +52,58 @@ fn native_agent_hooks_projection(record: &Value) -> Result<Value, &'static str> 
     }
     let mut allowed = serde_json::Map::with_capacity(hooks.len());
     for (agent, enabled) in hooks {
-        if agent.is_empty()
-            || agent.len() > 64
-            || !agent.bytes().all(|byte| {
-                byte.is_ascii_lowercase()
-                    || byte.is_ascii_digit()
-                    || matches!(byte, b'.' | b'-' | b'_')
-            })
-        {
+        if !valid_hook_agent_id(agent) {
             return Err("Invalid Host Hook agent ID");
         }
         let enabled = enabled.as_bool().ok_or("Nonboolean Host Hook switch")?;
         allowed.insert(agent.to_string(), json!(enabled));
     }
-    Ok(json!({"kind":"agentHookSettings", "agentStatusHooks":allowed}))
+    Ok(json!({
+        "kind":"agentHookSettings", "revision":revision,
+        "agentStatusHooks":allowed
+    }))
+}
+
+/// The Host's runtimeSettings.update performs the final revision check in
+/// one BEGIN IMMEDIATE SQLite transaction. This preflight is an additional
+/// compare of the observed Provider value, not a replacement for Host CAS.
+/// Only `agentStatusHooks` and `expectedRevision` are ever transmitted.
+fn native_agent_hook_cas_payload(
+    raw_host: &Value,
+    agent: &str,
+    expected_revision: i64,
+    expected_enabled: bool,
+    enabled: bool,
+) -> Result<Option<Value>, &'static str> {
+    if !valid_hook_agent_id(agent) || !(0..i64::MAX).contains(&expected_revision) {
+        return Err("Invalid Agent Hook ID or expected revision");
+    }
+    let sanitized = native_agent_hooks_projection(raw_host)?;
+    if sanitized["revision"].as_i64() != Some(expected_revision) {
+        return Err("Host Hook settings changed; refresh before retrying");
+    }
+    let mut switches = sanitized["agentStatusHooks"]
+        .as_object()
+        .cloned()
+        .ok_or("Host Hook switches invalid")?;
+    let old = switches
+        .get(agent)
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if old != expected_enabled {
+        return Err("Host Agent Hook changed; refresh before retrying");
+    }
+    if old == enabled {
+        return Ok(None);
+    }
+    if !switches.contains_key(agent) && switches.len() >= 64 {
+        return Err("Host Hook settings limit reached");
+    }
+    switches.insert(agent.to_owned(), json!(enabled));
+    Ok(Some(json!({
+        "expectedRevision": expected_revision,
+        "agentStatusHooks": switches
+    })))
 }
 
 pub async fn run(command: DesktopSettingsCommand) -> i32 {
@@ -70,6 +121,40 @@ pub async fn run(command: DesktopSettingsCommand) -> i32 {
     let (request, payload) = match command.action {
         DesktopSettingsAction::Get => ("desktopSettings.get", json!({})),
         DesktopSettingsAction::AgentHooksGet => ("runtimeSettings.get", json!({})),
+        DesktopSettingsAction::AgentHooksCas {
+            agent_id,
+            expected_revision,
+            expected_enabled,
+            enabled,
+        } => {
+            // Read only from the already authenticated, existing Host.
+            // On failure never retry blindly or manufacture a revision.
+            let current = match client
+                .request_value("runtimeSettings.get", &json!({}))
+                .await
+            {
+                Ok(snapshot) => snapshot,
+                Err(_) => return print_error("Host Hook settings unavailable"),
+            };
+            match native_agent_hook_cas_payload(
+                &current,
+                &agent_id,
+                expected_revision,
+                expected_enabled,
+                enabled,
+            ) {
+                Ok(Some(payload)) => ("runtimeSettings.update", payload),
+                Ok(None) => {
+                    let safe = match native_agent_hooks_projection(&current) {
+                        Ok(projection) => projection,
+                        Err(error) => return print_error(error),
+                    };
+                    print_value(&safe, command.output.json, "Agent Hook already matches");
+                    return 0;
+                }
+                Err(error) => return print_error(error),
+            }
+        }
         DesktopSettingsAction::FavoritesGet { root_path } => {
             ("gitFavorites.forWorkspace", json!({"rootPath":root_path}))
         }
@@ -200,6 +285,20 @@ pub async fn run(command: DesktopSettingsCommand) -> i32 {
                     Ok(projection) => projection,
                     Err(error) => return print_error(error),
                 }
+            } else if request == "runtimeSettings.update" {
+                let projected = match native_agent_hooks_projection(&data) {
+                    Ok(value) => value,
+                    Err(error) => return print_error(error),
+                };
+                let expected_next = payload["expectedRevision"]
+                    .as_i64()
+                    .and_then(|v| v.checked_add(1));
+                if projected["revision"].as_i64() != expected_next
+                    || projected["agentStatusHooks"] != payload["agentStatusHooks"]
+                {
+                    return print_error("Host Hook CAS readback did not confirm the update");
+                }
+                projected
             } else if request == "tab.pin.cas" {
                 match native_pin_projection(&data) {
                     Some(projection) => projection,
@@ -210,6 +309,12 @@ pub async fn run(command: DesktopSettingsCommand) -> i32 {
             };
             print_value(&safe, command.output.json, "Shared desktop settings ready");
             0
+        }
+        Err(error) if request == "runtimeSettings.update" => {
+            // Do not print a full Host Settings diagnostic or retry after
+            // conflict; the UI must fetch fresh Host truth before another CAS.
+            let _ = error;
+            print_error("Host Hook CAS rejected; refresh and retry")
         }
         Err(error) => print_error(error),
     }
@@ -257,20 +362,25 @@ mod tests {
         });
         let projected = super::native_agent_hooks_projection(&host).unwrap();
         assert_eq!(projected["kind"], "agentHookSettings");
+        assert_eq!(projected["revision"], 19);
         assert_eq!(projected["agentStatusHooks"]["codex"], true);
         assert_eq!(projected["agentStatusHooks"]["claude"], false);
-        assert_eq!(projected.as_object().unwrap().len(), 2);
+        assert_eq!(projected.as_object().unwrap().len(), 3);
         let text = projected.to_string();
         for secret in ["VERY_SECRET", "Do not disclose", "PRIVATE", "BAD", "apiKey"] {
             assert!(!text.contains(secret));
         }
         assert!(super::native_agent_hooks_projection(&json!({"revision":19})).is_err());
         assert!(super::native_agent_hooks_projection(&json!({
-            "agentStatusHooks": {"codex": "yes"}
+            "agentStatusHooks":{"codex":true}
         }))
         .is_err());
         assert!(super::native_agent_hooks_projection(&json!({
-            "agentStatusHooks": {"bad\nname": true}
+            "revision":19, "agentStatusHooks": {"codex": "yes"}
+        }))
+        .is_err());
+        assert!(super::native_agent_hooks_projection(&json!({
+            "revision":19, "agentStatusHooks": {"bad\nname": true}
         }))
         .is_err());
     }
@@ -293,6 +403,98 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn agent_hook_cas_only_mutates_one_switch_and_requires_exact_host_revision() {
+        let host = json!({
+            "revision": 7,
+            "agentStatusHooks": {"codex": false, "claude": true},
+            "aiTextGeneration": {"apiKey":"HIDDEN", "prompt":"PRIVATE"},
+            "agentQuotas": {"clientSecret":"SECRET"},
+        });
+        let payload = super::native_agent_hook_cas_payload(&host, "codex", 7, false, true)
+            .unwrap()
+            .expect("changed Hook must write");
+        assert_eq!(
+            payload,
+            json!({
+                "expectedRevision": 7,
+                "agentStatusHooks": {"codex": true, "claude": true}
+            })
+        );
+        let text = payload.to_string();
+        for secret in ["HIDDEN", "PRIVATE", "SECRET"] {
+            assert!(!text.contains(secret));
+        }
+        assert!(super::native_agent_hook_cas_payload(&host, "codex", 6, false, true).is_err());
+        assert!(super::native_agent_hook_cas_payload(&host, "codex", 7, true, false).is_err());
+        assert!(super::native_agent_hook_cas_payload(&host, "bad\nagent", 7, false, true).is_err());
+        assert!(super::native_agent_hook_cas_payload(&host, "codex", -1, false, true).is_err());
+        assert!(
+            super::native_agent_hook_cas_payload(&host, "claude", 7, true, true)
+                .unwrap()
+                .is_none(),
+            "no-op cannot create an extra Host update revision"
+        );
+        assert!(
+            super::native_agent_hook_cas_payload(
+                &json!({"agentStatusHooks":{"codex":false}}),
+                "codex",
+                0,
+                false,
+                true
+            )
+            .is_err(),
+            "no Host revision means no CAS"
+        );
+    }
+
+    #[test]
+    fn agent_hook_cas_cli_requires_observed_value_and_revision() {
+        let parsed = crate::cli::Cli::try_parse_from([
+            "alera",
+            "settings",
+            "--no-start",
+            "--json",
+            "agent-hooks-cas",
+            "--agent-id",
+            "codex",
+            "--expected-revision",
+            "7",
+            "--expected-enabled",
+            "false",
+            "--enabled",
+            "true",
+        ])
+        .unwrap();
+        assert!(matches!(
+            parsed.command,
+            crate::cli::Command::Settings(crate::cli::DesktopSettingsCommand {
+                no_start: true,
+                action: crate::cli::DesktopSettingsAction::AgentHooksCas {
+                    expected_revision: 7,
+                    expected_enabled: false,
+                    enabled: true,
+                    ..
+                },
+                ..
+            })
+        ));
+        assert!(
+            crate::cli::Cli::try_parse_from([
+                "alera",
+                "settings",
+                "--no-start",
+                "agent-hooks-cas",
+                "--agent-id",
+                "codex",
+                "--enabled",
+                "true"
+            ])
+            .is_err(),
+            "blind Hook updates must be impossible from CLI"
+        );
     }
 
     #[test]

@@ -62,7 +62,9 @@ use alera_gpui_desktop::project_tree::{
     project_title_matches_search, sidebar_workspaces_for_group, worktree_matches_search,
     ProjectTreeGroup,
 };
-use alera_gpui_desktop::runtime_bridge::{ProjectRemovalPreview, RuntimeCliBridge};
+use alera_gpui_desktop::runtime_bridge::{
+    AgentHookSettingsSnapshot, ProjectRemovalPreview, RuntimeCliBridge,
+};
 use alera_gpui_desktop::runtime_catalog::RuntimeCatalog;
 use alera_gpui_desktop::session::{PreviewSessionStore, TerminalLayout, TerminalLayoutTab};
 use alera_gpui_desktop::terminal::{
@@ -544,7 +546,9 @@ struct Workbench {
     agent_notification_clock: Instant,
     /// Separate Host-owned operational Hook settings; unlike the portable
     /// notification toggle, these live in runtimeSettings.agentStatusHooks.
-    agent_hook_switches: Option<HashMap<String, bool>>,
+    agent_hook_switches: Option<AgentHookSettingsSnapshot>,
+    agent_hook_write_loading: bool,
+    agent_hook_ui_status: String,
     agent_hook_switches_loading: bool,
     agent_hook_switches_request: u64,
     agent_hook_switches_last_refresh: Instant,
@@ -6137,7 +6141,7 @@ impl Workbench {
     }
 
     fn refresh_agent_hook_switches(&mut self, cx: &mut Context<Self>) {
-        if self.agent_hook_switches_loading {
+        if self.agent_hook_switches_loading || self.agent_hook_write_loading {
             return;
         }
         self.agent_hook_switches_last_refresh = Instant::now();
@@ -6154,7 +6158,7 @@ impl Workbench {
         let request = self.agent_hook_switches_request;
         cx.spawn(async move |view, cx| {
             let result = cx
-                .background_spawn(async move { bridge.agent_hook_settings_snapshot() })
+                .background_spawn(async move { bridge.agent_hook_settings_versioned_snapshot() })
                 .await;
             view.update(cx, |view, cx| {
                 if view.agent_hook_switches_request != request {
@@ -6163,7 +6167,12 @@ impl Workbench {
                 view.agent_hook_switches_loading = false;
                 match result {
                     Ok(switches) => {
-                        if view.agent_hook_switches.as_ref() != Some(&switches) {
+                        if view
+                            .agent_hook_switches
+                            .as_ref()
+                            .map(|state| &state.switches)
+                            != Some(&switches.switches)
+                        {
                             view.agent_notification_delivery.on_host_reconnected();
                         }
                         view.agent_hook_switches = Some(switches);
@@ -6176,6 +6185,72 @@ impl Workbench {
                     }
                 }
                 view.observe_agent_notification_status();
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// A Provider toggle is never optimistic. Require a Host-authenticated
+    /// versioned snapshot and exactly one in-flight CAS; any conflict or CLI
+    /// incompatibility invalidates Native's local permission cache.
+    fn change_agent_hook_setting(
+        &mut self,
+        agent: &'static str,
+        enabled: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if !matches!(agent, "codex" | "claude") || self.agent_hook_write_loading {
+            return;
+        }
+        let Some(observed) = self.agent_hook_switches.clone() else {
+            self.agent_hook_ui_status = "Host Hook settings unavailable; refresh required".into();
+            cx.notify();
+            return;
+        };
+        if observed.switches.get(agent).copied().unwrap_or(false) == enabled {
+            return;
+        }
+        let Some(bridge) = self.runtime_bridge.clone() else {
+            self.agent_hook_ui_status = "Existing Runtime Host unavailable".into();
+            cx.notify();
+            return;
+        };
+        self.agent_hook_write_loading = true;
+        self.agent_hook_ui_status = format!("Saving {agent} Hook through Runtime Host…");
+        // Discard any earlier in-flight read from before this CAS.
+        self.agent_hook_switches_request = self.agent_hook_switches_request.wrapping_add(1);
+        self.agent_hook_switches_loading = false;
+        cx.notify();
+        cx.spawn(async move |view, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    bridge.agent_hook_settings_compare_and_set(&observed, agent, enabled)
+                })
+                .await;
+            view.update(cx, |view, cx| {
+                view.agent_hook_write_loading = false;
+                match result {
+                    Ok(snapshot) => {
+                        view.agent_hook_switches = Some(snapshot);
+                        view.agent_hook_ui_status =
+                            format!("Runtime Host confirmed {agent} Hook setting");
+                    }
+                    Err(_) => {
+                        view.agent_hook_switches = None;
+                        view.agent_hook_ui_status =
+                            "Host Hook CAS rejected or unavailable; refresh and retry".into();
+                    }
+                }
+                // No stale Waiting/Blocked notice may survive an operational
+                // Hook toggle, even when the Host changes the provider set.
+                view.agent_notification_delivery.on_host_reconnected();
+                view.observe_agent_notification_status();
+                view.agent_hook_switches_last_refresh = Instant::now()
+                    .checked_sub(Duration::from_secs(30))
+                    .unwrap_or_else(Instant::now);
+                view.refresh_agent_hook_switches(cx);
                 cx.notify();
             })
             .ok();
@@ -6197,8 +6272,12 @@ impl Workbench {
             .get("agents.agentStatusFinishedNotificationsEnabled")
             .and_then(serde_json::Value::as_bool)
             == Some(true);
-        let enabled_sessions =
-            enabled_notice_sessions(&self.terminals.sessions, self.agent_hook_switches.as_ref());
+        let enabled_sessions = enabled_notice_sessions(
+            &self.terminals.sessions,
+            self.agent_hook_switches
+                .as_ref()
+                .map(|state| &state.switches),
+        );
         let has_hook = !self.terminals.session_list_is_stale()
             && enabled_sessions
                 .iter()
@@ -6220,8 +6299,12 @@ impl Workbench {
     fn observe_agent_notification_status(&mut self) {
         let policy = self.native_agent_notification_policy();
         let now_ms = self.agent_notification_clock.elapsed().as_millis() as u64;
-        let enabled_sessions =
-            enabled_notice_sessions(&self.terminals.sessions, self.agent_hook_switches.as_ref());
+        let enabled_sessions = enabled_notice_sessions(
+            &self.terminals.sessions,
+            self.agent_hook_switches
+                .as_ref()
+                .map(|state| &state.switches),
+        );
         self.agent_notification_delivery
             .observe(&enabled_sessions, now_ms, policy);
     }
@@ -6230,8 +6313,12 @@ impl Workbench {
         self.observe_agent_notification_status();
         let policy = self.native_agent_notification_policy();
         let now_ms = self.agent_notification_clock.elapsed().as_millis() as u64;
-        let enabled_sessions =
-            enabled_notice_sessions(&self.terminals.sessions, self.agent_hook_switches.as_ref());
+        let enabled_sessions = enabled_notice_sessions(
+            &self.terminals.sessions,
+            self.agent_hook_switches
+                .as_ref()
+                .map(|state| &state.switches),
+        );
         let notices = self
             .agent_notification_delivery
             .drain(&enabled_sessions, now_ms, policy);
@@ -10509,6 +10596,8 @@ fn main() {
                             agent_notification_delivery: AgentNotificationDelivery::new(),
                             agent_notification_clock: Instant::now(),
                             agent_hook_switches: None,
+                            agent_hook_write_loading: false,
+                            agent_hook_ui_status: String::new(),
                             agent_hook_switches_loading: false,
                             agent_hook_switches_request: 0,
                             agent_hook_switches_last_refresh: Instant::now()

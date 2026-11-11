@@ -397,8 +397,55 @@ impl RuntimeCliBridge {
     /// An older CLI/Host or malformed reply fails closed; no inference from
     /// a running Agent process may silently enable native notifications.
     pub fn agent_hook_settings_snapshot(&self) -> io::Result<HashMap<String, bool>> {
+        Ok(self.agent_hook_settings_versioned_snapshot()?.switches)
+    }
+
+    pub fn agent_hook_settings_versioned_snapshot(&self) -> io::Result<AgentHookSettingsSnapshot> {
         let response = self.desktop_settings_command(&[OsString::from("agent-hooks-get")])?;
-        parse_agent_hook_settings_snapshot(&response)
+        parse_versioned_agent_hook_settings(&response)
+    }
+
+    /// Writes exactly one Agent Hook via Host's atomic expectedRevision CAS.
+    /// Caller must supply an observed, unmodified Host snapshot. CLI also
+    /// compares the old Provider value before sending its two-field update.
+    pub fn agent_hook_settings_compare_and_set(
+        &self,
+        observed: &AgentHookSettingsSnapshot,
+        agent: &str,
+        enabled: bool,
+    ) -> io::Result<AgentHookSettingsSnapshot> {
+        if agent.is_empty()
+            || agent.len() > 64
+            || !agent.bytes().all(|c| {
+                c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, b'-' | b'_' | b'.')
+            })
+            || observed.revision < 0
+            || observed.revision == i64::MAX
+        {
+            return Err(io::Error::new(
+                ErrorKind::InvalidInput,
+                "Invalid Agent Hook CAS target",
+            ));
+        }
+        let response = self.desktop_settings_command(&[
+            OsString::from("agent-hooks-cas"),
+            OsString::from("--agent-id"),
+            OsString::from(agent),
+            OsString::from("--expected-revision"),
+            OsString::from(observed.revision.to_string()),
+            OsString::from("--expected-enabled"),
+            OsString::from(
+                observed
+                    .switches
+                    .get(agent)
+                    .copied()
+                    .unwrap_or(false)
+                    .to_string(),
+            ),
+            OsString::from("--enabled"),
+            OsString::from(enabled.to_string()),
+        ])?;
+        validate_agent_hook_cas_readback(observed, agent, enabled, &response)
     }
 
     pub fn git_favorites_for_workspace(&self, root: &Path) -> io::Result<Value> {
@@ -1589,14 +1636,20 @@ fn choose_runtime_dir(
 /// Settings CLI shares a transport but different verbs have intentionally
 /// different secret-free result contracts. Never interpret a pin-list array
 /// or pin-set projection as a full DesktopSettings snapshot.
-fn parse_agent_hook_settings_snapshot(response: &Value) -> io::Result<HashMap<String, bool>> {
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AgentHookSettingsSnapshot {
+    pub revision: i64,
+    pub switches: HashMap<String, bool>,
+}
+
+fn parse_versioned_agent_hook_settings(response: &Value) -> io::Result<AgentHookSettingsSnapshot> {
     let fields = response.as_object().ok_or_else(|| {
         io::Error::new(
             ErrorKind::InvalidData,
             "Host Agent Hooks reply is not an object",
         )
     })?;
-    if fields.len() != 2
+    if fields.len() != 3
         || response.get("kind").and_then(Value::as_str) != Some("agentHookSettings")
     {
         return Err(io::Error::new(
@@ -1604,6 +1657,11 @@ fn parse_agent_hook_settings_snapshot(response: &Value) -> io::Result<HashMap<St
             "Unexpected Host Hook response",
         ));
     }
+    let revision = response
+        .get("revision")
+        .and_then(Value::as_i64)
+        .filter(|revision| *revision >= 0 && *revision < i64::MAX)
+        .ok_or_else(|| io::Error::new(ErrorKind::InvalidData, "Host Hook revision missing"))?;
     let hooks = response
         .get("agentStatusHooks")
         .and_then(Value::as_object)
@@ -1629,12 +1687,55 @@ fn parse_agent_hook_settings_snapshot(response: &Value) -> io::Result<HashMap<St
             .ok_or_else(|| io::Error::new(ErrorKind::InvalidData, "Invalid Host Hook boolean"))?;
         parsed.insert(agent.clone(), enabled);
     }
-    Ok(parsed)
+    Ok(AgentHookSettingsSnapshot {
+        revision,
+        switches: parsed,
+    })
+}
+
+fn parse_agent_hook_settings_snapshot(response: &Value) -> io::Result<HashMap<String, bool>> {
+    Ok(parse_versioned_agent_hook_settings(response)?.switches)
+}
+
+fn validate_agent_hook_cas_readback(
+    before: &AgentHookSettingsSnapshot,
+    agent: &str,
+    enabled: bool,
+    response: &Value,
+) -> io::Result<AgentHookSettingsSnapshot> {
+    let after = parse_versioned_agent_hook_settings(response)?;
+    let mut expected = before.switches.clone();
+    if !expected.contains_key(agent) && expected.len() >= 64 {
+        return Err(io::Error::new(
+            ErrorKind::InvalidInput,
+            "Too many Agent Hooks",
+        ));
+    }
+    let is_noop = before.switches.get(agent).copied().unwrap_or(false) == enabled;
+    if !is_noop {
+        expected.insert(agent.to_owned(), enabled);
+    }
+    let next_revision = if is_noop {
+        before.revision
+    } else {
+        before
+            .revision
+            .checked_add(1)
+            .ok_or_else(|| io::Error::new(ErrorKind::InvalidInput, "Host Hook revision overflow"))?
+    };
+    if after.revision != next_revision || after.switches != expected {
+        return Err(io::Error::new(
+            ErrorKind::InvalidData,
+            "Host Agent Hook CAS readback mismatch",
+        ));
+    }
+    Ok(after)
 }
 
 fn validate_desktop_settings_response(verb: Option<&str>, response: &Value) -> io::Result<()> {
     let valid = match verb {
         Some("agent-hooks-get") => parse_agent_hook_settings_snapshot(response).is_ok(),
+        Some("agent-hooks-cas") => parse_versioned_agent_hook_settings(response).is_ok(),
         Some("pin-list") => response.is_array(),
         Some("pin-set") => response.is_object(),
         Some(verb) if verb.starts_with("favorites-") => {
@@ -1758,15 +1859,19 @@ mod tests {
     fn native_hook_settings_snapshot_is_strict_boolean_read_only_and_fail_closed() {
         let safe = serde_json::json!({
             "kind":"agentHookSettings",
+            "revision": 7,
             "agentStatusHooks":{"codex":true,"claude":false,"grok":true}
         });
         let parsed = parse_agent_hook_settings_snapshot(&safe).unwrap();
         assert_eq!(parsed.get("codex"), Some(&true));
         assert_eq!(parsed.get("claude"), Some(&false));
+        let versioned = parse_versioned_agent_hook_settings(&safe).unwrap();
+        assert_eq!(versioned.revision, 7);
+        assert_eq!(versioned.switches.get("codex"), Some(&true));
         assert!(!parsed.contains_key("unknown"));
         assert!(
             parse_agent_hook_settings_snapshot(&serde_json::json!({
-                "kind":"agentHookSettings","agentStatusHooks":{}
+                "kind":"agentHookSettings","revision":0,"agentStatusHooks":{}
             }))
             .unwrap()
             .is_empty(),
@@ -1783,6 +1888,28 @@ mod tests {
                 parse_agent_hook_settings_snapshot(&unsafe_reply).is_err(),
                 "unexpected Host response must not turn on Native Hook notifications"
             );
+        }
+    }
+
+    #[test]
+    fn agent_hook_cas_readback_cannot_confirm_stale_or_other_provider_changes() {
+        let before = AgentHookSettingsSnapshot {
+            revision: 17,
+            switches: HashMap::from([("codex".into(), false), ("claude".into(), true)]),
+        };
+        let confirmed = serde_json::json!({
+            "kind":"agentHookSettings","revision":18,
+            "agentStatusHooks":{"codex":true,"claude":true}
+        });
+        assert!(validate_agent_hook_cas_readback(&before, "codex", true, &confirmed).is_ok());
+        for bad in [
+            serde_json::json!({"kind":"agentHookSettings","revision":17,"agentStatusHooks":{"codex":true,"claude":true}}),
+            serde_json::json!({"kind":"agentHookSettings","revision":19,"agentStatusHooks":{"codex":true,"claude":true}}),
+            serde_json::json!({"kind":"agentHookSettings","revision":18,"agentStatusHooks":{"codex":false,"claude":true}}),
+            serde_json::json!({"kind":"agentHookSettings","revision":18,"agentStatusHooks":{"codex":true,"claude":false}}),
+            serde_json::json!({"kind":"agentHookSettings","revision":18,"agentStatusHooks":{"codex":true,"claude":true},"secret":"NOPE"}),
+        ] {
+            assert!(validate_agent_hook_cas_readback(&before, "codex", true, &bad).is_err());
         }
     }
 

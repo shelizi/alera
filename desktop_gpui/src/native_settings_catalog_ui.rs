@@ -1,11 +1,13 @@
 //! Classic Settings catalog presentation on the GPUI Kit workbench.
-//! This layer is deliberately inert: real Native controls remain in
-//! native_settings_ui.rs, and catalog previews never touch preferences/Host.
+//! Only reviewed, Host-backed rows are interactive. Most rows remain
+//! read-only; operational Agent Hook toggles use the versioned Native CLI
+//! bridge, never direct RuntimeStore access or speculative local writes.
 use super::*;
 use alera_gpui_desktop::native_i18n::{tr, UiLocale};
 use alera_gpui_desktop::settings_menu_catalog::{
     shared_setting_row_path, PreviewRow, SettingsSection,
 };
+use gpui_kit::component::switch::Switch;
 
 /// Fail-closed Host state for catalog rows backed by the shared Rust
 /// snapshot. Until the first snapshot installs, a row may only report that
@@ -412,6 +414,58 @@ impl Workbench {
             .into_any_element()
     }
 
+    /// Operational Hook toggles are not portable DesktopSettings scalars:
+    /// Classic stores them in Host runtimeSettings with a transaction
+    /// revision. They stay inert until a versioned Host snapshot is present.
+    fn render_agent_hook_toggle(
+        &self,
+        row: &PreviewRow,
+        agent: &'static str,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let Some(snapshot) = self.agent_hook_switches.as_ref() else {
+            return self.render_host_state_row(row);
+        };
+        if self.agent_hook_write_loading {
+            return div()
+                .p_3()
+                .bg(rgb(PANEL))
+                .text_sm()
+                .text_color(rgb(MUTED))
+                .child(format!(
+                    "{} — saving through Runtime Host…",
+                    tr(self.settings_menu_locale, row.title)
+                ))
+                .into_any_element();
+        }
+        let enabled = snapshot.switches.get(agent).copied().unwrap_or(false);
+        div()
+            .p_3()
+            .bg(rgb(PANEL))
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                Switch::new(format!("agent-hook-{agent}"))
+                    .label(tr(self.settings_menu_locale, row.title))
+                    .checked(enabled)
+                    .on_change(cx.listener(move |view, next, _, cx| {
+                        view.change_agent_hook_setting(agent, *next, cx);
+                    })),
+            )
+            .child(div().text_xs().text_color(rgb(MUTED)).child(
+                if self.agent_hook_ui_status.is_empty() {
+                    format!(
+                        "Runtime Host revision {} · changes use compare-and-set",
+                        snapshot.revision
+                    )
+                } else {
+                    self.agent_hook_ui_status.clone()
+                },
+            ))
+            .into_any_element()
+    }
+
     fn render_connected_settings_row(
         &self,
         section: &'static str,
@@ -421,6 +475,15 @@ impl Workbench {
     ) -> Option<gpui::AnyElement> {
         if section == "projects" && row.title == "Projects" {
             return Some(self.render_project_management_setting(cx));
+        }
+        if section == "agents" {
+            match row.title {
+                "Codex Hooks" => return Some(self.render_agent_hook_toggle(row, "codex", cx)),
+                "Claude Code Hooks" => {
+                    return Some(self.render_agent_hook_toggle(row, "claude", cx));
+                }
+                _ => {}
+            }
         }
         let path = shared_setting_row_path(section, row.title)?;
         if self.shared_catalog_state() != CatalogHostState::Ready {
