@@ -51,10 +51,20 @@ pub struct HistorySyncAccount {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HistoryArchiveSummary {
+    pub sessions: u64,
+    pub versions: u64,
+    pub truncated: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HistorySyncSnapshot {
     pub revision: i64,
     pub history_sync: HistorySyncPolicy,
     pub accounts: Vec<HistorySyncAccount>,
+    #[serde(default)]
+    pub archive_summary: Option<HistoryArchiveSummary>,
 }
 
 impl HistorySyncSnapshot {
@@ -215,11 +225,13 @@ mod tests {
             "accounts": [
                 {"provider":"codex","accountId":"default","label":"Codex Default","supported":true},
                 {"provider":"claude","accountId":"default","label":"Claude Default","supported":true}
-            ]
+            ],
+            "archiveSummary":{"sessions":1,"versions":2,"truncated":false}
         })).unwrap();
         assert_eq!(snapshot.history_sync.mode, HistorySyncMode::Groups);
         assert_eq!(snapshot.group_for(&snapshot.accounts[0]), "team");
         assert_eq!(snapshot.group_for(&snapshot.accounts[1]), "personal");
+        assert_eq!(snapshot.archive_summary.as_ref().unwrap().versions, 2);
         assert!(serde_json::from_value::<HistorySyncSnapshot>(json!({
             "revision": 1, "historySync": {"mode":"all"}, "accounts":[], "secret":"no"
         }))

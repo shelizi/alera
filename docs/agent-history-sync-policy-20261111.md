@@ -48,6 +48,31 @@ does not erase any previously copied history.
   an exact complete-line prefix is reported as stale in Host warnings.
   The mirror never overwrites either account's native transcript.
 
+## Private immutable updates for continued conversations (2026-11-12)
+
+- After a transcript was copied once, an append-only, quiet source that has
+  continued growing is classified as stale. The native target remains
+  untouched: a live or resumed provider session may hold that file open.
+- The Host saves the full newer version as immutable, content-addressed JSONL
+  under its private `agent-history-snapshots/` directory, outside Codex,
+  Claude and AGY account directories. Distinct source/target account pairs
+  and session paths receive distinct hashed namespaces.
+- Repeated scans of the same content deduplicate. Storage is limited to
+  16 immutable versions up to 16 MiB each per mirrored session; versions are
+  never deleted automatically. Capacity and write errors appear in Host logs.
+- A private snapshot is **not** an automatically imported provider session,
+  and there is **not yet** a GPUI history viewer for these versions. Native
+  Resume can still see an old copy; native cross-account continuation needs
+  separate provider-specific acceptance tests.
+- Conversation payloads can contain secrets even though authentication files
+  are never copied. Snapshots remain on the private local Runtime Host.
+
+- `alera runtime --json history-sync get` now exposes bounded, metadata-only
+  `archiveSummary` counts (sessions, versions, truncated) after Host auth; no
+  raw conversation content or profile paths enter this settings response.
+- GPUI History Sync Settings displays these Host-owned counts. A real history
+  viewer and native resume handoff are still separate release gates.
+
 ## Explicit limitations / gates
 
 1. Copying a transcript is **not proof** native CLI resume will accept it on a

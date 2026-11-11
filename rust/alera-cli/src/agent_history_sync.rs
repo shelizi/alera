@@ -3,14 +3,16 @@
 //! This only mirrors session files; it never copies credentials or settings.
 
 use std::fs::{self, OpenOptions};
-use std::io::{ErrorKind, Write};
+use std::io::{self, ErrorKind, Write};
 use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
+use crate::agent_history_snapshots::{preserve_version, ArchiveResult};
 use alera_core::runtime::{
     RuntimeAgentHistorySyncMode, RuntimeAgentHistorySyncSettings, RuntimeAgentQuotaSettings,
     RuntimeStore,
 };
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 const INTERVAL: Duration = Duration::from_secs(3 * 60);
@@ -32,9 +34,15 @@ struct MirrorStats {
     skipped: usize,
     conflicts: usize,
     stale: usize,
+    archived: usize,
+    archive_capacity: usize,
+    archive_errors: usize,
 }
 
-pub(crate) fn spawn(runtime_store: RuntimeStore) -> tokio::task::JoinHandle<()> {
+pub(crate) fn spawn(
+    runtime_store: RuntimeStore,
+    snapshot_root: PathBuf,
+) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(INTERVAL);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -51,15 +59,19 @@ pub(crate) fn spawn(runtime_store: RuntimeStore) -> tokio::task::JoinHandle<()> 
                 continue;
             }
             let policy = settings.history_sync;
+            let snapshot_root = snapshot_root.clone();
             match tokio::task::spawn_blocking(move || {
-                mirror_accounts(&policy, &accounts, QUIET_PERIOD)
+                mirror_accounts_with_snapshots(&policy, &accounts, QUIET_PERIOD, Some(&snapshot_root))
             })
             .await
             {
-                Ok(stats) if stats.conflicts > 0 || stats.stale > 0 => tracing::warn!(
+                Ok(stats) if stats.conflicts > 0 || stats.stale > 0 || stats.archive_errors > 0 || stats.archive_capacity > 0 => tracing::warn!(
                     conflicts = stats.conflicts,
                     stale = stats.stale,
-                    "agent history sync kept conflicting or stale transcripts unchanged"
+                    archived = stats.archived,
+                    archive_capacity = stats.archive_capacity,
+                    archive_errors = stats.archive_errors,
+                    "agent history sync preserved native files and archived stale transcript versions"
                 ),
                 Err(_) => tracing::warn!("agent history sync worker failed"),
                 _ => {}
@@ -116,10 +128,20 @@ async fn resolve_accounts(settings: &RuntimeAgentQuotaSettings) -> Vec<HistoryAc
     // Never guess a Gemini directory and accidentally copy its credentials.
     accounts
 }
+#[cfg(test)]
 fn mirror_accounts(
     policy: &RuntimeAgentHistorySyncSettings,
     accounts: &[HistoryAccount],
     quiet: Duration,
+) -> MirrorStats {
+    mirror_accounts_with_snapshots(policy, accounts, quiet, None)
+}
+
+fn mirror_accounts_with_snapshots(
+    policy: &RuntimeAgentHistorySyncSettings,
+    accounts: &[HistoryAccount],
+    quiet: Duration,
+    snapshot_root: Option<&Path>,
 ) -> MirrorStats {
     let mut stats = MirrorStats::default();
     let mut budget = MAX_FILES_PER_PASS;
@@ -133,7 +155,14 @@ fn mirror_accounts(
             {
                 continue;
             }
-            mirror_pair(source, target, quiet, &mut budget, &mut stats);
+            mirror_pair(
+                source,
+                target,
+                quiet,
+                snapshot_root,
+                &mut budget,
+                &mut stats,
+            );
         }
     }
     stats
@@ -143,6 +172,7 @@ fn mirror_pair(
     source: &HistoryAccount,
     target: &HistoryAccount,
     quiet: Duration,
+    snapshot_root: Option<&Path>,
     budget: &mut usize,
     stats: &mut MirrorStats,
 ) {
@@ -200,6 +230,24 @@ fn mirror_pair(
                     } else if existing.len() < original.len() {
                         if is_complete_line_prefix(&target_file, &path) {
                             stats.stale += 1;
+                            if let Some(root) = snapshot_root {
+                                match archive_stale_copy(
+                                    root,
+                                    source,
+                                    target,
+                                    &child,
+                                    &path,
+                                    &target_file,
+                                    quiet,
+                                ) {
+                                    Ok(Some(ArchiveResult::Created)) => stats.archived += 1,
+                                    Ok(Some(ArchiveResult::AlreadyPresent)) | Ok(None) => {}
+                                    Ok(Some(ArchiveResult::CapacityReached)) => {
+                                        stats.archive_capacity += 1
+                                    }
+                                    Err(_) => stats.archive_errors += 1,
+                                }
+                            }
                         } else {
                             stats.conflicts += 1;
                         }
@@ -219,6 +267,89 @@ fn mirror_pair(
             }
         }
     }
+}
+
+/// Preserve the newest complete, quiet source in Host-private version storage.
+/// The provider's target JSONL is only read. Never change native session files
+/// because an unrelated CLI may still be holding a resume handle to that path.
+fn archive_stale_copy(
+    archive_root: &Path,
+    source: &HistoryAccount,
+    target: &HistoryAccount,
+    relative: &Path,
+    source_file: &Path,
+    native_target: &Path,
+    quiet: Duration,
+) -> io::Result<Option<ArchiveResult>> {
+    if archive_root.starts_with(&source.history_root)
+        || archive_root.starts_with(&target.history_root)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Archive overlaps provider history",
+        ));
+    }
+
+    let before = fs::symlink_metadata(source_file)?;
+    let target_before = fs::symlink_metadata(native_target)?;
+    if !before.file_type().is_file()
+        || !target_before.file_type().is_file()
+        || before.len() > MAX_FILE_BYTES
+        || before.len() <= target_before.len()
+    {
+        return Ok(None);
+    }
+    let quiet_enough = before
+        .modified()
+        .ok()
+        .and_then(|time| SystemTime::now().duration_since(time).ok())
+        .is_some_and(|age| age >= quiet);
+    if !quiet_enough {
+        return Ok(None);
+    }
+
+    let full = fs::read(source_file)?;
+    let prefix = fs::read(native_target)?;
+    let after = fs::symlink_metadata(source_file)?;
+    let target_after = fs::symlink_metadata(native_target)?;
+    if full.len() as u64 != before.len()
+        || after.len() != before.len()
+        || after.modified().ok() != before.modified().ok()
+        || target_after.len() != target_before.len()
+        || target_after.modified().ok() != target_before.modified().ok()
+        || prefix.is_empty()
+        || prefix.last() != Some(&b'\n')
+        || full.last() != Some(&b'\n')
+        || !full.starts_with(&prefix)
+    {
+        return Ok(None);
+    }
+
+    // Hash the complete scoped identity to avoid filesystem path traversal
+    // and keep private account directory names out of snapshot filenames.
+    let mut identity = Sha256::new();
+    let relative_path = relative.to_string_lossy();
+    for part in [
+        source.provider.as_bytes(),
+        source.account_id.as_bytes(),
+        target.account_id.as_bytes(),
+        relative_path.as_bytes(),
+    ] {
+        identity.update((part.len() as u32).to_le_bytes());
+        identity.update(part);
+    }
+    let identity = hex::encode(identity.finalize());
+    let version = hex::encode(Sha256::digest(&full));
+    let metadata = serde_json::to_vec(&serde_json::json!({
+        "provider": source.provider,
+        "sourceAccount": source.account_id,
+        "targetAccount": target.account_id,
+        "relativePath": relative.to_string_lossy(),
+        "format": "native-jsonl",
+        "note": "Alera private snapshot; never import into another Agent login without verification"
+    }))
+    .map_err(io::Error::other)?;
+    preserve_version(archive_root, &identity, &version, &full, &metadata).map(Some)
 }
 
 /// Only classify an already existing transcript as a stale mirror if both
@@ -461,6 +592,87 @@ mod tests {
         assert_eq!(stats.copied, 0);
         assert_eq!(stats.stale, 1);
         assert_eq!(fs::read(target).unwrap(), original);
+    }
+
+    #[test]
+    fn stale_native_copy_is_preserved_while_new_versions_are_archived_once() {
+        let (temp, accounts) = fixture();
+        let policy = RuntimeAgentHistorySyncSettings::default();
+        let archive = temp.path().join("host-snapshots");
+        assert_eq!(
+            mirror_accounts(&policy, &accounts, Duration::ZERO).copied,
+            1
+        );
+        let source = accounts[0].history_root.join("2026/11/first.jsonl");
+        let target = accounts[1].history_root.join("2026/11/first.jsonl");
+        let previous = fs::read(&target).unwrap();
+        let mut new_version = previous.clone();
+        new_version.extend_from_slice(b"{\"type\":\"followup\"}\n");
+        fs::write(&source, &new_version).unwrap();
+
+        let updated =
+            mirror_accounts_with_snapshots(&policy, &accounts, Duration::ZERO, Some(&archive));
+        assert_eq!(updated.stale, 1);
+        assert_eq!(updated.archived, 1);
+        assert_eq!(updated.archive_errors, 0);
+        assert_eq!(
+            fs::read(&target).unwrap(),
+            previous,
+            "never overwrite a provider session"
+        );
+        let bucket = fs::read_dir(&archive)
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        let snapshots = fs::read_dir(&bucket)
+            .unwrap()
+            .map(|v| v.unwrap().path())
+            .collect::<Vec<_>>();
+        assert_eq!(snapshots.len(), 2, "one metadata file and one version");
+        let archived = snapshots
+            .into_iter()
+            .find(|p| p.extension().is_some_and(|ext| ext == "jsonl"))
+            .unwrap();
+        assert_eq!(fs::read(archived).unwrap(), new_version);
+
+        let again =
+            mirror_accounts_with_snapshots(&policy, &accounts, Duration::ZERO, Some(&archive));
+        assert_eq!(again.stale, 1);
+        assert_eq!(again.archived, 0, "content-addressing must dedupe");
+    }
+
+    #[test]
+    fn never_archive_divergent_or_active_native_transcripts() {
+        let (temp, accounts) = fixture();
+        let archive = temp.path().join("host-snapshots");
+        let policy = RuntimeAgentHistorySyncSettings::default();
+        let source = accounts[0].history_root.join("2026/11/first.jsonl");
+        let target = accounts[1].history_root.join("2026/11/first.jsonl");
+        fs::create_dir_all(target.parent().unwrap()).unwrap();
+        fs::write(&target, b"{\"type\":\"different\"}\n").unwrap();
+        let divergent =
+            mirror_accounts_with_snapshots(&policy, &accounts, Duration::ZERO, Some(&archive));
+        assert_eq!(divergent.archived, 0);
+        assert!(!archive.exists());
+        fs::remove_file(&target).unwrap();
+        assert_eq!(
+            mirror_accounts(&policy, &accounts, Duration::ZERO).copied,
+            1
+        );
+        let old = fs::read(&source).unwrap();
+        let mut new_content = old.clone();
+        new_content.extend_from_slice(b"{\"type\":\"more\"}\n");
+        fs::write(&source, new_content).unwrap();
+        let active = mirror_accounts_with_snapshots(
+            &policy,
+            &accounts,
+            Duration::from_secs(3600),
+            Some(&archive),
+        );
+        assert_eq!(active.archived, 0);
+        assert!(!archive.exists());
     }
 
     #[test]

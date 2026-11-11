@@ -5,6 +5,7 @@ use alera_core::runtime::{RuntimeAgentHistorySyncMode, RuntimeAgentQuotaSettings
 use serde::Serialize;
 use serde_json::{json, Value};
 
+use crate::agent_history_snapshots::summarize_private_versions;
 use crate::cli::{RuntimeDirArgs, RuntimeHistorySyncAction, RuntimeHistorySyncModeArg};
 use crate::runtime_host_client::RuntimeHostRpcClient;
 use crate::{print_error, print_value, runtime_dir};
@@ -137,12 +138,18 @@ pub(crate) async fn run(
         Err(error) => return print_error(error),
     };
     let catalog = accounts(&settings);
+    let archive_summary = summarize_private_versions(
+        &runtime_dir(runtime).join("agent-history-snapshots"),
+    )
+    .ok()
+    .map(|info| json!({"sessions": info.sessions, "versions": info.versions, "truncated": info.truncated}));
     if let RuntimeHistorySyncAction::Get = action {
         print_value(
             &json!({
                 "revision": revision,
                 "historySync": settings.history_sync,
                 "accounts": catalog,
+                "archiveSummary": archive_summary,
             }),
             json_output,
             "Runtime Host shared history policy loaded",
@@ -202,6 +209,7 @@ pub(crate) async fn run(
             "revision": response["revision"],
             "historySync": wanted,
             "accounts": catalog,
+            "archiveSummary": archive_summary,
         }),
         json_output,
         "Runtime Host history sync settings saved",

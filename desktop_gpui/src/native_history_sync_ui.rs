@@ -200,6 +200,18 @@ impl Workbench {
                     .child("Connect an existing Runtime Host and click Refresh. No local fallback will be written."))
                 .into_any_element();
         };
+        if let Some(archive) = &snapshot.archive_summary {
+            content = content.child(div().text_xs().text_color(rgb(MUTED)).child(format!(
+                "Host-private updated history snapshots: {} sessions, {} versions{}",
+                archive.sessions,
+                archive.versions,
+                if archive.truncated {
+                    " (limited scan)"
+                } else {
+                    ""
+                }
+            )));
+        }
         let modes = [
             (
                 HistorySyncMode::All,
@@ -352,7 +364,7 @@ impl Workbench {
         }
         content
             .child(div().text_xs().text_color(rgb(MUTED)).child(
-                "Only Codex/Claude file mirroring is currently enabled. Antigravity history transfer awaits provider verification. Copying a file does not guarantee native cross-account Resume.",
+                "Codex/Claude share quiet native transcripts. Continued conversations are archived as private Alera snapshots without overwriting native files; snapshots may contain sensitive chat text. AGY mirroring and cross-account Resume need verification.",
             ))
             .into_any_element()
     }

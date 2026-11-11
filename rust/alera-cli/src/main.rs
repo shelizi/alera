@@ -1,5 +1,6 @@
 mod agent_account_environment;
 mod agent_descriptor_export;
+mod agent_history_snapshots;
 mod agent_history_sync;
 mod agent_profile_commands;
 mod agent_profile_input;
