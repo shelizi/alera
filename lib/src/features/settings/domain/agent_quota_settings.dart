@@ -121,6 +121,44 @@ class const AgentQuotaEnvironmentSettings({
       );
 }
 
+/// History synchronization only shares native history within one provider.
+/// Credentials and running-session state are never included.
+@MappableEnum()
+enum AgentHistorySyncMode { all, separate, groups }
+
+@MappableClass()
+class const AgentHistorySyncSettings({
+  this.mode = AgentHistorySyncMode.all,
+  this.accountGroups = const <String, String>{},
+}) with AgentHistorySyncSettingsMappable {
+  final AgentHistorySyncMode mode;
+
+  /// Group names are scoped by provider; keys are `provider:accountId`.
+  /// An unassigned account stays separate when mode == groups.
+  final Map<String, String> accountGroups;
+
+  static const AgentHistorySyncSettings defaults = AgentHistorySyncSettings();
+
+  bool shouldSync(String provider, String sourceAccount, String targetAccount) {
+    if (sourceAccount == targetAccount ||
+        !const <String>{'codex', 'claude', 'agy'}.contains(provider)) {
+      return false;
+    }
+    return switch (mode) {
+      AgentHistorySyncMode.all => true,
+      AgentHistorySyncMode.separate => false,
+      AgentHistorySyncMode.groups =>
+        (accountGroups['$provider:$sourceAccount']?.trim().isNotEmpty ??
+                false) &&
+            accountGroups['$provider:$sourceAccount']?.trim() ==
+                accountGroups['$provider:$targetAccount']?.trim(),
+    };
+  }
+
+  factory fromJson(Map<String, Object?> json) =>
+      AgentHistorySyncSettingsMapper.fromMap(Map<String, dynamic>.from(json));
+}
+
 @MappableClass()
 class const AgentQuotaHostSettings({
   this.enabledProviders = AgentQuotaProviderId.values,
@@ -131,6 +169,7 @@ class const AgentQuotaHostSettings({
   this.selectedClaudeProfile = 'default',
   this.codexProfiles = const <CodexQuotaProfileSettings>[],
   this.selectedCodexProfile = 'default',
+  this.historySync = AgentHistorySyncSettings.defaults,
   this.environment = AgentQuotaEnvironmentSettings.defaults,
   this.unpinnedQuotaKeys = const <String>[],
 }) with AgentQuotaHostSettingsMappable {
@@ -143,6 +182,7 @@ class const AgentQuotaHostSettings({
   final String selectedClaudeProfile;
   final List<CodexQuotaProfileSettings> codexProfiles;
   final String selectedCodexProfile;
+  final AgentHistorySyncSettings historySync;
   final AgentQuotaEnvironmentSettings environment;
 
   /// Quotas hidden from the status bar (still visible in the overview panel).
