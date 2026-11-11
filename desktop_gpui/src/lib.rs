@@ -6,6 +6,7 @@ pub mod agent_profiles;
 pub mod agent_quota;
 mod agent_runtime_bridge;
 pub mod agent_status_notifications;
+pub mod agent_windows_notifications;
 pub mod edition;
 pub mod editor;
 pub mod editor_search;

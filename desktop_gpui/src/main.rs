@@ -23,6 +23,11 @@ use alera_gpui_desktop::agent_profiles::{
     matching_agent_handle, AgentProfileRow, LaunchedAgentTab,
 };
 use alera_gpui_desktop::agent_quota::QuotaSnapshot;
+use alera_gpui_desktop::agent_status_notifications::{
+    validated_notice_target, AgentNotice, AgentNotificationDelivery, AgentNotificationPolicy,
+};
+#[cfg(windows)]
+use alera_gpui_desktop::agent_windows_notifications::WindowsAgentToastPresenter;
 use alera_gpui_desktop::edition::NATIVE_APP_NAME;
 use alera_gpui_desktop::editor::EditorDraftStore;
 use alera_gpui_desktop::editor_tabs::{EditorTabs, SaveAllReport, MAX_EDITOR_TABS};
@@ -532,6 +537,13 @@ struct Workbench {
     /// Prevent an async inventory started before a status push from
     /// resurrecting stale Agent Hook state after the push arrives.
     agent_presence_event_generation: u64,
+    /// Host events and inventories share one delivery rule engine. No OS
+    /// toast is emitted until explicit Native-only ownership is confirmed.
+    agent_notification_delivery: AgentNotificationDelivery,
+    agent_notification_clock: Instant,
+    #[cfg(windows)]
+    agent_windows_toast: WindowsAgentToastPresenter,
+    agent_toast_activation: Option<AgentNotice>,
     terminal_read_loading: Option<String>,
     terminal_split_read_loading: bool,
     terminal_poll: TerminalPollGate,
@@ -4358,12 +4370,14 @@ impl Workbench {
                         if view.terminals.apply_session_list(generation, sessions) {
                             if was_disconnected && !view.terminals.sessions.is_empty() {
                                 view.terminal_poll.reset();
+                                view.agent_notification_delivery.on_host_reconnected();
                             }
                             // Never fully reconcile/focus tabs on a periodic
                             // Host status refresh. Change only the Hook chip
                             // metadata; pane order, pins and user focus stay.
                             view.mixed_tabs
                                 .refresh_agent_statuses(&view.terminals.sessions);
+                            view.observe_agent_notification_status();
                             view.restore_terminal_layout_from_host(cx);
                             view.refresh_host_tab_pins(cx);
                             if let Some(created) = view
@@ -4433,6 +4447,7 @@ impl Workbench {
                         // erase the old VT preview. The Host may restart
                         // and re-expose the same running Session later.
                         view.terminals.note_session_list_failure();
+                        view.agent_notification_delivery.on_host_reconnected();
                         // A stale Host list cannot substantiate a live
                         // Working/Waiting/Blocked/Done status dot.
                         view.mixed_tabs.refresh_agent_statuses(&[]);
@@ -6114,6 +6129,121 @@ impl Workbench {
         .detach();
     }
 
+    fn native_agent_notification_policy(&self) -> AgentNotificationPolicy {
+        // The runtime Host is the only settings owner. Missing, stale or
+        // incompatible settings fail closed, never invent an opt-in.
+        let enabled = self.settings_shared_error.is_none()
+            && self
+                .settings_extra_values
+                .get("agents.agentStatusNotificationsEnabled")
+                .and_then(serde_json::Value::as_bool)
+                == Some(true);
+        let include_finished = self
+            .settings_extra_values
+            .get("agents.agentStatusFinishedNotificationsEnabled")
+            .and_then(serde_json::Value::as_bool)
+            == Some(true);
+        let has_hook = !self.terminals.session_list_is_stale()
+            && self
+                .terminals
+                .sessions
+                .iter()
+                .any(|s| s.running && s.agent_type.is_some() && s.agent_state.is_some());
+        // Classic currently owns production Toast delivery. Only an
+        // explicitly isolated *debug* process may exercise the Windows
+        // presenter; release builds can never silently duplicate Classic.
+        let manual_test_owner = cfg!(all(windows, debug_assertions))
+            && std::env::var_os("ALERA_GPUI_AGENT_TOAST_EXCLUSIVE_TEST")
+                == Some(std::ffi::OsString::from("1"));
+        AgentNotificationPolicy {
+            hooks_enabled: has_hook,
+            notifications_enabled: enabled,
+            include_finished,
+            native_owns_delivery: manual_test_owner,
+        }
+    }
+
+    fn observe_agent_notification_status(&mut self) {
+        let policy = self.native_agent_notification_policy();
+        let now_ms = self.agent_notification_clock.elapsed().as_millis() as u64;
+        self.agent_notification_delivery
+            .observe(&self.terminals.sessions, now_ms, policy);
+    }
+
+    fn flush_agent_notification_delivery(&mut self, cx: &mut Context<Self>) {
+        self.observe_agent_notification_status();
+        let policy = self.native_agent_notification_policy();
+        let now_ms = self.agent_notification_clock.elapsed().as_millis() as u64;
+        let notices =
+            self.agent_notification_delivery
+                .drain(&self.terminals.sessions, now_ms, policy);
+        if !notices.is_empty() {
+            #[cfg(windows)]
+            if let Err(error) = self.agent_windows_toast.show(&notices) {
+                // Do not report a toast as delivered when Windows rejects
+                // Native AUMID registration/notification permission.
+                self.agent_status = format!("Windows Agent notice unavailable: {error}");
+                cx.notify();
+            }
+        }
+        #[cfg(windows)]
+        if let Some(clicked) = self.agent_windows_toast.take_activation() {
+            self.agent_toast_activation = Some(clicked);
+            cx.notify();
+        }
+    }
+
+    fn activate_agent_notice(
+        &mut self,
+        notice: AgentNotice,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // Clicking a WinRT notification never gives the Host permission to
+        // start/terminate a PTY. Cross-workspace changes must use the normal
+        // confirmed selection path; fail closed until it is implemented.
+        if self.terminals.session_list_is_stale()
+            || validated_notice_target(&notice, &self.terminals.sessions).is_none()
+        {
+            self.terminals.status = "Agent notice is stale; refresh Host sessions".into();
+            cx.notify();
+            return;
+        }
+        let current_workspace =
+            select_registered_host_workspace(self.model.root(), &self.mcp_host_workspaces).ok();
+        if current_workspace.as_deref() != Some(notice.workspace_id.as_str()) {
+            self.terminals.status =
+                "Agent is in another workspace; open it before attaching the notice".into();
+            cx.notify();
+            return;
+        }
+        if !self.terminals.tabs.iter().any(|tab| {
+            tab.handle == notice.session_id
+                && tab.workspace_id == notice.workspace_id
+                && tab.tab_id == notice.tab_id
+        }) {
+            // Only opens a local view of a previously verified running Host
+            // session. Native never creates/starts a Shell here.
+            self.select_terminal(notice.session_id.clone(), cx);
+            self.sync_mixed_tabs(cx);
+        }
+        let target = self.mixed_tabs.entries().iter().find_map(|tab| {
+            let WorkbenchTabIdentity::Host(host) = &tab.identity else {
+                return None;
+            };
+            (host.handle == notice.session_id
+                && host.workspace_id() == notice.workspace_id
+                && host.tab_id() == notice.tab_id)
+                .then(|| tab.identity.clone())
+        });
+        if let Some(id) = target {
+            self.focus_mixed_tab(&id, window, cx);
+        } else {
+            self.terminals.status = "Agent Host tab is no longer available".into();
+            cx.notify();
+        }
+    }
+
     fn pump_native_terminal_stream(&mut self, cx: &mut Context<Self>) {
         let live_views: Vec<_> = self
             .terminals
@@ -6256,6 +6386,7 @@ impl Workbench {
                         if self.terminals.apply_agent_presence_changes(&changes) {
                             self.mixed_tabs
                                 .refresh_agent_statuses(&self.terminals.sessions);
+                            self.observe_agent_notification_status();
                             repaint = true;
                         }
                         // Never auto-attach or create any Host session on
@@ -6286,6 +6417,7 @@ impl Workbench {
             stream.note_ui_parse(parsed_bytes, parse_started.elapsed());
         }
         if disconnected {
+            self.agent_notification_delivery.on_host_reconnected();
             self.terminal_stream = None;
             self.terminals.invalidate_stream_observers();
             self.terminal_stream_retry.failed(Instant::now());
@@ -6436,6 +6568,7 @@ impl Workbench {
                     ) {
                         view.refresh_terminals(cx);
                     }
+                    view.flush_agent_notification_delivery(cx);
                 })
                 .is_err()
             {
@@ -6449,6 +6582,19 @@ impl Workbench {
 impl Render for Workbench {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_mixed_tabs(cx);
+        if let Some(notice) = self.agent_toast_activation.take() {
+            // Toast clicks arrive on a WinRT callback thread. Resolve them
+            // on GPUI's actual Window context, after layout is available;
+            // verify Host session identity again before focusing anything.
+            let owner = cx.entity().downgrade();
+            window.defer(cx, move |window, cx| {
+                if let Some(workbench) = owner.upgrade() {
+                    workbench.update(cx, |view, cx| {
+                        view.activate_agent_notice(notice, window, cx);
+                    });
+                }
+            });
+        }
         if self.settings_section.is_some() && !self.settings_kit_dialog_open {
             // MCP open_settings has no Window parameter. Defer Kit overlay
             // creation until after the Workbench render to avoid re-entering
@@ -10294,6 +10440,11 @@ fn main() {
                             terminal_layout_restore: None,
                             terminal_list_loading: false,
                             agent_presence_event_generation: 0,
+                            agent_notification_delivery: AgentNotificationDelivery::new(),
+                            agent_notification_clock: Instant::now(),
+                            #[cfg(windows)]
+                            agent_windows_toast: WindowsAgentToastPresenter::new(),
+                            agent_toast_activation: None,
                             terminal_read_loading: None,
                             terminal_split_read_loading: false,
                             terminal_poll: TerminalPollGate::default(),

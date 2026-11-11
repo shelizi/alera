@@ -203,6 +203,116 @@ impl AgentNoticeCoalescer {
     }
 }
 
+/// Native must not silently take over Classic's Windows notifications.
+/// Caller must obtain an explicit exclusive Host delivery claim before
+/// passing `native_owns_delivery=true`. Without it the policy fails closed.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct AgentNotificationPolicy {
+    pub hooks_enabled: bool,
+    pub notifications_enabled: bool,
+    pub include_finished: bool,
+    pub native_owns_delivery: bool,
+}
+
+impl AgentNotificationPolicy {
+    pub fn allowed(self) -> bool {
+        self.hooks_enabled && self.notifications_enabled && self.native_owns_delivery
+    }
+}
+
+/// Revalidates a notice against the *current* authenticated Host inventory;
+/// the handle alone is not enough because it may have been recycled.
+/// Deliberately allows a state change from Waiting to Done: clicking a
+/// historical notice may still focus the same live Agent, not a new one.
+pub fn validated_notice_target<'a>(
+    notice: &AgentNotice,
+    sessions: &'a [TerminalSession],
+) -> Option<&'a TerminalSession> {
+    sessions.iter().find(|session| {
+        session.running
+            && session.handle == notice.session_id
+            && session.workspace_id == notice.workspace_id
+            && session.tab_id == notice.tab_id
+            && session.agent_type.as_deref() == Some(notice.agent_type.as_str())
+    })
+}
+
+/// Pure H5 delivery boundary. Keeps Classic-like transition history even
+/// while notifications are disabled or owned by Classic; pending batches
+/// are discarded on revocation, Agent recovery or Host identity change.
+#[derive(Default)]
+pub struct AgentNotificationDelivery {
+    tracker: AgentNotificationTracker,
+    coalescer: AgentNoticeCoalescer,
+}
+
+impl AgentNotificationDelivery {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn observe(
+        &mut self,
+        sessions: &[TerminalSession],
+        now_ms: u64,
+        policy: AgentNotificationPolicy,
+    ) {
+        let allowed = policy.allowed();
+        let notices = self
+            .tracker
+            .observe(sessions, now_ms, policy.include_finished, allowed);
+        if !allowed {
+            self.coalescer.clear();
+            return;
+        }
+        self.coalescer.pending.retain(|_, notice| {
+            validated_notice_target(notice, sessions).is_some_and(|current| {
+                current.agent_state == Some(notice.state)
+                    && !(notice.state == AgentActivityState::Done && current.interrupted)
+            })
+        });
+        if self.coalescer.pending.is_empty() {
+            self.coalescer.first_enqueue_ms = None;
+            self.coalescer.last_enqueue_ms = None;
+        }
+        self.coalescer.enqueue(notices, now_ms);
+    }
+
+    pub fn drain(
+        &mut self,
+        sessions: &[TerminalSession],
+        now_ms: u64,
+        policy: AgentNotificationPolicy,
+    ) -> Vec<AgentNotice> {
+        if !policy.allowed() {
+            self.coalescer.clear();
+            return Vec::new();
+        }
+        self.coalescer
+            .drain_if_ready(now_ms)
+            .into_iter()
+            .filter(|notice| {
+                validated_notice_target(notice, sessions).is_some_and(|current| {
+                    current.agent_state == Some(notice.state)
+                        && !(notice.state == AgentActivityState::Done && current.interrupted)
+                        && (notice.state != AgentActivityState::Done || policy.include_finished)
+                })
+            })
+            .collect()
+    }
+
+    pub fn clear(&mut self) {
+        self.coalescer.clear();
+    }
+
+    /// Reconnecting to an existing Host must not replay already-waiting
+    /// Agents as new attention. Keep cooldown history, reset only baseline.
+    pub fn on_host_reconnected(&mut self) {
+        self.coalescer.clear();
+        self.tracker.initialized = false;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -400,5 +510,133 @@ mod tests {
         );
         coalescer.discard("h1");
         assert!(coalescer.drain_if_ready(12_000).is_empty());
+    }
+
+    #[test]
+    fn attention_delivery_requires_explicit_native_ownership_and_host_permission() {
+        let mut delivery = AgentNotificationDelivery::new();
+        let working = session("h1", "t1", Some(AgentActivityState::Working));
+        let waiting = session("h1", "t1", Some(AgentActivityState::Waiting));
+        let owner = AgentNotificationPolicy {
+            hooks_enabled: true,
+            notifications_enabled: true,
+            include_finished: false,
+            native_owns_delivery: true,
+        };
+        let not_owner = AgentNotificationPolicy {
+            native_owns_delivery: false,
+            ..owner
+        };
+        delivery.observe(&[working.clone()], 0, owner);
+        delivery.observe(&[waiting.clone()], 1_000, not_owner);
+        assert!(
+            delivery.drain(&[waiting.clone()], 5_000, owner).is_empty(),
+            "Classic-owned transitions may not replay when Native gains ownership"
+        );
+        delivery.observe(&[working.clone()], 6_000, owner);
+        delivery.observe(&[waiting.clone()], 7_000, owner);
+        let batch = delivery.drain(&[waiting.clone()], 10_000, owner);
+        assert_eq!(batch.len(), 1, "new Native-owned attention is eligible");
+        assert_eq!(batch[0].tab_id, "t1");
+        assert!(delivery.drain(&[waiting.clone()], 11_000, owner).is_empty());
+    }
+
+    #[test]
+    fn resolved_or_recycled_agent_cancels_delivery_even_after_coalescing() {
+        let mut delivery = AgentNotificationDelivery::new();
+        let working = session("h1", "t1", Some(AgentActivityState::Working));
+        let waiting = session("h1", "t1", Some(AgentActivityState::Waiting));
+        let owner = AgentNotificationPolicy {
+            hooks_enabled: true,
+            notifications_enabled: true,
+            include_finished: false,
+            native_owns_delivery: true,
+        };
+        delivery.observe(&[working.clone()], 0, owner);
+        delivery.observe(&[waiting.clone()], 1_000, owner);
+        delivery.observe(&[working.clone()], 2_000, owner);
+        assert!(delivery.drain(&[working.clone()], 10_000, owner).is_empty());
+        delivery.observe(&[waiting.clone()], 65_000, owner);
+        let recycled = session("h1", "t2", Some(AgentActivityState::Waiting));
+        assert!(
+            delivery.drain(&[recycled], 70_000, owner).is_empty(),
+            "a new Host tab may reuse the same handle"
+        );
+        delivery.observe(&[working], 71_000, owner);
+        assert!(delivery
+            .drain(
+                &[waiting],
+                75_000,
+                AgentNotificationPolicy {
+                    notifications_enabled: false,
+                    ..owner
+                }
+            )
+            .is_empty());
+    }
+
+    #[test]
+    fn notice_activation_rechecks_exact_host_identity_before_navigation() {
+        let target = AgentNotice {
+            session_id: "h1".into(),
+            workspace_id: "workspace-a".into(),
+            tab_id: "t1".into(),
+            agent_type: "codex".into(),
+            state: AgentActivityState::Waiting,
+        };
+        let current = session("h1", "t1", Some(AgentActivityState::Done));
+        assert!(
+            validated_notice_target(&target, &[current.clone()]).is_some(),
+            "still-live same Host session may be focused even after state changes"
+        );
+        for bad in [
+            session("h1", "t2", Some(AgentActivityState::Waiting)),
+            TerminalSession {
+                workspace_id: "other".into(),
+                ..current.clone()
+            },
+            TerminalSession {
+                agent_type: Some("claude".into()),
+                ..current.clone()
+            },
+            TerminalSession {
+                running: false,
+                ..current.clone()
+            },
+        ] {
+            assert!(
+                validated_notice_target(&target, &[bad]).is_none(),
+                "stale click must never focus a different Host or workspace"
+            );
+        }
+        assert!(validated_notice_target(&target, &[]).is_none());
+    }
+
+    #[test]
+    fn reconnect_discards_pending_toasts_and_does_not_replay_waiting_snapshot() {
+        let mut delivery = AgentNotificationDelivery::new();
+        let working = session("h1", "t1", Some(AgentActivityState::Working));
+        let waiting = session("h1", "t1", Some(AgentActivityState::Waiting));
+        let owner = AgentNotificationPolicy {
+            hooks_enabled: true,
+            notifications_enabled: true,
+            include_finished: false,
+            native_owns_delivery: true,
+        };
+        delivery.observe(&[working.clone()], 0, owner);
+        delivery.observe(&[waiting.clone()], 1_000, owner);
+        delivery.on_host_reconnected();
+        delivery.observe(&[waiting.clone()], 4_000, owner);
+        assert!(
+            delivery.drain(&[waiting.clone()], 11_000, owner).is_empty(),
+            "reconnect snapshot must never replay the previous Waiting"
+        );
+        delivery.observe(&[working], 12_000, owner);
+        delivery.observe(&[waiting.clone()], 72_000, owner);
+        assert_eq!(
+            delivery.drain(&[waiting], 75_000, owner).len(),
+            1,
+            "a genuinely fresh attention after reconnect may notify"
+        );
     }
 }

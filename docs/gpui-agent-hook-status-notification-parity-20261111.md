@@ -33,8 +33,8 @@
 | H1 | 四態資料模型／安全解析 | Host 回傳四態、缺狀態／未知狀態、Session 停止、錯誤 Workspace/Tab、身分重用 | 顯示與解析四態；無法確證時 unknown，絕不把 running 當 working | **PARTIAL：解析 GREEN；Host 身分競態待 H3** | `terminal.rs` RED=E0609/E0433；全套 Library **392/392 PASS** |
 | H2 | GPUI 版面渲染 | Tab 與左欄顏色、Tooltip、等待／阻塞、重繪後復原 | 四態顯示／無重疊、其他 Tab 不變 | **PARTIAL：Tab 投影、狀態變化即時重繪、色彩 GREEN；左欄/Tooltip/GUI 尚未驗收** | Library **403/403 PASS**、Native Binary **21/21 PASS**、Native Check exit 0 |
 | H3 | Host Presence 同步 | 首次快照、delta、亂序、重連、失聯、取消、切換 Workspace／世代 | 唯一 Host 真相、增量正確、過期請求拒絕 | **PARTIAL：安全 Host delta push 接線、過期事件／舊快照競態護欄、舊版 invalidation fallback 已 GREEN；隔離 Host 端到端和全域無預覽訂閱未驗收** | CLI stream **3/3 PASS**；Native Library **407/407 PASS**、Native Binary **21/21 PASS** |
-| H4 | 通知規則 | 60s cooldown、3s/10s coalesce、done toggle、初始化／重連不補發、關閉 Session 去重 | 純 Rust 可重現與無資料競態 | **PARTIAL：純 Rust 決策 8/8 PASS、支援同狀態新回合；尚未接進原生通知投遞** | `agent_status_notifications.rs`：新回合 RED assertion→GREEN；Library **407/407 PASS** |
-| H5 | Windows OS 通知／點擊 | 許可、關閉通知、同時兩版去重、Windows AppId 不污染 Classic、點通知定位正確 Pane/Tab | 具體隔離桌面通知可見且導航安全 | TODO | — |
+| H4 | 通知規則 | 60s cooldown、3s/10s coalesce、done toggle、初始化／重連不補發、關閉 Session 去重 | 純 Rust 可重現與無資料競態 | **PARTIAL：純 Rust 決策 8/8 PASS，已接進 H5 Native 通知排程；真實 OS 顯示仍待 H5 實機驗收** | `agent_status_notifications.rs`：新回合 RED assertion→GREEN，Library **413/413 PASS** |
+| H5 | Windows OS 通知／點擊 | 許可、關閉通知、同時兩版去重、Windows AppId 不污染 Classic、點通知定位正確 Pane/Tab | 具體隔離桌面通知可見且導航安全 | **PARTIAL：WinRT Toast adapter + Host 規則接線 + 本工作區點擊安全路由已通過程式驗證；隔離 Windows GUI、跨工作區導航與 Classic/GPUI 自動通知仲裁仍 TODO，正常模式預設不投遞** | H5 RED E0433/E0425 → GREEN；Library **413/413 PASS**，Native Binary **21/21 PASS**，Native cargo check exit 0 |
 | H6 | 設定與跨版本 | Host 設定讀寫 CAS、停用、舊 Host、離線錯誤與重試 | 設定真實生效、Classic / GPUI 行為一致 | TODO | — |
 | H7 | 完整驗收 Gate | Windows Native Build、Rust 全套、隔離 Host 真 Hook、四態點擊、兩版同時使用、DPI/IME | 逐項 GUI PASS；`supported` 才能另案評估 | TODO | — |
 
@@ -61,6 +61,9 @@
 | 2026-11-11 H2/H3-2 | 修正 Host `terminal list` 定期刷新後 Tab 沒有同步重繪四態的缺漏。新增 `WorkbenchTabs::refresh_agent_statuses` 只更新**完全符合 Host session/workspace/tab 身分**的 status/interrupted；不觸碰 Tab 排序、釘選、active 焦點或底層 Host/PTY。Host 列表失敗時清除未確證狀態 | 新測試 `agent_hook_refresh_only_updates_exact_host_metadata_without_stealing_tab_focus` 編譯 RED **E0599** | 指定 1/1 PASS；完整 Library **403/403 PASS**、Native Binary **21/21 PASS**、`cargo check --offline --locked --bin alera-gpui-desktop -j 2` **exit 0** | **仍未實際 Windows UI、Host Push、OS Toast 驗收** | H3 正規 `agentPresenceChanged` delta、H5 Windows Toast |
 | 2026-11-11 H3-2 | 使用既有 CLI ↔ Host 認證長連線轉送 `agentPresenceChanged`；CLI 僅放行 session/workspace/tab/agentType/state/time/interrupted，**不轉送 Prompt、ToolInput 等私密字串**。Native 雙重驗證識別與 UTC 時序，delta 僅更新完全相同的執行中 Session；較舊事件／CLI 快照不得覆蓋較新事件；晚到的舊 Inventory 請求依世代捨棄。Host 關閉事件僅有 sessionId 時退回完整清單，不誤刪 recycled handle | Native `native_stream_accepts_only_identity_scoped_agent_presence_changes` 編譯 RED E0433/E0599；`host_presence_delta_rejects_stale_events_and_old_inventory_snapshots` 先寫測試 | Native 專項均 GREEN；跨層 `sanitized_host_push_updates_only_exact_live_agent_without_terminal_observe` PASS；完整 Rust Library **407/407 PASS**，Native Binary **21/21 PASS**、Native `cargo check` exit 0；CLI stream **3/3 PASS**（原 PTY 權限、事件篩選與 Host 保密） | 尚未使用隔離 Host 真 Hook 驗收；事件僅在既有 Native CLI stream 活動時接收；OS Toast 尚未實作 | 隔離 Host delta、H4 通知事件接線 |
 | 2026-11-11 H4-3 | 同狀態但不同 `stateStartedAt` 的新 Agent 回合，視為新通知候選；初次時間戳補齊不補發，60 秒同 Session/同狀態冷卻不變 | `same_attention_state_new_agent_turn_is_not_lost_after_cooldown` **RED：0 通知，預期 1** | 指定 1/1 **GREEN**；H4 通知純規則 **8/8 PASS**，完整 Library **407/407 PASS** | 沒有接上 OS Toast／多客戶端通知仲裁 | H5 真實 Windows 通知與點擊 |
+| 2026-11-11 H5-1 | 新增 `AgentNotificationDelivery`，每次 Host state delta／清單都累積有界通知候選；1.5s 既有 Housekeeping timer 在 3–10s 規則後投遞。每批投遞前重新核對 Session/Workspace/Tab/Agent type/state、被回復／移除／換身分的事件撤銷；設定停用或沒有唯一 Native 所有權立即清空，不補發歷史通知。Toast 單筆點擊走 GPUI Window deferred callback，再次比對 Host 身分、僅正確的目前工作區可聚焦；其他工作區拒絕誤導覽 | 先寫 `attention_delivery_requires_explicit_native_ownership_and_host_permission`、`resolved_or_recycled_agent_cancels_delivery_even_after_coalescing`、`notice_activation_rechecks_exact_host_identity_before_navigation`：型別／函式不存在，編譯 RED E0433/E0425 | 通知決策新增 **3/3 GREEN**，加上重連 **1/1 PASS**；完整 Library **413/413 PASS**、Native Binary **21/21 PASS**，Native `cargo check --offline --locked --bin alera-gpui-desktop -j 2` exit 0 | **正常／Release 不投遞 Native OS Toast**：Classic 正式通知投遞權未交接。只有 Windows debug + 明確 `ALERA_GPUI_AGENT_TOAST_EXCLUSIVE_TEST=1` 的人工隔離測試入口；此環境變數不是安全的跨客戶端 Host 仲裁 | H5-2 註冊／授權／真實 Toast click；H6 Hook 設定；跨工作區正確導航 |
+| 2026-11-11 H5-2 | 以 GPUI 獨立 `NATIVE_WINDOWS_APP_ID`（不同於 Classic 的 Flutter notification AppUserModelID）加入 `windows 0.62.2` WinRT `ToastNotificationManager`、`ToastNotification`、`XmlDocument`，所有 Prompt/ToolInput/Host ID 不進 Toast XML；輸入一律 XML escape、有界 128 筆、群組通知一次顯示；單一通知的 in-process activated callback 僅傳有型別的 Host target 並再驗證 | `windows_toast_xml_has_no_prompt_tool_input_or_unescaped_agent_text`、`toast_only_accepts_one_or_more_bounded_attention_items` 編譯 RED：XML 建構函式不存在 | Toast XML 安全 **2/2 PASS**；WinRT native binary typecheck exit 0；完整 Library **413/413 PASS** | **尚未測 Windows Toast 真實彈出／系統權限／Start Menu shortcut 註冊／點擊 HWND 喚醒**；WinRT API 返回成功不等於實際 UI 已顯示 | 隔離 GUI 與 Classic 雙開仲裁，勿打勾 H5 |
+| 2026-11-11 H5-3 | `AgentNotificationDelivery::on_host_reconnected` 要捨棄在途 Toast，不將重連時已有的 Waiting 當成新通知；真正恢復工作又進 Waiting 則可受 60 秒 cooldown 管理 | 補 `reconnect_discards_pending_toasts_and_does_not_replay_waiting_snapshot` 回歸案例 | 指定 1/1 PASS，Library **413/413 PASS**。本輪第一次 Native Binary **21/21 PASS**；追加此 Library-only 測試後的第二次 Native Bin 重跑在連結階段 4 分鐘沒有新輸出，已由本輪控制端停止，**此第二輪 NOT RUN/INCOMPLETE**。Native `cargo check` 仍 PASS | 未實際斷線啟動 Windows Toast；對第二輪中止不虛報成功 | H5 系統／跨版本端到端 Gate，後續 Native 重測 |
 
 ## 尚未解決
 
@@ -68,10 +71,11 @@
 - 既有 Classic Host 版本可能不支援新版部分共用設定；不能據此升級正式 Host。
 - 最新 Windows GPUI EXE 曾被工作區外可執行檔安全政策禁止啟動；須使用授權隔離途徑驗收 GUI，不得搬檔繞過。
 - 跨平台 OS 通知需分平台 adapter；Windows 應先通過，其他平台標示 NOT RUN 而非 PASS。
-- 現有 H4 通知去重僅比對同一 Session 的狀態差異，尚未讀取 Host `stateStartedAt`；連續回合相同狀態通知、重連後補發界線仍需配合 H3 event timestamp TDD。
-- 在 H3/H5 正式接線之前，`AgentNotificationTracker` 仍是**純規則層**，不會觸發 OS Toast；不可僅因 **403/403 Library** 通過就打勾 H5。
-- 主程式目前用已存在的 `terminal list --no-start` 每 3 秒（有活躍 Agent）或每 15 秒（沒有）刷新，**尚非** Classic 的 Host `agentPresenceChanged` 事件訂閱；只有授權的隔離 Host 實測之後才能宣告端到端即時狀態完成。
+- H4 已比對 Host `stateStartedAt` 支援同狀態的新 Agent 回合通知；H5 通知決策已接到 Native Host 事件／清單及 Windows API，但 release 通知投遞權尚未正式交接。**Library 413/413 PASS 不等於系統 Toast／跨版本仲裁已通過**。
+- 主程式仍保留既有 `terminal list --no-start` 每 3 秒（有活躍 Agent）或每 15 秒（沒有）刷新作為 **Host push 的回退方案**；真實 Host 事件／斷線重連尚待隔離端到端驗收。
 - H3-2 已加入同一 Native Terminal stream 的 Host `agentPresenceChanged` push 轉接，CLI/Native 單元測試均 GREEN；但當沒有開啟任何 Native Host 預覽 Tab、stream 尚未啟動時仍只依賴 3s/15s 的授權清單輪詢；完整所有 Worktree 全域訂閱、隔離 Host 真實 Hook 與重連驗收仍屬後續工作。
+- H5 Toast 已可編譯並接入 Native event loop，但**目前只有 Windows Debug 且明確設定 `ALERA_GPUI_AGENT_TOAST_EXCLUSIVE_TEST=1` 才可能發送**；這是開發者人工隔離測試開關，不代表完成跨版本 OS 通知仲裁。正式版、未開啟的使用者一律不接管 Classic 通知，以免重複；Host settings 若缺少通知偏好／Host 失聯，亦一律不投遞。
+- H5 Toast 選取僅自動定位到**當前已經驗證的 Host Workspace**，不能將跨工作區通知當成已完成。真實 Windows AppID shortcut、前景視窗啟動與 Toast click 的獨立實機 Gate 尚未通過；OS 不支援或通知顯示失敗會回報錯誤而非假成功。
 
 ## 發行 Gate
 
