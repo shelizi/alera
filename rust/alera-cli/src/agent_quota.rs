@@ -117,6 +117,13 @@ fn quota_account_requested(selected: &Option<String>, account: &str) -> bool {
     selected.as_ref().is_none_or(|selected| selected == account)
 }
 
+/// AGY's current login is OS-keyring scoped. A different profile id must
+/// never return the default login's quota as though it belonged to that id.
+/// Per-account AGY fetches require an independently authenticated backend.
+fn agy_default_account_requested(selected: &Option<String>) -> bool {
+    quota_account_requested(selected, "default")
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ClaudeProfileRequest {
@@ -350,11 +357,13 @@ pub(crate) async fn fetch_agent_quotas(payload: Value) -> Result<Value> {
                 tasks.spawn(fetch_cursor());
             }
             "agy" => {
-                let permits = Arc::clone(&cli_permits);
-                tasks.spawn(async move {
-                    let _permit = permits.acquire_owned().await.ok();
-                    fetch_tui_provider("agy", "Antigravity", "agy", "/usage").await
-                });
+                if agy_default_account_requested(&selected_account) {
+                    let permits = Arc::clone(&cli_permits);
+                    tasks.spawn(async move {
+                        let _permit = permits.acquire_owned().await.ok();
+                        fetch_tui_provider("agy", "Antigravity", "agy", "/usage").await
+                    });
+                }
             }
             "minimax" => {
                 let names = request.environment_names.clone();

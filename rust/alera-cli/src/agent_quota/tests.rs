@@ -1,5 +1,31 @@
 use super::*;
 
+#[test]
+fn agy_quota_must_not_substitute_default_login_for_another_account() {
+    // The current AGY CLI has one OS-keyring login per Windows user. Alera
+    // must never report that login's quota under a requested other account.
+    assert!(agy_default_account_requested(&None));
+    assert!(agy_default_account_requested(&Some("default".to_string())));
+    assert!(!agy_default_account_requested(&Some("work".to_string())));
+    assert!(!agy_default_account_requested(&Some(
+        "C:/other/profile".to_string()
+    )));
+}
+
+#[tokio::test]
+async fn agy_other_account_filter_returns_no_default_snapshot() {
+    // No external AGY process should start for an unsupported account ID.
+    for provider in ["agy", "antigravity"] {
+        let payload = fetch_agent_quotas(json!({
+            "providers": [provider],
+            "accountId": "work"
+        }))
+        .await
+        .expect("filtered quota payload");
+        assert_eq!(payload["snapshots"], json!([]), "{provider}");
+    }
+}
+
 #[tokio::test]
 async fn accepts_only_configured_transient_environment_values() {
     let secret = "quota-secret-must-not-be-returned";

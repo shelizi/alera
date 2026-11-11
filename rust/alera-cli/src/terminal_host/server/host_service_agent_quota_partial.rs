@@ -15,8 +15,10 @@ pub(super) fn optional_quota_text(payload: &Value, key: &str) -> Option<String> 
 
 /// Builds the fetch body for a full snapshot or for one provider/account.
 ///
-/// `provider` narrows the request to that agent. `account_id` is only applied
-/// for providers that have more than one account (Claude, Codex, OpenCode).
+/// `provider` narrows the request to that agent. `account_id` selects an
+/// independent account for Claude, Codex and OpenCode. AGY currently only
+/// supports `default`; the proxy must not substitute its OS-keyring login
+/// for an unsupported non-default account ID.
 pub(super) fn quota_fetch_payload(
     settings: &RuntimeAgentQuotaSettings,
     environment_values: &Value,
