@@ -23,7 +23,6 @@ pub fn enabled_notice_sessions(
     };
     sessions
         .iter()
-        .take(MAX_NOTICE_SESSIONS)
         .filter(|session| {
             session.running
                 && session
@@ -31,6 +30,10 @@ pub fn enabled_notice_sessions(
                     .as_deref()
                     .is_some_and(|name| enabled.get(&name.to_ascii_lowercase()) == Some(&true))
         })
+        // A disabled provider may have hundreds of live terminals. Cap
+        // *eligible* sessions only, or it can starve enabled Agents later
+        // in the same authenticated Host snapshot.
+        .take(MAX_NOTICE_SESSIONS)
         .cloned()
         .collect()
 }
@@ -675,6 +678,34 @@ mod tests {
         assert!(now_disabled.is_empty());
         delivery.observe(&now_disabled, 5_000, owner);
         assert!(delivery.drain(&now_disabled, 6_000, owner).is_empty());
+    }
+
+    #[test]
+    fn disabled_provider_flood_cannot_starve_late_enabled_host_agent() {
+        let mut all = (0..150)
+            .map(|index| {
+                let mut item = session(
+                    &format!("disabled-{index}"),
+                    &format!("tab-{index}"),
+                    Some(AgentActivityState::Waiting),
+                );
+                item.agent_type = Some("claude".into());
+                item
+            })
+            .collect::<Vec<_>>();
+        all.push(session(
+            "live-codex",
+            "real-tab",
+            Some(AgentActivityState::Waiting),
+        ));
+        let flags = HashMap::from([("codex".into(), true), ("claude".into(), false)]);
+        let selected = enabled_notice_sessions(&all, Some(&flags));
+        assert_eq!(
+            selected.len(),
+            1,
+            "unrelated disabled sessions must not consume the notification cap"
+        );
+        assert_eq!(selected[0].handle, "live-codex");
     }
 
     #[test]
