@@ -32,10 +32,13 @@ cd /d "%~dp0..\rust"
 if errorlevel 1 exit /b 1
 if /i "%~1"=="check" (
   cargo check --offline --locked -p alera-cli --bin alera -j 2
+) else if /i "%~1"=="check-tests" (
+  rem Validate H6 unit-test code without linking the full Windows test EXE.
+  cargo check --offline --locked -p alera-cli --bin alera --tests -j 2
 ) else if /i "%~1"=="test" (
   cargo test --offline --locked -p alera-cli --bin alera agent_hook_readback -j 2
 ) else (
-  echo Usage: verify-agent-hook-cli-msvc.cmd check^|test 1>&2
+  echo Usage: verify-agent-hook-cli-msvc.cmd check^|check-tests^|test 1>&2
   exit /b 64
 )
 exit /b %errorlevel%
