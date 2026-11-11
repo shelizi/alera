@@ -215,6 +215,8 @@ mod tests {
             agent_type: agent.then(|| "Codex".to_string()),
             agent_state: None,
             interrupted: false,
+            agent_state_started_at: None,
+            agent_updated_at: None,
         }]);
         dock.open(handle);
         (

@@ -163,6 +163,8 @@ mod tests {
                 running: true,
                 agent_state: None,
                 interrupted: false,
+                agent_state_started_at: None,
+                agent_updated_at: None,
             },
             TerminalSession {
                 handle: "plain_terminal".into(),
@@ -172,6 +174,8 @@ mod tests {
                 running: true,
                 agent_state: None,
                 interrupted: false,
+                agent_state_started_at: None,
+                agent_updated_at: None,
             },
             TerminalSession {
                 handle: "correct_agent".into(),
@@ -181,6 +185,8 @@ mod tests {
                 running: true,
                 agent_state: None,
                 interrupted: false,
+                agent_state_started_at: None,
+                agent_updated_at: None,
             },
         ];
         assert_eq!(

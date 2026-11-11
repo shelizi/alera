@@ -442,6 +442,8 @@ mod tests {
             agent_type: None,
             agent_state: None,
             interrupted: false,
+            agent_state_started_at: None,
+            agent_updated_at: None,
         }]);
         dock.open(handle);
         WorkbenchTabIdentity::Host(dock.context_target_at(0).unwrap())

@@ -216,6 +216,8 @@ mod tests {
             agent_type: Some("Codex".into()),
             agent_state: None,
             interrupted: false,
+            agent_state_started_at: None,
+            agent_updated_at: None,
         };
         let pin = parse_pin_snapshot(&json!([item]), "ws").unwrap().remove(0);
         assert!(pin.matches_session(&session));

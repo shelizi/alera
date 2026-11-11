@@ -46,6 +46,7 @@ pub struct AgentNotice {
 struct ObservedAgent {
     identity: AgentIdentity,
     state: Option<AgentActivityState>,
+    state_started_at: Option<String>,
 }
 
 /// Emits only *new* attention transitions in an existing, exact Host session.
@@ -81,8 +82,15 @@ impl AgentNotificationTracker {
             let state = session.agent_state;
             if self.initialized && enabled {
                 let prior = self.observed.get(&identity.session_id);
-                let changed_in_same_session =
-                    prior.is_some_and(|old| old.identity == identity && old.state != state);
+                let changed_in_same_session = prior.is_some_and(|old| {
+                    old.identity == identity
+                        && (old.state != state
+                            || old
+                                .state_started_at
+                                .as_deref()
+                                .zip(session.agent_state_started_at.as_deref())
+                                .is_some_and(|(before, after)| before != after))
+                });
                 if changed_in_same_session {
                     if let Some(state) = state.filter(|state| {
                         matches!(
@@ -111,7 +119,11 @@ impl AgentNotificationTracker {
             }
             next.insert(
                 identity.session_id.clone(),
-                ObservedAgent { identity, state },
+                ObservedAgent {
+                    identity,
+                    state,
+                    state_started_at: session.agent_state_started_at.clone(),
+                },
             );
         }
         let live = next
@@ -205,6 +217,8 @@ mod tests {
             agent_type: Some("codex".into()),
             agent_state: state,
             interrupted: false,
+            agent_state_started_at: None,
+            agent_updated_at: None,
         }
     }
 
@@ -294,6 +308,42 @@ mod tests {
             .is_empty());
         assert!(tracker.observe(&[waiting], 2_000, false, true).is_empty());
         assert!(tracker.observe(&[working], 3_000, false, true).is_empty());
+    }
+
+    #[test]
+    fn same_attention_state_new_agent_turn_is_not_lost_after_cooldown() {
+        let mut tracker = AgentNotificationTracker::new();
+        let mut waiting = session("h1", "t1", Some(AgentActivityState::Waiting));
+        waiting.agent_state_started_at = Some("2026-11-11T07:00:00Z".into());
+        assert!(
+            tracker
+                .observe(&[waiting.clone()], 0, false, true)
+                .is_empty(),
+            "initial Host snapshot is baseline, never a notification"
+        );
+        assert!(
+            tracker
+                .observe(&[waiting.clone()], 80_000, false, true)
+                .is_empty(),
+            "same state and same turn may not replay"
+        );
+        waiting.agent_state_started_at = Some("2026-11-11T07:01:20Z".into());
+        assert_eq!(
+            tracker
+                .observe(&[waiting.clone()], 80_001, false, true)
+                .len(),
+            1,
+            "a new approval in a new turn is a fresh Hook transition"
+        );
+        waiting.agent_state_started_at = Some("2026-11-11T07:01:21Z".into());
+        assert!(
+            tracker
+                .observe(&[waiting.clone()], 81_000, false, true)
+                .is_empty(),
+            "new round within cooldown should not spam"
+        );
+        waiting.agent_state_started_at = Some("2026-11-11T07:03:00Z".into());
+        assert_eq!(tracker.observe(&[waiting], 142_000, false, true).len(), 1);
     }
 
     #[test]

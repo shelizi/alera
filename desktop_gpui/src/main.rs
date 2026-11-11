@@ -529,6 +529,9 @@ struct Workbench {
     terminal_create_pane: Option<PendingTerminalPane>,
     terminal_layout_restore: Option<TerminalLayout>,
     terminal_list_loading: bool,
+    /// Prevent an async inventory started before a status push from
+    /// resurrecting stale Agent Hook state after the push arrives.
+    agent_presence_event_generation: u64,
     terminal_read_loading: Option<String>,
     terminal_split_read_loading: bool,
     terminal_poll: TerminalPollGate,
@@ -4330,6 +4333,7 @@ impl Workbench {
         };
         self.terminal_list_loading = true;
         let generation = self.workspace_generation;
+        let presence_generation = self.agent_presence_event_generation;
         self.terminals.status = "Listing existing Host sessions…".into();
         cx.notify();
         cx.spawn(async move |view, cx| {
@@ -4341,6 +4345,12 @@ impl Workbench {
                     return;
                 }
                 view.terminal_list_loading = false;
+                // The Host status stream is newer than this async list
+                // request; discard its result and read a fresh snapshot.
+                if view.agent_presence_event_generation != presence_generation {
+                    view.refresh_terminals(cx);
+                    return;
+                }
                 match result {
                     Ok(sessions) => {
                         let was_disconnected = view.terminals.session_list_is_stale()
@@ -6236,6 +6246,23 @@ impl Workbench {
                         parsed_bytes += bytes.len();
                         self.terminal_poll_cadence.record_activity(Instant::now());
                         repaint = true;
+                    }
+                }
+                StreamViewUpdate::AgentPresenceChanged { changes } => {
+                    // Strict redacted Host status event, not a PTY update.
+                    self.agent_presence_event_generation =
+                        self.agent_presence_event_generation.wrapping_add(1);
+                    if let Some(changes) = changes {
+                        if self.terminals.apply_agent_presence_changes(&changes) {
+                            self.mixed_tabs
+                                .refresh_agent_statuses(&self.terminals.sessions);
+                            repaint = true;
+                        }
+                        // Never auto-attach or create any Host session on
+                        // account of an unrecognized/recycled event.
+                    } else {
+                        // Older Hosts publish invalidation without deltas.
+                        self.refresh_terminals(cx);
                     }
                 }
                 StreamViewUpdate::Failed(reason) => {
@@ -10266,6 +10293,7 @@ fn main() {
                             terminal_create_pane: None,
                             terminal_layout_restore: None,
                             terminal_list_loading: false,
+                            agent_presence_event_generation: 0,
                             terminal_read_loading: None,
                             terminal_split_read_loading: false,
                             terminal_poll: TerminalPollGate::default(),

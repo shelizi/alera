@@ -3,6 +3,7 @@
 //! reads Host control files, receives credentials, or starts a Host.
 
 use crate::runtime_bridge::{terminal_cli_arguments, RuntimeCliBridge};
+use crate::terminal::{agent_host_utc_time_key, AgentActivityState, AgentPresenceChange};
 use crate::terminal_output_budget::TerminalParseBudget;
 use alera_core::child_process::windowless_command;
 use base64::engine::general_purpose::STANDARD;
@@ -94,6 +95,9 @@ pub enum StreamViewUpdate {
         identity: StreamSessionIdentity,
         bytes: Vec<u8>,
     },
+    AgentPresenceChanged {
+        changes: Option<Vec<AgentPresenceChange>>,
+    },
     Failed(String),
     Disconnected,
 }
@@ -129,6 +133,9 @@ pub enum StreamEvent {
     Output {
         session_id: String,
         data: Vec<u8>,
+    },
+    AgentPresenceChanged {
+        changes: Option<Vec<AgentPresenceChange>>,
     },
     ResyncRequired {
         session_id: String,
@@ -264,6 +271,9 @@ impl StreamSubscriptions {
                     Vec::new()
                 }
             }
+            StreamEvent::AgentPresenceChanged { changes } => {
+                vec![StreamViewUpdate::AgentPresenceChanged { changes }]
+            }
             StreamEvent::ResyncRequired { session_id } => {
                 self.active.remove(&session_id);
                 self.rejected.insert(session_id);
@@ -294,6 +304,92 @@ fn valid_session_id(id: &str) -> bool {
             .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, b'-' | b'_' | b'.' | b':'))
 }
 
+/// Only consume the explicit status-only sidecar schema. Malformed data is
+/// dropped rather than interpreted as a Terminal frame or a UI command.
+fn parse_agent_presence_stream_event(value: &Value) -> Option<StreamEvent> {
+    if value.get("event").and_then(Value::as_str) != Some("agentPresenceChanged") {
+        return None;
+    }
+    let Some(raw_changes) = value.pointer("/payload/changes").and_then(Value::as_array) else {
+        return Some(StreamEvent::AgentPresenceChanged { changes: None });
+    };
+    if raw_changes.len() > 128 {
+        return Some(StreamEvent::AgentPresenceChanged { changes: None });
+    }
+    let mut changes = Vec::with_capacity(raw_changes.len());
+    for item in raw_changes {
+        let record = item.as_object()?;
+        if record.keys().any(|key| {
+            !matches!(
+                key.as_str(),
+                "terminalSessionId"
+                    | "workspaceId"
+                    | "tabId"
+                    | "agentType"
+                    | "state"
+                    | "stateStartedAt"
+                    | "updatedAt"
+                    | "interrupted"
+                    | "removed"
+            )
+        }) {
+            return None;
+        }
+        let bounded_id = |field: &str, limit: usize| {
+            item.get(field)
+                .and_then(Value::as_str)
+                .filter(|value| {
+                    !value.is_empty()
+                        && value.len() <= limit
+                        && value.bytes().all(|b| {
+                            b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b':')
+                        })
+                })
+                .map(str::to_owned)
+        };
+        let (Some(session_id), Some(workspace_id), Some(tab_id)) = (
+            bounded_id("terminalSessionId", 128),
+            bounded_id("workspaceId", 256),
+            bounded_id("tabId", 256),
+        ) else {
+            return None;
+        };
+        let removed = item.get("removed") == Some(&Value::Bool(true));
+        let (agent_type, state, state_started_at, updated_at) = if removed {
+            (None, None, String::new(), String::new())
+        } else {
+            let agent_type = bounded_id("agentType", 64)?;
+            let state = item
+                .get("state")
+                .and_then(Value::as_str)
+                .and_then(AgentActivityState::parse)?;
+            let timestamp = |field| {
+                item.get(field)
+                    .and_then(Value::as_str)
+                    .filter(|value| value.len() <= 64 && agent_host_utc_time_key(value).is_some())
+                    .map(str::to_owned)
+            };
+            let started = timestamp("stateStartedAt")?;
+            let updated = timestamp("updatedAt")?;
+            (Some(agent_type), Some(state), started, updated)
+        };
+        changes.push(AgentPresenceChange {
+            session_id,
+            workspace_id,
+            tab_id,
+            agent_type,
+            state,
+            state_started_at,
+            updated_at,
+            interrupted: item.get("interrupted").and_then(Value::as_bool) == Some(true),
+            removed,
+        });
+    }
+    Some(StreamEvent::AgentPresenceChanged {
+        changes: Some(changes),
+    })
+}
+
 pub fn parse_stream_event(value: &Value) -> Option<StreamEvent> {
     if let Some(id) = value.get("id").and_then(Value::as_u64) {
         if id == 0 {
@@ -311,6 +407,9 @@ pub fn parse_stream_event(value: &Value) -> Option<StreamEvent> {
     }
     if value.get("event").and_then(Value::as_str) == Some("disconnected") {
         return Some(StreamEvent::Disconnected);
+    }
+    if value.get("event").and_then(Value::as_str) == Some("agentPresenceChanged") {
+        return parse_agent_presence_stream_event(value);
     }
     let payload = value.get("payload")?;
     let id = payload.get("sessionId").and_then(Value::as_str)?;
@@ -942,6 +1041,45 @@ mod tests {
     }
 
     #[test]
+    fn sanitized_host_push_updates_only_exact_live_agent_without_terminal_observe() {
+        use crate::terminal::{parse_terminal_list, TerminalDock};
+
+        let mut dock = TerminalDock::for_workspace(7);
+        let initial = serde_json::json!({"items":[{
+            "handle":"pty-1", "workspaceId":"ws-1", "tabId":"tab-1",
+            "running":true, "agentType":"codex", "agentState":"working",
+            "stateStartedAt":"2026-11-11T07:00:00Z", "updatedAt":"2026-11-11T07:00:00Z"
+        }]});
+        assert!(dock.apply_session_list(7, parse_terminal_list(&initial).unwrap()));
+        assert!(dock.open("pty-1"));
+        let event = serde_json::json!({
+            "event":"agentPresenceChanged", "payload":{"changes":[{
+                "terminalSessionId":"pty-1", "workspaceId":"ws-1", "tabId":"tab-1",
+                "agentType":"codex", "state":"waiting",
+                "stateStartedAt":"2026-11-11T07:00:01+00:00",
+                "updatedAt":"2026-11-11T07:00:01+00:00",
+                "interrupted":false
+            }]}
+        });
+        let mut stream = StreamSubscriptions::default();
+        let updates = stream.process(parse_stream_event(&event).unwrap());
+        let [StreamViewUpdate::AgentPresenceChanged {
+            changes: Some(changes),
+        }] = updates.as_slice()
+        else {
+            panic!("private stream must route the status event without observing PTY output");
+        };
+        assert!(dock.apply_agent_presence_changes(changes));
+        assert_eq!(
+            dock.sessions[0].agent_state,
+            Some(AgentActivityState::Waiting)
+        );
+        assert_eq!(dock.tabs.len(), 1);
+        assert_eq!(dock.active_tab, Some(0));
+        assert!(dock.sessions[0].running);
+    }
+
+    #[test]
     fn background_recovery_requires_exact_running_host_ack_and_never_creates_view_lease() {
         let expected = ("pty-1".into(), "ws-1".into(), "tab-1".into());
         assert!(confirmed_background_recovery(
@@ -967,5 +1105,49 @@ mod tests {
         ), Some(StreamViewUpdate::RecoveryReady {
             session_id, workspace_id, tab_id,
         }) if session_id == "pty-1" && workspace_id == "ws-1" && tab_id == "tab-1"));
+    }
+
+    #[test]
+    fn native_stream_accepts_only_identity_scoped_agent_presence_changes() {
+        let event = json!({
+            "event":"agentPresenceChanged", "payload":{"changes":[{
+                "terminalSessionId":"pty-1", "workspaceId":"ws-1",
+                "tabId":"tab-1", "agentType":"codex", "state":"waiting",
+                "stateStartedAt":"2026-11-11T07:00:00+00:00",
+                "updatedAt":"2026-11-11T07:00:01+00:00",
+                "interrupted":false
+            }]}
+        });
+        let StreamEvent::AgentPresenceChanged { changes } =
+            parse_stream_event(&event).expect("recognized authenticated Host event")
+        else {
+            panic!("Host status push must not be discarded");
+        };
+        let changes = changes.expect("delta event");
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].session_id, "pty-1");
+        assert_eq!(changes[0].workspace_id, "ws-1");
+        assert_eq!(changes[0].tab_id, "tab-1");
+        assert_eq!(changes[0].state, Some(AgentActivityState::Waiting));
+        assert_eq!(changes[0].updated_at, "2026-11-11T07:00:01+00:00");
+        assert!(
+            matches!(
+                parse_stream_event(&json!({"event":"agentPresenceChanged", "payload":{}})),
+                Some(StreamEvent::AgentPresenceChanged { changes: None })
+            ),
+            "old Host invalidation must request a fresh list"
+        );
+        assert!(
+            parse_stream_event(&json!({"event":"mcpUiCommand", "payload":event["payload"]}))
+                .is_none()
+        );
+        assert!(
+            parse_stream_event(&json!({"event":"agentPresenceChanged", "payload":{
+                "changes":[{"terminalSessionId":"pty-1","workspaceId":"ws-1","tabId":"tab-1",
+                  "state":"working","agentType":"codex","prompt":"SECRET"}]
+            }}))
+            .is_none(),
+            "unsanitized Host payload must be rejected at Native boundary"
+        );
     }
 }

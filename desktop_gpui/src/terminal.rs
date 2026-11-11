@@ -56,6 +56,46 @@ impl AgentActivityState {
     }
 }
 
+/// Sanitized, status-only Host push. No Prompt, tool input, tokens or PTY
+/// bytes cross this model. Exact Host identities prevent recycled-handle
+/// events from changing a different Agent Tab.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AgentPresenceChange {
+    pub session_id: String,
+    pub workspace_id: String,
+    pub tab_id: String,
+    pub agent_type: Option<String>,
+    pub state: Option<AgentActivityState>,
+    pub state_started_at: String,
+    pub updated_at: String,
+    pub interrupted: bool,
+    pub removed: bool,
+}
+
+/// All Host Agent timestamps are UTC; the Host JSON encoder may choose Z
+/// while the delta encoder emits +00:00. Canonicalize fractional seconds so
+/// lexicographic ordering means chronological ordering in UTC.
+pub(crate) fn agent_host_utc_time_key(raw: &str) -> Option<String> {
+    let trimmed = raw
+        .strip_suffix('Z')
+        .or_else(|| raw.strip_suffix("+00:00"))?;
+    let (seconds, fraction) = trimmed.split_once('.').unwrap_or((trimmed, ""));
+    let bytes = seconds.as_bytes();
+    if bytes.len() != 19
+        || !bytes.iter().enumerate().all(|(i, byte)| match i {
+            4 | 7 => *byte == b'-',
+            10 => *byte == b'T',
+            13 | 16 => *byte == b':',
+            _ => byte.is_ascii_digit(),
+        })
+        || fraction.len() > 9
+        || !fraction.bytes().all(|b| b.is_ascii_digit())
+    {
+        return None;
+    }
+    Some(format!("{seconds}.{fraction:0<9}"))
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TerminalSession {
     pub handle: String,
@@ -66,6 +106,9 @@ pub struct TerminalSession {
     /// None means unconfirmed/unknown, never implicitly 'working'.
     pub agent_state: Option<AgentActivityState>,
     pub interrupted: bool,
+    /// Host revision of the current state. Used to reject stale async lists.
+    pub agent_state_started_at: Option<String>,
+    pub agent_updated_at: Option<String>,
 }
 
 impl TerminalSession {
@@ -546,6 +589,18 @@ pub fn parse_terminal_list(value: &Value) -> io::Result<Vec<TerminalSession>> {
             .and_then(AgentActivityState::parse);
         let interrupted = agent_state == Some(AgentActivityState::Done)
             && item.get("interrupted").and_then(Value::as_bool) == Some(true);
+        let agent_state_started_at = agent_state.and_then(|_| {
+            item.get("stateStartedAt")
+                .and_then(Value::as_str)
+                .filter(|value| agent_host_utc_time_key(value).is_some())
+                .map(str::to_string)
+        });
+        let agent_updated_at = agent_state.and_then(|_| {
+            item.get("updatedAt")
+                .and_then(Value::as_str)
+                .filter(|value| agent_host_utc_time_key(value).is_some())
+                .map(str::to_string)
+        });
         if sessions
             .iter()
             .any(|session: &TerminalSession| session.handle == handle)
@@ -560,6 +615,8 @@ pub fn parse_terminal_list(value: &Value) -> io::Result<Vec<TerminalSession>> {
             agent_type,
             agent_state,
             interrupted,
+            agent_state_started_at,
+            agent_updated_at,
         });
     }
     Ok(sessions)
@@ -1797,6 +1854,40 @@ impl TerminalDock {
     }
 
     pub fn update_sessions(&mut self, sessions: Vec<TerminalSession>) {
+        let mut sessions = sessions;
+        // A snapshot RPC can complete after a newer Host delta. Preserve
+        // that newer exact-identity status, but do not leak it to a recycled
+        // handle, changed Agent type or a stopped session.
+        for current in &mut sessions {
+            if !current.running || current.agent_state.is_none() {
+                continue;
+            }
+            let Some(old) = self.sessions.iter().find(|old| {
+                old.running
+                    && old.handle == current.handle
+                    && old.workspace_id == current.workspace_id
+                    && old.tab_id == current.tab_id
+                    && old.agent_type == current.agent_type
+            }) else {
+                continue;
+            };
+            if let (Some(old_time), Some(current_time)) = (
+                old.agent_updated_at
+                    .as_deref()
+                    .and_then(agent_host_utc_time_key),
+                current
+                    .agent_updated_at
+                    .as_deref()
+                    .and_then(agent_host_utc_time_key),
+            ) {
+                if old_time > current_time {
+                    current.agent_state = old.agent_state;
+                    current.interrupted = old.interrupted;
+                    current.agent_state_started_at = old.agent_state_started_at.clone();
+                    current.agent_updated_at = old.agent_updated_at.clone();
+                }
+            }
+        }
         self.session_list_stale = false;
         for tab in &mut self.tabs {
             if let Some(session) = sessions.iter().find(|item| {
@@ -1814,6 +1905,60 @@ impl TerminalDock {
             "{} existing terminal(s) · all workspaces",
             self.sessions.len()
         );
+    }
+
+    /// Apply redacted authenticated Host deltas to the *existing* exact
+    /// identity only. Cannot open/attach a tab, start PTYs or select panes.
+    /// Older updates never replace newer state, regardless of event order.
+    pub fn apply_agent_presence_changes(&mut self, changes: &[AgentPresenceChange]) -> bool {
+        let mut changed = false;
+        for change in changes.iter().take(MAX_TERMINALS) {
+            let Some(session) = self.sessions.iter_mut().find(|session| {
+                session.running
+                    && session.handle == change.session_id
+                    && session.workspace_id == change.workspace_id
+                    && session.tab_id == change.tab_id
+            }) else {
+                continue;
+            };
+            if change.removed {
+                if session.agent_state.is_some() || session.interrupted {
+                    session.agent_state = None;
+                    session.agent_updated_at = None;
+                    session.agent_state_started_at = None;
+                    session.interrupted = false;
+                    changed = true;
+                }
+                continue;
+            }
+            if change.agent_type.as_ref() != session.agent_type.as_ref() || change.state.is_none() {
+                continue;
+            }
+            let Some(incoming_time) = agent_host_utc_time_key(&change.updated_at) else {
+                continue;
+            };
+            if session
+                .agent_updated_at
+                .as_deref()
+                .and_then(agent_host_utc_time_key)
+                .is_some_and(|previous_time| incoming_time < previous_time)
+            {
+                continue;
+            }
+            let next_interrupted =
+                change.state == Some(AgentActivityState::Done) && change.interrupted;
+            if session.agent_state != change.state
+                || session.interrupted != next_interrupted
+                || session.agent_updated_at.as_deref() != Some(change.updated_at.as_str())
+            {
+                session.agent_state = change.state;
+                session.interrupted = next_interrupted;
+                session.agent_state_started_at = Some(change.state_started_at.clone());
+                session.agent_updated_at = Some(change.updated_at.clone());
+                changed = true;
+            }
+        }
+        changed
     }
 
     /// Recreate only preview tabs whose three Host identities still match.
@@ -2086,6 +2231,8 @@ mod tests {
             agent_type: None,
             agent_state: None,
             interrupted: false,
+            agent_state_started_at: None,
+            agent_updated_at: None,
         };
         assert!(expected.matches_running_identity(&expected));
         let mut current = expected.clone();
@@ -2626,6 +2773,8 @@ mod tests {
             agent_type: Some("codex".into()),
             agent_state: None,
             interrupted: false,
+            agent_state_started_at: None,
+            agent_updated_at: None,
         }
     }
 
@@ -2988,6 +3137,57 @@ mod tests {
         assert!(!agent_presence_refresh_due(3, &[stopped]));
         assert!(agent_presence_refresh_due(11, &[]));
         assert!(!agent_presence_refresh_due(12, &[]));
+    }
+
+    #[test]
+    fn host_presence_delta_rejects_stale_events_and_old_inventory_snapshots() {
+        let mut dock = TerminalDock::for_workspace(7);
+        let newer = "2026-11-11T07:00:02+00:00";
+        let older = "2026-11-11T07:00:01Z";
+        let start = "2026-11-11T07:00:00Z";
+        let snapshot = json!({"items":[{
+            "handle":"pty-1","workspaceId":"ws-1","tabId":"tab-1",
+            "running":true,"agentType":"codex","agentState":"working",
+            "stateStartedAt":start,"updatedAt":older
+        }]});
+        assert!(dock.apply_session_list(7, parse_terminal_list(&snapshot).unwrap()));
+        let delta = AgentPresenceChange {
+            session_id: "pty-1".into(),
+            workspace_id: "ws-1".into(),
+            tab_id: "tab-1".into(),
+            agent_type: Some("codex".into()),
+            state: Some(AgentActivityState::Waiting),
+            updated_at: newer.into(),
+            state_started_at: start.into(),
+            interrupted: false,
+            removed: false,
+        };
+        assert!(dock.apply_agent_presence_changes(&[delta.clone()]));
+        assert_eq!(
+            dock.sessions[0].agent_state,
+            Some(AgentActivityState::Waiting)
+        );
+        let mut stale = delta.clone();
+        stale.state = Some(AgentActivityState::Blocked);
+        stale.updated_at = older.into();
+        assert!(!dock.apply_agent_presence_changes(&[stale]));
+        assert!(dock.apply_session_list(7, parse_terminal_list(&snapshot).unwrap()));
+        assert_eq!(
+            dock.sessions[0].agent_state,
+            Some(AgentActivityState::Waiting),
+            "old snapshot must not reverse a newer delta"
+        );
+        let mut recycled = delta.clone();
+        recycled.tab_id = "new-tab-with-recycled-handle".into();
+        assert!(!dock.apply_agent_presence_changes(&[recycled]));
+        assert_eq!(
+            dock.sessions[0].agent_state,
+            Some(AgentActivityState::Waiting)
+        );
+        let mut removed = delta;
+        removed.removed = true;
+        assert!(dock.apply_agent_presence_changes(&[removed]));
+        assert_eq!(dock.sessions[0].agent_state, None);
     }
 
     #[test]
