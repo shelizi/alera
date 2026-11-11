@@ -4,7 +4,7 @@
 //! their existing owners. This projection owns only tab-strip order/focus.
 //! Closing a preview never becomes a Runtime Host PTY termination request.
 
-use crate::terminal::{AgentActivityState, TerminalTabContextTarget};
+use crate::terminal::{AgentActivityState, TerminalSession, TerminalTabContextTarget};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkbenchTabIdentity {
@@ -60,6 +60,39 @@ impl WorkbenchTabs {
 
     pub fn pinned(&self) -> &[WorkbenchTabIdentity] {
         &self.pinned
+    }
+
+    /// Refresh only Hook-derived presentation fields after an authenticated
+    /// Host session list. Unlike full reconciliation this preserves tab order,
+    /// pane allocation, selection, pinning, and all Host/PTY ownership.
+    ///
+    /// A recycled handle is not a match unless its workspace and Host Tab ID
+    /// also match the original identity. On a lost Host connection, passing an
+    /// empty list clears unverified status instead of showing stale "working".
+    pub fn refresh_agent_statuses(&mut self, sessions: &[TerminalSession]) -> bool {
+        let mut changed = false;
+        for tab in &mut self.tabs {
+            let WorkbenchTabIdentity::Host(target) = &tab.identity else {
+                continue;
+            };
+            let exact = sessions.iter().find(|session| {
+                session.running
+                    && session.agent_type.is_some()
+                    && session.handle == target.handle
+                    && session.workspace_id == target.workspace_id()
+                    && session.tab_id == target.tab_id()
+            });
+            let state = exact.and_then(|session| session.agent_state);
+            let interrupted = exact.is_some_and(|session| {
+                session.interrupted && state == Some(AgentActivityState::Done)
+            });
+            if tab.agent_state != state || tab.interrupted != interrupted {
+                tab.agent_state = state;
+                tab.interrupted = interrupted;
+                changed = true;
+            }
+        }
+        changed
     }
 
     pub fn is_pinned(&self, id: &WorkbenchTabIdentity) -> bool {
@@ -297,6 +330,49 @@ mod tests {
             host.sessions.len(),
             1,
             "status refresh must not close a Host PTY"
+        );
+    }
+
+    #[test]
+    fn agent_hook_refresh_only_updates_exact_host_metadata_without_stealing_tab_focus() {
+        let (agent, dock) = host("pty-agent-1", true);
+        let file = editor(9, 42);
+        let mut tabs = WorkbenchTabs::for_workspace(7);
+        tabs.reconcile(
+            7,
+            vec![agent.clone(), file.clone()],
+            Some(file.identity.clone()),
+        );
+        assert!(tabs.set_pinned(&agent.identity, true));
+        let mut live = dock.sessions[0].clone();
+        live.agent_state = Some(AgentActivityState::Waiting);
+        assert!(tabs.refresh_agent_statuses(&[live.clone()]));
+        assert_eq!(
+            tabs.entries()[0].agent_state,
+            Some(AgentActivityState::Waiting)
+        );
+        assert_eq!(tabs.active(), Some(&file.identity));
+        assert_eq!(tabs.entries()[0].identity, agent.identity);
+        assert_eq!(tabs.entries()[1].identity, file.identity);
+        assert!(tabs.is_pinned(&agent.identity));
+        assert!(!tabs.refresh_agent_statuses(&[live.clone()]));
+        live.agent_state = Some(AgentActivityState::Blocked);
+        assert!(tabs.refresh_agent_statuses(&[live.clone()]));
+        assert_eq!(
+            tabs.entries()[0].agent_state,
+            Some(AgentActivityState::Blocked)
+        );
+        // The handle is the same but its Host Tab identity changed: reject it.
+        live.tab_id = "recycled-tab".into();
+        assert!(tabs.refresh_agent_statuses(&[live]));
+        assert_eq!(tabs.entries()[0].agent_state, None);
+        assert_eq!(tabs.active(), Some(&file.identity));
+        assert!(tabs.is_pinned(&agent.identity));
+        assert!(!tabs.refresh_agent_statuses(&[]));
+        assert_eq!(
+            dock.sessions.len(),
+            1,
+            "status changes never terminate PTYs"
         );
     }
 

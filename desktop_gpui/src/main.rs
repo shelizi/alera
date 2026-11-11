@@ -4349,6 +4349,11 @@ impl Workbench {
                             if was_disconnected && !view.terminals.sessions.is_empty() {
                                 view.terminal_poll.reset();
                             }
+                            // Never fully reconcile/focus tabs on a periodic
+                            // Host status refresh. Change only the Hook chip
+                            // metadata; pane order, pins and user focus stay.
+                            view.mixed_tabs
+                                .refresh_agent_statuses(&view.terminals.sessions);
                             view.restore_terminal_layout_from_host(cx);
                             view.refresh_host_tab_pins(cx);
                             if let Some(created) = view
@@ -4418,6 +4423,9 @@ impl Workbench {
                         // erase the old VT preview. The Host may restart
                         // and re-expose the same running Session later.
                         view.terminals.note_session_list_failure();
+                        // A stale Host list cannot substantiate a live
+                        // Working/Waiting/Blocked/Done status dot.
+                        view.mixed_tabs.refresh_agent_statuses(&[]);
                         view.terminals.status = if error.kind() == std::io::ErrorKind::NotConnected {
                             "Runtime Host is offline · use + → New Terminal to start one".into()
                         } else {

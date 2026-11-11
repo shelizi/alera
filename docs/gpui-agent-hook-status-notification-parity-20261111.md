@@ -31,8 +31,8 @@
 |---|---|---|---|---|---|
 | H0 | 建立規格／隔離工作樹 | N/A | 檔案落地、基準與保護驗證 | DONE | 規格首版，隔離 feature worktree |
 | H1 | 四態資料模型／安全解析 | Host 回傳四態、缺狀態／未知狀態、Session 停止、錯誤 Workspace/Tab、身分重用 | 顯示與解析四態；無法確證時 unknown，絕不把 running 當 working | **PARTIAL：解析 GREEN；Host 身分競態待 H3** | `terminal.rs` RED=E0609/E0433；全套 Library **392/392 PASS** |
-| H2 | GPUI 版面渲染 | Tab 與左欄顏色、Tooltip、等待／阻塞、重繪後復原 | 四態顯示／無重疊、其他 Tab 不變 | **PARTIAL：Tab 投影與色彩 GREEN；左欄/Tooltip/GUI 尚未驗收** | Library **394/394 PASS**，Native `cargo check --bin alera-gpui-desktop` PASS |
-| H3 | Host Presence 同步 | 首次快照、delta、亂序、重連、失聯、取消、切換 Workspace／世代 | 唯一 Host 真相、增量正確、過期請求拒絕 | **PARTIAL：3s/15s 受控 snapshot polling GREEN；Host delta stream 與重連競態未實作** | `agent_presence_refresh_due`：RED E0425，GREEN 1/1；Library **402/402 PASS**；Native Check exit 0 |
+| H2 | GPUI 版面渲染 | Tab 與左欄顏色、Tooltip、等待／阻塞、重繪後復原 | 四態顯示／無重疊、其他 Tab 不變 | **PARTIAL：Tab 投影、狀態變化即時重繪、色彩 GREEN；左欄/Tooltip/GUI 尚未驗收** | Library **403/403 PASS**、Native Binary **21/21 PASS**、Native Check exit 0 |
+| H3 | Host Presence 同步 | 首次快照、delta、亂序、重連、失聯、取消、切換 Workspace／世代 | 唯一 Host 真相、增量正確、過期請求拒絕 | **PARTIAL：3s/15s 受控 snapshot polling＋Tab metadata-only sync GREEN；Host delta stream 與重連競態未實作** | `agent_presence_refresh_due`：RED E0425；`refresh_agent_statuses`：RED E0599；Library **403/403 PASS** |
 | H4 | 通知規則 | 60s cooldown、3s/10s coalesce、done toggle、初始化／重連不補發、關閉 Session 去重 | 純 Rust 可重現與無資料競態 | **PARTIAL：純 Rust 決策 7/7 PASS；尚未接進原生通知投遞** | `agent_status_notifications.rs`：RED E0433，GREEN **7/7**，Library **402/402 PASS** |
 | H5 | Windows OS 通知／點擊 | 許可、關閉通知、同時兩版去重、Windows AppId 不污染 Classic、點通知定位正確 Pane/Tab | 具體隔離桌面通知可見且導航安全 | TODO | — |
 | H6 | 設定與跨版本 | Host 設定讀寫 CAS、停用、舊 Host、離線錯誤與重試 | 設定真實生效、Classic / GPUI 行為一致 | TODO | — |
@@ -58,6 +58,7 @@
 | 2026-11-11 H4-1 | 新增純 Rust `AgentNotificationTracker`／`AgentNoticeCoalescer`，匹配 Classic 60 秒冷卻、3/10 秒合併；初始快照忽略、受控 Done、Session 重用拒絕、停用設定不補送 | 新 5 個測試因 `AgentNotificationTracker`／`AgentNoticeCoalescer` 不存在編譯 RED E0433 | 先修 Hash key 型別，再跑專項 **5/5 PASS**，全套 Library **399/399 PASS** | **尚未連接 OS 通知**；此階段只有決策層，不可宣稱 GPUI 已會跳 Toast | H3 資料驅動與 H5 OS Adapter |
 | 2026-11-11 H3-1 | 複用 `terminal list --no-start`，活躍 Agent 由每 15s 改為每 3s 刷新四態；沒有活躍 Agent 保持 15s 間隔；不新增 Host／PTY | `active_agent_status_polls_faster_without_spinning_when_host_is_idle` 編譯 RED E0425 | 指定 **1/1 PASS**，全套 Library **402/402 PASS**；Native `cargo check --offline --locked --bin alera-gpui-desktop -j 2` **exit 0** | 尚未有 Host `agentPresenceChanged` push event；不可宣稱與 Classic 事件時序相同 | 後續實作雙向 Presence push/delta generation、通知投遞 |
 | 2026-11-11 H4-2 | 補足連續抖動最長 10 秒強制 flush、等待期間狀態解除可取消排隊的實測 | 既有 H4 RED E0433，另增兩個回歸防再犯 | 新增 2/2 PASS，通知規則合計 **7/7 PASS**、全套 Library **402/402 PASS** | 無 OS 通知啟動證據 | H5 顯示／導覽與跨版本通知仲裁 |
+| 2026-11-11 H2/H3-2 | 修正 Host `terminal list` 定期刷新後 Tab 沒有同步重繪四態的缺漏。新增 `WorkbenchTabs::refresh_agent_statuses` 只更新**完全符合 Host session/workspace/tab 身分**的 status/interrupted；不觸碰 Tab 排序、釘選、active 焦點或底層 Host/PTY。Host 列表失敗時清除未確證狀態 | 新測試 `agent_hook_refresh_only_updates_exact_host_metadata_without_stealing_tab_focus` 編譯 RED **E0599** | 指定 1/1 PASS；完整 Library **403/403 PASS**、Native Binary **21/21 PASS**、`cargo check --offline --locked --bin alera-gpui-desktop -j 2` **exit 0** | **仍未實際 Windows UI、Host Push、OS Toast 驗收** | H3 正規 `agentPresenceChanged` delta、H5 Windows Toast |
 
 ## 尚未解決
 
@@ -66,7 +67,8 @@
 - 最新 Windows GPUI EXE 曾被工作區外可執行檔安全政策禁止啟動；須使用授權隔離途徑驗收 GUI，不得搬檔繞過。
 - 跨平台 OS 通知需分平台 adapter；Windows 應先通過，其他平台標示 NOT RUN 而非 PASS。
 - 現有 H4 通知去重僅比對同一 Session 的狀態差異，尚未讀取 Host `stateStartedAt`；連續回合相同狀態通知、重連後補發界線仍需配合 H3 event timestamp TDD。
-- 在 H3/H5 正式接線之前，`AgentNotificationTracker` 仍是**純規則層**，不會觸發 OS Toast；不可僅因 400/400 Library 通過就打勾 H5。
+- 在 H3/H5 正式接線之前，`AgentNotificationTracker` 仍是**純規則層**，不會觸發 OS Toast；不可僅因 **403/403 Library** 通過就打勾 H5。
+- 主程式目前用已存在的 `terminal list --no-start` 每 3 秒（有活躍 Agent）或每 15 秒（沒有）刷新，**尚非** Classic 的 Host `agentPresenceChanged` 事件訂閱；只有授權的隔離 Host 實測之後才能宣告端到端即時狀態完成。
 
 ## 發行 Gate
 
