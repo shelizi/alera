@@ -242,6 +242,12 @@ pub const SECTIONS: &[SettingsSection] = &[
         nav_group: SettingsNavGroup::Resources, show_group_chips: false,
         groups: &[group!("Agent Profiles" => [row!("Agent Profiles", "Configure available launch profiles.", Action)])],
     },
+    SettingsSection {
+        id: "historySync", title: "History Sync", icon: "↻",
+        description: "Share Agent conversation history across account groups through Runtime Host.",
+        nav_group: SettingsNavGroup::Preferences, show_group_chips: false,
+        groups: &[],
+    },
 ];
 
 pub fn section(id: &str) -> Option<&'static SettingsSection> {
@@ -395,7 +401,8 @@ mod tests {
                 "projects",
                 "mobileDevices",
                 "remoteHosts",
-                "agentProfiles"
+                "agentProfiles",
+                "historySync"
             ]
         );
         assert_eq!(

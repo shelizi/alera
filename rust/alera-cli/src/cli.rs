@@ -502,6 +502,45 @@ pub enum RuntimeAction {
     Clear(RuntimeClearArgs),
     /// Inspect or change runtime-owned agent integrations.
     Agents(RuntimeAgentsCommand),
+    /// Read or configure host-owned cross-account history sharing.
+    HistorySync(RuntimeHistorySyncCommand),
+}
+
+#[derive(Debug, Args)]
+pub struct RuntimeHistorySyncCommand {
+    #[command(subcommand)]
+    pub action: RuntimeHistorySyncAction,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum RuntimeHistorySyncModeArg {
+    All,
+    Separate,
+    Groups,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum RuntimeHistorySyncAction {
+    /// Read the shared Host policy, accounts, and revision; never start a Host.
+    Get,
+    /// Change the sharing mode with optimistic Host revision checking.
+    SetMode {
+        #[arg(long)]
+        mode: RuntimeHistorySyncModeArg,
+        #[arg(long)]
+        expected_revision: i64,
+    },
+    /// Assign/remove one account's sync group (blank removes it).
+    SetGroup {
+        #[arg(long)]
+        provider: String,
+        #[arg(long)]
+        account_id: String,
+        #[arg(long)]
+        group_name: String,
+        #[arg(long)]
+        expected_revision: i64,
+    },
 }
 
 #[derive(Debug, Args)]

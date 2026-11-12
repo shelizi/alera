@@ -1,5 +1,62 @@
 use std::collections::HashMap;
 
+#[tokio::test]
+async fn history_sync_policy_is_visible_to_two_clients_of_same_runtime_store() {
+    use super::{RuntimeAgentHistorySyncMode, RuntimeAgentHistorySyncSettings};
+    use std::collections::BTreeMap;
+
+    let directory = tempfile::tempdir().unwrap();
+    let classic = RuntimeStore::open(directory.path()).await.unwrap();
+    let gpui = RuntimeStore::open(directory.path()).await.unwrap();
+
+    let mut settings = classic.agent_quota_settings().await.unwrap();
+    assert_eq!(settings.history_sync.mode, RuntimeAgentHistorySyncMode::All);
+    settings.history_sync = RuntimeAgentHistorySyncSettings {
+        mode: RuntimeAgentHistorySyncMode::Groups,
+        account_groups: BTreeMap::from([
+            ("codex:default".into(), "team".into()),
+            ("codex:work".into(), "team".into()),
+            ("claude:default".into(), "private".into()),
+        ]),
+    };
+    classic.set_agent_quota_settings(settings).await.unwrap();
+
+    let seen_in_gpui = gpui.agent_quota_settings().await.unwrap();
+    assert_eq!(
+        seen_in_gpui.history_sync.mode,
+        RuntimeAgentHistorySyncMode::Groups
+    );
+    assert!(seen_in_gpui
+        .history_sync
+        .should_sync("codex", "default", "work"));
+    assert!(!seen_in_gpui
+        .history_sync
+        .should_sync("claude", "default", "work"));
+
+    let mut gpui_settings = seen_in_gpui;
+    gpui_settings.history_sync.mode = RuntimeAgentHistorySyncMode::Separate;
+    gpui.set_agent_quota_settings(gpui_settings).await.unwrap();
+
+    let after_gpui_change = classic.agent_quota_settings().await.unwrap();
+    assert_eq!(
+        after_gpui_change.history_sync.mode,
+        RuntimeAgentHistorySyncMode::Separate
+    );
+    assert!(!after_gpui_change
+        .history_sync
+        .should_sync("codex", "default", "work"));
+
+    let reopened = RuntimeStore::open(directory.path()).await.unwrap();
+    assert_eq!(
+        reopened
+            .agent_quota_settings()
+            .await
+            .unwrap()
+            .history_sync
+            .mode,
+        RuntimeAgentHistorySyncMode::Separate
+    );
+}
 use super::{
     RuntimeAiAssistSettings, RuntimeSettings, RuntimeStore, RuntimeTextAction,
     RuntimeTextActionsSettings,

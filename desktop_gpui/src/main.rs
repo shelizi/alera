@@ -4,6 +4,7 @@ mod native_action_dialog_ui;
 mod native_agent_quota_ui;
 mod native_components;
 mod native_git_favorites_ui;
+mod native_history_sync_ui;
 mod native_host_pins_ui;
 mod native_popup_ui;
 mod native_project_sidebar_ui;
@@ -70,6 +71,9 @@ use alera_gpui_desktop::git_sidebar_layout::{
     GitSidebarOptions, GitSidebarViewMode, SectionKey,
 };
 use alera_gpui_desktop::git_watch::GitWatchService;
+use alera_gpui_desktop::history_sync_bridge::{
+    HistorySyncAccount, HistorySyncMode, HistorySyncSnapshot,
+};
 use alera_gpui_desktop::host_tab_pins::{
     host_pin_owner_coverage, host_pin_query_workspaces, HostPinOwnerCoverage, HostTabPinSnapshot,
 };
@@ -637,6 +641,13 @@ struct Workbench {
     native_settings_store: Option<NativeSettingsStore>,
     native_settings: NativeSettings,
     native_settings_error: Option<String>,
+    history_sync_snapshot: Option<HistorySyncSnapshot>,
+    history_sync_loading: bool,
+    history_sync_busy: bool,
+    history_sync_request: u64,
+    history_sync_status: String,
+    history_sync_edit: Option<HistorySyncAccount>,
+    history_sync_input: Entity<QuickOpenInput>,
     settings_section: Option<String>,
     settings_modal_focus: gpui::FocusHandle,
     settings_kit_dialog_open: bool,
@@ -13451,6 +13462,15 @@ fn main() {
                             native_settings_store,
                             native_settings,
                             native_settings_error,
+                            history_sync_snapshot: None,
+                            history_sync_loading: false,
+                            history_sync_busy: false,
+                            history_sync_request: 0,
+                            history_sync_status: String::new(),
+                            history_sync_edit: None,
+                            history_sync_input: cx.new(|cx| {
+                                QuickOpenInput::with_placeholder("Group (empty = independent)", cx)
+                            }),
                             settings_section: None,
                             settings_modal_focus: cx.focus_handle(),
                             settings_kit_dialog_open: false,

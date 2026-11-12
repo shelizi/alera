@@ -235,6 +235,108 @@ class const AgentQuotaSettingsPane({
         ),
         const SizedBox(height: AleraTokens.space16),
         KeyedSubtree(
+          key: groupKeys['historySync'],
+          child: AleraSettingsGroup(
+            title: 'Agent History Sync',
+            description: 'Keep account logins separate. Share native conversation history only between accounts of the same Agent on this host.',
+            children: <Widget>[
+              AleraSettingRow(
+                title: 'History Sharing Mode',
+                description: 'By default all accounts of the same Agent share history. Separate keeps each account isolated; Groups shares only matching group names.',
+                controlWidth: 340,
+                child: DropdownButton<AgentHistorySyncMode>(
+                  isExpanded: true,
+                  value: hostSettings.historySync.mode,
+                  items: const <DropdownMenuItem<AgentHistorySyncMode>>[
+                    DropdownMenuItem(
+                      value: AgentHistorySyncMode.all,
+                      child: Text('Sync All (Default)'),
+                    ),
+                    DropdownMenuItem(
+                      value: AgentHistorySyncMode.separate,
+                      child: Text('Keep Separate'),
+                    ),
+                    DropdownMenuItem(
+                      value: AgentHistorySyncMode.groups,
+                      child: Text('Sync by Group'),
+                    ),
+                  ],
+                  onChanged: (mode) {
+                    if (mode == null) return;
+                    unawaited(
+                      controller.setAgentHistorySyncMode(
+                        hostId: hostId,
+                        mode: mode,
+                      ),
+                    );
+                  },
+                ),
+              ),
+              if (hostSettings.historySync.mode ==
+                  AgentHistorySyncMode.groups) ...[
+                _historySyncGroupRow(
+                  hostId: hostId,
+                  provider: 'codex',
+                  accountId: 'default',
+                  label: 'Codex Default',
+                  sync: hostSettings.historySync,
+                  controller: controller,
+                ),
+                for (final profile in hostSettings.codexProfiles)
+                  _historySyncGroupRow(
+                    hostId: hostId,
+                    provider: 'codex',
+                    accountId: profile.profile,
+                    label: 'Codex · ${profile.alias}',
+                    sync: hostSettings.historySync,
+                    controller: controller,
+                  ),
+                _historySyncGroupRow(
+                  hostId: hostId,
+                  provider: 'claude',
+                  accountId: 'default',
+                  label: 'Claude Default',
+                  sync: hostSettings.historySync,
+                  controller: controller,
+                ),
+                for (final profile in hostSettings.claudeProfiles)
+                  _historySyncGroupRow(
+                    hostId: hostId,
+                    provider: 'claude',
+                    accountId: profile.profile,
+                    label: 'Claude · ${profile.alias}',
+                    sync: hostSettings.historySync,
+                    controller: controller,
+                  ),
+                _historySyncGroupRow(
+                  hostId: hostId,
+                  provider: 'agy',
+                  accountId: 'default',
+                  label: 'Antigravity Default',
+                  sync: hostSettings.historySync,
+                  controller: controller,
+                ),
+                const Padding(
+                  padding: EdgeInsets.only(top: AleraTokens.space8),
+                  child: Text(
+                    'Enter the same group name for accounts that should sync. '
+                    'An empty group remains isolated. Group names do not mix Codex, Claude or AGY formats.',
+                  ),
+                ),
+              ],
+              const Padding(
+                padding: EdgeInsets.only(top: AleraTokens.space8),
+                child: Text(
+                  'History only: credentials, configuration, active session files, '
+                  'and authentication tokens are never shared. Changing to Separate '
+                  'does not delete history already copied.',
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: AleraTokens.space16),
+        KeyedSubtree(
           key: groupKeys['credentials'],
           child: AleraSettingsGroup(
             title: 'Credential Environment',
@@ -324,6 +426,33 @@ class const AgentQuotaSettingsPane({
       ],
     );
   }
+}
+
+Widget _historySyncGroupRow({
+  required String hostId,
+  required String provider,
+  required String accountId,
+  required String label,
+  required AgentHistorySyncSettings sync,
+  required SettingsController controller,
+}) {
+  return SettingsTextRow(
+    key: ValueKey<String>('history-sync-group-$provider:$accountId'),
+    title: label,
+    description: accountId,
+    value: sync.accountGroups['$provider:$accountId'] ?? '',
+    hintText: 'e.g. work',
+    onChanged: (value) {
+      unawaited(
+        controller.setAgentHistorySyncAccountGroup(
+          hostId: hostId,
+          provider: provider,
+          accountId: accountId,
+          group: value,
+        ),
+      );
+    },
+  );
 }
 
 void _saveEnvironment(

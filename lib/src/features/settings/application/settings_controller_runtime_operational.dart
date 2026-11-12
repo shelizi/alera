@@ -169,6 +169,48 @@ mixin _SettingsControllerRuntimeOperationalSettings on _$SettingsController {
     await _saveQuotaHost(hostId, current.copyWith(environment: environment));
   });
 
+  Future<void> setAgentHistorySyncMode({
+    required String hostId,
+    required AgentHistorySyncMode mode,
+  }) => _controller._serialize(() async {
+    final current = state.agents.quotas.forHost(hostId);
+    await _saveQuotaHost(
+      hostId,
+      current.copyWith(historySync: current.historySync.copyWith(mode: mode)),
+    );
+  });
+
+  Future<void> setAgentHistorySyncAccountGroup({
+    required String hostId,
+    required String provider,
+    required String accountId,
+    required String group,
+  }) => _controller._serialize(() async {
+    if (!const <String>{'codex', 'claude', 'agy'}.contains(provider) ||
+        accountId.trim().isEmpty) {
+      throw ArgumentError('Unknown Agent account for history sync');
+    }
+    final normalizedGroup = group.trim();
+    if (normalizedGroup.length > 64 ||
+        normalizedGroup.contains(RegExp(r'[\x00-\x1f]'))) {
+      throw ArgumentError.value(group, 'group', 'Invalid history sync group');
+    }
+    final current = state.agents.quotas.forHost(hostId);
+    final key = '$provider:$accountId';
+    final groups = <String, String>{...current.historySync.accountGroups};
+    if (normalizedGroup.isEmpty) {
+      groups.remove(key);
+    } else {
+      groups[key] = normalizedGroup;
+    }
+    await _saveQuotaHost(
+      hostId,
+      current.copyWith(
+        historySync: current.historySync.copyWith(accountGroups: groups),
+      ),
+    );
+  });
+
   Future<void> _saveQuotaHost(
     String hostId,
     AgentQuotaHostSettings hostSettings,

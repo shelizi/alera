@@ -7,6 +7,94 @@ use super::agent_settings_contract_tests::{read_response, wire_call};
 use crate::terminal_host::client::ClientHandle;
 
 #[tokio::test]
+async fn classic_and_gpui_history_sync_share_revisioned_host_state() {
+    let dir = tempfile::tempdir().unwrap();
+    let (gpui_handle, mut gpui_responses) = ClientHandle::test_channels();
+    let (classic_handle, mut classic_responses) = ClientHandle::test_channels();
+    let mut actor = test_actor(
+        &dir,
+        HashMap::from([
+            (1, local_client(gpui_handle)),
+            (2, local_client(classic_handle)),
+        ]),
+        HashMap::new(),
+    )
+    .await;
+
+    let before = actor.runtime_settings_snapshot().await.unwrap();
+    assert_eq!(before["revision"], 0);
+    assert_eq!(before["agentQuotas"]["historySync"]["mode"], "all");
+
+    let mut quotas = before["agentQuotas"].clone();
+    quotas["historySync"] = json!({
+        "mode": "groups",
+        "accountGroups": {
+            "codex:default": "work",
+            "codex:profile-b": "work",
+            "claude:default": "private"
+        }
+    });
+    wire_call(
+        &mut actor,
+        1,
+        201,
+        "runtimeSettings.update",
+        json!({ "expectedRevision": 0, "agentQuotas": quotas }),
+    )
+    .await;
+    let saved = read_response(&mut gpui_responses, 201).await;
+    assert_eq!(saved["ok"], true, "{saved}");
+    assert_eq!(saved["payload"]["revision"], 1, "{saved}");
+    assert_eq!(
+        saved["payload"]["agentQuotas"]["historySync"]["mode"],
+        "groups"
+    );
+
+    wire_call(&mut actor, 2, 202, "runtimeSettings.get", json!({})).await;
+    let seen_in_classic = read_response(&mut classic_responses, 202).await;
+    assert_eq!(seen_in_classic["ok"], true, "{seen_in_classic}");
+    assert_eq!(
+        seen_in_classic["payload"]["agentQuotas"]["historySync"]["accountGroups"]
+            ["codex:profile-b"],
+        "work",
+        "{seen_in_classic}"
+    );
+
+    // Old Classic edit based on its original revision must not overwrite GPUI.
+    quotas["historySync"] = json!({"mode": "separate"});
+    wire_call(
+        &mut actor,
+        2,
+        203,
+        "runtimeSettings.update",
+        json!({ "expectedRevision": 0, "agentQuotas": quotas.clone() }),
+    )
+    .await;
+    let rejected = read_response(&mut classic_responses, 203).await;
+    assert_eq!(rejected["ok"], false, "{rejected}");
+    assert_eq!(rejected["errorCode"], "runtime_settings_revision_conflict");
+    assert_eq!(
+        actor.runtime_settings_snapshot().await.unwrap()["agentQuotas"]["historySync"]["mode"],
+        "groups"
+    );
+
+    wire_call(
+        &mut actor,
+        2,
+        204,
+        "runtimeSettings.update",
+        json!({ "expectedRevision": 1, "agentQuotas": quotas }),
+    )
+    .await;
+    let committed = read_response(&mut classic_responses, 204).await;
+    assert_eq!(committed["ok"], true, "{committed}");
+    assert_eq!(committed["payload"]["revision"], 2);
+    assert_eq!(
+        committed["payload"]["agentQuotas"]["historySync"]["mode"],
+        "separate"
+    );
+}
+#[tokio::test]
 async fn runtime_settings_update_reapplies_the_same_values_idempotently() {
     let dir = tempfile::tempdir().unwrap();
     let (handle, mut responses) = ClientHandle::test_channels();

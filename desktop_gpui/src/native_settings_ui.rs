@@ -71,7 +71,7 @@ impl Workbench {
         section: &str,
         cx: &mut Context<Self>,
     ) -> Result<(), &'static str> {
-        if catalog_section(section).is_none() {
+        if section != "historySync" && catalog_section(section).is_none() {
             return Err("ui_not_ready");
         }
         // Existing connected Native controls now read the same Rust Runtime
@@ -92,6 +92,7 @@ impl Workbench {
         self.settings_section = Some(section.to_owned());
         match section {
             "agents" => self.refresh_terminals(cx),
+            "historySync" => self.refresh_shared_history_sync(cx),
             "agentProfiles" => self.refresh_agent_profiles(cx),
             _ => {}
         }
@@ -528,13 +529,15 @@ impl Workbench {
                     },
                 ))
                 .into_any_element(),
+            "historySync" => self.render_history_sync_settings(cx),
             _ => div().into_any_element(),
         };
         let metrics = NativeModalSize::Settings.resolve(viewport_width, viewport_height);
         let compact = metrics.stacked_navigation;
-        // Application, Terminal and Editor use their real controls directly
-        // inside the Classic catalog; don't show a duplicate second panel.
-        let has_native_controls = matches!(section, "agents" | "agentProfiles");
+        // Existing shared settings are rendered directly through the catalog.
+        // The separately Host-owned History Sync and Agent Profile panels
+        // remain connected Native controls rather than inert catalog previews.
+        let has_native_controls = matches!(section, "agents" | "agentProfiles" | "historySync");
         let navigation = div()
             .id("native-settings-sidebar")
             .flex()
@@ -775,10 +778,13 @@ impl Workbench {
                     .py_2()
                     .text_xs()
                     .text_color(rgb(MUTED))
-                    .child(tr(
-                        locale,
-                        "Connected controls save to shared Rust Core · other items are unavailable in GPUI",
-                    )),
+                    .child(if section == "historySync" {
+                        "Agent History Sync is shared through the Runtime Host.".to_owned()
+                    } else {
+                        tr(locale,
+                            "Connected controls save to shared Rust Core · other items are unavailable in GPUI",
+                        ).to_string()
+                    }),
             );
         let body = div()
             .id("native-settings-panel")

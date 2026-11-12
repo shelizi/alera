@@ -1,5 +1,6 @@
 use crate::agent_descriptor::canonical_agent_id;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 const CURRENT_PROVIDER_DEFAULTS_VERSION: u32 = 2;
 
@@ -18,6 +19,9 @@ pub struct RuntimeAgentQuotaSettings {
     pub claude_profiles: Vec<RuntimeClaudeQuotaProfile>,
     #[serde(default)]
     pub codex_profiles: Vec<RuntimeCodexQuotaProfile>,
+    /// Per-host account history policy; never carries credentials.
+    #[serde(default)]
+    pub history_sync: RuntimeAgentHistorySyncSettings,
     #[serde(default)]
     pub environment: RuntimeAgentQuotaEnvironment,
 }
@@ -31,6 +35,7 @@ impl Default for RuntimeAgentQuotaSettings {
             claude_default_show_in_usage: true,
             claude_profiles: Vec::new(),
             codex_profiles: Vec::new(),
+            history_sync: RuntimeAgentHistorySyncSettings::default(),
             environment: RuntimeAgentQuotaEnvironment::default(),
         }
     }
@@ -90,6 +95,7 @@ impl RuntimeAgentQuotaSettings {
                 && std::path::Path::new(&entry.profile).is_absolute()
                 && seen_profiles.insert(entry.profile.clone())
         });
+        self.history_sync.normalize();
         self
     }
 
@@ -103,6 +109,62 @@ impl RuntimeAgentQuotaSettings {
                 profile
             })
             .collect()
+    }
+}
+
+/// Only the same provider's histories can be mirrored as native files.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum RuntimeAgentHistorySyncMode {
+    #[default]
+    All,
+    Separate,
+    Groups,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeAgentHistorySyncSettings {
+    #[serde(default)]
+    pub mode: RuntimeAgentHistorySyncMode,
+    /// Keys are `provider:accountId`. Group names are scoped per provider.
+    #[serde(default)]
+    pub account_groups: BTreeMap<String, String>,
+}
+
+impl RuntimeAgentHistorySyncSettings {
+    pub fn normalize(&mut self) {
+        self.account_groups = std::mem::take(&mut self.account_groups)
+            .into_iter()
+            .filter_map(|(account, group)| {
+                let account = account.trim();
+                let group = group.trim();
+                let (provider, id) = account.split_once(':')?;
+                if !matches!(provider, "codex" | "claude" | "agy")
+                    || id.trim().is_empty()
+                    || group.is_empty()
+                {
+                    return None;
+                }
+                Some((account.to_owned(), group.to_owned()))
+            })
+            .collect();
+    }
+
+    /// Membership only: file I/O must separately enforce safe path/liveness.
+    pub fn should_sync(&self, provider: &str, first: &str, second: &str) -> bool {
+        if first == second || !matches!(provider, "codex" | "claude" | "agy") {
+            return false;
+        }
+        match self.mode {
+            RuntimeAgentHistorySyncMode::All => true,
+            RuntimeAgentHistorySyncMode::Separate => false,
+            RuntimeAgentHistorySyncMode::Groups => {
+                let one = self.account_groups.get(&format!("{provider}:{first}"));
+                let two = self.account_groups.get(&format!("{provider}:{second}"));
+                one.is_some_and(|group| !group.is_empty() && Some(group) == two)
+            }
+        }
     }
 }
 
@@ -216,6 +278,76 @@ fn default_true() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn history_sync_defaults_to_all_for_legacy_settings() {
+        let settings: RuntimeAgentQuotaSettings =
+            serde_json::from_value(serde_json::json!({"codexProfiles": []})).unwrap();
+        assert_eq!(settings.history_sync.mode, RuntimeAgentHistorySyncMode::All);
+        assert!(settings
+            .history_sync
+            .should_sync("codex", "default", "work"));
+        assert!(!settings
+            .history_sync
+            .should_sync("codex", "default", "default"));
+        assert!(!settings.history_sync.should_sync("grok", "default", "work"));
+    }
+
+    #[test]
+    fn history_sync_separate_mode_blocks_all_cross_account_copies() {
+        let settings: RuntimeAgentHistorySyncSettings =
+            serde_json::from_value(serde_json::json!({"mode": "separate"})).unwrap();
+        assert!(!settings.should_sync("codex", "default", "work"));
+        assert!(!settings.should_sync("claude", "default", "work"));
+        assert!(!settings.should_sync("agy", "default", "work"));
+    }
+
+    #[test]
+    fn history_sync_groups_require_explicit_membership_within_provider() {
+        let mut settings: RuntimeAgentHistorySyncSettings =
+            serde_json::from_value(serde_json::json!({
+                "mode": "groups",
+                "accountGroups": {
+                    "codex:default": "work",
+                    "codex:C:\\codex-work": "work",
+                    "codex:private": "personal",
+                    "claude:default": "work",
+                    "claude:second": "work",
+                    "agy:default": "research",
+                    "agy:second": "research",
+                    "claude:unused": "  ",
+                    "unknown:foo": "work"
+                }
+            }))
+            .unwrap();
+        settings.normalize();
+        assert!(settings.should_sync("codex", "default", "C:\\codex-work"));
+        assert!(!settings.should_sync("codex", "default", "private"));
+        assert!(!settings.should_sync("codex", "default", "missing"));
+        assert!(settings.should_sync("claude", "default", "second"));
+        assert!(settings.should_sync("agy", "default", "second"));
+        assert!(!settings.account_groups.contains_key("claude:unused"));
+        assert!(!settings.account_groups.contains_key("unknown:foo"));
+    }
+
+    #[test]
+    fn history_sync_round_trip_retains_selection_and_groups() {
+        let settings: RuntimeAgentQuotaSettings = serde_json::from_value(serde_json::json!({
+            "historySync": {
+                "mode": "groups",
+                "accountGroups": {"codex:default": "team", "codex:b": "team"}
+            }
+        }))
+        .unwrap();
+        let restored: RuntimeAgentQuotaSettings =
+            serde_json::from_value(serde_json::to_value(settings).unwrap()).unwrap();
+        assert_eq!(
+            restored.history_sync.mode,
+            RuntimeAgentHistorySyncMode::Groups
+        );
+        assert!(restored.history_sync.should_sync("codex", "default", "b"));
+        assert!(!restored.history_sync.should_sync("claude", "default", "b"));
+    }
 
     #[test]
     fn legacy_claude_profiles_are_visible_in_usage_by_default() {
