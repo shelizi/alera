@@ -12,6 +12,14 @@ pub struct InstalledAgentCli {
     pub executable_path: PathBuf,
 }
 
+impl InstalledAgentCli {
+    /// Classic's New Tab menu displays this shared descriptor label as-is.
+    /// Do not add a second `New Agent` prefix in the native popup.
+    pub fn new_tab_menu_label(&self) -> &str {
+        self.display_name.as_str()
+    }
+}
+
 /// Probe installed, spawnable Agent adapters independently of Host Agent
 /// Profiles. The caller must run this on a background thread, never in paint.
 pub fn detect_installed_agent_clis(
@@ -28,8 +36,8 @@ pub fn detect_installed_agent_clis(
 }
 
 /// Installed CLI presence and Host profile configuration are independent.
-/// A matching Host profile is the only currently supported Native launch route.
-/// Prefer the user's selected/default profile when more than one matches.
+/// Direct local Agent launch does not require a saved Host profile.
+/// When selecting a Host profile explicitly, prefer the user's selection.
 pub fn matching_host_profile_for_agent<'a>(
     agent_id: &str,
     profiles: &'a [crate::agent_profiles::AgentProfileRow],
@@ -250,6 +258,27 @@ mod tests {
             |path| found.contains(path),
             |_path| agy_healthy,
         )
+    }
+
+    #[test]
+    fn installed_agent_new_tab_labels_match_classic_unprefixed_names_and_order() {
+        // Classic's + menu uses agentDisplayName directly: no "New Agent" prefix.
+        let rows = probe(
+            r"C:\agents",
+            &[
+                r"C:\agents\copilot.exe",
+                r"C:\agents\claude.cmd",
+                r"C:\agents\codex.exe",
+            ],
+            &[],
+            false,
+        );
+        assert_eq!(
+            rows.iter()
+                .map(InstalledAgentCli::new_tab_menu_label)
+                .collect::<Vec<_>>(),
+            ["Codex", "Claude Code", "GitHub Copilot"]
+        );
     }
 
     #[test]

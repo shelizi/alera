@@ -71,7 +71,7 @@ impl Workbench {
                 let agent_owner = owner.clone();
                 let agent_target = target.clone();
                 let agent_id = agent.id.clone();
-                let label = format!("New Agent · {}", agent.display_name);
+                let label = agent.new_tab_menu_label().to_owned();
                 menu = menu.item(PopupMenuItem::new(label).on_click(move |_, window, cx| {
                     let _ = agent_owner.update(cx, |view, cx| {
                         view.prepare_detected_agent_in_pane(&agent_id, &agent_target, window, cx);
