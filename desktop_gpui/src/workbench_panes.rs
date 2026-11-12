@@ -173,6 +173,21 @@ impl WorkbenchPaneLayout {
         moved
     }
 
+    /// A cross-pane drop should activate only the identity that actually
+    /// became active in the destination. Same-pane sorting must preserve
+    /// the user's current selection; stale or closed sources get no focus.
+    pub fn post_cross_pane_drop_focus(
+        &self,
+        moved: &WorkbenchTabIdentity,
+        crossed_panes: bool,
+    ) -> Option<WorkbenchTabIdentity> {
+        crossed_panes
+            .then(|| self.active_in(self.focused))
+            .flatten()
+            .filter(|active| *active == moved)
+            .cloned()
+    }
+
     /// Split `id` off into the secondary pane, creating the split when needed.
     /// Equivalent to [`Self::move_to`] with [`PaneSlot::Secondary`]: the tab
     /// keeps its single identity — a Host PTY or editor buffer is never
@@ -577,6 +592,37 @@ mod tests {
             0
         );
         assert!(!recycled.has_secondary());
+    }
+
+    #[test]
+    fn cross_pane_host_drop_requests_focus_only_for_moved_live_identity() {
+        let agent = host("claude-session");
+        let terminal = host("cmd-session");
+        let mut panes = WorkbenchPaneLayout::new();
+        panes.reconcile(&[agent.clone(), terminal.clone()]);
+        assert_eq!(panes.post_cross_pane_drop_focus(&agent, false), None);
+        assert!(panes.move_to(&terminal, PaneSlot::Secondary));
+        assert_eq!(
+            panes.post_cross_pane_drop_focus(&terminal, true),
+            Some(terminal.clone())
+        );
+        assert_eq!(
+            panes.post_cross_pane_drop_focus(&agent, true),
+            None,
+            "the old primary Host must not steal the moved tab focus"
+        );
+        assert!(panes.move_to(&agent, PaneSlot::Secondary));
+        assert_eq!(
+            panes.post_cross_pane_drop_focus(&agent, true),
+            Some(agent.clone())
+        );
+        panes.reconcile(&[terminal.clone()]);
+        assert_eq!(
+            panes.post_cross_pane_drop_focus(&agent, true),
+            None,
+            "a closed Host preview cannot receive focus"
+        );
+        assert_eq!(panes.post_cross_pane_drop_focus(&terminal, false), None);
     }
 
     #[test]

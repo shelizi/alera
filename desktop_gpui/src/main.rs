@@ -8063,8 +8063,8 @@ impl Workbench {
                             })
                         },
                     )
-                    .on_drop(cx.listener(move |this, drag: &MixedTabDrag, _, cx| {
-                        this.reorder_mixed_tab(drag, &for_drop, cx);
+                    .on_drop(cx.listener(move |this, drag: &MixedTabDrag, window, cx| {
+                        this.reorder_mixed_tab(drag, &for_drop, window, cx);
                     }))
                     .context_menu(Self::kit_mixed_tab_context_menu(
                         cx.entity().downgrade(),
@@ -8451,6 +8451,7 @@ impl Workbench {
         &mut self,
         drag: &MixedTabDrag,
         target: &WorkbenchTabIdentity,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if drag.workspace_generation != self.workspace_generation
@@ -8481,7 +8482,19 @@ impl Workbench {
         let pane_reordered = self.mixed_panes.reorder_within(&drag.identity, target);
         let global_reordered = self.mixed_tabs.move_to(&drag.identity, target);
         if pane_reordered || global_reordered || !source_in_destination {
-            self.save_mixed_pane_layout(cx);
+            // Pane membership alone does not change TerminalDock.active_tab.
+            // If a Host Agent is dragged across panes, synchronize the real
+            // TUI output/input owner immediately, just like clicking its tab.
+            // Otherwise the old Terminal can remain on screen under the
+            // moved Agent chip until the next manual focus change.
+            let dropped_focus = self
+                .mixed_panes
+                .post_cross_pane_drop_focus(&drag.identity, !source_in_destination);
+            if let Some(identity) = dropped_focus {
+                self.focus_mixed_tab(&identity, window, cx);
+            } else {
+                self.save_mixed_pane_layout(cx);
+            }
             if !source_in_destination {
                 self.refresh_terminal_split_output(cx);
             }
