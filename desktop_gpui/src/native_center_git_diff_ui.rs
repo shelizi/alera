@@ -100,6 +100,16 @@ fn center_hunk_controls(selected: Option<usize>, count: usize) -> (usize, bool, 
     )
 }
 
+fn center_hunk_target(
+    rows: &[CenterGitDiffRow],
+    selected: Option<usize>,
+    next: bool,
+) -> Option<(usize, usize)> {
+    let positions = hunk_positions(rows);
+    let target = adjacent_hunk_index(selected, positions.len(), next)?;
+    positions.get(target).copied().map(|row| (target, row))
+}
+
 impl Workbench {
     pub(super) fn center_git_diff_is_current(&self) -> bool {
         self.center_git_diff_source.as_ref().is_some_and(|source| {
@@ -150,15 +160,19 @@ impl Workbench {
         if !self.center_git_diff_is_current() || self.git_diff_loading {
             return;
         }
-        let Some(patch) = self.git_diff.as_ref() else {
+        if self.git_diff.is_none() {
             return;
-        };
-        let positions = hunk_positions(&center_git_diff_rows(patch));
-        let target = adjacent_hunk_index(self.center_git_diff_hunk, positions.len(), next);
-        if let Some(selected) = target {
+        }
+        // The page loader already parsed the bounded patch once. Reuse its
+        // cached virtual rows rather than re-parsing on every Hunk click.
+        if let Some((selected, row_index)) = center_hunk_target(
+            self.center_git_diff_rows.as_ref(),
+            self.center_git_diff_hunk,
+            next,
+        ) {
             self.center_git_diff_hunk = Some(selected);
             self.center_git_diff_scroll
-                .scroll_to_item(positions[selected], gpui::ScrollStrategy::Center);
+                .scroll_to_item(row_index, gpui::ScrollStrategy::Center);
             cx.notify();
         }
     }
@@ -398,8 +412,8 @@ impl Workbench {
 #[cfg(test)]
 mod tests {
     use super::{
-        adjacent_hunk_index, center_git_diff_rows, center_hunk_controls, hunk_positions,
-        should_show_center_git_diff_view, uses_paged_git_preview, GitChangeArea,
+        adjacent_hunk_index, center_git_diff_rows, center_hunk_controls, center_hunk_target,
+        hunk_positions, should_show_center_git_diff_view, uses_paged_git_preview, GitChangeArea,
         MAX_CENTER_DIFF_SOURCE_BYTES,
     };
 
@@ -459,6 +473,21 @@ mod tests {
         assert_eq!(center_hunk_controls(Some(2), 3), (3, true, false));
         assert_eq!(center_hunk_controls(Some(3), 3), (0, false, false));
         assert_eq!(center_hunk_controls(Some(usize::MAX), 3), (0, false, false));
+    }
+    #[test]
+    fn center_hunk_jump_targets_cached_virtual_rows_and_refuses_outdated_positions() {
+        let mut patch = String::from("diff --git a/x b/x\n@@ -1 +1 @@\n");
+        for _ in 0..530 {
+            patch.push_str(" context\n");
+        }
+        patch.push_str("@@ -532 +532 @@\n+new\n");
+        let rows = center_git_diff_rows(&patch);
+        assert_eq!(center_hunk_target(&rows, None, true), Some((0, 1)));
+        assert_eq!(center_hunk_target(&rows, Some(0), true), Some((1, 532)));
+        assert_eq!(center_hunk_target(&rows, Some(1), true), None);
+        assert_eq!(center_hunk_target(&rows, Some(1), false), Some((0, 1)));
+        assert_eq!(center_hunk_target(&rows, Some(999), true), None);
+        assert_eq!(center_hunk_target(&[], Some(0), false), None);
     }
     #[test]
     fn git_change_rows_expose_bounded_center_diff_without_mixing_staged_previews() {
