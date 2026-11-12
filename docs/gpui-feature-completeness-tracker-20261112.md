@@ -34,11 +34,11 @@
 | --- | --- | --- | --- |
 | **T01** | 左右 Pane 的 `+` → **New Terminal**，確實建立並可輸入／輸出 | **完成（正常流程）**：2026-11-12 Windows GPUI 主、副 Pane `+` 各建立一個 Host-owned `cmd.exe`；兩個獨立 PTY 都能透過 GUI 輸入 `echo` 並顯示輸出；Host `terminal list/read` 雙向核對 PASS | **PASS**：不同 Session／Tab ID、輸出不串流、無幽靈 Tab。見 [T01 Windows 雙 Pane 驗收](gpui-t01-terminal-two-pane-acceptance-20261112.md) |
 | **T02** | `+` 自動偵測本機 Agent；支援刷新、沒有安裝時明示 | **完成（Windows 正常流程）**：新編譯 GPUI 主、副 Pane 都顯示共用 Rust 描述表的六種本機 Agent 與 Classic 名稱順序；隔離 PATH 空清單明示、重新掃描 PASS；TDD + GPUI Library **513/513 PASS** | **PASS**：修正 `New Agent ·` 多餘前綴，保留獨立 Host Profile／Attach；[T02 Windows 驗收](gpui-t02-agent-cli-menu-acceptance-20261112.md)。真實 Provider 互動移至 T03 |
-| **T03** | **New Agent** 建立真實 Provider Terminal，登入後可互動 | **部分完成**：Codex／Claude 真實 TUI、關閉重開與 Host 生命周期在隔離環境通過；六種 Provider 的 GPUI 正向點擊尚未全核實 | 由 `+` 各啟動可用 Provider、可輸入回覆；未登入的 Agent 清楚顯示原因；不用強制終止程序測試 |
+| **T03** | **New Agent** 建立真實 Provider Terminal，登入後可互動 | **完成（Windows 六種已登入 Provider 正向流程）**：Codex／Claude Code／GitHub Copilot／Antigravity／Grok Build／Devin 均從 GUI `+` 建立真實 Host PTY、發送無工具文字問題並收到真實回覆；Host 確認六個獨立 Session，輸出不串流 | **PASS 6/6**：[T03 Windows 六 Provider 驗收](gpui-t03-live-six-provider-acceptance-20261112.md)。未登入／失效憑證的清楚提示尚未驗證，移至 **T07**；Hook 和 Devin conhost 警告移 H02／T06 |
 | **T04** | Attach 既有 Host Session；切換／關閉分頁不終止背景 PTY | **部分完成**：真實 GUI Attach、重新開啟原 Session 已驗證；部分分頁操作仍待正常操作確認 | 左右 Pane Attach／切換／關閉／再次 Attach，分頁與 Session ID 正確 |
 | **T05** | Terminal／Agent 分割、Tab 移動、右鍵、拖曳、Close Others／Right | **已有實作／待操作驗收**：雙 Pane 的操作與身份回歸已存在 | 用一個普通 Terminal、一個 Agent 及一個 Editor，完成主副窗格的右鍵、移動、分割、關閉與重新附加 |
-| **T06** | Terminal 一般鍵盤、貼上／複製、Enter／Ctrl+鍵、中文輸入 | **部分完成**：真實 ASCII/TUI 輸入可用；注音候選窗及跨應用剪貼簿仍需核對 | 在真實 GUI 輸入英文、繁中，貼上／複製並確認無失焦、無重複送出 |
-| **T07** | Agent Profile、Agent 自訂執行路徑、狀態錯誤提示 | **部分完成**：Host Profile、已安裝 CLI 及 Native 本地 override 均有程式入口 | 選一個有 Profile 的 Provider，確認設定→新增→輸入→關閉的完整正向流程 |
+| **T06** | Terminal 一般鍵盤、貼上／複製、Enter／Ctrl+鍵、中文輸入 | **部分完成**：六個真實 Agent ASCII/TUI 輸入已驗證；注音候選窗及跨應用剪貼簿待核對。T03 看到 Devin 提示 GPUI 的 Windows Console Host (`conhost`) 支援有限、建議 Git Bash／Windows Terminal，仍可正常回答 | 在真實 GUI 輸入英文、繁中，貼上／複製、快捷鍵與 Terminal resize／Shell 選擇；確認 Devin 的一般使用警告是否需由 Host 啟動環境解決 |
+| **T07** | Agent Profile、Agent 自訂執行路徑、狀態錯誤提示 | **部分完成**：Host Profile、已安裝 CLI 及 Native 本地 override 均有程式入口；T03 六種已登入 CLI 成功，**未登入／失效憑證的錯誤提示未驗證** | 選有 Profile 的 Provider 完成設定→新增→輸入→關閉；再用不改正式登入的隔離方法檢查未登入、失效憑證、錯誤路徑提示，不能將已安裝誤稱已登入 |
 
 **F1 結案條件：** 不依賴特定測試工具才能新增 Terminal／Agent；使用者從主、副窗格都能完成日常工作，且保留 Host-owned PTY。
 
@@ -84,7 +84,7 @@
 | ID | 功能與 Classic 行為 | 初始狀態／已知證據 | 下一步與正常完成定義 |
 | --- | --- | --- | --- |
 | **H01** | `working／waiting／blocked／done` 在正確 Agent／Tab 顯示 | **部分完成**：Host Presence 模型、快照／變更投影與 Tab Status 已有 | 用正常的 Codex／Claude 操作檢查狀態變化與 Tooltip，不需要強制崩潰 |
-| **H02** | Hook 開關與通知偏好能儲存、讀回 | **部分完成**：Codex／Claude Hook CAS 及設定 UI 有接線 | 在隔離 Host 開關一次→讀回→重開設定頁一致；其他 Provider 逐項擴充 |
+| **H02** | Hook 開關與通知偏好能儲存、讀回 | **部分完成**：Codex／Claude Hook CAS 及設定 UI 有接線；T03 真實 Devin TUI 出現原有 JBContext 使用者 Hook failed（不阻塞 CLI 回覆），原因未判定、未改正式 Hook | 在隔離 Host 開關一次→讀回→重開設定頁一致；其他 Provider 逐項擴充，並釐清 Devin 既有 Hook 失敗是否需要相容修正 |
 | **H03** | Windows 原生通知與點擊後定位到正確 Pane／Session | **部分完成**：Toast adapter 與通知去重規則已有實作；真實 GUI 通知尚未驗收 | 正常等待／完成情境看到通知，點擊定位；Classic/Native 不同時重複提醒 |
 
 ### F6｜UI／UX：最後做一致性收斂
@@ -102,8 +102,9 @@
 | --- | --- | --- | --- |
 | DONE | **T01** | GPUI 主／副 Pane 由 `+` 建立真正可互動 Terminal；完成一般 GUI 正向流程 | **Windows GUI + Host 讀回 PASS**；[驗收紀錄](gpui-t01-terminal-two-pane-acceptance-20261112.md) |
 | DONE | **T02** | Agent 自動偵測、刷新、未安裝提示及 Classic 下拉選單操作一致 | **Windows 主／副 Pane GUI PASS + 513/513 Rust Library PASS**；[驗收紀錄](gpui-t02-agent-cli-menu-acceptance-20261112.md) |
-| **NOW** | **T03** | 已安裝 Provider 的 New Agent 正常啟動、互動與錯誤提示 | 待開始／下一個工作包 |
-| NEXT | T04 → T05 → T06 → T07 | Attach／Tab／Split、Terminal 鍵盤、Agent Profile | 排隊 |
+| DONE | **T03** | 六種已安裝／已登入 Provider 的 New Agent 真實啟動與互動 | **Windows GUI + Host read 6/6 PASS**；[驗收紀錄](gpui-t03-live-six-provider-acceptance-20261112.md)。未登入錯誤提示移 T07 |
+| **NOW** | **T04** | Attach 既有 Host Session；切換／關閉分頁不終止背景 PTY；左右窗格重新 Attach | 待開始／下一個工作包 |
+| NEXT | T05 → T06 → T07 | Tab／Split、Terminal 鍵盤、Agent Profile／未登入提示 | 排隊 |
 | NEXT | E01 → E02 → E03 → E04 → E05 → E06 | 編輯／檔案管理／搜尋正常閉環 | 排隊 |
 | NEXT | G01 → G02 → G03 → G04 → G05 → G06 | Source Control／中央 Diff／Graph／分支／Worktree | 排隊 |
 | NEXT | S01 → S02 → S03 → S04 | Settings 接線、Rust 共用設定與語系 | 排隊 |
@@ -128,13 +129,14 @@
 | 2026-11-12 | `789f2fa00`（建檔前） | PLAN | 重新聚焦六大功能線；依已整合程式、既有文件建立首次盤點，正常 GUI 流程與極端測試分開管理 | **NOW T01**；本輪是計畫落地，未宣稱新功能完成 |
 | 2026-11-12 | `165c79824`（本輪基線；T01 驗收 Commit 為本列所在提交） | T01 | 隔離 Windows GPUI 主、副 Pane `+` 建立兩個 `cmd.exe`；GUI `echo gpuit01primaryok`／`echo gpuit01secondaryok` 均 PASS；Host `terminal list/read` 確認不同 Session／Tab ID、互不串流。GUI 正常關閉、僅測試 Host 停止、fixture Git 狀態未變；既有完整 Cargo 回歸本輪未重跑。[詳見 T01 紀錄](gpui-t01-terminal-two-pane-acceptance-20261112.md) | **T01 完成（正常流程）→ NOW T02**；`supported=false`、不合 main／Push／部署 |
 | 2026-11-12 | `6ce141b79`（T02 基線；T02 修改的 Commit 為本列所在提交） | T02 | Classic 與 Native 共用 Agent descriptor 的名稱與順序；Native 去除多餘 `New Agent ·` 前綴。TDD RED→GREEN，新測試 **1/1 PASS**；GPUI Library **513/513 PASS**；Windows binary build／fmt PASS；實際 Windows 主、副 Pane 六種 Agent、刷新和獨立 PATH 空清單 PASS，沒有啟動 Host。見 [T02 驗收](gpui-t02-agent-cli-menu-acceptance-20261112.md) | **T02 完成（Windows 正常流程）→ NOW T03**；未合 main／Push／部署，`supported=false` |
+| 2026-11-12 | `edaa07305`（T03 基線；T03 驗收 Commit 為本列所在提交） | T03 | Windows GPUI 實際由 `+` 啟動六種已登入 Provider，均從真實 TUI 收到簡短無工具回覆；隔離 Host `terminal list/read` 交叉確認六個獨立 running Session，輸出無串流；正常關閉 GUI，僅停隔離 Host，fixture 狀態前後相同。詳細見 [T03 驗收](gpui-t03-live-six-provider-acceptance-20261112.md)。未登入情境與 Devin Hook/conhost 警告另行追蹤；本輪無程式改動、未重跑 Cargo | **T03 六種正向完成 → NOW T04**；`supported=false`，未合 main／Push／部署 |
 
 ## 6. 既有實作／Classic 規格來源（保留歷史證據）
 
 - **Classic 互動契約：** [gpui-flutter-classic-ux-parity-20261108.md](gpui-flutter-classic-ux-parity-20261108.md)、[gpui-flutter-interaction-parity-20261108.md](gpui-flutter-interaction-parity-20261108.md)。
 - **最新常用 UI 缺口初盤：** [gpui-native-ui-ux-improvement-plan-20261110.md](gpui-native-ui-ux-improvement-plan-20261110.md)；早期的 PLAN／FAIL 是該版歷史，不直接代表今天仍失敗。
-- **Terminal／Agent：** [gpui-t01-terminal-two-pane-acceptance-20261112.md](gpui-t01-terminal-two-pane-acceptance-20261112.md)（真實 GUI `New Terminal` 雙 Pane 驗收）；[gpui-t02-agent-cli-menu-acceptance-20261112.md](gpui-t02-agent-cli-menu-acceptance-20261112.md)（本次 Agent 偵測、空清單、刷新與 Classic 名稱對齊）；[gpui-agent-cli-dropdown-parity-20261112.md](gpui-agent-cli-dropdown-parity-20261112.md)（含 real Codex／Claude、主副 Pane、Host Session）；[gpui-terminal-classic-transport-parity-20261109.md](gpui-terminal-classic-transport-parity-20261109.md)。
+- **Terminal／Agent：** [gpui-t01-terminal-two-pane-acceptance-20261112.md](gpui-t01-terminal-two-pane-acceptance-20261112.md)（真實 GUI `New Terminal` 雙 Pane 驗收）；[gpui-t02-agent-cli-menu-acceptance-20261112.md](gpui-t02-agent-cli-menu-acceptance-20261112.md)（Agent 偵測、空清單、刷新與 Classic 名稱對齊）；[gpui-t03-live-six-provider-acceptance-20261112.md](gpui-t03-live-six-provider-acceptance-20261112.md)（本次六個真實 Provider、主副 Pane／Host Session 交叉核對與非阻塞警告）；[gpui-agent-cli-dropdown-parity-20261112.md](gpui-agent-cli-dropdown-parity-20261112.md)（含 real Codex／Claude、主副 Pane、Host Session）；[gpui-terminal-classic-transport-parity-20261109.md](gpui-terminal-classic-transport-parity-20261109.md)。
 - **Git 與中央 Diff：** [gpui-central-diff-branch-audit-20261112.md](gpui-central-diff-branch-audit-20261112.md)、[gpui-source-control-git-graph-parity-20261109.md](gpui-source-control-git-graph-parity-20261109.md)。
 - **設定／Hook：** [gpui-agent-hook-status-notification-parity-20261111.md](gpui-agent-hook-status-notification-parity-20261111.md)、[gpui-dart-component-reuse-tdd-20261109.md](gpui-dart-component-reuse-tdd-20261109.md)。
 - **其他舊里程碑：** [gpui-p0-p1-p2-tdd-closure-20261108.md](gpui-p0-p1-p2-tdd-closure-20261108.md)、[gpui-active-work-ledger-20261107.md](gpui-active-work-ledger-20261107.md)。
-- **最後一次基線回歸（來自上輪、非本次重跑）：** GPUI Library **512/512 PASS**、Native Binary **31/31 PASS**；隔離 Host 建立請求跨重啟模擬 **1/1 PASS**，提交 `789f2fa00`。此數字不取代後續功能 UI 實測。
+- **最新程式回歸（非本輪 T03 重跑）：** 上一輪 T02 的 GPUI Library **513/513 PASS**、Native Windows binary 建置與 `cargo fmt` PASS，提交 `edaa07305`；較早 Native Binary **31/31 PASS** 與隔離 Host 建立請求跨重啟模擬 **1/1 PASS** 仍是既有歷史。數字不可視為本輪新測試。
