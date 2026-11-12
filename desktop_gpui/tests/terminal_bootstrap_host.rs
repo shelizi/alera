@@ -217,4 +217,38 @@ fn explicit_new_terminal_starts_host_registers_checkout_and_reads_pty() {
         );
         std::thread::sleep(Duration::from_millis(100));
     }
+
+    // A short-lived direct Agent process must exit its wrapper shell without
+    // the user typing 'exit'. Otherwise Host falsely reports an Agent as live.
+    let quick_exit = PathBuf::from(std::env::var_os("SystemRoot").unwrap())
+        .join("System32")
+        .join("where.exe");
+    assert!(
+        quick_exit.is_file(),
+        "Windows short-lived CLI fixture missing"
+    );
+    let quick_agent = bridge
+        .create_agent_terminal_for_workspace(&root, "claude", quick_exit.to_str().unwrap())
+        .expect("short-lived direct Agent launch must create a Host tab");
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        let sessions = bridge.list_terminals().unwrap();
+        if !sessions
+            .iter()
+            .any(|item| item.handle == quick_agent.handle && item.running)
+        {
+            assert!(
+                sessions
+                    .iter()
+                    .any(|item| second_agent.matches_live_session(item)),
+                "short-lived Agent exit must not terminate another live PTY"
+            );
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "short-lived direct Agent left an orphaned running shell"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
 }

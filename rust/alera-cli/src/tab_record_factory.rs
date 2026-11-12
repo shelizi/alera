@@ -91,6 +91,7 @@ pub(crate) fn agent_tab_from_args(
             "terminalSessionId": tab_id,
             "agentType": descriptor.id,
             "spawnOnCreate": true,
+            "exitShellOnAgentExit": true,
             "initialManagedAgentLaunch": {
                 "executable": args.executable_path,
                 "arguments": [],
@@ -118,6 +119,7 @@ mod agent_direct_launch_tests {
         assert_eq!(tab.title, "Claude Code");
         assert_eq!(tab.payload["agentType"], "claude");
         assert_eq!(tab.payload["spawnOnCreate"], true);
+        assert_eq!(tab.payload["exitShellOnAgentExit"], true);
         assert!(tab.payload["initialCommand"].is_null());
         assert!(tab.payload["agentProfileId"].is_null());
         assert_eq!(tab.payload["terminalSessionId"], tab.id);

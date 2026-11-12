@@ -30,6 +30,18 @@ pub struct WorkbenchTab {
     pub interrupted: bool,
 }
 
+impl WorkbenchTab {
+    /// A stopped Host preview retains its last screen but must not look live.
+    /// Editors are not Host PTYs, even if stale projection says otherwise.
+    pub fn stopped_label(&self) -> Option<&'static str> {
+        if !self.running && matches!(&self.identity, WorkbenchTabIdentity::Host(_)) {
+            Some("Stopped")
+        } else {
+            None
+        }
+    }
+}
+
 /// A single ordered strip for all three kinds of tabs. Reconciliation takes
 /// observed identities from the original owners; it cannot create, close or
 /// move an underlying editor buffer or PTY.
@@ -250,6 +262,20 @@ mod tests {
             agent_state: None,
             interrupted: false,
         }
+    }
+
+    #[test]
+    fn stopped_host_tab_has_explicit_label_but_editor_and_live_pty_do_not() {
+        let (mut agent, _) = host("crashed-agent", true);
+        assert_eq!(agent.stopped_label(), None);
+        agent.running = false;
+        assert_eq!(agent.stopped_label(), Some("Stopped"));
+        let (mut terminal, _) = host("terminal", false);
+        terminal.running = false;
+        assert_eq!(terminal.stopped_label(), Some("Stopped"));
+        let mut file = editor(7, 3);
+        file.running = false;
+        assert_eq!(file.stopped_label(), None);
     }
 
     #[test]

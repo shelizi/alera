@@ -7745,6 +7745,7 @@ impl Workbench {
         } else {
             ("mixed-tab", "mixed-tab-focus", "mixed-tab-close")
         };
+        let stopped_label = tab.stopped_label();
         let identity = tab.identity;
         let icon_kind = match tab.kind {
             WorkbenchTabKind::Terminal | WorkbenchTabKind::Agent => UiIcon::Terminal,
@@ -7820,8 +7821,13 @@ impl Workbench {
                         )
                     })
                     .when(pinned, |entry| entry.child(icon(UiIcon::Pin, 12.0, MUTED)))
-                    .when(!tab.running, |entry| {
-                        entry.child(div().text_xs().text_color(rgb(MUTED)).child("○"))
+                    .when(stopped_label.is_some(), |entry| {
+                        entry.child(
+                            div()
+                                .text_xs()
+                                .text_color(rgb(MUTED))
+                                .child(stopped_label.unwrap_or("")),
+                        )
                     })
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.focus_mixed_tab(&for_click, window, cx);

@@ -320,12 +320,17 @@ impl ServerActor {
             if let Some((mechanism, prompt)) = prompt_arguments {
                 append_initial_prompt_argument_for(mechanism, &mut launch.arguments, prompt);
             }
-            Some(
-                crate::terminal_host::orchestration::managed_launch_shell_rendering::render_managed_launch(
-                    &launch,
-                    &default_launch.interactive_shell,
-                ),
-            )
+            let command = crate::terminal_host::orchestration::managed_launch_shell_rendering::render_managed_launch(
+                &launch,
+                &default_launch.interactive_shell,
+            );
+            // Direct installed Agents own the PTY's lifetime. Do not leave
+            // an interactive wrapper shell alive after the provider exits.
+            Some(if tab.payload["exitShellOnAgentExit"] == true {
+                auto_close_setup_command(&command, &default_launch.interactive_shell)
+            } else {
+                command
+            })
         } else {
             initial_command(tab)?.map(|command| {
                 let command = isolate_codex_command(command);
