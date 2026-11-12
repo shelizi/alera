@@ -32,6 +32,22 @@ pub const WORKBENCH_LAYOUT_VERSION: u32 = 1;
 
 const MAX_LAYOUT_BYTES: u64 = 64 * 1024;
 
+/// Reserved opaque Editor key for a locally recovered, unsaved scratch draft.
+/// No path or raw buffer contents enter the pane-layout JSON.
+pub const SCRATCH_EDITOR_KEY_PREFIX: &str = "@alera-scratch:";
+
+pub fn scratch_layout_key(id: &str) -> Option<String> {
+    if id.len() != 56 || !id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some(format!("{SCRATCH_EDITOR_KEY_PREFIX}{id}"))
+}
+
+pub fn scratch_identity_from_layout_key(key: &str) -> Option<&str> {
+    key.strip_prefix(SCRATCH_EDITOR_KEY_PREFIX)
+        .filter(|id| id.len() == 56 && id.bytes().all(|byte| byte.is_ascii_hexdigit()))
+}
+
 /// Split arrangement axis recorded in [`SavedWorkbenchLayoutV1`]. This is a
 /// layout preference only; it never changes tab ownership.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -229,6 +245,27 @@ mod tests {
             secondary_active_editor: Some("editor:8:3".into()),
             pinned_editors: Vec::new(),
         }
+    }
+
+    #[test]
+    fn scratch_layout_key_uses_only_bounded_stable_identity_not_workspace_path() {
+        let id = "a".repeat(56);
+        let key = scratch_layout_key(&id).expect("valid recovered draft id");
+        assert_eq!(scratch_identity_from_layout_key(&key), Some(id.as_str()));
+        assert!(scratch_layout_key("../escape").is_none());
+        assert!(scratch_layout_key(&"a".repeat(57)).is_none());
+        assert!(scratch_identity_from_layout_key("file.txt").is_none());
+        assert!(scratch_identity_from_layout_key("@alera-scratch:wrong").is_none());
+
+        let mut layout = sample();
+        layout.secondary_editors = vec![key.clone()];
+        layout.secondary_active_editor = Some(key.clone());
+        let restored = SavedWorkbenchLayoutV1::from_json(&layout.to_json().unwrap()).unwrap();
+        assert_eq!(restored.secondary_editors, vec![key.clone()]);
+        assert_eq!(
+            restored.secondary_active_editor.as_deref(),
+            Some(key.as_str())
+        );
     }
 
     #[test]

@@ -300,6 +300,12 @@ impl NativeEditor {
         self.tabs.file_backed_instances()
     }
 
+    /// Pair local untitled drafts with their stable on-disk recovery identity.
+    /// The Workbench layout persists only this opaque ID, never the text.
+    pub fn scratch_tab_instances(&self) -> Vec<(u64, String)> {
+        self.tabs.scratch_tab_instances()
+    }
+
     /// An immutable content snapshot for a second-pane read-only projection.
     /// The returned text never becomes part of the saved pane layout.
     pub fn tab_content_snapshot(&self, instance: u64) -> Option<String> {

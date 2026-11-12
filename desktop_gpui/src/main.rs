@@ -115,7 +115,8 @@ use alera_gpui_desktop::visual_tokens::{
 };
 use alera_gpui_desktop::vt_screen::StyledRow;
 use alera_gpui_desktop::workbench_layout_store::{
-    SavedWorkbenchAxis, SavedWorkbenchLayoutV1, SavedWorkbenchPane, WORKBENCH_LAYOUT_VERSION,
+    scratch_layout_key, SavedWorkbenchAxis, SavedWorkbenchLayoutV1, SavedWorkbenchPane,
+    SCRATCH_EDITOR_KEY_PREFIX, WORKBENCH_LAYOUT_VERSION,
 };
 use alera_gpui_desktop::workbench_panes::{
     PaneAttachGuard, PaneAxis, PaneSlot, WorkbenchPaneLayout,
@@ -7299,9 +7300,9 @@ impl Workbench {
                 .all(|component| matches!(component, Component::Normal(_)))
     }
 
-    /// Only existing, file-backed editor tabs have a cross-launch identity.
-    /// Keep their keys workspace-relative and treat saved strings as inert;
-    /// unsaved drafts are recovered separately by EditorDraftStore.
+    /// File-backed tabs use checked workspace-relative paths. Unsaved scratch
+    /// tabs use a bounded opaque EditorDraftStore recovery ID; the layout
+    /// contains no raw scratch text or Host/PTy identity.
     fn editor_layout_keys(&self, cx: &Context<Self>) -> Vec<(WorkbenchTabIdentity, String)> {
         let mut keys = Vec::new();
         for pane in [PaneSlot::Primary, PaneSlot::Secondary] {
@@ -7317,6 +7318,17 @@ impl Workbench {
                                 instance,
                             },
                             relative.to_string_lossy().into_owned(),
+                        ));
+                    }
+                }
+                for (instance, scratch_id) in editor.read(cx).scratch_tab_instances() {
+                    if let Some(key) = scratch_layout_key(&scratch_id) {
+                        keys.push((
+                            WorkbenchTabIdentity::Editor {
+                                editor_epoch: self.editor_epoch,
+                                instance,
+                            },
+                            key,
                         ));
                     }
                 }
@@ -7428,6 +7440,12 @@ impl Workbench {
             .chain(saved.secondary_editors.iter())
             .take(MAX_EDITOR_TABS)
         {
+            // Scratch draft documents were independently recovered by
+            // EditorDraftStore. Their opaque layout keys are never paths
+            // and must not trigger filesystem reads or duplicate buffers.
+            if key.starts_with(SCRATCH_EDITOR_KEY_PREFIX) {
+                continue;
+            }
             let relative = Path::new(key);
             if !Self::valid_editor_layout_key(relative) {
                 eprintln!("Alera GPUI: refused unsafe persisted editor path");

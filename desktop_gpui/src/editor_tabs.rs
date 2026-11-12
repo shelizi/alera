@@ -243,6 +243,22 @@ impl EditorTabs {
             .collect()
     }
 
+    /// Stable recovery identity of an unsaved tab, paired with its current
+    /// in-process instance. A file-backed tab cannot also enter this list.
+    pub fn scratch_tab_instances(&self) -> Vec<(u64, String)> {
+        self.tabs
+            .iter()
+            .zip(self.tab_instances.iter().copied())
+            .filter_map(|(session, instance)| {
+                let doc = session.document()?;
+                if doc.path().is_some() {
+                    return None;
+                }
+                doc.scratch_id().map(|id| (instance, id.to_owned()))
+            })
+            .collect()
+    }
+
     pub fn has_draft_store(&self) -> bool {
         self.drafts.is_some()
     }
@@ -751,6 +767,33 @@ mod tests {
             tabs.document().unwrap().content().len(),
             crate::editor::MAX_EDITOR_BYTES
         );
+    }
+
+    #[test]
+    fn scratch_pane_identity_survives_draft_recovery_without_using_runtime_tab_number() {
+        let root = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let store = EditorDraftStore::new(state.path());
+        let mut first = EditorTabs::new(Some(store.clone()));
+        first.open_scratch(root.path()).unwrap();
+        first
+            .document_mut()
+            .unwrap()
+            .replace(None, "pane sentinel")
+            .unwrap();
+        first.persist_draft().unwrap();
+        let before = first.scratch_tab_instances();
+        assert_eq!(before.len(), 1);
+        assert_eq!(before[0].1.len(), 56);
+        drop(first);
+
+        let mut recovered = EditorTabs::new(Some(store));
+        assert_eq!(recovered.restore_scratch_drafts(root.path()).unwrap(), 1);
+        let after = recovered.scratch_tab_instances();
+        assert_eq!(after.len(), 1);
+        assert_eq!(before[0].1, after[0].1);
+        assert_ne!(before[0].0, after[0].0);
+        assert_eq!(recovered.document().unwrap().content(), "pane sentinel");
     }
 
     #[test]
