@@ -910,6 +910,29 @@ pub fn parse_created_agent_terminal(
     Ok(created)
 }
 
+/// Separate proven PTY readiness from the Agent Hook identity. A direct
+/// Agent's exact Host persisted tab was already authenticated before this
+/// function is called; a missing Hook must not leave the workbench showing
+/// an endless 'Agent starting' state.
+pub fn direct_agent_ready_feedback(
+    session: &TerminalSession,
+    expected_agent: &str,
+) -> Option<&'static str> {
+    if !session.running
+        || session
+            .agent_type
+            .as_deref()
+            .is_some_and(|reported| reported != expected_agent)
+    {
+        return None;
+    }
+    Some(if session.agent_type.is_some() {
+        "Host PTY ready; Agent Hook recognized"
+    } else {
+        "Host PTY ready; Agent Hook not yet detected"
+    })
+}
+
 fn invalid(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
 }
@@ -3004,6 +3027,26 @@ mod tests {
             .confirm_sessions_with_host_verified_agent(&[mismatch], "codex")
             .is_none());
         assert!(flow.is_waiting());
+    }
+
+    #[test]
+    fn direct_agent_status_separates_live_host_pty_from_hook_identity() {
+        let mut session = session("pty-feedback");
+        session.agent_type = None;
+        assert_eq!(
+            direct_agent_ready_feedback(&session, "codex"),
+            Some("Host PTY ready; Agent Hook not yet detected"),
+            "A real interactive PTY must not be mislabeled 'Agent starting' forever"
+        );
+        session.agent_type = Some("codex".into());
+        assert_eq!(
+            direct_agent_ready_feedback(&session, "codex"),
+            Some("Host PTY ready; Agent Hook recognized")
+        );
+        session.agent_type = Some("claude".into());
+        assert!(direct_agent_ready_feedback(&session, "codex").is_none());
+        session.running = false;
+        assert!(direct_agent_ready_feedback(&session, "claude").is_none());
     }
 
     #[test]

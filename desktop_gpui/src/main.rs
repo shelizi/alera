@@ -6675,6 +6675,20 @@ impl Workbench {
                                     ).is_none() {
                                         view.terminals.status =
                                             "Host terminal created but Native attach was refused; use + → Attach existing".into();
+                                    } else if let Some(agent_id) = pending.expected_agent_id.as_deref() {
+                                        // Host PTY input can be ready before
+                                        // the provider Hook reports an Agent.
+                                        // Update the stale "Agent starting"
+                                        // banner only after verified attachment
+                                        // to the original pane succeeded.
+                                        if let Some(feedback) =
+                                            alera_gpui_desktop::terminal::direct_agent_ready_feedback(
+                                                &session,
+                                                agent_id,
+                                            )
+                                        {
+                                            view.model.set_status(feedback);
+                                        }
                                     }
                                 } else {
                                     view.terminals.status =
