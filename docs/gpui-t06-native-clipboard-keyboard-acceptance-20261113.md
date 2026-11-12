@@ -38,3 +38,11 @@
 - **已通過：T06 常用鍵盤 Ctrl+C、Ctrl+V、Ctrl+Shift+V、Ctrl+Shift+C、雙 Pane Copy 與 Unicode 直接提交。**
 - **NOW 仍是 T06**：真正 Windows 注音 IME 候選視窗及選字確認；副 Pane 滑鼠多列拖選在此輪有程式／純測試但尚未獨立 GUI 拖選驗收，不宣稱完成。若正常情境查到確實缺口，再修正。
 - `supported=false` 不變；未合 `main`、Push、部署或 Release。
+## 2026-11-13 延續：注音標記期間的 KeyDown 防誤送
+
+- 共用 `TerminalKeyDispatch` 對主、副 Pane 的 KeyDown 分流：只要對應的 `QuickOpenInput::composing()` 為真，注音聲母／韻母的 ASCII KeyDown、空白／Enter／Backspace 候選控制，以及 Ctrl+Shift+C／V 都不進 Host PTY／剪貼簿，保留原生 TSF TextInput 組字及提交。離開 marked composition 後，恢復原本 Ctrl+C 的 PTY 中斷與複製／貼上快捷鍵。已有非 ASCII 的 TextInput commit 路徑不變。
+- TDD 先新增 `native_ime_preedit_blocks_raw_pty_keys_and_clipboard_shortcuts`：修正前編譯因缺少分流型別／函式 RED（E0432／E0425），補齊主副 Pane 共用路由後 GREEN（1/1）。
+- Windows 本機程式回歸：Rust Library **523 PASS／0 FAIL／1 FILTERED**（沿用排除既有 Git History 長測）；Native Binary **31/31 PASS**、`cargo build --offline --locked --bin alera-gpui-desktop` PASS、`cargo fmt --all -- --check`、`git diff --check` PASS。
+- **不宣稱 Windows 注音候選 GUI PASS。** 本輪桌面已有其他前景程式，未搶佔鍵盤焦點或切換 Windows 使用者輸入法；本輪僅保證「收到 marked preedit 之後」不向 PTY 洩漏候選按鍵，不代表第一個注音鍵已正確啟動 TSF，也不代表候選視窗、選字提交一定正常。上輪 Unicode 字元直接輸入 PASS 是獨立驗收，不替代本項。
+- 下一個 T06 真實流程：確認 Microsoft Bopomofo 為**中文模式**、從 Terminal 主 Pane 輸入注音並觀察候選清單及選字後 Host 讀回；重做副 Pane；檢查 Enter、Backspace、Escape、Ctrl+C 以及切 Pane／失焦期間不會將未提交組字誤送其他 Host。副 Pane 多列滑鼠拖選仍需 GUI 實測。
+- 僅改 GPUI Native 的 `main.rs`、`terminal.rs` 與本驗收／追蹤文件；Classic、正式 Host／PTY 未更動；`supported=false`，未合 main、Push、部署或 Release。

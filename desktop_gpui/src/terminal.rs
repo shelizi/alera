@@ -442,6 +442,37 @@ pub fn is_text_input_keystroke(
         || (key.chars().count() == 1 && key.chars().any(|ch| !ch.is_ascii()))
 }
 
+/// One routing decision shared by both Terminal panes. While native IME
+/// text is marked, candidate navigation, phonetic ASCII and even shortcuts
+/// must not reach the Host PTY. Native Unicode commits take the input handler.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TerminalKeyDispatch {
+    Composing,
+    NativeText,
+    Clipboard(TerminalClipboardShortcut),
+    Pty,
+}
+
+pub fn terminal_key_dispatch(
+    key: &str,
+    key_char: Option<&str>,
+    control: bool,
+    shift: bool,
+    alt: bool,
+    platform: bool,
+    composing: bool,
+) -> TerminalKeyDispatch {
+    if composing {
+        TerminalKeyDispatch::Composing
+    } else if let Some(shortcut) = terminal_clipboard_shortcut(key, control, shift, alt, platform) {
+        TerminalKeyDispatch::Clipboard(shortcut)
+    } else if is_text_input_keystroke(key, key_char, control, alt, platform) {
+        TerminalKeyDispatch::NativeText
+    } else {
+        TerminalKeyDispatch::Pty
+    }
+}
+
 /// Only suppresses recently forwarded KeyDown ASCII. Paste, unicode
 /// injection and Windows IME can deliver text without any preceding KeyDown,
 /// which must still reach Host. Owned by the single Native input surface.
@@ -2808,6 +2839,55 @@ mod tests {
         assert!(terminal_clipboard_payload("", false).is_none());
         assert!(terminal_clipboard_payload("bad\0payload", false).is_none());
         assert!(terminal_clipboard_payload(&"x".repeat(4096), true).is_none());
+    }
+
+    #[test]
+    fn native_ime_preedit_blocks_raw_pty_keys_and_clipboard_shortcuts() {
+        use TerminalClipboardShortcut::{Copy, Paste};
+        use TerminalKeyDispatch::{Clipboard, Composing, NativeText, Pty};
+
+        // Phonetic ASCII and candidate-navigation keys belong to the IME.
+        for (key, key_char, ctrl, shift) in [
+            ("s", Some("s"), false, false),
+            ("space", Some(" "), false, false),
+            ("backspace", None, false, false),
+            ("enter", None, false, false),
+            ("c", Some("c"), true, true),
+            ("v", Some("v"), true, true),
+            ("c", Some("c"), true, false),
+        ] {
+            assert_eq!(
+                terminal_key_dispatch(key, key_char, ctrl, shift, false, false, true),
+                Composing,
+                "{key} must stay with native IME until it commits"
+            );
+        }
+
+        // After commit, Host keys and clipboard shortcuts are restored.
+        assert_eq!(
+            terminal_key_dispatch("s", Some("s"), false, false, false, false, false),
+            Pty
+        );
+        assert_eq!(
+            terminal_key_dispatch("enter", None, false, false, false, false, false),
+            Pty
+        );
+        assert_eq!(
+            terminal_key_dispatch("c", None, true, true, false, false, false),
+            Clipboard(Copy)
+        );
+        assert_eq!(
+            terminal_key_dispatch("v", None, true, true, false, false, false),
+            Clipboard(Paste)
+        );
+        assert_eq!(
+            terminal_key_dispatch("c", None, true, false, false, false, false),
+            Pty
+        );
+        assert_eq!(
+            terminal_key_dispatch("中", Some("中"), false, false, false, false, false),
+            NativeText
+        );
     }
 
     #[test]

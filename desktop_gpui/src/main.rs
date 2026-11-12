@@ -102,11 +102,12 @@ use alera_gpui_desktop::session::{
 };
 use alera_gpui_desktop::terminal::{
     encode_terminal_key, estimate_terminal_viewport_with_line_height, raw_key_reply_may_drain,
-    select_registered_host_workspace, terminal_clipboard_payload, terminal_clipboard_shortcut,
-    terminal_ime_anchor_with_line_height, AgentActivityState, TerminalAutoResizeGate,
-    TerminalClipboardShortcut, TerminalCreateFlow, TerminalCreateTick, TerminalDock,
-    TerminalLineSelection, TerminalPollCadence, TerminalPollGate, TerminalSession,
-    TerminalTabContextTarget, TerminalViewMode, TerminalViewportProposal, HOST_SESSION_LIST_SCOPE,
+    select_registered_host_workspace, terminal_clipboard_payload,
+    terminal_ime_anchor_with_line_height, terminal_key_dispatch, AgentActivityState,
+    TerminalAutoResizeGate, TerminalClipboardShortcut, TerminalCreateFlow, TerminalCreateTick,
+    TerminalDock, TerminalKeyDispatch, TerminalLineSelection, TerminalPollCadence,
+    TerminalPollGate, TerminalSession, TerminalTabContextTarget, TerminalViewMode,
+    TerminalViewportProposal, HOST_SESSION_LIST_SCOPE,
 };
 use alera_gpui_desktop::terminal_panes::{TerminalPaneLayout, TerminalSplitDirection};
 use alera_gpui_desktop::terminal_stream_bridge::{
@@ -7439,18 +7440,29 @@ impl Workbench {
         } else if pane != PaneSlot::Primary {
             return false;
         }
-        match terminal_clipboard_shortcut(
+        // The focused Native IME sink owns provisional Zhuyin text.
+        // Both panes must block raw PTY keys and clipboard shortcuts while
+        // candidate selection is composing; committed text comes through TSF.
+        let composing = match pane {
+            PaneSlot::Primary => self.terminal_input.read(cx).composing(),
+            PaneSlot::Secondary => self.secondary_terminal_input.read(cx).composing(),
+        };
+        match terminal_key_dispatch(
             &event.keystroke.key,
+            event.keystroke.key_char.as_deref(),
             event.keystroke.modifiers.control,
             event.keystroke.modifiers.shift,
             event.keystroke.modifiers.alt,
             event.keystroke.modifiers.platform,
+            composing,
         ) {
-            Some(TerminalClipboardShortcut::Copy) => {
+            TerminalKeyDispatch::Composing => return true,
+            TerminalKeyDispatch::NativeText => return false,
+            TerminalKeyDispatch::Clipboard(TerminalClipboardShortcut::Copy) => {
                 self.copy_terminal_text_for_pane(pane, false, cx);
                 return true;
             }
-            Some(TerminalClipboardShortcut::Paste) => {
+            TerminalKeyDispatch::Clipboard(TerminalClipboardShortcut::Paste) => {
                 if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
                     // Respect the active Alacritty TUI's bracketed paste mode.
                     let bracketed = self
@@ -7468,18 +7480,7 @@ impl Workbench {
                 }
                 return true;
             }
-            None => {}
-        }
-        // KeyDown and the native IME/TextInput commit are two paths to the
-        // same Host. This must apply to BOTH panes, not just primary.
-        if alera_gpui_desktop::terminal::is_text_input_keystroke(
-            &event.keystroke.key,
-            event.keystroke.key_char.as_deref(),
-            event.keystroke.modifiers.control,
-            event.keystroke.modifiers.alt,
-            event.keystroke.modifiers.platform,
-        ) {
-            return false;
+            TerminalKeyDispatch::Pty => {}
         }
         self.send_terminal_key(pane, event, cx)
     }
