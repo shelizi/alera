@@ -5,6 +5,8 @@
 > 產品標準：**Flutter Classic 的行為與操作路徑優先；Native 不需要像素完全一致，但不能為了實作方便而另造操作流程。**
 > 規格來源：[`gpui-flutter-classic-ux-parity-20261108.md`](gpui-flutter-classic-ux-parity-20261108.md)；左側管理 [`gpui-left-project-worktree-parity-20261109.md`](gpui-left-project-worktree-parity-20261109.md)；既有總體 Gate [`gpui-desktop-detailed-execution-plan-20261107.md`](gpui-desktop-detailed-execution-plan-20261107.md)。
 
+> **2026-11-12 更新：** GPUI 最新功能／UI 工作隊列統一追蹤於 [功能完整度追蹤表](gpui-feature-completeness-tracker-20261112.md)。本文 11/10 測試為歷史基線，未重測前勿當成目前整合分支狀態。
+
 ## 一、驗收基準及證據邊界
 
 ### 環境

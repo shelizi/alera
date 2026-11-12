@@ -6,6 +6,8 @@
 
 **狀態：實驗性 / UNSUPPORTED。** 此紀錄區分程式已提交、headless 編譯測試、實機 GUI 尚未驗收。勿將模型測試等同 Windows 注音、選取、存檔、終端或完整 IDE parity 的實機證據。
 
+> **2026-11-12 工作追蹤入口：** [GPUI 功能完整度優先／Classic 對齊追蹤表](gpui-feature-completeness-tracker-20261112.md)。本檔只保留較早期開發歷史，NOW／NEXT、狀態和 Commit 以新表為準。
+
 ## 已整理並併回 GPUI 開發分支
 
 | 分類 | 提交 | 結果 |

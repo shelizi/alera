@@ -6,6 +6,8 @@
 >
 > **提交策略：** 在 `.worktrees/feat-gpui-desktop-20261107`（或個別新 worktree）持續開發；保留正式 `main`、既有 Flutter/mobile、Runtime Host、PTY 與使用者資料。**無新授權不得合併、推送正式遠端、打 tag、發布或覆蓋使用者安裝版本。**
 
+> **2026-11-12 最新開發優先序：** 請先看 [GPUI 功能完整度追蹤表](gpui-feature-completeness-tracker-20261112.md) 的 NOW／NEXT。本文 G0–G6 保留作歷史與發版 Gate，不再以極端情境測試阻擋一般功能開發。
+
 ## A. 接手第一眼：確認基準、目前完成度與立即決策
 
 ### A.1 來源與責任
