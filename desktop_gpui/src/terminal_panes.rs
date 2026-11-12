@@ -135,6 +135,10 @@ mod tests {
             tab_id: format!("tab-{handle}"),
             running: true,
             agent_type: None,
+            agent_state: None,
+            interrupted: false,
+            agent_state_started_at: None,
+            agent_updated_at: None,
         }
     }
 

@@ -26,6 +26,10 @@ pub struct NativeSettings {
     pub terminal_font_size: f64,
     pub editor_autosave_enabled: bool,
     pub editor_tab_size: u64,
+    /// Legacy Native JSON fallback. When Host is available, Rust Core's
+    /// editor.twoRowTabs is authoritative for both Classic and GPUI.
+    #[serde(default)]
+    pub editor_two_row_tabs: bool,
     /// Native Explorer-only preferences. Never exposed to Host MCP setting
     /// updates and never shared with the Classic Flutter preferences file.
     #[serde(default = "default_explorer_show_hidden")]
@@ -53,6 +57,7 @@ impl Default for NativeSettings {
             terminal_font_size: 13.0,
             editor_autosave_enabled: false,
             editor_tab_size: 4,
+            editor_two_row_tabs: false,
             explorer_show_hidden: default_explorer_show_hidden(),
             explorer_show_ignored: false,
             confirm_project_removal: true,
@@ -64,6 +69,112 @@ impl Default for NativeSettings {
 }
 
 impl NativeSettings {
+    /// Apply all ten reviewed Classic/GPUI shared fields to the current UI
+    /// snapshot. Explorer visibility and Native-only metadata remain intact.
+    /// No local JSON is written; Runtime Host stays the authoritative owner.
+    pub fn apply_shared_snapshot(&mut self, snapshot: &Value) -> io::Result<String> {
+        let values = snapshot
+            .get("values")
+            .and_then(Value::as_object)
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "Shared desktop Settings values missing",
+                )
+            })?;
+        let mut required = Vec::new();
+        for path in alera_core::desktop_settings_contract::SHARED_DESKTOP_PATHS {
+            let Some(value) = values.get(path) else {
+                if path == "agents.quotaUnpinnedKeys" {
+                    // Existing Host binaries without the new optional quota
+                    // preference must not break all other shared settings.
+                    continue;
+                }
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "Incomplete shared desktop Settings snapshot",
+                ));
+            };
+            if path == "general.language" {
+                if !value.as_str().is_some_and(|v| {
+                    matches!(
+                        v,
+                        "system"
+                            | "english"
+                            | "traditionalChinese"
+                            | "simplifiedChinese"
+                            | "japanese"
+                    )
+                }) {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "Invalid shared language",
+                    ));
+                }
+            } else if path == "agents.defaultAgentProfileId" {
+                if !value.is_null() && !value.as_str().is_some_and(Self::valid_agent_profile_id) {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "Invalid shared Host default Agent Profile ID",
+                    ));
+                }
+            } else if path == "agents.quotaUnpinnedKeys" {
+                if !alera_core::desktop_settings_contract::valid_quota_unpinned_keys(value) {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "Invalid shared quota pins",
+                    ));
+                }
+            } else if alera_core::desktop_settings_contract::extended_portable(path) {
+                if !alera_core::desktop_settings_contract::valid_extended_portable(path, value) {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "Invalid shared portable setting",
+                    ));
+                }
+            } else if !Self::valid_value(path, value) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "Invalid shared setting",
+                ));
+            }
+            required.push((path, value.clone()));
+        }
+        let language = values["general.language"].as_str().unwrap().to_owned();
+        for (path, value) in required {
+            match path {
+                "general.autoGitFetchEnabled" => {
+                    self.auto_git_fetch_enabled = value.as_bool().unwrap()
+                }
+                "general.autoGitFetchIntervalMinutes" => {
+                    self.auto_git_fetch_interval_minutes = value.as_u64().unwrap()
+                }
+                "terminal.fontSize" => self.terminal_font_size = value.as_f64().unwrap(),
+                "editor.autosaveEnabled" => self.editor_autosave_enabled = value.as_bool().unwrap(),
+                "editor.tabSize" => self.editor_tab_size = value.as_u64().unwrap(),
+                "editor.twoRowTabs" => self.editor_two_row_tabs = value.as_bool().unwrap(),
+                "general.confirmProjectRemoval" => {
+                    self.confirm_project_removal = value.as_bool().unwrap()
+                }
+                "general.confirmWorkspaceRemoval" => {
+                    self.confirm_workspace_removal = value.as_bool().unwrap()
+                }
+                "general.autoArchiveWorkspacesAfterDays" => {
+                    self.auto_archive_workspaces_after_days = value.as_u64().unwrap()
+                }
+                "agents.defaultAgentProfileId" => {
+                    self.default_agent_profile_id = value.as_str().map(str::to_owned)
+                }
+                "explorer.showHiddenFiles" => self.explorer_show_hidden = value.as_bool().unwrap(),
+                "explorer.showIgnoredFiles" => {
+                    self.explorer_show_ignored = value.as_bool().unwrap()
+                }
+                _ => {}
+            }
+        }
+        Ok(language)
+    }
+
     fn valid_agent_profile_id(id: &str) -> bool {
         !id.is_empty()
             && id.len() <= 128
@@ -79,11 +190,15 @@ impl NativeSettings {
             "terminal.fontSize" => json!(self.terminal_font_size),
             "editor.autosaveEnabled" => json!(self.editor_autosave_enabled),
             "editor.tabSize" => json!(self.editor_tab_size),
+            "editor.twoRowTabs" => json!(self.editor_two_row_tabs),
             "general.confirmProjectRemoval" => json!(self.confirm_project_removal),
             "general.confirmWorkspaceRemoval" => json!(self.confirm_workspace_removal),
             "general.autoArchiveWorkspacesAfterDays" => {
                 json!(self.auto_archive_workspaces_after_days)
             }
+            "agents.defaultAgentProfileId" => json!(self.default_agent_profile_id),
+            "explorer.showHiddenFiles" => json!(self.explorer_show_hidden),
+            "explorer.showIgnoredFiles" => json!(self.explorer_show_ignored),
             _ => return None,
         })
     }
@@ -103,6 +218,9 @@ impl NativeSettings {
         match path {
             "general.autoGitFetchEnabled"
             | "editor.autosaveEnabled"
+            | "editor.twoRowTabs"
+            | "explorer.showHiddenFiles"
+            | "explorer.showIgnoredFiles"
             | "general.confirmProjectRemoval"
             | "general.confirmWorkspaceRemoval" => value.is_boolean(),
             "general.autoGitFetchIntervalMinutes" => {
@@ -193,6 +311,12 @@ impl NativeSettingsStore {
         Self {
             path: state_dir.join(SETTINGS_FILENAME),
         }
+    }
+
+    /// Only an actual legacy file can seed the Host; the first-run default
+    /// must not accidentally win over a Classic preference.
+    pub fn has_saved_state(&self) -> bool {
+        self.path.is_file()
     }
 
     /// An absent file means first run. A corrupt or future-version file
@@ -344,6 +468,30 @@ impl NativeSettingsStore {
         Ok(readback)
     }
 
+    /// UI-only local preference: never expose the Classic-specific toggle
+    /// as an MCP-writable Host shared scalar without a Core contract.
+    pub fn compare_and_set_two_row_tabs(
+        &self,
+        expected: bool,
+        next: bool,
+    ) -> io::Result<NativeSettings> {
+        let _lock = self.lock()?;
+        let mut settings = self.read()?;
+        if settings.editor_two_row_tabs != expected {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "Native two-row tabs preference changed in another window",
+            ));
+        }
+        settings.editor_two_row_tabs = next;
+        self.persist(&settings)?;
+        let readback = self.read()?;
+        if readback.editor_two_row_tabs != next {
+            return Err(io::Error::other("Native two-row tabs readback mismatch"));
+        }
+        Ok(readback)
+    }
+
     fn lock(&self) -> io::Result<SettingsFileLock> {
         let parent = self
             .path
@@ -403,6 +551,127 @@ impl Drop for SettingsFileLock {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_two_row_tabs_persists_for_one_time_host_migration_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = NativeSettingsStore::new(dir.path());
+        assert!(!store.read().unwrap().editor_two_row_tabs);
+        assert!(!store.has_saved_state());
+        assert!(
+            store
+                .compare_and_set_two_row_tabs(false, true)
+                .unwrap()
+                .editor_two_row_tabs
+        );
+        assert!(store.read().unwrap().editor_two_row_tabs);
+        assert!(store.has_saved_state());
+        assert!(store.compare_and_set_two_row_tabs(false, true).is_err());
+        assert!(
+            !store
+                .compare_and_set_two_row_tabs(true, false)
+                .unwrap()
+                .editor_two_row_tabs
+        );
+        assert!(!store.read().unwrap().editor_two_row_tabs);
+        assert!(!NativeSettings::writable("editor.twoRowTabs"));
+        assert_eq!(
+            NativeSettings::default().get("editor.twoRowTabs"),
+            Some(json!(false))
+        );
+    }
+
+    #[test]
+    fn shared_host_snapshot_validates_quota_pin_field_without_erasing_native_only_data() {
+        let mut state = NativeSettings::default();
+        state.explorer_show_ignored = true;
+        state.default_agent_profile_id = Some("managed_codex".to_owned());
+        let snapshot = json!({"values":{
+            "general.language":"traditionalChinese",
+            "general.autoGitFetchEnabled":false,
+            "general.autoGitFetchIntervalMinutes":10,
+            "terminal.fontSize":17.0,
+            "editor.autosaveEnabled":true,
+            "editor.tabSize":8,
+            "editor.twoRowTabs":true,
+            "general.confirmProjectRemoval":false,
+            "general.confirmWorkspaceRemoval":true,
+            "general.autoArchiveWorkspacesAfterDays":60,
+            "agents.defaultAgentProfileId":"host_codex",
+            "explorer.showHiddenFiles":true,
+            "explorer.showIgnoredFiles":false,
+            "general.showTrayIcon":true,
+            "general.showDockBadge":true,
+            "general.showTrayBadge":false,
+            "terminal.fontFamily":"JetBrains Mono",
+            "terminal.lineHeight":1.5,
+            "terminal.cursorShape":"bar",
+            "terminal.cursorBlink":true,
+            "terminal.themeName":"Dracula",
+            "terminal.backgroundOpacity":0.8,
+            "terminal.tuiScrollSensitivity":2,
+            "terminal.clipboardOnSelect":true,
+            "editor.themeName":"Tokyo Night Dark",
+            "editor.autosaveDelaySeconds":7,
+            "agents.agentStatusNotificationsEnabled":true,
+            "agents.agentStatusFinishedNotificationsEnabled":false,
+            "agents.showTabTitlesInSidebar":true,
+            "editor.quickOpenExcludedDirectories":["node_modules","target","Generated"],
+            "agents.quotaUnpinnedKeys":["claude:default","agy"]
+        }});
+        assert_eq!(
+            state.apply_shared_snapshot(&snapshot).unwrap(),
+            "traditionalChinese"
+        );
+        assert_eq!(state.terminal_font_size, 17.0);
+        assert_eq!(state.editor_tab_size, 8);
+        assert!(state.editor_two_row_tabs);
+        assert!(!state.auto_git_fetch_enabled);
+        assert!(!state.confirm_project_removal);
+        assert!(state.confirm_workspace_removal);
+        assert_eq!(state.auto_archive_workspaces_after_days, 60);
+        assert!(!state.explorer_show_ignored);
+        assert!(state.explorer_show_hidden);
+        assert_eq!(
+            state.default_agent_profile_id.as_deref(),
+            Some("host_codex")
+        );
+        let previous = state.clone();
+        let mut invalid_pins = snapshot.clone();
+        invalid_pins["values"]["agents.quotaUnpinnedKeys"] = json!(["agy", "agy"]);
+        assert!(state.apply_shared_snapshot(&invalid_pins).is_err());
+        let mut old_host = snapshot.clone();
+        old_host["values"]
+            .as_object_mut()
+            .unwrap()
+            .remove("agents.quotaUnpinnedKeys");
+        assert_eq!(
+            state.apply_shared_snapshot(&old_host).unwrap(),
+            "traditionalChinese",
+            "Older Host without quota-pins key should still provide other shared settings",
+        );
+        let mut invalid_extended = snapshot.clone();
+        invalid_extended["values"]["terminal.cursorShape"] = json!("unexpected");
+        assert!(state.apply_shared_snapshot(&invalid_extended).is_err());
+        let mut invalid_exclusions = snapshot.clone();
+        invalid_exclusions["values"]["editor.quickOpenExcludedDirectories"] =
+            json!(["target", "TARGET"]);
+        assert!(state.apply_shared_snapshot(&invalid_exclusions).is_err());
+        let mut invalid_two_row = snapshot.clone();
+        invalid_two_row["values"]["editor.twoRowTabs"] = json!("true");
+        assert!(state.apply_shared_snapshot(&invalid_two_row).is_err());
+        assert_eq!(
+            state, previous,
+            "Invalid extended settings must not partially install"
+        );
+        assert!(state
+            .apply_shared_snapshot(&json!({"values":{
+                "general.language":"japanese",
+                "general.autoGitFetchEnabled":true
+            }}))
+            .is_err());
+        assert_eq!(state, previous);
+    }
 
     #[test]
     fn isolated_store_cas_survives_restart_and_refuses_stale_or_unsafe_mutations() {

@@ -1,7 +1,12 @@
 //! UI-agnostic workbench state and native desktop application services.
 //! Tests can build this library without the heavyweight GPUI renderer.
+rust_i18n::i18n!("locales", fallback = "en");
+
 pub mod agent_profiles;
+pub mod agent_quota;
 mod agent_runtime_bridge;
+pub mod agent_status_notifications;
+pub mod agent_windows_notifications;
 pub mod ai_commit_bridge;
 pub mod edition;
 pub mod editor;
@@ -24,15 +29,19 @@ pub mod git_inspect;
 pub mod git_original_tabs;
 pub mod git_sidebar_layout;
 pub mod git_watch;
+pub mod host_tab_pins;
 pub mod mcp_ui_bridge;
 pub mod mcp_workspace_creation;
 pub mod model;
+pub mod native_i18n;
 pub mod native_modal;
 pub mod native_settings;
 pub mod project_search;
 pub mod project_tree;
 pub mod runtime_bridge;
+pub mod runtime_catalog;
 pub mod session;
+pub mod settings_menu_catalog;
 pub mod terminal;
 pub mod terminal_bootstrap;
 pub mod terminal_output_budget;
@@ -44,6 +53,7 @@ pub mod vt_screen;
 pub mod workbench_layout_store;
 pub mod workbench_panes;
 pub mod workbench_tabs;
+pub mod workspace_sidebar_order;
 pub mod workspace_tree;
 pub mod worktree_manager;
 

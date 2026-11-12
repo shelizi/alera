@@ -155,6 +155,146 @@ async fn runtime_settings_update_checks_expected_revision_and_preserves_lww_with
     assert_eq!(lww["payload"]["revision"], 3);
 }
 
+/// Two isolated authenticated app clients exercise the actual Host request
+/// router and SQLite expectedRevision transaction; no production Host runs.
+#[tokio::test]
+async fn agent_hook_host_cas_rejects_stale_classic_native_writers_and_preserves_others() {
+    let dir = tempfile::tempdir().unwrap();
+    let (classic_handle, mut classic_responses) = ClientHandle::test_channels();
+    let (native_handle, mut native_responses) = ClientHandle::test_channels();
+    let mut actor = test_actor(
+        &dir,
+        HashMap::from([
+            (1, local_client(classic_handle)),
+            (2, local_client(native_handle)),
+        ]),
+        HashMap::new(),
+    )
+    .await;
+
+    // Both clients observe the same Host-owned snapshot.
+    for (client_id, request_id) in [(1, 100), (2, 200)] {
+        wire_call(
+            &mut actor,
+            client_id,
+            request_id,
+            "runtimeSettings.get",
+            json!({}),
+        )
+        .await;
+    }
+    let classic_before = read_response(&mut classic_responses, 100).await;
+    let native_before = read_response(&mut native_responses, 200).await;
+    assert_eq!(classic_before["ok"], true, "{classic_before}");
+    assert_eq!(native_before["ok"], true, "{native_before}");
+    assert_eq!(
+        classic_before["payload"]["revision"],
+        native_before["payload"]["revision"]
+    );
+    let observed = classic_before["payload"]["revision"].as_i64().unwrap();
+
+    // Classic changes an unrelated field, which must also invalidate a
+    // pending Native Hook CAS that was based on the old global revision.
+    wire_call(
+        &mut actor,
+        1,
+        101,
+        "runtimeSettings.update",
+        json!({"expectedRevision": observed, "confirmProjectRemoval": false}),
+    )
+    .await;
+    let classic_changed = read_response(&mut classic_responses, 101).await;
+    assert_eq!(classic_changed["ok"], true, "{classic_changed}");
+    assert_eq!(classic_changed["payload"]["revision"], observed + 1);
+
+    wire_call(
+        &mut actor,
+        2,
+        201,
+        "runtimeSettings.update",
+        json!({"expectedRevision": observed,
+            "agentStatusHooks": {"codex": true, "claude": false}}),
+    )
+    .await;
+    let stale_other_setting = read_response(&mut native_responses, 201).await;
+    assert_eq!(stale_other_setting["ok"], false, "{stale_other_setting}");
+    assert_eq!(
+        stale_other_setting["errorCode"],
+        "runtime_settings_revision_conflict"
+    );
+    assert_eq!(
+        stale_other_setting["errorDetails"]["expectedRevision"],
+        observed
+    );
+    assert_eq!(
+        stale_other_setting["errorDetails"]["actualRevision"],
+        observed + 1
+    );
+    let unchanged = actor.runtime_settings_snapshot().await.unwrap();
+    assert_eq!(unchanged["revision"], observed + 1);
+    assert_eq!(unchanged["confirmProjectRemoval"], false);
+    assert_ne!(unchanged["agentStatusHooks"]["codex"], true);
+
+    // A refreshed Native client changes only one Provider. Other settings
+    // retain their values and Host advances its atomic revision once.
+    wire_call(
+        &mut actor,
+        2,
+        202,
+        "runtimeSettings.update",
+        json!({"expectedRevision": observed + 1,
+            "agentStatusHooks": {"codex": true, "claude": false}}),
+    )
+    .await;
+    let native_written = read_response(&mut native_responses, 202).await;
+    assert_eq!(native_written["ok"], true, "{native_written}");
+    assert_eq!(native_written["payload"]["revision"], observed + 2);
+    assert_eq!(native_written["payload"]["agentStatusHooks"]["codex"], true);
+    assert_eq!(
+        native_written["payload"]["agentStatusHooks"]["claude"],
+        false
+    );
+
+    // Classic's now-stale Hook toggle must not roll back the Native change.
+    wire_call(
+        &mut actor,
+        1,
+        102,
+        "runtimeSettings.update",
+        json!({"expectedRevision": observed + 1,
+            "agentStatusHooks": {"codex": false, "claude": true}}),
+    )
+    .await;
+    let stale_hooks = read_response(&mut classic_responses, 102).await;
+    assert_eq!(stale_hooks["ok"], false, "{stale_hooks}");
+    assert_eq!(
+        stale_hooks["errorCode"],
+        "runtime_settings_revision_conflict"
+    );
+    assert_eq!(stale_hooks["errorDetails"]["actualRevision"], observed + 2);
+    let preserved = actor.runtime_settings_snapshot().await.unwrap();
+    assert_eq!(preserved["revision"], observed + 2);
+    assert_eq!(preserved["agentStatusHooks"]["codex"], true);
+    assert_eq!(preserved["agentStatusHooks"]["claude"], false);
+    assert_eq!(preserved["confirmProjectRemoval"], false);
+
+    // Fresh Classic settings can update Claude without losing Codex.
+    wire_call(
+        &mut actor,
+        1,
+        103,
+        "runtimeSettings.update",
+        json!({"expectedRevision": observed + 2,
+            "agentStatusHooks": {"codex": true, "claude": true}}),
+    )
+    .await;
+    let merged = read_response(&mut classic_responses, 103).await;
+    assert_eq!(merged["ok"], true, "{merged}");
+    assert_eq!(merged["payload"]["revision"], observed + 3);
+    assert_eq!(merged["payload"]["agentStatusHooks"]["codex"], true);
+    assert_eq!(merged["payload"]["agentStatusHooks"]["claude"], true);
+    assert_eq!(merged["payload"]["confirmProjectRemoval"], false);
+}
 #[tokio::test]
 async fn mobile_runtime_settings_update_rejects_desktop_only_keys() {
     let dir = tempfile::tempdir().unwrap();

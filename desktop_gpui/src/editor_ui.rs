@@ -68,6 +68,7 @@ actions!(
         InsertIndent,
         SelectAll,
         SaveFile,
+        SaveAsFile,
         Paste,
         Copy,
         Cut,
@@ -118,6 +119,8 @@ pub fn bind_editor_keys(cx: &mut App) {
         KeyBinding::new("cmd-a", SelectAll, Some("AleraGpuiEditor")),
         KeyBinding::new("ctrl-s", SaveFile, Some("AleraGpuiEditor")),
         KeyBinding::new("cmd-s", SaveFile, Some("AleraGpuiEditor")),
+        KeyBinding::new("ctrl-shift-s", SaveAsFile, Some("AleraGpuiEditor")),
+        KeyBinding::new("cmd-shift-s", SaveAsFile, Some("AleraGpuiEditor")),
         KeyBinding::new("ctrl-v", Paste, Some("AleraGpuiEditor")),
         KeyBinding::new("cmd-v", Paste, Some("AleraGpuiEditor")),
         KeyBinding::new("ctrl-c", Copy, Some("AleraGpuiEditor")),
@@ -261,12 +264,12 @@ impl NativeEditor {
 
     /// Leave untitled drafts in recovery. Autosave only an idle file-backed
     /// document without any in-progress IME composition.
-    pub fn autosave_if_idle(&mut self, cx: &mut Context<Self>) {
+    pub fn autosave_if_idle(&mut self, idle_seconds: u64, cx: &mut Context<Self>) {
         if !self.tabs.is_empty()
             && self.doc().is_dirty()
             && self.doc().path().is_some()
             && self.doc().marked().is_none()
-            && self.last_edit.elapsed() >= Duration::from_secs(3)
+            && self.last_edit.elapsed() >= Duration::from_secs(idle_seconds.clamp(1, 60))
         {
             self.save(cx);
         }
@@ -1013,6 +1016,9 @@ impl NativeEditor {
             self.save(cx);
         }
     }
+    fn save_as_file(&mut self, _: &SaveAsFile, _: &mut Window, cx: &mut Context<Self>) {
+        self.prompt_save_as(cx);
+    }
     fn paste(&mut self, _: &Paste, _: &mut Window, cx: &mut Context<Self>) {
         if let Some(value) = cx.read_from_clipboard().and_then(|item| item.text()) {
             let result = self.doc_mut().replace(None, &value);
@@ -1514,6 +1520,7 @@ impl Render for NativeEditor {
             .on_action(cx.listener(Self::insert_indent))
             .on_action(cx.listener(Self::select_all))
             .on_action(cx.listener(Self::save_file))
+            .on_action(cx.listener(Self::save_as_file))
             .on_action(cx.listener(Self::paste))
             .on_action(cx.listener(Self::copy))
             .on_action(cx.listener(Self::cut))

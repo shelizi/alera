@@ -287,6 +287,9 @@ class WorkspaceTabService._(
     if (tab == null) {
       throw StateError('Workspace tab not found: $tabId');
     }
+    if (_repository case WorkbenchTabPinRepository pinRepository) {
+      return pinRepository.compareAndSetWorkspaceTabPinned(tab, pinned);
+    }
     final payload = Map<String, Object?>.of(tab.payload);
     if (pinned) {
       payload[workspaceTabPinnedPayloadKey] = true;

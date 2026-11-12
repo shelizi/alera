@@ -82,6 +82,90 @@ impl StreamSessions {
     }
 }
 
+/// The authenticated Host broadcasts richer Agent status events containing
+/// prompts, tool input and assistant messages. The private GPUI sidecar must
+/// never forward those strings, or any arbitrary Host event, across stdio.
+/// A malformed/oversized batch is converted to a snapshot invalidation.
+fn sanitize_agent_presence_event(message: &Value) -> Option<Value> {
+    if message.get("event").and_then(Value::as_str) != Some("agentPresenceChanged") {
+        return None;
+    }
+    let Some(changes) = message
+        .pointer("/payload/changes")
+        .and_then(Value::as_array)
+    else {
+        return Some(json!({"event": "agentPresenceChanged", "payload": {}}));
+    };
+    if changes.len() > 128 {
+        return Some(json!({"event": "agentPresenceChanged", "payload": {}}));
+    }
+    let mut allowed = Vec::with_capacity(changes.len());
+    for change in changes {
+        // Real Host PTY shutdowns emit only sessionId + removed:true.
+        // Without the full workspace/tab identity, never forward a deletion
+        // that could target a recycled handle; request an authenticated
+        // terminal list instead.
+        if change.get("removed") == Some(&Value::Bool(true))
+            && (change.get("workspaceId").and_then(Value::as_str).is_none()
+                || change.get("tabId").and_then(Value::as_str).is_none())
+        {
+            return Some(json!({"event": "agentPresenceChanged", "payload": {}}));
+        }
+        let (Some(session_id), Some(workspace_id), Some(tab_id)) = (
+            change
+                .get("terminalSessionId")
+                .and_then(Value::as_str)
+                .filter(|id| valid_identity(id, 128)),
+            change
+                .get("workspaceId")
+                .and_then(Value::as_str)
+                .filter(|id| valid_identity(id, 256)),
+            change
+                .get("tabId")
+                .and_then(Value::as_str)
+                .filter(|id| valid_identity(id, 256)),
+        ) else {
+            continue;
+        };
+        if change.get("removed") == Some(&Value::Bool(true)) {
+            allowed.push(json!({
+                "terminalSessionId": session_id, "workspaceId": workspace_id,
+                "tabId": tab_id, "removed": true,
+            }));
+            continue;
+        }
+        let Some(state) = change
+            .get("state")
+            .and_then(Value::as_str)
+            .filter(|state| matches!(*state, "working" | "waiting" | "blocked" | "done"))
+        else {
+            continue;
+        };
+        let Some(agent_type) = change
+            .get("agentType")
+            .and_then(Value::as_str)
+            .filter(|type_name| valid_identity(type_name, 64))
+        else {
+            continue;
+        };
+        let timestamps = ["stateStartedAt", "updatedAt"].map(|field| {
+            change.get(field).and_then(Value::as_str).filter(|value| {
+                value.len() <= 64 && chrono::DateTime::parse_from_rfc3339(value).is_ok()
+            })
+        });
+        let [Some(started_at), Some(updated_at)] = timestamps else {
+            continue;
+        };
+        allowed.push(json!({
+            "terminalSessionId": session_id, "workspaceId": workspace_id,
+            "tabId": tab_id, "agentType": agent_type, "state": state,
+            "stateStartedAt": started_at, "updatedAt": updated_at,
+            "interrupted": change.get("interrupted").and_then(Value::as_bool),
+        }));
+    }
+    Some(json!({"event": "agentPresenceChanged", "payload": {"changes": allowed}}))
+}
+
 fn valid_identity(value: &str, limit: usize) -> bool {
     !value.is_empty()
         && value.len() <= limit
@@ -285,6 +369,8 @@ async fn run_stream(client: RuntimeHostRpcClient) -> Result<()> {
                             "error": frame.get("error").cloned().unwrap_or(Value::Null),
                         })).await?;
                     }
+                } else if let Some(redacted) = sanitize_agent_presence_event(&frame) {
+                    emit_line(&mut stdout, &redacted).await?;
                 } else if sessions.forward(&frame) {
                     emit_line(&mut stdout, &frame).await?;
                 }
@@ -378,5 +464,63 @@ mod tests {
         assert!(
             !sessions.forward(&json!({"event": "mcpUiCommand", "payload": {"sessionId": "pty-a"}}))
         );
+    }
+
+    #[test]
+    fn agent_presence_push_is_bounded_redacted_and_retains_exact_host_identity() {
+        let host_event = json!({
+            "event": "agentPresenceChanged",
+            "payload": {"changes": [
+                {
+                    "terminalSessionId": "pty-1", "workspaceId": "ws-1",
+                    "tabId": "tab-1", "agentType": "codex",
+                    "state": "waiting", "stateStartedAt": "2026-11-11T07:00:00+00:00",
+                    "updatedAt": "2026-11-11T07:00:01+00:00",
+                    "interrupted": false, "prompt": "SECRET PROMPT",
+                    "toolInput": "API_KEY=SECRET", "lastAssistantMessage": "PRIVATE"
+                },
+                {"terminalSessionId": "pty-2", "workspaceId": "ws-2",
+                 "tabId": "tab-2", "removed": true}
+            ]}
+        });
+        let forwarded = sanitize_agent_presence_event(&host_event).unwrap();
+        let changes = forwarded["payload"]["changes"].as_array().unwrap();
+        assert_eq!(changes.len(), 2);
+        assert_eq!(changes[0]["state"], "waiting");
+        assert_eq!(changes[0]["workspaceId"], "ws-1");
+        assert_eq!(changes[0]["tabId"], "tab-1");
+        assert_eq!(changes[0]["updatedAt"], "2026-11-11T07:00:01+00:00");
+        for field in ["prompt", "toolName", "toolInput", "lastAssistantMessage"] {
+            assert!(changes[0].get(field).is_none(), "sensitive {field} leaked");
+        }
+        assert_eq!(changes[1]["removed"], true);
+        assert!(sanitize_agent_presence_event(
+            &json!({"event": "mcpUiCommand", "payload": host_event["payload"]})
+        )
+        .is_none());
+        assert!(sanitize_agent_presence_event(&json!({
+            "event": "agentPresenceChanged", "payload": {"changes": [
+                {"terminalSessionId": "bad\nhandle", "state": "working"},
+                {"terminalSessionId": "pty-2", "workspaceId": "ws", "tabId": "tab",
+                 "state": "hacked", "agentType": "codex"}
+            ]}
+        }))
+        .unwrap()["payload"]["changes"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+        assert!(
+            sanitize_agent_presence_event(&json!({
+                "event": "agentPresenceChanged", "payload": {}
+            }))
+            .is_some(),
+            "legacy Host invalidation must still trigger snapshot"
+        );
+        assert_eq!(sanitize_agent_presence_event(&json!({
+            "event": "agentPresenceChanged", "payload": {"changes": [
+                {"terminalSessionId": "pty-1", "removed": true}
+            ]}
+        })).unwrap(), json!({"event":"agentPresenceChanged","payload":{}}),
+          "Host closure without workspace/tab identity must invalidate, never delete recycled Tab");
     }
 }

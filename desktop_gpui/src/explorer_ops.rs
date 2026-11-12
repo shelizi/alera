@@ -5,6 +5,7 @@ use std::collections::HashSet;
 use std::fs::{self, OpenOptions};
 use std::io::{self, ErrorKind, Read};
 use std::path::{Component, Path, PathBuf};
+use std::process::{Command, Stdio};
 
 const MAX_NAME_BYTES: usize = 255;
 const MAX_RECURSIVE_ENTRIES: usize = 4_096;
@@ -27,6 +28,56 @@ impl ExplorerFiles {
 
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// Reveals are read-only, but must honor the same workspace, symlink,
+    /// and protected-path boundaries as Explorer file operations.
+    pub fn reveal_target(&self, candidate: &Path) -> io::Result<PathBuf> {
+        let path = self.existing(candidate)?;
+        let kind = fs::symlink_metadata(&path)?.file_type();
+        if !kind.is_file() && !kind.is_dir() {
+            return Err(invalid("Only normal files and folders can be revealed"));
+        }
+        Ok(path)
+    }
+
+    /// Show an explicitly selected file or folder in the system file manager.
+    /// The file is never opened/executed and no shell command is involved.
+    pub fn reveal_in_file_manager(&self, candidate: &Path) -> io::Result<()> {
+        let target = self.reveal_target(candidate)?;
+        #[cfg(target_os = "windows")]
+        let mut command = {
+            let mut command = Command::new("explorer.exe");
+            command.arg(format!("/select,{}", target.display()));
+            command
+        };
+        #[cfg(target_os = "macos")]
+        let mut command = {
+            let mut command = Command::new("open");
+            command.arg("-R").arg(&target);
+            command
+        };
+        #[cfg(target_os = "linux")]
+        let mut command = {
+            let mut command = Command::new("xdg-open");
+            // No portable select-file flag on Linux file managers.
+            command.arg(target.parent().unwrap_or(&target));
+            command
+        };
+        #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+        return Err(io::Error::new(
+            ErrorKind::Unsupported,
+            "Showing files in the OS file manager is unsupported",
+        ));
+        #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+        {
+            command
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()?;
+            Ok(())
+        }
     }
 
     fn existing(&self, candidate: &Path) -> io::Result<PathBuf> {
@@ -716,6 +767,23 @@ fn forbidden(message: &str) -> io::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn file_manager_reveal_rejects_stale_outside_and_protected_targets() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = dunce::canonicalize(temp.path()).unwrap();
+        let files = ExplorerFiles::new(&root).unwrap();
+        let folder = files.create_folder(&root, "folder").unwrap();
+        let selected = files.create_file(&folder, "a file.txt").unwrap();
+        assert_eq!(files.reveal_target(&selected).unwrap(), selected);
+        assert_eq!(files.reveal_target(&folder).unwrap(), folder);
+        assert!(files.reveal_target(&root).is_err());
+        assert!(files.reveal_target(&root.join("missing.txt")).is_err());
+        assert!(files.reveal_target(&root.join("../outside.txt")).is_err());
+        fs::create_dir(root.join(".git")).unwrap();
+        assert!(files.reveal_target(&root.join(".git")).is_err());
+        assert!(selected.is_file(), "validation must not mutate the file");
+    }
 
     #[test]
     fn batch_delete_requires_exact_reconfirmed_selection_and_workspace() {

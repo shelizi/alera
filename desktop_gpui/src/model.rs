@@ -53,7 +53,7 @@ impl WorkbenchModel {
             entries: Vec::new(),
             tabs: Vec::new(),
             active_tab: None,
-            status: "Native GPUI preview: file browsing is read-only".into(),
+            status: "Ready · open a file or Terminal tab".into(),
         };
         model.refresh()?;
         Ok(model)
@@ -278,6 +278,30 @@ impl WorkbenchModel {
         self.status = format!("Closed {}", closed.title);
     }
 
+    /// Drop the preview tab for `path` once the editable workbench owns the
+    /// file. Preview tabs are read-only snapshots, so releasing one never
+    /// discards editor state; keeping it would render a second same-path
+    /// chip beside the canonical editor tab. Comparison canonicalizes the
+    /// candidate so aliased spellings of the same file still match.
+    pub fn release_path(&mut self, candidate: &Path) -> bool {
+        let path = dunce::canonicalize(candidate).unwrap_or_else(|_| candidate.to_path_buf());
+        let active_path = self.active_document().map(|tab| tab.path.clone());
+        let prior_active = self.active_tab;
+        let before = self.tabs.len();
+        self.tabs.retain(|tab| tab.path != path);
+        if self.tabs.len() == before {
+            return false;
+        }
+        self.active_tab = active_path
+            .and_then(|active| self.tabs.iter().position(|tab| tab.path == active))
+            .or_else(|| {
+                prior_active.and_then(|index| {
+                    (!self.tabs.is_empty()).then(|| index.min(self.tabs.len() - 1))
+                })
+            });
+        true
+    }
+
     /// Drop previews of a renamed, moved or deleted path (and descendants),
     /// retaining unrelated open previews. A real editor must first be checked
     /// for dirty changes by the UI before any filesystem mutation.
@@ -408,6 +432,40 @@ mod tests {
         fs::write(&large, vec![b'x'; MAX_FILE_BYTES as usize + 1]).unwrap();
         assert!(!model.preview_path(&large));
         assert_eq!(model.selected_path(), Some(four.as_path()));
+    }
+
+    #[test]
+    fn release_path_drops_only_the_editor_owned_preview_and_repairs_selection() {
+        let temp = tempfile::tempdir().unwrap();
+        for file in ["a.txt", "b.txt", "c.txt"] {
+            fs::write(temp.path().join(file), file).unwrap();
+        }
+        let mut model = WorkbenchModel::new(temp.path()).unwrap();
+        let root = model.root().to_path_buf();
+        let a = root.join("a.txt");
+        let b = root.join("b.txt");
+        let c = root.join("c.txt");
+        assert!(model.open_path(&a));
+        assert!(model.open_path(&b));
+        assert!(model.preview_path(&c));
+        assert_eq!(model.tabs().len(), 3);
+        model.activate_tab(1);
+        // Releasing a non-active preview keeps the current selection.
+        assert!(model.release_path(&a));
+        assert_eq!(model.tabs().len(), 2);
+        assert_eq!(model.selected_path(), Some(b.as_path()));
+        assert!(
+            model.tabs()[1].transient,
+            "surviving preview stays untouched"
+        );
+        // An aliased spelling of the same canonical file still releases it.
+        assert!(model.release_path(&root.join(".").join("b.txt")));
+        assert_eq!(model.tabs().len(), 1);
+        assert_eq!(model.selected_path(), Some(c.as_path()));
+        assert!(model.release_path(&c));
+        assert!(model.tabs().is_empty());
+        assert_eq!(model.active_tab(), None);
+        assert!(!model.release_path(&root.join("missing.txt")));
     }
 
     #[test]

@@ -161,6 +161,10 @@ mod tests {
                 tab_id: "tab_a".into(),
                 agent_type: Some("codex".into()),
                 running: true,
+                agent_state: None,
+                interrupted: false,
+                agent_state_started_at: None,
+                agent_updated_at: None,
             },
             TerminalSession {
                 handle: "plain_terminal".into(),
@@ -168,6 +172,10 @@ mod tests {
                 tab_id: "tab_a".into(),
                 agent_type: None,
                 running: true,
+                agent_state: None,
+                interrupted: false,
+                agent_state_started_at: None,
+                agent_updated_at: None,
             },
             TerminalSession {
                 handle: "correct_agent".into(),
@@ -175,6 +183,10 @@ mod tests {
                 tab_id: "tab_a".into(),
                 agent_type: Some("codex".into()),
                 running: true,
+                agent_state: None,
+                interrupted: false,
+                agent_state_started_at: None,
+                agent_updated_at: None,
             },
         ];
         assert_eq!(

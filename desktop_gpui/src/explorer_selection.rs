@@ -5,6 +5,16 @@ use std::path::{Path, PathBuf};
 
 pub const MAX_SELECTED: usize = 128;
 
+/// Keyboard navigation is scoped to the current visible Explorer rows.
+/// Moving the highlight never opens a file or performs a filesystem write.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExplorerNavigation {
+    Previous,
+    Next,
+    First,
+    Last,
+}
+
 #[derive(Debug, Clone)]
 pub struct ExplorerMultiSelection {
     root: PathBuf,
@@ -27,6 +37,51 @@ impl ExplorerMultiSelection {
 
     pub fn len(&self) -> usize {
         self.paths.len()
+    }
+
+    /// GPUI ScrollHandle indexes *painted direct children*, not filesystem
+    /// paths. Use the exact visible order (filter/tree/flat) rather than an
+    /// index from a different presentation or a guessed row height.
+    pub fn visible_row_index(&self, path: &Path, visible: &[PathBuf]) -> Option<usize> {
+        if path == self.root || !path.starts_with(&self.root) {
+            return None;
+        }
+        visible.iter().position(|row| row == path)
+    }
+
+    /// A stale selection (after refresh/filter/collapse) is not used to
+    /// calculate an out-of-range target. Invalid rows can never be selected.
+    pub fn navigate(
+        &mut self,
+        selected: Option<&Path>,
+        visible: &[PathBuf],
+        direction: ExplorerNavigation,
+    ) -> Option<PathBuf> {
+        let items: Vec<_> = visible
+            .iter()
+            .filter(|path| path.starts_with(&self.root) && *path != &self.root)
+            .collect();
+        if items.is_empty() {
+            return None;
+        }
+        let current =
+            selected.and_then(|path| items.iter().position(|item| item.as_path() == path));
+        let index = match direction {
+            ExplorerNavigation::First => 0,
+            ExplorerNavigation::Last => items.len() - 1,
+            ExplorerNavigation::Previous => current
+                .map(|index| index.saturating_sub(1))
+                .unwrap_or(items.len() - 1),
+            ExplorerNavigation::Next => current
+                .map(|index| (index + 1).min(items.len() - 1))
+                .unwrap_or(0),
+        };
+        let next = items[index].to_path_buf();
+        // Reset a previous Ctrl/Shift range just like a plain row click.
+        if !self.click(&next, visible, false, false) {
+            return None;
+        }
+        Some(next)
     }
 
     pub fn clear(&mut self) {
@@ -129,6 +184,89 @@ impl ExplorerMultiSelection {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scroll_target_index_matches_current_visible_presentation_only() {
+        let root = PathBuf::from("C:/safe");
+        let nested = root.join("src/main.rs");
+        let sibling = root.join("README.md");
+        let hidden = root.join("src/hidden.rs");
+        let selection = ExplorerMultiSelection::new(&root);
+        let filtered = vec![nested.clone(), sibling.clone()];
+        let tree = vec![root.join("src"), sibling.clone(), nested.clone()];
+        assert_eq!(selection.visible_row_index(&nested, &filtered), Some(0));
+        assert_eq!(selection.visible_row_index(&nested, &tree), Some(2));
+        assert_eq!(selection.visible_row_index(&hidden, &filtered), None);
+        assert_eq!(selection.visible_row_index(&root, &filtered), None);
+        assert_eq!(
+            selection.visible_row_index(&PathBuf::from("C:/outside"), &tree),
+            None
+        );
+    }
+
+    #[test]
+    fn arrow_navigation_keeps_one_visible_target_and_clamps_ends() {
+        let root = PathBuf::from("C:/safe");
+        let rows: Vec<_> = ["a", "b", "c"].iter().map(|name| root.join(name)).collect();
+        let mut selection = ExplorerMultiSelection::new(&root);
+        let first = selection
+            .navigate(None, &rows, ExplorerNavigation::Next)
+            .unwrap();
+        assert_eq!(first, rows[0]);
+        let second = selection
+            .navigate(Some(&first), &rows, ExplorerNavigation::Next)
+            .unwrap();
+        assert_eq!(second, rows[1]);
+        assert_eq!(selection.len(), 1);
+        assert!(!selection.contains(&rows[0]));
+        assert!(selection.contains(&rows[1]));
+        assert_eq!(
+            selection.navigate(Some(&second), &rows, ExplorerNavigation::First),
+            Some(rows[0].clone())
+        );
+        assert_eq!(
+            selection.navigate(Some(&rows[0]), &rows, ExplorerNavigation::Previous),
+            Some(rows[0].clone())
+        );
+        assert_eq!(
+            selection.navigate(Some(&rows[2]), &rows, ExplorerNavigation::Next),
+            Some(rows[2].clone())
+        );
+        assert_eq!(
+            selection.navigate(None, &rows, ExplorerNavigation::Previous),
+            Some(rows[2].clone())
+        );
+    }
+
+    #[test]
+    fn keyboard_navigation_rejects_outside_rows_and_stale_selected_path() {
+        let root = PathBuf::from("C:/safe");
+        let outside = PathBuf::from("C:/other/private");
+        let first = root.join("one");
+        let second = root.join("two");
+        let visible = vec![outside.clone(), first.clone(), second.clone()];
+        let mut selection = ExplorerMultiSelection::new(&root);
+        assert_eq!(
+            selection.navigate(Some(&outside), &visible, ExplorerNavigation::Next),
+            Some(first)
+        );
+        assert_eq!(
+            selection.navigate(
+                Some(&root.join("missing")),
+                &visible,
+                ExplorerNavigation::Last
+            ),
+            Some(second)
+        );
+        assert!(selection
+            .navigate(None, &[outside], ExplorerNavigation::Next)
+            .is_none());
+        assert_eq!(
+            selection.len(),
+            1,
+            "an unavailable view must not discard earlier selection"
+        );
+    }
 
     #[test]
     fn select_all_only_accepts_visible_workspace_rows_and_obeys_cap() {

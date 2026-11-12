@@ -36,6 +36,15 @@ abstract interface class WorkbenchViewBoundTabRemovalRepository {
   );
 }
 
+/// Optional authoritative Host pin capability. Unlike an ordinary Tab
+/// upsert, this compares the observed identity and revision atomically.
+abstract interface class WorkbenchTabPinRepository {
+  Future<WorkspaceTabRecord> compareAndSetWorkspaceTabPinned(
+    WorkspaceTabRecord observed,
+    bool pinned,
+  );
+}
+
 abstract interface class WorkbenchRepository
     implements
         WorkbenchLayoutRepository,

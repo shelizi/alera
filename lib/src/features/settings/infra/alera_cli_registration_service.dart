@@ -4,7 +4,7 @@ import 'package:alera/src/shared/infra/runtime/alera_cli_sidecar.dart';
 import 'package:alera/src/shared/infra/process/command_environment_resolver.dart';
 import 'package:alera/src/shared/infra/process/process_runner.dart';
 import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
+import 'package:alera/src/shared/infra/storage/alera_support_directory.dart';
 import 'package:logging/logging.dart';
 
 typedef AleraCliRegistrationSupportDirectoryResolver =
@@ -77,7 +77,7 @@ class AleraCliRegistrationService({
           (() =>
               commandEnvironmentResolver ?? UserCommandEnvironmentResolver()),
       _applicationSupportDirectory =
-          applicationSupportDirectory ?? getApplicationSupportDirectory,
+          applicationSupportDirectory ?? aleraApplicationSupportDirectory,
       _environment = environment ?? Platform.environment,
       _operatingSystem = operatingSystem ?? Platform.operatingSystem,
       _executableChecker = executableChecker ?? _hostFileIsExecutable,

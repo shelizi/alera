@@ -18,7 +18,9 @@ impl Workbench {
     /// Host session list remains an action rather than pretending to be a tab.
     pub(super) fn kit_new_tab_menu(
         owner: gpui::WeakEntity<Self>,
-        running: Vec<(String, String)>,
+        target: Option<PaneAttachGuard>,
+        running: Vec<(TerminalSession, String)>,
+        profiles: Vec<AgentProfileRow>,
         terminal_create_busy: bool,
         terminal_create_timed_out: bool,
     ) -> impl Fn(
@@ -28,55 +30,99 @@ impl Workbench {
     ) -> gpui_kit::component::menu::PopupMenu
            + 'static {
         move |mut menu, _, _| {
+            let Some(target) = target.clone() else {
+                return menu.label("Pane no longer available; reopen New Tab");
+            };
             let new_file_owner = owner.clone();
+            let new_file_target = target.clone();
             menu = menu.item(PopupMenuItem::new("New File").on_click(move |_, _, cx| {
-                let _ = new_file_owner.update(cx, |view, cx| view.new_editor(cx));
+                let _ = new_file_owner.update(cx, |view, cx| {
+                    if new_file_target.still_valid(view.workspace_generation, &view.mixed_panes) {
+                        view.new_editor_in_pane(new_file_target.pane(), cx);
+                    } else {
+                        view.model.set_status("Pane changed; reopen New Tab");
+                        cx.notify();
+                    }
+                });
             }));
             let new_terminal_owner = owner.clone();
+            let new_terminal_target = target.clone();
             menu = menu.item(
                 PopupMenuItem::new("New Terminal").on_click(move |_, _, cx| {
-                    let _ = new_terminal_owner.update(cx, |view, cx| view.create_host_terminal(cx));
+                    let _ = new_terminal_owner.update(cx, |view, cx| {
+                        view.create_host_terminal_in_pane(new_terminal_target.clone(), cx);
+                    });
                 }),
             );
+            if !profiles.is_empty() {
+                menu = menu.separator();
+            }
+            for profile in profiles.iter().cloned() {
+                let owner = owner.clone();
+                let agent_target = target.clone();
+                let id = profile.id;
+                let label = format!("New Agent · {} ({})", profile.name, profile.agent_type);
+                menu = menu.item(PopupMenuItem::new(label).on_click(move |_, window, cx| {
+                    let _ = owner.update(cx, |view, cx| {
+                        view.prepare_agent_in_pane(&id, &agent_target, window, cx);
+                    });
+                }));
+            }
             if terminal_create_timed_out {
                 let retry_owner = owner.clone();
-                menu = menu.item(PopupMenuItem::new("Retry terminal confirmation").on_click(
-                    move |_, _, cx| {
-                        let _ = retry_owner
-                            .update(cx, |view, cx| view.retry_host_terminal_confirmation(cx));
-                    },
-                ));
+                let retry_target = target.clone();
+                // Retrying is global, but the saved creation intent still
+                // determines which pane may receive the Host session.
+                menu = menu.item(
+                    PopupMenuItem::new("Recheck pending Host session (no new PTY)").on_click(
+                        move |_, _, cx| {
+                            let _ = retry_owner.update(cx, |view, cx| {
+                                if retry_target
+                                    .still_valid(view.workspace_generation, &view.mixed_panes)
+                                    && view.terminal_create_pane.is_some()
+                                {
+                                    view.retry_host_terminal_confirmation(cx);
+                                }
+                            });
+                        },
+                    ),
+                );
             }
             if terminal_create_busy {
                 let cancel_owner = owner.clone();
-                menu = menu.item(PopupMenuItem::new("Cancel waiting for terminal").on_click(
-                    move |_, _, cx| {
-                        let _ = cancel_owner
-                            .update(cx, |view, cx| view.cancel_host_terminal_confirmation(cx));
-                    },
-                ));
+                let cancel_target = target.clone();
+                // Local cancellation never terminates a Host PTY. Allow it
+                // from either current pane if the original pane was closed.
+                menu = menu.item(
+                    PopupMenuItem::new("Cancel pending request (keep Host PTY)").on_click(
+                        move |_, _, cx| {
+                            let _ = cancel_owner.update(cx, |view, cx| {
+                                if cancel_target
+                                    .still_valid(view.workspace_generation, &view.mixed_panes)
+                                    && view.terminal_create_pane.is_some()
+                                {
+                                    view.cancel_host_terminal_confirmation(cx);
+                                }
+                            });
+                        },
+                    ),
+                );
             }
             menu = menu.label("Attach running Host session");
             if running.is_empty() {
                 menu = menu.label("No running Host sessions");
             }
-            for (handle, title) in running.iter().cloned() {
+            for (expected, title) in running.iter().cloned() {
                 let owner = owner.clone();
-                menu = menu.item(PopupMenuItem::new(title).on_click(move |_, _, cx| {
+                let attach_target = target.clone();
+                menu = menu.item(PopupMenuItem::new(title).on_click(move |_, window, cx| {
                     let _ = owner.update(cx, |view, cx| {
-                        // Recheck Host identity at click-time. Refreshing the
-                        // menu must never attach to a recycled/stopped tab.
-                        if view
-                            .terminals
-                            .sessions
-                            .iter()
-                            .any(|session| session.running && session.handle == handle)
+                        // Recheck handle + Host workspace + tab ID and pane
+                        // generation at click time. Never follow reused IDs.
+                        if let Some(identity) =
+                            view.attach_live_terminal_to_pane(&expected, &attach_target, cx)
                         {
-                            view.explorer_preview_active = false;
-                            view.select_terminal(handle.clone(), cx);
-                        } else {
-                            view.model.set_status("Host session stopped; cannot attach");
-                            cx.notify();
+                            view.focus_mixed_tab(&identity, window, cx);
                         }
                     });
                 }));
@@ -97,6 +143,18 @@ impl Workbench {
     ) -> gpui_kit::component::menu::PopupMenu
            + 'static {
         move |mut menu, _, _| {
+            let file_owner = owner.clone();
+            let pane = if active_in_secondary {
+                PaneSlot::Secondary
+            } else {
+                PaneSlot::Primary
+            };
+            menu = menu.item(PopupMenuItem::new("New File in this pane").on_click(
+                move |_, _, cx| {
+                    let _ = file_owner.update(cx, |view, cx| view.new_editor_in_pane(pane, cx));
+                },
+            ));
+            menu = menu.separator();
             if let Some(WorkbenchTabIdentity::Host(target)) = active.clone() {
                 menu = menu.label("Terminal");
                 let refresh_owner = owner.clone();
@@ -293,6 +351,7 @@ impl Workbench {
         owner: gpui::WeakEntity<Self>,
         identity: WorkbenchTabIdentity,
         secondary: bool,
+        pinned: bool,
     ) -> impl Fn(
         gpui_kit::component::menu::PopupMenu,
         &mut Window,
@@ -302,6 +361,10 @@ impl Workbench {
         move |mut menu, _, _| {
             let actions = [
                 (MixedContextAction::Focus, "Focus"),
+                (
+                    MixedContextAction::TogglePin,
+                    if pinned { "Unpin Tab" } else { "Pin Tab" },
+                ),
                 (MixedContextAction::Close, "Close"),
                 (MixedContextAction::CloseOthers, "Close others"),
                 (MixedContextAction::CloseToRight, "Close to right"),
@@ -325,8 +388,14 @@ impl Workbench {
                 let identity = identity.clone();
                 menu = menu.item(PopupMenuItem::new(label).on_click(move |_, window, cx| {
                     let _ = owner.update(cx, |view, cx| {
+                        let expected = if secondary {
+                            PaneSlot::Secondary
+                        } else {
+                            PaneSlot::Primary
+                        };
                         if view.mixed_tab_is_current(&identity, cx)
                             && view.mixed_tabs.contains(&identity)
+                            && view.mixed_panes.tabs_in(expected).contains(&identity)
                         {
                             view.mixed_tab_context = Some(identity.clone());
                             view.apply_mixed_tab_context(action, window, cx);
@@ -401,6 +470,7 @@ impl Workbench {
                 ExplorerMenuAction::Paste,
                 ExplorerMenuAction::CopyAbsolutePath,
                 ExplorerMenuAction::CopyRelativePath,
+                ExplorerMenuAction::RevealInFileManager,
                 ExplorerMenuAction::File(ExplorerAction::Duplicate),
                 ExplorerMenuAction::File(ExplorerAction::Move),
                 ExplorerMenuAction::File(ExplorerAction::Copy),

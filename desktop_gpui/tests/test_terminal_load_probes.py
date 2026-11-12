@@ -21,6 +21,61 @@ from terminal_stream_isolated_smoke import (
 
 
 class IsolatedTerminalLoadProbeTests(unittest.TestCase):
+    def test_ime_desktop_probe_requires_both_cursor_apis_without_moving_cursor(self):
+        import ctypes
+        from ctypes import wintypes
+        from terminal_stream_isolated_smoke import probe_windows_interactive_desktop
+
+        class Point(ctypes.Structure):
+            _fields_ = [("x", wintypes.LONG), ("y", wintypes.LONG)]
+
+        class Desktop:
+            def __init__(self, blocked=None):
+                self.blocked = blocked
+                self.calls = []
+
+            def GetCursorPos(self, out):
+                position = ctypes.cast(out, ctypes.POINTER(Point)).contents
+                position.x, position.y = 123, 456
+                return 1
+
+            def GetPhysicalCursorPos(self, out):
+                position = ctypes.cast(out, ctypes.POINTER(Point)).contents
+                position.x, position.y = 246, 912
+                return 1
+
+            def SetCursorPos(self, x, y):
+                self.calls.append(("logical", x, y))
+                return int(self.blocked != "logical")
+
+            def SetPhysicalCursorPos(self, x, y):
+                self.calls.append(("physical", x, y))
+                return int(self.blocked != "physical")
+
+        healthy = Desktop()
+        available, detail = probe_windows_interactive_desktop(os_name="nt", user32=healthy)
+        self.assertTrue(available, detail)
+        self.assertEqual(healthy.calls, [("logical", 123, 456), ("physical", 246, 912)])
+
+        blocked = Desktop(blocked="physical")
+        available, detail = probe_windows_interactive_desktop(os_name="nt", user32=blocked)
+        self.assertFalse(available)
+        self.assertIn("SetPhysicalCursorPos failed", detail)
+        self.assertEqual(blocked.calls, [("logical", 123, 456), ("physical", 246, 912)])
+
+        blocked = Desktop(blocked="logical")
+        available, detail = probe_windows_interactive_desktop(os_name="nt", user32=blocked)
+        self.assertFalse(available)
+        self.assertIn("SetCursorPos failed", detail)
+        self.assertEqual(blocked.calls, [("logical", 123, 456)])
+
+    def test_ime_desktop_probe_refuses_non_windows(self):
+        from terminal_stream_isolated_smoke import probe_windows_interactive_desktop
+
+        available, detail = probe_windows_interactive_desktop(os_name="posix")
+        self.assertFalse(available)
+        self.assertIn("Windows", detail)
+
     def test_echoed_command_cannot_contain_completion_marker_in_either_style(self):
         for style in ("plain", "ansi"):
             for pane in (0, 1):

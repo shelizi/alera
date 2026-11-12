@@ -1,0 +1,17 @@
+{
+  "snapshots": [
+    {"provider":"claude","accountId":"default","status":"ok","windows":[{"label":"5 hour","usedPercent":15,"resetDescription":"in 3h"},{"label":"Weekly","usedPercent":33,"resetDescription":"Friday"},{"label":"Fable weekly","usedPercent":42}]},
+    {"provider":"claude","accountId":"work","displayName":"Work","status":"ok","windows":[{"label":"5 hour","usedPercent":91},{"label":"Weekly","usedPercent":37}]},
+    {"provider":"codex","accountId":"default","status":"ok","windows":[{"label":"5 hour","usedPercent":6},{"label":"Weekly","usedPercent":15}]},
+    {"provider":"codex","accountId":"second","displayName":"Secondary","status":"ok","windows":[{"label":"5 hour","usedPercent":80},{"label":"Weekly","usedPercent":45}]},
+    {"provider":"kimi","status":"ok","windows":[{"label":"Weekly","usedPercent":48}]},
+    {"provider":"grok","status":"ok","windows":[{"label":"5 hour","usedPercent":49}]},
+    {"provider":"cursor","status":"ok","windows":[{"label":"Monthly","usedPercent":26}]},
+    {"provider":"antigravity","status":"ok","buckets":[{"name":"Gemini Five Hour","usedPercent":3},{"name":"Gemini Weekly","usedPercent":30},{"name":"Claude and GPT Five Hour","usedPercent":65},{"name":"Claude and GPT Weekly","usedPercent":94},{"name":"Argon Weekly","usedPercent":12}]},
+    {"provider":"minimax","status":"ok","buckets":[{"name":"MiniMax-general Weekly","usedPercent":27},{"name":"MiniMax-video Weekly","usedPercent":53}]},
+    {"provider":"zai","status":"ok","windows":[{"label":"Daily","usedPercent":44},{"label":"MCP Weekly","usedPercent":32}]},
+    {"provider":"devin","status":"ok","windows":[{"label":"Daily","usedPercent":22},{"label":"Weekly","usedPercent":50}]},
+    {"provider":"opencode","accountId":"go","status":"ok","amounts":[{"label":"Spend","currency":"USD","spentAmount":3.25}]},
+    {"provider":"opencode","accountId":"zen","status":"ok","amounts":[{"label":"Spend","currency":"USD","spentAmount":7.75}]}
+  ]
+}

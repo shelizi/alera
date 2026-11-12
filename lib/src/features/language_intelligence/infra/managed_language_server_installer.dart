@@ -5,7 +5,7 @@ import 'dart:io';
 
 import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
+import 'package:alera/src/shared/infra/storage/alera_support_directory.dart';
 
 import '../../../shared/infra/process/command_path_probe.dart';
 import '../../../shared/infra/process/rust_process_runner.dart';
@@ -98,7 +98,7 @@ final class ManagedLanguageServerInstaller
        _isWindows = isWindows ?? Platform.isWindows,
        _executableExists = executableExists,
        _supportDirectory =
-           supportDirectory ?? (() => getApplicationSupportDirectory()),
+           supportDirectory ?? (() => aleraApplicationSupportDirectory()),
        _processRunner =
            processRunner ?? const DefaultManagedLanguageServerProcessRunner(),
        _recipes = recipes ?? managedLanguageServerRecipes,

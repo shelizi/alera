@@ -58,6 +58,10 @@ pub enum Command {
     TerminalHost(TerminalHostArgs),
     /// Inspect or operate the local Alera runtime profile.
     Runtime(RuntimeCommand),
+    /// Read or compare-and-set the reviewed cross-desktop settings projection.
+    Settings(DesktopSettingsCommand),
+    /// Inspect the existing Runtime Host's agent quota snapshots (read-only).
+    Quota(AgentQuotaCommand),
 
     /// Create, list, update, and remove runtime-owned projects.
     Project(ProjectCommand),
@@ -349,6 +353,134 @@ pub struct OutputArgs {
 }
 
 #[derive(Debug, Args)]
+pub struct AgentQuotaCommand {
+    #[command(flatten)]
+    pub runtime: RuntimeDirArgs,
+    #[command(flatten)]
+    pub output: OutputArgs,
+    /// Required: never start a Host or a provider CLI from Native's bridge.
+    #[arg(long = "no-start", default_value_t = false)]
+    pub no_start: bool,
+    #[command(subcommand)]
+    pub action: AgentQuotaAction,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum AgentQuotaAction {
+    /// Read the same Host-owned snapshot used by Classic's status bar.
+    Snapshot {
+        #[arg(long)]
+        force_refresh: bool,
+        #[arg(long)]
+        provider: Option<String>,
+        #[arg(long, requires = "provider")]
+        account_id: Option<String>,
+    },
+    /// Return a secret-free projection of Host quota provider ordering.
+    Config,
+}
+
+#[derive(Debug, Args)]
+pub struct DesktopSettingsCommand {
+    #[command(flatten)]
+    pub runtime: RuntimeDirArgs,
+    #[command(flatten)]
+    pub output: OutputArgs,
+    #[arg(long = "no-start", default_value_t = false)]
+    pub no_start: bool,
+    #[command(subcommand)]
+    pub action: DesktopSettingsAction,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum DesktopSettingsAction {
+    Get,
+    /// Read only Host-enabled Agent Hook switches (no Runtime settings,
+    /// AI Assist data, provider credentials or change authority).
+    AgentHooksGet,
+    /// Compare-and-set one Hook provider using the already-running Host's
+    /// atomic runtimeSettings expectedRevision; never submit a full Settings
+    /// object or permit an unobserved toggle.
+    AgentHooksCas {
+        #[arg(long)]
+        agent_id: String,
+        #[arg(long)]
+        expected_revision: i64,
+        #[arg(long, action = clap::ArgAction::Set)]
+        expected_enabled: bool,
+        #[arg(long, action = clap::ArgAction::Set)]
+        enabled: bool,
+    },
+    /// Resolve exactly one registered Host project/worktree to its Git favorites.
+    FavoritesGet {
+        #[arg(long)]
+        root_path: String,
+    },
+    /// Import old Native per-workspace favorites only when Host scope is absent.
+    FavoritesSeed {
+        #[arg(long)]
+        root_path: String,
+        /// JSON array of branch names (no Git commands or repository mutation).
+        #[arg(long)]
+        branches: String,
+    },
+    /// Compare and set one Host-resolved repository's favorite branches.
+    FavoritesSet {
+        #[arg(long)]
+        root_path: String,
+        #[arg(long)]
+        expected: String,
+        #[arg(long)]
+        value: String,
+    },
+    /// One-time upgrade of Native's former local Agent Profile preference.
+    MigrateProfile {
+        #[arg(long)]
+        profile_id: Option<String>,
+    },
+    /// Import the previous Native Explorer preferences only if Rust has none.
+    MigrateExplorer {
+        #[arg(long, action = clap::ArgAction::Set)]
+        show_hidden: bool,
+        #[arg(long, action = clap::ArgAction::Set)]
+        show_ignored: bool,
+    },
+    /// Import the previous Native-only two-row Tab preference if Rust has none.
+    MigrateTwoRow {
+        #[arg(long, action = clap::ArgAction::Set)]
+        enabled: bool,
+    },
+    /// Read only pinned/revision/session metadata for one Host workspace.
+    PinList {
+        #[arg(long)]
+        workspace_id: String,
+    },
+    /// Compare-and-set a Host Terminal pin; never accept an entire payload.
+    PinSet {
+        #[arg(long)]
+        workspace_id: String,
+        #[arg(long)]
+        id: String,
+        #[arg(long)]
+        expected_updated_at: String,
+        #[arg(long, action = clap::ArgAction::Set)]
+        expected_pinned: bool,
+        #[arg(long, action = clap::ArgAction::Set)]
+        pinned: bool,
+        #[arg(long)]
+        expected_terminal_session_id: String,
+    },
+    Set {
+        #[arg(long)]
+        path: String,
+        #[arg(long)]
+        expected: String,
+        #[arg(long)]
+        value: String,
+    },
+}
+
+#[derive(Debug, Args)]
 pub struct RuntimeCommand {
     #[command(flatten)]
     pub runtime: RuntimeDirArgs,
@@ -429,8 +561,32 @@ pub enum ProjectAction {
     List,
     /// Register a local project path.
     Add(ProjectAddArgs),
+    /// Rename a registered project without changing its repository path.
+    Rename(ProjectRenameArgs),
+    /// Read existing shared project settings, or defaults if not configured.
+    ConfigShow(IdArgs),
+    /// Replace the shared project settings with validated JSON.
+    ConfigSet(ProjectConfigSetArgs),
+    /// Preview Classic Host project removal impact before confirmation.
+    RemovePreview(IdArgs),
     /// Remove a project and runtime-owned child records.
     Remove(IdArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct ProjectConfigSetArgs {
+    #[arg(long)]
+    pub id: String,
+    #[arg(long = "config-json")]
+    pub config_json: String,
+}
+
+#[derive(Debug, Args)]
+pub struct ProjectRenameArgs {
+    #[arg(long)]
+    pub id: String,
+    #[arg(long)]
+    pub name: String,
 }
 
 #[derive(Debug, Args)]
@@ -464,8 +620,16 @@ pub struct TagCommand {
 #[derive(Debug, Subcommand)]
 pub enum TagAction {
     List,
+    /// Create a new named shared tag, refusing a case-insensitive duplicate.
+    Create(TagCreateArgs),
     Upsert(TagUpsertArgs),
     Remove(IdArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct TagCreateArgs {
+    #[arg(long)]
+    pub name: String,
 }
 
 #[derive(Debug, Args)]

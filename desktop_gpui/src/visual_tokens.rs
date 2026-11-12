@@ -12,6 +12,11 @@ pub const TEXT: u32 = 0xf5f5f5;
 pub const MUTED: u32 = 0xa1a1a1;
 pub const FAINT: u32 = 0x606060;
 pub const ACTIVE: u32 = 0x303030;
+// Classic AgentStatusDot uses AleraTokens.info/warning/error/success.
+pub const AGENT_WORKING: u32 = 0x60A5FA;
+pub const AGENT_WAITING: u32 = 0xF59E0B;
+pub const AGENT_BLOCKED: u32 = 0xF87171;
+pub const AGENT_DONE: u32 = 0x22C55E;
 
 pub const TOP_BAR_HEIGHT: f32 = 52.0;
 pub const SECTION_HEADER_HEIGHT: f32 = 44.0;
@@ -59,5 +64,22 @@ mod tests {
         }
         assert!(TAB_STRIP_HEIGHT >= SECTION_HEADER_HEIGHT);
         assert!(RIGHT_SIDEBAR_WIDTH >= 220.0);
+    }
+
+    #[test]
+    fn hook_state_colors_match_classic_status_dots() {
+        for (name, color) in [
+            ("info", AGENT_WORKING),
+            ("warning", AGENT_WAITING),
+            ("error", AGENT_BLOCKED),
+            ("success", AGENT_DONE),
+        ] {
+            assert!(
+                FLUTTER.contains(&format!(
+                    "static const Color {name} = Color(0xFF{color:06X});"
+                )),
+                "GPUI agent Hook color drift: {name}",
+            );
+        }
     }
 }

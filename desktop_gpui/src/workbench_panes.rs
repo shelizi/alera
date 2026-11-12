@@ -10,7 +10,7 @@
 //! tab to the primary pane.
 
 use crate::terminal::TerminalTabContextTarget;
-use crate::workbench_tabs::WorkbenchTabIdentity;
+use crate::workbench_tabs::{WorkbenchTab, WorkbenchTabIdentity};
 
 /// Which of the two workbench panes a tab strip belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -29,6 +29,45 @@ pub enum PaneAxis {
     #[default]
     Horizontal,
     Vertical,
+}
+
+/// Capture the destination pane for a menu or pending Host RPC. A secondary
+/// guard is anchored to an existing tab so a dismissed/recreated split
+/// cannot accidentally inherit an old asynchronous attachment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PaneAttachGuard {
+    generation: u64,
+    pane: PaneSlot,
+    anchor: Option<WorkbenchTabIdentity>,
+}
+
+impl PaneAttachGuard {
+    pub fn capture(generation: u64, pane: PaneSlot, layout: &WorkbenchPaneLayout) -> Option<Self> {
+        if pane == PaneSlot::Secondary && !layout.has_secondary() {
+            return None;
+        }
+        Some(Self {
+            generation,
+            pane,
+            anchor: layout.active_in(pane).cloned(),
+        })
+    }
+
+    pub fn pane(&self) -> PaneSlot {
+        self.pane
+    }
+
+    pub fn still_valid(&self, generation: u64, layout: &WorkbenchPaneLayout) -> bool {
+        if generation != self.generation {
+            return false;
+        }
+        if self.pane == PaneSlot::Primary {
+            return true;
+        }
+        self.anchor.as_ref().is_some_and(|anchor| {
+            layout.has_secondary() && layout.tabs_in(PaneSlot::Secondary).contains(anchor)
+        })
+    }
 }
 
 /// Ordered tab identities for the primary and optional secondary pane, plus
@@ -174,6 +213,98 @@ impl WorkbenchPaneLayout {
         }
     }
 
+    /// Visual tab metadata follows this pane's independent order; no
+    /// identity is displayed twice and stale entries are never invented.
+    pub fn visible_tabs_in(&self, slot: PaneSlot, entries: &[WorkbenchTab]) -> Vec<WorkbenchTab> {
+        self.tabs_in(slot)
+            .iter()
+            .filter_map(|id| entries.iter().find(|tab| &tab.identity == id).cloned())
+            .collect()
+    }
+
+    /// A same-pane drag reorders labels without transferring a Host PTY or
+    /// Editor buffer. Cross-pane moves must use the guarded owner transfer.
+    pub fn reorder_within(
+        &mut self,
+        source: &WorkbenchTabIdentity,
+        target: &WorkbenchTabIdentity,
+    ) -> bool {
+        let tabs = if self.primary.contains(source) && self.primary.contains(target) {
+            &mut self.primary
+        } else if self.secondary.contains(source) && self.secondary.contains(target) {
+            &mut self.secondary
+        } else {
+            return false;
+        };
+        let from = tabs.iter().position(|id| id == source).unwrap();
+        let to = tabs.iter().position(|id| id == target).unwrap();
+        if from == to {
+            return false;
+        }
+        let id = tabs.remove(from);
+        tabs.insert(to, id);
+        true
+    }
+
+    /// Classic's tab context commands are local to the clicked pane.
+    /// Choosing Close Others or Close to Right must not close any tab in
+    /// the adjacent pane, including a dirty Editor or a running Host preview.
+    pub fn close_candidates(
+        &self,
+        clicked: &WorkbenchTabIdentity,
+        to_right: bool,
+    ) -> Vec<WorkbenchTabIdentity> {
+        let entries = if self.primary.contains(clicked) {
+            &self.primary
+        } else if self.secondary.contains(clicked) {
+            &self.secondary
+        } else {
+            return Vec::new();
+        };
+        let index = entries.iter().position(|id| id == clicked).unwrap();
+        entries
+            .iter()
+            .enumerate()
+            .filter_map(|(position, id)| {
+                (position != index && (!to_right || position > index)).then_some(id.clone())
+            })
+            .collect()
+    }
+
+    /// Classic closes only unpinned tabs in the clicked pane for batch-close.
+    pub fn close_unpinned_candidates(
+        &self,
+        clicked: &WorkbenchTabIdentity,
+        to_right: bool,
+        pinned: &[WorkbenchTabIdentity],
+    ) -> Vec<WorkbenchTabIdentity> {
+        self.close_candidates(clicked, to_right)
+            .into_iter()
+            .filter(|id| !pinned.contains(id))
+            .collect()
+    }
+
+    pub fn adjacent_tab(
+        &self,
+        clicked: &WorkbenchTabIdentity,
+        move_right: bool,
+    ) -> Option<WorkbenchTabIdentity> {
+        let entries = if self.primary.contains(clicked) {
+            &self.primary
+        } else if self.secondary.contains(clicked) {
+            &self.secondary
+        } else {
+            return None;
+        };
+        let index = entries.iter().position(|id| id == clicked)?;
+        let neighbor = if move_right {
+            (index + 1 < entries.len()).then_some(index + 1)
+        } else {
+            index.checked_sub(1)
+        }?;
+        entries.get(neighbor).cloned()
+    }
+
     /// The pane that currently owns keyboard focus.
     pub fn focused_pane(&self) -> PaneSlot {
         self.focused
@@ -309,6 +440,10 @@ mod tests {
             tab_id: format!("tab-{handle}"),
             running: true,
             agent_type: None,
+            agent_state: None,
+            interrupted: false,
+            agent_state_started_at: None,
+            agent_updated_at: None,
         }]);
         dock.open(handle);
         WorkbenchTabIdentity::Host(dock.context_target_at(0).unwrap())
@@ -338,6 +473,206 @@ mod tests {
         for (index, id) in ids.iter().enumerate() {
             assert!(!ids[..index].contains(id), "duplicated identity {id:?}");
         }
+    }
+
+    #[test]
+    fn per_pane_projection_and_reorder_keep_active_editor_and_unique_tabs() {
+        use crate::workbench_tabs::{WorkbenchTab, WorkbenchTabKind};
+        let a = editor(5, 1);
+        let b = editor(5, 2);
+        let c = editor(5, 3);
+        let d = editor(5, 4);
+        let mut panes = WorkbenchPaneLayout::new();
+        panes.reconcile(&[a.clone(), b.clone(), c.clone(), d.clone()]);
+        assert!(panes.move_to(&b, PaneSlot::Secondary));
+        assert!(panes.move_to(&d, PaneSlot::Secondary));
+        // Moving into a pane already activates the tab; selecting it again
+        // correctly reports no change.
+        assert_eq!(panes.active_in(PaneSlot::Secondary), Some(&d));
+        assert!(!panes.activate(&d));
+        let entries = [c.clone(), d.clone(), a.clone(), b.clone()]
+            .into_iter()
+            .map(|identity| WorkbenchTab {
+                title: format!("{identity:?}"),
+                identity,
+                kind: WorkbenchTabKind::Editor,
+                dirty: true,
+                running: true,
+                agent_state: None,
+                interrupted: false,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            panes
+                .visible_tabs_in(PaneSlot::Primary, &entries)
+                .iter()
+                .map(|tab| &tab.identity)
+                .collect::<Vec<_>>(),
+            vec![&a, &c]
+        );
+        assert_eq!(
+            panes
+                .visible_tabs_in(PaneSlot::Secondary, &entries)
+                .iter()
+                .map(|tab| &tab.identity)
+                .collect::<Vec<_>>(),
+            vec![&b, &d]
+        );
+        assert!(panes.reorder_within(&d, &b));
+        expect(&panes, PaneSlot::Secondary, &[d.clone(), b.clone()]);
+        assert_eq!(panes.active_in(PaneSlot::Secondary), Some(&d));
+        assert!(!panes.reorder_within(&a, &d));
+        assert_unique(&panes);
+        let remaining = vec![entries[0].clone(), entries[2].clone()];
+        assert!(panes
+            .visible_tabs_in(PaneSlot::Secondary, &remaining)
+            .is_empty());
+        assert_eq!(
+            panes.visible_tabs_in(PaneSlot::Primary, &remaining).len(),
+            2
+        );
+    }
+
+    #[test]
+    fn close_others_and_right_skip_pins_and_other_pane() {
+        let first = editor(6, 1);
+        let pinned = editor(6, 2);
+        let third = editor(6, 3);
+        let secondary = editor(6, 4);
+        let mut layout = WorkbenchPaneLayout::new();
+        layout.reconcile(&[
+            first.clone(),
+            pinned.clone(),
+            third.clone(),
+            secondary.clone(),
+        ]);
+        assert!(layout.move_to(&secondary, PaneSlot::Secondary));
+        assert_eq!(
+            layout.close_unpinned_candidates(&first, true, std::slice::from_ref(&pinned)),
+            vec![third.clone()]
+        );
+        assert_eq!(
+            layout.close_unpinned_candidates(&third, false, std::slice::from_ref(&pinned)),
+            vec![first.clone()]
+        );
+        assert!(layout
+            .close_unpinned_candidates(&secondary, false, &[])
+            .is_empty());
+    }
+
+    #[test]
+    fn per_pane_pinned_close_targets_survive_reorder_and_duplicate_instance_numbers() {
+        // Two editor mounts can use the same instance number in different
+        // epochs. Pin and batch-close decisions must compare full identities
+        // and must never touch the opposite pane.
+        let primary_active = editor(7, 1);
+        let primary_pinned = editor(7, 2);
+        let secondary_pinned = editor(8, 1);
+        let secondary_unpinned = editor(8, 3);
+        let secondary_active = editor(8, 4);
+        let mut panes = WorkbenchPaneLayout::new();
+        panes.reconcile(&[
+            primary_active.clone(),
+            primary_pinned.clone(),
+            secondary_pinned.clone(),
+            secondary_unpinned.clone(),
+            secondary_active.clone(),
+        ]);
+        for tab in [&secondary_pinned, &secondary_unpinned, &secondary_active] {
+            assert!(panes.move_to(tab, PaneSlot::Secondary));
+        }
+        let pinned = vec![primary_pinned.clone(), secondary_pinned.clone()];
+        assert!(panes
+            .close_unpinned_candidates(&primary_active, false, &pinned)
+            .is_empty());
+        assert_eq!(
+            panes.close_unpinned_candidates(&secondary_unpinned, false, &pinned),
+            vec![secondary_active.clone()]
+        );
+        assert!(panes.reorder_within(&secondary_active, &secondary_pinned));
+        assert_eq!(
+            panes.close_unpinned_candidates(&secondary_active, true, &pinned),
+            vec![secondary_unpinned.clone()]
+        );
+        expect(
+            &panes,
+            PaneSlot::Primary,
+            &[primary_active.clone(), primary_pinned.clone()],
+        );
+        expect(
+            &panes,
+            PaneSlot::Secondary,
+            &[
+                secondary_active.clone(),
+                secondary_pinned.clone(),
+                secondary_unpinned.clone(),
+            ],
+        );
+        assert_unique(&panes);
+    }
+
+    #[test]
+    fn context_actions_only_target_neighbors_in_the_clicked_pane() {
+        let a = editor(3, 1);
+        let b = editor(3, 2);
+        let c = editor(3, 3);
+        let d = host("pty-live");
+        let mut panes = WorkbenchPaneLayout::new();
+        panes.reconcile(&[a.clone(), b.clone(), c.clone(), d.clone()]);
+        assert!(panes.move_to(&b, PaneSlot::Secondary));
+        assert!(panes.move_to(&c, PaneSlot::Secondary));
+        assert_eq!(panes.close_candidates(&b, true), vec![c.clone()]);
+        assert_eq!(panes.close_candidates(&c, true), Vec::new());
+        assert_eq!(panes.close_candidates(&d, false), vec![a.clone()]);
+        assert_eq!(panes.adjacent_tab(&b, true), Some(c.clone()));
+        assert_eq!(panes.adjacent_tab(&b, false), None);
+        assert_eq!(panes.adjacent_tab(&a, true), Some(d.clone()));
+        assert_eq!(panes.adjacent_tab(&c, true), None);
+        assert!(panes.reorder_within(&c, &b));
+        assert_eq!(panes.close_candidates(&c, true), vec![b.clone()]);
+        assert_eq!(panes.close_candidates(&a, false), vec![d.clone()]);
+        assert!(panes.close_candidates(&editor(999, 1), false).is_empty());
+        assert_unique(&panes);
+    }
+
+    #[test]
+    fn pane_attach_guard_rejects_workspace_switch_and_recreated_secondary() {
+        let first = editor(4, 1);
+        let second = editor(4, 2);
+        let mut layout = WorkbenchPaneLayout::new();
+        layout.reconcile(&[first.clone(), second.clone()]);
+        assert!(PaneAttachGuard::capture(7, PaneSlot::Secondary, &layout).is_none());
+        let primary = PaneAttachGuard::capture(7, PaneSlot::Primary, &layout).unwrap();
+        assert!(layout.move_to(&second, PaneSlot::Secondary));
+        let secondary = PaneAttachGuard::capture(7, PaneSlot::Secondary, &layout).unwrap();
+        assert!(secondary.still_valid(7, &layout));
+        assert!(!secondary.still_valid(8, &layout));
+        assert!(primary.still_valid(7, &layout));
+        assert!(layout.move_to(&second, PaneSlot::Primary));
+        assert!(!secondary.still_valid(7, &layout));
+        assert!(layout.move_to(&first, PaneSlot::Secondary));
+        assert!(
+            !secondary.still_valid(7, &layout),
+            "stale menu cannot target recreated split"
+        );
+        assert!(primary.still_valid(7, &layout));
+        assert!(!primary.still_valid(8, &layout));
+    }
+
+    #[test]
+    fn pane_attach_guard_survives_other_selection_in_original_pane() {
+        let first = editor(1, 1);
+        let second = editor(1, 2);
+        let mut layout = WorkbenchPaneLayout::new();
+        layout.reconcile(&[first.clone(), second.clone()]);
+        assert!(layout.move_to(&first, PaneSlot::Secondary));
+        let target = PaneAttachGuard::capture(5, PaneSlot::Secondary, &layout).unwrap();
+        assert!(layout.move_to(&second, PaneSlot::Secondary));
+        assert!(layout.activate(&first));
+        assert!(target.still_valid(5, &layout));
+        assert_eq!(target.pane(), PaneSlot::Secondary);
+        assert!(layout.activate(&second));
+        assert!(target.still_valid(5, &layout));
     }
 
     #[test]

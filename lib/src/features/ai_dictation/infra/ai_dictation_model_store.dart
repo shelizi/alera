@@ -6,7 +6,7 @@ import 'dart:isolate';
 import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
+import 'package:alera/src/shared/infra/storage/alera_support_directory.dart';
 
 import 'ai_dictation_core_ml_store.dart';
 import 'ai_dictation_model.dart';
@@ -23,7 +23,7 @@ class AiDictationModelStore({
   this
     : _clientFactory = clientFactory ?? http.Client.new,
       _supportDirectory =
-          supportDirectory ?? (() => getApplicationSupportDirectory()),
+          supportDirectory ?? (() => aleraApplicationSupportDirectory()),
       _modelCatalog = modelCatalog ?? models,
       _installCoreMlEncoder = installCoreMlEncoder ?? Platform.isMacOS,
       _coreMlStore = coreMlStore ?? const AiDictationCoreMlStore();

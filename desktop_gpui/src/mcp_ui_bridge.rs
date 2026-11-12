@@ -306,6 +306,10 @@ mod tests {
             tab_id: "tab1".into(),
             running: true,
             agent_type: Some("codex".into()),
+            agent_state: None,
+            interrupted: false,
+            agent_state_started_at: None,
+            agent_updated_at: None,
         };
         let terminal = TerminalSession {
             handle: "plain-terminal".into(),
@@ -313,6 +317,10 @@ mod tests {
             tab_id: "tab2".into(),
             running: true,
             agent_type: None,
+            agent_state: None,
+            interrupted: false,
+            agent_state_started_at: None,
+            agent_updated_at: None,
         };
         let command = NativeMcpUiCommand {
             request_id: "req1".into(),

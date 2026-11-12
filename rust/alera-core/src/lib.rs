@@ -1,5 +1,6 @@
 pub mod agent_descriptor;
 pub mod child_process;
+pub mod desktop_settings_contract;
 pub mod git;
 pub mod git_cli;
 pub mod managed_agent_launch;

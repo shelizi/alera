@@ -50,6 +50,14 @@ struct SavedProjects {
     roots: Vec<PathBuf>,
 }
 
+/// UI-only fold state. This is deliberately separate from the RuntimeStore
+/// project and workspace catalog (which remains authoritative).
+#[derive(Debug, Serialize, Deserialize)]
+struct SavedProjectTreeFolds {
+    version: u32,
+    roots: Vec<PathBuf>,
+}
+
 /// Only public Host session identities, never PTY text or credentials.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TerminalLayoutTab {
@@ -136,8 +144,22 @@ fn validate_terminal_layout(layout: &TerminalLayout) -> io::Result<()> {
 }
 
 impl PreviewSessionStore {
-    /// Per-workspace Git Graph favorites; never modifies repository config or
-    /// Flutter's local preferences. Fail closed on corrupt or mismatched data.
+    /// A missing legacy file is *not* an explicit empty favorite selection:
+    /// don't let a new Native startup seed [] before Classic's first import.
+    pub fn has_legacy_git_favorites(&self, root: &Path) -> io::Result<bool> {
+        let canonical = dunce::canonicalize(root)?;
+        if canonical != root || !canonical.is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Git favorites root must be an existing canonical workspace",
+            ));
+        }
+        Ok(self.git_favorites_path(root).exists())
+    }
+
+    /// Test-only writer for exercising pre-Rust Native JSON migration fixtures.
+    /// Production GPUI cannot mutate this former second source of truth.
+    #[cfg(test)]
     pub fn save_git_favorites(&self, root: &Path, branches: &[String]) -> io::Result<()> {
         let canonical = dunce::canonicalize(root)?;
         if canonical != root || !canonical.is_dir() {
@@ -162,6 +184,8 @@ impl PreviewSessionStore {
         )
     }
 
+    /// Read-only old GPUI source, only used to seed absent Host favorites
+    /// during migration. Even cleared [] remains a meaningful legacy value.
     pub fn load_git_favorites(&self, root: &Path) -> io::Result<Vec<String>> {
         let canonical = dunce::canonicalize(root)?;
         if canonical != root || !canonical.is_dir() {
@@ -353,6 +377,73 @@ impl PreviewSessionStore {
             }
         }
         Ok(recent)
+    }
+
+    /// Clear an inactive Classic project from native recent hints without
+    /// deleting project files, Git worktrees, or local preview sessions.
+    pub fn forget_recent_workspace(&self, path: &Path) -> io::Result<()> {
+        let canonical = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        let roots = self
+            .recent_workspaces()?
+            .into_iter()
+            .filter(|root| root != &canonical)
+            .collect();
+        self.write_json(
+            &self.state_dir.join("recent.json"),
+            &RecentWorkspaces {
+                version: VERSION,
+                roots,
+            },
+        )
+    }
+
+    pub fn collapsed_project_roots(&self) -> io::Result<Vec<PathBuf>> {
+        let saved =
+            self.read_json::<SavedProjectTreeFolds>(&self.state_dir.join("project-folds.json"))?;
+        let Some(saved) = saved else {
+            return Ok(Vec::new());
+        };
+        if saved.version != VERSION {
+            return Ok(Vec::new());
+        }
+        let mut roots = Vec::new();
+        for path in saved.roots.into_iter().take(64) {
+            if let Ok(canonical) = dunce::canonicalize(&path) {
+                if canonical.is_dir() && canonical == path && !roots.contains(&canonical) {
+                    roots.push(canonical);
+                }
+            }
+        }
+        Ok(roots)
+    }
+
+    pub fn save_collapsed_project_roots(&self, roots: &[PathBuf]) -> io::Result<()> {
+        if roots.len() > 64 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Too many folded projects",
+            ));
+        }
+        let mut valid = Vec::new();
+        for path in roots {
+            let canonical = dunce::canonicalize(path)?;
+            if canonical != *path || !canonical.is_dir() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "Folded project root is invalid",
+                ));
+            }
+            if !valid.contains(&canonical) {
+                valid.push(canonical);
+            }
+        }
+        self.write_json(
+            &self.state_dir.join("project-folds.json"),
+            &SavedProjectTreeFolds {
+                version: VERSION,
+                roots: valid,
+            },
+        )
     }
 
     /// Pinned project roots, independent from most-recently-opened history.
@@ -767,6 +858,28 @@ mod tests {
     }
 
     #[test]
+    fn editor_owned_preview_release_is_not_restored_as_a_file_tab() {
+        let workspace = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let owned = workspace.path().join("owned.txt");
+        let kept = workspace.path().join("kept.txt");
+        fs::write(&owned, "editor buffer").unwrap();
+        fs::write(&kept, "preview only").unwrap();
+        let store = PreviewSessionStore::new(state.path());
+        let mut model = WorkbenchModel::new(workspace.path()).unwrap();
+        assert!(model.open_path(&owned));
+        assert!(model.open_path(&kept));
+        // The editable workbench now owns `owned`; its preview slot is gone.
+        assert!(model.release_path(&owned));
+        assert_eq!(model.tabs().len(), 1);
+        store.save(&model).unwrap();
+        let mut reopened = WorkbenchModel::new(workspace.path()).unwrap();
+        assert_eq!(store.restore(&mut reopened).unwrap(), 1);
+        assert_eq!(reopened.tabs().len(), 1);
+        assert_eq!(reopened.tabs()[0].path, kept);
+    }
+
+    #[test]
     fn native_git_favorites_survive_restart_and_stay_scoped_to_canonical_workspace() {
         let state = tempfile::tempdir().unwrap();
         let workspace_a = tempfile::tempdir().unwrap();
@@ -774,9 +887,12 @@ mod tests {
         let root_a = dunce::canonicalize(workspace_a.path()).unwrap();
         let root_b = dunce::canonicalize(workspace_b.path()).unwrap();
         let store = PreviewSessionStore::new(state.path());
+        assert!(!store.has_legacy_git_favorites(&root_a).unwrap());
+        assert!(!store.has_legacy_git_favorites(&root_b).unwrap());
         assert!(store.load_git_favorites(&root_a).unwrap().is_empty());
         let saved = vec!["main".into(), "origin/feature".into()];
         store.save_git_favorites(&root_a, &saved).unwrap();
+        assert!(store.has_legacy_git_favorites(&root_a).unwrap());
         let reopened = PreviewSessionStore::new(state.path());
         assert_eq!(reopened.load_git_favorites(&root_a).unwrap(), saved);
         assert!(reopened.load_git_favorites(&root_b).unwrap().is_empty());
@@ -841,6 +957,26 @@ mod tests {
         assert_eq!(reopened.active_tab(), Some(0));
         assert_eq!(reopened.content(), "modified on disk");
         assert!(reopened.directory().ends_with("src"));
+    }
+
+    #[test]
+    fn collapsed_project_roots_persist_across_restart_without_touching_runtime() {
+        let state = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        let root = dunce::canonicalize(project.path()).unwrap();
+        let store = PreviewSessionStore::new(state.path());
+        assert!(store.collapsed_project_roots().unwrap().is_empty());
+        store
+            .save_collapsed_project_roots(std::slice::from_ref(&root))
+            .unwrap();
+        let reopened = PreviewSessionStore::new(state.path());
+        assert_eq!(
+            reopened.collapsed_project_roots().unwrap(),
+            vec![root.clone()]
+        );
+        reopened.save_collapsed_project_roots(&[]).unwrap();
+        assert!(reopened.collapsed_project_roots().unwrap().is_empty());
+        assert!(root.is_dir());
     }
 
     #[test]
