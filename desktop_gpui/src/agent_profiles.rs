@@ -123,21 +123,30 @@ pub fn parse_launched_agent(
     })
 }
 
-/// Only an authenticated Host session matching both identifiers and an
-/// Agent type can fulfill a Native launch confirmation.
+/// Use the authenticated Profile launch's exact Host tab to attach a live PTY.
+/// Hooks are optional; PTY readiness never proves provider authentication.
 pub fn matching_agent_handle<'a>(
     pending: &LaunchedAgentTab,
     sessions: &'a [TerminalSession],
+    expected_agent_type: &str,
 ) -> Option<&'a str> {
+    if expected_agent_type.is_empty() {
+        return None;
+    }
+    let exact_live_tab = |session: &&TerminalSession| {
+        session.running
+            && session.workspace_id == pending.workspace_id
+            && session.tab_id == pending.tab_id
+    };
     sessions
         .iter()
-        .find(|session| {
-            session.workspace_id == pending.workspace_id
-                && session.tab_id == pending.tab_id
-                && session
-                    .agent_type
-                    .as_deref()
-                    .is_some_and(|name| !name.is_empty())
+        .filter(exact_live_tab)
+        .find(|session| session.agent_type.as_deref() == Some(expected_agent_type))
+        .or_else(|| {
+            sessions
+                .iter()
+                .filter(exact_live_tab)
+                .find(|session| session.agent_type.is_none())
         })
         .map(|session| session.handle.as_str())
 }
@@ -190,10 +199,47 @@ mod tests {
             },
         ];
         assert_eq!(
-            matching_agent_handle(&pending, &sessions),
+            matching_agent_handle(&pending, &sessions, "codex"),
             Some("correct_agent")
         );
-        assert!(matching_agent_handle(&pending, &sessions[..2]).is_none());
+        assert_eq!(
+            matching_agent_handle(&pending, &sessions[..2], "codex"),
+            Some("plain_terminal")
+        );
+    }
+
+    #[test]
+    fn profile_launch_attaches_authenticated_host_tab_without_optional_hook() {
+        let pending = LaunchedAgentTab {
+            workspace_id: "ws_ok".into(),
+            profile_id: "profile_1".into(),
+            tab_id: "tab_unique".into(),
+        };
+        let session = TerminalSession {
+            handle: "pty_running".into(),
+            workspace_id: "ws_ok".into(),
+            tab_id: "tab_unique".into(),
+            agent_type: None,
+            running: true,
+            agent_state: None,
+            interrupted: false,
+            agent_state_started_at: None,
+            agent_updated_at: None,
+        };
+        assert_eq!(
+            matching_agent_handle(&pending, &[session.clone()], "codex"),
+            Some("pty_running"),
+            "Host Profile tab must attach without waiting for optional Hook"
+        );
+        let mut stopped = session.clone();
+        stopped.running = false;
+        assert!(matching_agent_handle(&pending, &[stopped], "codex").is_none());
+        let mut wrong_hook = session.clone();
+        wrong_hook.agent_type = Some("claude".into());
+        assert!(matching_agent_handle(&pending, &[wrong_hook], "codex").is_none());
+        let mut wrong_tab = session;
+        wrong_tab.tab_id = "tab_other".into();
+        assert!(matching_agent_handle(&pending, &[wrong_tab], "codex").is_none());
     }
 
     #[test]

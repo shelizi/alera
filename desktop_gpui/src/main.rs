@@ -6396,8 +6396,7 @@ impl Workbench {
         cx.notify();
         cx.spawn(async move |view, cx| {
             let result = cx.background_spawn(async move {
-                let registered = bridge.list_registered_workspaces()?;
-                let workspace_id = select_registered_host_workspace(&root, &registered)?;
+                let workspace_id = bridge.ensure_host_workspace_for_explicit_profile_launch(&root)?;
                 bridge.launch_agent_profile(&profile_id, &workspace_id, &prompt)
             }).await;
             view.update(cx, |view, cx| {
@@ -6845,10 +6844,17 @@ impl Workbench {
                             }
                             // Launch reply contains a Host workspace+tab id,
                             // not a trustworthy PTY handle. Resolve through
-                            // a fresh authenticated session list, and require
-                            // this to be an Agent session before opening.
+                            // a fresh authenticated session list and check
+                            // the selected Profile adapter. Hook status can
+                            // remain absent until after provider sign-in.
                             let found_agent = view.agent_pending_tab.as_ref()
-                                .and_then(|pending| matching_agent_handle(pending, &view.terminals.sessions))
+                                .and_then(|pending| {
+                                    view.agent_profiles.iter()
+                                        .find(|profile| profile.id == pending.profile_id)
+                                        .and_then(|profile| matching_agent_handle(
+                                            pending, &view.terminals.sessions, &profile.agent_type,
+                                        ))
+                                })
                                 .and_then(|handle| view.terminals.sessions.iter()
                                     .find(|session| session.handle == handle && session.running)
                                     .cloned());
@@ -6860,8 +6866,16 @@ impl Workbench {
                                     if view.attach_live_terminal_to_pane(&session, &target, cx).is_some() {
                                         view.agent_pending_tab = None;
                                         view.agent_launch_pane = None;
-                                        view.agent_status =
-                                            "Agent Host tab confirmed in original pane".into();
+                                        view.agent_status = if session.agent_type.is_some() {
+                                            "Host Agent Profile PTY attached; Hook recognized. Provider sign-in not verified."
+                                        } else {
+                                            "Host Agent Profile PTY attached; Hook not detected. Check Terminal for sign-in instructions."
+                                        }.into();
+                                        // A running shell/PTY or Hook status is
+                                        // not proof of provider authentication.
+                                        view.model.set_status(
+                                            "Agent Profile terminal ready; provider sign-in not verified"
+                                        );
                                     } else {
                                         view.agent_status =
                                             "Agent exists, but preview could not attach; close another tab and Refresh, or use + → Attach existing".into();
