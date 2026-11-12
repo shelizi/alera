@@ -59,7 +59,19 @@ pub fn matching_host_profile_for_agent<'a>(
         })
 }
 
-fn executable_is_runnable(path: &Path) -> bool {
+/// Windows Agent executables must be real binaries or supported shell shims.
+/// Do not treat an existing text file as a runnable CLI override.
+pub fn supported_windows_agent_executable(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            ["exe", "com", "cmd", "bat"]
+                .iter()
+                .any(|candidate| extension.eq_ignore_ascii_case(candidate))
+        })
+}
+
+pub fn executable_is_runnable(path: &Path) -> bool {
     let Ok(metadata) = std::fs::metadata(path) else {
         return false;
     };
@@ -71,7 +83,11 @@ fn executable_is_runnable(path: &Path) -> bool {
         use std::os::unix::fs::PermissionsExt;
         metadata.permissions().mode() & 0o111 != 0
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        supported_windows_agent_executable(path)
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         true
     }
@@ -213,7 +229,10 @@ fn detect_with<F: Fn(&Path) -> bool, V: Fn(&Path) -> bool>(
             {
                 Some(override_path) => {
                     let path = PathBuf::from(override_path);
-                    exists(&path).then_some(path)
+                    (!windows || supported_windows_agent_executable(&path))
+                        .then(|| exists(&path))
+                        .filter(|found| *found)
+                        .map(|_| path)
                 }
                 None => {
                     resolve_from_path(descriptor.default_command, environment, windows, &exists)
@@ -336,6 +355,34 @@ mod tests {
             false,
         )
         .is_empty());
+        assert!(
+            probe(
+                r"C:\tools",
+                &[r"D:\Agents\Devin\devin.txt", r"C:\tools\devin.exe"],
+                &[("devin", r"D:\Agents\Devin\devin.txt")],
+                false,
+            )
+            .is_empty(),
+            "An existing text override must not mask PATH as an installed Agent"
+        );
+        assert!(supported_windows_agent_executable(Path::new(
+            r"C:\Agents\CODEX.EXE"
+        )));
+        assert!(supported_windows_agent_executable(Path::new(
+            r"C:\Agents\claude.cmd"
+        )));
+        assert!(supported_windows_agent_executable(Path::new(
+            r"C:\Agents\claude.bat"
+        )));
+        assert!(supported_windows_agent_executable(Path::new(
+            r"C:\Agents\x.com"
+        )));
+        assert!(!supported_windows_agent_executable(Path::new(
+            r"C:\Agents\x.txt"
+        )));
+        assert!(!supported_windows_agent_executable(Path::new(
+            r"C:\Agents\x.ps1"
+        )));
     }
 
     #[test]

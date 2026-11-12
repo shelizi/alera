@@ -14,6 +14,20 @@ const VERSION: u32 = 1;
 const MAX_BYTES: u64 = 16 * 1024;
 pub const SETTINGS_FILENAME: &str = "native-settings-v1.json";
 
+/// Distinguish an explicit Clear action from accidentally saving an empty
+/// input field. The store still validates file type, absolute path and CAS.
+pub fn agent_executable_form_value(clear: bool, raw: &str) -> Result<Option<String>, &'static str> {
+    if clear {
+        return Ok(None);
+    }
+    let value = raw.trim();
+    if value.is_empty() {
+        Err("Enter an executable path, or use Clear override")
+    } else {
+        Ok(Some(value.to_owned()))
+    }
+}
+
 const fn default_explorer_show_hidden() -> bool {
     !cfg!(windows)
 }
@@ -467,7 +481,7 @@ impl NativeSettingsStore {
                 path.len() > 1024
                     || path.contains(['\0', '\n', '\r'])
                     || !Path::new(path).is_absolute()
-                    || !Path::new(path).is_file()
+                    || !crate::local_agent_detection::executable_is_runnable(Path::new(path))
             })
         {
             return Err(io::Error::new(
@@ -941,6 +955,32 @@ mod tests {
             .unwrap()
             .agent_executable_paths
             .is_empty());
+    }
+
+    #[test]
+    fn native_agent_override_rejects_an_existing_non_executable_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let note = dir.path().join("agent-not-executable.txt");
+        std::fs::write(&note, b"not an executable").unwrap();
+        let store = NativeSettingsStore::new(dir.path());
+        let error = store
+            .compare_and_set_agent_executable_path("codex", None, note.to_str())
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert!(store.read().unwrap().agent_executable_paths.is_empty());
+    }
+
+    #[test]
+    fn agent_override_blank_save_does_not_act_as_clear() {
+        assert_eq!(
+            agent_executable_form_value(false, "   ").unwrap_err(),
+            "Enter an executable path, or use Clear override"
+        );
+        assert_eq!(agent_executable_form_value(true, "anything"), Ok(None));
+        assert_eq!(
+            agent_executable_form_value(false, "  C:\\Agents\\codex.exe  "),
+            Ok(Some("C:\\Agents\\codex.exe".into()))
+        );
     }
 
     #[test]

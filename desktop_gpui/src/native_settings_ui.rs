@@ -187,9 +187,16 @@ impl Workbench {
             cx.notify();
             return;
         };
-        let proposed = (!clear)
-            .then(|| self.agent_override_input.read(cx).query().trim().to_owned())
-            .filter(|path| !path.is_empty());
+        let draft = self.agent_override_input.read(cx).query().to_owned();
+        let proposed =
+            match alera_gpui_desktop::native_settings::agent_executable_form_value(clear, &draft) {
+                Ok(path) => path,
+                Err(message) => {
+                    self.agent_override_status = message.into();
+                    cx.notify();
+                    return;
+                }
+            };
         let expected = self
             .native_settings
             .agent_executable_paths
@@ -216,7 +223,12 @@ impl Workbench {
                         if clear {
                             view.agent_override_input.update(cx, |input, cx| input.clear(cx));
                         }
-                        view.agent_override_status = "Agent executable preference saved".into();
+                        view.agent_override_status = if clear {
+                            "Agent executable override cleared; using Auto PATH"
+                        } else {
+                            "Agent executable preference saved"
+                        }
+                        .into();
                         view.model.set_status("Local Agent executable setting updated");
                         // Cancel any older PATH scan started before the setting
                         // was saved; it must not overwrite the new detection.
@@ -226,9 +238,15 @@ impl Workbench {
                         view.refresh_installed_agent_clis(cx);
                     }
                     Err(error) => {
-                        view.agent_override_status = format!(
-                            "Could not save Agent executable: {error}. Use a real absolute executable file.",
-                        );
+                        view.agent_override_status = match error.kind() {
+                            std::io::ErrorKind::InvalidInput if cfg!(windows) =>
+                                "Invalid Agent executable: choose an existing absolute .exe, .cmd, .bat, or .com file.".into(),
+                            std::io::ErrorKind::InvalidInput =>
+                                "Invalid Agent executable: choose an existing executable file with an absolute path.".into(),
+                            std::io::ErrorKind::AlreadyExists =>
+                                "Agent executable path changed in another window; reopen Settings before saving.".into(),
+                            _ => format!("Could not save Agent executable: {error}"),
+                        };
                     }
                 }
                 cx.notify();
