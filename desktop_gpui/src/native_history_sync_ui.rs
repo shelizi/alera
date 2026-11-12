@@ -214,18 +214,18 @@ impl Workbench {
         }
         let modes = [
             (
-                HistorySyncMode::All,
-                "Sync All (default)",
-                "Same-provider accounts share completed native transcripts.",
+                HistorySyncMode::Separate,
+                "Keep Separate (default)",
+                "Accounts do not share future history. Previously copied history is not deleted.",
             ),
             (
-                HistorySyncMode::Separate,
-                "Keep Separate",
-                "Stop future syncing. Previously copied history is not deleted.",
+                HistorySyncMode::All,
+                "Sync All (opt-in)",
+                "Explicitly share completed native transcripts across same-provider accounts.",
             ),
             (
                 HistorySyncMode::Groups,
-                "Sync by Group",
+                "Sync by Group (opt-in)",
                 "Only accounts with the same nonempty group share history.",
             ),
         ];

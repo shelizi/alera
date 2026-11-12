@@ -1,6 +1,6 @@
 # Agent native history synchronization (2026-11-11)
 
-Status: feature worktree, not yet integrated into main or released.
+Status: integrated into local Classic and GPUI branches; experimental and not released.
 
 ## Scope
 
@@ -13,18 +13,24 @@ settings. Never copy JSONL across Codex / Claude / Antigravity formats.
 
 | Mode | Policy | Default |
 | --- | --- | --- |
-| `all` | All registered accounts of the **same** provider on one Host share finished transcript files | Yes |
-| `separate` | Each account has independent history; no new copies are made | No |
-| `groups` | Only accounts with the same nonempty group label and same provider share files | No |
+| `separate` | Each account has independent history; no new copies are made | Yes |
+| `all` | All registered accounts of the **same** provider on one Host share finished transcript files | No (opt-in) |
+| `groups` | Only accounts with the same nonempty group label and same provider share files | No (opt-in) |
 
 Grouping stores `provider:accountId -> groupName`, separately per host.
 Unassigned accounts in grouped mode are always independent. Changing modes
 does not erase any previously copied history.
 
+Explicitly saved `historySync.mode=all` or `groups` settings remain selected
+across upgrades. An absent `historySync` key or absent `mode` defaults to
+`separate` (no new cross-account copies). Existing mirrored files are never
+deleted when choosing Separate; disabling a previously enabled policy does
+not retroactively revoke already copied history.
+
 ## Initial implementation
 
 - Host-managed setting in `RuntimeAgentQuotaSettings.historySync`. Existing
-  settings without this key default to `all`; settings use the Runtime Host
+  settings without this key default to `separate`; settings use the Runtime Host
   update protocol and preserve multi-window revision validation.
 - Classic Settings: selectable history sync policy and per-account group label
   editors for Codex, Claude and the currently known AGY default account.

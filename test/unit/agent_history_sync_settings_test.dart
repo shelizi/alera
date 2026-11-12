@@ -2,12 +2,29 @@ import 'package:alera/src/features/settings/domain/alera_settings.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  test('legacy settings default to same-provider all-account sync', () {
-    final host = AgentQuotaHostSettings.fromJson(<String, Object?>{});
-    expect(host.historySync.mode, AgentHistorySyncMode.all);
+  test(
+    'legacy settings default to separate accounts unless opted into merging',
+    () {
+      final host = AgentQuotaHostSettings.fromJson(<String, Object?>{});
+      expect(host.historySync.mode, AgentHistorySyncMode.separate);
+      expect(host.historySync.shouldSync('codex', 'default', 'work'), isFalse);
+      expect(
+        host.historySync.shouldSync('codex', 'default', 'default'),
+        isFalse,
+      );
+      expect(host.historySync.shouldSync('grok', 'default', 'work'), isFalse);
+    },
+  );
+
+  test('explicit Sync All persists and only merges within same provider', () {
+    final host = AgentQuotaHostSettings.fromJson(<String, Object?>{
+      'historySync': <String, Object?>{'mode': 'all'},
+    });
     expect(host.historySync.shouldSync('codex', 'default', 'work'), isTrue);
-    expect(host.historySync.shouldSync('codex', 'default', 'default'), isFalse);
+    expect(host.historySync.shouldSync('claude', 'default', 'work'), isTrue);
     expect(host.historySync.shouldSync('grok', 'default', 'work'), isFalse);
+    final restored = AgentQuotaHostSettings.fromJson(host.toMap());
+    expect(restored.historySync.mode, AgentHistorySyncMode.all);
   });
 
   test('separate mode never connects different accounts', () {

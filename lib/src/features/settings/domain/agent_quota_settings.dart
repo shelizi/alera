@@ -128,7 +128,7 @@ enum AgentHistorySyncMode { all, separate, groups }
 
 @MappableClass()
 class const AgentHistorySyncSettings({
-  this.mode = AgentHistorySyncMode.all,
+  this.mode = AgentHistorySyncMode.separate,
   this.accountGroups = const <String, String>{},
 }) with AgentHistorySyncSettingsMappable {
   final AgentHistorySyncMode mode;

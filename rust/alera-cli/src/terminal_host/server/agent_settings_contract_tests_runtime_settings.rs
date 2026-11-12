@@ -23,7 +23,7 @@ async fn classic_and_gpui_history_sync_share_revisioned_host_state() {
 
     let before = actor.runtime_settings_snapshot().await.unwrap();
     assert_eq!(before["revision"], 0);
-    assert_eq!(before["agentQuotas"]["historySync"]["mode"], "all");
+    assert_eq!(before["agentQuotas"]["historySync"]["mode"], "separate");
 
     let mut quotas = before["agentQuotas"].clone();
     quotas["historySync"] = json!({
