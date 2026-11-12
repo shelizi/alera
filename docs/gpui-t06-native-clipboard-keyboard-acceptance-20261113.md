@@ -46,3 +46,26 @@
 - **不宣稱 Windows 注音候選 GUI PASS。** 本輪桌面已有其他前景程式，未搶佔鍵盤焦點或切換 Windows 使用者輸入法；本輪僅保證「收到 marked preedit 之後」不向 PTY 洩漏候選按鍵，不代表第一個注音鍵已正確啟動 TSF，也不代表候選視窗、選字提交一定正常。上輪 Unicode 字元直接輸入 PASS 是獨立驗收，不替代本項。
 - 下一個 T06 真實流程：確認 Microsoft Bopomofo 為**中文模式**、從 Terminal 主 Pane 輸入注音並觀察候選清單及選字後 Host 讀回；重做副 Pane；檢查 Enter、Backspace、Escape、Ctrl+C 以及切 Pane／失焦期間不會將未提交組字誤送其他 Host。副 Pane 多列滑鼠拖選仍需 GUI 實測。
 - 僅改 GPUI Native 的 `main.rs`、`terminal.rs` 與本驗收／追蹤文件；Classic、正式 Host／PTY 未更動；`supported=false`，未合 main、Push、部署或 Release。
+
+## 2026-11-13 Windows 真正 Microsoft Bopomofo T06 正向結案
+
+工作樹：`integrate/gpui-central-diff-into-main-20261112`，起始 HEAD `736f7dbd1`。本輪在 GPUI Native 增加查詢式 Windows IMM 模式判斷：僅在前景 GPUI 窗口的 IME **已開啟且 conversion mode 為 NATIVE** 時，將尚未有 marked preedit 的首個可列印 ASCII 交給 TSF；不切換系統輸入法、不控制其他視窗、未知模式沿用 PTY 鍵盤輸入。已標記的組字則繼續使用上一輪 `TerminalKeyDispatch` 防誤送。注意：不將外部對 IMM 相容層的觀測視為 Microsoft 注音全部行為的證明，實際驗收以下述 GUI＋Host 獨立讀回為準。
+
+### TDD／Windows 編譯
+
+- 先新增 `active_windows_native_ime_routes_first_phonetic_key_to_text_input`，修改前因 `terminal_key_dispatch` 缺第八參數出現 E0061（TDD RED）；新增首鍵路由後 GREEN。另新增 `win_ime::tests::native_mode_only_uses_confirmed_open_conversion` 驗證中文 NATIVE、英數、IME 關閉、未知狀態與 NOCONVERSION。
+- `cargo test --offline --locked --lib -- --skip git_history::tests::explicit_full_history_search_finds_old_subject_and_message_body_beyond_page_limit`：**524 PASS／0 FAIL／1 FILTERED**。既有 Git History 長測未執行，不能算 525/525。
+- `cargo test --offline --locked --bin alera-gpui-desktop`：**32/32 PASS**；`cargo build --offline --locked --bin alera-gpui-desktop`：**PASS**；`cargo fmt --all -- --check`、`git diff --check`：**PASS**。
+
+### 隔離 Windows GUI 與 Host 實證
+
+- 新測試 profile：`desktop_gpui/target/smoke-t06-native-ime-runtime-20261113-0220`；UI State：`desktop_gpui/target/smoke-t06-native-ime-state-20261113-0220`；唯一登錄的專案為既有受保護 fixture `.gpui-center-diff-smoke`。起始 Host `running=false`；GUI PID **23632** 移到第二螢幕，從 `+ → New Terminal` 建立真實 Windows `cmd.exe`。基本 `echo T06_IME_BASELINE_OK` GUI／Host 正確回應。
+- Windows GPUI 前景鍵盤 HKL **0x04040404**（台灣繁中）；**用真實鍵盤事件** `S → U → 3` 而非提交預先構造的 Unicode 字串：主 Pane 出現 Microsoft 注音候選視窗（含 A.你），Enter 選字後，CLI `terminal --no-start read` 從 Host 讀到 **「你」**，並未讀到原始 `su3`。再 `Ctrl+C` 後輸入 `echo T06_PRIMARY_STILL_OK` 正常回應，證明 PTY 仍可操作。
+- GUI 再用 `+ → New Terminal` 建立第二個 Host Session，右鍵 `Move to second pane`。副 Pane 同樣送 `S,U,3` 看到候選；以 **方向鍵 Down＋Enter** 取第二候選 **「擬」**，副 Host CLI 讀回含「擬」而不含 `su3`。主 Host handle `0833296e-d0ec-4e4b-8b50-6462e79381a8`，副 Host handle `e9ce8ac1-89e9-423e-968b-92bf4cf63a15`，兩者均 running 且輸出分離。
+- 副 Pane 執行無副作用的 `echo T06_DRAG_A & echo T06_DRAG_B & echo T06_DRAG_C`，實際滑鼠跨列拖曳，三列在 Native VT 視圖同時高亮，**副 Pane 多列拖選 GUI PASS**。本輪沒有再寫入／讀取使用者 OS 剪貼簿；前輪已獨立通過雙 Pane Ctrl+Shift+C。
+- 副 Pane 再開一次 `S,U,3` 候選但**不選字**，改點主 Pane。候選窗消失，TSF 紀錄 `blur cancel=Cancelled`，副 Host 從 `cursor=1501` 增量 read 回 **0 bytes**、`nextCursor=1501`，未將未提交注音送到 PTY 或另一 Pane。
+- Sanitized TSF debug 只記錄事件類型、焦點與字元數，這次累計 `preedit=20`、`commit=102`、`blur=4`，沒有輸出使用者輸入內容。GUI 已以 Alt+F4 關閉 PID 23632；**只停止指定隔離 Host**，停止後 `running=false`、`host=null`。受保護 fixture 原狀 `M center-diff-smoke.txt`、`?? center-diff-source-switch-untracked.txt`；沒有清理已存在的 `target/` 資料。
+
+### 結論
+
+**T06 Terminal 正常流程 DONE**：一般鍵盤／剪貼簿、主副窗格原生注音候選／選字及跨窗格失焦取消、VT 多列滑鼠拖選皆取得 Windows 實機與 Host 證據。U03 仍另追 Editor／Explorer 輸入法與焦點，不把 Terminal 通過誤稱全 GPUI 支援完成。**NOW T07**；`supported=false` 不變；未合 `main`、Push、部署或發版。

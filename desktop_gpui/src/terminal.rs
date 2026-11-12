@@ -461,12 +461,25 @@ pub fn terminal_key_dispatch(
     alt: bool,
     platform: bool,
     composing: bool,
+    native_ime_mode: bool,
 ) -> TerminalKeyDispatch {
     if composing {
         TerminalKeyDispatch::Composing
     } else if let Some(shortcut) = terminal_clipboard_shortcut(key, control, shift, alt, platform) {
         TerminalKeyDispatch::Clipboard(shortcut)
     } else if is_text_input_keystroke(key, key_char, control, alt, platform) {
+        TerminalKeyDispatch::NativeText
+    } else if native_ime_mode
+        && !control
+        && !alt
+        && !platform
+        && (key.eq_ignore_ascii_case("space")
+            || (key.len() == 1 && key.as_bytes()[0].is_ascii_graphic())
+            || key_char.is_some_and(|text| {
+                !text.is_empty() && text.chars().all(|ch| ch.is_ascii_graphic() || ch == ' ')
+            }))
+    {
+        // A CJK IME can consume ASCII before TSF emits its first marked preedit.
         TerminalKeyDispatch::NativeText
     } else {
         TerminalKeyDispatch::Pty
@@ -2857,7 +2870,7 @@ mod tests {
             ("c", Some("c"), true, false),
         ] {
             assert_eq!(
-                terminal_key_dispatch(key, key_char, ctrl, shift, false, false, true),
+                terminal_key_dispatch(key, key_char, ctrl, shift, false, false, true, false),
                 Composing,
                 "{key} must stay with native IME until it commits"
             );
@@ -2865,28 +2878,68 @@ mod tests {
 
         // After commit, Host keys and clipboard shortcuts are restored.
         assert_eq!(
-            terminal_key_dispatch("s", Some("s"), false, false, false, false, false),
+            terminal_key_dispatch("s", Some("s"), false, false, false, false, false, false),
             Pty
         );
         assert_eq!(
-            terminal_key_dispatch("enter", None, false, false, false, false, false),
+            terminal_key_dispatch("enter", None, false, false, false, false, false, false),
             Pty
         );
         assert_eq!(
-            terminal_key_dispatch("c", None, true, true, false, false, false),
+            terminal_key_dispatch("c", None, true, true, false, false, false, false),
             Clipboard(Copy)
         );
         assert_eq!(
-            terminal_key_dispatch("v", None, true, true, false, false, false),
+            terminal_key_dispatch("v", None, true, true, false, false, false, false),
             Clipboard(Paste)
         );
         assert_eq!(
-            terminal_key_dispatch("c", None, true, false, false, false, false),
+            terminal_key_dispatch("c", None, true, false, false, false, false, false),
             Pty
         );
         assert_eq!(
-            terminal_key_dispatch("中", Some("中"), false, false, false, false, false),
+            terminal_key_dispatch("中", Some("中"), false, false, false, false, false, false),
             NativeText
+        );
+    }
+
+    #[test]
+    fn active_windows_native_ime_routes_first_phonetic_key_to_text_input() {
+        use TerminalClipboardShortcut::Copy;
+        use TerminalKeyDispatch::{Clipboard, NativeText, Pty};
+
+        // IME may consume the first phonetic key before GPUI receives a
+        // marked-text callback. Do not leak that ASCII key into the PTY.
+        assert_eq!(
+            terminal_key_dispatch("s", Some("s"), false, false, false, false, false, true),
+            NativeText
+        );
+        assert_eq!(
+            terminal_key_dispatch("space", Some(" "), false, false, false, false, false, true),
+            NativeText
+        );
+        // Chinese keyboard present but English/alphanumeric mode selected.
+        assert_eq!(
+            terminal_key_dispatch("s", Some("s"), false, false, false, false, false, false),
+            Pty
+        );
+        // Non-printable keys and Ctrl+C remain valid PTY controls unless
+        // a native marked composition is actively in progress.
+        assert_eq!(
+            terminal_key_dispatch("enter", None, false, false, false, false, false, true),
+            Pty
+        );
+        assert_eq!(
+            terminal_key_dispatch("c", None, true, false, false, false, false, true),
+            Pty
+        );
+        assert_eq!(
+            terminal_key_dispatch("c", None, true, true, false, false, false, true),
+            Clipboard(Copy)
+        );
+        assert_eq!(
+            terminal_key_dispatch("s", Some("s"), false, false, true, false, false, true),
+            Pty
         );
     }
 

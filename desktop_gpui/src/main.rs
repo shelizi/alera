@@ -7455,6 +7455,7 @@ impl Workbench {
             event.keystroke.modifiers.alt,
             event.keystroke.modifiers.platform,
             composing,
+            win_ime::focused_native_text_mode(),
         ) {
             TerminalKeyDispatch::Composing => return true,
             TerminalKeyDispatch::NativeText => return false,
