@@ -45,7 +45,8 @@
 - New RED regression `terminal_create_cannot_confirm_a_host_session_that_exited_before_attach` proved that an exact Host session/workspace/tab triple could previously be considered attachable even when `running=false` for ordinary Terminal creation.
 - Fixed shared `CreatedHostTerminal::matches_live_session` to require `running=true` for both ordinary and direct-Agent create paths; stopped sessions cannot complete a new Terminal attach, and the pending request remains unresolved instead of silently spawning a second PTY.
 - GREEN regression PASS. Full `cargo test --offline --locked`: **507/507 GPUI Rust Library PASS**, **31/31 Native Binary PASS**, 3 environment-gated integration tests ignored and doc tests PASS. `cargo fmt --all -- --check` and `git diff --check` PASS.
-- This is a source-level Windows-host regression, not a new live provider-crash or OS GUI recovery acceptance. All other remaining support gates below stay open.
+- **Real isolated Host/PTY early-exit PASS (1/1):** extended opt-in `terminal_bootstrap_host` test with the current branch's `alera-cli.exe` and its own temporary Runtime directory. Created a Host session, read a shell echo marker, wrote `exit`, waited for the Host to stop listing the PTY as running, and verified GPUI's pending create could not confirm the stopped identity or launch a duplicate while awaiting. Scoped cleanup stops only this temporary Host.
+- This proves an actual isolated shell-exit path, not a genuine Codex/Claude crash, OS GUI recovery or long-lived provider restart. Other support gates below stay open.
 
 ## Remaining acceptance before supported=true
 - True-provider Windows startup, answer, Hook completion and GUI restart **are now proven for Codex and Claude Code** in the isolated fixture only. Other Agent providers, Windows abnormal crash/failure/retry paths and long-term Host persistence remain untested.

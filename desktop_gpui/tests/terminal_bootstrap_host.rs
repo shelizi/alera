@@ -4,6 +4,7 @@
 
 use alera_core::child_process::windowless_command;
 use alera_gpui_desktop::runtime_bridge::{RuntimeCliBridge, RuntimeStatus};
+use alera_gpui_desktop::terminal::TerminalCreateFlow;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
@@ -109,4 +110,35 @@ fn explicit_new_terminal_starts_host_registers_checkout_and_reads_pty() {
         );
         std::thread::sleep(Duration::from_millis(150));
     }
+
+    // Simulate an isolated CLI-owned PTY exiting after the Host created
+    // its tab but before GPUI confirms the new Terminal in a pane.
+    bridge
+        .write_terminal(&created.handle, "exit", true)
+        .expect("isolated PTY should accept a normal shell exit");
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let stopped_snapshot = loop {
+        let sessions = bridge.list_terminals().unwrap();
+        if !sessions
+            .iter()
+            .any(|session| session.handle == created.handle && session.running)
+        {
+            break sessions;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "isolated Host still reported the exited PTY as running"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    };
+
+    let mut flow = TerminalCreateFlow::default();
+    let request = flow.start_request().unwrap();
+    assert!(flow.finish_request(request, created));
+    assert!(
+        flow.confirm_sessions(&stopped_snapshot).is_none(),
+        "Host must never confirm a newly created Terminal after its PTY exited"
+    );
+    assert!(flow.is_waiting());
+    assert!(flow.start_request().is_none());
 }
