@@ -31,6 +31,7 @@ pub mod git_sidebar_layout;
 pub mod git_watch;
 pub mod history_sync_bridge;
 pub mod host_tab_pins;
+pub mod local_agent_detection;
 pub mod mcp_ui_bridge;
 pub mod mcp_workspace_creation;
 pub mod model;

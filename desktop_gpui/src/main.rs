@@ -78,6 +78,9 @@ use alera_gpui_desktop::history_sync_bridge::{
 use alera_gpui_desktop::host_tab_pins::{
     host_pin_owner_coverage, host_pin_query_workspaces, HostPinOwnerCoverage, HostTabPinSnapshot,
 };
+use alera_gpui_desktop::local_agent_detection::{
+    detect_installed_agent_clis, matching_host_profile_for_agent, InstalledAgentCli,
+};
 use alera_gpui_desktop::mcp_ui_bridge::{
     matching_host_tab_handle, NativeMcpUiBridge, NativeMcpUiCommand, NativeMcpUiEvent,
 };
@@ -675,6 +678,10 @@ struct Workbench {
     settings_exclusion_input: Entity<QuickOpenInput>,
     last_auto_git_fetch: Instant,
     agent_profiles: Vec<AgentProfileRow>,
+    /// Local CLI availability is separate from the Host Agent Profile catalog.
+    installed_agent_clis: Vec<InstalledAgentCli>,
+    installed_agent_clis_loading: bool,
+    installed_agent_clis_request: u64,
     agent_profiles_loading: bool,
     agent_profiles_request: u64,
     agent_selected_profile: Option<String>,
@@ -6167,6 +6174,34 @@ impl Workbench {
         }
     }
 
+    /// Classic's New Tab menu lists installed Agent CLIs from PATH without
+    /// needing a Host connection. Keep this slow scan off the UI thread.
+    /// Inventory is machine-wide. Request IDs reject stale scan results.
+    fn refresh_installed_agent_clis(&mut self, cx: &mut Context<Self>) {
+        if self.installed_agent_clis_loading {
+            return;
+        }
+        self.installed_agent_clis_loading = true;
+        self.installed_agent_clis_request = self.installed_agent_clis_request.wrapping_add(1);
+        let request = self.installed_agent_clis_request;
+        cx.spawn(async move |view, cx| {
+            let found = cx
+                .background_spawn(async move { detect_installed_agent_clis(&HashMap::new()) })
+                .await;
+            view.update(cx, |view, cx| {
+                if view.installed_agent_clis_request != request {
+                    return;
+                }
+                view.installed_agent_clis_loading = false;
+                view.installed_agent_clis = found;
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
     fn refresh_agent_profiles(&mut self, cx: &mut Context<Self>) {
         if self.agent_profiles_loading {
             return;
@@ -6229,6 +6264,55 @@ impl Workbench {
 
     /// The + menu selects a real Host Agent Profile and opens the existing
     /// task composer; it never launches an Agent before a task is submitted.
+    /// Choosing a detected local CLI is not permission to synthesize a Host
+    /// profile, spawn a PTY, or execute arbitrary paths. If a configured Host
+    /// profile of the same adapter exists, use its existing confirmation path;
+    /// otherwise explain the currently unsupported Native launch route.
+    fn prepare_detected_agent_in_pane(
+        &mut self,
+        agent_id: &str,
+        target: &PaneAttachGuard,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !target.still_valid(self.workspace_generation, &self.mixed_panes) {
+            self.model.set_status("Pane changed; reopen New Agent");
+            cx.notify();
+            return;
+        }
+        let Some(agent) = self
+            .installed_agent_clis
+            .iter()
+            .find(|item| item.id == agent_id)
+        else {
+            self.model
+                .set_status("Agent availability changed; refresh New Tab");
+            cx.notify();
+            return;
+        };
+        if let Some(profile_id) = matching_host_profile_for_agent(
+            agent_id,
+            &self.agent_profiles,
+            self.native_settings.default_agent_profile_id.as_deref(),
+        )
+        .map(|profile| profile.id.clone())
+        {
+            self.prepare_agent_in_pane(&profile_id, target, window, cx);
+            return;
+        }
+        let name = agent.display_name.clone();
+        self.agent_launch_pane = None;
+        self.agent_selected_profile = None;
+        self.runtime_details_open = true;
+        self.agent_status = format!(
+            "{name} is installed locally; configure a Host Agent Profile to launch it in Native"
+        );
+        self.model.set_status(format!(
+            "{name} detected; Native launch requires a Host Agent Profile"
+        ));
+        cx.notify();
+    }
+
     fn prepare_agent_in_pane(
         &mut self,
         profile_id: &str,
@@ -11660,6 +11744,8 @@ impl Render for Workbench {
                                                     &self.mixed_panes,
                                                 );
                                                 let profiles = self.agent_profiles.clone();
+                                                let installed = self.installed_agent_clis.clone();
+                                                let installed_loading = self.installed_agent_clis_loading;
                                                 icon_button("mixed-new-tab", UiIcon::Add, "New Tab", terminal_creating
                                                     && self.terminal_create_pane.as_ref().is_some_and(|pending| pending.target.pane() == PaneSlot::Primary))
                                                     .w(px(28.0))
@@ -11669,6 +11755,8 @@ impl Render for Workbench {
                                                         target,
                                                         running,
                                                         profiles,
+                                                        installed,
+                                                        installed_loading,
                                                         terminal_create_busy,
                                                         terminal_create_timed_out,
                                                     ))
@@ -11677,6 +11765,7 @@ impl Render for Workbench {
                                                             let _ = refresh_owner.update(cx, |view, cx| {
                                                                 view.refresh_terminals(cx);
                                                                 view.refresh_agent_profiles(cx);
+                                                                view.refresh_installed_agent_clis(cx);
                                                             });
                                                         }
                                                     })
@@ -12161,6 +12250,8 @@ impl Render for Workbench {
                                                             &self.mixed_panes,
                                                         );
                                                         let profiles = self.agent_profiles.clone();
+                                                        let installed = self.installed_agent_clis.clone();
+                                                        let installed_loading = self.installed_agent_clis_loading;
                                                         icon_button("mixed-secondary-new-tab", UiIcon::Add, "New Tab in second pane", terminal_creating
                                                             && self.terminal_create_pane.as_ref().is_some_and(|pending| pending.target.pane() == PaneSlot::Secondary))
                                                             .w(px(28.0))
@@ -12170,6 +12261,8 @@ impl Render for Workbench {
                                                                 target,
                                                                 running,
                                                                 profiles,
+                                                                installed,
+                                                                installed_loading,
                                                                 terminal_create_busy,
                                                                 terminal_create_timed_out,
                                                             ))
@@ -12178,6 +12271,7 @@ impl Render for Workbench {
                                                                     let _ = refresh_owner.update(cx, |view, cx| {
                                                                         view.refresh_terminals(cx);
                                                                         view.refresh_agent_profiles(cx);
+                                                                        view.refresh_installed_agent_clis(cx);
                                                                     });
                                                                 }
                                                             })
@@ -13591,6 +13685,9 @@ fn main() {
                             settings_exclusion_input,
                             last_auto_git_fetch: Instant::now(),
                             agent_profiles: Vec::new(),
+                            installed_agent_clis: Vec::new(),
+                            installed_agent_clis_loading: false,
+                            installed_agent_clis_request: 0,
                             agent_profiles_loading: false,
                             agent_profiles_request: 0,
                             agent_selected_profile: None,
@@ -13692,6 +13789,7 @@ fn main() {
                         view.refresh_git(cx);
                         view.refresh_shared_git_favorites(cx);
                         view.refresh_agent_profiles(cx);
+                        view.refresh_installed_agent_clis(cx);
                         view.connect_mcp_ui_bridge(cx);
                     });
                     view
