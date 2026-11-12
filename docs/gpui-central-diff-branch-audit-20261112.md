@@ -31,6 +31,7 @@
 - **Historical Editor / Explorer / Projects / Worktree:** `main` already has `editor_tabs.rs`, `explorer_ops.rs`, `project_tree.rs`, and `worktree_manager.rs`. Nonidentical historical patches still require behavior-by-behavior comparison, not blind cherry-picking or deletion.
 - **Terminal / Host tests:** `main` already contains `terminal_bootstrap.rs` and related guarded terminal layout and identity tests. Old test commits should be checked for missing assertions rather than replayed wholesale.
 - **i18n / shared settings:** `main` already contains `native_i18n.rs`, settings catalog, `history_sync_bridge.rs`, and Native History Sync UI; exact historical commit hashes differ following merge/reconciliation.
+- **File-level cross-check of 14 historical non-equivalent branches + one alternate integration ref:** all touched files still exist on `main` except the historical `desktop_gpui/src/settings_menu_ui.rs`. Its old `render_settings_menu_preview` path is now replaced by `native_settings_ui.rs` + `native_settings_catalog_ui.rs` with the same `matching_sections_localized` catalog helper. This is evidence of a refactor, **not** a behavioral-equivalence proof. Preserve the old branch and follow up on any uncovered UI interaction before cleanup.
 - **Already patch-equivalent:** 19 branches including Git patch paging, expanded diff dialogs, Hunk gutters, Editor Find, Project Search, dirty-pane guard, offline settings, and pinned-tab tests. Their named refs need no redundant merge merely to appear as ancestors.
 
 ## Decision boundary
