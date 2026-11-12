@@ -118,8 +118,8 @@ use alera_gpui_desktop::visual_tokens::{
 };
 use alera_gpui_desktop::vt_screen::StyledRow;
 use alera_gpui_desktop::workbench_layout_store::{
-    scratch_layout_key, SavedWorkbenchAxis, SavedWorkbenchLayoutV1, SavedWorkbenchPane,
-    SCRATCH_EDITOR_KEY_PREFIX, WORKBENCH_LAYOUT_VERSION,
+    scratch_layout_key, SavedWorkbenchAxis, SavedWorkbenchHostTab, SavedWorkbenchLayoutV1,
+    SavedWorkbenchPane, SCRATCH_EDITOR_KEY_PREFIX, WORKBENCH_LAYOUT_VERSION,
 };
 use alera_gpui_desktop::workbench_panes::{
     PaneAttachGuard, PaneAxis, PaneSlot, WorkbenchPaneLayout,
@@ -7675,7 +7675,9 @@ impl Workbench {
     }
 
     fn save_mixed_pane_layout(&mut self, cx: &Context<Self>) {
-        if self.mixed_layout_read_only {
+        // Do not overwrite saved Host/Editor pane assignments before the
+        // first authenticated Host inventory restores their previews.
+        if self.mixed_layout_read_only || self.mixed_layout_restore.is_some() {
             return;
         }
         let Some(store) = self.session_store.as_ref() else {
@@ -7695,6 +7697,21 @@ impl Workbench {
                 .tabs_in(slot)
                 .iter()
                 .filter_map(&key_for)
+                .collect::<Vec<_>>()
+        };
+        let host_for = |id: &WorkbenchTabIdentity| match id {
+            WorkbenchTabIdentity::Host(target) => Some(SavedWorkbenchHostTab::new(
+                target.handle.clone(),
+                target.workspace_id(),
+                target.tab_id(),
+            )),
+            _ => None,
+        };
+        let host_keys = |slot: PaneSlot| {
+            self.mixed_panes
+                .tabs_in(slot)
+                .iter()
+                .filter_map(&host_for)
                 .collect::<Vec<_>>()
         };
         let saved = SavedWorkbenchLayoutV1 {
@@ -7726,6 +7743,16 @@ impl Workbench {
                 .iter()
                 .filter_map(&key_for)
                 .collect(),
+            primary_hosts: host_keys(PaneSlot::Primary),
+            secondary_hosts: host_keys(PaneSlot::Secondary),
+            primary_active_host: self
+                .mixed_panes
+                .active_in(PaneSlot::Primary)
+                .and_then(&host_for),
+            secondary_active_host: self
+                .mixed_panes
+                .active_in(PaneSlot::Secondary)
+                .and_then(&host_for),
         };
         if let Err(error) = saved.save_to_path(&path) {
             eprintln!("Alera GPUI: could not save mixed pane layout: {error}");
@@ -7818,6 +7845,15 @@ impl Workbench {
         let Some(saved) = self.mixed_layout_restore.take() else {
             return;
         };
+        // The first render happens before the asynchronous authenticated Host
+        // list. Wait for TerminalLayout to restore its preview identities;
+        // otherwise this one-shot layout would discard secondary Host slots.
+        if self.terminal_layout_restore.is_some()
+            && (!saved.primary_hosts.is_empty() || !saved.secondary_hosts.is_empty())
+        {
+            self.mixed_layout_restore = Some(saved);
+            return;
+        }
         let keys = self.editor_layout_keys(cx);
         if keys.is_empty()
             && (!saved.primary_editors.is_empty() || !saved.secondary_editors.is_empty())
@@ -7830,8 +7866,18 @@ impl Workbench {
                 self.transfer_editor_to_pane(id, PaneSlot::Secondary, cx);
             }
         }
+        // Host hints can only reposition already-open tabs verified against
+        // the current authenticated Host inventory. They cannot attach or
+        // spawn terminals, nor can a recycled handle claim the old pane.
+        if !self.terminals.session_list_is_stale() {
+            self.mixed_panes.restore_live_host_positions(
+                &saved.primary_hosts,
+                &saved.secondary_hosts,
+                &self.terminals.sessions,
+            );
+        }
         // Rehydrate only file-backed Editor pins after actual NativeEditor
-        // sessions have been installed/transferred. Host IDs never restore.
+        // sessions have been installed/transferred. Host pins do not restore.
         for (id, key) in &keys {
             if saved.pinned_editors.contains(key) {
                 self.mixed_tabs.set_pinned(id, true);
@@ -7857,11 +7903,38 @@ impl Workbench {
         }
         if !saved.split_enabled {
             self.unsplit_mixed_panes(cx);
-        } else if saved.focused_pane == SavedWorkbenchPane::Primary {
-            self.mixed_panes.focus_pane(PaneSlot::Primary);
         } else {
-            self.mixed_panes.focus_pane(PaneSlot::Secondary);
+            // Restore each pane's active Host (when it is still authenticated)
+            // before the saved focused pane. No Host is created or attached.
+            for (slot, wanted) in [
+                (PaneSlot::Primary, saved.primary_active_host.as_ref()),
+                (PaneSlot::Secondary, saved.secondary_active_host.as_ref()),
+            ] {
+                if let Some(wanted) = wanted {
+                    if let Some(identity) = self
+                        .mixed_panes
+                        .tabs_in(slot)
+                        .iter()
+                        .find(|id| {
+                            matches!(id, WorkbenchTabIdentity::Host(target)
+                            if target.handle == wanted.handle
+                            && target.workspace_id() == wanted.workspace_id
+                            && target.tab_id() == wanted.tab_id
+                            && self.terminals.context_target_is_live(target))
+                        })
+                        .cloned()
+                    {
+                        self.mixed_panes.activate(&identity);
+                    }
+                }
+            }
+            if saved.focused_pane == SavedWorkbenchPane::Primary {
+                self.mixed_panes.focus_pane(PaneSlot::Primary);
+            } else {
+                self.mixed_panes.focus_pane(PaneSlot::Secondary);
+            }
         }
+        self.save_mixed_pane_layout(cx);
     }
 
     /// Both Classic workbench panes use this same chip behavior. Only

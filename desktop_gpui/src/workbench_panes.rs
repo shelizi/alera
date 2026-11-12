@@ -9,7 +9,8 @@
 //! Host PTY or editor buffer, and closing the secondary pane returns every
 //! tab to the primary pane.
 
-use crate::terminal::TerminalTabContextTarget;
+use crate::terminal::{TerminalSession, TerminalTabContextTarget};
+use crate::workbench_layout_store::SavedWorkbenchHostTab;
 use crate::workbench_tabs::{WorkbenchTab, WorkbenchTabIdentity};
 
 /// Which of the two workbench panes a tab strip belongs to.
@@ -125,6 +126,51 @@ impl WorkbenchPaneLayout {
                 self.focused = PaneSlot::Primary;
             }
         }
+    }
+
+    /// Reposition *only* already-open Host previews whose complete opaque
+    /// triple also matches an authenticated, still-running Host session.
+    /// This never opens/attaches/creates a Host PTY. Returned count is moves.
+    pub fn restore_live_host_positions(
+        &mut self,
+        primary: &[SavedWorkbenchHostTab],
+        secondary: &[SavedWorkbenchHostTab],
+        live: &[TerminalSession],
+    ) -> usize {
+        let mut moved = 0;
+        for (saved, destination) in [
+            (primary, PaneSlot::Primary),
+            (secondary, PaneSlot::Secondary),
+        ] {
+            for hint in saved {
+                let verified = live.iter().any(|session| {
+                    session.running
+                        && session.handle == hint.handle
+                        && session.workspace_id == hint.workspace_id
+                        && session.tab_id == hint.tab_id
+                });
+                if !verified {
+                    continue;
+                }
+                let identity = self
+                    .primary
+                    .iter()
+                    .chain(self.secondary.iter())
+                    .find(|id| {
+                        matches!(id, WorkbenchTabIdentity::Host(target)
+                        if target.handle == hint.handle
+                        && target.workspace_id() == hint.workspace_id
+                        && target.tab_id() == hint.tab_id)
+                    })
+                    .cloned();
+                if let Some(identity) = identity {
+                    if self.move_to(&identity, destination) {
+                        moved += 1;
+                    }
+                }
+            }
+        }
+        moved
     }
 
     /// Split `id` off into the secondary pane, creating the split when needed.
@@ -473,6 +519,64 @@ mod tests {
         for (index, id) in ids.iter().enumerate() {
             assert!(!ids[..index].contains(id), "duplicated identity {id:?}");
         }
+    }
+
+    #[test]
+    fn restored_host_pane_positions_require_running_exact_three_part_identity() {
+        let left = host("left");
+        let right = host("right");
+        let mut panes = WorkbenchPaneLayout::new();
+        panes.reconcile(&[left.clone(), right.clone()]);
+        let saved_right = SavedWorkbenchHostTab::new("right", "ws", "tab-right");
+        let saved_left = SavedWorkbenchHostTab::new("left", "ws", "tab-left");
+        let live = vec![
+            TerminalSession {
+                handle: "left".into(),
+                workspace_id: "ws".into(),
+                tab_id: "tab-left".into(),
+                running: true,
+                agent_type: None,
+                agent_state: None,
+                interrupted: false,
+                agent_state_started_at: None,
+                agent_updated_at: None,
+            },
+            TerminalSession {
+                handle: "right".into(),
+                workspace_id: "ws".into(),
+                tab_id: "tab-right".into(),
+                running: true,
+                agent_type: None,
+                agent_state: None,
+                interrupted: false,
+                agent_state_started_at: None,
+                agent_updated_at: None,
+            },
+        ];
+        assert_eq!(
+            panes.restore_live_host_positions(&[saved_left], &[saved_right.clone()], &live),
+            1
+        );
+        assert_eq!(panes.tabs_in(PaneSlot::Primary), &[left.clone()]);
+        assert_eq!(panes.tabs_in(PaneSlot::Secondary), &[right.clone()]);
+        assert_unique(&panes);
+
+        let mut recycled = WorkbenchPaneLayout::new();
+        recycled.reconcile(&[left, right.clone()]);
+        let mut replaced = live.clone();
+        replaced[1].tab_id = "recycled-tab".into();
+        assert_eq!(
+            recycled.restore_live_host_positions(&[], &[saved_right.clone()], &replaced),
+            0
+        );
+        assert!(!recycled.has_secondary());
+        replaced[1].tab_id = "tab-right".into();
+        replaced[1].running = false;
+        assert_eq!(
+            recycled.restore_live_host_positions(&[], &[saved_right], &replaced),
+            0
+        );
+        assert!(!recycled.has_secondary());
     }
 
     #[test]

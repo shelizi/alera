@@ -1,18 +1,18 @@
-//! Versioned JSON persistence for the Editor-only subset of the GPUI
-//! two-pane workbench layout.
+//! Versioned JSON persistence for the GPUI two-pane workbench layout.
 //!
 //! The runtime pane projection lives in `workbench_panes`; this module owns
-//! only the on-disk V1 snapshot of *editor* pane membership: which editor
-//! keys sit in the primary strip and the optional secondary strip, each
-//! pane's active editor, the focused pane and the split axis. Editor keys
+//! the on-disk V1 snapshot of editor pane membership and inert Host pane
+//! hints. Host hints are strictly session/workspace/tab identity triples
+//! and can only position an already authenticated, existing Host preview;
+//! this module never opens files, attaches or starts any Host PTY. Editor keys
 //! are opaque caller-defined strings — typically a stable encoding of an
 //! editor tab instance — and this store treats them as inert data: it
 //! never resolves them to paths, opens files, or interprets them.
 //!
-//! Host Terminal and Agent handles are deliberately unrepresentable: the
-//! schema has no fields for them, so a saved layout can never resurrect,
-//! attach or duplicate a Runtime Host PTY. Callers must pass only editor
-//! keys; anything else simply will not round-trip.
+//! Host hints are not launch requests: the UI must match the complete triple
+//! to an existing live Host session and existing preview before applying a
+//! pane move. A saved hint by itself cannot resurrect, attach or duplicate
+//! a Runtime Host PTY.
 //!
 //! Records are normalized on both read and write: empty keys are dropped,
 //! duplicates keep their first occurrence (the primary pane wins a key
@@ -31,6 +31,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub const WORKBENCH_LAYOUT_VERSION: u32 = 1;
 
 const MAX_LAYOUT_BYTES: u64 = 64 * 1024;
+const MAX_SAVED_HOST_PANE_TABS: usize = 64;
+const MAX_SAVED_HOST_ID_BYTES: usize = 256;
 
 /// Reserved opaque Editor key for a locally recovered, unsaved scratch draft.
 /// No path or raw buffer contents enter the pane-layout JSON.
@@ -67,10 +69,42 @@ pub enum SavedWorkbenchPane {
     Secondary,
 }
 
-/// Versioned on-disk snapshot of the Editor-only two-pane workbench layout.
+/// Inert Host pane-position hint. Never an authorization to open or start PTYs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SavedWorkbenchHostTab {
+    pub handle: String,
+    pub workspace_id: String,
+    pub tab_id: String,
+}
+
+impl SavedWorkbenchHostTab {
+    pub fn new(
+        handle: impl Into<String>,
+        workspace_id: impl Into<String>,
+        tab_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            handle: handle.into(),
+            workspace_id: workspace_id.into(),
+            tab_id: tab_id.into(),
+        }
+    }
+
+    fn valid(&self) -> bool {
+        [&self.handle, &self.workspace_id, &self.tab_id]
+            .into_iter()
+            .all(|id| {
+                !id.is_empty()
+                    && id.len() <= MAX_SAVED_HOST_ID_BYTES
+                    && !id.chars().any(char::is_control)
+            })
+    }
+}
+
+/// Versioned on-disk snapshot of the two-pane workbench layout.
 ///
-/// Every editor reference is an opaque caller-supplied key; see the module
-/// documentation for the normalization and Host-exclusion guarantees.
+/// Editor references are opaque caller-supplied keys; Host references are
+/// inert, bounded triples which cannot start, attach or own a Host PTY.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SavedWorkbenchLayoutV1 {
     /// Schema version; must equal [`WORKBENCH_LAYOUT_VERSION`]. Other
@@ -94,6 +128,15 @@ pub struct SavedWorkbenchLayoutV1 {
     /// Optional file-backed Editor pin keys; Host PTY ids stay excluded.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pinned_editors: Vec<String>,
+    /// Inert Host placement hints; older V1 snapshots omit all four fields.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub primary_hosts: Vec<SavedWorkbenchHostTab>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub secondary_hosts: Vec<SavedWorkbenchHostTab>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub primary_active_host: Option<SavedWorkbenchHostTab>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secondary_active_host: Option<SavedWorkbenchHostTab>,
 }
 
 impl SavedWorkbenchLayoutV1 {
@@ -162,6 +205,17 @@ impl SavedWorkbenchLayoutV1 {
         let mut pinned_editors = normalize_keys(&self.pinned_editors);
         pinned_editors
             .retain(|key| primary_editors.contains(key) || secondary_editors.contains(key));
+        let primary_hosts = normalize_hosts(&self.primary_hosts);
+        let mut secondary_hosts = normalize_hosts(&self.secondary_hosts);
+        secondary_hosts.retain(|host| !primary_hosts.contains(host));
+        let primary_active_host = self
+            .primary_active_host
+            .clone()
+            .filter(|host| primary_hosts.contains(host));
+        let secondary_active_host = self
+            .secondary_active_host
+            .clone()
+            .filter(|host| secondary_hosts.contains(host));
         let primary_active_editor = self
             .primary_active_editor
             .clone()
@@ -171,7 +225,9 @@ impl SavedWorkbenchLayoutV1 {
             .clone()
             .filter(|key| secondary_editors.contains(key));
         let focused_pane = match self.focused_pane {
-            SavedWorkbenchPane::Secondary if secondary_editors.is_empty() => {
+            SavedWorkbenchPane::Secondary
+                if secondary_editors.is_empty() && secondary_hosts.is_empty() =>
+            {
                 SavedWorkbenchPane::Primary
             }
             pane => pane,
@@ -186,8 +242,25 @@ impl SavedWorkbenchLayoutV1 {
             primary_active_editor,
             secondary_active_editor,
             pinned_editors,
+            primary_hosts,
+            secondary_hosts,
+            primary_active_host,
+            secondary_active_host,
         }
     }
+}
+
+fn normalize_hosts(hosts: &[SavedWorkbenchHostTab]) -> Vec<SavedWorkbenchHostTab> {
+    let mut normalized = Vec::new();
+    for host in hosts {
+        if host.valid() && !normalized.contains(host) {
+            normalized.push(host.clone());
+            if normalized.len() >= MAX_SAVED_HOST_PANE_TABS {
+                break;
+            }
+        }
+    }
+    normalized
 }
 
 /// Drop empty keys and duplicates, keeping first-occurrence strip order.
@@ -244,7 +317,40 @@ mod tests {
             primary_active_editor: Some("editor:7:2".into()),
             secondary_active_editor: Some("editor:8:3".into()),
             pinned_editors: Vec::new(),
+            primary_hosts: Vec::new(),
+            secondary_hosts: Vec::new(),
+            primary_active_host: None,
+            secondary_active_host: None,
         }
+    }
+
+    #[test]
+    fn saved_host_pane_triples_are_bounded_deduplicated_and_backward_compatible() {
+        let mut state = sample();
+        let a = SavedWorkbenchHostTab::new("pty-a", "ws-1", "tab-a");
+        let b = SavedWorkbenchHostTab::new("pty-b", "ws-1", "tab-b");
+        state.primary_hosts = vec![
+            a.clone(),
+            a.clone(),
+            SavedWorkbenchHostTab::new("", "ws", "tab"),
+        ];
+        state.secondary_hosts = vec![
+            b.clone(),
+            a.clone(),
+            SavedWorkbenchHostTab::new("x".repeat(257), "ws", "tab"),
+        ];
+        state.secondary_active_host = Some(b.clone());
+        state.focused_pane = SavedWorkbenchPane::Secondary;
+        let json = state.to_json().unwrap();
+        let restored = SavedWorkbenchLayoutV1::from_json(&json).unwrap();
+        assert_eq!(restored.primary_hosts, vec![a]);
+        assert_eq!(restored.secondary_hosts, vec![b.clone()]);
+        assert_eq!(restored.secondary_active_host, Some(b));
+        let legacy = r#"{"version":1,"split_enabled":true,"axis":"horizontal","focused_pane":"primary","primary_editors":[],"secondary_editors":[],"primary_active_editor":null,"secondary_active_editor":null}"#;
+        let older = SavedWorkbenchLayoutV1::from_json(legacy).unwrap();
+        assert!(older.primary_hosts.is_empty());
+        assert!(older.secondary_hosts.is_empty());
+        assert!(older.to_json().unwrap().contains("\"version\":1"));
     }
 
     #[test]
