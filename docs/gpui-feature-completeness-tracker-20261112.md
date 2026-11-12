@@ -32,8 +32,8 @@
 
 | ID | 功能與 Classic 行為 | 初始狀態／已知證據 | 下一步與正常完成定義 |
 | --- | --- | --- | --- |
-| **T01** | 左右 Pane 的 `+` → **New Terminal**，確實建立並可輸入／輸出 | **部分完成**：Host 建立、隔離 PTY E2E 通過；GPUI 直接點擊的正向完整流程需補 | **NOW**：實際 GPUI 左／右 Pane 各點一次、出現分頁、輸入指令、讀到輸出；錯誤時明確提示、不建立幽靈 Tab |
-| **T02** | `+` 自動偵測本機 Agent；支援刷新、沒有安裝時明示 | **部分完成**：Windows 雙 Pane 選單已列出六種已安裝 Agent；偵測與 Host Profile 分開 | 核對一般安裝／未安裝、刷新及選單順序／名稱，與 Classic 操作路徑一致 |
+| **T01** | 左右 Pane 的 `+` → **New Terminal**，確實建立並可輸入／輸出 | **完成（正常流程）**：2026-11-12 Windows GPUI 主、副 Pane `+` 各建立一個 Host-owned `cmd.exe`；兩個獨立 PTY 都能透過 GUI 輸入 `echo` 並顯示輸出；Host `terminal list/read` 雙向核對 PASS | **PASS**：不同 Session／Tab ID、輸出不串流、無幽靈 Tab。見 [T01 Windows 雙 Pane 驗收](gpui-t01-terminal-two-pane-acceptance-20261112.md) |
+| **T02** | `+` 自動偵測本機 Agent；支援刷新、沒有安裝時明示 | **部分完成**：本輪再次看到雙 Pane 選單均列出 Codex／Claude Code／GitHub Copilot／Antigravity／Grok Build／Devin，且與 Host Profile 分開 | **NOW**：核對一般安裝／未安裝、刷新及選單順序／名稱，與 Classic 操作路徑一致 |
 | **T03** | **New Agent** 建立真實 Provider Terminal，登入後可互動 | **部分完成**：Codex／Claude 真實 TUI、關閉重開與 Host 生命周期在隔離環境通過；六種 Provider 的 GPUI 正向點擊尚未全核實 | 由 `+` 各啟動可用 Provider、可輸入回覆；未登入的 Agent 清楚顯示原因；不用強制終止程序測試 |
 | **T04** | Attach 既有 Host Session；切換／關閉分頁不終止背景 PTY | **部分完成**：真實 GUI Attach、重新開啟原 Session 已驗證；部分分頁操作仍待正常操作確認 | 左右 Pane Attach／切換／關閉／再次 Attach，分頁與 Session ID 正確 |
 | **T05** | Terminal／Agent 分割、Tab 移動、右鍵、拖曳、Close Others／Right | **已有實作／待操作驗收**：雙 Pane 的操作與身份回歸已存在 | 用一個普通 Terminal、一個 Agent 及一個 Editor，完成主副窗格的右鍵、移動、分割、關閉與重新附加 |
@@ -100,8 +100,9 @@
 
 | 順序 | 工作單 | 本批要交付的結果 | 狀態 |
 | --- | --- | --- | --- |
-| **NOW** | **T01** | GPUI 主／副 Pane 由 `+` 建立真正可互動 Terminal；完成一般 GUI 正向流程 | **待開始／第一個工作包** |
-| NEXT | T02 → T03 | Agent 偵測與 New Agent 選單、已安裝 Provider 的正常啟動操作 | 排隊 |
+| DONE | **T01** | GPUI 主／副 Pane 由 `+` 建立真正可互動 Terminal；完成一般 GUI 正向流程 | **Windows GUI + Host 讀回 PASS**；[驗收紀錄](gpui-t01-terminal-two-pane-acceptance-20261112.md) |
+| **NOW** | **T02** | Agent 自動偵測、刷新、未安裝提示及 Classic 下拉選單操作一致 | 執行中／待一般情境驗收 |
+| NEXT | T03 | 已安裝 Provider 的 New Agent 正常啟動操作 | 排隊 |
 | NEXT | T04 → T05 → T06 → T07 | Attach／Tab／Split、Terminal 鍵盤、Agent Profile | 排隊 |
 | NEXT | E01 → E02 → E03 → E04 → E05 → E06 | 編輯／檔案管理／搜尋正常閉環 | 排隊 |
 | NEXT | G01 → G02 → G03 → G04 → G05 → G06 | Source Control／中央 Diff／Graph／分支／Worktree | 排隊 |
@@ -125,12 +126,13 @@
 | 日期 | HEAD／Commit | 工作單 | 本輪成果及驗證 | 現況／接續 |
 | --- | --- | --- | --- | --- |
 | 2026-11-12 | `789f2fa00`（建檔前） | PLAN | 重新聚焦六大功能線；依已整合程式、既有文件建立首次盤點，正常 GUI 流程與極端測試分開管理 | **NOW T01**；本輪是計畫落地，未宣稱新功能完成 |
+| 2026-11-12 | `165c79824`（本輪基線；T01 驗收 Commit 為本列所在提交） | T01 | 隔離 Windows GPUI 主、副 Pane `+` 建立兩個 `cmd.exe`；GUI `echo gpuit01primaryok`／`echo gpuit01secondaryok` 均 PASS；Host `terminal list/read` 確認不同 Session／Tab ID、互不串流。GUI 正常關閉、僅測試 Host 停止、fixture Git 狀態未變；既有完整 Cargo 回歸本輪未重跑。[詳見 T01 紀錄](gpui-t01-terminal-two-pane-acceptance-20261112.md) | **T01 完成（正常流程）→ NOW T02**；`supported=false`、不合 main／Push／部署 |
 
 ## 6. 既有實作／Classic 規格來源（保留歷史證據）
 
 - **Classic 互動契約：** [gpui-flutter-classic-ux-parity-20261108.md](gpui-flutter-classic-ux-parity-20261108.md)、[gpui-flutter-interaction-parity-20261108.md](gpui-flutter-interaction-parity-20261108.md)。
 - **最新常用 UI 缺口初盤：** [gpui-native-ui-ux-improvement-plan-20261110.md](gpui-native-ui-ux-improvement-plan-20261110.md)；早期的 PLAN／FAIL 是該版歷史，不直接代表今天仍失敗。
-- **Terminal／Agent：** [gpui-agent-cli-dropdown-parity-20261112.md](gpui-agent-cli-dropdown-parity-20261112.md)（含 real Codex／Claude、主副 Pane、Host Session）；[gpui-terminal-classic-transport-parity-20261109.md](gpui-terminal-classic-transport-parity-20261109.md)。
+- **Terminal／Agent：** [gpui-t01-terminal-two-pane-acceptance-20261112.md](gpui-t01-terminal-two-pane-acceptance-20261112.md)（本次真實 GUI `New Terminal` 雙 Pane 正向驗收）；[gpui-agent-cli-dropdown-parity-20261112.md](gpui-agent-cli-dropdown-parity-20261112.md)（含 real Codex／Claude、主副 Pane、Host Session）；[gpui-terminal-classic-transport-parity-20261109.md](gpui-terminal-classic-transport-parity-20261109.md)。
 - **Git 與中央 Diff：** [gpui-central-diff-branch-audit-20261112.md](gpui-central-diff-branch-audit-20261112.md)、[gpui-source-control-git-graph-parity-20261109.md](gpui-source-control-git-graph-parity-20261109.md)。
 - **設定／Hook：** [gpui-agent-hook-status-notification-parity-20261111.md](gpui-agent-hook-status-notification-parity-20261111.md)、[gpui-dart-component-reuse-tdd-20261109.md](gpui-dart-component-reuse-tdd-20261109.md)。
 - **其他舊里程碑：** [gpui-p0-p1-p2-tdd-closure-20261108.md](gpui-p0-p1-p2-tdd-closure-20261108.md)、[gpui-active-work-ledger-20261107.md](gpui-active-work-ledger-20261107.md)。
