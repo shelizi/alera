@@ -95,6 +95,47 @@ fn terminal_workspaces_and_create_parse_only_explicit_host_id() {
 }
 
 #[test]
+fn terminal_create_agent_requires_explicit_bounded_host_and_installed_agent_identity() {
+    let parsed = Cli::try_parse_from([
+        "alera",
+        "terminal",
+        "--no-start",
+        "--json",
+        "create-agent",
+        "--workspace-id",
+        "workspace-1",
+        "--agent-id",
+        "codex",
+        "--executable-path",
+        "C:/Agents/codex.exe",
+    ])
+    .unwrap();
+    match parsed.command {
+        Command::Terminal(crate::cli::TerminalCommand {
+            no_start: true,
+            action: crate::cli::TerminalAction::CreateAgent(args),
+            ..
+        }) => {
+            assert_eq!(args.workspace_id, "workspace-1");
+            assert_eq!(args.agent_id, "codex");
+            assert_eq!(args.executable_path, "C:/Agents/codex.exe");
+        }
+        other => panic!("unexpected Native create-agent CLI: {other:?}"),
+    }
+    assert!(Cli::try_parse_from([
+        "alera",
+        "terminal",
+        "--no-start",
+        "create-agent",
+        "--workspace-id",
+        "workspace-1",
+        "--agent-id",
+        "codex",
+    ])
+    .is_err());
+}
+
+#[test]
 fn terminal_resize_is_explicit_and_requires_full_viewport() {
     let parsed = Cli::try_parse_from([
         "alera",

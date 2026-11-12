@@ -8,6 +8,8 @@ use std::path::{Path, PathBuf};
 pub struct InstalledAgentCli {
     pub id: String,
     pub display_name: String,
+    /// Concrete path that passed local existence/health checks; not a shell line.
+    pub executable_path: PathBuf,
 }
 
 /// Probe installed, spawnable Agent adapters independently of Host Agent
@@ -215,6 +217,7 @@ fn detect_with<F: Fn(&Path) -> bool, V: Fn(&Path) -> bool>(
             Some(InstalledAgentCli {
                 id: descriptor.id.to_owned(),
                 display_name: descriptor.display_name.to_owned(),
+                executable_path: executable,
             })
         })
         .collect()

@@ -309,13 +309,14 @@ impl RuntimeCliBridge {
             // no stdin payload; both still require --no-start below.
             (Some("workspaces"), false) => args.len() == 1,
             (Some("create"), false) => is_create_terminal_args(args),
+            (Some("create-agent"), false) => is_create_agent_terminal_args(args),
             (Some("resize"), false) => is_resize_terminal_args(args),
             _ => false,
         };
         if !allowed {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
-                "GPUI supports terminal list/read/workspaces/create/explicit write only",
+                "GPUI supports fixed terminal list/read/workspaces/create/create-agent/explicit write only",
             ));
         }
         if !self.runtime_dir.join("host.json").is_file()
@@ -1515,6 +1516,37 @@ fn is_create_terminal_args(args: &[OsString]) -> bool {
         && args[1]
             .to_str()
             .is_some_and(|arg| arg.len() > FLAG.len() && arg.starts_with(FLAG))
+}
+
+fn is_create_agent_terminal_args(args: &[OsString]) -> bool {
+    if args.len() != 4 {
+        return false;
+    }
+    let workspace = args[1]
+        .to_str()
+        .and_then(|s| s.strip_prefix("--workspace-id="));
+    let agent = args[2].to_str().and_then(|s| s.strip_prefix("--agent-id="));
+    let executable = args[3]
+        .to_str()
+        .and_then(|s| s.strip_prefix("--executable-path="));
+    let valid_id = workspace.is_some_and(|id| {
+        !id.is_empty()
+            && id.len() <= 256
+            && id.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':')
+            })
+    });
+    valid_id
+        && agent.is_some_and(|id| {
+            alera_core::agent_descriptor::agent_descriptor(id).is_some_and(|desc| desc.id == id)
+        })
+        && executable.is_some_and(|value| {
+            !value.is_empty()
+                && value.len() <= 1024
+                && !value.chars().any(|c| c.is_control())
+                && Path::new(value).is_absolute()
+                && Path::new(value).is_file()
+        })
 }
 
 fn is_resize_terminal_args(args: &[OsString]) -> bool {

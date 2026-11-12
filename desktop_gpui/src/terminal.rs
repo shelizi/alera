@@ -276,6 +276,20 @@ impl RuntimeCliBridge {
         parse_created_terminal(&response, workspace_id)
     }
 
+    /// Host-owned direct launch of a canonical installed Agent. Unlike
+    /// `tab create`, the authenticated terminal request has no offline-store
+    /// fallback. The response is still corroborated by the session list.
+    pub fn create_agent_terminal(
+        &self,
+        workspace_id: &str,
+        agent_id: &str,
+        executable: &str,
+    ) -> io::Result<CreatedHostTerminal> {
+        let args = create_agent_terminal_verb(workspace_id, agent_id, executable)?;
+        let response = self.terminal_json(&args)?;
+        parse_created_agent_terminal(&response, workspace_id, agent_id, executable)
+    }
+
     /// Request only explicit dimensions for an already known Host terminal.
     /// Host mobile-driver lease semantics may defer actual PTY resizing.
     pub fn resize_terminal(&self, handle: &str, cols: u16, rows: u16) -> io::Result<()> {
@@ -544,6 +558,47 @@ pub fn create_terminal_verb(workspace_id: &str) -> io::Result<Vec<OsString>> {
     Ok(vec![
         OsString::from("create"),
         OsString::from(format!("--workspace-id={workspace_id}")),
+    ])
+}
+
+/// Never accept generic commands from menu text. The Host derives the
+/// launch command from the common descriptor registry and checks overrides.
+pub fn create_agent_terminal_verb(
+    workspace_id: &str,
+    agent_id: &str,
+    executable: &str,
+) -> io::Result<Vec<OsString>> {
+    if !valid_host_id(workspace_id) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Invalid Host workspace",
+        ));
+    }
+    if !alera_core::agent_descriptor::agent_descriptor(agent_id)
+        .is_some_and(|descriptor| descriptor.id == agent_id)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Unknown Agent type",
+        ));
+    }
+    let path = Path::new(executable);
+    if executable.is_empty()
+        || executable.len() > 1024
+        || executable.chars().any(|ch| ch.is_control())
+        || !path.is_absolute()
+        || !path.is_file()
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Invalid Agent executable",
+        ));
+    }
+    Ok(vec![
+        OsString::from("create-agent"),
+        OsString::from(format!("--workspace-id={workspace_id}")),
+        OsString::from(format!("--agent-id={agent_id}")),
+        OsString::from(format!("--executable-path={executable}")),
     ])
 }
 
@@ -818,6 +873,41 @@ pub fn parse_created_terminal(
         workspace_id: expected_workspace_id.to_string(),
         tab_id: tab_id.to_string(),
     })
+}
+
+/// A direct-Agent Host create reply must corroborate the exact requested
+/// adapter and executable in its persisted tab payload, in addition to its
+/// workspace/tab/session identity. A running PTY without Hook presence may
+/// attach only after this stronger verification succeeds.
+pub fn parse_created_agent_terminal(
+    value: &Value,
+    expected_workspace_id: &str,
+    expected_agent_id: &str,
+    expected_executable: &str,
+) -> io::Result<CreatedHostTerminal> {
+    let created = parse_created_terminal(value, expected_workspace_id)?;
+    let tab = value
+        .get("tab")
+        .ok_or_else(|| invalid("Agent create response has no tab"))?;
+    let payload = tab
+        .get("payload")
+        .ok_or_else(|| invalid("Agent create response has no payload"))?;
+    let exact_agent = payload.get("agentType").and_then(Value::as_str) == Some(expected_agent_id);
+    let exact_executable = payload
+        .pointer("/initialManagedAgentLaunch/executable")
+        .and_then(Value::as_str)
+        == Some(expected_executable);
+    let no_unrequested_arguments = payload
+        .pointer("/initialManagedAgentLaunch/arguments")
+        .and_then(Value::as_array)
+        .is_some_and(Vec::is_empty);
+    let host_spawn_requested = payload.get("spawnOnCreate").and_then(Value::as_bool) == Some(true);
+    if !exact_agent || !exact_executable || !no_unrequested_arguments || !host_spawn_requested {
+        return Err(invalid(
+            "Host Agent tab does not match the requested adapter and executable",
+        ));
+    }
+    Ok(created)
 }
 
 fn invalid(message: &str) -> io::Error {
@@ -1460,13 +1550,52 @@ impl TerminalCreateFlow {
         &mut self,
         sessions: &[TerminalSession],
     ) -> Option<CreatedHostTerminal> {
+        self.confirm_sessions_with_agent(sessions, None)
+    }
+
+    /// Call only after parse_created_agent_terminal corroborates the Host's
+    /// persisted Agent type and executable. Hook presence can arrive later.
+    /// A running PTY with the exact Host identity and no Hook report is safe
+    /// to show, but a stopped session or conflicting Hook type is not.
+    pub fn confirm_sessions_with_host_verified_agent(
+        &mut self,
+        sessions: &[TerminalSession],
+        expected_agent: &str,
+    ) -> Option<CreatedHostTerminal> {
         let TerminalCreatePhase::Awaiting { created, .. } = &self.phase else {
             return None;
         };
-        if !sessions
-            .iter()
-            .any(|session| created.matches_live_session(session))
-        {
+        if !sessions.iter().any(|session| {
+            created.matches_live_session(session)
+                && session.running
+                && session
+                    .agent_type
+                    .as_deref()
+                    .is_none_or(|reported| reported == expected_agent)
+        }) {
+            return None;
+        }
+        let confirmed = created.clone();
+        self.phase = TerminalCreatePhase::Idle;
+        Some(confirmed)
+    }
+
+    /// Strict Hook-confirmed adapter matching for callers that have not
+    /// verified a direct Agent create response. Ordinary terminals unchanged.
+    pub fn confirm_sessions_with_agent(
+        &mut self,
+        sessions: &[TerminalSession],
+        expected_agent: Option<&str>,
+    ) -> Option<CreatedHostTerminal> {
+        let TerminalCreatePhase::Awaiting { created, .. } = &self.phase else {
+            return None;
+        };
+        if !sessions.iter().any(|session| {
+            created.matches_live_session(session)
+                && expected_agent.is_none_or(|agent| {
+                    session.running && session.agent_type.as_deref() == Some(agent)
+                })
+        }) {
             return None;
         }
         let confirmed = created.clone();
@@ -2787,6 +2916,115 @@ mod tests {
             running: true,
             text: text.into(),
         }
+    }
+
+    #[test]
+    fn direct_agent_launch_uses_only_canonical_adapter_with_verified_executable() {
+        let current_exe = std::env::current_exe().unwrap();
+        let exe = current_exe.to_string_lossy().into_owned();
+        let args = create_agent_terminal_verb("ws-123", "codex", &exe).unwrap();
+        assert_eq!(args[0], "create-agent");
+        assert_eq!(args[1], "--workspace-id=ws-123");
+        assert_eq!(args[2], "--agent-id=codex");
+        assert_eq!(
+            args[3].to_str(),
+            Some(format!("--executable-path={exe}").as_str())
+        );
+        assert!(create_agent_terminal_verb("../bad", "codex", &exe).is_err());
+        assert!(create_agent_terminal_verb("ws-123", "unknown", &exe).is_err());
+        assert!(create_agent_terminal_verb("ws-123", "claude", "./relative.exe").is_err());
+        assert!(create_agent_terminal_verb("ws-123", "claude", "C:/missing.exe").is_err());
+    }
+
+    #[test]
+    fn direct_agent_reply_must_bind_host_tab_type_and_executable_before_session_attach() {
+        let exe = std::env::current_exe().unwrap();
+        let exe = exe.to_string_lossy().into_owned();
+        let response = serde_json::json!({
+            "tab": {
+                "id": "tab-pty-1",
+                "workspaceId": "workspace-1",
+                "kind": "terminal",
+                "payload": {
+                    "terminalSessionId": "pty-1",
+                    "agentType": "codex",
+                    "spawnOnCreate": true,
+                    "initialManagedAgentLaunch": {"executable": exe, "arguments":[]}
+                }
+            },
+            "attachment": {"sessionId": "pty-1", "workspaceId":"workspace-1", "tabId":"tab-pty-1"}
+        });
+        let expected =
+            parse_created_agent_terminal(&response, "workspace-1", "codex", &exe).unwrap();
+        assert_eq!(expected.handle, "pty-1");
+        assert_eq!(expected.tab_id, "tab-pty-1");
+        for wrong in ["claude", "unknown-agent"] {
+            assert!(parse_created_agent_terminal(&response, "workspace-1", wrong, &exe).is_err());
+        }
+        let mut swapped = response.clone();
+        swapped["tab"]["payload"]["initialManagedAgentLaunch"]["executable"] =
+            serde_json::json!("C:/wrong-agent.exe");
+        assert!(parse_created_agent_terminal(&swapped, "workspace-1", "codex", &exe).is_err());
+        swapped = response.clone();
+        swapped["tab"]["payload"]["agentType"] = serde_json::Value::Null;
+        assert!(parse_created_agent_terminal(&swapped, "workspace-1", "codex", &exe).is_err());
+        swapped = response.clone();
+        swapped["attachment"]["sessionId"] = serde_json::json!("other-pty");
+        assert!(parse_created_agent_terminal(&swapped, "workspace-1", "codex", &exe).is_err());
+    }
+
+    #[test]
+    fn direct_agent_hook_delay_can_confirm_running_pty_only_after_verified_reply() {
+        let mut flow = TerminalCreateFlow::default();
+        let request = flow.start_request().unwrap();
+        let mut sess = session("pty-no-hook");
+        sess.agent_type = None;
+        let created = CreatedHostTerminal {
+            handle: sess.handle.clone(),
+            workspace_id: sess.workspace_id.clone(),
+            tab_id: sess.tab_id.clone(),
+        };
+        assert!(flow.finish_request(request, created.clone()));
+        assert_eq!(
+            flow.confirm_sessions_with_host_verified_agent(&[sess.clone()], "codex"),
+            Some(created.clone()),
+            "A Host-verified Agent PTY must not block on delayed Hook presence",
+        );
+        let mut stopped = sess.clone();
+        stopped.running = false;
+        let mut flow = TerminalCreateFlow::default();
+        let request = flow.start_request().unwrap();
+        assert!(flow.finish_request(request, created.clone()));
+        assert!(flow
+            .confirm_sessions_with_host_verified_agent(&[stopped], "codex")
+            .is_none());
+        let mut mismatch = sess;
+        mismatch.agent_type = Some("claude".into());
+        assert!(flow
+            .confirm_sessions_with_host_verified_agent(&[mismatch], "codex")
+            .is_none());
+        assert!(flow.is_waiting());
+    }
+
+    #[test]
+    fn direct_agent_confirmation_requires_correct_running_agent_not_only_same_host_tab() {
+        let mut flow = TerminalCreateFlow::default();
+        let request = flow.start_request().unwrap();
+        let sess = session("pty-1");
+        let created = CreatedHostTerminal {
+            handle: sess.handle.clone(),
+            workspace_id: sess.workspace_id.clone(),
+            tab_id: sess.tab_id.clone(),
+        };
+        assert!(flow.finish_request(request, created.clone()));
+        assert!(flow
+            .confirm_sessions_with_agent(&[sess.clone()], Some("claude"))
+            .is_none());
+        assert!(flow.is_waiting());
+        assert_eq!(
+            flow.confirm_sessions_with_agent(&[sess], Some("codex")),
+            Some(created)
+        );
     }
 
     #[test]

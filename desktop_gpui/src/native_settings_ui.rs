@@ -170,6 +170,73 @@ impl Workbench {
         );
     }
 
+    /// Native-only executable override; Host and Classic preferences remain
+    /// untouched. Validate/write/read back under the store's local CAS lock
+    /// on a worker thread, never while painting or holding a GPUI Window.
+    fn save_native_agent_executable_path(&mut self, clear: bool, cx: &mut Context<Self>) {
+        if self.agent_override_busy {
+            return;
+        }
+        let Some(id) = self.agent_override_selected_id.clone() else {
+            self.agent_override_status = "Select an Agent type first".into();
+            cx.notify();
+            return;
+        };
+        let Some(store) = self.native_settings_store.clone() else {
+            self.agent_override_status = "Native settings are not available".into();
+            cx.notify();
+            return;
+        };
+        let proposed = (!clear)
+            .then(|| self.agent_override_input.read(cx).query().trim().to_owned())
+            .filter(|path| !path.is_empty());
+        let expected = self
+            .native_settings
+            .agent_executable_paths
+            .get(&id)
+            .cloned();
+        self.agent_override_request = self.agent_override_request.wrapping_add(1);
+        let request = self.agent_override_request;
+        self.agent_override_busy = true;
+        self.agent_override_status = "Validating local Agent executable…".into();
+        cx.spawn(async move |view, cx| {
+            let result = cx.background_spawn(async move {
+                store.compare_and_set_agent_executable_path(
+                    &id, expected.as_deref(), proposed.as_deref(),
+                )
+            }).await;
+            view.update(cx, |view, cx| {
+                if view.agent_override_request != request {
+                    return;
+                }
+                view.agent_override_busy = false;
+                match result {
+                    Ok(updated) => {
+                        view.native_settings = updated;
+                        if clear {
+                            view.agent_override_input.update(cx, |input, cx| input.clear(cx));
+                        }
+                        view.agent_override_status = "Agent executable preference saved".into();
+                        view.model.set_status("Local Agent executable setting updated");
+                        // Cancel any older PATH scan started before the setting
+                        // was saved; it must not overwrite the new detection.
+                        view.installed_agent_clis_loading = false;
+                        view.installed_agent_clis_request =
+                            view.installed_agent_clis_request.wrapping_add(1);
+                        view.refresh_installed_agent_clis(cx);
+                    }
+                    Err(error) => {
+                        view.agent_override_status = format!(
+                            "Could not save Agent executable: {error}. Use a real absolute executable file.",
+                        );
+                    }
+                }
+                cx.notify();
+            }).ok();
+        }).detach();
+        cx.notify();
+    }
+
     pub(super) fn native_settings_bool_row(
         &self,
         label: &'static str,
@@ -526,6 +593,77 @@ impl Workbench {
                         "Loading Host Agent Profiles…".to_owned()
                     } else {
                         self.agent_status.clone()
+                    },
+                ))
+                .child(div().mt_3().text_sm().child("Local Agent executables (Classic parity)"))
+                .child(div().text_xs().text_color(rgb(MUTED)).child(
+                    "Choose an Agent, then set an absolute executable file path. Blank uses PATH. Native-only; does not change Classic or Host Profiles.",
+                ))
+                .children(alera_core::agent_descriptor::AGENT_DESCRIPTORS
+                    .iter()
+                    .enumerate()
+                    .map(|(index, descriptor)| {
+                        let id = descriptor.id.to_owned();
+                        let is_selected = self.agent_override_selected_id.as_deref() == Some(descriptor.id);
+                        let path = self.native_settings.agent_executable_paths.get(descriptor.id);
+                        let label = format!(
+                            "{} {} · {}",
+                            if is_selected { "●" } else { "○" },
+                            descriptor.display_name,
+                            path.map(|path| {
+                                if path.chars().count() > 72 {
+                                    format!("{}…", path.chars().take(70).collect::<String>())
+                                } else {
+                                    path.clone()
+                                }
+                            }).unwrap_or_else(|| "Auto PATH".into()),
+                        );
+                        div()
+                            .id(("agent-executable-row", index))
+                            .cursor_pointer()
+                            .text_xs()
+                            .text_color(rgb(if is_selected { TEXT } else { MUTED }))
+                            .hover(|style| style.bg(rgb(ACTIVE)))
+                            .p_1()
+                            .child(label)
+                            .on_click(cx.listener(move |view, _, _, cx| {
+                                let path = view.native_settings.agent_executable_paths.get(&id)
+                                    .cloned().unwrap_or_default();
+                                view.agent_override_selected_id = Some(id.clone());
+                                view.agent_override_input.update(cx, |input, cx| {
+                                    input.set_query(&path, cx);
+                                });
+                                view.agent_override_status = format!("Selected {id}: edit or clear its local executable");
+                                cx.notify();
+                            }))
+                    }))
+                .child(self.agent_override_input.clone())
+                .child(div()
+                    .flex()
+                    .gap_3()
+                    .child(div()
+                        .id("native-agent-executable-save")
+                        .cursor_pointer()
+                        .text_sm()
+                        .text_color(rgb(if self.agent_override_busy { MUTED } else { TEXT }))
+                        .child("Save executable path")
+                        .on_click(cx.listener(|view, _, _, cx| {
+                            view.save_native_agent_executable_path(false, cx);
+                        })))
+                    .child(div()
+                        .id("native-agent-executable-clear")
+                        .cursor_pointer()
+                        .text_sm()
+                        .text_color(rgb(TEXT))
+                        .child("Clear override")
+                        .on_click(cx.listener(|view, _, _, cx| {
+                            view.save_native_agent_executable_path(true, cx);
+                        }))))
+                .child(div().text_xs().text_color(rgb(MUTED)).child(
+                    if self.agent_override_busy {
+                        "Saving Native Agent executable…".to_owned()
+                    } else {
+                        self.agent_override_status.clone()
                     },
                 ))
                 .into_any_element(),

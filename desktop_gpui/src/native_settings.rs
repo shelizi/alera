@@ -4,6 +4,7 @@
 use crate::explorer_visibility::ExplorerVisibilityOptions;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
@@ -44,6 +45,10 @@ pub struct NativeSettings {
     /// get/update and never copied from Classic's Agent Profile catalog.
     #[serde(default)]
     pub default_agent_profile_id: Option<String>,
+    /// Native-local overrides for the same canonical Agent adapters as Classic.
+    /// Never overwrite/read Classic's private Flutter preferences.
+    #[serde(default)]
+    pub agent_executable_paths: BTreeMap<String, String>,
 }
 
 impl Default for NativeSettings {
@@ -64,6 +69,7 @@ impl Default for NativeSettings {
             confirm_workspace_removal: true,
             auto_archive_workspaces_after_days: 0,
             default_agent_profile_id: None,
+            agent_executable_paths: BTreeMap::new(),
         }
     }
 }
@@ -277,6 +283,20 @@ impl NativeSettings {
                 "Invalid Native settings document",
             ));
         }
+        if self.agent_executable_paths.len() > 12
+            || self.agent_executable_paths.iter().any(|(id, path)| {
+                alera_core::agent_descriptor::agent_descriptor(id)
+                    .is_none_or(|descriptor| descriptor.id != id)
+                    || path.len() > 1024
+                    || path.contains(['\0', '\n', '\r'])
+                    || !Path::new(path).is_absolute()
+            })
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Invalid Native Agent executable override map",
+            ));
+        }
         Ok(())
     }
 
@@ -435,6 +455,55 @@ impl NativeSettingsStore {
 
     /// Native-local CAS for the default Agent Profile. This setting cannot
     /// be accessed through the Host's scalar MCP settings allowlist.
+    pub fn compare_and_set_agent_executable_path(
+        &self,
+        agent_id: &str,
+        expected: Option<&str>,
+        next: Option<&str>,
+    ) -> io::Result<NativeSettings> {
+        if alera_core::agent_descriptor::agent_descriptor(agent_id)
+            .is_none_or(|descriptor| descriptor.id != agent_id)
+            || next.is_some_and(|path| {
+                path.len() > 1024
+                    || path.contains(['\0', '\n', '\r'])
+                    || !Path::new(path).is_absolute()
+                    || !Path::new(path).is_file()
+            })
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Invalid Agent executable path",
+            ));
+        }
+        let _lock = self.lock()?;
+        let mut settings = self.read()?;
+        if settings
+            .agent_executable_paths
+            .get(agent_id)
+            .map(String::as_str)
+            != expected
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "Agent executable path was changed by another window",
+            ));
+        }
+        if let Some(next) = next.filter(|next| !next.is_empty()) {
+            settings
+                .agent_executable_paths
+                .insert(agent_id.into(), next.into());
+        } else {
+            settings.agent_executable_paths.remove(agent_id);
+        }
+        settings.validate()?;
+        self.persist(&settings)?;
+        let readback = self.read()?;
+        if readback.agent_executable_paths != settings.agent_executable_paths {
+            return Err(io::Error::other("Agent executable path readback mismatch"));
+        }
+        Ok(readback)
+    }
+
     pub fn compare_and_set_default_agent_profile(
         &self,
         expected: Option<&str>,
@@ -835,6 +904,43 @@ mod tests {
         let reloaded = store.read().unwrap();
         assert_eq!(reloaded.explorer_show_hidden, next.show_hidden);
         assert!(reloaded.explorer_show_ignored);
+    }
+
+    #[test]
+    fn native_agent_executable_overrides_are_cas_local_only_and_legacy_compatible() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = NativeSettingsStore::new(dir.path());
+        assert!(store.read().unwrap().agent_executable_paths.is_empty());
+        let executable = std::env::current_exe().unwrap();
+        let path = executable.to_str().unwrap();
+        let saved = store
+            .compare_and_set_agent_executable_path("claude", None, Some(path))
+            .unwrap();
+        assert_eq!(
+            saved
+                .agent_executable_paths
+                .get("claude")
+                .map(String::as_str),
+            Some(path)
+        );
+        assert!(store
+            .compare_and_set_agent_executable_path("claude", None, Some(path))
+            .is_err());
+        assert!(store
+            .compare_and_set_agent_executable_path("claude", Some(path), Some("relative.exe"))
+            .is_err());
+        assert!(store
+            .compare_and_set_agent_executable_path("unknown", None, Some(path))
+            .is_err());
+        assert!(store
+            .compare_and_set_agent_executable_path("claude", Some(path), Some("x\nabc"))
+            .is_err());
+        assert_eq!(store.read().unwrap().agent_executable_paths["claude"], path);
+        assert!(store
+            .compare_and_set_agent_executable_path("claude", Some(path), None)
+            .unwrap()
+            .agent_executable_paths
+            .is_empty());
     }
 
     #[test]

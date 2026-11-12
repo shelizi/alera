@@ -30,6 +30,22 @@ impl RuntimeCliBridge {
     /// existing checkout of one unique Runtime project. No Git worktree
     /// creation or deletion is permitted by this path.
     pub fn create_terminal_for_workspace(&self, root: &Path) -> io::Result<CreatedHostTerminal> {
+        let workspace_id = self.ensure_host_workspace_for_explicit_terminal(root)?;
+        self.create_terminal(&workspace_id)
+    }
+
+    /// Explicit New Agent action shares Host start/registered-checkout guards.
+    pub fn create_agent_terminal_for_workspace(
+        &self,
+        root: &Path,
+        agent_id: &str,
+        executable: &str,
+    ) -> io::Result<CreatedHostTerminal> {
+        let workspace_id = self.ensure_host_workspace_for_explicit_terminal(root)?;
+        self.create_agent_terminal(&workspace_id, agent_id, executable)
+    }
+
+    fn ensure_host_workspace_for_explicit_terminal(&self, root: &Path) -> io::Result<String> {
         let active = dunce::canonicalize(root)?;
         if active != root || !active.is_dir() {
             return Err(io::Error::new(
@@ -57,7 +73,7 @@ impl RuntimeCliBridge {
             }
             Err(error) => return Err(error),
         };
-        self.create_terminal(&workspace_id)
+        Ok(workspace_id)
     }
 
     /// Explicit runtime start can detach a persistent Host that retains the

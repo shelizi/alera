@@ -147,6 +147,9 @@ pub enum TerminalAction {
     Workspaces,
     /// Create a new Runtime Host terminal in an existing Workspace.
     Create(TerminalCreateArgs),
+    /// Explicitly launch an installed Agent inside a Host-owned terminal Tab.
+    /// No saved Agent Profile is required; requires --no-start.
+    CreateAgent(TerminalCreateAgentArgs),
     /// Resize an existing Host terminal without claiming mobile driver lease.
     Resize(TerminalResizeArgs),
     /// List live terminal sessions.
@@ -170,6 +173,17 @@ pub struct TerminalCreateArgs {
     /// Host Workspace ID only; a filesystem path is not accepted.
     #[arg(long = "workspace-id")]
     pub workspace_id: String,
+}
+
+#[derive(Debug, Args)]
+pub struct TerminalCreateAgentArgs {
+    #[arg(long = "workspace-id")]
+    pub workspace_id: String,
+    #[arg(long = "agent-id")]
+    pub agent_id: String,
+    /// Executable path selected by Native's local Agent detector (not shell text).
+    #[arg(long = "executable-path")]
+    pub executable_path: String,
 }
 
 #[derive(Debug, Args)]

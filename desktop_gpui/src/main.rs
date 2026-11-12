@@ -78,9 +78,7 @@ use alera_gpui_desktop::history_sync_bridge::{
 use alera_gpui_desktop::host_tab_pins::{
     host_pin_owner_coverage, host_pin_query_workspaces, HostPinOwnerCoverage, HostTabPinSnapshot,
 };
-use alera_gpui_desktop::local_agent_detection::{
-    detect_installed_agent_clis, matching_host_profile_for_agent, InstalledAgentCli,
-};
+use alera_gpui_desktop::local_agent_detection::{detect_installed_agent_clis, InstalledAgentCli};
 use alera_gpui_desktop::mcp_ui_bridge::{
     matching_host_tab_handle, NativeMcpUiBridge, NativeMcpUiCommand, NativeMcpUiEvent,
 };
@@ -433,6 +431,7 @@ struct ExplorerContextMenu {
 struct PendingTerminalPane {
     request_id: u64,
     target: PaneAttachGuard,
+    expected_agent_id: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -686,6 +685,11 @@ struct Workbench {
     agent_profiles_request: u64,
     agent_selected_profile: Option<String>,
     agent_prompt_input: Entity<QuickOpenInput>,
+    agent_override_selected_id: Option<String>,
+    agent_override_input: Entity<QuickOpenInput>,
+    agent_override_busy: bool,
+    agent_override_request: u64,
+    agent_override_status: String,
     agent_launch_busy: bool,
     agent_launch_request: u64,
     agent_pending_tab: Option<LaunchedAgentTab>,
@@ -6184,9 +6188,15 @@ impl Workbench {
         self.installed_agent_clis_loading = true;
         self.installed_agent_clis_request = self.installed_agent_clis_request.wrapping_add(1);
         let request = self.installed_agent_clis_request;
+        let paths = self
+            .native_settings
+            .agent_executable_paths
+            .clone()
+            .into_iter()
+            .collect::<HashMap<_, _>>();
         cx.spawn(async move |view, cx| {
             let found = cx
-                .background_spawn(async move { detect_installed_agent_clis(&HashMap::new()) })
+                .background_spawn(async move { detect_installed_agent_clis(&paths) })
                 .await;
             view.update(cx, |view, cx| {
                 if view.installed_agent_clis_request != request {
@@ -6262,17 +6272,13 @@ impl Workbench {
         cx.notify();
     }
 
-    /// The + menu selects a real Host Agent Profile and opens the existing
-    /// task composer; it never launches an Agent before a task is submitted.
-    /// Choosing a detected local CLI is not permission to synthesize a Host
-    /// profile, spawn a PTY, or execute arbitrary paths. If a configured Host
-    /// profile of the same adapter exists, use its existing confirmation path;
-    /// otherwise explain the currently unsupported Native launch route.
+    /// Classic's installed Agent menu starts a Host-owned PTY for the chosen
+    /// adapter immediately. Configured Host Profiles remain a distinct entry.
     fn prepare_detected_agent_in_pane(
         &mut self,
         agent_id: &str,
         target: &PaneAttachGuard,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if !target.still_valid(self.workspace_generation, &self.mixed_panes) {
@@ -6280,37 +6286,17 @@ impl Workbench {
             cx.notify();
             return;
         }
-        let Some(agent) = self
+        if !self
             .installed_agent_clis
             .iter()
-            .find(|item| item.id == agent_id)
-        else {
+            .any(|agent| agent.id == agent_id)
+        {
             self.model
-                .set_status("Agent availability changed; refresh New Tab");
+                .set_status("Agent availability changed; rescan installed Agents");
             cx.notify();
             return;
-        };
-        if let Some(profile_id) = matching_host_profile_for_agent(
-            agent_id,
-            &self.agent_profiles,
-            self.native_settings.default_agent_profile_id.as_deref(),
-        )
-        .map(|profile| profile.id.clone())
-        {
-            self.prepare_agent_in_pane(&profile_id, target, window, cx);
-            return;
         }
-        let name = agent.display_name.clone();
-        self.agent_launch_pane = None;
-        self.agent_selected_profile = None;
-        self.runtime_details_open = true;
-        self.agent_status = format!(
-            "{name} is installed locally; configure a Host Agent Profile to launch it in Native"
-        );
-        self.model.set_status(format!(
-            "{name} detected; Native launch requires a Host Agent Profile"
-        ));
-        cx.notify();
+        self.create_host_agent_in_pane(target.clone(), agent_id.to_owned(), cx);
     }
 
     fn prepare_agent_in_pane(
@@ -6433,6 +6419,24 @@ impl Workbench {
     }
 
     fn create_host_terminal_in_pane(&mut self, target: PaneAttachGuard, cx: &mut Context<Self>) {
+        self.create_host_terminal_targeted(target, None, cx);
+    }
+
+    fn create_host_agent_in_pane(
+        &mut self,
+        target: PaneAttachGuard,
+        agent_id: String,
+        cx: &mut Context<Self>,
+    ) {
+        self.create_host_terminal_targeted(target, Some(agent_id), cx);
+    }
+
+    fn create_host_terminal_targeted(
+        &mut self,
+        target: PaneAttachGuard,
+        agent_id: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
         if !target.still_valid(self.workspace_generation, &self.mixed_panes) {
             self.terminals.status = "Workbench pane changed; reopen the New Tab menu".into();
             cx.notify();
@@ -6453,19 +6457,43 @@ impl Workbench {
             // primary status bar must still explain why explicit New Terminal
             // could not create a tab; never start a Host during smoke tests.
             self.terminals.status = "Alera CLI missing; cannot create Host terminal".into();
-            self.model
-                .set_status("New Terminal unavailable: Alera CLI not found");
+            self.model.set_status(if agent_id.is_some() {
+                "New Agent unavailable: Alera CLI not found"
+            } else {
+                "New Terminal unavailable: Alera CLI not found"
+            });
             cx.notify();
             return;
         };
         let root = self.model.root().to_path_buf();
+        let agent_executable = agent_id.as_deref().and_then(|id| {
+            self.installed_agent_clis
+                .iter()
+                .find(|agent| agent.id == id)
+                .map(|agent| agent.executable_path.to_string_lossy().into_owned())
+        });
+        if agent_id.is_some() && agent_executable.is_none() {
+            self.model
+                .set_status("Installed Agent executable is no longer available; rescan");
+            cx.notify();
+            return;
+        }
+        let is_agent = agent_id.is_some();
         let generation = self.workspace_generation;
         let Some(request_id) = self.terminal_create_flow.start_request() else {
             return;
         };
-        self.terminal_create_pane = Some(PendingTerminalPane { request_id, target });
-        self.terminals.status =
-            "Checking registered Host workspaces before creating terminal…".into();
+        self.terminal_create_pane = Some(PendingTerminalPane {
+            request_id,
+            target,
+            expected_agent_id: agent_id.clone(),
+        });
+        self.terminals.status = if is_agent {
+            "Checking registered Host workspace before launching Agent…"
+        } else {
+            "Checking registered Host workspaces before creating terminal…"
+        }
+        .into();
         cx.notify();
         cx.spawn(async move |view, cx| {
             let result = cx
@@ -6473,7 +6501,15 @@ impl Workbench {
                     // Explicit New Terminal may start the existing CLI Host
                     // and register this *already existing* checkout. Passive
                     // refresh/read/write still never start a Host or PTY.
-                    bridge.create_terminal_for_workspace(&root)
+                    if let Some(agent_id) = agent_id {
+                        bridge.create_agent_terminal_for_workspace(
+                            &root,
+                            &agent_id,
+                            agent_executable.as_deref().expect("checked installed executable before creating Host Agent"),
+                        )
+                    } else {
+                        bridge.create_terminal_for_workspace(&root)
+                    }
                 })
                 .await;
             view.update(cx, |view, cx| {
@@ -6491,9 +6527,14 @@ impl Workbench {
                             return;
                         }
                         view.center_view = CenterView::Terminal;
-                        view.terminals.status =
+                        view.terminals.status = if is_agent {
+                            "Host Agent started; confirming session identity (30s limit)…"
+                        } else {
                             "Host terminal created; confirming session identity (30s limit)…"
-                                .into();
+                        }.into();
+                        if is_agent {
+                            view.model.set_status("Agent starting; confirming Host session identity");
+                        }
                         view.refresh_terminals(cx);
                     }
                     Err(error) => {
@@ -6515,6 +6556,11 @@ impl Workbench {
                         } else {
                             format!("Cannot create Host terminal: {error}")
                         };
+                        if is_agent {
+                            view.model.set_status(
+                                "Agent launch not confirmed; check existing Host sessions before retry",
+                            );
+                        }
                     }
                 }
                 cx.notify();
@@ -6593,10 +6639,25 @@ impl Workbench {
                             view.observe_agent_notification_status();
                             view.restore_terminal_layout_from_host(cx);
                             view.refresh_host_tab_pins(cx);
-                            if let Some(created) = view
-                                .terminal_create_flow
-                                .confirm_sessions(&view.terminals.sessions)
-                            {
+                            // Direct Agent PTYs may start before Hooks report
+                            // presence. Their typed Host create reply was
+                            // corroborated before entering Awaiting, so only
+                            // the exact live triple is needed; conflicting
+                            // Hook agent types still fail closed. Plain
+                            // terminals retain the original identity gate.
+                            let direct_agent = view.terminal_create_pane.as_ref()
+                                .and_then(|pending| pending.expected_agent_id.as_deref());
+                            let confirmed = if let Some(agent_id) = direct_agent {
+                                view.terminal_create_flow.confirm_sessions_with_host_verified_agent(
+                                    &view.terminals.sessions,
+                                    agent_id,
+                                )
+                            } else {
+                                view.terminal_create_flow.confirm_sessions(
+                                    &view.terminals.sessions,
+                                )
+                            };
+                            if let Some(created) = confirmed {
                                 // Never redirect a delayed Host create result to
                                 // whichever pane currently has global focus.
                                 // Only the exact authenticated Host triple may
@@ -13694,6 +13755,16 @@ fn main() {
                             agent_prompt_input: cx.new(|cx| {
                                 QuickOpenInput::with_placeholder("Task for selected Agent…", cx)
                             }),
+                            agent_override_selected_id: Some("codex".into()),
+                            agent_override_input: cx.new(|cx| {
+                                QuickOpenInput::with_placeholder(
+                                    "Absolute Agent executable path…",
+                                    cx,
+                                )
+                            }),
+                            agent_override_busy: false,
+                            agent_override_request: 0,
+                            agent_override_status: String::new(),
                             agent_launch_busy: false,
                             agent_launch_request: 0,
                             agent_pending_tab: None,
