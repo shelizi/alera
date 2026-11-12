@@ -4,6 +4,7 @@
 
 use alera_core::child_process::windowless_command;
 use alera_gpui_desktop::runtime_bridge::{RuntimeCliBridge, RuntimeStatus};
+use alera_gpui_desktop::session::PreviewSessionStore;
 use alera_gpui_desktop::terminal::TerminalCreateFlow;
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -64,6 +65,11 @@ fn explicit_new_terminal_starts_host_registers_checkout_and_reads_pty() {
 
     let bridge = RuntimeCliBridge::new(&cli, &runtime);
     assert_eq!(bridge.probe().unwrap(), RuntimeStatus::Stopped);
+    // Native writes this intent BEFORE calling create. A GUI crash after the
+    // Host creates the PTY must not turn a new window into another create.
+    let gui_state = temp.path().join("native-state");
+    let first_view = PreviewSessionStore::new(&gui_state);
+    let intent = first_view.reserve_host_create(&root, None).unwrap();
     let created = bridge
         .create_terminal_for_workspace(&root)
         .expect("user-selected New Terminal must bootstrap existing project");
@@ -93,6 +99,46 @@ fn explicit_new_terminal_starts_host_registers_checkout_and_reads_pty() {
         );
         std::thread::sleep(Duration::from_millis(100));
     }
+
+    // Simulate losing the GUI after Host creation but before the response is
+    // processed. The new GUI must only LIST this existing Host PTY.
+    drop(first_view);
+    let restarted_view = PreviewSessionStore::new(&gui_state);
+    assert_eq!(
+        restarted_view.pending_host_create(&root).unwrap(),
+        Some(intent.clone())
+    );
+    assert_eq!(
+        restarted_view
+            .reserve_host_create(&root, None)
+            .unwrap_err()
+            .kind(),
+        std::io::ErrorKind::AlreadyExists,
+        "recovered Native GUI must not spawn another PTY"
+    );
+    let mut recovered_flow = TerminalCreateFlow::default();
+    assert!(recovered_flow.restore_outcome_unknown());
+    assert!(recovered_flow.start_request().is_none());
+    let sessions = bridge.list_terminals().unwrap();
+    assert_eq!(
+        sessions.iter().filter(|session| session.running).count(),
+        1,
+        "Host may retain exactly one terminal from the original create"
+    );
+    assert!(sessions
+        .iter()
+        .any(|session| created.matches_live_session(session)));
+    assert!(
+        recovered_flow.confirm_sessions(&sessions).is_none(),
+        "an unresolved journal is NOT authorization to auto-attach an arbitrary Host session"
+    );
+    // Explicit acknowledgement is permitted only after authenticated list.
+    restarted_view.resolve_host_create(&root, &intent).unwrap();
+    assert!(recovered_flow.cancel());
+    let next_intent = restarted_view.reserve_host_create(&root, None).unwrap();
+    restarted_view
+        .resolve_host_create(&root, &next_intent)
+        .unwrap();
 
     let marker = "ALERA_GPUI_TERMINAL_BOOTSTRAP_OK";
     bridge

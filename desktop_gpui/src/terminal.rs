@@ -1536,6 +1536,20 @@ impl TerminalCreateFlow {
         matches!(self.phase, TerminalCreatePhase::OutcomeUnknown { .. })
     }
 
+    /// Rehydrate a create that was already submitted when the GUI exited.
+    /// No Host identity was proven, so recovery only permits listing and
+    /// explicit acknowledgement, never another create or auto-attach.
+    pub fn restore_outcome_unknown(&mut self) -> bool {
+        if self.is_active() {
+            return false;
+        }
+        self.next_request_id = self.next_request_id.wrapping_add(1).max(1);
+        self.phase = TerminalCreatePhase::OutcomeUnknown {
+            request_id: self.next_request_id,
+        };
+        true
+    }
+
     pub fn is_waiting(&self) -> bool {
         matches!(self.phase, TerminalCreatePhase::Awaiting { .. })
     }
@@ -3682,6 +3696,20 @@ mod tests {
         assert!(flow.is_creating());
         assert!(flow.fail_request(second));
         assert!(!flow.is_active());
+    }
+
+    #[test]
+    fn recovered_create_outcome_never_reissues_a_host_create() {
+        let mut flow = TerminalCreateFlow::default();
+        assert!(flow.restore_outcome_unknown());
+        assert!(flow.is_outcome_unknown());
+        assert!(flow.start_request().is_none());
+        assert_eq!(flow.tick(), TerminalCreateTick::None);
+        assert!(!flow.retry_confirmation());
+        assert!(flow.confirm_sessions(&[session("term-1")]).is_none());
+        assert!(!flow.restore_outcome_unknown());
+        assert!(flow.cancel());
+        assert!(flow.start_request().is_some());
     }
 
     #[test]

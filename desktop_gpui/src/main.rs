@@ -97,7 +97,9 @@ use alera_gpui_desktop::runtime_bridge::{
     AgentHookSettingsSnapshot, ProjectRemovalPreview, RuntimeCliBridge,
 };
 use alera_gpui_desktop::runtime_catalog::RuntimeCatalog;
-use alera_gpui_desktop::session::{PreviewSessionStore, TerminalLayout, TerminalLayoutTab};
+use alera_gpui_desktop::session::{
+    PendingHostCreate, PreviewSessionStore, TerminalLayout, TerminalLayoutTab,
+};
 use alera_gpui_desktop::terminal::{
     encode_terminal_key, estimate_terminal_viewport_with_line_height, raw_key_reply_may_drain,
     select_registered_host_workspace, terminal_ime_anchor_with_line_height, AgentActivityState,
@@ -709,6 +711,8 @@ struct Workbench {
     terminal_auto_resize: TerminalAutoResizeGate,
     terminal_line_selection: Option<TerminalLineSelection>,
     terminal_create_flow: TerminalCreateFlow,
+    terminal_create_journal: Option<PendingHostCreate>,
+    terminal_create_inventory_verified: bool,
     terminal_create_pane: Option<PendingTerminalPane>,
     terminal_layout_restore: Option<TerminalLayout>,
     terminal_list_loading: bool,
@@ -5351,6 +5355,7 @@ impl Workbench {
         self.terminal_panes.reset();
         self.terminal_create_flow.cancel();
         self.terminal_create_pane = None;
+        self.restore_host_create_journal();
         self.load_terminal_layout();
         self.terminal_key_queue.clear();
         self.terminal_key_queue_target = None;
@@ -6418,6 +6423,63 @@ impl Workbench {
         }).detach();
     }
 
+    /// Read-only GUI recovery: an unconfirmed Host create survives application
+    /// restart and workspace switching. Never infer "not created" from a
+    /// missing CLI reply or use a saved marker to auto-attach a session.
+    fn restore_host_create_journal(&mut self) {
+        self.terminal_create_journal = None;
+        self.terminal_create_inventory_verified = false;
+        let Some(store) = self.session_store.as_ref() else {
+            return;
+        };
+        match store.pending_host_create(self.model.root()) {
+            Ok(Some(record)) => {
+                if self.terminal_create_flow.restore_outcome_unknown() {
+                    self.terminal_create_journal = Some(record);
+                    self.terminals.status =
+                        "Previous Host create unresolved; inspect existing sessions before acknowledging (no new PTY)"
+                            .into();
+                    self.model
+                        .set_status("Host create interrupted; inspect + → Attach existing");
+                }
+            }
+            Err(error) => {
+                self.terminal_create_flow.restore_outcome_unknown();
+                self.terminals.status = format!(
+                    "Host create recovery record unavailable: {error}. Do not retry; preserve the file"
+                );
+                self.model
+                    .set_status("Host create recovery blocked; inspect local journal");
+            }
+            Ok(None) => {}
+        }
+    }
+
+    /// A validated exact Host session proves the create completed. Only then
+    /// retire the matching persistent marker; a failed retire blocks retries.
+    fn resolve_confirmed_host_create_journal(&mut self) {
+        let Some(record) = self.terminal_create_journal.as_ref() else {
+            return;
+        };
+        let Some(store) = self.session_store.as_ref() else {
+            self.terminal_create_flow.restore_outcome_unknown();
+            self.terminals.status =
+                "Host create journal store unavailable; manual recovery required".into();
+            return;
+        };
+        match store.resolve_host_create(self.model.root(), record) {
+            Ok(()) => {
+                self.terminal_create_journal = None;
+                self.terminal_create_inventory_verified = false;
+            }
+            Err(error) => {
+                self.terminal_create_flow.restore_outcome_unknown();
+                self.terminals.status =
+                    format!("Host created a PTY but recovery marker could not be cleared: {error}");
+            }
+        }
+    }
+
     fn create_host_terminal_in_pane(&mut self, target: PaneAttachGuard, cx: &mut Context<Self>) {
         self.create_host_terminal_targeted(target, None, cx);
     }
@@ -6480,9 +6542,37 @@ impl Workbench {
         }
         let is_agent = agent_id.is_some();
         let generation = self.workspace_generation;
+        // Commit a per-workspace, create_new + fsync journal BEFORE any
+        // potentially side-effecting Host startup/create RPC. Even if this
+        // window crashes or a second GPUI window races, no blind retry.
+        let Some(store) = self.session_store.as_ref() else {
+            self.terminals.status =
+                "Cannot create Host PTY without durable Native recovery storage".into();
+            self.model
+                .set_status("Host create refused: persistent recovery storage unavailable");
+            cx.notify();
+            return;
+        };
+        let journal = match store.reserve_host_create(&root, agent_id.as_deref()) {
+            Ok(record) => record,
+            Err(error) => {
+                self.restore_host_create_journal();
+                self.terminals.status = format!(
+                    "Host create blocked by recovery journal: {error}. Check + → Attach existing; no new PTY issued"
+                );
+                self.model
+                    .set_status("Unresolved Host create: inspect existing sessions before retry");
+                self.refresh_terminals(cx);
+                cx.notify();
+                return;
+            }
+        };
+
         let Some(request_id) = self.terminal_create_flow.start_request() else {
             return;
         };
+        self.terminal_create_journal = Some(journal);
+        self.terminal_create_inventory_verified = false;
         self.terminal_create_pane = Some(PendingTerminalPane {
             request_id,
             target,
@@ -6584,12 +6674,48 @@ impl Workbench {
     }
 
     fn cancel_host_terminal_confirmation(&mut self, cx: &mut Context<Self>) {
-        if self.terminal_create_flow.cancel() {
-            self.terminal_create_pane = None;
-            // An RPC in flight can still create a Host terminal. Dismiss
-            // only the local expectation; never issue a Host kill request.
+        if !self.terminal_create_flow.is_active() {
+            return;
+        }
+        if self.terminal_create_flow.is_creating() {
             self.terminals.status =
-                "Stopped waiting. Host terminal may exist; use Attach existing to find it".into();
+                "Host create still in progress; wait for its result, do not create a duplicate"
+                    .into();
+            cx.notify();
+            return;
+        }
+        if !self.terminal_create_inventory_verified {
+            self.terminals.status =
+                "Cannot dismiss until a fresh authenticated Host session list succeeds".into();
+            self.refresh_terminals(cx);
+            cx.notify();
+            return;
+        }
+        let (Some(store), Some(record)) = (
+            self.session_store.as_ref(),
+            self.terminal_create_journal.as_ref(),
+        ) else {
+            self.terminals.status =
+                "Recovery record unavailable; preserve it and inspect manually".into();
+            cx.notify();
+            return;
+        };
+        if let Err(error) = store.resolve_host_create(self.model.root(), record) {
+            self.terminals.status =
+                format!("Cannot clear recovery record: {error}; no new PTY allowed");
+            cx.notify();
+            return;
+        }
+
+        if self.terminal_create_flow.cancel() {
+            self.terminal_create_journal = None;
+            self.terminal_create_inventory_verified = false;
+            self.terminal_create_pane = None;
+            // Authenticated Host inventory was checked; acknowledgement
+            // retires only the UI marker and never stops a Host PTY.
+            self.terminals.status =
+                "Acknowledged after Host inventory; existing PTYs remain available via Attach"
+                    .into();
             cx.notify();
         }
     }
@@ -6610,6 +6736,12 @@ impl Workbench {
         self.terminal_list_loading = true;
         let generation = self.workspace_generation;
         let presence_generation = self.agent_presence_event_generation;
+        // A list begun BEFORE the Host create reply (still Creating) cannot
+        // verify the eventual result, even if its callback arrives later.
+        // Bind this read to the exact outstanding marker, not a newer one.
+        let create_journal_at_listing = (!self.terminal_create_flow.is_creating())
+            .then(|| self.terminal_create_journal.clone())
+            .flatten();
         self.terminals.status = "Listing existing Host sessions…".into();
         cx.notify();
         cx.spawn(async move |view, cx| {
@@ -6632,6 +6764,14 @@ impl Workbench {
                         let was_disconnected = view.terminals.session_list_is_stale()
                             || view.terminals.sessions.is_empty();
                         if view.terminals.apply_session_list(generation, sessions) {
+                            // Only an authenticated post-request inventory can
+                            // authorize the user's explicit unknown-create acknowledgement.
+                            if create_journal_at_listing.as_ref().is_some_and(|journal| {
+                                view.terminal_create_flow.is_active()
+                                    && view.terminal_create_journal.as_ref() == Some(journal)
+                            }) {
+                                view.terminal_create_inventory_verified = true;
+                            }
                             if was_disconnected && !view.terminals.sessions.is_empty() {
                                 view.terminal_poll.reset();
                                 view.agent_notification_delivery.on_host_reconnected();
@@ -6663,6 +6803,7 @@ impl Workbench {
                                 )
                             };
                             if let Some(created) = confirmed {
+                                view.resolve_confirmed_host_create_journal();
                                 // Never redirect a delayed Host create result to
                                 // whichever pane currently has global focus.
                                 // Only the exact authenticated Host triple may
@@ -13810,6 +13951,8 @@ fn main() {
                             terminal_auto_resize: TerminalAutoResizeGate::default(),
                             terminal_line_selection: None,
                             terminal_create_flow: TerminalCreateFlow::default(),
+                            terminal_create_journal: None,
+                            terminal_create_inventory_verified: false,
                             terminal_create_pane: None,
                             terminal_layout_restore: None,
                             terminal_list_loading: false,
@@ -13840,6 +13983,7 @@ fn main() {
                         workbench.load_terminal_layout();
                         workbench.load_mixed_pane_layout();
                         workbench.restore_file_tabs_from_pane_layout(cx);
+                        workbench.restore_host_create_journal();
                         workbench.refresh_shared_desktop_settings(cx);
                         workbench.refresh_agent_quotas(false, None, cx);
                         workbench

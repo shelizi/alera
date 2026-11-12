@@ -80,6 +80,24 @@ struct SavedTerminalLayout {
     layout: TerminalLayout,
 }
 
+/// Durable UI-only fence created BEFORE a Host create RPC. Its presence
+/// survives GUI restart and blocks blind duplicate Agent/Terminal creation.
+/// Never stores executable paths, prompts, secrets or PTY output.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PendingHostCreate {
+    version: u32,
+    root: PathBuf,
+    nonce: String,
+    agent_id: Option<String>,
+}
+
+impl PendingHostCreate {
+    pub fn agent_id(&self) -> Option<&str> {
+        self.agent_id.as_deref()
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SavedGitFavorites {
@@ -651,6 +669,117 @@ impl PreviewSessionStore {
         Ok(next)
     }
 
+    /// A scoped, durable marker for an unconfirmed Host create. Never write it
+    /// to the checkout or the Classic RuntimeStore.
+    pub fn host_create_journal_path(&self, root: &Path) -> io::Result<PathBuf> {
+        let canonical = dunce::canonicalize(root)?;
+        if canonical != root || !canonical.is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Host create requires a canonical existing workspace",
+            ));
+        }
+        let session_path = self.session_path(root);
+        let name = session_path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy();
+        Ok(self
+            .state_dir
+            .join(name.replacen("workspace-", "host-create-", 1)))
+    }
+
+    /// An invalid/partial file is an unknown outcome, not permission to retry.
+    pub fn pending_host_create(&self, root: &Path) -> io::Result<Option<PendingHostCreate>> {
+        let path = self.host_create_journal_path(root)?;
+        let Some(record): Option<PendingHostCreate> = self.read_json(&path)? else {
+            return Ok(None);
+        };
+        if record.version != VERSION
+            || record.root != root
+            || record.nonce.is_empty()
+            || record.nonce.len() > 128
+            || record
+                .nonce
+                .bytes()
+                .any(|byte| !byte.is_ascii_alphanumeric() && byte != b'-')
+            || record.agent_id.as_deref().is_some_and(|id| {
+                id.is_empty()
+                    || id.len() > 64
+                    || !id
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+            })
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Invalid Host create journal; preserve it and inspect Host sessions",
+            ));
+        }
+        Ok(Some(record))
+    }
+
+    /// This create_new + fsync MUST finish before any Host create RPC.
+    /// A crashed GUI, another window, or a partially written marker blocks
+    /// another create, rather than risking a second PTY.
+    pub fn reserve_host_create(
+        &self,
+        root: &Path,
+        agent_id: Option<&str>,
+    ) -> io::Result<PendingHostCreate> {
+        let path = self.host_create_journal_path(root)?;
+        if agent_id.is_some_and(|id| {
+            id.is_empty()
+                || id.len() > 64
+                || !id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        }) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Invalid Agent ID",
+            ));
+        }
+        static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let sequence = SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let record = PendingHostCreate {
+            version: VERSION,
+            root: root.to_path_buf(),
+            nonce: format!("{}-{now}-{sequence}", std::process::id()),
+            agent_id: agent_id.map(str::to_owned),
+        };
+        let bytes = encode_json(&record)?;
+        fs::create_dir_all(&self.state_dir)?;
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)?;
+        file.write_all(&bytes)?;
+        file.sync_all()?;
+        #[cfg(unix)]
+        fs::File::open(&self.state_dir)?.sync_all()?;
+        Ok(record)
+    }
+
+    /// Retire only the SAME intent after authenticated confirmation or
+    /// explicit acknowledgement following a successful Host inventory read.
+    pub fn resolve_host_create(&self, root: &Path, expected: &PendingHostCreate) -> io::Result<()> {
+        if self.pending_host_create(root)?.as_ref() != Some(expected) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Host create marker changed; stale callback may not clear it",
+            ));
+        }
+        fs::remove_file(self.host_create_journal_path(root)?)?;
+        #[cfg(unix)]
+        fs::File::open(&self.state_dir)?.sync_all()?;
+        Ok(())
+    }
+
     fn session_path(&self, root: &Path) -> PathBuf {
         // Deterministic FNV-1a is only a filename key, never a security check.
         // The saved record always validates its canonical root on load.
@@ -832,6 +961,75 @@ fn is_safe_relative(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unconfirmed_host_create_survives_restart_and_blocks_duplicate_shell() {
+        let state = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let canonical = dunce::canonicalize(root.path()).unwrap();
+        let store = PreviewSessionStore::new(state.path());
+        assert!(store.pending_host_create(&canonical).unwrap().is_none());
+        let saved = store
+            .reserve_host_create(&canonical, Some("codex"))
+            .unwrap();
+        assert_eq!(saved.agent_id(), Some("codex"));
+        drop(store);
+        let restarted = PreviewSessionStore::new(state.path());
+        assert_eq!(
+            restarted.pending_host_create(&canonical).unwrap(),
+            Some(saved.clone())
+        );
+        assert_eq!(
+            restarted
+                .reserve_host_create(&canonical, None)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::AlreadyExists,
+            "restarted GUI must never mint a second Host PTY while outcome is unknown"
+        );
+        restarted.resolve_host_create(&canonical, &saved).unwrap();
+        assert!(restarted.pending_host_create(&canonical).unwrap().is_none());
+        let next = restarted.reserve_host_create(&canonical, None).unwrap();
+        assert_ne!(next, saved);
+        assert!(restarted.resolve_host_create(&canonical, &saved).is_err());
+        assert_eq!(
+            restarted.pending_host_create(&canonical).unwrap(),
+            Some(next)
+        );
+    }
+
+    #[test]
+    fn corrupted_or_concurrent_host_create_journal_fails_closed_and_is_workspace_scoped() {
+        let state = tempfile::tempdir().unwrap();
+        let root_a = tempfile::tempdir().unwrap();
+        let root_b = tempfile::tempdir().unwrap();
+        let a = dunce::canonicalize(root_a.path()).unwrap();
+        let b = dunce::canonicalize(root_b.path()).unwrap();
+        let store = PreviewSessionStore::new(state.path());
+        let first = store.reserve_host_create(&a, Some("claude")).unwrap();
+        let second_view = PreviewSessionStore::new(state.path());
+        assert_eq!(
+            second_view
+                .reserve_host_create(&a, Some("codex"))
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::AlreadyExists
+        );
+        let separate = second_view.reserve_host_create(&b, None).unwrap();
+        assert_eq!(second_view.pending_host_create(&b).unwrap(), Some(separate));
+        store.resolve_host_create(&a, &first).unwrap();
+        let path = store.host_create_journal_path(&a).unwrap();
+        std::fs::write(&path, b"{bad-json").unwrap();
+        assert!(second_view.pending_host_create(&a).is_err());
+        assert_eq!(
+            second_view
+                .reserve_host_create(&a, None)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::AlreadyExists,
+            "corrupt journal is not permission to create a Host PTY"
+        );
+    }
 
     #[test]
     fn transient_explorer_preview_is_not_restored_or_stored_as_file_tab() {
