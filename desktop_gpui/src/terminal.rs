@@ -387,6 +387,45 @@ pub fn encode_terminal_key(
     Some(sequence.to_owned())
 }
 
+/// Windows Terminal clipboard shortcuts. Ordinary Ctrl+C must continue to
+/// reach the PTY as SIGINT, while Ctrl+Shift+C copies from the focused pane.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TerminalClipboardShortcut {
+    Copy,
+    Paste,
+}
+
+pub fn terminal_clipboard_shortcut(
+    key: &str,
+    control: bool,
+    shift: bool,
+    alt: bool,
+    platform: bool,
+) -> Option<TerminalClipboardShortcut> {
+    if !control || alt || platform {
+        return None;
+    }
+    match (key.to_ascii_lowercase().as_str(), shift) {
+        ("c", true) => Some(TerminalClipboardShortcut::Copy),
+        ("v", _) => Some(TerminalClipboardShortcut::Paste),
+        _ => None,
+    }
+}
+
+/// Respect Alacritty's live BRACKETED_PASTE mode, keep PTY clipboard input
+/// bounded by the existing 4 KiB Host write limit, and reject NUL bytes.
+pub fn terminal_clipboard_payload(text: &str, bracketed: bool) -> Option<String> {
+    if text.is_empty() || text.contains('\0') {
+        return None;
+    }
+    let payload = if bracketed {
+        format!("\x1b[200~{text}\x1b[201~")
+    } else {
+        text.to_owned()
+    };
+    (payload.len() <= 4096).then_some(payload)
+}
+
 /// IME owns Unicode commits. Ordinary ASCII keys must use KeyDown because
 /// GPUI/Windows may not send EntityInputHandler events for plain typing.
 pub fn is_text_input_keystroke(
@@ -1315,7 +1354,7 @@ impl TerminalLineSelection {
         row: usize,
     ) -> Option<Self> {
         if rows.is_empty()
-            || rows.len() > 100
+            || rows.len() > 200
             || row >= rows.len()
             || rows.iter().any(|text| text.len() > 4096)
         {
@@ -2697,6 +2736,27 @@ mod tests {
     }
 
     #[test]
+    fn vt_selection_supports_full_200_row_native_pane_without_crossing_snapshot_bounds() {
+        let target = TerminalTabContextTarget {
+            handle: "pty-large".into(),
+            workspace_id: "ws".into(),
+            tab_id: "tab".into(),
+            generation: 1,
+            workspace_generation: 2,
+        };
+        let rows = (0..200).map(|i| format!("row{i}")).collect::<Vec<_>>();
+        let mut selection =
+            TerminalLineSelection::begin(target.clone(), Some(8), rows.clone(), 149)
+                .expect("full-height Terminal pane row selection");
+        assert!(selection.extend(151));
+        assert_eq!(selection.selected_text(), "row149\nrow150\nrow151");
+        assert!(selection.is_current(&target, Some(8)));
+        assert!(
+            TerminalLineSelection::begin(target, Some(8), vec!["x".into(); 201], 150).is_none()
+        );
+    }
+
+    #[test]
     fn bounded_resize_verb_never_starts_host_and_rejects_unsafe_geometry() {
         use crate::runtime_bridge::terminal_cli_arguments;
         let args = resize_terminal_verb("term-1", 120, 36).unwrap();
@@ -2708,6 +2768,46 @@ mod tests {
             assert!(resize_terminal_verb("term-1", dims.0, dims.1).is_err());
         }
         assert!(resize_terminal_verb("bad\nhandle", 80, 24).is_err());
+    }
+
+    #[test]
+    fn native_terminal_clipboard_shortcuts_and_bracketed_paste_are_safe() {
+        use super::TerminalClipboardShortcut::{Copy, Paste};
+        assert_eq!(
+            terminal_clipboard_shortcut("c", true, true, false, false),
+            Some(Copy)
+        );
+        assert_eq!(
+            terminal_clipboard_shortcut("V", true, true, false, false),
+            Some(Paste)
+        );
+        assert_eq!(
+            terminal_clipboard_shortcut("v", true, false, false, false),
+            Some(Paste)
+        );
+        assert_eq!(
+            terminal_clipboard_shortcut("c", true, false, false, false),
+            None
+        );
+        assert_eq!(
+            terminal_clipboard_shortcut("v", true, true, true, false),
+            None
+        );
+        assert_eq!(
+            terminal_clipboard_shortcut("v", true, true, false, true),
+            None
+        );
+        assert_eq!(
+            terminal_clipboard_payload("echo 中文", false),
+            Some("echo 中文".to_owned())
+        );
+        assert_eq!(
+            terminal_clipboard_payload("one\ntwo", true),
+            Some("\x1b[200~one\ntwo\x1b[201~".to_owned())
+        );
+        assert!(terminal_clipboard_payload("", false).is_none());
+        assert!(terminal_clipboard_payload("bad\0payload", false).is_none());
+        assert!(terminal_clipboard_payload(&"x".repeat(4096), true).is_none());
     }
 
     #[test]

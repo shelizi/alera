@@ -213,7 +213,7 @@ impl Workbench {
                     move |_, _, cx| {
                         let _ = copy_owner.update(cx, |view, cx| {
                             if view.kit_menu_host_is_active(&copy_target) {
-                                view.copy_primary_terminal_text(false, cx);
+                                view.copy_terminal_text_for_pane(pane, false, cx);
                             }
                         });
                     },
@@ -224,7 +224,7 @@ impl Workbench {
                     move |_, _, cx| {
                         let _ = selected_owner.update(cx, |view, cx| {
                             if view.kit_menu_host_is_active(&selected_target) {
-                                view.copy_primary_terminal_text(true, cx);
+                                view.copy_terminal_text_for_pane(pane, true, cx);
                             }
                         });
                     },

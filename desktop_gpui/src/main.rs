@@ -102,8 +102,9 @@ use alera_gpui_desktop::session::{
 };
 use alera_gpui_desktop::terminal::{
     encode_terminal_key, estimate_terminal_viewport_with_line_height, raw_key_reply_may_drain,
-    select_registered_host_workspace, terminal_ime_anchor_with_line_height, AgentActivityState,
-    TerminalAutoResizeGate, TerminalCreateFlow, TerminalCreateTick, TerminalDock,
+    select_registered_host_workspace, terminal_clipboard_payload, terminal_clipboard_shortcut,
+    terminal_ime_anchor_with_line_height, AgentActivityState, TerminalAutoResizeGate,
+    TerminalClipboardShortcut, TerminalCreateFlow, TerminalCreateTick, TerminalDock,
     TerminalLineSelection, TerminalPollCadence, TerminalPollGate, TerminalSession,
     TerminalTabContextTarget, TerminalViewMode, TerminalViewportProposal, HOST_SESSION_LIST_SCOPE,
 };
@@ -7124,17 +7125,32 @@ impl Workbench {
 
     /// Mouse selection is a bounded snapshot of primary VT screen rows;
     /// never forwards mouse/selection gestures to the running Host PTY.
-    fn begin_terminal_line_selection(&mut self, row: usize, cx: &mut Context<Self>) {
-        let index = if self.mixed_panes.has_secondary() {
-            self.mixed_panes
-                .active_in(PaneSlot::Primary)
-                .and_then(|id| match id {
-                    WorkbenchTabIdentity::Host(target) => self.terminals.index_for_context(target),
-                    _ => None,
-                })
-        } else {
+    /// A mixed split owns one terminal surface per Pane; never choose the
+    /// globally focused TerminalDock tab for a copy/selection in the other Pane.
+    fn terminal_index_in_pane(&self, pane: PaneSlot) -> Option<usize> {
+        if self.mixed_panes.has_secondary() {
+            self.mixed_panes.active_in(pane).and_then(|id| match id {
+                WorkbenchTabIdentity::Host(target) => self.terminals.index_for_context(target),
+                _ => None,
+            })
+        } else if pane == PaneSlot::Primary {
             self.terminals.active_tab
-        };
+        } else {
+            None
+        }
+    }
+
+    fn begin_terminal_line_selection(&mut self, row: usize, cx: &mut Context<Self>) {
+        self.begin_terminal_line_selection_for_pane(PaneSlot::Primary, row, cx);
+    }
+
+    fn begin_terminal_line_selection_for_pane(
+        &mut self,
+        pane: PaneSlot,
+        row: usize,
+        cx: &mut Context<Self>,
+    ) {
+        let index = self.terminal_index_in_pane(pane);
         let Some((target, tab)) = index.and_then(|i| {
             self.terminals
                 .context_target_at(i)
@@ -7184,30 +7200,45 @@ impl Workbench {
                 .and_then(serde_json::Value::as_bool)
                 == Some(true)
             {
-                self.copy_primary_terminal_text(true, cx);
+                // The selection can belong to either split Pane. Use the
+                // exact Host identity/cursor instead of copying primary by default.
+                let pane = self.terminal_line_selection.as_ref().and_then(|selection| {
+                    [PaneSlot::Primary, PaneSlot::Secondary]
+                        .into_iter()
+                        .find(|pane| {
+                            self.terminal_index_in_pane(*pane)
+                                .and_then(|i| {
+                                    self.terminals
+                                        .context_target_at(i)
+                                        .zip(self.terminals.tabs.get(i))
+                                })
+                                .is_some_and(|(target, tab)| {
+                                    selection.is_current(&target, tab.next_cursor)
+                                })
+                        })
+                });
+                if let Some(pane) = pane {
+                    self.copy_terminal_text_for_pane(pane, true, cx);
+                }
             } else {
                 cx.notify();
             }
         }
     }
 
-    fn copy_primary_terminal_text(&mut self, selected_only: bool, cx: &mut Context<Self>) {
-        let index = if self.mixed_panes.has_secondary() {
-            self.mixed_panes
-                .active_in(PaneSlot::Primary)
-                .and_then(|id| match id {
-                    WorkbenchTabIdentity::Host(target) => self.terminals.index_for_context(target),
-                    _ => None,
-                })
-        } else {
-            self.terminals.active_tab
-        };
+    fn copy_terminal_text_for_pane(
+        &mut self,
+        pane: PaneSlot,
+        selected_only: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let index = self.terminal_index_in_pane(pane);
         let Some((target, tab)) = index.and_then(|i| {
             self.terminals
                 .context_target_at(i)
                 .zip(self.terminals.tabs.get(i))
         }) else {
-            self.terminals.status = "No visible primary Host terminal to copy".into();
+            self.terminals.status = "No visible Host terminal in this Pane to copy".into();
             cx.notify();
             return;
         };
@@ -7408,14 +7439,36 @@ impl Workbench {
         } else if pane != PaneSlot::Primary {
             return false;
         }
-        if event.keystroke.modifiers.control
-            && !event.keystroke.modifiers.shift
-            && event.keystroke.key.eq_ignore_ascii_case("v")
-        {
-            if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-                return self.enqueue_terminal_text_for_pane(pane, text, cx);
+        match terminal_clipboard_shortcut(
+            &event.keystroke.key,
+            event.keystroke.modifiers.control,
+            event.keystroke.modifiers.shift,
+            event.keystroke.modifiers.alt,
+            event.keystroke.modifiers.platform,
+        ) {
+            Some(TerminalClipboardShortcut::Copy) => {
+                self.copy_terminal_text_for_pane(pane, false, cx);
+                return true;
             }
-            return true;
+            Some(TerminalClipboardShortcut::Paste) => {
+                if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
+                    // Respect the active Alacritty TUI's bracketed paste mode.
+                    let bracketed = self
+                        .terminals
+                        .active()
+                        .is_some_and(|tab| tab.screen.bracketed_paste());
+                    if let Some(payload) = terminal_clipboard_payload(&text, bracketed) {
+                        self.enqueue_terminal_text_for_pane(pane, payload, cx);
+                    } else {
+                        self.terminals.status =
+                            "Clipboard text empty, NUL-containing or exceeds 4 KiB Host limit"
+                                .into();
+                        cx.notify();
+                    }
+                }
+                return true;
+            }
+            None => {}
         }
         // KeyDown and the native IME/TextInput commit are two paths to the
         // same Host. This must apply to BOTH panes, not just primary.
@@ -9744,6 +9797,25 @@ impl Render for Workbench {
             })
             .map(|selection| {
                 (0..terminal_screen_rows.len())
+                    .map(|row| selection.includes_row(row))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let terminal_secondary_selected_rows = mixed_secondary_host
+            .as_ref()
+            .and_then(|target| {
+                self.terminals
+                    .index_for_context(target)
+                    .and_then(|index| self.terminals.tabs.get(index))
+                    .and_then(|tab| {
+                        self.terminal_line_selection
+                            .as_ref()
+                            .filter(|selection| selection.is_current(target, tab.next_cursor))
+                    })
+            })
+            .map(|selection| {
+                let count = mixed_secondary_vt_rows.as_ref().map(Vec::len).unwrap_or(0);
+                (0..count)
                     .map(|row| selection.includes_row(row))
                     .collect::<Vec<_>>()
             })
@@ -12470,13 +12542,7 @@ impl Render for Workbench {
                                                 this.finish_terminal_line_selection(cx);
                                             }))
                                             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
-                                                if event.keystroke.modifiers.control
-                                                    && event.keystroke.modifiers.shift
-                                                    && event.keystroke.key.eq_ignore_ascii_case("c")
-                                                {
-                                                    this.copy_primary_terminal_text(false, cx);
-                                                    cx.stop_propagation();
-                                                } else if this.send_terminal_key_for_pane(PaneSlot::Primary, event, cx) {
+                                                if this.send_terminal_key_for_pane(PaneSlot::Primary, event, cx) {
                                                     cx.stop_propagation();
                                                 }
                                             }))
@@ -12553,13 +12619,7 @@ impl Render for Workbench {
                                                 window.focus(&focus, cx);
                                             }))
                                             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
-                                                if event.keystroke.modifiers.control
-                                                    && event.keystroke.modifiers.shift
-                                                    && event.keystroke.key.eq_ignore_ascii_case("c")
-                                                {
-                                                    this.copy_primary_terminal_text(false, cx);
-                                                    cx.stop_propagation();
-                                                } else if this.send_terminal_key_for_pane(PaneSlot::Primary, event, cx) {
+                                                if this.send_terminal_key_for_pane(PaneSlot::Primary, event, cx) {
                                                     cx.stop_propagation();
                                                 }
                                             }))
@@ -12878,10 +12938,33 @@ impl Render for Workbench {
                                                             .flex_col()
                                                             .whitespace_nowrap()
                                                             .children(rows.into_iter().enumerate().map(|(index, row)| {
+                                                                let selected = terminal_secondary_selected_rows.get(index).copied().unwrap_or(false);
                                                                 div()
                                                                     .id(("mixed-secondary-colored-row", index))
                                                                     .whitespace_nowrap()
                                                                     .line_height(px(terminal_font_size * terminal_line_height))
+                                                                    .bg(rgb(if selected { ACTIVE } else { TERMINAL_DEFAULT_BG }))
+                                                                    .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |this, _, window, cx| {
+                                                                        if let Some(WorkbenchTabIdentity::Host(target)) =
+                                                                            this.mixed_panes.active_in(PaneSlot::Secondary).cloned()
+                                                                        {
+                                                                            if this.terminals.context_target_is_live(&target) {
+                                                                                if let Some(tab_index) = this.terminals.index_for_context(&target) {
+                                                                                    this.mixed_panes.focus_pane(PaneSlot::Secondary);
+                                                                                    this.terminals.activate(tab_index);
+                                                                                    this.center_view = CenterView::Terminal;
+                                                                                    window.focus(&this.secondary_terminal_input.read(cx).focus_handle(cx), cx);
+                                                                                    this.begin_terminal_line_selection_for_pane(PaneSlot::Secondary, index, cx);
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                    }))
+                                                                    .on_mouse_move(cx.listener(move |this, _, _, cx| {
+                                                                        this.extend_terminal_line_selection(index, cx);
+                                                                    }))
+                                                                    .on_mouse_up(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
+                                                                        this.finish_terminal_line_selection(cx);
+                                                                    }))
                                                                     .child(
                                                                         gpui::StyledText::new(row.text)
                                                                             .with_highlights(row.spans.into_iter().map(|span| {
@@ -12890,7 +12973,7 @@ impl Render for Workbench {
                                                                                     span.range,
                                                                                     gpui::HighlightStyle {
                                                                                         color: Some(rgb(style.fg).into()),
-                                                                                        background_color: Some(rgb(style.bg).into()),
+                                                                                        background_color: Some(rgb(if selected { ACTIVE } else { style.bg }).into()),
                                                                                         font_weight: style.bold.then_some(gpui::FontWeight::BOLD),
                                                                                         font_style: style.italic.then_some(gpui::FontStyle::Italic),
                                                                                         underline: style.underline.then_some(gpui::UnderlineStyle {
