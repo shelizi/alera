@@ -1503,6 +1503,9 @@ enum TerminalCreatePhase {
     Creating {
         request_id: u64,
     },
+    OutcomeUnknown {
+        request_id: u64,
+    },
     Awaiting {
         created: CreatedHostTerminal,
         ticks: u8,
@@ -1527,6 +1530,10 @@ impl TerminalCreateFlow {
 
     pub fn is_creating(&self) -> bool {
         matches!(self.phase, TerminalCreatePhase::Creating { .. })
+    }
+
+    pub fn is_outcome_unknown(&self) -> bool {
+        matches!(self.phase, TerminalCreatePhase::OutcomeUnknown { .. })
     }
 
     pub fn is_waiting(&self) -> bool {
@@ -1556,6 +1563,18 @@ impl TerminalCreateFlow {
             return false;
         }
         self.phase = TerminalCreatePhase::Awaiting { created, ticks: 0 };
+        true
+    }
+
+    /// A lost CLI reply cannot prove that the Host did not already create a PTY.
+    /// Keep the request blocked until the user reviews existing sessions and
+    /// explicitly dismisses the uncertain result.
+    pub fn mark_request_outcome_unknown(&mut self, request_id: u64) -> bool {
+        if !matches!(self.phase, TerminalCreatePhase::Creating { request_id: active } if active == request_id)
+        {
+            return false;
+        }
+        self.phase = TerminalCreatePhase::OutcomeUnknown { request_id };
         true
     }
 
@@ -3663,6 +3682,33 @@ mod tests {
         assert!(flow.is_creating());
         assert!(flow.fail_request(second));
         assert!(!flow.is_active());
+    }
+
+    #[test]
+    fn ambiguous_terminal_creation_requires_manual_reconciliation_before_another_create() {
+        let mut flow = TerminalCreateFlow::default();
+        let request = flow.start_request().unwrap();
+        assert!(flow.mark_request_outcome_unknown(request));
+        assert!(flow.is_outcome_unknown());
+        assert!(flow.is_active());
+        assert!(
+            flow.start_request().is_none(),
+            "no blind duplicate Host create RPC"
+        );
+        assert!(!flow.mark_request_outcome_unknown(request));
+        assert!(
+            !flow.retry_confirmation(),
+            "no unverified Host IDs to retry"
+        );
+        assert!(flow.confirm_sessions(&[session("term-1")]).is_none());
+        assert!(
+            flow.cancel(),
+            "user deliberately dismisses after inspecting Host"
+        );
+        let next = flow.start_request().unwrap();
+        assert_ne!(next, request);
+        assert!(!flow.mark_request_outcome_unknown(request));
+        assert!(flow.is_creating());
     }
 
     #[test]

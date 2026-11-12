@@ -6538,29 +6538,34 @@ impl Workbench {
                         view.refresh_terminals(cx);
                     }
                     Err(error) => {
-                        if !view.terminal_create_flow.fail_request(request_id) {
-                            return;
-                        }
-                        if view.terminal_create_pane.as_ref().is_some_and(|pending| {
+                        // The pending pane intent must belong to this exact
+                        // request, not a stale callback after pane reuse.
+                        if !view.terminal_create_pane.as_ref().is_some_and(|pending| {
                             pending.request_id == request_id
                         }) {
-                            view.terminal_create_pane = None;
+                            return;
+                        }
+
+                        if !view.terminal_create_flow.mark_request_outcome_unknown(request_id) {
+                            return;
                         }
                         view.terminals.status = if error.kind() == std::io::ErrorKind::InvalidData {
                             // The Host RPC may already have created a PTY,
                             // even when the CLI reply failed validation.
                             // Never encourage a second create as a retry.
                             format!(
-                                "Host terminal reply could not be verified: {error}. A session may already exist; use Attach existing before retrying New Terminal."
+                                "Host reply unverified: {error}. Inspect Attach running Host session, then dismiss the pending request before another New Terminal."
                             )
                         } else {
-                            format!("Cannot create Host terminal: {error}")
+                            format!("Host create outcome unknown: {error}. Inspect existing sessions, then dismiss the pending request before another PTY.")
                         };
                         if is_agent {
                             view.model.set_status(
-                                "Agent launch not confirmed; check existing Host sessions before retry",
+                                "Agent outcome unknown; inspect Host sessions before dismissing request",
                             );
                         }
+                        // Re-list existing Host sessions, never create a second PTY.
+                        view.refresh_terminals(cx);
                     }
                 }
                 cx.notify();
@@ -9407,6 +9412,7 @@ impl Render for Workbench {
             })
             .collect();
         let terminal_create_busy = self.terminal_create_flow.is_active();
+        let terminal_create_unknown = self.terminal_create_flow.is_outcome_unknown();
         let terminal_create_timed_out = self.terminal_create_flow.is_timed_out();
         let terminal_creating = self.terminal_create_flow.is_creating();
         // The primary pane renders its own Host identity, even when the
@@ -11834,6 +11840,7 @@ impl Render for Workbench {
                                                         installed_loading,
                                                         terminal_create_busy,
                                                         terminal_create_timed_out,
+                                                        terminal_create_unknown,
                                                     ))
                                                     .on_open_change(move |open, _, cx| {
                                                         if *open {
@@ -12340,6 +12347,7 @@ impl Render for Workbench {
                                                                 installed_loading,
                                                                 terminal_create_busy,
                                                                 terminal_create_timed_out,
+                                                                terminal_create_unknown,
                                                             ))
                                                             .on_open_change(move |open, _, cx| {
                                                                 if *open {

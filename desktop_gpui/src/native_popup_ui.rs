@@ -25,6 +25,7 @@ impl Workbench {
         installed_loading: bool,
         terminal_create_busy: bool,
         terminal_create_timed_out: bool,
+        terminal_create_unknown: bool,
     ) -> impl Fn(
         gpui_kit::component::menu::PopupMenu,
         &mut Window,
@@ -119,6 +120,11 @@ impl Workbench {
                             });
                         },
                     ),
+                );
+            }
+            if terminal_create_unknown {
+                menu = menu.separator().label(
+                    "Host create result unknown · inspect running sessions before dismissing",
                 );
             }
             if terminal_create_busy {

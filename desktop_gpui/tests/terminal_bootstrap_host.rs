@@ -141,4 +141,80 @@ fn explicit_new_terminal_starts_host_registers_checkout_and_reads_pty() {
     );
     assert!(flow.is_waiting());
     assert!(flow.start_request().is_none());
+    // Exercise the direct-Agent Host path with a controllable cmd.exe fixture.
+    // This is NOT a genuine provider crash; it proves that a failed Agent PTY
+    // does not masquerade as running or silently reuse its old Host identity.
+    let shell = dunce::canonicalize(PathBuf::from(
+        std::env::var_os("ComSpec").expect("Windows ComSpec"),
+    ))
+    .unwrap();
+    let shell = shell.to_str().unwrap();
+    let first_agent = bridge
+        .create_agent_terminal_for_workspace(&root, "codex", shell)
+        .expect("test Agent must use exact Host create-agent tab payload");
+    let mut first_flow = TerminalCreateFlow::default();
+    let request = first_flow.start_request().unwrap();
+    assert!(first_flow.finish_request(request, first_agent.clone()));
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        let sessions = bridge.list_terminals().unwrap();
+        if first_flow
+            .confirm_sessions_with_host_verified_agent(&sessions, "codex")
+            .is_some()
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "test Agent never reached running PTY"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    bridge
+        .write_terminal(&first_agent.handle, "exit /b 23", true)
+        .expect("test Agent shell must accept a nonzero exit");
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        let sessions = bridge.list_terminals().unwrap();
+        if !sessions
+            .iter()
+            .any(|item| item.handle == first_agent.handle && item.running)
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "failed Agent PTY still marked running"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    // A new explicit user action after checking the Host may start a fresh
+    // PTY; it must have its own handle rather than revive the exited Agent.
+    let second_agent = bridge
+        .create_agent_terminal_for_workspace(&root, "codex", shell)
+        .expect("explicit second Agent launch should succeed");
+    assert_ne!(first_agent.handle, second_agent.handle);
+    assert_ne!(first_agent.tab_id, second_agent.tab_id);
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        let sessions = bridge.list_terminals().unwrap();
+        let active = sessions
+            .iter()
+            .filter(|item| item.running)
+            .collect::<Vec<_>>();
+        if active
+            .iter()
+            .any(|item| second_agent.matches_live_session(item))
+        {
+            assert_eq!(active.len(), 1, "retry created duplicate running PTYs");
+            assert!(!active.iter().any(|item| item.handle == first_agent.handle));
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "second Agent PTY never became ready"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
 }
