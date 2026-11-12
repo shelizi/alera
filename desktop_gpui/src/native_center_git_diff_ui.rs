@@ -73,6 +73,15 @@ pub(super) fn should_show_center_git_diff_view(
     source_current && !git_original_active
 }
 
+/// Keep both Terminal branches (live PTY and empty/offline fallback) out of
+/// the center pane while an Editor or temporary read-only Git Diff owns it.
+pub(super) fn should_hide_underlying_terminal(
+    center_is_editor: bool,
+    center_git_diff_visible: bool,
+) -> bool {
+    center_is_editor || center_git_diff_visible
+}
+
 /// A fresh page starts at its first hunk; a previous/next click never wraps,
 /// overflows or jumps to a hunk from an obsolete page.
 fn adjacent_hunk_index(selected: Option<usize>, count: usize, next: bool) -> Option<usize> {
@@ -275,8 +284,9 @@ impl Workbench {
                     .px_3()
                     .py_1()
                     .flex()
+                    .flex_wrap()
                     .items_center()
-                    .gap_3()
+                    .gap_2()
                     .child(if can_previous_page {
                         div()
                             .id("central-git-previous-page")
@@ -289,8 +299,11 @@ impl Workbench {
                             }))
                             .into_any_element()
                     } else {
-                        div().text_sm().text_color(rgb(MUTED))
-                            .child("Previous page").into_any_element()
+                        div()
+                            .text_sm()
+                            .text_color(rgb(MUTED))
+                            .child("Previous page")
+                            .into_any_element()
                     })
                     .child(if can_next_page {
                         div()
@@ -304,8 +317,11 @@ impl Workbench {
                             }))
                             .into_any_element()
                     } else {
-                        div().text_sm().text_color(rgb(MUTED))
-                            .child("Next page").into_any_element()
+                        div()
+                            .text_sm()
+                            .text_color(rgb(MUTED))
+                            .child("Next page")
+                            .into_any_element()
                     })
                     .child(
                         div()
@@ -325,8 +341,11 @@ impl Workbench {
                             }))
                             .into_any_element()
                     } else {
-                        div().text_sm().text_color(rgb(MUTED))
-                            .child("Previous hunk").into_any_element()
+                        div()
+                            .text_sm()
+                            .text_color(rgb(MUTED))
+                            .child("Previous hunk")
+                            .into_any_element()
                     })
                     .child(if can_next_hunk {
                         div()
@@ -340,16 +359,21 @@ impl Workbench {
                             }))
                             .into_any_element()
                     } else {
-                        div().text_sm().text_color(rgb(MUTED))
-                            .child("Next hunk").into_any_element()
+                        div()
+                            .text_sm()
+                            .text_color(rgb(MUTED))
+                            .child("Next hunk")
+                            .into_any_element()
                     }),
             )
             .child(
                 div()
                     .px_3()
+                    .min_w_0()
                     .text_xs()
                     .text_color(rgb(MUTED))
-                    .child("Old | New | Patch · coordinates require a visible @@ hunk header; long lines are clipped in this viewport only"),
+                    .truncate()
+                    .child("Old | New | Patch · read-only · long rows clipped"),
             )
             .child(
                 gpui::uniform_list(
@@ -375,7 +399,9 @@ impl Workbench {
                                             .justify_end()
                                             .text_xs()
                                             .text_color(rgb(MUTED))
-                                            .child(row.old.map_or_else(String::new, |n| n.to_string())),
+                                            .child(
+                                                row.old.map_or_else(String::new, |n| n.to_string()),
+                                            ),
                                     )
                                     .child(
                                         div()
@@ -384,7 +410,9 @@ impl Workbench {
                                             .justify_end()
                                             .text_xs()
                                             .text_color(rgb(MUTED))
-                                            .child(row.new.map_or_else(String::new, |n| n.to_string())),
+                                            .child(
+                                                row.new.map_or_else(String::new, |n| n.to_string()),
+                                            ),
                                     )
                                     .child(
                                         div()
@@ -413,8 +441,8 @@ impl Workbench {
 mod tests {
     use super::{
         adjacent_hunk_index, center_git_diff_rows, center_hunk_controls, center_hunk_target,
-        hunk_positions, should_show_center_git_diff_view, uses_paged_git_preview, GitChangeArea,
-        MAX_CENTER_DIFF_SOURCE_BYTES,
+        hunk_positions, should_hide_underlying_terminal, should_show_center_git_diff_view,
+        uses_paged_git_preview, GitChangeArea, MAX_CENTER_DIFF_SOURCE_BYTES,
     };
 
     #[test]
@@ -450,6 +478,14 @@ mod tests {
         assert!(should_show_center_git_diff_view(false, true));
         assert!(!should_show_center_git_diff_view(false, false));
         assert!(!should_show_center_git_diff_view(true, false));
+    }
+
+    #[test]
+    fn center_diff_hides_underlying_terminal_even_when_no_host_tab_exists() {
+        assert!(!should_hide_underlying_terminal(false, false));
+        assert!(should_hide_underlying_terminal(true, false));
+        assert!(should_hide_underlying_terminal(false, true));
+        assert!(should_hide_underlying_terminal(true, true));
     }
 
     #[test]
