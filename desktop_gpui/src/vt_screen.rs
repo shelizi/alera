@@ -187,8 +187,8 @@ impl Default for VtScreen {
 
 impl VtScreen {
     pub fn new(rows: u16, cols: u16) -> Self {
-        let rows = rows.clamp(5, 100);
-        let cols = cols.clamp(20, 240);
+        let rows = rows.clamp(5, 200);
+        let cols = cols.clamp(20, 512);
         let parser = vt100::Parser::new(
             NonZeroU16::new(rows).expect("clamped rows"),
             NonZeroU16::new(cols).expect("clamped cols"),
@@ -230,7 +230,7 @@ impl VtScreen {
     }
 
     /// The exact visible grid, grouped into contiguous styled text runs.
-    /// O(rows * cols), capped at 100 x 240, independent of scrollback size.
+    /// O(rows * cols), capped at Host-compatible 200 x 512, independent of scrollback size.
     /// A CJK/emoji wide character occupies one text run with double-width
     /// font layout; its trailing VT continuation cell is not duplicated.
     pub fn styled_rows(&self) -> Vec<StyledRow> {
@@ -287,8 +287,8 @@ impl VtScreen {
 
     /// Local preview size only. Never assert to Host that it was resized.
     pub fn set_preview_size(&mut self, rows: u16, cols: u16) {
-        let rows = rows.clamp(5, 100);
-        let cols = cols.clamp(20, 240);
+        let rows = rows.clamp(5, 200);
+        let cols = cols.clamp(20, 512);
         if self.rows != rows || self.cols != cols {
             self.parser.set_size(
                 NonZeroU16::new(rows).expect("clamped rows"),
@@ -371,12 +371,22 @@ mod tests {
     }
 
     #[test]
+    fn wide_terminal_preview_uses_the_host_supported_512_column_limit() {
+        let mut screen = VtScreen::new(120, 350);
+        assert_eq!(screen.dimensions(), (120, 350));
+        assert_eq!(screen.styled_rows().len(), 120);
+        screen.set_preview_size(160, 384);
+        assert_eq!(screen.dimensions(), (160, 384));
+        assert_eq!(screen.styled_rows()[0].text.chars().count(), 384);
+    }
+
+    #[test]
     fn terminal_rows_are_bounded_and_osc_clipboard_does_not_leak() {
         let mut screen = VtScreen::new(u16::MAX, u16::MAX);
         screen.feed("visible\x1b]52;c;dG9rZW4=\x07\x1b[32mOK");
         let rows = screen.styled_rows();
-        assert_eq!(rows.len(), 100);
-        assert!(rows.iter().all(|row| row.spans.len() <= 240));
+        assert_eq!(rows.len(), 200);
+        assert!(rows.iter().all(|row| row.spans.len() <= 512));
         assert!(rows[0].text.starts_with("visibleOK"));
         assert!(!rows[0].text.contains("dG9rZW4"));
     }
@@ -432,7 +442,7 @@ mod tests {
     #[test]
     fn preview_dimension_limits_and_reset_are_bounded() {
         let mut screen = VtScreen::new(0, u16::MAX);
-        assert_eq!(screen.dimensions(), (5, 240));
+        assert_eq!(screen.dimensions(), (5, 512));
         screen.set_preview_size(40, 120);
         assert_eq!(screen.dimensions(), (40, 120));
         screen.feed("hello");
@@ -475,7 +485,7 @@ mod tests {
         screen.feed("\x1b[8;99999;99999t");
         assert_eq!(screen.dimensions(), (24, 80));
         screen.feed("\x1b[8;120;512t");
-        assert_eq!(screen.dimensions(), (100, 240));
+        assert_eq!(screen.dimensions(), (120, 512));
         screen.feed("\x1b[8;24;80t");
         assert_eq!(screen.dimensions(), (24, 80));
     }

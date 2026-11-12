@@ -1166,7 +1166,9 @@ pub fn estimate_terminal_viewport_with_line_height(
     if columns < 20.0 || lines < 5.0 {
         return None;
     }
-    Some((columns.min(240.0) as u16, lines.min(100.0) as u16))
+    // Match the Host resize verb's supported 512x200 geometry. A 240-col
+    // emulator cap otherwise letterboxes wide displays even after PTY resize.
+    Some((columns.min(512.0) as u16, lines.min(200.0) as u16))
 }
 
 /// Position the tiny Windows IME input capture near the actual VT cursor,
@@ -1974,6 +1976,31 @@ impl TerminalDock {
         true
     }
 
+    /// Keep the local visible VT grid in sync after the Host accepts a
+    /// normal viewport resize. Never change an unrelated or recycled tab.
+    /// This does not create or resize a Host PTY; the Host request ran first.
+    pub fn apply_host_accepted_viewport(
+        &mut self,
+        target: &TerminalTabContextTarget,
+        cols: u16,
+        rows: u16,
+    ) -> bool {
+        if !self.context_target_is_live(target) {
+            return false;
+        }
+        let Some(index) = self.index_for_context(target) else {
+            return false;
+        };
+        let Some(tab) = self.tabs.get_mut(index) else {
+            return false;
+        };
+        if !tab.running {
+            return false;
+        }
+        tab.screen.set_preview_size(rows, cols);
+        true
+    }
+
     pub fn context_target_at(&self, index: usize) -> Option<TerminalTabContextTarget> {
         let tab = self.tabs.get(index)?;
         Some(TerminalTabContextTarget {
@@ -2465,7 +2492,7 @@ mod tests {
         );
         assert_eq!(
             estimate_terminal_viewport(50_000.0, 50_000.0, 13.0),
-            Some((240, 100))
+            Some((512, 200))
         );
         let smaller = estimate_terminal_viewport(800.0, 480.0, 13.0).unwrap();
         let larger = estimate_terminal_viewport(1200.0, 780.0, 13.0).unwrap();
@@ -2497,6 +2524,29 @@ mod tests {
             estimate_terminal_viewport_with_line_height(1200.0, 600.0, 13.0, 1.3),
             estimate_terminal_viewport(1200.0, 600.0, 13.0)
         );
+    }
+
+    #[test]
+    fn wide_viewport_estimation_does_not_letterbox_at_240_columns() {
+        let (cols, rows) = estimate_terminal_viewport_with_line_height(3030.0, 920.0, 14.0, 1.3)
+            .expect("large Windows viewport");
+        assert!(cols > 240, "Host supports more than 240 columns: {cols}");
+        assert!(cols <= 512);
+        assert!(rows >= 40);
+    }
+
+    #[test]
+    fn host_accepted_resize_expands_only_the_matching_live_preview() {
+        let mut dock = TerminalDock::for_workspace(5);
+        assert!(dock.apply_session_list(5, vec![session("pty-1")]));
+        assert!(dock.open("pty-1"));
+        let current = dock.context_target_at(0).unwrap();
+        let mut stale = current.clone();
+        stale.tab_id = "different-tab".to_owned();
+        assert!(!dock.apply_host_accepted_viewport(&stale, 320, 64));
+        assert_eq!(dock.active().unwrap().screen.dimensions(), (24, 80));
+        assert!(dock.apply_host_accepted_viewport(&current, 320, 64));
+        assert_eq!(dock.active().unwrap().screen.dimensions(), (64, 320));
     }
 
     #[test]

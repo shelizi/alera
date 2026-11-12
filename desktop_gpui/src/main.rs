@@ -116,13 +116,13 @@ use alera_gpui_desktop::visual_tokens::{
     ELEVATED, MUTED, PANEL, PROJECTS_SIDEBAR_WIDTH, RIGHT_SIDEBAR_WIDTH, SECTION_HEADER_HEIGHT,
     STATUS_BAR_HEIGHT, TAB_STRIP_HEIGHT, TEXT, TOOLBAR, TOP_BAR_HEIGHT,
 };
-use alera_gpui_desktop::vt_screen::StyledRow;
+use alera_gpui_desktop::vt_screen::{StyledRow, TERMINAL_DEFAULT_BG};
 use alera_gpui_desktop::workbench_layout_store::{
     scratch_layout_key, SavedWorkbenchAxis, SavedWorkbenchHostTab, SavedWorkbenchLayoutV1,
     SavedWorkbenchPane, SCRATCH_EDITOR_KEY_PREFIX, WORKBENCH_LAYOUT_VERSION,
 };
 use alera_gpui_desktop::workbench_panes::{
-    PaneAttachGuard, PaneAxis, PaneSlot, WorkbenchPaneLayout,
+    shared_pinned_tab_row, PaneAttachGuard, PaneAxis, PaneSlot, WorkbenchPaneLayout,
 };
 use alera_gpui_desktop::workbench_tabs::{
     WorkbenchTab, WorkbenchTabIdentity, WorkbenchTabKind, WorkbenchTabs,
@@ -7052,9 +7052,16 @@ impl Workbench {
                     return;
                 }
                 view.terminals.status = match result {
-                    Ok(()) => format!(
-                        "Requested {cols}×{rows}; Host may defer while a mobile client holds viewport control"
-                    ),
+                    Ok(()) => {
+                        if let Some(target) = view
+                            .terminals
+                            .active_tab
+                            .and_then(|index| view.terminals.context_target_at(index))
+                        {
+                            view.terminals.apply_host_accepted_viewport(&target, cols, rows);
+                        }
+                        format!("Requested {cols}×{rows}; Host may defer while a mobile client holds viewport control")
+                    }
                     Err(error) => format!("Host Resize refused: {error}"),
                 };
                 cx.notify();
@@ -7094,11 +7101,21 @@ impl Workbench {
                     {
                         return;
                     }
-                    if let Err(error) = result {
-                        view.terminals.status = format!(
-                            "Auto Resize {cols}×{rows} refused (no repeated retries until size changes): {error}"
-                        );
-                        cx.notify();
+                    match result {
+                        Ok(()) => {
+                            // The Host accepted the resize. Expand the local
+                            // VT grid as well; otherwise a 24x80 preview keeps
+                            // letterboxing in a much larger GPUI pane.
+                            if view.terminals.apply_host_accepted_viewport(&target, cols, rows) {
+                                cx.notify();
+                            }
+                        }
+                        Err(error) => {
+                            view.terminals.status = format!(
+                                "Auto Resize {cols}×{rows} refused (no repeated retries until size changes): {error}"
+                            );
+                            cx.notify();
+                        }
                     }
                 }).ok();
             }).detach();
@@ -9190,14 +9207,28 @@ impl Workbench {
             }
         })
         .detach();
+        // Auto-resize gets its own single per-Workbench debounce poll. Don't
+        // make users see the old 80x24 VT grid until the unrelated 1.5s
+        // housekeeping timer fires (a common normal new-Tab UX gap).
+        cx.spawn(async move |view, cx| loop {
+            cx.background_executor()
+                .timer(Duration::from_millis(400))
+                .await;
+            if view
+                .update(cx, |view, cx| view.flush_auto_terminal_resizes(cx))
+                .is_err()
+            {
+                break;
+            }
+        })
+        .detach();
         // Housekeeping retains its existing 1.5s interval and is independent
-        // of the fast output reader. Never spawn a timer per tab.
+        // of Terminal resize and the fast output reader.
         cx.spawn(async move |view, cx| loop {
             cx.background_executor().timer(Duration::from_millis(1500)).await;
             if view
                 .update(cx, |view, cx| {
                     view.terminal_tick = view.terminal_tick.wrapping_add(1);
-                    view.flush_auto_terminal_resizes(cx);
                     view.poll_native_mcp_commands(cx);
                     // Classic and GPUI may remain open simultaneously.
                     // Poll a narrow six-field Host snapshot off the UI
@@ -9363,6 +9394,8 @@ impl Render for Workbench {
             self.native_settings.editor_two_row_tabs && !primary_pinned_tabs.is_empty();
         let secondary_two_rows =
             self.native_settings.editor_two_row_tabs && !secondary_pinned_tabs.is_empty();
+        let shared_pinned_row =
+            shared_pinned_tab_row(primary_two_rows, secondary_two_rows, mixed_has_secondary);
         // Classic only creates a second row when that pane has pinned tabs.
         // In one-row mode keep the pins ahead of the regular scrolling tabs.
         let mixed_primary_tabs = if primary_two_rows {
@@ -11887,10 +11920,24 @@ impl Render for Workbench {
                             .min_w_0()
                             .flex()
                             .flex_col()
+                            // One header layout owns both split Pane Tab bars.  The secondary
+                            // pane no longer starts a whole Tab-row below the primary.
+                            .child(
+                                div()
+                                    .id("mixed-pane-aligned-headers")
+                                    .flex()
+                                    .min_w_0()
+                                    .child(
+                                        div()
+                                            .id("mixed-primary-header-column")
+                                            .flex_1()
+                                            .min_w_0()
+                                            .flex()
+                                            .flex_col()
                             .child(
                                 div()
                                     .id("mixed-primary-pinned-tab-strip")
-                                    .when(primary_two_rows, |row| {
+                                    .when(shared_pinned_row, |row| {
                                         row.h(px(TAB_STRIP_HEIGHT))
                                             .min_w_0()
                                             .flex()
@@ -11900,7 +11947,7 @@ impl Render for Workbench {
                                             .bg(rgb(TOOLBAR))
                                             .border_b_1()
                                             .border_color(rgb(BORDER))
-                                            .children(primary_pinned_tabs.into_iter().enumerate().map(|(index, tab)| {
+                                            .children((if primary_two_rows { primary_pinned_tabs } else { Vec::new() }).into_iter().enumerate().map(|(index, tab)| {
                                                 let selected = mixed_primary_active.as_ref() == Some(&tab.identity);
                                                 Self::render_mixed_tab_chip(
                                                     index + 512,
@@ -12108,6 +12155,138 @@ impl Render for Workbench {
                                             )),
                                     ),
                             )
+                                    )
+                                    .child(if mixed_has_secondary && mixed_split_horizontal {
+                                        div()
+                                            .id("mixed-secondary-header-column")
+                                            .flex_1()
+                                            .min_w_0()
+                                            .flex()
+                                            .flex_col()
+                                            .border_l_1()
+                                            .border_color(rgb(BORDER))
+                                            .child(
+                                                div()
+                                                    .id("mixed-secondary-pinned-tab-strip")
+                                                    .when(shared_pinned_row, |row| {
+                                                        row.h(px(TAB_STRIP_HEIGHT))
+                                                            .min_w_0()
+                                                            .flex()
+                                                            .items_center()
+                                                            .overflow_x_scroll()
+                                                            .pl_2()
+                                                            .bg(rgb(TOOLBAR))
+                                                            .border_b_1()
+                                                            .border_color(rgb(BORDER))
+                                                            .children((if secondary_two_rows { secondary_pinned_tabs.clone() } else { Vec::new() }).into_iter().enumerate().map(|(index, tab)| {
+                                                                let selected = mixed_secondary_active.as_ref() == Some(&tab.identity);
+                                                                Self::render_mixed_tab_chip(
+                                                                    index + 512,
+                                                                    tab,
+                                                                    PaneSlot::Secondary,
+                                                                    selected,
+                                                                    true,
+                                                                    mixed_drag_generation,
+                                                                    cx,
+                                                                )
+                                                            }))
+                                                    }),
+                                            )
+                                            .child(
+                                                div()
+                                                    .id("mixed-secondary-toolbar")
+                                                    .h(px(TAB_STRIP_HEIGHT))
+                                                    .px_2()
+                                                    .flex()
+                                                    .items_center()
+                                                    .gap_1()
+                                                    .bg(rgb(TOOLBAR))
+                                                    .border_b_1()
+                                                    .border_color(rgb(BORDER))
+                                                    .child(
+                                                        div()
+                                                            .id("mixed-secondary-tabs-scroll")
+                                                            .flex_1()
+                                                            .min_w_0()
+                                                            .flex()
+                                                            .items_center()
+                                                            .overflow_x_scroll()
+                                                            .children(mixed_secondary_tabs.clone().into_iter().enumerate().map(|(index, tab)| {
+                                                                let selected = mixed_secondary_active.as_ref() == Some(&tab.identity);
+                                                                let pinned = pinned_ids.contains(&tab.identity);
+                                                                Self::render_mixed_tab_chip(
+                                                                    index, tab, PaneSlot::Secondary, selected, pinned,
+                                                                    mixed_drag_generation, cx,
+                                                                )
+                                                            }))
+                                                            .on_drop(cx.listener(|this, drag: &MixedTabDrag, window, cx| {
+                                                                if drag.workspace_generation == this.workspace_generation
+                                                                    && this.mixed_tab_is_current(&drag.identity, cx)
+                                                                    && this.transfer_editor_to_pane(&drag.identity, PaneSlot::Secondary, cx)
+                                                                {
+                                                                    this.focus_mixed_tab(&drag.identity, window, cx);
+                                                                    this.refresh_terminal_split_output(cx);
+                                                                }
+                                                            })),
+                                                    )
+                                                    .child({
+                                                        let owner = cx.entity().downgrade();
+                                                        let refresh_owner = owner.clone();
+                                                        let running = self.terminals.sessions.iter()
+                                                            .filter(|session| session.running)
+                                                            .map(|session| (
+                                                                session.clone(),
+                                                                format!("{} · {}", session.label(), session.workspace_id),
+                                                            ))
+                                                            .collect::<Vec<_>>();
+                                                        let target = PaneAttachGuard::capture(
+                                                            self.workspace_generation,
+                                                            PaneSlot::Secondary,
+                                                            &self.mixed_panes,
+                                                        );
+                                                        let profiles = self.agent_profiles.clone();
+                                                        let installed = self.installed_agent_clis.clone();
+                                                        let installed_loading = self.installed_agent_clis_loading;
+                                                        icon_button("mixed-secondary-new-tab", UiIcon::Add, "New Tab in second pane", terminal_creating
+                                                            && self.terminal_create_pane.as_ref().is_some_and(|pending| pending.target.pane() == PaneSlot::Secondary))
+                                                            .w(px(28.0))
+                                                            .h(px(28.0))
+                                                            .dropdown_menu(Self::kit_new_tab_menu(
+                                                                owner,
+                                                                target,
+                                                                running,
+                                                                profiles,
+                                                                installed,
+                                                                installed_loading,
+                                                                terminal_create_busy,
+                                                                terminal_create_timed_out,
+                                                                terminal_create_unknown,
+                                                            ))
+                                                            .on_open_change(move |open, _, cx| {
+                                                                if *open {
+                                                                    let _ = refresh_owner.update(cx, |view, cx| {
+                                                                        view.refresh_terminals(cx);
+                                                                        view.refresh_agent_profiles(cx);
+                                                                        view.refresh_installed_agent_clis(cx);
+                                                                    });
+                                                                }
+                                                            })
+                                                    })
+                                                    .child(
+                                                        icon_button("mixed-secondary-pane-actions", UiIcon::More, "Second pane actions", false)
+                                                            .dropdown_menu(Self::kit_pane_actions_menu(
+                                                                cx.entity().downgrade(),
+                                                                mixed_secondary_active.clone(),
+                                                                true,
+                                                                mixed_has_secondary,
+                                                            )),
+                                                    ),
+                                            )
+                                            .into_any_element()
+                                    } else {
+                                        div().h(px(0.0)).into_any_element()
+                                    }),
+                            )
                             .child(
                                 div()
                                     .h(px(29.0))
@@ -12267,6 +12446,8 @@ impl Render for Workbench {
                                         div()
                                             .id("terminal-colored-grid")
                                             .relative()
+                                            .min_w_0()
+                                            .bg(rgb(TERMINAL_DEFAULT_BG))
                                             .key_context("AleraGpuiTerminalRaw")
                                             .track_focus(&terminal_keyboard_focus)
                                             .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, window, cx| {
@@ -12322,7 +12503,7 @@ impl Render for Workbench {
                                                         .id(("terminal-colored-row", row_index))
                                                         .whitespace_nowrap()
                                                         .line_height(px(terminal_font_size * terminal_line_height))
-                                                        .bg(rgb(if selected { ACTIVE } else { BG }))
+                                                        .bg(rgb(if selected { ACTIVE } else { TERMINAL_DEFAULT_BG }))
                                                         .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |this, _, window, cx| {
                                                             // Text rows consume the pointer event; explicitly
                                                             // restore the Terminal IME sink, not the old Explorer.
@@ -12360,6 +12541,7 @@ impl Render for Workbench {
                                     } else {
                                         div()
                                             .id("terminal-output-scroll")
+                                            .bg(rgb(TERMINAL_DEFAULT_BG))
                                             .key_context("AleraGpuiTerminalRaw")
                                             .track_focus(&terminal_keyboard_focus)
                                             .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, window, cx| {
@@ -12485,9 +12667,20 @@ impl Render for Workbench {
                                             .flex_col()
                                             .border_l_1()
                                             .border_color(rgb(BORDER))
+                                            // Stacked panes keep their own header; horizontal
+                                            // panes share the aligned header above this split.
+                                            .child(if mixed_split_horizontal {
+                                                div().h(px(0.0)).into_any_element()
+                                            } else {
+                                                div()
+                                                    .id("mixed-secondary-stacked-header")
+                                                    .flex()
+                                                    .flex_col()
+                                                    .min_w_0()
                                             .child(
                                                 div()
                                                     .id("mixed-secondary-pinned-tab-strip")
+
                                                     .when(secondary_two_rows, |row| {
                                                         row.h(px(TAB_STRIP_HEIGHT))
                                                             .min_w_0()
@@ -12515,6 +12708,7 @@ impl Render for Workbench {
                                             .child(
                                                 div()
                                                     .id("mixed-secondary-toolbar")
+
                                                     .h(px(TAB_STRIP_HEIGHT))
                                                     .px_2()
                                                     .flex()
@@ -12602,6 +12796,8 @@ impl Render for Workbench {
                                                             )),
                                                     ),
                                             )
+                                                    .into_any_element()
+                                            })
                                             .child(if let Some(editor) = secondary_native_editor {
                                                 div()
                                                     .id("mixed-secondary-editor")
@@ -12622,6 +12818,8 @@ impl Render for Workbench {
                                                     .relative()
                                                     .flex_1()
                                                     .min_h_0()
+                                                    .min_w_0()
+                                                    .bg(rgb(TERMINAL_DEFAULT_BG))
                                                     .key_context("AleraGpuiTerminalRaw")
                                                     .track_focus(&secondary_terminal_keyboard_focus)
                                                     .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |this, _, window, cx| {

@@ -13,6 +13,17 @@ use crate::terminal::{TerminalSession, TerminalTabContextTarget};
 use crate::workbench_layout_store::SavedWorkbenchHostTab;
 use crate::workbench_tabs::{WorkbenchTab, WorkbenchTabIdentity};
 
+/// In a split, both tab headers reserve the same pinned row so that the
+/// actual tab-strip baseline remains aligned even if just one pane has pins.
+/// For a single pane, only the primary pane can add this extra row.
+pub fn shared_pinned_tab_row(
+    primary_two_rows: bool,
+    secondary_two_rows: bool,
+    has_secondary: bool,
+) -> bool {
+    primary_two_rows || (has_secondary && secondary_two_rows)
+}
+
 /// Which of the two workbench panes a tab strip belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum PaneSlot {
@@ -592,6 +603,15 @@ mod tests {
             0
         );
         assert!(!recycled.has_secondary());
+    }
+
+    #[test]
+    fn split_tab_headers_share_one_row_even_when_only_one_side_is_pinned() {
+        assert!(!shared_pinned_tab_row(false, false, true));
+        assert!(shared_pinned_tab_row(true, false, true));
+        assert!(shared_pinned_tab_row(false, true, true));
+        assert!(shared_pinned_tab_row(true, true, true));
+        assert!(!shared_pinned_tab_row(false, true, false));
     }
 
     #[test]
