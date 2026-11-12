@@ -88,6 +88,18 @@ fn adjacent_hunk_index(selected: Option<usize>, count: usize, next: bool) -> Opt
             .and_then(|index| index.checked_sub(1))
     }
 }
+
+fn center_hunk_controls(selected: Option<usize>, count: usize) -> (usize, bool, bool) {
+    if selected.is_some_and(|index| index >= count) {
+        return (0, false, false);
+    }
+    (
+        selected.map_or(0, |index| index.saturating_add(1)),
+        adjacent_hunk_index(selected, count, false).is_some(),
+        adjacent_hunk_index(selected, count, true).is_some(),
+    )
+}
+
 impl Workbench {
     pub(super) fn center_git_diff_is_current(&self) -> bool {
         self.center_git_diff_source.as_ref().is_some_and(|source| {
@@ -185,18 +197,10 @@ impl Workbench {
             Arc::new(Vec::new())
         };
         let hunk_count = rows.iter().filter(|row| row.hunk.is_some()).count();
-        let can_next_hunk = !self.git_diff_loading
-            && self.center_git_diff_is_current()
-            && match self.center_git_diff_hunk {
-                None => hunk_count > 0,
-                Some(selected) => selected + 1 < hunk_count,
-            };
-        let can_previous_hunk = !self.git_diff_loading
-            && self.center_git_diff_is_current()
-            && self
-                .center_git_diff_hunk
-                .is_some_and(|selected| selected > 0);
-        let selected_hunk = self.center_git_diff_hunk.map_or(0, |selected| selected + 1);
+        let (selected_hunk, previous_available, next_available) =
+            center_hunk_controls(self.center_git_diff_hunk, hunk_count);
+        let can_previous_hunk = valid && !self.git_diff_loading && previous_available;
+        let can_next_hunk = valid && !self.git_diff_loading && next_available;
         let count = rows.len();
         div()
             .id("central-git-diff-view")
@@ -394,7 +398,7 @@ impl Workbench {
 #[cfg(test)]
 mod tests {
     use super::{
-        adjacent_hunk_index, center_git_diff_rows, hunk_positions,
+        adjacent_hunk_index, center_git_diff_rows, center_hunk_controls, hunk_positions,
         should_show_center_git_diff_view, uses_paged_git_preview, GitChangeArea,
         MAX_CENTER_DIFF_SOURCE_BYTES,
     };
@@ -445,6 +449,16 @@ mod tests {
         assert_eq!(adjacent_hunk_index(Some(9), 3, false), None);
         assert_eq!(adjacent_hunk_index(Some(usize::MAX), 3, true), None);
         assert_eq!(adjacent_hunk_index(Some(usize::MAX), 3, false), None);
+    }
+    #[test]
+    fn center_diff_hunk_buttons_fail_closed_on_invalid_or_overflowed_selection() {
+        assert_eq!(center_hunk_controls(None, 0), (0, false, false));
+        assert_eq!(center_hunk_controls(None, 3), (0, false, true));
+        assert_eq!(center_hunk_controls(Some(0), 3), (1, false, true));
+        assert_eq!(center_hunk_controls(Some(1), 3), (2, true, true));
+        assert_eq!(center_hunk_controls(Some(2), 3), (3, true, false));
+        assert_eq!(center_hunk_controls(Some(3), 3), (0, false, false));
+        assert_eq!(center_hunk_controls(Some(usize::MAX), 3), (0, false, false));
     }
     #[test]
     fn git_change_rows_expose_bounded_center_diff_without_mixing_staged_previews() {
