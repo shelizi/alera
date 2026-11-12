@@ -187,7 +187,8 @@ impl CreatedHostTerminal {
     /// A Host creation reply is not sufficient to attach to a PTY: the next
     /// authenticated session list must corroborate all three identities.
     pub fn matches_live_session(&self, session: &TerminalSession) -> bool {
-        session.handle == self.handle
+        session.running
+            && session.handle == self.handle
             && session.workspace_id == self.workspace_id
             && session.tab_id == self.tab_id
     }
@@ -3613,6 +3614,35 @@ mod tests {
         assert!(flow.confirm_sessions(&[session("term-1")]).is_some());
         assert!(!flow.is_active());
         assert!(flow.start_request().is_some());
+    }
+
+    #[test]
+    fn terminal_create_cannot_confirm_a_host_session_that_exited_before_attach() {
+        let mut flow = TerminalCreateFlow::default();
+        let request = flow.start_request().unwrap();
+        let created = CreatedHostTerminal {
+            handle: "term-1".into(),
+            workspace_id: "workspace-1".into(),
+            tab_id: "tab-term-1".into(),
+        };
+        assert!(flow.finish_request(request, created.clone()));
+
+        let mut exited = session("term-1");
+        exited.running = false;
+        exited.agent_type = None;
+        assert!(
+            !created.matches_live_session(&exited),
+            "a matching Host identity is not proof that its PTY is still running"
+        );
+        assert!(
+            flow.confirm_sessions(&[exited]).is_none(),
+            "an exited PTY must never become a successfully attached Terminal"
+        );
+        assert!(flow.is_waiting(), "keep the existing confirmation request");
+        assert!(
+            flow.start_request().is_none(),
+            "do not spawn a second PTY while the first Host result is unresolved"
+        );
     }
 
     #[test]

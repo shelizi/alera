@@ -41,6 +41,12 @@
 - **Scratch workspace side effects:** `.code-review-graph` appeared under the dedicated nested Git smoke fixture during real-provider runs (directory timestamp observed), while the nested Git status still showed its preexisting modified smoke text and untracked test source-switch file. Do not attribute this directory to a particular Hook without further provenance, and do not delete protected Git fixture data. This did not modify the integration branch's tracked source files.
 - **Cleanup (PASS):** closed the test GUI and force-stopped **only** `smoke-real-agents-runtime-20261112` after both test sessions finished (`runtime stop --force` returned `stopped=true`, final isolated `running=false`, 0 isolated Host process). Verified a separate production Classic Host process remained running (count 1). No `main` merge, Push or deployment. Prior library 506/506, Native binary 31/31, and CLI 1268/1268 (+8 ignored) are previous verified suites; the current turn performed live GUI acceptance, not a new compilation/regression run.
 
+## Early-exit Host session guard (2026-11-12)
+- New RED regression `terminal_create_cannot_confirm_a_host_session_that_exited_before_attach` proved that an exact Host session/workspace/tab triple could previously be considered attachable even when `running=false` for ordinary Terminal creation.
+- Fixed shared `CreatedHostTerminal::matches_live_session` to require `running=true` for both ordinary and direct-Agent create paths; stopped sessions cannot complete a new Terminal attach, and the pending request remains unresolved instead of silently spawning a second PTY.
+- GREEN regression PASS. Full `cargo test --offline --locked`: **507/507 GPUI Rust Library PASS**, **31/31 Native Binary PASS**, 3 environment-gated integration tests ignored and doc tests PASS. `cargo fmt --all -- --check` and `git diff --check` PASS.
+- This is a source-level Windows-host regression, not a new live provider-crash or OS GUI recovery acceptance. All other remaining support gates below stay open.
+
 ## Remaining acceptance before supported=true
 - True-provider Windows startup, answer, Hook completion and GUI restart **are now proven for Codex and Claude Code** in the isolated fixture only. Other Agent providers, Windows abnormal crash/failure/retry paths and long-term Host persistence remain untested.
 - Native and Classic retain separate executable-override preferences; cross-edition synchronization is not provided. POSIX/macOS login-shell PATH hydration, icon parity and 150%/200% Windows DPI remain untested.
