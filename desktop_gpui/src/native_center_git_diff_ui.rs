@@ -82,6 +82,23 @@ pub(super) fn should_hide_underlying_terminal(
     center_is_editor || center_git_diff_visible
 }
 
+/// Explicit primary Editor or Explorer file navigation replaces temporary
+/// center overlays without deleting Git Original snapshots or Editor buffers.
+/// Secondary-pane actions must leave the primary projection intact.
+pub(super) fn release_primary_center_overlays_for_navigation(
+    pane: PaneSlot,
+    source: &mut Option<GitDialogFileSource>,
+    selected_hunk: &mut Option<usize>,
+    original_active: &mut bool,
+) {
+    if pane != PaneSlot::Primary {
+        return;
+    }
+    *source = None;
+    *selected_hunk = None;
+    *original_active = false;
+}
+
 /// A fresh page starts at its first hunk; a previous/next click never wraps,
 /// overflows or jumps to a hunk from an obsolete page.
 fn adjacent_hunk_index(selected: Option<usize>, count: usize, next: bool) -> Option<usize> {
@@ -441,9 +458,78 @@ impl Workbench {
 mod tests {
     use super::{
         adjacent_hunk_index, center_git_diff_rows, center_hunk_controls, center_hunk_target,
-        hunk_positions, should_hide_underlying_terminal, should_show_center_git_diff_view,
-        uses_paged_git_preview, GitChangeArea, MAX_CENTER_DIFF_SOURCE_BYTES,
+        hunk_positions, release_primary_center_overlays_for_navigation,
+        should_hide_underlying_terminal, should_show_center_git_diff_view, uses_paged_git_preview,
+        GitChangeArea, GitDialogFileSource, PaneSlot, MAX_CENTER_DIFF_SOURCE_BYTES,
     };
+
+    #[test]
+    fn new_primary_editor_reveals_buffer_without_dropping_secondary_overlay() {
+        let source = GitDialogFileSource {
+            workspace_generation: 3,
+            source_ticket: 9,
+            relative: "src/diff.txt".into(),
+        };
+        let mut selected_source = Some(source);
+        let mut selected_hunk = Some(2);
+        let mut original_active = false;
+
+        // Secondary Editor work must not hide or reset the primary Diff.
+        release_primary_center_overlays_for_navigation(
+            PaneSlot::Secondary,
+            &mut selected_source,
+            &mut selected_hunk,
+            &mut original_active,
+        );
+        assert!(selected_source.is_some());
+        assert_eq!(selected_hunk, Some(2));
+        assert!(!original_active);
+
+        // A new primary Editor must show without a second tab click.
+        release_primary_center_overlays_for_navigation(
+            PaneSlot::Primary,
+            &mut selected_source,
+            &mut selected_hunk,
+            &mut original_active,
+        );
+        assert!(selected_source.is_none());
+        assert_eq!(selected_hunk, None);
+
+        // Git Original remains stored, but no longer covers the new Editor.
+        original_active = true;
+        release_primary_center_overlays_for_navigation(
+            PaneSlot::Primary,
+            &mut selected_source,
+            &mut selected_hunk,
+            &mut original_active,
+        );
+        assert!(!original_active);
+    }
+
+    #[test]
+    fn explorer_file_preview_releases_stale_primary_center_overlay() {
+        let mut source = Some(super::GitDialogFileSource {
+            workspace_generation: 5,
+            source_ticket: 18,
+            relative: "first.txt".into(),
+        });
+        let mut hunk = Some(1);
+        let mut original_active = false;
+        // A direct Explorer click must reveal the new file, rather than
+        // leaving the previously selected Git diff above the preview.
+        super::release_primary_center_overlays_for_navigation(
+            super::PaneSlot::Primary,
+            &mut source,
+            &mut hunk,
+            &mut original_active,
+        );
+        assert!(source.is_none());
+        assert!(hunk.is_none());
+        assert!(!should_show_center_git_diff_view(
+            original_active,
+            source.is_some()
+        ));
+    }
 
     #[test]
     fn center_diff_virtual_rows_include_hunks_beyond_modal_first_400_lines() {

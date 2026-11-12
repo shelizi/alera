@@ -770,6 +770,18 @@ impl Workbench {
         false
     }
 
+    /// A user-selected primary Editor/Explorer tab replaces the transient
+    /// center Git projection. The read-only Original tab and dirty documents
+    /// retain ownership of their data; secondary tabs keep the primary view.
+    fn release_primary_center_overlays(&mut self, pane: PaneSlot) {
+        native_center_git_diff_ui::release_primary_center_overlays_for_navigation(
+            pane,
+            &mut self.center_git_diff_source,
+            &mut self.center_git_diff_hunk,
+            &mut self.git_original_active,
+        );
+    }
+
     fn click_explorer_file(
         &mut self,
         path: &Path,
@@ -795,10 +807,12 @@ impl Workbench {
             // A file already owned by a live editor buffer is reused, never
             // shadowed by a second read-only preview chip for the same path.
             self.focus_editor_instance(pane, instance, cx);
+            self.release_primary_center_overlays(pane);
             self.explorer_preview_active = false;
             self.model
                 .set_status("Focused existing editor buffer; no duplicate opened");
         } else if self.model.preview_path(path) {
+            self.release_primary_center_overlays(PaneSlot::Primary);
             self.explorer_preview_active = true;
             self.center_view = CenterView::Editor;
             window.focus(&self.explorer_keyboard_focus, cx);
@@ -4612,6 +4626,7 @@ impl Workbench {
         // If a pane already owns it, focus that exact existing document.
         if let Some((pane, instance)) = self.editor_instance_for_path(&path, cx) {
             self.focus_editor_instance(pane, instance, cx);
+            self.release_primary_center_overlays(pane);
             // The editable buffer is the single canonical tab for this
             // path; release any read-only preview chip that would duplicate it.
             self.model.release_path(&path);
@@ -4628,6 +4643,7 @@ impl Workbench {
                     self.install_editor(tabs, cx);
                     self.model.release_path(&path);
                     self.center_view = CenterView::Editor;
+                    self.release_primary_center_overlays(PaneSlot::Primary);
                 }
                 Err(error) => self.model.set_status(format!(
                     "Cannot edit {}: {error}. Recovery draft kept for investigation when one exists.",
@@ -4646,6 +4662,7 @@ impl Workbench {
                 self.model.set_status(effect.status());
                 self.model.release_path(&path);
                 self.center_view = CenterView::Editor;
+                self.release_primary_center_overlays(self.mixed_panes.focused_pane());
             }
             Err(error) => self.model.set_status(format!(
                 "Cannot edit {}: {error}. Recovery draft kept for investigation when one exists.",
@@ -4732,6 +4749,7 @@ impl Workbench {
         }
         self.explorer_preview_active = false;
         let root = self.model.root().to_path_buf();
+        let mut opened = false;
         if self.editor_for_pane(pane).is_none() {
             let mut tabs = EditorTabs::new(self.draft_store());
             match tabs.open_scratch(&root) {
@@ -4742,6 +4760,7 @@ impl Workbench {
                         PaneSlot::Secondary => self.install_secondary_editor(tabs, cx),
                     }
                     self.center_view = CenterView::Editor;
+                    opened = true;
                 }
                 Err(error) => self
                     .model
@@ -4753,11 +4772,15 @@ impl Workbench {
                 Ok(effect) => {
                     self.model.set_status(effect.status());
                     self.center_view = CenterView::Editor;
+                    opened = true;
                 }
                 Err(error) => self
                     .model
                     .set_status(format!("Cannot create an editor: {error}")),
             }
+        }
+        if opened {
+            self.release_primary_center_overlays(pane);
         }
         self.mixed_panes.focus_pane(pane);
         self.sync_mixed_tabs(cx);
@@ -11568,7 +11591,7 @@ impl Render for Workbench {
                                                             )
                                                             .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
                                                                 this.model.activate_tab(index);
-                                                                this.git_original_active = false;
+                                                                this.release_primary_center_overlays(PaneSlot::Primary);
                                                                 if event.click_count() >= 2 && transient {
                                                                     if let Some(path) = this.model.selected_path().map(PathBuf::from) {
                                                                         this.click_explorer_file(&path, true, window, cx);
