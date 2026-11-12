@@ -6365,7 +6365,12 @@ impl Workbench {
             self.runtime_bridge = RuntimeCliBridge::discover().ok();
         }
         let Some(bridge) = self.runtime_bridge.clone() else {
+            // A Diff or Editor can hide the terminal-only status panel. The
+            // primary status bar must still explain why explicit New Terminal
+            // could not create a tab; never start a Host during smoke tests.
             self.terminals.status = "Alera CLI missing; cannot create Host terminal".into();
+            self.model
+                .set_status("New Terminal unavailable: Alera CLI not found");
             cx.notify();
             return;
         };
