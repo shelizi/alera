@@ -501,14 +501,36 @@ mod tests {
         )
     }
 
+    fn sharing_all() -> RuntimeAgentHistorySyncSettings {
+        RuntimeAgentHistorySyncSettings {
+            mode: RuntimeAgentHistorySyncMode::All,
+            ..Default::default()
+        }
+    }
+
     #[test]
-    fn default_all_mirrors_only_transcripts_and_preserves_credentials() {
-        let (dir, accounts) = fixture();
-        let stats = mirror_accounts(
+    fn default_separate_does_not_copy_or_archive_any_account_history() {
+        let (directory, accounts) = fixture();
+        let archive = directory.path().join("host-snapshots");
+        let result = mirror_accounts_with_snapshots(
             &RuntimeAgentHistorySyncSettings::default(),
             &accounts,
             Duration::ZERO,
+            Some(&archive),
         );
+        assert_eq!(result.copied, 0);
+        assert_eq!(result.archived, 0);
+        assert!(!accounts[1]
+            .history_root
+            .join("2026/11/first.jsonl")
+            .exists());
+        assert!(!archive.exists());
+    }
+
+    #[test]
+    fn explicitly_enabled_all_mirrors_transcripts_and_preserves_credentials() {
+        let (dir, accounts) = fixture();
+        let stats = mirror_accounts(&sharing_all(), &accounts, Duration::ZERO);
         assert_eq!(stats.copied, 1);
         assert_eq!(
             fs::read_to_string(accounts[1].history_root.join("2026/11/first.jsonl")).unwrap(),
@@ -564,11 +586,7 @@ mod tests {
         let target = accounts[1].history_root.join("2026/11/first.jsonl");
         fs::create_dir_all(target.parent().unwrap()).unwrap();
         fs::write(&target, "other-account history").unwrap();
-        let stats = mirror_accounts(
-            &RuntimeAgentHistorySyncSettings::default(),
-            &accounts,
-            Duration::ZERO,
-        );
+        let stats = mirror_accounts(&sharing_all(), &accounts, Duration::ZERO);
         assert_eq!(stats.copied, 0);
         assert!(stats.conflicts >= 1);
         assert_eq!(fs::read_to_string(target).unwrap(), "other-account history");
@@ -577,7 +595,7 @@ mod tests {
     #[test]
     fn later_messages_are_reported_as_stale_and_never_overwrite_a_native_copy() {
         let (_, accounts) = fixture();
-        let policy = RuntimeAgentHistorySyncSettings::default();
+        let policy = sharing_all();
         assert_eq!(
             mirror_accounts(&policy, &accounts, Duration::ZERO).copied,
             1
@@ -597,7 +615,7 @@ mod tests {
     #[test]
     fn stale_native_copy_is_preserved_while_new_versions_are_archived_once() {
         let (temp, accounts) = fixture();
-        let policy = RuntimeAgentHistorySyncSettings::default();
+        let policy = sharing_all();
         let archive = temp.path().join("host-snapshots");
         assert_eq!(
             mirror_accounts(&policy, &accounts, Duration::ZERO).copied,
@@ -647,7 +665,7 @@ mod tests {
     fn never_archive_divergent_or_active_native_transcripts() {
         let (temp, accounts) = fixture();
         let archive = temp.path().join("host-snapshots");
-        let policy = RuntimeAgentHistorySyncSettings::default();
+        let policy = sharing_all();
         let source = accounts[0].history_root.join("2026/11/first.jsonl");
         let target = accounts[1].history_root.join("2026/11/first.jsonl");
         fs::create_dir_all(target.parent().unwrap()).unwrap();
@@ -679,12 +697,7 @@ mod tests {
     fn recent_transcript_must_not_be_copied() {
         let (_, accounts) = fixture();
         assert_eq!(
-            mirror_accounts(
-                &RuntimeAgentHistorySyncSettings::default(),
-                &accounts,
-                Duration::from_secs(3600),
-            )
-            .copied,
+            mirror_accounts(&sharing_all(), &accounts, Duration::from_secs(3600),).copied,
             0
         );
     }
@@ -695,23 +708,13 @@ mod tests {
         let foreign = accounts[0].history_root.clone();
         accounts[1].provider = "claude";
         assert_eq!(
-            mirror_accounts(
-                &RuntimeAgentHistorySyncSettings::default(),
-                &accounts,
-                Duration::ZERO
-            )
-            .copied,
+            mirror_accounts(&sharing_all(), &accounts, Duration::ZERO).copied,
             0
         );
         accounts[1].provider = "codex";
         accounts[1].history_root = foreign;
         assert_eq!(
-            mirror_accounts(
-                &RuntimeAgentHistorySyncSettings::default(),
-                &accounts,
-                Duration::ZERO
-            )
-            .copied,
+            mirror_accounts(&sharing_all(), &accounts, Duration::ZERO).copied,
             0
         );
     }

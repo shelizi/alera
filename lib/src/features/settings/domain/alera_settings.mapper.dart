@@ -2093,7 +2093,7 @@ class AgentHistorySyncSettingsMapper
 
   static AgentHistorySyncMode _$mode(AgentHistorySyncSettings v) => v.mode;
   static const Field<AgentHistorySyncSettings, AgentHistorySyncMode> _f$mode =
-      Field('mode', _$mode, opt: true, def: AgentHistorySyncMode.all);
+      Field('mode', _$mode, opt: true, def: AgentHistorySyncMode.separate);
   static Map<String, String> _$accountGroups(AgentHistorySyncSettings v) =>
       v.accountGroups;
   static const Field<AgentHistorySyncSettings, Map<String, String>>

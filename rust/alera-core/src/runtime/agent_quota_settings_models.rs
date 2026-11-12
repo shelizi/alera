@@ -116,8 +116,8 @@ impl RuntimeAgentQuotaSettings {
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum RuntimeAgentHistorySyncMode {
-    #[default]
     All,
+    #[default]
     Separate,
     Groups,
 }
@@ -280,17 +280,39 @@ mod tests {
     use super::*;
 
     #[test]
-    fn history_sync_defaults_to_all_for_legacy_settings() {
+    fn history_sync_defaults_to_separate_for_legacy_settings() {
         let settings: RuntimeAgentQuotaSettings =
             serde_json::from_value(serde_json::json!({"codexProfiles": []})).unwrap();
-        assert_eq!(settings.history_sync.mode, RuntimeAgentHistorySyncMode::All);
-        assert!(settings
+        assert_eq!(
+            settings.history_sync.mode,
+            RuntimeAgentHistorySyncMode::Separate
+        );
+        assert!(!settings
             .history_sync
             .should_sync("codex", "default", "work"));
         assert!(!settings
             .history_sync
             .should_sync("codex", "default", "default"));
         assert!(!settings.history_sync.should_sync("grok", "default", "work"));
+    }
+
+    #[test]
+    fn history_sync_only_merges_accounts_after_explicit_mode_selection() {
+        let fresh = RuntimeAgentQuotaSettings::default();
+        assert_eq!(
+            fresh.history_sync.mode,
+            RuntimeAgentHistorySyncMode::Separate
+        );
+        let omitted_mode: RuntimeAgentHistorySyncSettings =
+            serde_json::from_value(serde_json::json!({})).unwrap();
+        assert!(!omitted_mode.should_sync("claude", "default", "work"));
+        let explicit_all: RuntimeAgentQuotaSettings =
+            serde_json::from_value(serde_json::json!({"historySync": {"mode": "all"}})).unwrap();
+        assert!(explicit_all
+            .history_sync
+            .should_sync("codex", "default", "work"));
+        let serialized = serde_json::to_value(explicit_all).unwrap();
+        assert_eq!(serialized["historySync"]["mode"], "all");
     }
 
     #[test]
@@ -328,6 +350,16 @@ mod tests {
         assert!(settings.should_sync("agy", "default", "second"));
         assert!(!settings.account_groups.contains_key("claude:unused"));
         assert!(!settings.account_groups.contains_key("unknown:foo"));
+    }
+
+    #[test]
+    fn history_sync_json_missing_mode_is_also_separate() {
+        let policy: RuntimeAgentHistorySyncSettings = serde_json::from_value(
+            serde_json::json!({"accountGroups": {"codex:a": "team", "codex:b": "team"}}),
+        )
+        .unwrap();
+        assert_eq!(policy.mode, RuntimeAgentHistorySyncMode::Separate);
+        assert!(!policy.should_sync("codex", "a", "b"));
     }
 
     #[test]

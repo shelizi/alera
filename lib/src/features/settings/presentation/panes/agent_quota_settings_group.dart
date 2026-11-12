@@ -242,23 +242,23 @@ class const AgentQuotaSettingsPane({
             children: <Widget>[
               AleraSettingRow(
                 title: 'History Sharing Mode',
-                description: 'By default all accounts of the same Agent share history. Separate keeps each account isolated; Groups shares only matching group names.',
+                description: 'Accounts remain separate by default. Choose Sync All or Sync by Group to explicitly share history with other accounts of the same Agent.',
                 controlWidth: 340,
                 child: DropdownButton<AgentHistorySyncMode>(
                   isExpanded: true,
                   value: hostSettings.historySync.mode,
                   items: const <DropdownMenuItem<AgentHistorySyncMode>>[
                     DropdownMenuItem(
-                      value: AgentHistorySyncMode.all,
-                      child: Text('Sync All (Default)'),
+                      value: AgentHistorySyncMode.separate,
+                      child: Text('Keep Separate (Default)'),
                     ),
                     DropdownMenuItem(
-                      value: AgentHistorySyncMode.separate,
-                      child: Text('Keep Separate'),
+                      value: AgentHistorySyncMode.all,
+                      child: Text('Sync All (Opt-in)'),
                     ),
                     DropdownMenuItem(
                       value: AgentHistorySyncMode.groups,
-                      child: Text('Sync by Group'),
+                      child: Text('Sync by Group (Opt-in)'),
                     ),
                   ],
                   onChanged: (mode) {

@@ -10,7 +10,10 @@ async fn history_sync_policy_is_visible_to_two_clients_of_same_runtime_store() {
     let gpui = RuntimeStore::open(directory.path()).await.unwrap();
 
     let mut settings = classic.agent_quota_settings().await.unwrap();
-    assert_eq!(settings.history_sync.mode, RuntimeAgentHistorySyncMode::All);
+    assert_eq!(
+        settings.history_sync.mode,
+        RuntimeAgentHistorySyncMode::Separate
+    );
     settings.history_sync = RuntimeAgentHistorySyncSettings {
         mode: RuntimeAgentHistorySyncMode::Groups,
         account_groups: BTreeMap::from([
