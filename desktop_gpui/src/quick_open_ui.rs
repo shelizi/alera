@@ -29,6 +29,25 @@ pub(super) fn quick_open_enter_accepts_match(key: &str, composing: bool, has_mat
         && (key.eq_ignore_ascii_case("enter") || key.eq_ignore_ascii_case("return"))
 }
 
+/// Quick Open keyboard navigation targets the *current* result set.
+/// IME candidate selection owns Up/Down while a composition is active, and
+/// there is no synthetic selection when no files match the query.
+pub(super) fn quick_open_move_selection(
+    key: &str,
+    composing: bool,
+    selected: usize,
+    count: usize,
+) -> Option<usize> {
+    if composing || count == 0 {
+        return None;
+    }
+    match key.to_ascii_lowercase().as_str() {
+        "up" => Some(selected.min(count - 1).saturating_sub(1)),
+        "down" => Some(selected.saturating_add(1).min(count - 1)),
+        _ => None,
+    }
+}
+
 /// Only dismiss Quick Open after the active Native Editor owns the exact
 /// requested disk file. A failed open must not silently close the dialog
 /// while leaving some unrelated dirty buffer focused.
@@ -548,7 +567,7 @@ impl Render for QuickOpenInput {
 mod tests {
     use super::{
         accepts_native_text_event, normalize_input_text, quick_open_enter_accepts_match,
-        quick_open_target_is_active, remove_marked_preedit,
+        quick_open_move_selection, quick_open_target_is_active, remove_marked_preedit,
     };
 
     #[test]
@@ -562,6 +581,27 @@ mod tests {
             "one  two three"
         );
         assert_eq!(normalize_input_text("中\0文\n第二行", true), "中文\n第二行");
+    }
+
+    #[test]
+    fn e04_quick_open_arrows_select_bounded_matches_without_stealing_ime_keys() {
+        assert_eq!(quick_open_move_selection("down", false, 0, 3), Some(1));
+        assert_eq!(quick_open_move_selection("down", false, 1, 3), Some(2));
+        assert_eq!(quick_open_move_selection("down", false, 2, 3), Some(2));
+        assert_eq!(quick_open_move_selection("up", false, 2, 3), Some(1));
+        assert_eq!(quick_open_move_selection("up", false, 0, 3), Some(0));
+        assert_eq!(
+            quick_open_move_selection("DOWN", false, usize::MAX, 3),
+            Some(2)
+        );
+        assert_eq!(
+            quick_open_move_selection("up", false, usize::MAX, 3),
+            Some(1)
+        );
+        assert_eq!(quick_open_move_selection("down", true, 0, 3), None);
+        assert_eq!(quick_open_move_selection("up", true, 1, 3), None);
+        assert_eq!(quick_open_move_selection("down", false, 0, 0), None);
+        assert_eq!(quick_open_move_selection("enter", false, 0, 3), None);
     }
 
     #[test]

@@ -524,6 +524,9 @@ struct Workbench {
     worktree_delete_pending: Option<PathBuf>,
     picking_workspace: bool,
     quick_open: Option<Entity<QuickOpenInput>>,
+    quick_open_selected_index: usize,
+    quick_open_selection_query: String,
+    quick_open_results_scroll: ScrollHandle,
     explorer_filter_input: Entity<QuickOpenInput>,
     file_index: Option<Arc<WorkspaceFileIndex>>,
     file_index_loading: bool,
@@ -4476,7 +4479,20 @@ impl Workbench {
             window.close_dialog(cx);
         }
         let input = cx.new(QuickOpenInput::new);
-        cx.observe(&input, |_, _, cx| cx.notify()).detach();
+        self.quick_open_selected_index = 0;
+        self.quick_open_selection_query.clear();
+        self.quick_open_results_scroll.scroll_to_item(0);
+        let observed = input.clone();
+        cx.observe(&input, move |view, _, cx| {
+            let query = observed.read(cx).query().to_owned();
+            if view.quick_open_selection_query != query {
+                view.quick_open_selection_query = query;
+                view.quick_open_selected_index = 0;
+                view.quick_open_results_scroll.scroll_to_item(0);
+            }
+            cx.notify();
+        })
+        .detach();
         window.focus(&input.read(cx).focus_handle(cx), cx);
         self.quick_open = Some(input);
         self.ensure_file_index(cx);
@@ -14234,6 +14250,9 @@ fn main() {
                             worktree_delete_pending: None,
                             picking_workspace: false,
                             quick_open: None,
+                            quick_open_selected_index: 0,
+                            quick_open_selection_query: String::new(),
+                            quick_open_results_scroll: ScrollHandle::new(),
                             explorer_filter_input,
                             file_index: None,
                             file_index_loading: false,

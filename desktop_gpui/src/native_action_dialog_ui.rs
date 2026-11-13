@@ -593,8 +593,9 @@ impl Workbench {
             .as_ref()
             .map(|index| index.search_with_exclusions(input.read(cx).query(), 18, &excluded))
             .unwrap_or_default();
-        let first_match = matches.first().cloned();
         let count = matches.len();
+        let selected_index = self.quick_open_selected_index.min(count.saturating_sub(1));
+        let selected_match = matches.get(selected_index).cloned();
         let total = self
             .file_index
             .as_ref()
@@ -619,6 +620,7 @@ impl Workbench {
             .child(
                 div()
                     .id("native-quick-open-results")
+                    .track_scroll(&self.quick_open_results_scroll)
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()
@@ -631,7 +633,7 @@ impl Workbench {
                         native_components::menu_item(
                             ("native-quick-open-result", index),
                             label,
-                            index == 0,
+                            index == selected_index,
                             false,
                         )
                         .on_click(cx.listener(
@@ -644,12 +646,25 @@ impl Workbench {
         let content = content.on_key_down(cx.listener(
             move |view, event: &gpui::KeyDownEvent, window, cx| {
                 let key = event.keystroke.key.as_str();
+                let composing = input_for_enter.read(cx).composing();
+                if let Some(next) = crate::quick_open_ui::quick_open_move_selection(
+                    key,
+                    composing,
+                    view.quick_open_selected_index,
+                    count,
+                ) {
+                    view.quick_open_selected_index = next;
+                    view.quick_open_results_scroll.scroll_to_item(next);
+                    cx.notify();
+                    cx.stop_propagation();
+                    return;
+                }
                 if crate::quick_open_ui::quick_open_enter_accepts_match(
                     key,
-                    input_for_enter.read(cx).composing(),
-                    first_match.is_some(),
+                    composing,
+                    selected_match.is_some(),
                 ) {
-                    if let Some(path) = &first_match {
+                    if let Some(path) = &selected_match {
                         view.choose_quick_open_path(path, window, cx);
                     }
                     cx.stop_propagation();
