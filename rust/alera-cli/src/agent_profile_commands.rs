@@ -6,8 +6,9 @@ use serde::Serialize;
 use serde_json::{json, Value};
 
 use crate::agent_profile_input::{
-    draft_for_create, draft_for_update, ensure_expected_revision, ensure_risk_confirmation,
-    managed_config_for_create, managed_config_for_update, parse_revision_overrides,
+    draft_for_clone, draft_for_create, draft_for_update, ensure_expected_revision,
+    ensure_risk_confirmation, managed_config_for_create, managed_config_for_update,
+    parse_revision_overrides,
 };
 use crate::cli::{
     AgentProfileAction, AgentProfileCommand, AgentProfileReorderArgs, AgentProfileSelectorArgs,
@@ -101,6 +102,37 @@ async fn run_command(command: AgentProfileCommand) -> Result<()> {
                     &draft.update_payload(&existing.id, expected_revision),
                 )
                 .await?;
+            print_saved(&saved, json_output)?;
+        }
+        AgentProfileAction::Clone(args) => {
+            if args.expected_revision < 0 {
+                bail!("source expected revision must be non-negative");
+            }
+            let (_, profiles) = list_profiles(&mut client).await?;
+            let source = select_profile(&profiles, &args.selector)?;
+            ensure_expected_revision(source, Some(args.expected_revision))?;
+            let draft = draft_for_clone(source, &args.name)?;
+            // A new Managed profile inherits reduced protections; require a
+            // fresh explicit confirmation even if the source was configured so.
+            ensure_risk_confirmation(None, &draft, args.confirm_reduced_protections)?;
+            if draft.launch_mode == AgentProfileLaunchMode::Managed {
+                ensure_capabilities(
+                    &mut client,
+                    &[RUNTIME_HOST_MANAGED_AGENT_PROFILES_CAPABILITY],
+                )
+                .await?;
+            }
+            let saved = client
+                .request_value("agentProfile.upsert", &draft.create_payload())
+                .await?;
+            if saved
+                .get("id")
+                .and_then(Value::as_str)
+                .is_none_or(|id| id == source.id)
+                || saved.get("revision").and_then(Value::as_i64) != Some(0)
+            {
+                bail!("Host did not confirm a distinct cloned Agent Profile");
+            }
             print_saved(&saved, json_output)?;
         }
         AgentProfileAction::RemovalImpact(args) => {

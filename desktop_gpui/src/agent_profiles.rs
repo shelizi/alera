@@ -45,6 +45,40 @@ pub fn validate_profile_name(name: &str) -> io::Result<String> {
     Ok(name.to_owned())
 }
 
+/// Suggest Classic-style Copy/Copy 2 names without retaining Host credentials.
+/// Shorten only at UTF-8 code point boundaries to keep names <=256 bytes.
+pub fn suggest_clone_name(
+    source: &AgentProfileRow,
+    existing: &[AgentProfileRow],
+) -> io::Result<String> {
+    for sequence in 1..=existing.len().saturating_add(2) {
+        let suffix = if sequence == 1 {
+            " Copy".to_owned()
+        } else {
+            format!(" Copy {sequence}")
+        };
+        let budget = MAX_NAME_BYTES.saturating_sub(suffix.len());
+        let mut prefix = String::new();
+        for ch in source.name.trim().chars() {
+            if prefix.len() + ch.len_utf8() > budget {
+                break;
+            }
+            prefix.push(ch);
+        }
+        let candidate = validate_profile_name(&format!("{prefix}{suffix}"))?;
+        if !existing
+            .iter()
+            .any(|item| item.name.trim().eq_ignore_ascii_case(&candidate))
+        {
+            return Ok(candidate);
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "No unique Agent Profile clone name",
+    ))
+}
+
 /// Only secret-free reference counts and Host identity are retained in GPUI.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentProfileRemovalImpact {
@@ -297,6 +331,30 @@ pub fn matching_agent_handle<'a>(
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn clone_name_is_unique_and_respects_utf8_byte_limit() {
+        let row = |name: String| AgentProfileRow {
+            id: name.clone(),
+            name,
+            agent_type: "codex".into(),
+            managed: false,
+            revision: Some(0),
+        };
+        let existing = vec![
+            row("Review".into()),
+            row("Review Copy".into()),
+            row("Review Copy 2".into()),
+        ];
+        assert_eq!(
+            suggest_clone_name(&existing[0], &existing).unwrap(),
+            "Review Copy 3"
+        );
+        let long = row("界".repeat(85));
+        let suggestion = suggest_clone_name(&long, &[long.clone()]).unwrap();
+        assert!(suggestion.ends_with(" Copy"));
+        assert!(suggestion.len() <= 256);
+        assert!(std::str::from_utf8(suggestion.as_bytes()).is_ok());
+    }
 
     #[test]
     fn profile_removal_preview_is_revision_guarded_and_fails_closed_on_references() {

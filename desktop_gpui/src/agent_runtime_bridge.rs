@@ -27,6 +27,11 @@ enum AllowedAgentRequest<'a> {
         agent_type: &'a str,
         command: &'a str,
     },
+    Clone {
+        id: &'a str,
+        expected_revision: i64,
+        name: &'a str,
+    },
     Rename {
         id: &'a str,
         expected_revision: i64,
@@ -70,6 +75,18 @@ fn args_for(runtime: &Path, request: &AllowedAgentRequest<'_>) -> Vec<OsString> 
             args.push(OsString::from(format!("--agent-type={agent_type}")));
             args.push(OsString::from("--launch-mode=command"));
             args.push(OsString::from(format!("--command={command}")));
+        }
+        AllowedAgentRequest::Clone {
+            id,
+            expected_revision,
+            name,
+        } => {
+            args.push(OsString::from("clone"));
+            args.push(OsString::from(format!("--profile-id={id}")));
+            args.push(OsString::from(format!(
+                "--expected-revision={expected_revision}"
+            )));
+            args.push(OsString::from(format!("--name={name}")));
         }
         AllowedAgentRequest::Rename {
             id,
@@ -192,6 +209,43 @@ impl RuntimeCliBridge {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "Host did not confirm created Agent Profile",
+            ));
+        }
+        Ok(row)
+    }
+
+    /// Clone by Host-owned identity, never by reconstructing a profile from
+    /// Native's intentionally secret-free display projection.
+    pub fn clone_agent_profile(
+        &self,
+        source: &AgentProfileRow,
+        raw_name: &str,
+    ) -> io::Result<AgentProfileRow> {
+        let name = validate_profile_name(raw_name)?;
+        let revision = source.revision.filter(|n| *n >= 0).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidInput, "Missing Host Profile revision")
+        })?;
+        if !safe_runtime_id(&source.id, 128) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Invalid source Profile ID",
+            ));
+        }
+        let saved = self.invoke_existing_host_agent(AllowedAgentRequest::Clone {
+            id: &source.id,
+            expected_revision: revision,
+            name: &name,
+        })?;
+        let row = parse_saved_profile(saved)?;
+        if row.id == source.id
+            || row.name != name
+            || row.agent_type != source.agent_type
+            || row.managed != source.managed
+            || row.revision != Some(0)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Host did not confirm a distinct matching Agent Profile copy",
             ));
         }
         Ok(row)
@@ -393,6 +447,7 @@ impl RuntimeCliBridge {
         let prompt = match &request {
             AllowedAgentRequest::List
             | AllowedAgentRequest::CreateCommand { .. }
+            | AllowedAgentRequest::Clone { .. }
             | AllowedAgentRequest::Rename { .. }
             | AllowedAgentRequest::Reorder { .. }
             | AllowedAgentRequest::RemovalImpact { .. }
@@ -467,6 +522,47 @@ impl RuntimeCliBridge {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clone_cli_request_uses_only_host_identity_revision_and_new_name() {
+        let runtime = Path::new("C:/isolated/runtime");
+        let args = args_for(
+            runtime,
+            &AllowedAgentRequest::Clone {
+                id: "profile_1",
+                expected_revision: 3,
+                name: "Review Copy",
+            },
+        );
+        assert_eq!(args[1], "--no-start");
+        assert!(args.iter().any(|part| part == "clone"));
+        assert!(args.iter().any(|part| part == "--profile-id=profile_1"));
+        assert!(args.iter().any(|part| part == "--expected-revision=3"));
+        assert!(args.iter().any(|part| part == "--name=Review Copy"));
+        assert!(!args
+            .iter()
+            .any(|part| part.to_string_lossy().contains("managedConfig")));
+        let dir = tempfile::tempdir().unwrap();
+        let bridge = RuntimeCliBridge::new(
+            dir.path().join("missing-cli.exe"),
+            &dir.path().join("runtime"),
+        );
+        let row = AgentProfileRow {
+            id: "profile_1".into(),
+            name: "Review".into(),
+            agent_type: "codex".into(),
+            managed: false,
+            revision: Some(3),
+        };
+        assert_eq!(
+            bridge
+                .clone_agent_profile(&row, "Review Copy")
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::NotConnected
+        );
+        assert!(!dir.path().join("runtime").exists());
+    }
 
     #[test]
     fn profile_create_and_rename_are_explicit_no_start_and_revision_guarded() {

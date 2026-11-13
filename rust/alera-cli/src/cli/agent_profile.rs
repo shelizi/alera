@@ -27,6 +27,8 @@ pub enum AgentProfileAction {
     Create(AgentProfileCreateArgs),
     /// Patch an existing agent profile.
     Update(AgentProfileUpdateArgs),
+    /// Clone a Host-owned profile with a new name and source revision check.
+    Clone(AgentProfileCloneArgs),
     /// Preview references that affect removal.
     #[command(name = "removal-impact")]
     RemovalImpact(AgentProfileRevisionSelectorArgs),
@@ -83,6 +85,21 @@ pub struct AgentProfileRemoveArgs {
     /// Confirm destructive removal after the runtime checks references.
     #[arg(long, required = true)]
     pub confirm: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct AgentProfileCloneArgs {
+    #[command(flatten)]
+    pub selector: AgentProfileSelectorArgs,
+    /// Require the exact Host revision the user observed.
+    #[arg(long = "expected-revision")]
+    pub expected_revision: i64,
+    /// Unique name for the copy.
+    #[arg(long)]
+    pub name: String,
+    /// Copying risky Managed configuration requires explicit confirmation.
+    #[arg(long = "confirm-reduced-protections")]
+    pub confirm_reduced_protections: bool,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]

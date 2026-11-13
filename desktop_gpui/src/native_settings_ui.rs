@@ -277,6 +277,88 @@ impl Workbench {
         cx.notify();
     }
 
+    /// Clone the complete Host-owned source using only its ID/revision here.
+    /// The CLI reads commands, prompts and Managed options from the Host.
+    fn clone_selected_host_agent_profile(&mut self, cx: &mut Context<Self>) {
+        if self.agent_profile_mutation_busy || self.agent_profiles_loading {
+            return;
+        }
+        let Some(source) = self
+            .agent_profiles
+            .iter()
+            .find(|profile| Some(profile.id.as_str()) == self.agent_selected_profile.as_deref())
+            .cloned()
+        else {
+            self.agent_profile_mutation_status = "Select a Host Profile to clone".into();
+            cx.notify();
+            return;
+        };
+        let name = match alera_gpui_desktop::agent_profiles::suggest_clone_name(
+            &source,
+            &self.agent_profiles,
+        ) {
+            Ok(value) => value,
+            Err(error) => {
+                self.agent_profile_mutation_status = format!("Cannot clone Profile: {error}");
+                cx.notify();
+                return;
+            }
+        };
+        if self.runtime_bridge.is_none() {
+            self.runtime_bridge = RuntimeCliBridge::discover().ok();
+        }
+        let Some(bridge) = self.runtime_bridge.clone() else {
+            self.agent_profile_mutation_status =
+                "Alera CLI missing; cannot clone Host Profile".into();
+            cx.notify();
+            return;
+        };
+        self.agent_profile_removal_preview = None;
+        self.agent_profile_mutation_busy = true;
+        self.agent_profile_mutation_request = self.agent_profile_mutation_request.wrapping_add(1);
+        let ticket = self.agent_profile_mutation_request;
+        let generation = self.workspace_generation;
+        let source_id = source.id.clone();
+        let managed = source.managed;
+        self.agent_profile_mutation_status = "Cloning complete Host Profile configuration…".into();
+        cx.spawn(async move |view, cx| {
+            let result = cx.background_spawn(async move {
+                bridge.clone_agent_profile(&source, &name)
+            }).await;
+            view.update(cx, |view, cx| {
+                if view.workspace_generation != generation
+                    || view.agent_profile_mutation_request != ticket {
+                    return;
+                }
+                view.agent_profile_mutation_busy = false;
+                match result {
+                    Ok(copy) => {
+                        if view.agent_selected_profile.as_deref() == Some(source_id.as_str()) {
+                            view.agent_selected_profile = Some(copy.id.clone());
+                            view.agent_profile_name_input.update(cx, |input, cx| {
+                                input.set_query(&copy.name, cx);
+                            });
+                        }
+                        view.agent_profile_mutation_status =
+                            "Host Profile cloned; complete configuration retained, catalog refreshing".into();
+                        view.agent_profiles_loading = false;
+                        view.agent_profiles_request = view.agent_profiles_request.wrapping_add(1);
+                        view.refresh_agent_profiles(cx);
+                    }
+                    Err(error) => {
+                        view.agent_profile_mutation_status = if managed {
+                            format!("Managed Profile clone not confirmed: {error}. Reduced-protection options require explicit confirmation in Classic or CLI.")
+                        } else {
+                            format!("Profile clone not confirmed: {error}. Refresh Host Profiles before retrying.")
+                        };
+                    }
+                }
+                cx.notify();
+            }).ok();
+        }).detach();
+        cx.notify();
+    }
+
     /// Reorder Host Profiles with the complete observed revision snapshot,
     /// never by mutating Native JSON or reusing stale local indices.
     fn move_host_agent_profile(
@@ -955,7 +1037,7 @@ impl Workbench {
                 ))
                 .child(div().mt_3().text_sm().child("Manage Host Agent Profiles"))
                 .child(div().text_xs().text_color(rgb(MUTED)).child(
-                    "Create a standard Command Profile using its default CLI, or rename a selected Host Profile. Advanced commands and Managed options remain in Classic.",
+                    "Create a default Command Profile, rename, or clone a selected Host Profile. Clone preserves Host settings; advanced editing and reduced-protection confirmation remain in Classic or CLI.",
                 ))
                 .child(self.agent_profile_name_input.clone())
                 .child(div().text_xs().text_color(rgb(MUTED)).child(
@@ -986,7 +1068,7 @@ impl Workbench {
                     ),
                 )
                 .child(
-                    div().flex().gap_3()
+                    div().flex().flex_wrap().gap_3()
                         .child(
                             div().id("native-create-agent-profile")
                                 .cursor_pointer().text_sm()
@@ -1003,6 +1085,15 @@ impl Workbench {
                                 .child("Rename selected")
                                 .on_click(cx.listener(|view, _, _, cx| {
                                     view.save_host_agent_profile(true, cx);
+                                }))
+                        )
+                        .child(
+                            div().id("native-clone-agent-profile")
+                                .cursor_pointer().text_sm()
+                                .text_color(rgb(if self.agent_profile_mutation_busy { MUTED } else { TEXT }))
+                                .child("Clone selected")
+                                .on_click(cx.listener(|view, _, _, cx| {
+                                    view.clone_selected_host_agent_profile(cx);
                                 }))
                         )
                 )
