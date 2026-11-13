@@ -359,6 +359,95 @@ impl Workbench {
         cx.notify();
     }
 
+    /// Explicit, read-only discovery from the installed Agent CLI. These
+    /// bounded, fixed Classic-compatible commands never run at page startup.
+    fn discover_selected_agent_profile_choices(
+        &mut self,
+        kind: ManagedChoiceKind,
+        cx: &mut Context<Self>,
+    ) {
+        if self.agent_profile_discovery_busy
+            || self.agent_profile_mutation_busy
+            || self.agent_profiles_loading
+        {
+            return;
+        }
+        let Some(selected) = self
+            .agent_profiles
+            .iter()
+            .find(|profile| Some(profile.id.as_str()) == self.agent_selected_profile.as_deref())
+            .filter(|profile| profile.managed)
+            .cloned()
+        else {
+            self.agent_profile_discovery_status =
+                "Select a Managed Profile before discovering options".into();
+            cx.notify();
+            return;
+        };
+        if discovery_arguments(&selected.agent_type, kind).is_none() {
+            self.agent_profile_discovery_status =
+                "This adapter does not expose a registered read-only option list; enter an exact ID"
+                    .into();
+            cx.notify();
+            return;
+        }
+        let Some(installed) = self
+            .installed_agent_clis
+            .iter()
+            .find(|agent| agent.id == selected.agent_type)
+            .cloned()
+        else {
+            self.agent_profile_discovery_status =
+                "Agent CLI not installed; rescan installed Agents or enter an exact ID".into();
+            cx.notify();
+            return;
+        };
+        self.agent_profile_discovery_busy = true;
+        self.agent_profile_discovery_request = self.agent_profile_discovery_request.wrapping_add(1);
+        let ticket = self.agent_profile_discovery_request;
+        let generation = self.workspace_generation;
+        self.agent_profile_discovery_status = "Discovering installed Agent options…".into();
+        cx.spawn(async move |view, cx| {
+            let result = cx.background_spawn(async move {
+                discover_choices(&installed, kind)
+            }).await;
+            let _ = view.update(cx, |view, cx| {
+                if view.workspace_generation != generation
+                    || view.agent_profile_discovery_request != ticket
+                    || view.agent_selected_profile.as_deref() != Some(selected.id.as_str())
+                    || !view.agent_profiles.iter().any(|row| {
+                        row.id == selected.id
+                            && row.managed
+                            && row.revision == selected.revision
+                    })
+                {
+                    return;
+                }
+                view.agent_profile_discovery_busy = false;
+                match result {
+                    Ok(choices) => {
+                        let count = choices.len();
+                        match kind {
+                            ManagedChoiceKind::Models => view.agent_profile_discovered_models = choices,
+                            ManagedChoiceKind::Personas => view.agent_profile_discovered_personas = choices,
+                        }
+                        view.agent_profile_discovery_status = if count == 0 {
+                            "No supported options reported; enter an exact ID if known".into()
+                        } else {
+                            format!("{count} available option(s) discovered; click one to fill the edit field")
+                        };
+                    }
+                    Err(error) => {
+                        view.agent_profile_discovery_status =
+                            format!("Read-only discovery unavailable: {error}; enter an exact ID");
+                    }
+                }
+                cx.notify();
+            });
+        }).detach();
+        cx.notify();
+    }
+
     /// The Host owns the entire Managed configuration. Native only exposes
     /// its display-safe model/persona selection after an explicit Host read.
     pub(super) fn load_selected_agent_profile_managed_selection(&mut self, cx: &mut Context<Self>) {
@@ -1605,6 +1694,12 @@ impl Workbench {
                                     view.agent_profile_removal_preview = None;
                                     view.agent_profile_content_loaded = None;
                                     view.agent_profile_managed_loaded = None;
+                                    view.agent_profile_discovery_request =
+                                        view.agent_profile_discovery_request.wrapping_add(1);
+                                    view.agent_profile_discovery_busy = false;
+                                    view.agent_profile_discovered_models.clear();
+                                    view.agent_profile_discovered_personas.clear();
+                                    view.agent_profile_discovery_status.clear();
                                     view.agent_profile_model_input.update(cx, |input, cx| input.clear(cx));
                                     view.agent_profile_persona_input.update(cx, |input, cx| input.clear(cx));
                                     view.agent_profile_command_input.update(cx, |input, cx| input.clear(cx));
@@ -1794,7 +1889,7 @@ impl Workbench {
                     |panel| panel
                         .child(div().mt_3().text_sm().child("Managed Model / Persona · Host Profile"))
                         .child(div().text_xs().text_color(rgb(MUTED)).child(
-                            "Uses the same adapter capability rules as Classic. Enter an exact Model ID or Persona name; empty selection uses the agent default. Only these two fields change; sandbox and permissions remain Host-owned. Model/Persona discovery is not yet connected to GPUI.",
+                            "Uses Classic's registered read-only option discovery when supported; exact Model IDs and Persona names can always be entered manually. Only these two fields change; Sandbox and Permissions remain Host-owned.",
                         ))
                         .child(div().flex().flex_wrap().gap_3()
                             .child(div().id("native-load-profile-managed-selection")
@@ -1827,6 +1922,46 @@ impl Workbench {
                                 })))
                         )
                         .when(
+                            self.agent_profiles.iter().find(|row| {
+                                selected_profile.as_deref() == Some(row.id.as_str())
+                            }).is_some_and(|row| discovery_arguments(
+                                &row.agent_type, ManagedChoiceKind::Models,
+                            ).is_some()),
+                            |panel| panel.child(
+                                div().id("native-discover-managed-models")
+                                    .cursor_pointer().text_sm()
+                                    .text_color(rgb(if self.agent_profile_discovery_busy { MUTED } else { TEXT }))
+                                    .child("Refresh Model choices (read-only)")
+                                    .on_click(cx.listener(|view, _, _, cx| {
+                                        view.discover_selected_agent_profile_choices(
+                                            ManagedChoiceKind::Models, cx,
+                                        );
+                                    }))
+                            ),
+                        )
+                        .when(
+                            self.agent_profiles.iter().find(|row| {
+                                selected_profile.as_deref() == Some(row.id.as_str())
+                            }).is_some_and(|row| discovery_arguments(
+                                &row.agent_type, ManagedChoiceKind::Personas,
+                            ).is_some()),
+                            |panel| panel.child(
+                                div().id("native-discover-managed-personas")
+                                    .cursor_pointer().text_sm()
+                                    .text_color(rgb(if self.agent_profile_discovery_busy { MUTED } else { TEXT }))
+                                    .child("Refresh Persona choices (read-only)")
+                                    .on_click(cx.listener(|view, _, _, cx| {
+                                        view.discover_selected_agent_profile_choices(
+                                            ManagedChoiceKind::Personas, cx,
+                                        );
+                                    }))
+                            ),
+                        )
+                        .when(!self.agent_profile_discovery_status.is_empty(), |panel| panel
+                            .child(div().text_xs().text_color(rgb(MUTED))
+                                .child(self.agent_profile_discovery_status.clone()))
+                        )
+                        .when(
                             self.agent_profile_managed_loaded.as_ref().is_some_and(|fields| {
                                 selected_profile.as_deref() == Some(fields.id.as_str())
                                     && self.agent_profiles.iter().any(|row| {
@@ -1847,6 +1982,25 @@ impl Workbench {
                                     .when(supports_model, |panel| panel
                                         .child(div().text_xs().text_color(rgb(MUTED)).child("Exact Model ID (leave unchanged for current setting)"))
                                         .child(self.agent_profile_model_input.clone())
+                                        .child(div().flex().flex_wrap().gap_2().children(
+                                            self.agent_profile_discovered_models.iter().cloned().enumerate()
+                                                .map(|(index, model)| {
+                                                    div().id(("native-managed-model-option", index))
+                                                        .cursor_pointer().p_1().text_xs()
+                                                        .bg(rgb(PANEL)).text_color(rgb(TEXT))
+                                                        .child(model.clone())
+                                                        .on_click(cx.listener(move |view, _, _, cx| {
+                                                            if view.agent_profile_mutation_busy
+                                                                || view.agent_profile_managed_loaded.is_none() {
+                                                                return;
+                                                            }
+                                                            view.agent_profile_model_input.update(cx, |input, cx| {
+                                                                input.set_query(&model, cx);
+                                                            });
+                                                            cx.notify();
+                                                        }))
+                                                }),
+                                        ))
                                     )
                                     .when(!supports_model, |panel| panel
                                         .child(div().text_xs().text_color(rgb(MUTED)).child("This adapter has no Model override"))
@@ -1854,6 +2008,25 @@ impl Workbench {
                                     .when(supports_persona, |panel| panel
                                         .child(div().text_xs().text_color(rgb(MUTED)).child("Exact Persona / Agent name"))
                                         .child(self.agent_profile_persona_input.clone())
+                                        .child(div().flex().flex_wrap().gap_2().children(
+                                            self.agent_profile_discovered_personas.iter().cloned().enumerate()
+                                                .map(|(index, persona)| {
+                                                    div().id(("native-managed-persona-option", index))
+                                                        .cursor_pointer().p_1().text_xs()
+                                                        .bg(rgb(PANEL)).text_color(rgb(TEXT))
+                                                        .child(persona.clone())
+                                                        .on_click(cx.listener(move |view, _, _, cx| {
+                                                            if view.agent_profile_mutation_busy
+                                                                || view.agent_profile_managed_loaded.is_none() {
+                                                                return;
+                                                            }
+                                                            view.agent_profile_persona_input.update(cx, |input, cx| {
+                                                                input.set_query(&persona, cx);
+                                                            });
+                                                            cx.notify();
+                                                        }))
+                                                }),
+                                        ))
                                     )
                                     .when(!supports_persona, |panel| panel
                                         .child(div().text_xs().text_color(rgb(MUTED)).child("This adapter has no Persona selection"))

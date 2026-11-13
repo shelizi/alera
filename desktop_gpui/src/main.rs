@@ -80,6 +80,9 @@ use alera_gpui_desktop::host_tab_pins::{
     host_pin_owner_coverage, host_pin_query_workspaces, HostPinOwnerCoverage, HostTabPinSnapshot,
 };
 use alera_gpui_desktop::local_agent_detection::{detect_installed_agent_clis, InstalledAgentCli};
+use alera_gpui_desktop::managed_choice_discovery::{
+    discover_choices, discovery_arguments, ManagedChoiceKind,
+};
 use alera_gpui_desktop::mcp_ui_bridge::{
     matching_host_tab_handle, NativeMcpUiBridge, NativeMcpUiCommand, NativeMcpUiEvent,
 };
@@ -700,6 +703,11 @@ struct Workbench {
     agent_profile_managed_loaded: Option<AgentProfileManagedSelectionFields>,
     agent_profile_model_input: Entity<QuickOpenInput>,
     agent_profile_persona_input: Entity<QuickOpenInput>,
+    agent_profile_discovered_models: Vec<String>,
+    agent_profile_discovered_personas: Vec<String>,
+    agent_profile_discovery_busy: bool,
+    agent_profile_discovery_request: u64,
+    agent_profile_discovery_status: String,
     agent_profile_command_input: Entity<QuickOpenInput>,
     agent_profile_custom_prompt_input: Entity<QuickOpenInput>,
     agent_profile_new_adapter: String,
@@ -6328,6 +6336,12 @@ impl Workbench {
                                     })
                             });
                         if !managed_is_current {
+                            view.agent_profile_discovery_request =
+                                view.agent_profile_discovery_request.wrapping_add(1);
+                            view.agent_profile_discovery_busy = false;
+                            view.agent_profile_discovered_models.clear();
+                            view.agent_profile_discovered_personas.clear();
+                            view.agent_profile_discovery_status.clear();
                             view.agent_profile_managed_loaded = None;
                             view.agent_profile_model_input
                                 .update(cx, |input, cx| input.clear(cx));
@@ -6348,6 +6362,12 @@ impl Workbench {
                         view.agent_profile_routing_loaded = None;
                         view.agent_profile_content_loaded = None;
                         view.agent_profile_managed_loaded = None;
+                        view.agent_profile_discovery_request =
+                            view.agent_profile_discovery_request.wrapping_add(1);
+                        view.agent_profile_discovery_busy = false;
+                        view.agent_profile_discovered_models.clear();
+                        view.agent_profile_discovered_personas.clear();
+                        view.agent_profile_discovery_status.clear();
                         view.agent_profile_model_input
                             .update(cx, |input, cx| input.clear(cx));
                         view.agent_profile_persona_input
@@ -14416,6 +14436,11 @@ fn main() {
                             agent_profile_persona_input: cx.new(|cx| {
                                 QuickOpenInput::with_placeholder("Exact Persona / Agent name (empty = default)…", cx)
                             }),
+                            agent_profile_discovered_models: Vec::new(),
+                            agent_profile_discovered_personas: Vec::new(),
+                            agent_profile_discovery_busy: false,
+                            agent_profile_discovery_request: 0,
+                            agent_profile_discovery_status: String::new(),
                             agent_profile_command_input: cx.new(|cx| {
                                 QuickOpenInput::profile_command(cx)
                             }),
