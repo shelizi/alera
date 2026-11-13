@@ -297,6 +297,47 @@ mod tests {
         );
     }
 
+    /// Uses an entirely fake local Windows CLI. This tests the actual shim,
+    /// hard-coded args, process pipes and parser without touching Provider auth.
+    #[cfg(windows)]
+    #[test]
+    fn windows_mock_cli_models_and_personas_are_discovered_end_to_end() {
+        let fixture = tempfile::tempdir().expect("disposable CLI fixture");
+        let script = fixture.path().join("Mock Agent CLI.cmd");
+        std::fs::write(
+            &script,
+            concat!(
+                "@echo off\r\n",
+                "if \"%~1\"==\"models\" (\r\n",
+                "  echo openai/gpt-5\r\n",
+                "  echo anthropic/claude-sonnet\r\n",
+                "  exit /b 0\r\n",
+                ")\r\n",
+                "if \"%~1\"==\"agent\" if \"%~2\"==\"list\" (\r\n",
+                "  echo build ^(primary^)\r\n",
+                "  echo review ^(subagent^)\r\n",
+                "  exit /b 0\r\n",
+                ")\r\n",
+                "exit /b 5\r\n",
+            ),
+        )
+        .expect("write isolated fake read-only CLI");
+
+        let fake = InstalledAgentCli {
+            id: "opencode".into(),
+            display_name: "Fake OpenCode".into(),
+            executable_path: script,
+        };
+        assert_eq!(
+            discover_choices(&fake, ManagedChoiceKind::Models).unwrap(),
+            ["openai/gpt-5", "anthropic/claude-sonnet"]
+        );
+        assert_eq!(
+            discover_choices(&fake, ManagedChoiceKind::Personas).unwrap(),
+            ["build", "review"]
+        );
+    }
+
     #[test]
     fn unsupported_agent_or_missing_executable_never_starts_discovery() {
         let agent = InstalledAgentCli {
