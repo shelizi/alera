@@ -469,3 +469,109 @@ fn agent_profile_routing_updates_only_requested_fields_and_guards_revision() {
     assert_eq!(managed_updated["description"], "Managed routing only");
     assert_eq!(managed_updated["quotaGroup"], "managed-updated");
 }
+
+/// GPUI's Command/Prompt editor must write through stdin against a disposable
+/// Host, preserve the other Host-owned fields, and reject stale revisions.
+#[test]
+fn agent_profile_stdin_command_prompt_roundtrip_on_isolated_host() {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    fn update_from_stdin(runtime_dir: &Path, id: &str, rev: i64, body: &str) -> Output {
+        let mut child = windowless_command(env!("CARGO_BIN_EXE_alera"))
+            .arg("agent-profile")
+            .arg("--runtime-dir")
+            .arg(runtime_dir)
+            .arg("--json")
+            .arg("--no-start")
+            .args([
+                "update",
+                "--profile-id",
+                id,
+                "--expected-revision",
+                &rev.to_string(),
+                "--edit-content-stdin",
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("disposable CLI process");
+        child
+            .stdin
+            .take()
+            .expect("piped stdin")
+            .write_all(body.as_bytes())
+            .expect("send bounded edit body");
+        child.wait_with_output().expect("CLI update result")
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let _guard = RuntimeGuard {
+        runtime_dir: temp.path().to_path_buf(),
+    };
+    start_isolated_runtime(temp.path());
+    let original = success_json(
+        temp.path(),
+        &[
+            "create",
+            "--name",
+            "Prompt Roundtrip QA",
+            "--agent-type",
+            "codex",
+            "--launch-mode",
+            "command",
+            "--command",
+            "codex --original",
+            "--custom-prompt",
+            "Original instructions",
+            "--description",
+            "Description stays",
+            "--quota-group",
+            "group-original",
+        ],
+    );
+    let id = original["id"].as_str().unwrap();
+    let output = update_from_stdin(
+        temp.path(),
+        id,
+        0,
+        r#"{"command":"codex --revised","customPrompt":"First line\nSecond line"}"#,
+    );
+    assert!(
+        output.status.success(),
+        "stdin update failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let saved: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(saved["revision"], 1);
+    assert_eq!(saved["command"], "codex --revised");
+    assert_eq!(saved["customPrompt"], "First line\nSecond line");
+    for key in ["agentType", "launchMode", "description", "quotaGroup"] {
+        assert_eq!(saved[key], original[key], "unexpected change to {key}");
+    }
+
+    let stale = update_from_stdin(
+        temp.path(),
+        id,
+        0,
+        r#"{"customPrompt":"Must not be saved"}"#,
+    );
+    assert!(!stale.status.success(), "stale write must fail");
+    let after_stale = success_json(temp.path(), &["show", "--profile-id", id]);
+    assert_eq!(after_stale["revision"], 1);
+    assert_eq!(after_stale["customPrompt"], "First line\nSecond line");
+
+    let cleared = update_from_stdin(temp.path(), id, 1, r#"{"clearCustomPrompt":true}"#);
+    assert!(
+        cleared.status.success(),
+        "clear failed: {}",
+        String::from_utf8_lossy(&cleared.stderr)
+    );
+    let after_clear = success_json(temp.path(), &["show", "--profile-id", id]);
+    assert_eq!(after_clear["revision"], 2);
+    assert_eq!(after_clear["customPrompt"], "");
+    assert_eq!(after_clear["command"], "codex --revised");
+    assert_eq!(after_clear["description"], "Description stays");
+    assert_eq!(after_clear["quotaGroup"], "group-original");
+}

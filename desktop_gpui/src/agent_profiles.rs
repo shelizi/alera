@@ -78,6 +78,59 @@ pub fn parse_profile_routing_fields(value: &Value) -> io::Result<AgentProfileRou
     })
 }
 
+/// Temporary, user-requested edit projection. Never persist, log, or include
+/// the Host's Managed options/credentials in this editor model.
+#[derive(Clone, PartialEq, Eq)]
+pub struct AgentProfileContentFields {
+    pub id: String,
+    pub revision: i64,
+    pub managed: bool,
+    pub command: String,
+    pub custom_prompt: String,
+}
+
+pub fn parse_profile_content_fields(value: &Value) -> io::Result<AgentProfileContentFields> {
+    let id = value
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|id| safe_runtime_id(id, 128))
+        .ok_or_else(|| invalid("Host Agent Profile content ID is invalid"))?;
+    let revision = value
+        .get("revision")
+        .and_then(Value::as_i64)
+        .filter(|revision| *revision >= 0)
+        .ok_or_else(|| invalid("Host Agent Profile content revision is invalid"))?;
+    let mode = value
+        .get("launchMode")
+        .and_then(Value::as_str)
+        .filter(|mode| matches!(*mode, "command" | "managed"))
+        .ok_or_else(|| invalid("Host Agent Profile launch mode is invalid"))?;
+    let command = value
+        .get("command")
+        .and_then(Value::as_str)
+        .ok_or_else(|| invalid("Host Agent Profile Command is unavailable"))?;
+    let prompt = value
+        .get("customPrompt")
+        .and_then(Value::as_str)
+        .ok_or_else(|| invalid("Host Agent Profile Custom Prompt is unavailable"))?;
+    if command.len() > 4096
+        || command.contains(['\r', '\n', '\0'])
+        || prompt.len() > 8192
+        || prompt.contains('\0')
+    {
+        return Err(invalid(
+            "Host Agent Profile content is invalid or exceeds editor limits",
+        ));
+    }
+    Ok(AgentProfileContentFields {
+        id: id.to_owned(),
+        revision,
+        managed: mode == "managed",
+        command: command.to_owned(),
+        custom_prompt: prompt.replace("\r\n", "\n").replace('\r', "\n"),
+    })
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LaunchedAgentTab {
     pub workspace_id: String,
@@ -390,6 +443,38 @@ pub fn matching_agent_handle<'a>(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn command_prompt_content_projection_preserves_multiline_without_managed_secrets() {
+        let value = json!({
+            "id":"prof_abc","revision":7,"launchMode":"command",
+            "command":"codex --session review","customPrompt":"第一行\nSecond line",
+            "managedConfig":{"token":"MUST_NOT_COPY"},
+        });
+        let fields = parse_profile_content_fields(&value).unwrap();
+        assert_eq!(fields.id, "prof_abc");
+        assert_eq!(fields.revision, 7);
+        assert!(!fields.managed);
+        assert_eq!(fields.command, "codex --session review");
+        assert_eq!(fields.custom_prompt, "第一行\nSecond line");
+        let crlf = json!({"id":"prof_abc","revision":8,"launchMode":"managed",
+            "command":"","customPrompt":"A\r\nB\rC"});
+        let content = parse_profile_content_fields(&crlf).unwrap();
+        assert!(content.managed);
+        assert_eq!(content.custom_prompt, "A\nB\nC");
+        for raw in [
+            json!({"id":"../escape","revision":7,"launchMode":"command","command":"codex","customPrompt":""}),
+            json!({"id":"prof_abc","revision":-1,"launchMode":"command","command":"codex","customPrompt":""}),
+            json!({"id":"prof_abc","revision":7,"launchMode":"invalid","command":"codex","customPrompt":""}),
+            json!({"id":"prof_abc","revision":7,"launchMode":"command","command":"codex\nbad","customPrompt":""}),
+            json!({"id":"prof_abc","revision":7,"launchMode":"command","command":"codex","customPrompt":"bad\0prompt"}),
+            json!({"id":"prof_abc","revision":7,"launchMode":"command","command":"codex","customPrompt": 5}),
+            json!({"id":"prof_abc","revision":7,"launchMode":"command","command":"codex","customPrompt":"x".repeat(8193)}),
+        ] {
+            assert!(parse_profile_content_fields(&raw).is_err());
+        }
+    }
+
     #[test]
     fn routing_fields_are_host_owned_secret_free_projection() {
         let source = json!({

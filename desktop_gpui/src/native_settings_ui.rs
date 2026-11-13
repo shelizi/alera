@@ -359,6 +359,220 @@ impl Workbench {
         cx.notify();
     }
 
+    /// Explicitly load Command and Custom Prompt for a temporary edit session.
+    /// The full Host response is projected before any UI state is updated.
+    pub(super) fn load_selected_agent_profile_content(&mut self, cx: &mut Context<Self>) {
+        if self.agent_profile_mutation_busy || self.agent_profiles_loading {
+            return;
+        }
+        let Some(selected) = self
+            .agent_profiles
+            .iter()
+            .find(|profile| Some(profile.id.as_str()) == self.agent_selected_profile.as_deref())
+            .cloned()
+        else {
+            self.agent_profile_mutation_status =
+                "Select a Host Profile to edit Command/Prompt".into();
+            cx.notify();
+            return;
+        };
+        self.agent_profile_content_loaded = None;
+        self.agent_profile_command_input
+            .update(cx, |input, cx| input.clear(cx));
+        self.agent_profile_custom_prompt_input
+            .update(cx, |input, cx| input.clear(cx));
+        if self.runtime_bridge.is_none() {
+            self.runtime_bridge = RuntimeCliBridge::discover().ok();
+        }
+        let Some(bridge) = self.runtime_bridge.clone() else {
+            self.agent_profile_mutation_status =
+                "Alera CLI missing; cannot load Command/Prompt".into();
+            cx.notify();
+            return;
+        };
+        self.agent_profile_mutation_busy = true;
+        self.agent_profile_mutation_request = self.agent_profile_mutation_request.wrapping_add(1);
+        let ticket = self.agent_profile_mutation_request;
+        let generation = self.workspace_generation;
+        self.agent_profile_mutation_status = "Loading Command/Prompt from Host…".into();
+        cx.spawn(async move |view, cx| {
+            let result = cx
+                .background_spawn(async move { bridge.load_agent_profile_content(&selected) })
+                .await;
+            let _ = view.update(cx, |view, cx| {
+                if view.workspace_generation != generation
+                    || view.agent_profile_mutation_request != ticket
+                {
+                    return;
+                }
+                view.agent_profile_mutation_busy = false;
+                match result {
+                    Ok(fields)
+                        if view.agent_selected_profile.as_deref() == Some(fields.id.as_str())
+                            && view.agent_profiles.iter().any(|profile| {
+                                profile.id == fields.id
+                                    && profile.revision == Some(fields.revision)
+                                    && profile.managed == fields.managed
+                            }) =>
+                    {
+                        let command_loaded = view
+                            .agent_profile_command_input
+                            .update(cx, |input, cx| input.set_query(&fields.command, cx));
+                        let prompt_loaded = view
+                            .agent_profile_custom_prompt_input
+                            .update(cx, |input, cx| input.set_query(&fields.custom_prompt, cx));
+                        if command_loaded && prompt_loaded {
+                            view.agent_profile_content_loaded = Some(fields);
+                            view.agent_profile_mutation_status =
+                                "Command/Prompt loaded from Host; edit then Save or Clear Prompt"
+                                    .into();
+                        } else {
+                            view.agent_profile_mutation_status =
+                                "Host content exceeds editor limits; nothing loaded".into();
+                        }
+                    }
+                    Ok(_) => {
+                        view.agent_profile_mutation_status =
+                            "Host Profile changed during content load; refresh and reselect it"
+                                .into();
+                    }
+                    Err(error) => {
+                        view.agent_profile_mutation_status =
+                            format!("Unable to load Command/Prompt: {error}");
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// Explicit user action only; edits are transient until Host CAS succeeds.
+    /// Clearing a prompt requires the separate Clear Prompt action.
+    fn save_selected_agent_profile_content(&mut self, clear_only: bool, cx: &mut Context<Self>) {
+        if self.agent_profile_mutation_busy || self.agent_profiles_loading {
+            return;
+        }
+        let Some(selected) = self
+            .agent_profiles
+            .iter()
+            .find(|profile| Some(profile.id.as_str()) == self.agent_selected_profile.as_deref())
+            .cloned()
+        else {
+            self.agent_profile_mutation_status = "Select a Host Profile before saving".into();
+            cx.notify();
+            return;
+        };
+        let Some(original) = self.agent_profile_content_loaded.as_ref() else {
+            self.agent_profile_mutation_status =
+                "Load Command/Prompt from Host before editing".into();
+            cx.notify();
+            return;
+        };
+        if original.id != selected.id
+            || Some(original.revision) != selected.revision
+            || original.managed != selected.managed
+        {
+            self.agent_profile_mutation_status =
+                "Host Profile changed; reload before saving".into();
+            cx.notify();
+            return;
+        }
+        if self.agent_profile_command_input.read(cx).composing()
+            || self.agent_profile_custom_prompt_input.read(cx).composing()
+        {
+            self.agent_profile_mutation_status = "Finish IME composition before saving".into();
+            cx.notify();
+            return;
+        }
+        let command_now = self
+            .agent_profile_command_input
+            .read(cx)
+            .query()
+            .trim()
+            .to_owned();
+        let prompt_now = self
+            .agent_profile_custom_prompt_input
+            .read(cx)
+            .query()
+            .to_owned();
+        if !selected.managed && !clear_only && command_now.is_empty() {
+            self.agent_profile_mutation_status = "Command must not be empty".into();
+            cx.notify();
+            return;
+        }
+        if !clear_only && prompt_now.trim().is_empty() && prompt_now != original.custom_prompt {
+            self.agent_profile_mutation_status =
+                "Use the explicit Clear Prompt button to remove instructions".into();
+            cx.notify();
+            return;
+        }
+        let command = if clear_only || selected.managed || command_now == original.command {
+            None
+        } else {
+            Some(command_now)
+        };
+        let prompt = if clear_only || prompt_now == original.custom_prompt {
+            None
+        } else {
+            Some(prompt_now)
+        };
+        let clear_prompt = clear_only && !original.custom_prompt.is_empty();
+        if command.is_none() && prompt.is_none() && !clear_prompt {
+            self.agent_profile_mutation_status = "No Command/Prompt changes to save".into();
+            cx.notify();
+            return;
+        }
+        if self.runtime_bridge.is_none() {
+            self.runtime_bridge = RuntimeCliBridge::discover().ok();
+        }
+        let Some(bridge) = self.runtime_bridge.clone() else {
+            self.agent_profile_mutation_status =
+                "Alera CLI missing; cannot save Command/Prompt".into();
+            cx.notify();
+            return;
+        };
+        self.agent_profile_mutation_busy = true;
+        self.agent_profile_mutation_request = self.agent_profile_mutation_request.wrapping_add(1);
+        let ticket = self.agent_profile_mutation_request;
+        let generation = self.workspace_generation;
+        self.agent_profile_mutation_status =
+            "Saving Command/Prompt to Host with revision check…".into();
+        cx.spawn(async move |view, cx| {
+            let result = cx.background_spawn(async move {
+                bridge.update_agent_profile_command_prompt(
+                    &selected, command.as_deref(), prompt.as_deref(), clear_prompt
+                )
+            }).await;
+            let _ = view.update(cx, |view, cx| {
+                if view.workspace_generation != generation
+                    || view.agent_profile_mutation_request != ticket {
+                    return;
+                }
+                view.agent_profile_mutation_busy = false;
+                view.agent_profile_content_loaded = None;
+                view.agent_profile_command_input.update(cx, |input, cx| input.clear(cx));
+                view.agent_profile_custom_prompt_input.update(cx, |input, cx| input.clear(cx));
+                match result {
+                    Ok(_) => {
+                        view.agent_profile_mutation_status =
+                            "Command/Prompt saved in Host; catalog refreshing for independent readback".into();
+                        view.agent_profiles_loading = false;
+                        view.agent_profiles_request = view.agent_profiles_request.wrapping_add(1);
+                        view.refresh_agent_profiles(cx);
+                    }
+                    Err(error) => {
+                        view.agent_profile_mutation_status =
+                            format!("Host Command/Prompt not saved: {error}. Reload before retrying.");
+                    }
+                }
+                cx.notify();
+            });
+        }).detach();
+        cx.notify();
+    }
+
     /// Only Description/Quota Group are writable here; existing Host Command,
     /// Prompt and Managed configurations are never part of Native UI state.
     fn save_selected_agent_profile_routing(&mut self, cx: &mut Context<Self>) {
@@ -1154,6 +1368,9 @@ impl Workbench {
                                     }
                                     view.agent_selected_profile = Some(selection_id.clone());
                                     view.agent_profile_removal_preview = None;
+                                    view.agent_profile_content_loaded = None;
+                                    view.agent_profile_command_input.update(cx, |input, cx| input.clear(cx));
+                                    view.agent_profile_custom_prompt_input.update(cx, |input, cx| input.clear(cx));
                                     view.agent_profile_name_input.update(cx, |input, cx| {
                                         input.set_query(&name_for_edit, cx);
                                     });
@@ -1223,7 +1440,7 @@ impl Workbench {
                 ))
                 .child(div().mt_3().text_sm().child("Manage Host Agent Profiles"))
                 .child(div().text_xs().text_color(rgb(MUTED)).child(
-                    "Create, rename, clone, or edit Routing for a selected Host Profile. Managed options/model/persona editing and reduced-protection confirmation remain in Classic or CLI.",
+                    "Create, rename, clone, or edit Routing, Command and Custom Prompt. Managed options/model/persona editing and reduced-protection confirmation remain in Classic or CLI.",
                 ))
                 .child(self.agent_profile_name_input.clone())
                 .child(div().text_xs().text_color(rgb(MUTED)).child(
@@ -1282,6 +1499,54 @@ impl Workbench {
                                     view.clone_selected_host_agent_profile(cx);
                                 }))
                         )
+                )
+                .child(div().mt_3().text_sm().child("Command / Custom Prompt · Host Profile"))
+                .child(div().text_xs().text_color(rgb(MUTED)).child(
+                    "Explicitly load these Host-owned fields to edit. Command mode uses a single-line command; Custom Prompt preserves multiple lines. Changes are not saved until confirmed.",
+                ))
+                .child(div().flex().flex_wrap().gap_3()
+                    .child(div().id("native-load-profile-content")
+                        .cursor_pointer().text_sm()
+                        .text_color(rgb(if self.agent_profile_mutation_busy { MUTED } else { TEXT }))
+                        .child("Load Command / Prompt")
+                        .on_click(cx.listener(|view, _, _, cx| {
+                            view.load_selected_agent_profile_content(cx);
+                        })))
+                    .child(div().id("native-save-profile-content")
+                        .cursor_pointer().text_sm()
+                        .text_color(rgb(if self.agent_profile_mutation_busy { MUTED } else { TEXT }))
+                        .child("Save Command / Prompt")
+                        .on_click(cx.listener(|view, _, _, cx| {
+                            view.save_selected_agent_profile_content(false, cx);
+                        })))
+                    .child(div().id("native-clear-profile-prompt")
+                        .cursor_pointer().text_sm()
+                        .text_color(rgb(if self.agent_profile_mutation_busy { MUTED } else { TEXT }))
+                        .child("Clear Prompt")
+                        .on_click(cx.listener(|view, _, _, cx| {
+                            view.save_selected_agent_profile_content(true, cx);
+                        })))
+                )
+                .when(
+                    self.agent_profile_content_loaded.as_ref().is_some_and(|fields| {
+                        selected_profile.as_deref() == Some(fields.id.as_str())
+                            && self.agent_profiles.iter().any(|profile| {
+                                profile.id == fields.id
+                                    && profile.revision == Some(fields.revision)
+                                    && profile.managed == fields.managed
+                            })
+                    }),
+                    |panel| {
+                        panel
+                            .when(
+                                self.agent_profile_content_loaded.as_ref().is_some_and(|fields| !fields.managed),
+                                |panel| panel
+                                    .child(div().text_xs().text_color(rgb(MUTED)).child("Command (single line, up to 4 KiB)"))
+                                    .child(self.agent_profile_command_input.clone()),
+                            )
+                            .child(div().text_xs().text_color(rgb(MUTED)).child("Custom Prompt (multiline, up to 8 KiB)"))
+                            .child(self.agent_profile_custom_prompt_input.clone())
+                    }
                 )
                 .child(div().mt_3().text_sm().child("Routing · selected Host Profile"))
                 .child(div().text_xs().text_color(rgb(MUTED)).child(

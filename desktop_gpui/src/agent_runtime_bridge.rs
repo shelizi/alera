@@ -2,10 +2,10 @@
 //! authentication, Agent launch semantics, MCP injection and PTY lifetimes.
 //! No generic process runner is exposed to GPUI views.
 use crate::agent_profiles::{
-    parse_launched_agent, parse_profile_catalog, parse_profile_removal_impact,
-    parse_profile_routing_fields, safe_runtime_id, validate_profile_name,
-    validate_profile_routing_fields, AgentProfileRemovalImpact, AgentProfileRoutingFields,
-    AgentProfileRow, LaunchedAgentTab,
+    parse_launched_agent, parse_profile_catalog, parse_profile_content_fields,
+    parse_profile_removal_impact, parse_profile_routing_fields, safe_runtime_id,
+    validate_profile_name, validate_profile_routing_fields, AgentProfileContentFields,
+    AgentProfileRemovalImpact, AgentProfileRoutingFields, AgentProfileRow, LaunchedAgentTab,
 };
 use crate::runtime_bridge::RuntimeCliBridge;
 use alera_core::child_process::windowless_command;
@@ -376,6 +376,35 @@ impl RuntimeCliBridge {
         Ok(fields)
     }
 
+    /// User-initiated, transient Host content read. This projection must
+    /// remain in the active edit UI only and is never copied to shared settings.
+    pub fn load_agent_profile_content(
+        &self,
+        selected: &AgentProfileRow,
+    ) -> io::Result<AgentProfileContentFields> {
+        if !safe_runtime_id(&selected.id, 128)
+            || selected.revision.is_none_or(|revision| revision < 0)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "An observed Host revision is required to edit Profile content",
+            ));
+        }
+        let response =
+            self.invoke_existing_host_agent(AllowedAgentRequest::Show { id: &selected.id })?;
+        let content = parse_profile_content_fields(&response)?;
+        if content.id != selected.id
+            || Some(content.revision) != selected.revision
+            || content.managed != selected.managed
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "Host Profile changed; refresh before editing Command/Prompt",
+            ));
+        }
+        Ok(content)
+    }
+
     /// Patch only routing fields via CLI update; the CLI's Host draft retains
     /// Command, Custom Prompt and the full Managed configuration unchanged.
     pub fn save_agent_profile_routing(
@@ -471,6 +500,8 @@ impl RuntimeCliBridge {
                 "Command edits require a Command-mode Agent Profile",
             ));
         }
+        let expected_command = command.clone();
+        let expected_prompt = custom_prompt.clone();
         let content = command_prompt_edit_json(command, custom_prompt, clear_custom_prompt);
         let value = self.invoke_existing_host_agent(AllowedAgentRequest::UpdateCommandPrompt {
             id: &selected.id,
@@ -486,6 +517,20 @@ impl RuntimeCliBridge {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "Host did not confirm a revision-guarded Command/Prompt update",
+            ));
+        }
+        let verified = self.load_agent_profile_content(&row)?;
+        if expected_command
+            .as_ref()
+            .is_some_and(|command| verified.command != *command)
+            || expected_prompt
+                .as_ref()
+                .is_some_and(|prompt| verified.custom_prompt != *prompt)
+            || (clear_custom_prompt && !verified.custom_prompt.is_empty())
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Host Command/Prompt readback differs from saved edit",
             ));
         }
         Ok(row)
