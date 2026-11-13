@@ -3,7 +3,7 @@
 use serde::Deserialize;
 use serde_json::Value;
 
-pub const REFRESH_INTERVAL_SECS: u64 = 15 * 60;
+pub const REFRESH_INTERVAL_SECS: u64 = 5 * 60;
 const MAX_SNAPSHOTS: usize = 128;
 
 const PROVIDERS: &[(&str, &str)] = &[
@@ -169,6 +169,34 @@ impl QuotaSnapshot {
         readings.sort_by_key(|reading| reading.order);
         readings
     }
+}
+
+/// Classic shows the provider icon, not its full name, in the status row.
+/// Only account aliases disambiguate multi-account or OpenCode entries.
+pub fn status_bar_account_label(snapshot: &QuotaSnapshot, all: &[QuotaSnapshot]) -> Option<String> {
+    if snapshot.provider == "opencode" {
+        return Some(
+            if snapshot.account_id == "go" {
+                "Go"
+            } else {
+                "Zen"
+            }
+            .to_owned(),
+        );
+    }
+    let peers = all
+        .iter()
+        .filter(|row| row.provider == snapshot.provider)
+        .count();
+    if snapshot.account_id == "default" || snapshot.account_id.is_empty() {
+        return (peers > 1).then(|| "Default".to_owned());
+    }
+    let alias = snapshot.display_name.trim();
+    Some(if alias.is_empty() {
+        snapshot.account_id.clone()
+    } else {
+        alias.to_owned()
+    })
 }
 
 /// Classic status-bar visibility follows the shared per-account pin list
@@ -337,6 +365,33 @@ pub fn merge_quota_snapshots(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn classic_status_bar_refreshes_five_minutes_and_uses_compact_account_labels() {
+        assert_eq!(REFRESH_INTERVAL_SECS, 5 * 60);
+        let snapshots = parse_quota_snapshots(&json!({"snapshots": [
+            {"provider":"claude","accountId":"default","status":"ok"},
+            {"provider":"claude","accountId":"work","displayName":"Work","status":"ok"},
+            {"provider":"codex","accountId":"default","status":"ok"},
+            {"provider":"agy","accountId":"default","status":"ok"},
+            {"provider":"opencode","accountId":"go","status":"ok"}
+        ]}))
+        .unwrap();
+        assert_eq!(
+            status_bar_account_label(&snapshots[0], &snapshots),
+            Some("Default".into())
+        );
+        assert_eq!(
+            status_bar_account_label(&snapshots[1], &snapshots),
+            Some("Work".into())
+        );
+        assert_eq!(status_bar_account_label(&snapshots[2], &snapshots), None);
+        assert_eq!(status_bar_account_label(&snapshots[3], &snapshots), None);
+        assert_eq!(
+            status_bar_account_label(&snapshots[4], &snapshots),
+            Some("Go".into())
+        );
+    }
 
     #[test]
     fn visual_fixture_covers_ten_provider_logos_multiple_accounts_and_agy_five_metrics() {

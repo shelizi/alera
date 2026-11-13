@@ -1,7 +1,9 @@
 //! GPUI presentation of Classic's Host-owned Agent Quota snapshots.
 //! Every query is read-only and performed on the background executor.
 use super::*;
-use alera_gpui_desktop::agent_quota::{merge_quota_snapshots, parse_quota_snapshots, QuotaReading};
+use alera_gpui_desktop::agent_quota::{
+    merge_quota_snapshots, parse_quota_snapshots, status_bar_account_label, QuotaReading,
+};
 use std::io;
 use std::sync::OnceLock;
 
@@ -16,6 +18,12 @@ fn light_current_color_icon(
     cache
         .get_or_init(|| original.replace("currentColor", "#EAEAEA").into_bytes())
         .as_slice()
+}
+
+/// Classic's compact quota gauge, rather than a generic bullet.
+fn quota_gauge_icon() -> gpui::AnyElement {
+    const SVG: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#A1A1A1" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 17a8.5 8.5 0 1 1 17 0"/><path d="M12 17l4.5-5"/><circle cx="12" cy="17" r="1.5" fill="#A1A1A1" stroke="none"/></svg>"##;
+    gpui::svg().data(SVG).size(px(13.0)).into_any_element()
 }
 
 fn quota_provider_icon(provider: &str, size: f32) -> gpui::AnyElement {
@@ -123,9 +131,33 @@ fn quota_overview_status(loading: bool, failed: bool, has_entries: bool) -> &'st
 #[cfg(test)]
 mod quota_ui_tests {
     use super::{
-        light_current_color_icon, quota_overview_status, quota_pin_button_label, quota_status_label,
+        light_current_color_icon, quota_overview_status, quota_pin_button_label,
+        quota_reading_color, quota_status_label, QuotaReading,
     };
+    use alera_gpui_desktop::visual_tokens::{AGENT_BLOCKED, AGENT_DONE, AGENT_WAITING, FAINT};
     use std::sync::OnceLock;
+
+    #[test]
+    fn status_bar_remaining_colors_follow_classic_thresholds_without_stale_green() {
+        let mut reading = QuotaReading {
+            label: "W".into(),
+            value: "19%".into(),
+            remaining_percent: Some(19.0),
+            reset: None,
+            order: 1,
+        };
+        assert_eq!(quota_reading_color("ok", &reading), AGENT_BLOCKED);
+        reading.remaining_percent = Some(20.0);
+        assert_eq!(quota_reading_color("ok", &reading), AGENT_WAITING);
+        reading.remaining_percent = Some(49.0);
+        assert_eq!(quota_reading_color("ok", &reading), AGENT_WAITING);
+        reading.remaining_percent = Some(50.0);
+        assert_eq!(quota_reading_color("ok", &reading), AGENT_DONE);
+        assert_eq!(quota_reading_color("stale", &reading), FAINT);
+        assert_eq!(quota_reading_color("error", &reading), AGENT_BLOCKED);
+        reading.remaining_percent = None;
+        assert_eq!(quota_reading_color("ok", &reading), FAINT);
+    }
 
     #[test]
     fn original_codex_svg_current_color_is_converted_for_dark_ui() {
@@ -169,13 +201,15 @@ mod quota_ui_tests {
 }
 
 fn quota_reading_color(status: &str, reading: &QuotaReading) -> u32 {
-    if status != "ok" {
-        return MUTED;
-    }
-    match reading.remaining_percent {
-        Some(value) if value <= 10.0 => 0xeb9a9a,
-        Some(value) if value <= 30.0 => 0xe9bd80,
-        _ => TEXT,
+    match status {
+        "stale" => alera_gpui_desktop::visual_tokens::FAINT,
+        "ok" => match reading.remaining_percent {
+            Some(value) if value.is_finite() && value < 20.0 => AGENT_BLOCKED,
+            Some(value) if value.is_finite() && value < 50.0 => AGENT_WAITING,
+            Some(value) if value.is_finite() => AGENT_DONE,
+            _ => alera_gpui_desktop::visual_tokens::FAINT,
+        },
+        _ => AGENT_BLOCKED,
     }
 }
 
@@ -398,7 +432,7 @@ impl Workbench {
         } else if !has_data {
             "Quotas"
         } else {
-            "◎"
+            "Quotas"
         };
         #[cfg(all(feature = "quota-visual-fixture", debug_assertions))]
         let label = if Self::quota_visual_fixture_enabled() {
@@ -406,6 +440,10 @@ impl Workbench {
         } else {
             label
         };
+        #[cfg(all(feature = "quota-visual-fixture", debug_assertions))]
+        let show_label = !has_data || Self::quota_visual_fixture_enabled();
+        #[cfg(not(all(feature = "quota-visual-fixture", debug_assertions)))]
+        let show_label = !has_data;
         let unpinned_keys = self.quota_unpinned_keys();
         let chips = alera_gpui_desktop::agent_quota::status_bar_quotas(
             &self.quota_snapshots,
@@ -417,6 +455,8 @@ impl Workbench {
         .map(|(index, snapshot)| {
             let readings = snapshot.readings();
             let account_key = snapshot.key();
+            let click_account_key = account_key.clone();
+            let profile_label = status_bar_account_label(snapshot, &self.quota_snapshots);
             div()
                 .id(("native-quota-status-provider", index))
                 .flex()
@@ -429,13 +469,15 @@ impl Workbench {
                 .border_r_1()
                 .border_color(rgb(BORDER))
                 .child(quota_provider_icon(&snapshot.provider, 14.0))
-                .child(
+                // Classic puts the provider identity in the icon and only
+                // adds an account alias when it disambiguates accounts.
+                .children(profile_label.map(|label| {
                     div()
                         .text_xs()
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(rgb(if snapshot.status == "ok" { TEXT } else { MUTED }))
-                        .child(snapshot.title()),
-                )
+                        .child(label)
+                }))
                 .children(
                     readings
                         .iter()
@@ -455,6 +497,11 @@ impl Workbench {
                         view.quota_popover_account = Some(account_key.clone());
                         cx.notify();
                     }
+                }))
+                .on_click(cx.listener(move |view, _, _, cx| {
+                    view.quota_popover_open = true;
+                    view.quota_popover_account = Some(click_account_key.clone());
+                    cx.notify();
                 }))
         })
         .collect::<Vec<_>>();
@@ -476,7 +523,8 @@ impl Workbench {
                     .font_weight(gpui::FontWeight::SEMIBOLD)
                     .text_color(rgb(TEXT))
                     .hover(|style| style.bg(rgb(ACTIVE)))
-                    .child(label)
+                    .child(quota_gauge_icon())
+                    .when(show_label, |button| button.child(label))
                     .on_hover(cx.listener(|view, hovering, _, cx| {
                         if *hovering {
                             view.quota_popover_open = true;
@@ -500,6 +548,29 @@ impl Workbench {
                     .items_center()
                     .children(chips),
             )
+            .child(
+                div()
+                    .id("native-quota-status-refresh")
+                    .cursor_pointer()
+                    .flex_shrink_0()
+                    .w(px(22.0))
+                    .h(px(22.0))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded_sm()
+                    .hover(|style| style.bg(rgb(ACTIVE)))
+                    .child(icon(
+                        UiIcon::Refresh,
+                        13.0,
+                        if self.quota_loading { MUTED } else { TEXT },
+                    ))
+                    .on_click(cx.listener(|view, _, _, cx| {
+                        if !view.quota_loading {
+                            view.refresh_agent_quotas(true, None, cx);
+                        }
+                    })),
+            )
             .when(self.quota_popover_open, |root| {
                 root.child(
                     div()
@@ -507,16 +578,16 @@ impl Workbench {
                         .absolute()
                         .bottom(px(STATUS_BAR_HEIGHT))
                         .left(px(0.0))
-                        .w(px(410.0))
-                        .max_h(px(490.0))
-                        .overflow_y_scroll()
+                        .w(px(380.0))
+                        .max_h(px(480.0))
+                        // Only the list scrolls. Keep Refresh and Close in view.
                         .rounded_lg()
                         .border_1()
                         .border_color(rgb(BORDER))
                         .bg(rgb(ELEVATED))
                         .shadow_lg()
                         .p_2()
-                        .child(self.render_native_quota_overview(440.0, cx))
+                        .child(self.render_native_quota_overview(404.0, cx))
                         .on_mouse_down_out(cx.listener(|view, _, _, cx| {
                             view.quota_popover_open = false;
                             view.quota_popover_account = None;
@@ -766,9 +837,9 @@ impl Workbench {
                                 div()
                                     .id(("native-quota-reading-scroll", index))
                                     .flex()
+                                    .flex_wrap()
                                     .items_center()
-                                    .gap_3()
-                                    .overflow_x_scroll()
+                                    .gap_2()
                                     .children(readings.iter().map(|reading| {
                                         quota_reading_element(&snapshot.status, reading)
                                     })),
