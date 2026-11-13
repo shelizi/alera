@@ -288,6 +288,24 @@ mod g01_source_control_action_tests {
         assert!(!GitUiAction::Commit("message".into()).is_index_only());
     }
 }
+#[cfg(test)]
+mod g05_branch_remote_ui_tests {
+    use super::GitUiAction;
+
+    #[test]
+    fn selected_branch_remote_actions_do_not_require_saved_editor_buffers() {
+        assert!(GitUiAction::Fetch.is_worktree_independent());
+        assert!(GitUiAction::PullSelected("topic".into()).is_worktree_independent());
+        assert!(GitUiAction::PushSelected("topic".into()).is_worktree_independent());
+        assert!(GitUiAction::PushUpstream.is_worktree_independent());
+        assert!(GitUiAction::Stage("a.txt".into()).is_worktree_independent());
+        assert!(GitUiAction::Unstage("a.txt".into()).is_worktree_independent());
+        assert!(!GitUiAction::MergeWithoutConflicts("topic".into()).is_worktree_independent());
+        assert!(!GitUiAction::SwitchBranch("topic".into()).is_worktree_independent());
+        assert!(!GitUiAction::PullFfOnly.is_worktree_independent());
+        assert!(!GitUiAction::StashSave.is_worktree_independent());
+    }
+}
 impl GitUiAction {
     /// Index-only Git actions may proceed with a dirty Native Editor.
     /// They stage saved disk bytes, never the unsaved editor buffer.
@@ -296,6 +314,18 @@ impl GitUiAction {
             self,
             Self::Stage(_) | Self::Unstage(_) | Self::StageMany(_) | Self::UnstageMany(_)
         )
+    }
+
+    /// These actions never modify checked-out files or the active Editor:
+    /// Fetch updates remote-tracking refs; selected branch Pull updates only
+    /// a branch guaranteed not to be checked out; Push transfers committed
+    /// objects. Dirty Editor buffers remain entirely local.
+    fn is_worktree_independent(&self) -> bool {
+        self.is_index_only()
+            || matches!(
+                self,
+                Self::Fetch | Self::PullSelected(_) | Self::PushSelected(_) | Self::PushUpstream
+            )
     }
 }
 
@@ -3374,12 +3404,13 @@ impl Workbench {
         }
         let unsaved_editors = self.editor_dirty(cx);
         let index_only = action.is_index_only();
+        let worktree_independent = action.is_worktree_independent();
         let submitted_commit_message = match &action {
             GitUiAction::Commit(message) => Some(message.clone()),
             GitUiAction::Amend(preview) => Some(preview.replacement_message.clone()),
             _ => None,
         };
-        if unsaved_editors && !index_only {
+        if unsaved_editors && !worktree_independent {
             self.git_action_status = "Save unsaved editor buffers before changing Git".into();
             cx.notify();
             return;
@@ -3501,6 +3532,10 @@ impl Workbench {
                         view.git_action_status = if index_only && unsaved_editors {
                             format!(
                                 "{message}. Only saved disk bytes changed in Git; unsaved Editor text was not staged."
+                            )
+                        } else if worktree_independent && unsaved_editors {
+                            format!(
+                                "{message}. Unsaved Editor text and working files remain untouched."
                             )
                         } else {
                             message

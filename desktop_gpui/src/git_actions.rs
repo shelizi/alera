@@ -4153,6 +4153,128 @@ mod tests {
     }
 
     #[test]
+    fn g05_selected_pull_push_and_merge_preserve_active_branch_and_dirty_worktree() {
+        let (work, remote, actions, current) = bare_remote_fixture();
+        let original_head = actions.repo.head().unwrap().target().unwrap();
+        let first = actions.repo.find_commit(original_head).unwrap();
+        actions.repo.branch("topic", &first, false).unwrap();
+        git_in_dir(
+            actions.root(),
+            &["push", "-u", "origin", "refs/heads/topic"],
+        )
+        .unwrap();
+        let clone_dir = tempfile::tempdir().unwrap();
+        let clone = clone_dir.path().join("clone");
+        git_in_dir(
+            clone_dir.path(),
+            &[
+                "clone",
+                remote.path().to_str().unwrap(),
+                clone.to_str().unwrap(),
+            ],
+        )
+        .unwrap();
+        git_in_dir(
+            &clone,
+            &["checkout", "-b", "topic", "--track", "origin/topic"],
+        )
+        .unwrap();
+        let upstream = GitActions::open(&dunce::canonicalize(&clone).unwrap()).unwrap();
+        let upstream_oid =
+            fixture_commit(&upstream, "topic.txt", "topic from remote", "topic update");
+        git_in_dir(&clone, &["push", "origin", "refs/heads/topic"]).unwrap();
+
+        // The active Editor may have unsaved text and the active worktree
+        // may contain unrelated dirty/untracked files. Neither selected
+        // branch Pull nor Push may modify them.
+        fs::write(work.path().join("a.txt"), "active workspace local edits").unwrap();
+        fs::write(work.path().join("keep.txt"), "untouched untracked").unwrap();
+        assert!(actions
+            .pull_branch_without_switch("topic")
+            .unwrap()
+            .contains("without switching"));
+        assert_eq!(
+            actions
+                .repo
+                .find_reference("refs/heads/topic")
+                .unwrap()
+                .target(),
+            Some(upstream_oid)
+        );
+        assert_eq!(actions.repo.head().unwrap().target(), Some(original_head));
+        assert_eq!(actions.repo.head().unwrap().shorthand().unwrap(), current);
+        assert_eq!(
+            fs::read_to_string(work.path().join("a.txt")).unwrap(),
+            "active workspace local edits"
+        );
+        assert_eq!(
+            fs::read_to_string(work.path().join("keep.txt")).unwrap(),
+            "untouched untracked"
+        );
+        assert!(!work.path().join("topic.txt").exists());
+
+        let parent = actions.repo.find_commit(upstream_oid).unwrap();
+        let original_tree = parent.tree().unwrap();
+        let mut builder = actions.repo.treebuilder(Some(&original_tree)).unwrap();
+        let content = actions.repo.blob(b"local topic commit").unwrap();
+        builder
+            .insert("topic-local.txt", content, 0o100644)
+            .unwrap();
+        let next_tree = actions.repo.find_tree(builder.write().unwrap()).unwrap();
+        let sig = Signature::now("G05 QA", "g05@example.invalid").unwrap();
+        let next = actions
+            .repo
+            .commit(None, &sig, &sig, "topic local", &next_tree, &[&parent])
+            .unwrap();
+        actions
+            .repo
+            .find_reference("refs/heads/topic")
+            .unwrap()
+            .set_target(next, "g05 topic ref update")
+            .unwrap();
+
+        assert!(actions
+            .push_branch_without_switch("topic")
+            .unwrap()
+            .contains("without switching"));
+        assert_eq!(
+            Repository::open_bare(remote.path())
+                .unwrap()
+                .find_reference("refs/heads/topic")
+                .unwrap()
+                .target(),
+            Some(next)
+        );
+        assert_eq!(actions.repo.head().unwrap().target(), Some(original_head));
+        assert_eq!(
+            fs::read_to_string(work.path().join("keep.txt")).unwrap(),
+            "untouched untracked"
+        );
+        assert_eq!(
+            fs::read_to_string(work.path().join("a.txt")).unwrap(),
+            "active workspace local edits"
+        );
+
+        // Merge is different: it intentionally updates the current branch's
+        // checked-out worktree and must refuse dirty files until saved.
+        assert!(actions.merge_without_conflicts("topic").is_err());
+        assert_eq!(actions.repo.head().unwrap().target(), Some(original_head));
+        fs::write(work.path().join("a.txt"), "before").unwrap();
+        fs::remove_file(work.path().join("keep.txt")).unwrap();
+        let merged = actions.merge_without_conflicts("topic").unwrap();
+        assert!(merged.contains(&current), "{merged}");
+        assert_eq!(actions.repo.head().unwrap().shorthand().unwrap(), current);
+        assert_eq!(actions.repo.head().unwrap().target(), Some(next));
+        assert_eq!(
+            fs::read_to_string(work.path().join("topic.txt")).unwrap(),
+            "topic from remote"
+        );
+        assert_eq!(
+            fs::read_to_string(work.path().join("topic-local.txt")).unwrap(),
+            "local topic commit"
+        );
+    }
+    #[test]
     fn selected_branch_push_uses_exact_upstream_and_never_moves_head() {
         let (work, remote, actions, _current) = bare_remote_fixture();
         let head = actions.repo.head().unwrap().peel_to_commit().unwrap();
