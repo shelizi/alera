@@ -19,6 +19,7 @@ use std::time::{Duration, Instant};
 
 const MAX_RESPONSE_BYTES: u64 = 512 * 1024;
 const MAX_PROMPT_BYTES: usize = 8 * 1024;
+const MAX_EDIT_COMMAND_BYTES: usize = 4 * 1024;
 const LIST_TIMEOUT: Duration = Duration::from_secs(5);
 const LAUNCH_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -32,6 +33,13 @@ enum AllowedAgentRequest<'a> {
         expected_revision: i64,
         description: &'a str,
         quota_group: &'a str,
+    },
+    /// Command/Custom Prompt edits travel as stdin JSON (`content`); argv
+    /// carries only the --edit-content-stdin opt-in flag.
+    UpdateCommandPrompt {
+        id: &'a str,
+        expected_revision: i64,
+        content: &'a str,
     },
     CreateCommand {
         name: &'a str,
@@ -101,6 +109,18 @@ fn args_for(runtime: &Path, request: &AllowedAgentRequest<'_>) -> Vec<OsString> 
             } else {
                 args.push(OsString::from(format!("--quota-group={quota_group}")));
             }
+        }
+        AllowedAgentRequest::UpdateCommandPrompt {
+            id,
+            expected_revision,
+            ..
+        } => {
+            args.push(OsString::from("update"));
+            args.push(OsString::from(format!("--profile-id={id}")));
+            args.push(OsString::from(format!(
+                "--expected-revision={expected_revision}"
+            )));
+            args.push(OsString::from("--edit-content-stdin"));
         }
         AllowedAgentRequest::CreateCommand {
             name,
@@ -216,6 +236,48 @@ fn wait_bounded(child: &mut Child, timeout: Duration) -> io::Result<std::process
             }
         }
     }
+}
+
+fn validate_edit_command(raw: &str) -> io::Result<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed.len() > MAX_EDIT_COMMAND_BYTES || trimmed.contains('\0') {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Agent command must be nonempty, NUL-free, and at most 4 KiB",
+        ));
+    }
+    Ok(trimmed.to_owned())
+}
+
+fn validate_edit_prompt(raw: &str) -> io::Result<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed.len() > MAX_PROMPT_BYTES || trimmed.contains('\0') {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Agent Custom Prompt must be nonempty, NUL-free, and at most 8 KiB",
+        ));
+    }
+    Ok(trimmed.to_owned())
+}
+
+/// Build the exact stdin JSON the CLI's --edit-content-stdin parser accepts.
+/// Only validated, already-trimmed values are serialized.
+fn command_prompt_edit_json(
+    command: Option<String>,
+    custom_prompt: Option<String>,
+    clear_custom_prompt: bool,
+) -> String {
+    let mut edit = serde_json::Map::new();
+    if let Some(command) = command {
+        edit.insert("command".to_string(), Value::String(command));
+    }
+    if let Some(prompt) = custom_prompt {
+        edit.insert("customPrompt".to_string(), Value::String(prompt));
+    }
+    if clear_custom_prompt {
+        edit.insert("clearCustomPrompt".to_string(), Value::Bool(true));
+    }
+    Value::Object(edit).to_string()
 }
 
 impl RuntimeCliBridge {
@@ -358,6 +420,72 @@ impl RuntimeCliBridge {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "Host did not confirm a revision-guarded Routing update",
+            ));
+        }
+        Ok(row)
+    }
+
+    /// Update only the Host-owned Command line and/or Custom Prompt. Both
+    /// travel to the CLI as bounded stdin JSON, never argv; the transient
+    /// Host reply is re-projected to the secret-free row and must advance
+    /// the observed revision. Untouched fields stay Host-owned.
+    pub fn update_agent_profile_command_prompt(
+        &self,
+        selected: &AgentProfileRow,
+        command: Option<&str>,
+        custom_prompt: Option<&str>,
+        clear_custom_prompt: bool,
+    ) -> io::Result<AgentProfileRow> {
+        let revision = selected
+            .revision
+            .filter(|revision| *revision >= 0)
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "Missing observed Host Profile revision",
+                )
+            })?;
+        if !safe_runtime_id(&selected.id, 128) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Invalid Host Profile ID",
+            ));
+        }
+        let command = command.map(validate_edit_command).transpose()?;
+        let custom_prompt = custom_prompt.map(validate_edit_prompt).transpose()?;
+        if custom_prompt.is_some() && clear_custom_prompt {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Custom Prompt cannot be replaced and cleared together",
+            ));
+        }
+        if command.is_none() && custom_prompt.is_none() && !clear_custom_prompt {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Command/Prompt update needs a command, prompt, or explicit clear",
+            ));
+        }
+        if command.is_some() && selected.managed {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Command edits require a Command-mode Agent Profile",
+            ));
+        }
+        let content = command_prompt_edit_json(command, custom_prompt, clear_custom_prompt);
+        let value = self.invoke_existing_host_agent(AllowedAgentRequest::UpdateCommandPrompt {
+            id: &selected.id,
+            expected_revision: revision,
+            content: content.as_str(),
+        })?;
+        let row = parse_saved_profile(value)?;
+        if row.id != selected.id
+            || row.revision.is_none_or(|saved| saved <= revision)
+            || row.agent_type != selected.agent_type
+            || row.managed != selected.managed
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Host did not confirm a revision-guarded Command/Prompt update",
             ));
         }
         Ok(row)
@@ -556,7 +684,7 @@ impl RuntimeCliBridge {
                 "No running Runtime Host; Native will not start one automatically",
             ));
         }
-        let prompt = match &request {
+        let stdin_payload = match &request {
             AllowedAgentRequest::List
             | AllowedAgentRequest::Show { .. }
             | AllowedAgentRequest::UpdateRouting { .. }
@@ -567,6 +695,7 @@ impl RuntimeCliBridge {
             | AllowedAgentRequest::RemovalImpact { .. }
             | AllowedAgentRequest::RemoveConfirmed { .. } => None,
             AllowedAgentRequest::Launch { prompt, .. } => Some(prompt.as_bytes()),
+            AllowedAgentRequest::UpdateCommandPrompt { content, .. } => Some(content.as_bytes()),
         };
         let timeout = if matches!(request, AllowedAgentRequest::List) {
             LIST_TIMEOUT
@@ -577,7 +706,7 @@ impl RuntimeCliBridge {
         command
             .args(args_for(runtime, &request))
             .env_remove("ALERA_WORKSPACE_ID")
-            .stdin(if prompt.is_some() {
+            .stdin(if stdin_payload.is_some() {
                 Stdio::piped()
             } else {
                 Stdio::null()
@@ -585,7 +714,7 @@ impl RuntimeCliBridge {
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
         let mut child = command.spawn()?;
-        if let Some(input) = prompt {
+        if let Some(input) = stdin_payload {
             let sent = child
                 .stdin
                 .take()
@@ -894,5 +1023,155 @@ mod tests {
                 .kind(),
             io::ErrorKind::InvalidInput
         );
+    }
+
+    #[test]
+    fn command_prompt_update_uses_stdin_flag_and_never_places_content_in_argv() {
+        let runtime = Path::new("C:/isolated/runtime");
+        let args = args_for(
+            runtime,
+            &AllowedAgentRequest::UpdateCommandPrompt {
+                id: "prof_1",
+                expected_revision: 7,
+                content: r#"{"command":"codex --secret-flag","customPrompt":"PRIVATE PROMPT"}"#,
+            },
+        );
+        assert!(args.iter().any(|arg| arg == "update"));
+        assert!(args.iter().any(|arg| arg == "--no-start"));
+        assert!(args.iter().any(|arg| arg == "--profile-id=prof_1"));
+        assert!(args.iter().any(|arg| arg == "--expected-revision=7"));
+        assert!(args.iter().any(|arg| arg == "--edit-content-stdin"));
+        assert!(!args.iter().any(|arg| arg == "--command"));
+        assert!(!args.iter().any(|arg| arg == "--custom-prompt"));
+        assert!(!args.iter().any(|arg| arg == "--prompt-stdin"));
+        for arg in &args {
+            let text = arg.to_string_lossy();
+            for secret in [
+                "codex --secret-flag",
+                "PRIVATE PROMPT",
+                "customPrompt",
+                "clearCustomPrompt",
+            ] {
+                assert!(!text.contains(secret), "argv leaked {secret}: {text}");
+            }
+        }
+    }
+
+    #[test]
+    fn command_prompt_edit_json_matches_cli_stdin_schema() {
+        let full = command_prompt_edit_json(
+            Some("codex --x".to_string()),
+            Some("Focus".to_string()),
+            false,
+        );
+        let value: Value = serde_json::from_str(&full).unwrap();
+        assert_eq!(value["command"], "codex --x");
+        assert_eq!(value["customPrompt"], "Focus");
+        assert!(value.get("clearCustomPrompt").is_none());
+
+        let prompt_only = command_prompt_edit_json(None, Some("Focus".to_string()), false);
+        let value: Value = serde_json::from_str(&prompt_only).unwrap();
+        assert!(value.get("command").is_none());
+        assert_eq!(value["customPrompt"], "Focus");
+
+        let clear = command_prompt_edit_json(None, None, true);
+        let value: Value = serde_json::from_str(&clear).unwrap();
+        assert_eq!(value["clearCustomPrompt"], true);
+        assert!(value.get("command").is_none());
+        assert!(value.get("customPrompt").is_none());
+    }
+
+    #[test]
+    fn command_prompt_update_validates_inputs_before_host_access() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = dir.path().join("runtime");
+        let bridge = RuntimeCliBridge::new(dir.path().join("missing-cli.exe"), &runtime);
+        let row = |managed: bool, revision: Option<i64>| AgentProfileRow {
+            id: "prof_1".into(),
+            name: "Review".into(),
+            agent_type: "codex".into(),
+            managed,
+            revision,
+        };
+        let invalid = |result: io::Result<AgentProfileRow>| {
+            assert_eq!(result.unwrap_err().kind(), io::ErrorKind::InvalidInput)
+        };
+
+        invalid(bridge.update_agent_profile_command_prompt(
+            &row(false, Some(3)),
+            None,
+            None,
+            false,
+        ));
+        invalid(bridge.update_agent_profile_command_prompt(
+            &row(false, Some(3)),
+            Some("   "),
+            None,
+            false,
+        ));
+        invalid(bridge.update_agent_profile_command_prompt(
+            &row(false, Some(3)),
+            Some("bad\0command"),
+            None,
+            false,
+        ));
+        let big_command = "c".repeat(MAX_EDIT_COMMAND_BYTES + 1);
+        invalid(bridge.update_agent_profile_command_prompt(
+            &row(false, Some(3)),
+            Some(big_command.as_str()),
+            None,
+            false,
+        ));
+        invalid(bridge.update_agent_profile_command_prompt(
+            &row(true, Some(3)),
+            Some("codex"),
+            None,
+            false,
+        ));
+        let big_prompt = "p".repeat(MAX_PROMPT_BYTES + 1);
+        invalid(bridge.update_agent_profile_command_prompt(
+            &row(false, Some(3)),
+            None,
+            Some(big_prompt.as_str()),
+            false,
+        ));
+        invalid(bridge.update_agent_profile_command_prompt(
+            &row(false, Some(3)),
+            None,
+            Some("Focus"),
+            true,
+        ));
+        invalid(bridge.update_agent_profile_command_prompt(
+            &row(false, None),
+            Some("codex"),
+            None,
+            false,
+        ));
+        let mut bad_id = row(false, Some(3));
+        bad_id.id = "../escape".into();
+        invalid(bridge.update_agent_profile_command_prompt(&bad_id, Some("codex"), None, false));
+
+        // Valid edits reach the existing-Host gate and fail closed without
+        // starting a Host or creating the runtime directory.
+        let valid_cases: [(bool, Option<&str>, Option<&str>, bool); 3] = [
+            (false, Some("codex --x"), None, false),
+            (false, None, Some("Focus"), false),
+            (true, None, None, true),
+        ];
+        for (managed, command, prompt, clear) in valid_cases {
+            assert_eq!(
+                bridge
+                    .update_agent_profile_command_prompt(
+                        &row(managed, Some(3)),
+                        command,
+                        prompt,
+                        clear,
+                    )
+                    .unwrap_err()
+                    .kind(),
+                io::ErrorKind::NotConnected
+            );
+        }
+        assert!(!runtime.exists());
     }
 }

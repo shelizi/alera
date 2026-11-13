@@ -1,9 +1,10 @@
 use std::collections::{HashMap, HashSet};
+use std::io::Read;
 
 use alera_core::runtime::{AgentProfile, AgentProfileLaunchMode, AgentProfileRemovalImpact};
 use anyhow::{anyhow, bail, Context, Result};
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 
 use crate::agent_profile_input::{
     draft_for_clone, draft_for_create, draft_for_update, ensure_expected_revision,
@@ -12,6 +13,7 @@ use crate::agent_profile_input::{
 };
 use crate::cli::{
     AgentProfileAction, AgentProfileCommand, AgentProfileReorderArgs, AgentProfileSelectorArgs,
+    AgentProfileUpdateArgs,
 };
 use crate::runtime_host_client::RuntimeHostRpcClient;
 use crate::terminal_host::agent_profile_capabilities::{
@@ -82,7 +84,8 @@ async fn run_command(command: AgentProfileCommand) -> Result<()> {
                 .await?;
             print_saved(&saved, json_output)?;
         }
-        AgentProfileAction::Update(args) => {
+        AgentProfileAction::Update(mut args) => {
+            apply_stdin_edit_content(&mut args)?;
             let (_, profiles) = list_profiles(&mut client).await?;
             let existing = select_profile(&profiles, &args.target.selector)?;
             let expected_revision =
@@ -308,6 +311,136 @@ pub(crate) async fn ensure_capabilities(
         }
     }
     Ok(())
+}
+
+const MAX_EDIT_CONTENT_STDIN_BYTES: u64 = 32 * 1024;
+const MAX_EDIT_COMMAND_BYTES: usize = 4 * 1024;
+const MAX_EDIT_PROMPT_BYTES: usize = 8 * 1024;
+
+struct AgentProfileEditContent {
+    command: Option<String>,
+    custom_prompt: Option<String>,
+    clear_custom_prompt: bool,
+}
+
+/// `--edit-content-stdin` carries Command/Custom Prompt edits as bounded JSON
+/// so callers never place user text in process argv or logs. Parsing is
+/// all-or-nothing: a malformed body leaves every profile field untouched.
+fn apply_stdin_edit_content(args: &mut AgentProfileUpdateArgs) -> Result<()> {
+    if !args.edit_content_stdin {
+        return Ok(());
+    }
+    let edit = read_edit_content(&mut std::io::stdin().lock())?;
+    apply_edit_content(args, edit);
+    Ok(())
+}
+
+fn read_edit_content(stdin: &mut impl Read) -> Result<AgentProfileEditContent> {
+    let mut raw = String::new();
+    stdin
+        .by_ref()
+        .take(MAX_EDIT_CONTENT_STDIN_BYTES + 1)
+        .read_to_string(&mut raw)
+        .context("failed to read agent profile edit content from standard input")?;
+    if raw.len() as u64 > MAX_EDIT_CONTENT_STDIN_BYTES {
+        bail!(
+            "agent profile edit content exceeds {} bytes",
+            MAX_EDIT_CONTENT_STDIN_BYTES
+        );
+    }
+    parse_edit_content(&raw)
+}
+
+fn apply_edit_content(args: &mut AgentProfileUpdateArgs, edit: AgentProfileEditContent) {
+    if let Some(command) = edit.command {
+        args.command = Some(command);
+    }
+    if let Some(prompt) = edit.custom_prompt {
+        args.custom_prompt = Some(prompt);
+    }
+    if edit.clear_custom_prompt {
+        args.clear_custom_prompt = true;
+    }
+}
+
+fn parse_edit_content(raw: &str) -> Result<AgentProfileEditContent> {
+    let value: Value =
+        serde_json::from_str(raw).context("agent profile edit content must be valid JSON")?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| anyhow!("agent profile edit content must be a JSON object"))?;
+    for key in object.keys() {
+        if !matches!(
+            key.as_str(),
+            "command" | "customPrompt" | "clearCustomPrompt"
+        ) {
+            bail!("agent profile edit content has unsupported field: {key}");
+        }
+    }
+    let command = edit_text_field(object, "command", MAX_EDIT_COMMAND_BYTES)?;
+    let custom_prompt = match object.get("customPrompt") {
+        None => None,
+        Some(Value::String(text)) => {
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
+                bail!(
+                    "agent profile edit content customPrompt must be nonempty; use clearCustomPrompt to clear it"
+                );
+            }
+            if trimmed.len() > MAX_EDIT_PROMPT_BYTES {
+                bail!(
+                    "agent profile edit content customPrompt exceeds {MAX_EDIT_PROMPT_BYTES} bytes"
+                );
+            }
+            if trimmed.contains('\0') {
+                bail!("agent profile edit content customPrompt must not contain NUL");
+            }
+            Some(trimmed.to_string())
+        }
+        Some(_) => bail!("agent profile edit content customPrompt must be a string"),
+    };
+    let clear_custom_prompt = match object.get("clearCustomPrompt") {
+        None => false,
+        Some(Value::Bool(true)) => true,
+        Some(_) => {
+            bail!("agent profile edit content clearCustomPrompt must be true when present")
+        }
+    };
+    if custom_prompt.is_some() && clear_custom_prompt {
+        bail!("agent profile edit content cannot replace and clear customPrompt together");
+    }
+    if command.is_none() && custom_prompt.is_none() && !clear_custom_prompt {
+        bail!("agent profile edit content must set command, customPrompt, or clearCustomPrompt");
+    }
+    Ok(AgentProfileEditContent {
+        command,
+        custom_prompt,
+        clear_custom_prompt,
+    })
+}
+
+fn edit_text_field(
+    object: &Map<String, Value>,
+    key: &str,
+    max_bytes: usize,
+) -> Result<Option<String>> {
+    let Some(value) = object.get(key) else {
+        return Ok(None);
+    };
+    let Value::String(text) = value else {
+        bail!("agent profile edit content {key} must be a string");
+    };
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        bail!("agent profile edit content {key} must be nonempty");
+    }
+    if trimmed.len() > max_bytes {
+        bail!("agent profile edit content {key} exceeds {max_bytes} bytes");
+    }
+    if trimmed.contains('\0') {
+        bail!("agent profile edit content {key} must not contain NUL");
+    }
+    Ok(Some(trimmed.to_string()))
 }
 
 fn reorder_revisions(

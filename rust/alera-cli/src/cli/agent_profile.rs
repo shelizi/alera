@@ -198,6 +198,19 @@ pub struct AgentProfileUpdateArgs {
     pub quota_group: Option<String>,
     #[arg(long = "clear-quota-group")]
     pub clear_quota_group: bool,
+    /// Read a bounded JSON Command/Custom Prompt edit from standard input
+    /// instead of argv. Requires --expected-revision.
+    #[arg(
+        long = "edit-content-stdin",
+        conflicts_with_all = [
+            "command",
+            "custom_prompt",
+            "clear_custom_prompt",
+            "managed_config_stdin"
+        ],
+        requires = "expected_revision"
+    )]
+    pub edit_content_stdin: bool,
     /// Confirm newly enabled settings that reduce agent protections.
     #[arg(long = "confirm-reduced-protections")]
     pub confirm_reduced_protections: bool,
