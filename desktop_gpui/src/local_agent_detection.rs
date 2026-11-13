@@ -2,6 +2,55 @@
 //! Classic uses the descriptor registry and PATH/PATHEXT, independently of Host
 //! Agent Profiles. Never launch an Agent or Host while merely listing commands.
 use std::collections::HashMap;
+use std::io::{self, ErrorKind};
+
+/// Profile launch failure guidance is intentionally independent of Provider
+/// credential discovery. An installed CLI is not proof of a signed-in account,
+/// and a generic Host error is not proof of an expired token.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentProfileLaunchFailure {
+    RuntimeUnavailable,
+    CliOrResourceMissing,
+    HostDenied,
+    ProfileChanged,
+    InvalidProfileOrPrompt,
+    OutcomeUnknown,
+}
+
+pub fn classify_agent_profile_launch_failure(error: &io::Error) -> AgentProfileLaunchFailure {
+    match error.kind() {
+        ErrorKind::NotConnected | ErrorKind::ConnectionRefused | ErrorKind::ConnectionReset => {
+            AgentProfileLaunchFailure::RuntimeUnavailable
+        }
+        ErrorKind::NotFound => AgentProfileLaunchFailure::CliOrResourceMissing,
+        ErrorKind::PermissionDenied => AgentProfileLaunchFailure::HostDenied,
+        ErrorKind::AlreadyExists => AgentProfileLaunchFailure::ProfileChanged,
+        ErrorKind::InvalidInput => AgentProfileLaunchFailure::InvalidProfileOrPrompt,
+        _ => AgentProfileLaunchFailure::OutcomeUnknown,
+    }
+}
+
+impl AgentProfileLaunchFailure {
+    /// Privacy-safe, actionable copy. Never forward raw Host diagnostics or
+    /// claim "expired" unless Host someday exposes a typed, verified auth code.
+    pub fn guidance(self) -> &'static str {
+        match self {
+            Self::RuntimeUnavailable =>
+                "Runtime Host unavailable. Check that Classic/Host is running, then refresh Agent Profiles.",
+            Self::CliOrResourceMissing =>
+                "Alera CLI or required Host resource is missing. Verify CLI path and refresh Agent Profiles.",
+            Self::HostDenied =>
+                "Host denied the request. Check permissions and Provider sign-in separately; login status is not verified.",
+            Self::ProfileChanged =>
+                "Agent Profile or workspace changed. Refresh the Host catalog and reselect it.",
+            Self::InvalidProfileOrPrompt =>
+                "Profile or prompt was rejected. Review the selected Profile and task input.",
+            Self::OutcomeUnknown =>
+                "Host did not confirm this launch. Provider login status is unknown; check sign-in separately.",
+        }
+    }
+}
+
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -254,6 +303,55 @@ fn detect_with<F: Fn(&Path) -> bool, V: Fn(&Path) -> bool>(
 mod tests {
     use super::*;
     use std::collections::HashSet;
+
+    #[test]
+    fn provider_launch_guidance_distinguishes_runtime_missing_permissions_and_unknown_auth() {
+        let kind = |kind| {
+            classify_agent_profile_launch_failure(&io::Error::new(
+                kind,
+                "SECRET_TOKEN=do-not-display",
+            ))
+        };
+        assert_eq!(
+            kind(ErrorKind::NotConnected),
+            AgentProfileLaunchFailure::RuntimeUnavailable
+        );
+        assert_eq!(
+            kind(ErrorKind::NotFound),
+            AgentProfileLaunchFailure::CliOrResourceMissing
+        );
+        assert_eq!(
+            kind(ErrorKind::PermissionDenied),
+            AgentProfileLaunchFailure::HostDenied
+        );
+        assert_eq!(
+            kind(ErrorKind::AlreadyExists),
+            AgentProfileLaunchFailure::ProfileChanged
+        );
+        assert_eq!(
+            kind(ErrorKind::InvalidInput),
+            AgentProfileLaunchFailure::InvalidProfileOrPrompt
+        );
+        assert_eq!(
+            kind(ErrorKind::Other),
+            AgentProfileLaunchFailure::OutcomeUnknown
+        );
+        for code in [
+            AgentProfileLaunchFailure::RuntimeUnavailable,
+            AgentProfileLaunchFailure::CliOrResourceMissing,
+            AgentProfileLaunchFailure::HostDenied,
+            AgentProfileLaunchFailure::ProfileChanged,
+            AgentProfileLaunchFailure::InvalidProfileOrPrompt,
+            AgentProfileLaunchFailure::OutcomeUnknown,
+        ] {
+            let text = code.guidance();
+            assert!(!text.contains("SECRET_TOKEN"));
+            assert!(
+                !text.contains("expired"),
+                "generic errors must not claim credential expiration"
+            );
+        }
+    }
 
     fn probe(
         path: &str,

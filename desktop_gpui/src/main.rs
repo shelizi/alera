@@ -25,7 +25,8 @@ use alera_core::git::{
     prepare_staged_commit_prompt, verify_staged_commit_prompt, GitStagedCommitPrompt,
 };
 use alera_gpui_desktop::agent_profiles::{
-    matching_agent_handle, AgentProfileRemovalImpact, AgentProfileRow, LaunchedAgentTab,
+    matching_agent_handle, AgentProfileContentFields, AgentProfileManagedSelectionFields,
+    AgentProfileRemovalImpact, AgentProfileRow, LaunchedAgentTab,
 };
 use alera_gpui_desktop::agent_quota::QuotaSnapshot;
 use alera_gpui_desktop::agent_status_notifications::{
@@ -78,7 +79,12 @@ use alera_gpui_desktop::history_sync_bridge::{
 use alera_gpui_desktop::host_tab_pins::{
     host_pin_owner_coverage, host_pin_query_workspaces, HostPinOwnerCoverage, HostTabPinSnapshot,
 };
-use alera_gpui_desktop::local_agent_detection::{detect_installed_agent_clis, InstalledAgentCli};
+use alera_gpui_desktop::local_agent_detection::{
+    classify_agent_profile_launch_failure, detect_installed_agent_clis, InstalledAgentCli,
+};
+use alera_gpui_desktop::managed_choice_discovery::{
+    discover_choices, discovery_arguments, ManagedChoiceKind,
+};
 use alera_gpui_desktop::mcp_ui_bridge::{
     matching_host_tab_handle, NativeMcpUiBridge, NativeMcpUiCommand, NativeMcpUiEvent,
 };
@@ -693,6 +699,19 @@ struct Workbench {
     agent_profile_quota_group_input: Entity<QuickOpenInput>,
     /// Loaded Host identity/revision; no routing values in shared settings.
     agent_profile_routing_loaded: Option<(String, i64)>,
+    /// Temporary edit-only values; never persisted in shared desktop settings.
+    agent_profile_content_loaded: Option<AgentProfileContentFields>,
+    /// Transient Host-owned Model/Persona selection; no other Managed config.
+    agent_profile_managed_loaded: Option<AgentProfileManagedSelectionFields>,
+    agent_profile_model_input: Entity<QuickOpenInput>,
+    agent_profile_persona_input: Entity<QuickOpenInput>,
+    agent_profile_discovered_models: Vec<String>,
+    agent_profile_discovered_personas: Vec<String>,
+    agent_profile_discovery_busy: bool,
+    agent_profile_discovery_request: u64,
+    agent_profile_discovery_status: String,
+    agent_profile_command_input: Entity<QuickOpenInput>,
+    agent_profile_custom_prompt_input: Entity<QuickOpenInput>,
     agent_profile_new_adapter: String,
     agent_profile_mutation_busy: bool,
     agent_profile_mutation_request: u64,
@@ -6296,11 +6315,69 @@ impl Workbench {
                                 view.load_selected_agent_profile_routing(cx);
                             }
                         }
+                        let content_is_current = view
+                            .agent_profile_content_loaded
+                            .as_ref()
+                            .is_some_and(|fields| {
+                                view.agent_selected_profile.as_deref() == Some(fields.id.as_str())
+                                    && view.agent_profiles.iter().any(|row| {
+                                        row.id == fields.id
+                                            && row.revision == Some(fields.revision)
+                                            && row.managed == fields.managed
+                                    })
+                            });
+                        let managed_is_current = view
+                            .agent_profile_managed_loaded
+                            .as_ref()
+                            .is_some_and(|fields| {
+                                view.agent_selected_profile.as_deref() == Some(fields.id.as_str())
+                                    && view.agent_profiles.iter().any(|row| {
+                                        row.id == fields.id
+                                            && row.revision == Some(fields.revision)
+                                            && row.managed
+                                    })
+                            });
+                        if !managed_is_current {
+                            view.agent_profile_discovery_request =
+                                view.agent_profile_discovery_request.wrapping_add(1);
+                            view.agent_profile_discovery_busy = false;
+                            view.agent_profile_discovered_models.clear();
+                            view.agent_profile_discovered_personas.clear();
+                            view.agent_profile_discovery_status.clear();
+                            view.agent_profile_managed_loaded = None;
+                            view.agent_profile_model_input
+                                .update(cx, |input, cx| input.clear(cx));
+                            view.agent_profile_persona_input
+                                .update(cx, |input, cx| input.clear(cx));
+                        }
+                        if !content_is_current {
+                            view.agent_profile_content_loaded = None;
+                            view.agent_profile_command_input
+                                .update(cx, |input, cx| input.clear(cx));
+                            view.agent_profile_custom_prompt_input
+                                .update(cx, |input, cx| input.clear(cx));
+                        }
                     }
                     Err(error) => {
                         view.agent_profiles.clear();
                         view.agent_selected_profile = None;
                         view.agent_profile_routing_loaded = None;
+                        view.agent_profile_content_loaded = None;
+                        view.agent_profile_managed_loaded = None;
+                        view.agent_profile_discovery_request =
+                            view.agent_profile_discovery_request.wrapping_add(1);
+                        view.agent_profile_discovery_busy = false;
+                        view.agent_profile_discovered_models.clear();
+                        view.agent_profile_discovered_personas.clear();
+                        view.agent_profile_discovery_status.clear();
+                        view.agent_profile_model_input
+                            .update(cx, |input, cx| input.clear(cx));
+                        view.agent_profile_persona_input
+                            .update(cx, |input, cx| input.clear(cx));
+                        view.agent_profile_command_input
+                            .update(cx, |input, cx| input.clear(cx));
+                        view.agent_profile_custom_prompt_input
+                            .update(cx, |input, cx| input.clear(cx));
                         view.agent_profile_description_input
                             .update(cx, |input, cx| input.clear(cx));
                         view.agent_profile_quota_group_input
@@ -6450,8 +6527,9 @@ impl Workbench {
                     }
                     Err(error) => {
                         view.agent_launch_pane = None;
+                        let guidance = classify_agent_profile_launch_failure(&error).guidance();
                         view.agent_status = format!(
-                            "Agent launch not confirmed: {error}. Check Attach existing before retrying; the Host might have created the tab"
+                            "Agent launch not confirmed: {guidance} Check Attach existing before retrying; the Host might have created the tab."
                         );
                         view.refresh_terminals(cx);
                     }
@@ -14353,6 +14431,25 @@ fn main() {
                                 QuickOpenInput::with_placeholder("Quota Group (empty clears)", cx)
                             }),
                             agent_profile_routing_loaded: None,
+                            agent_profile_content_loaded: None,
+                            agent_profile_managed_loaded: None,
+                            agent_profile_model_input: cx.new(|cx| {
+                                QuickOpenInput::with_placeholder("Exact Model ID (empty = default)…", cx)
+                            }),
+                            agent_profile_persona_input: cx.new(|cx| {
+                                QuickOpenInput::with_placeholder("Exact Persona / Agent name (empty = default)…", cx)
+                            }),
+                            agent_profile_discovered_models: Vec::new(),
+                            agent_profile_discovered_personas: Vec::new(),
+                            agent_profile_discovery_busy: false,
+                            agent_profile_discovery_request: 0,
+                            agent_profile_discovery_status: String::new(),
+                            agent_profile_command_input: cx.new(|cx| {
+                                QuickOpenInput::profile_command(cx)
+                            }),
+                            agent_profile_custom_prompt_input: cx.new(|cx| {
+                                QuickOpenInput::profile_multiline(cx)
+                            }),
                             agent_profile_new_adapter: "codex".into(),
                             agent_profile_mutation_busy: false,
                             agent_profile_mutation_request: 0,

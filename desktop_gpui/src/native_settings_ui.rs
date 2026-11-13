@@ -359,6 +359,544 @@ impl Workbench {
         cx.notify();
     }
 
+    /// Explicit, read-only discovery from the installed Agent CLI. These
+    /// bounded, fixed Classic-compatible commands never run at page startup.
+    fn discover_selected_agent_profile_choices(
+        &mut self,
+        kind: ManagedChoiceKind,
+        cx: &mut Context<Self>,
+    ) {
+        if self.agent_profile_discovery_busy
+            || self.agent_profile_mutation_busy
+            || self.agent_profiles_loading
+        {
+            return;
+        }
+        let Some(selected) = self
+            .agent_profiles
+            .iter()
+            .find(|profile| Some(profile.id.as_str()) == self.agent_selected_profile.as_deref())
+            .filter(|profile| profile.managed)
+            .cloned()
+        else {
+            self.agent_profile_discovery_status =
+                "Select a Managed Profile before discovering options".into();
+            cx.notify();
+            return;
+        };
+        if discovery_arguments(&selected.agent_type, kind).is_none() {
+            self.agent_profile_discovery_status =
+                "This adapter does not expose a registered read-only option list; enter an exact ID"
+                    .into();
+            cx.notify();
+            return;
+        }
+        let Some(installed) = self
+            .installed_agent_clis
+            .iter()
+            .find(|agent| agent.id == selected.agent_type)
+            .cloned()
+        else {
+            self.agent_profile_discovery_status =
+                "Agent CLI not installed; rescan installed Agents or enter an exact ID".into();
+            cx.notify();
+            return;
+        };
+        self.agent_profile_discovery_busy = true;
+        self.agent_profile_discovery_request = self.agent_profile_discovery_request.wrapping_add(1);
+        let ticket = self.agent_profile_discovery_request;
+        let generation = self.workspace_generation;
+        self.agent_profile_discovery_status = "Discovering installed Agent options…".into();
+        cx.spawn(async move |view, cx| {
+            let result = cx.background_spawn(async move {
+                discover_choices(&installed, kind)
+            }).await;
+            let _ = view.update(cx, |view, cx| {
+                if view.workspace_generation != generation
+                    || view.agent_profile_discovery_request != ticket
+                    || view.agent_selected_profile.as_deref() != Some(selected.id.as_str())
+                    || !view.agent_profiles.iter().any(|row| {
+                        row.id == selected.id
+                            && row.managed
+                            && row.revision == selected.revision
+                    })
+                {
+                    return;
+                }
+                view.agent_profile_discovery_busy = false;
+                match result {
+                    Ok(choices) => {
+                        let count = choices.len();
+                        match kind {
+                            ManagedChoiceKind::Models => view.agent_profile_discovered_models = choices,
+                            ManagedChoiceKind::Personas => view.agent_profile_discovered_personas = choices,
+                        }
+                        view.agent_profile_discovery_status = if count == 0 {
+                            "No supported options reported; enter an exact ID if known".into()
+                        } else {
+                            format!("{count} available option(s) discovered; click one to fill the edit field")
+                        };
+                    }
+                    Err(error) => {
+                        view.agent_profile_discovery_status =
+                            format!("Read-only discovery unavailable: {error}; enter an exact ID");
+                    }
+                }
+                cx.notify();
+            });
+        }).detach();
+        cx.notify();
+    }
+
+    /// The Host owns the entire Managed configuration. Native only exposes
+    /// its display-safe model/persona selection after an explicit Host read.
+    pub(super) fn load_selected_agent_profile_managed_selection(&mut self, cx: &mut Context<Self>) {
+        if self.agent_profile_mutation_busy || self.agent_profiles_loading {
+            return;
+        }
+        let Some(selected) = self
+            .agent_profiles
+            .iter()
+            .find(|row| Some(row.id.as_str()) == self.agent_selected_profile.as_deref())
+            .filter(|row| row.managed)
+            .cloned()
+        else {
+            self.agent_profile_mutation_status =
+                "Select a Managed Host Profile to load Model/Persona".into();
+            cx.notify();
+            return;
+        };
+        self.agent_profile_managed_loaded = None;
+        self.agent_profile_model_input
+            .update(cx, |input, cx| input.clear(cx));
+        self.agent_profile_persona_input
+            .update(cx, |input, cx| input.clear(cx));
+        if self.runtime_bridge.is_none() {
+            self.runtime_bridge = RuntimeCliBridge::discover().ok();
+        }
+        let Some(bridge) = self.runtime_bridge.clone() else {
+            self.agent_profile_mutation_status =
+                "Alera CLI missing; cannot load Managed Model/Persona".into();
+            cx.notify();
+            return;
+        };
+        self.agent_profile_mutation_busy = true;
+        self.agent_profile_mutation_request = self.agent_profile_mutation_request.wrapping_add(1);
+        let ticket = self.agent_profile_mutation_request;
+        let generation = self.workspace_generation;
+        self.agent_profile_mutation_status = "Loading Managed Model/Persona from Host…".into();
+        cx.spawn(async move |view, cx| {
+            let result = cx.background_spawn(async move {
+                bridge.load_agent_profile_managed_selection(&selected)
+            }).await;
+            let _ = view.update(cx, |view, cx| {
+                if view.workspace_generation != generation
+                    || view.agent_profile_mutation_request != ticket {
+                    return;
+                }
+                view.agent_profile_mutation_busy = false;
+                match result {
+                    Ok(fields) if view.agent_selected_profile.as_deref() == Some(fields.id.as_str())
+                        && view.agent_profiles.iter().any(|row| {
+                            row.id == fields.id
+                                && row.managed
+                                && row.revision == Some(fields.revision)
+                        }) => {
+                        let model_ok = view.agent_profile_model_input.update(cx, |input, cx| {
+                            input.set_query(&fields.model, cx)
+                        });
+                        let persona_ok = view.agent_profile_persona_input.update(cx, |input, cx| {
+                            input.set_query(&fields.persona, cx)
+                        });
+                        if model_ok && persona_ok {
+                            view.agent_profile_managed_loaded = Some(fields);
+                            view.agent_profile_mutation_status =
+                                "Managed Model/Persona loaded; save changes or explicitly clear a field"
+                                    .into();
+                        } else {
+                            view.agent_profile_mutation_status =
+                                "Managed Host selection exceeds editor limits".into();
+                        }
+                    }
+                    Ok(_) => {
+                        view.agent_profile_mutation_status =
+                            "Managed Profile changed during load; refresh and reselect".into();
+                    }
+                    Err(error) => {
+                        view.agent_profile_mutation_status =
+                            format!("Unable to load Managed Model/Persona: {error}");
+                    }
+                }
+                cx.notify();
+            });
+        }).detach();
+        cx.notify();
+    }
+
+    /// Save only changed Model/Persona fields. Empty input requires explicit
+    /// Clear Model / Clear Persona, so clearing never happens accidentally.
+    fn save_selected_agent_profile_managed_selection(
+        &mut self,
+        clear_model: bool,
+        clear_persona: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if self.agent_profile_mutation_busy || self.agent_profiles_loading {
+            return;
+        }
+        let Some(selected) = self
+            .agent_profiles
+            .iter()
+            .find(|row| Some(row.id.as_str()) == self.agent_selected_profile.as_deref())
+            .filter(|row| row.managed)
+            .cloned()
+        else {
+            self.agent_profile_mutation_status = "Select a Managed Host Profile first".into();
+            cx.notify();
+            return;
+        };
+        let Some(original) = self.agent_profile_managed_loaded.clone() else {
+            self.agent_profile_mutation_status =
+                "Load Model/Persona from Host before editing".into();
+            cx.notify();
+            return;
+        };
+        if original.id != selected.id || Some(original.revision) != selected.revision {
+            self.agent_profile_mutation_status =
+                "Managed Profile revision changed; reload before saving".into();
+            cx.notify();
+            return;
+        }
+        if self.agent_profile_model_input.read(cx).composing()
+            || self.agent_profile_persona_input.read(cx).composing()
+        {
+            self.agent_profile_mutation_status =
+                "Finish IME composition before saving Managed Profile".into();
+            cx.notify();
+            return;
+        }
+        let model_now = self
+            .agent_profile_model_input
+            .read(cx)
+            .query()
+            .trim()
+            .to_owned();
+        let persona_now = self
+            .agent_profile_persona_input
+            .read(cx)
+            .query()
+            .trim()
+            .to_owned();
+        let descriptor = alera_core::agent_descriptor::agent_descriptor(&selected.agent_type);
+        let supports_model = descriptor.is_some_and(|item| {
+            item.model_override != alera_core::agent_descriptor::AgentModelOverride::Unsupported
+        });
+        let supports_persona = descriptor.is_some_and(|item| item.supports_persona);
+        if (clear_model && !supports_model) || (clear_persona && !supports_persona) {
+            self.agent_profile_mutation_status =
+                "Selected adapter does not support that Managed option".into();
+            cx.notify();
+            return;
+        }
+        if !clear_model
+            && !clear_persona
+            && ((supports_model && model_now.is_empty() && !original.model.is_empty())
+                || (supports_persona && persona_now.is_empty() && !original.persona.is_empty()))
+        {
+            self.agent_profile_mutation_status =
+                "Use Clear Model / Clear Persona to remove an existing selection".into();
+            cx.notify();
+            return;
+        }
+        let model: Option<Option<String>> = if clear_model {
+            (!original.model.is_empty()).then_some(None)
+        } else if clear_persona {
+            None
+        } else if supports_model && model_now != original.model {
+            Some(Some(model_now))
+        } else {
+            None
+        };
+        let persona: Option<Option<String>> = if clear_persona {
+            (!original.persona.is_empty()).then_some(None)
+        } else if clear_model {
+            None
+        } else if supports_persona && persona_now != original.persona {
+            Some(Some(persona_now))
+        } else {
+            None
+        };
+        if model.is_none() && persona.is_none() {
+            self.agent_profile_mutation_status = "No Managed Model/Persona changes to save".into();
+            cx.notify();
+            return;
+        }
+        if self.runtime_bridge.is_none() {
+            self.runtime_bridge = RuntimeCliBridge::discover().ok();
+        }
+        let Some(bridge) = self.runtime_bridge.clone() else {
+            self.agent_profile_mutation_status =
+                "Alera CLI missing; cannot save Managed Model/Persona".into();
+            cx.notify();
+            return;
+        };
+        self.agent_profile_mutation_busy = true;
+        self.agent_profile_mutation_request = self.agent_profile_mutation_request.wrapping_add(1);
+        let ticket = self.agent_profile_mutation_request;
+        let generation = self.workspace_generation;
+        self.agent_profile_mutation_status =
+            "Saving Managed Model/Persona to Host with revision check…".into();
+        cx.spawn(async move |view, cx| {
+            let result = cx.background_spawn(async move {
+                bridge.update_agent_profile_managed_selection(
+                    &selected,
+                    model.as_ref().map(|value| value.as_deref()),
+                    persona.as_ref().map(|value| value.as_deref()),
+                )
+            }).await;
+            let _ = view.update(cx, |view, cx| {
+                if view.workspace_generation != generation
+                    || view.agent_profile_mutation_request != ticket {
+                    return;
+                }
+                view.agent_profile_mutation_busy = false;
+                view.agent_profile_managed_loaded = None;
+                view.agent_profile_model_input.update(cx, |input, cx| input.clear(cx));
+                view.agent_profile_persona_input.update(cx, |input, cx| input.clear(cx));
+                match result {
+                    Ok(_) => {
+                        view.agent_profile_mutation_status =
+                            "Host Managed Model/Persona saved and independently verified; refreshing catalog"
+                                .into();
+                        view.agent_profiles_loading = false;
+                        view.agent_profiles_request = view.agent_profiles_request.wrapping_add(1);
+                        view.refresh_agent_profiles(cx);
+                    }
+                    Err(error) => {
+                        view.agent_profile_mutation_status =
+                            format!("Managed Model/Persona save not confirmed: {error}; reload before retrying");
+                    }
+                }
+                cx.notify();
+            });
+        }).detach();
+        cx.notify();
+    }
+
+    /// Explicitly load Command and Custom Prompt for a temporary edit session.
+    /// The full Host response is projected before any UI state is updated.
+    pub(super) fn load_selected_agent_profile_content(&mut self, cx: &mut Context<Self>) {
+        if self.agent_profile_mutation_busy || self.agent_profiles_loading {
+            return;
+        }
+        let Some(selected) = self
+            .agent_profiles
+            .iter()
+            .find(|profile| Some(profile.id.as_str()) == self.agent_selected_profile.as_deref())
+            .cloned()
+        else {
+            self.agent_profile_mutation_status =
+                "Select a Host Profile to edit Command/Prompt".into();
+            cx.notify();
+            return;
+        };
+        self.agent_profile_content_loaded = None;
+        self.agent_profile_command_input
+            .update(cx, |input, cx| input.clear(cx));
+        self.agent_profile_custom_prompt_input
+            .update(cx, |input, cx| input.clear(cx));
+        if self.runtime_bridge.is_none() {
+            self.runtime_bridge = RuntimeCliBridge::discover().ok();
+        }
+        let Some(bridge) = self.runtime_bridge.clone() else {
+            self.agent_profile_mutation_status =
+                "Alera CLI missing; cannot load Command/Prompt".into();
+            cx.notify();
+            return;
+        };
+        self.agent_profile_mutation_busy = true;
+        self.agent_profile_mutation_request = self.agent_profile_mutation_request.wrapping_add(1);
+        let ticket = self.agent_profile_mutation_request;
+        let generation = self.workspace_generation;
+        self.agent_profile_mutation_status = "Loading Command/Prompt from Host…".into();
+        cx.spawn(async move |view, cx| {
+            let result = cx
+                .background_spawn(async move { bridge.load_agent_profile_content(&selected) })
+                .await;
+            let _ = view.update(cx, |view, cx| {
+                if view.workspace_generation != generation
+                    || view.agent_profile_mutation_request != ticket
+                {
+                    return;
+                }
+                view.agent_profile_mutation_busy = false;
+                match result {
+                    Ok(fields)
+                        if view.agent_selected_profile.as_deref() == Some(fields.id.as_str())
+                            && view.agent_profiles.iter().any(|profile| {
+                                profile.id == fields.id
+                                    && profile.revision == Some(fields.revision)
+                                    && profile.managed == fields.managed
+                            }) =>
+                    {
+                        let command_loaded = view
+                            .agent_profile_command_input
+                            .update(cx, |input, cx| input.set_query(&fields.command, cx));
+                        let prompt_loaded = view
+                            .agent_profile_custom_prompt_input
+                            .update(cx, |input, cx| input.set_query(&fields.custom_prompt, cx));
+                        if command_loaded && prompt_loaded {
+                            view.agent_profile_content_loaded = Some(fields);
+                            view.agent_profile_mutation_status =
+                                "Command/Prompt loaded from Host; edit then Save or Clear Prompt"
+                                    .into();
+                        } else {
+                            view.agent_profile_mutation_status =
+                                "Host content exceeds editor limits; nothing loaded".into();
+                        }
+                    }
+                    Ok(_) => {
+                        view.agent_profile_mutation_status =
+                            "Host Profile changed during content load; refresh and reselect it"
+                                .into();
+                    }
+                    Err(error) => {
+                        view.agent_profile_mutation_status =
+                            format!("Unable to load Command/Prompt: {error}");
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// Explicit user action only; edits are transient until Host CAS succeeds.
+    /// Clearing a prompt requires the separate Clear Prompt action.
+    fn save_selected_agent_profile_content(&mut self, clear_only: bool, cx: &mut Context<Self>) {
+        if self.agent_profile_mutation_busy || self.agent_profiles_loading {
+            return;
+        }
+        let Some(selected) = self
+            .agent_profiles
+            .iter()
+            .find(|profile| Some(profile.id.as_str()) == self.agent_selected_profile.as_deref())
+            .cloned()
+        else {
+            self.agent_profile_mutation_status = "Select a Host Profile before saving".into();
+            cx.notify();
+            return;
+        };
+        let Some(original) = self.agent_profile_content_loaded.as_ref() else {
+            self.agent_profile_mutation_status =
+                "Load Command/Prompt from Host before editing".into();
+            cx.notify();
+            return;
+        };
+        if original.id != selected.id
+            || Some(original.revision) != selected.revision
+            || original.managed != selected.managed
+        {
+            self.agent_profile_mutation_status =
+                "Host Profile changed; reload before saving".into();
+            cx.notify();
+            return;
+        }
+        if self.agent_profile_command_input.read(cx).composing()
+            || self.agent_profile_custom_prompt_input.read(cx).composing()
+        {
+            self.agent_profile_mutation_status = "Finish IME composition before saving".into();
+            cx.notify();
+            return;
+        }
+        let command_now = self
+            .agent_profile_command_input
+            .read(cx)
+            .query()
+            .trim()
+            .to_owned();
+        let prompt_now = self
+            .agent_profile_custom_prompt_input
+            .read(cx)
+            .query()
+            .to_owned();
+        if !selected.managed && !clear_only && command_now.is_empty() {
+            self.agent_profile_mutation_status = "Command must not be empty".into();
+            cx.notify();
+            return;
+        }
+        if !clear_only && prompt_now.trim().is_empty() && prompt_now != original.custom_prompt {
+            self.agent_profile_mutation_status =
+                "Use the explicit Clear Prompt button to remove instructions".into();
+            cx.notify();
+            return;
+        }
+        let command = if clear_only || selected.managed || command_now == original.command {
+            None
+        } else {
+            Some(command_now)
+        };
+        let prompt = if clear_only || prompt_now == original.custom_prompt {
+            None
+        } else {
+            Some(prompt_now)
+        };
+        let clear_prompt = clear_only && !original.custom_prompt.is_empty();
+        if command.is_none() && prompt.is_none() && !clear_prompt {
+            self.agent_profile_mutation_status = "No Command/Prompt changes to save".into();
+            cx.notify();
+            return;
+        }
+        if self.runtime_bridge.is_none() {
+            self.runtime_bridge = RuntimeCliBridge::discover().ok();
+        }
+        let Some(bridge) = self.runtime_bridge.clone() else {
+            self.agent_profile_mutation_status =
+                "Alera CLI missing; cannot save Command/Prompt".into();
+            cx.notify();
+            return;
+        };
+        self.agent_profile_mutation_busy = true;
+        self.agent_profile_mutation_request = self.agent_profile_mutation_request.wrapping_add(1);
+        let ticket = self.agent_profile_mutation_request;
+        let generation = self.workspace_generation;
+        self.agent_profile_mutation_status =
+            "Saving Command/Prompt to Host with revision check…".into();
+        cx.spawn(async move |view, cx| {
+            let result = cx.background_spawn(async move {
+                bridge.update_agent_profile_command_prompt(
+                    &selected, command.as_deref(), prompt.as_deref(), clear_prompt
+                )
+            }).await;
+            let _ = view.update(cx, |view, cx| {
+                if view.workspace_generation != generation
+                    || view.agent_profile_mutation_request != ticket {
+                    return;
+                }
+                view.agent_profile_mutation_busy = false;
+                view.agent_profile_content_loaded = None;
+                view.agent_profile_command_input.update(cx, |input, cx| input.clear(cx));
+                view.agent_profile_custom_prompt_input.update(cx, |input, cx| input.clear(cx));
+                match result {
+                    Ok(_) => {
+                        view.agent_profile_mutation_status =
+                            "Command/Prompt saved in Host; catalog refreshing for independent readback".into();
+                        view.agent_profiles_loading = false;
+                        view.agent_profiles_request = view.agent_profiles_request.wrapping_add(1);
+                        view.refresh_agent_profiles(cx);
+                    }
+                    Err(error) => {
+                        view.agent_profile_mutation_status =
+                            format!("Host Command/Prompt not saved: {error}. Reload before retrying.");
+                    }
+                }
+                cx.notify();
+            });
+        }).detach();
+        cx.notify();
+    }
+
     /// Only Description/Quota Group are writable here; existing Host Command,
     /// Prompt and Managed configurations are never part of Native UI state.
     fn save_selected_agent_profile_routing(&mut self, cx: &mut Context<Self>) {
@@ -1154,6 +1692,18 @@ impl Workbench {
                                     }
                                     view.agent_selected_profile = Some(selection_id.clone());
                                     view.agent_profile_removal_preview = None;
+                                    view.agent_profile_content_loaded = None;
+                                    view.agent_profile_managed_loaded = None;
+                                    view.agent_profile_discovery_request =
+                                        view.agent_profile_discovery_request.wrapping_add(1);
+                                    view.agent_profile_discovery_busy = false;
+                                    view.agent_profile_discovered_models.clear();
+                                    view.agent_profile_discovered_personas.clear();
+                                    view.agent_profile_discovery_status.clear();
+                                    view.agent_profile_model_input.update(cx, |input, cx| input.clear(cx));
+                                    view.agent_profile_persona_input.update(cx, |input, cx| input.clear(cx));
+                                    view.agent_profile_command_input.update(cx, |input, cx| input.clear(cx));
+                                    view.agent_profile_custom_prompt_input.update(cx, |input, cx| input.clear(cx));
                                     view.agent_profile_name_input.update(cx, |input, cx| {
                                         input.set_query(&name_for_edit, cx);
                                     });
@@ -1223,7 +1773,7 @@ impl Workbench {
                 ))
                 .child(div().mt_3().text_sm().child("Manage Host Agent Profiles"))
                 .child(div().text_xs().text_color(rgb(MUTED)).child(
-                    "Create, rename, clone, or edit Routing for a selected Host Profile. Managed options/model/persona editing and reduced-protection confirmation remain in Classic or CLI.",
+                    "Create, rename, clone, or edit Routing, Command, Prompt, and Managed Model/Persona. Reduced-protection settings remain Host/Classic owned.",
                 ))
                 .child(self.agent_profile_name_input.clone())
                 .child(div().text_xs().text_color(rgb(MUTED)).child(
@@ -1281,6 +1831,207 @@ impl Workbench {
                                 .on_click(cx.listener(|view, _, _, cx| {
                                     view.clone_selected_host_agent_profile(cx);
                                 }))
+                        )
+                )
+                .child(div().mt_3().text_sm().child("Command / Custom Prompt · Host Profile"))
+                .child(div().text_xs().text_color(rgb(MUTED)).child(
+                    "Explicitly load these Host-owned fields to edit. Command mode uses a single-line command; Custom Prompt preserves multiple lines. Changes are not saved until confirmed.",
+                ))
+                .child(div().flex().flex_wrap().gap_3()
+                    .child(div().id("native-load-profile-content")
+                        .cursor_pointer().text_sm()
+                        .text_color(rgb(if self.agent_profile_mutation_busy { MUTED } else { TEXT }))
+                        .child("Load Command / Prompt")
+                        .on_click(cx.listener(|view, _, _, cx| {
+                            view.load_selected_agent_profile_content(cx);
+                        })))
+                    .child(div().id("native-save-profile-content")
+                        .cursor_pointer().text_sm()
+                        .text_color(rgb(if self.agent_profile_mutation_busy { MUTED } else { TEXT }))
+                        .child("Save Command / Prompt")
+                        .on_click(cx.listener(|view, _, _, cx| {
+                            view.save_selected_agent_profile_content(false, cx);
+                        })))
+                    .child(div().id("native-clear-profile-prompt")
+                        .cursor_pointer().text_sm()
+                        .text_color(rgb(if self.agent_profile_mutation_busy { MUTED } else { TEXT }))
+                        .child("Clear Prompt")
+                        .on_click(cx.listener(|view, _, _, cx| {
+                            view.save_selected_agent_profile_content(true, cx);
+                        })))
+                )
+                .when(
+                    self.agent_profile_content_loaded.as_ref().is_some_and(|fields| {
+                        selected_profile.as_deref() == Some(fields.id.as_str())
+                            && self.agent_profiles.iter().any(|profile| {
+                                profile.id == fields.id
+                                    && profile.revision == Some(fields.revision)
+                                    && profile.managed == fields.managed
+                            })
+                    }),
+                    |panel| {
+                        panel
+                            .when(
+                                self.agent_profile_content_loaded.as_ref().is_some_and(|fields| !fields.managed),
+                                |panel| panel
+                                    .child(div().text_xs().text_color(rgb(MUTED)).child("Command (single line, up to 4 KiB)"))
+                                    .child(self.agent_profile_command_input.clone()),
+                            )
+                            .child(div().text_xs().text_color(rgb(MUTED)).child("Custom Prompt (multiline, up to 8 KiB)"))
+                            .child(self.agent_profile_custom_prompt_input.clone())
+                    }
+                )
+                .when(
+                    self.agent_profiles.iter().any(|row| {
+                        row.managed
+                            && selected_profile.as_deref() == Some(row.id.as_str())
+                    }),
+                    |panel| panel
+                        .child(div().mt_3().text_sm().child("Managed Model / Persona · Host Profile"))
+                        .child(div().text_xs().text_color(rgb(MUTED)).child(
+                            "Uses Classic's registered read-only option discovery when supported; exact Model IDs and Persona names can always be entered manually. Only these two fields change; Sandbox and Permissions remain Host-owned.",
+                        ))
+                        .child(div().flex().flex_wrap().gap_3()
+                            .child(div().id("native-load-profile-managed-selection")
+                                .cursor_pointer().text_sm()
+                                .text_color(rgb(if self.agent_profile_mutation_busy { MUTED } else { TEXT }))
+                                .child("Load Model / Persona")
+                                .on_click(cx.listener(|view, _, _, cx| {
+                                    view.load_selected_agent_profile_managed_selection(cx);
+                                })))
+                            .child(div().id("native-save-profile-managed-selection")
+                                .cursor_pointer().text_sm()
+                                .text_color(rgb(if self.agent_profile_mutation_busy { MUTED } else { TEXT }))
+                                .child("Save Model / Persona")
+                                .on_click(cx.listener(|view, _, _, cx| {
+                                    view.save_selected_agent_profile_managed_selection(false, false, cx);
+                                })))
+                            .child(div().id("native-clear-profile-model")
+                                .cursor_pointer().text_sm()
+                                .text_color(rgb(if self.agent_profile_mutation_busy { MUTED } else { TEXT }))
+                                .child("Clear Model")
+                                .on_click(cx.listener(|view, _, _, cx| {
+                                    view.save_selected_agent_profile_managed_selection(true, false, cx);
+                                })))
+                            .child(div().id("native-clear-profile-persona")
+                                .cursor_pointer().text_sm()
+                                .text_color(rgb(if self.agent_profile_mutation_busy { MUTED } else { TEXT }))
+                                .child("Clear Persona")
+                                .on_click(cx.listener(|view, _, _, cx| {
+                                    view.save_selected_agent_profile_managed_selection(false, true, cx);
+                                })))
+                        )
+                        .when(
+                            self.agent_profiles.iter().find(|row| {
+                                selected_profile.as_deref() == Some(row.id.as_str())
+                            }).is_some_and(|row| discovery_arguments(
+                                &row.agent_type, ManagedChoiceKind::Models,
+                            ).is_some()),
+                            |panel| panel.child(
+                                div().id("native-discover-managed-models")
+                                    .cursor_pointer().text_sm()
+                                    .text_color(rgb(if self.agent_profile_discovery_busy { MUTED } else { TEXT }))
+                                    .child("Refresh Model choices (read-only)")
+                                    .on_click(cx.listener(|view, _, _, cx| {
+                                        view.discover_selected_agent_profile_choices(
+                                            ManagedChoiceKind::Models, cx,
+                                        );
+                                    }))
+                            ),
+                        )
+                        .when(
+                            self.agent_profiles.iter().find(|row| {
+                                selected_profile.as_deref() == Some(row.id.as_str())
+                            }).is_some_and(|row| discovery_arguments(
+                                &row.agent_type, ManagedChoiceKind::Personas,
+                            ).is_some()),
+                            |panel| panel.child(
+                                div().id("native-discover-managed-personas")
+                                    .cursor_pointer().text_sm()
+                                    .text_color(rgb(if self.agent_profile_discovery_busy { MUTED } else { TEXT }))
+                                    .child("Refresh Persona choices (read-only)")
+                                    .on_click(cx.listener(|view, _, _, cx| {
+                                        view.discover_selected_agent_profile_choices(
+                                            ManagedChoiceKind::Personas, cx,
+                                        );
+                                    }))
+                            ),
+                        )
+                        .when(!self.agent_profile_discovery_status.is_empty(), |panel| panel
+                            .child(div().text_xs().text_color(rgb(MUTED))
+                                .child(self.agent_profile_discovery_status.clone()))
+                        )
+                        .when(
+                            self.agent_profile_managed_loaded.as_ref().is_some_and(|fields| {
+                                selected_profile.as_deref() == Some(fields.id.as_str())
+                                    && self.agent_profiles.iter().any(|row| {
+                                        row.id == fields.id
+                                            && row.managed
+                                            && row.revision == Some(fields.revision)
+                                    })
+                            }),
+                            |panel| {
+                                let descriptor = self.agent_profiles.iter()
+                                    .find(|row| selected_profile.as_deref() == Some(row.id.as_str()))
+                                    .and_then(|row| alera_core::agent_descriptor::agent_descriptor(&row.agent_type));
+                                let supports_model = descriptor.is_some_and(|item| {
+                                    item.model_override != alera_core::agent_descriptor::AgentModelOverride::Unsupported
+                                });
+                                let supports_persona = descriptor.is_some_and(|item| item.supports_persona);
+                                panel
+                                    .when(supports_model, |panel| panel
+                                        .child(div().text_xs().text_color(rgb(MUTED)).child("Exact Model ID (leave unchanged for current setting)"))
+                                        .child(self.agent_profile_model_input.clone())
+                                        .child(div().flex().flex_wrap().gap_2().children(
+                                            self.agent_profile_discovered_models.iter().cloned().enumerate()
+                                                .map(|(index, model)| {
+                                                    div().id(("native-managed-model-option", index))
+                                                        .cursor_pointer().p_1().text_xs()
+                                                        .bg(rgb(PANEL)).text_color(rgb(TEXT))
+                                                        .child(model.clone())
+                                                        .on_click(cx.listener(move |view, _, _, cx| {
+                                                            if view.agent_profile_mutation_busy
+                                                                || view.agent_profile_managed_loaded.is_none() {
+                                                                return;
+                                                            }
+                                                            view.agent_profile_model_input.update(cx, |input, cx| {
+                                                                input.set_query(&model, cx);
+                                                            });
+                                                            cx.notify();
+                                                        }))
+                                                }),
+                                        ))
+                                    )
+                                    .when(!supports_model, |panel| panel
+                                        .child(div().text_xs().text_color(rgb(MUTED)).child("This adapter has no Model override"))
+                                    )
+                                    .when(supports_persona, |panel| panel
+                                        .child(div().text_xs().text_color(rgb(MUTED)).child("Exact Persona / Agent name"))
+                                        .child(self.agent_profile_persona_input.clone())
+                                        .child(div().flex().flex_wrap().gap_2().children(
+                                            self.agent_profile_discovered_personas.iter().cloned().enumerate()
+                                                .map(|(index, persona)| {
+                                                    div().id(("native-managed-persona-option", index))
+                                                        .cursor_pointer().p_1().text_xs()
+                                                        .bg(rgb(PANEL)).text_color(rgb(TEXT))
+                                                        .child(persona.clone())
+                                                        .on_click(cx.listener(move |view, _, _, cx| {
+                                                            if view.agent_profile_mutation_busy
+                                                                || view.agent_profile_managed_loaded.is_none() {
+                                                                return;
+                                                            }
+                                                            view.agent_profile_persona_input.update(cx, |input, cx| {
+                                                                input.set_query(&persona, cx);
+                                                            });
+                                                            cx.notify();
+                                                        }))
+                                                }),
+                                        ))
+                                    )
+                                    .when(!supports_persona, |panel| panel
+                                        .child(div().text_xs().text_color(rgb(MUTED)).child("This adapter has no Persona selection"))
+                                    )
+                            },
                         )
                 )
                 .child(div().mt_3().text_sm().child("Routing · selected Host Profile"))

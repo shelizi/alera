@@ -35,9 +35,20 @@ fn remove_marked_preedit(text: &mut String, marked: Option<Range<usize>>) -> Opt
     Some(range.start)
 }
 
+/// The Profile Prompt is the only QuickOpenInput mode that preserves lines.
+fn normalize_input_text(raw: &str, multiline: bool) -> String {
+    if multiline {
+        raw.replace("\r\n", "\n")
+            .replace('\r', "\n")
+            .replace('\0', "")
+    } else {
+        raw.replace(['\r', '\n', '\0'], " ")
+    }
+}
+
 actions!(
     alera_gpui_quick_open,
-    [QueryBackspace, QuerySelectAll, QueryPaste]
+    [QueryBackspace, QuerySelectAll, QueryPaste, QueryNewline]
 );
 
 pub fn bind_quick_open_keys(cx: &mut App) {
@@ -47,6 +58,16 @@ pub fn bind_quick_open_keys(cx: &mut App) {
         KeyBinding::new("cmd-a", QuerySelectAll, Some("AleraGpuiQuickOpen")),
         KeyBinding::new("ctrl-v", QueryPaste, Some("AleraGpuiQuickOpen")),
         KeyBinding::new("cmd-v", QueryPaste, Some("AleraGpuiQuickOpen")),
+        KeyBinding::new(
+            "backspace",
+            QueryBackspace,
+            Some("AleraGpuiProfileMultiline"),
+        ),
+        KeyBinding::new("ctrl-a", QuerySelectAll, Some("AleraGpuiProfileMultiline")),
+        KeyBinding::new("cmd-a", QuerySelectAll, Some("AleraGpuiProfileMultiline")),
+        KeyBinding::new("ctrl-v", QueryPaste, Some("AleraGpuiProfileMultiline")),
+        KeyBinding::new("cmd-v", QueryPaste, Some("AleraGpuiProfileMultiline")),
+        KeyBinding::new("enter", QueryNewline, Some("AleraGpuiProfileMultiline")),
     ]);
 }
 
@@ -55,6 +76,8 @@ pub struct QuickOpenInput {
     text: String,
     placeholder: String,
     terminal_mode: bool,
+    multiline_mode: bool,
+    max_input_bytes: usize,
     selection: Range<usize>,
     marked: Option<Range<usize>>,
     terminal_committed: VecDeque<String>,
@@ -72,6 +95,8 @@ impl QuickOpenInput {
             text: String::new(),
             placeholder: placeholder.into(),
             terminal_mode: false,
+            multiline_mode: false,
+            max_input_bytes: 512,
             selection: 0..0,
             marked: None,
             terminal_committed: VecDeque::new(),
@@ -82,6 +107,25 @@ impl QuickOpenInput {
     pub fn terminal(cx: &mut Context<Self>) -> Self {
         let mut input = Self::with_placeholder("Command for selected Host session…", cx);
         input.terminal_mode = true;
+        input.max_input_bytes = 4096;
+        input
+    }
+
+    /// Editable single-line Host Profile command; unlike file search it
+    /// supports the validated 4 KiB Host command limit.
+    pub fn profile_command(cx: &mut Context<Self>) -> Self {
+        let mut input = Self::with_placeholder("Host Command (4 KiB max)…", cx);
+        input.max_input_bytes = 4096;
+        input
+    }
+
+    /// Host-owned Custom Prompt requires real newlines, not Quick Open query
+    /// filtering. This mode is opt-in and does not alter search or Terminal.
+    pub fn profile_multiline(cx: &mut Context<Self>) -> Self {
+        let mut input =
+            Self::with_placeholder("Custom Prompt (up to 8 KiB, Enter for newline)…", cx);
+        input.multiline_mode = true;
+        input.max_input_bytes = 8192;
         input
     }
 
@@ -140,10 +184,17 @@ impl QuickOpenInput {
     /// Select a known local branch from the Git Graph without synthesizing
     /// keyboard/IME events. A user edit still follows the ordinary handler.
     pub fn set_query(&mut self, value: &str, cx: &mut Context<Self>) -> bool {
-        if value.len() > 512 || value.contains(['\r', '\n', '\0']) {
+        if value.len() > self.max_input_bytes
+            || value.contains('\0')
+            || (!self.multiline_mode && value.contains(['\r', '\n']))
+        {
             return false;
         }
-        self.text = value.to_owned();
+        self.text = if self.multiline_mode {
+            value.replace("\r\n", "\n").replace('\r', "\n")
+        } else {
+            value.to_owned()
+        };
         self.selection = self.text.len()..self.text.len();
         self.marked = None;
         cx.notify();
@@ -170,8 +221,8 @@ impl QuickOpenInput {
         {
             return;
         }
-        let text = raw.replace(['\r', '\n', '\0'], " ");
-        let max_length = if self.terminal_mode { 4096 } else { 512 };
+        let text = normalize_input_text(raw, self.multiline_mode);
+        let max_length = self.max_input_bytes;
         if self.text.len() - (range.end - range.start) + text.len() > max_length {
             return;
         }
@@ -210,6 +261,14 @@ impl QuickOpenInput {
         };
         self.selection = range;
         self.replace(None, "", false, cx);
+    }
+
+    fn newline(&mut self, _: &QueryNewline, _: &mut Window, cx: &mut Context<Self>) {
+        // Enter confirms an active IME candidate; only insert a newline
+        // after the marked composition has been committed.
+        if self.multiline_mode && self.marked.is_none() {
+            self.replace(None, "\n", false, cx);
+        }
     }
 
     fn select_all(&mut self, _: &QuerySelectAll, _: &mut Window, cx: &mut Context<Self>) {
@@ -419,8 +478,13 @@ impl Render for QuickOpenInput {
         }
         div()
             .id("quick-open-query")
-            .key_context("AleraGpuiQuickOpen")
+            .key_context(if self.multiline_mode {
+                "AleraGpuiProfileMultiline"
+            } else {
+                "AleraGpuiQuickOpen"
+            })
             .track_focus(&self.focus)
+            .on_action(cx.listener(Self::newline))
             .on_action(cx.listener(Self::backspace))
             .on_action(cx.listener(Self::select_all))
             .on_action(cx.listener(Self::paste))
@@ -443,10 +507,15 @@ impl Render for QuickOpenInput {
             .px_2()
             .py_1()
             .text_sm()
+            .when(self.multiline_mode, |input| input.min_h(px(108.0)))
             .child(if self.text.is_empty() {
                 self.placeholder.to_string()
             } else {
-                format!("⌕ {}", self.text)
+                if self.multiline_mode {
+                    self.text.clone()
+                } else {
+                    format!("⌕ {}", self.text)
+                }
             })
             .child(QuickOpenCapture { input: cx.entity() })
             .into_any_element()
@@ -455,7 +524,20 @@ impl Render for QuickOpenInput {
 
 #[cfg(test)]
 mod tests {
-    use super::{accepts_native_text_event, remove_marked_preedit};
+    use super::{accepts_native_text_event, normalize_input_text, remove_marked_preedit};
+
+    #[test]
+    fn profile_multiline_preserves_newlines_without_changing_search_or_terminal() {
+        assert_eq!(
+            normalize_input_text("one\r\ntwo\nthree", true),
+            "one\ntwo\nthree"
+        );
+        assert_eq!(
+            normalize_input_text("one\r\ntwo\nthree", false),
+            "one  two three"
+        );
+        assert_eq!(normalize_input_text("中\0文\n第二行", true), "中文\n第二行");
+    }
 
     #[test]
     fn both_terminal_and_explorer_reject_delayed_ime_events_after_blur() {

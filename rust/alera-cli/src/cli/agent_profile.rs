@@ -198,6 +198,33 @@ pub struct AgentProfileUpdateArgs {
     pub quota_group: Option<String>,
     #[arg(long = "clear-quota-group")]
     pub clear_quota_group: bool,
+    /// Read a bounded JSON Command/Custom Prompt edit from standard input
+    /// instead of argv. Requires --expected-revision.
+    #[arg(
+        long = "edit-content-stdin",
+        conflicts_with_all = [
+            "command",
+            "custom_prompt",
+            "clear_custom_prompt",
+            "managed_config_stdin"
+        ],
+        requires = "expected_revision"
+    )]
+    pub edit_content_stdin: bool,
+    /// Patch only Managed model/persona from a bounded JSON object on stdin.
+    /// The CLI merges into the live Host-managed config and preserves other
+    /// keys, revision and reduced-protection confirmation semantics.
+    #[arg(
+        long = "edit-managed-selection-stdin",
+        requires = "expected_revision",
+        conflicts_with_all = [
+            "edit_content_stdin", "managed_config", "managed_config_file",
+            "managed_config_stdin", "agent_type", "launch_mode", "command",
+            "custom_prompt", "clear_custom_prompt", "name", "description",
+            "clear_description", "quota_group", "clear_quota_group"
+        ]
+    )]
+    pub edit_managed_selection_stdin: bool,
     /// Confirm newly enabled settings that reduce agent protections.
     #[arg(long = "confirm-reduced-protections")]
     pub confirm_reduced_protections: bool,
