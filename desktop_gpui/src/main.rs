@@ -94,7 +94,6 @@ use alera_gpui_desktop::model::WorkbenchModel;
 use alera_gpui_desktop::native_i18n::UiLocale;
 use alera_gpui_desktop::native_modal::NativeModalSize;
 use alera_gpui_desktop::native_settings::{NativeSettings, NativeSettingsStore};
-use alera_gpui_desktop::project_search::{ContentMatch, ProjectSearch};
 use alera_gpui_desktop::project_tree::{
     collect_project_tree_with_registered, project_group_matches_search,
     project_title_matches_search, sidebar_workspaces_for_group, worktree_matches_search,
@@ -138,6 +137,10 @@ use alera_gpui_desktop::workbench_tabs::{
 };
 use alera_gpui_desktop::workspace_sidebar_order::order_worktree_rows;
 use alera_gpui_desktop::workspace_tree::WorkspaceTree;
+use alera_gpui_desktop::worktree_content_search::{
+    search_worktree_contents, worktree_hit_requires_switch, WorktreeContentMatch,
+    WorktreeContentScope,
+};
 use alera_gpui_desktop::worktree_manager::{
     matching_branch_worktree, WorktreeEntry, WorktreeManager,
 };
@@ -532,8 +535,11 @@ struct Workbench {
     file_index_loading: bool,
     file_index_request: u64,
     content_query: Option<Entity<QuickOpenInput>>,
+    content_search_scope: WorktreeContentScope,
+    content_worktrees_searched: usize,
+    content_worktrees_skipped: usize,
     content_loading: bool,
-    content_matches: Vec<ContentMatch>,
+    content_matches: Vec<WorktreeContentMatch>,
     content_truncated: bool,
     content_error: Option<String>,
     content_searched_query: String,
@@ -4575,6 +4581,8 @@ impl Workbench {
         self.content_matches.clear();
         self.content_truncated = false;
         self.content_error = None;
+        self.content_worktrees_searched = 0;
+        self.content_worktrees_skipped = 0;
         self.content_searched_query = query.clone();
         if query.is_empty() {
             self.content_loading = false;
@@ -4584,14 +4592,14 @@ impl Workbench {
         }
         let generation = self.workspace_generation;
         let root = self.model.root().to_path_buf();
+        let scope = self.content_search_scope;
         self.content_loading = true;
         cx.spawn(async move |view, cx| {
-            // Directory walking, decoding and matching are strictly off the
-            // GPUI UI thread. ProjectSearch never writes workspace files.
+            // Git worktree discovery, directory walking, decoding and content
+            // matching all run off the GPUI UI thread. Results retain the
+            // owning checkout so same-relative-path hits never get swapped.
             let result = cx
-                .background_spawn(async move {
-                    ProjectSearch::new(&root).and_then(|search| search.search(&query))
-                })
+                .background_spawn(async move { search_worktree_contents(&root, &query, scope) })
                 .await;
             view.update(cx, |view, cx| {
                 if view.workspace_generation != generation || view.content_request != ticket {
@@ -4602,6 +4610,8 @@ impl Workbench {
                     Ok(results) => {
                         view.content_matches = results.matches;
                         view.content_truncated = results.truncated;
+                        view.content_worktrees_searched = results.searched_worktrees;
+                        view.content_worktrees_skipped = results.skipped_worktrees;
                         view.content_error = None;
                     }
                     Err(error) => {
@@ -4620,24 +4630,55 @@ impl Workbench {
 
     fn open_content_search_hit(
         &mut self,
-        path: &std::path::Path,
-        line: usize,
-        column: usize,
+        hit: &WorktreeContentMatch,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.model.open_path(path) {
-            self.model
-                .set_status("Search result is unavailable; rerun search");
+        // A UI event can arrive after a new search has replaced the results.
+        // Never switch worktrees or open a stale result from an old snapshot.
+        if !self.content_matches.iter().any(|item| item == hit) {
+            self.model.set_status("Search result changed; rerun search");
+            cx.notify();
+            return;
+        }
+        let path = match hit.checked_path() {
+            Ok(path) => path,
+            Err(error) => {
+                self.model.set_status(format!(
+                    "Search result is unavailable: {error}; rerun search"
+                ));
+                cx.notify();
+                return;
+            }
+        };
+        let owner = hit.root.clone();
+        let line = hit.hit.line;
+        let column = hit.hit.column;
+        if worktree_hit_requires_switch(self.model.root(), hit) {
+            // Keep the existing dirty-buffer, running Host and Git safety
+            // gates. Do not fabricate a success if workspace switch refused.
+            self.switch_workspace(owner.clone(), cx);
+            if self.model.root() != owner {
+                cx.notify();
+                return;
+            }
+        }
+        if !self.model.open_path(&path) {
+            self.model.set_status(
+                "Search result belongs to this worktree but could not be opened; rerun search",
+            );
             cx.notify();
             return;
         }
         self.open_editor(cx);
         let Some(editor) = self.focused_editor() else {
+            self.model
+                .set_status("Search result could not activate a Native Editor");
+            cx.notify();
             return;
         };
         match editor.update(cx, |editor, cx| {
-            editor.navigate_to_content_hit(path, line, column, cx)
+            editor.navigate_to_content_hit(&path, line, column, cx)
         }) {
             Ok(()) => window.focus(&editor.read(cx).focus_handle(cx), cx),
             Err(error) => self.model.set_status(format!(
@@ -5266,6 +5307,9 @@ impl Workbench {
         self.file_index_loading = false;
         self.file_index_request = self.file_index_request.wrapping_add(1);
         self.content_query = None;
+        self.content_search_scope = WorktreeContentScope::Current;
+        self.content_worktrees_searched = 0;
+        self.content_worktrees_skipped = 0;
         self.content_loading = false;
         self.content_matches.clear();
         self.content_error = None;
@@ -10116,6 +10160,9 @@ impl Render for Workbench {
         let index_loading = self.file_index_loading;
         let content_query = self.content_query.clone();
         let content_loading = self.content_loading;
+        let content_search_all = self.content_search_scope == WorktreeContentScope::AllWorktrees;
+        let content_worktrees_searched = self.content_worktrees_searched;
+        let content_worktrees_skipped = self.content_worktrees_skipped;
         let content_results_total = self.content_matches.len();
         let content_results: Vec<_> = self
             .content_matches
@@ -10125,17 +10172,27 @@ impl Render for Workbench {
             .enumerate()
             .collect();
         let content_status = if content_loading {
-            "Searching workspace text…".to_string()
+            if content_search_all {
+                "Searching registered Git worktrees…".to_string()
+            } else {
+                "Searching current workspace text…".to_string()
+            }
         } else if let Some(error) = &self.content_error {
             error.clone()
         } else if self.content_searched_query.is_empty() {
             "Enter text and click Search".to_string()
         } else {
             format!(
-                "{} match(es){}{}",
+                "{} match(es) · {} worktree(s){}{}{}",
                 content_results_total,
+                content_worktrees_searched,
                 if self.content_truncated {
                     " · partial results"
+                } else {
+                    ""
+                },
+                if content_worktrees_skipped > 0 {
+                    " · some worktrees skipped"
                 } else {
                     ""
                 },
@@ -10708,10 +10765,48 @@ impl Render for Workbench {
                                                 .items_center()
                                                 .gap_1()
                                                 .child(div().flex_1().min_w_0().child(input))
-                                                .child(icon_button("content-search-run", UiIcon::Search, "Search project file contents", content_loading)
+                                                .child(icon_button("content-search-run", UiIcon::Search, "Search selected content scope", content_loading)
                                                     .on_click(cx.listener(|this, _, _, cx| {
                                                         this.search_project_contents(cx);
                                                     }))))
+                                            .child(
+                                                div()
+                                                    .flex()
+                                                    .items_center()
+                                                    .gap_1()
+                                                    .child(
+                                                        div()
+                                                            .id("content-scope-current")
+                                                            .cursor_pointer()
+                                                            .px_2()
+                                                            .py_1()
+                                                            .text_xs()
+                                                            .bg(rgb(if content_search_all { PANEL } else { ACTIVE }))
+                                                            .child("Current worktree")
+                                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                                if this.content_search_scope != WorktreeContentScope::Current {
+                                                                    this.content_search_scope = WorktreeContentScope::Current;
+                                                                    this.search_project_contents(cx);
+                                                                }
+                                                            })),
+                                                    )
+                                                    .child(
+                                                        div()
+                                                            .id("content-scope-all-worktrees")
+                                                            .cursor_pointer()
+                                                            .px_2()
+                                                            .py_1()
+                                                            .text_xs()
+                                                            .bg(rgb(if content_search_all { ACTIVE } else { PANEL }))
+                                                            .child("All Git worktrees")
+                                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                                if this.content_search_scope != WorktreeContentScope::AllWorktrees {
+                                                                    this.content_search_scope = WorktreeContentScope::AllWorktrees;
+                                                                    this.search_project_contents(cx);
+                                                                }
+                                                            })),
+                                                    ),
+                                            )
                                             .child(
                                                 div()
                                                     .text_xs()
@@ -10724,25 +10819,30 @@ impl Render for Workbench {
                                                     .max_h(px(230.0))
                                                     .overflow_y_scroll()
                                                     .children(content_results.into_iter().map(|(i, hit)| {
-                                                        let path = workspace_root.join(&hit.path);
                                                         let label = format!(
                                                             "{}:{}:{}  {}",
-                                                            hit.path.display(),
-                                                            hit.line,
-                                                            hit.column,
-                                                            hit.snippet
+                                                            hit.hit.path.display(),
+                                                            hit.hit.line,
+                                                            hit.hit.column,
+                                                            hit.hit.snippet
                                                         );
+                                                        let owner_label = hit.label();
                                                         div()
                                                             .id(("content-search-result", i))
                                                             .cursor_pointer()
                                                             .py_1()
-                                                            .text_xs()
+                                                            .min_w_0()
                                                             .hover(|style| style.bg(rgb(ACTIVE)))
-                                                            .child(label)
+                                                            .child(
+                                                                div()
+                                                                    .min_w_0()
+                                                                    .flex()
+                                                                    .flex_col()
+                                                                    .child(div().min_w_0().text_xs().child(label))
+                                                                    .child(div().min_w_0().text_xs().text_color(rgb(MUTED)).child(owner_label)),
+                                                            )
                                                             .on_click(cx.listener(move |this, _, window, cx| {
-                                                                this.open_content_search_hit(
-                                                                    &path, hit.line, hit.column, window, cx,
-                                                                );
+                                                                this.open_content_search_hit(&hit, window, cx);
                                                             }))
                                                     })),
                                             )
@@ -14258,6 +14358,9 @@ fn main() {
                             file_index_loading: false,
                             file_index_request: 0,
                             content_query: None,
+                            content_search_scope: WorktreeContentScope::Current,
+                            content_worktrees_searched: 0,
+                            content_worktrees_skipped: 0,
                             content_loading: false,
                             content_matches: Vec::new(),
                             content_truncated: false,

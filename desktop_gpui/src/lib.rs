@@ -58,6 +58,7 @@ pub mod workbench_panes;
 pub mod workbench_tabs;
 pub mod workspace_sidebar_order;
 pub mod workspace_tree;
+pub mod worktree_content_search;
 pub mod worktree_manager;
 
 #[cfg(test)]

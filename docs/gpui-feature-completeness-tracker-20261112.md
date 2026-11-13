@@ -50,7 +50,7 @@
 | **E02** | Editor 文字輸入、尋找／取代、Undo／Redo、`Ctrl+S`、Save As | **部分完成**：GUI 編輯存檔和磁碟讀回有實測；Find/Replace 有程式與測試 | 一個繁中 UTF-8 檔依序編輯、尋找、取代、Undo、儲存、重新開啟，檔案結果一致 |
 | **E03** | Explorer 開檔、建立／重新命名／複製／剪下／貼上／拖放 | **核心已接線／待 GUI**：檔案操作 23/23、選取 7/7、拖曳 3/3、Native 36/36、Windows EXE PASS；Copy／Duplicate 不因無關 Dirty Editor 被拒，Cut／Rename／Move 保護仍在 Editor 開啟的檔案。詳見 [E03](gpui-e03-explorer-normal-operations-20261113.md) | Windows 實際操作、OS 外部檔案拖出／系統剪貼簿雙向尚未驗收；未聲稱 Classic 100% parity，不阻塞 E04 |
 | **E04** | `Ctrl+P`、Explorer 篩選與全文搜尋；快速定位檔案 | **核心已接線／待 GUI**：Ctrl+P、Explorer 模糊篩選、Unicode 全文搜尋已有；新增 Quick Open Up/Down 結果選取、Enter 開反白檔、查詢改變重設索引與捲動，並保留注音組字。Search Index 3/3、Content 3/3、Native 37/37、Windows EXE PASS。詳見 [E04](gpui-e04-quick-open-search-navigation-20261113.md) | Windows GUI 鍵盤操作、同名／長檔名窄視窗排版待驗；基本操作先整合，NOW E05 |
-| **E05** | 跨 Worktree 內容搜尋與結果開啟 | **待核對**：現有內容搜尋的跨 Worktree 範圍需與 Classic 比對 | 確認搜尋範圍選項，結果可開到正確 Worktree，不誤開當前工作樹同名檔 |
+| **E05** | 跨 Worktree 內容搜尋與結果開啟 | **核心已接線／待 GUI**：新增目前／所有 Git Worktree 範圍與 root-owned 搜尋結果、行列定位、安全切換，不按目前 Workspace 拼接同名路徑。使用 2 個真 Git Worktree 的同名檔 TDD **3/3 PASS**，Native **37/37**、Windows EXE PASS；[E05 驗證](gpui-e05-cross-worktree-search-20261113.md) | 實機選範圍、其他 Worktree 結果點擊、Dirty Editor 切換拒絕及搜尋面板切換後保留性待 GUI 驗；核心先進 E06 |
 | **E06** | 多 Editor Pane、Dirty／草稿保存、關閉／重開復原 | **部分完成**：Rust 身分／Undo／草稿回歸已有；GUI 部分驗證 | 左右各開一份檔案、新增草稿、儲存／重開；未儲存內容與檔案關聯正確 |
 
 **F2 結案條件：** 使用者可以長時間進行正常文字編輯、搜尋與檔案管理，而不需要回到 Classic 處理同類工作。
@@ -112,8 +112,8 @@
 | INTEGRATED／待 GUI 驗收 | **E02** | Editor 輸入、尋找／取代、Unicode Undo/Redo、Save/Save As；新增常用取代快捷鍵 | Rust EditorSearch 5/5、Save As Guard 2/2、Undo/Redo 1/1、磁碟儲存 1/1，合計 **9/9 PASS**；`baa157e18` 新增 Ctrl+H、Cmd+Alt+F，Native 36/36、Windows cargo check PASS。真 GUI 與完整存檔→重開測試另驗，不擋 E03 |
 | INTEGRATED／待 GUI 與 OS 拖出驗收 | **E03** | Explorer New／Rename／Copy／Cut／Paste／Duplicate／Move／內部拖曳、多選、外部拖入 | 正常操作已接線；修正 Copy／Duplicate 被無關 Dirty Editor 全域阻擋，Cut／Rename／Move 僅攔截被開啟 Editor 擁有的檔案或父目錄。ExplorerOps **23/23**、Selection **7/7**、Drag **3/3**、Native **36/36**、Windows EXE PASS。OS 剪貼簿雙向與拖出、真 GUI 仍待驗；[E03 驗證](gpui-e03-explorer-normal-operations-20261113.md) |
 | INTEGRATED／待 GUI 驗收 | **E04** | `Ctrl+P`／Explorer 篩選／Unicode 全文搜尋／相對路徑顯示，新增 Up/Down 結果選取與 Enter 開反白項目 | 新增 E04 索引移動 Rust **1/1**、檔名路徑模糊索引 **3/3**、全文搜尋 **3/3**；Native **37/37**、Windows EXE PASS。真 GUI 與窄視窗長檔名待驗，[E04 驗證](gpui-e04-quick-open-search-navigation-20261113.md) |
-| **NOW** | **E05** | 跨 Worktree 內容搜尋與搜尋結果開到正確 Worktree | 比對 Classic 搜尋範圍、Worktree 選擇及結果開檔路由；優先修同名檔錯開 Workspace 的日常問題 |
-| NEXT | **E06** | 雙 Editor Pane、Dirty／草稿保存與重開復原 | 排隊 |
+| INTEGRATED／待 GUI 驗收 | **E05** | 內容搜尋新增「目前 Worktree／所有 Git Worktree」；每筆保留 branch／root／相對路徑，點擊結果先切換正確 Workspace，再開 Editor 並定位 Unicode 行列 | 臨時 Git 主／linked Worktree 同名路徑、不同內容驗證 **3/3 PASS**；ProjectSearch **3/3**、Native **37/37**、Windows EXE Build PASS。真 GUI 與切換後重開搜尋面板待驗，[E05 驗證](gpui-e05-cross-worktree-search-20261113.md) |
+| **NOW** | **E06** | 雙 Editor Pane、Dirty／草稿保存、移動與重新啟動還原 | 先檢查主副窗格一般開檔／輸入／儲存與草稿持久化閉環，對照 Classic，隔離 Workspace 測試後修正常功能缺口 |
 | NEXT | G01 → G02 → G03 → G04 → G05 → G06 | Source Control／中央 Diff／Graph／分支／Worktree | 排隊 |
 | NEXT | S01 → S02 → S03 → S04 | Settings 接線、Rust 共用設定與語系 | 排隊 |
 | NEXT | H01 → H02 → H03 | Hook 四態、設定、Windows 通知 | 排隊 |
@@ -128,6 +128,8 @@
 **2026-11-13 E03 正常檔案管理修正→NOW E04**：確認 Explorer New／Rename／Copy／Cut／Paste／Duplicate／Move、多選、內部拖曳與外部檔案匯入均已有核心程式。修正 Clipboard Paste／右鍵 Copy／Duplicate 對無關 Dirty Editor 的全域拒絕；Cut、Rename、Move 僅在來源仍被主／副 Editor 開啟（包括選取資料夾的子檔案）時拒絕，以免留下失效的 Editor 路徑。實際 tempfile Windows Rust 回歸 ExplorerOps **23/23**、Selection **7/7**、Drag **3/3**、Native **36/36**；Windows EXE Build、cargo check、fmt／diff 全 PASS。**Windows GUI 與 OS 剪貼簿雙向／從 GPUI 拖出檔案仍待驗**，E03 註明非完整 Classic parity，但不因其卡住日常功能主線；下一個 NOW E04。
 
 **2026-11-13 E04 搜尋日常 UX 完善→NOW E05**：Ctrl+P Quick Open 原本固定 Enter 開第一筆，已在 `quick_open_ui.rs`／`main.rs`／`native_action_dialog_ui.rs` 補 Up／Down 反白結果、查詢改變重設索引、視窗捲動到選取列與 Enter 開反白檔，保持注音組字不攔截。新增 Rust 鍵盤選取測試 **1/1 PASS**，既有 Quick Open／Explorer 模糊索引 **3/3**、Unicode 全文搜尋 **3/3**、Native **37/37**、Windows EXE Build／cargo check／fmt／diff PASS。**真 GUI 注音候選、長檔名窄視窗顯示未驗**，保留後續驗收；為避免再次停滯，核心功能接線完成後 NOW 進入 E05 跨 Worktree 搜尋。
+
+**2026-11-13 E05 真正跨 Worktree 搜尋→NOW E06**：原內容搜尋僅以當前 `self.model.root()` 查詢並從當前根目錄拼接結果，沒有 Worktree 身分。新增 `worktree_content_search.rs` 依實際 Git registered Worktree 提供「Current／All Git worktrees」搜尋，結果保存 `root`／`branch`／Workspace-relative path／行列，離線背景執行、最多 24 Worktree 與 partial/skipped 狀態。點擊先核對結果、確認真實檔案與其 Worktree 身分，跨 Workspace 使用既有安全切換規則，不強行關閉 Dirty Editor，再交給 Native Editor 正確檔案定位。實際 2 個臨時 Git Worktree 都有 `src/same.txt` 且內容不同，Rust 測試 **3/3**，包含即使 linked checkout 在主 `.worktrees/` 目錄下，也不能由物理路徑包含關係誤認擁有者；ProjectSearch **3/3**、Native **37/37**、Windows EXE Build／cargo check／fmt／diff PASS。**GUI 真實操作仍待驗，切換後搜尋面板目前按既有 Workspace 切換重設**；主線推進 **NOW E06**，`supported=false`，無 main 合併／Push／部署／Release。
 
 ## 5. 每次「繼續／進度」的更新規約
 
