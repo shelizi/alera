@@ -688,6 +688,11 @@ struct Workbench {
     agent_profiles_loading: bool,
     agent_profiles_request: u64,
     agent_selected_profile: Option<String>,
+    agent_profile_name_input: Entity<QuickOpenInput>,
+    agent_profile_new_adapter: String,
+    agent_profile_mutation_busy: bool,
+    agent_profile_mutation_request: u64,
+    agent_profile_mutation_status: String,
     agent_prompt_input: Entity<QuickOpenInput>,
     agent_override_selected_id: Option<String>,
     agent_override_input: Entity<QuickOpenInput>,
@@ -14304,6 +14309,13 @@ fn main() {
                             agent_profiles_loading: false,
                             agent_profiles_request: 0,
                             agent_selected_profile: None,
+                            agent_profile_name_input: cx.new(|cx| {
+                                QuickOpenInput::with_placeholder("New Profile name / Rename selected Profile…", cx)
+                            }),
+                            agent_profile_new_adapter: "codex".into(),
+                            agent_profile_mutation_busy: false,
+                            agent_profile_mutation_request: 0,
+                            agent_profile_mutation_status: "Create a standard command profile, or rename the selected Host profile".into(),
                             agent_prompt_input: cx.new(|cx| {
                                 QuickOpenInput::with_placeholder("Task for selected Agent…", cx)
                             }),

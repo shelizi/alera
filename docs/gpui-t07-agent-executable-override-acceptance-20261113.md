@@ -22,5 +22,5 @@
 
 - `cargo test --offline --locked --lib -- --skip git_history::tests::explicit_full_history_search_finds_old_subject_and_message_body_beyond_page_limit`：**528 PASS／0 FAIL／1 FILTERED**（既有長測未執行）。
 - `cargo test --offline --locked --bin alera-gpui-desktop`：**32／32 PASS**；Windows EXE Build、`cargo fmt --all -- --check`、`git diff --check`：**PASS**。
-- **T07 NOW** 仍需：真實 Provider 的未登入／過期憑證互動提示，與 Classic 的 Host Agent Profile 建立、編輯、排序、刪除操作對齊。T07 子項的本地執行檔覆寫可標為 Windows 正常流程 PASS，但**不等於 Provider 已登入／Agent 啟動成功**。
+- **同日後續**：Host Profile 標準 Command Create、Rename 與 ↑↓ 排序已在 GPUI 完成並經隔離 Windows GUI／Host 實測；詳見 [管理驗收](gpui-t07-host-profile-management-acceptance-20261113.md)。T07 仍需真實 Provider 未登入／過期憑證提示、Advanced／Managed Profile 編輯、Clone 與安全 Delete。CLI Override 的通過**不等於 Provider 已登入／Agent 啟動成功**。
 - `supported=false`；未合併 `main`、Push、部署或發版。

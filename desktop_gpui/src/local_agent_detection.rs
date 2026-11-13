@@ -403,18 +403,21 @@ mod tests {
                 name: "Claude Default".into(),
                 agent_type: "claude".into(),
                 managed: true,
+                revision: Some(1),
             },
             AgentProfileRow {
                 id: "claude_p2".into(),
                 name: "Claude Review".into(),
                 agent_type: "claude".into(),
                 managed: false,
+                revision: Some(1),
             },
             AgentProfileRow {
                 id: "codex_p1".into(),
                 name: "Codex".into(),
                 agent_type: "codex".into(),
                 managed: true,
+                revision: Some(1),
             },
         ];
         assert_eq!(

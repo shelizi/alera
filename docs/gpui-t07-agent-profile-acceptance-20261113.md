@@ -33,7 +33,7 @@
 ## T07 尚未完成
 
 - 真實 Provider 的**未登入／過期憑證**、登入錯誤畫面是否可辨識：**尚未實測**。本輪只保證登入提示可見、未驗證時不假報成功；不能將 `cmd.exe` 測試當作真實 Codex 登入驗收。
-- Classic Agent Profile 的建立／編輯／排序／刪除流程，Native 目前仍以讀取／選擇預設／啟動為主，尚未補齊完整管理 UI。
+- **同日後續補齊部分管理 UI**：Native 已可建立標準 Command Profile、revision CAS Rename、↑↓ 排序，並通過隔離 Windows GUI／Host 實測；[管理子項詳錄](gpui-t07-host-profile-management-acceptance-20261113.md)。完整 Managed／進階 Edit、Clone、Delete 含 Removal Impact 仍未完成。
 - **2026-11-13 後續完成**：執行檔 Override 的無效路徑、合法 `.cmd` Save、空白 Save 與明確 Clear 已完成 Windows GUI／TDD 驗收；詳見 [T07 Override 後續紀錄](gpui-t07-agent-executable-override-acceptance-20261113.md)。CLI 缺失與實際 Provider 登入仍各依對應驗收追蹤。
 
 **NOW 仍為 T07**；`supported=false`，未合併 `main`、Push、部署或 Release。

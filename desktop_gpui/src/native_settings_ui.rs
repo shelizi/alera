@@ -170,6 +170,184 @@ impl Workbench {
         );
     }
 
+    /// User-requested Host mutation only: normal Command Profile creation or
+    /// revision-guarded name edit. Neither action mirrors private Host config.
+    fn save_host_agent_profile(&mut self, rename: bool, cx: &mut Context<Self>) {
+        if self.agent_profile_mutation_busy {
+            return;
+        }
+        if self.agent_profile_name_input.read(cx).composing() {
+            self.agent_profile_mutation_status = "Finish IME composition before saving".into();
+            cx.notify();
+            return;
+        }
+        let input = self.agent_profile_name_input.read(cx);
+        let name = match alera_gpui_desktop::agent_profiles::validate_profile_name(input.query()) {
+            Ok(value) => value,
+            Err(error) => {
+                self.agent_profile_mutation_status = error.to_string();
+                cx.notify();
+                return;
+            }
+        };
+        let rename_target = if rename {
+            let Some(profile) = self.agent_profiles.iter().find(|profile| {
+                Some(profile.id.as_str()) == self.agent_selected_profile.as_deref()
+            }) else {
+                self.agent_profile_mutation_status = "Select a Host Profile to rename".into();
+                cx.notify();
+                return;
+            };
+            let Some(revision) = profile.revision else {
+                self.agent_profile_mutation_status =
+                    "Host did not expose a revision; cannot safely rename this Profile".into();
+                cx.notify();
+                return;
+            };
+            Some((profile.id.clone(), revision))
+        } else {
+            None
+        };
+        if self.runtime_bridge.is_none() {
+            self.runtime_bridge = RuntimeCliBridge::discover().ok();
+        }
+        let Some(bridge) = self.runtime_bridge.clone() else {
+            self.agent_profile_mutation_status =
+                "Alera CLI missing; cannot save a Host Profile".into();
+            cx.notify();
+            return;
+        };
+        let adapter = self.agent_profile_new_adapter.clone();
+        let generation = self.workspace_generation;
+        self.agent_profile_mutation_busy = true;
+        self.agent_profile_mutation_request = self.agent_profile_mutation_request.wrapping_add(1);
+        let request = self.agent_profile_mutation_request;
+        self.agent_profile_mutation_status = if rename {
+            "Renaming the selected Host Profile with revision validation…"
+        } else {
+            "Creating a standard Command Profile in the running Host…"
+        }
+        .into();
+        cx.spawn(async move |view, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    if let Some((id, revision)) = rename_target {
+                        bridge.rename_agent_profile(&id, revision, &name)
+                    } else {
+                        bridge.create_command_agent_profile(&name, &adapter)
+                    }
+                })
+                .await;
+            view.update(cx, |view, cx| {
+                if view.workspace_generation != generation
+                    || view.agent_profile_mutation_request != request
+                {
+                    return;
+                }
+                view.agent_profile_mutation_busy = false;
+                match result {
+                    Ok(saved) => {
+                        view.agent_selected_profile = Some(saved.id.clone());
+                        view.agent_profile_name_input.update(cx, |input, cx| {
+                            input.set_query(&saved.name, cx);
+                        });
+                        view.agent_profile_mutation_status = if rename {
+                            "Profile renamed in Host; catalog refreshing"
+                        } else {
+                            "Standard Command Profile created in Host; catalog refreshing"
+                        }
+                        .into();
+                        // Reject an older in-flight listing before readback.
+                        view.agent_profiles_loading = false;
+                        view.agent_profiles_request = view.agent_profiles_request.wrapping_add(1);
+                        view.refresh_agent_profiles(cx);
+                    }
+                    Err(error) => {
+                        view.agent_profile_mutation_status = format!(
+                            "Host Profile not confirmed: {error}. Refresh Profiles before retrying."
+                        );
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// Reorder Host Profiles with the complete observed revision snapshot,
+    /// never by mutating Native JSON or reusing stale local indices.
+    fn move_host_agent_profile(
+        &mut self,
+        profile_id: String,
+        toward_start: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if self.agent_profile_mutation_busy || self.agent_profiles_loading {
+            return;
+        }
+        if !self
+            .agent_profiles
+            .iter()
+            .any(|profile| profile.id == profile_id)
+        {
+            self.agent_profile_mutation_status =
+                "Profile list changed; refresh before reordering".into();
+            cx.notify();
+            return;
+        }
+        if self.runtime_bridge.is_none() {
+            self.runtime_bridge = RuntimeCliBridge::discover().ok();
+        }
+        let Some(bridge) = self.runtime_bridge.clone() else {
+            self.agent_profile_mutation_status =
+                "Alera CLI missing; cannot reorder Host Profiles".into();
+            cx.notify();
+            return;
+        };
+        let observed = self.agent_profiles.clone();
+        let generation = self.workspace_generation;
+        self.agent_profile_mutation_busy = true;
+        self.agent_profile_mutation_request = self.agent_profile_mutation_request.wrapping_add(1);
+        let request = self.agent_profile_mutation_request;
+        self.agent_profile_mutation_status = "Saving Host Agent Profile order…".into();
+        cx.spawn(async move |view, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    bridge.move_agent_profile(&observed, &profile_id, toward_start)
+                })
+                .await;
+            view.update(cx, |view, cx| {
+                if view.workspace_generation != generation
+                    || view.agent_profile_mutation_request != request
+                {
+                    return;
+                }
+                view.agent_profile_mutation_busy = false;
+                match result {
+                    Ok(profiles) => {
+                        view.agent_profiles = profiles;
+                        view.agent_profile_mutation_status =
+                            "Host Agent Profile order saved".into();
+                        view.agent_profiles_loading = false;
+                        view.agent_profiles_request = view.agent_profiles_request.wrapping_add(1);
+                        view.refresh_agent_profiles(cx);
+                    }
+                    Err(error) => {
+                        view.agent_profile_mutation_status = format!(
+                            "Could not reorder Host Profiles: {error}. Refresh before retrying."
+                        );
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
     /// Native-only executable override; Host and Classic preferences remain
     /// untouched. Validate/write/read back under the store's local CAS lock
     /// on a worker thread, never while painting or holding a GPUI Window.
@@ -555,6 +733,9 @@ impl Workbench {
                     let selected = selected_profile.as_deref() == Some(id.as_str());
                     let is_default = default_profile.as_deref() == Some(id.as_str());
                     let selection_id = id.clone();
+                    let name_for_edit = profile.name.clone();
+                    let move_up_id = id.clone();
+                    let move_down_id = id.clone();
                     div()
                         .id(("native-profile-row", index))
                         .flex()
@@ -572,6 +753,9 @@ impl Workbench {
                                 .child(format!("{} {label}", if selected { "●" } else { "○" }))
                                 .on_click(cx.listener(move |view, _, _, cx| {
                                     view.agent_selected_profile = Some(selection_id.clone());
+                                    view.agent_profile_name_input.update(cx, |input, cx| {
+                                        input.set_query(&name_for_edit, cx);
+                                    });
                                     cx.notify();
                                 })),
                         )
@@ -585,6 +769,28 @@ impl Workbench {
                                 .on_click(cx.listener(move |view, _, _, cx| {
                                     let next = (!is_default).then(|| id.clone());
                                     view.change_native_default_agent_profile(next, cx);
+                                })),
+                        )
+                        .child(
+                            div()
+                                .id(("native-profile-move-up", index))
+                                .cursor_pointer()
+                                .text_xs()
+                                .text_color(rgb(TEXT))
+                                .child("↑")
+                                .on_click(cx.listener(move |view, _, _, cx| {
+                                    view.move_host_agent_profile(move_up_id.clone(), true, cx);
+                                })),
+                        )
+                        .child(
+                            div()
+                                .id(("native-profile-move-down", index))
+                                .cursor_pointer()
+                                .text_xs()
+                                .text_color(rgb(TEXT))
+                                .child("↓")
+                                .on_click(cx.listener(move |view, _, _, cx| {
+                                    view.move_host_agent_profile(move_down_id.clone(), false, cx);
                                 })),
                         )
                 }))
@@ -611,6 +817,66 @@ impl Workbench {
                         "Loading Host Agent Profiles…".to_owned()
                     } else {
                         self.agent_status.clone()
+                    },
+                ))
+                .child(div().mt_3().text_sm().child("Manage Host Agent Profiles"))
+                .child(div().text_xs().text_color(rgb(MUTED)).child(
+                    "Create a standard Command Profile using its default CLI, or rename a selected Host Profile. Advanced commands and Managed options remain in Classic.",
+                ))
+                .child(self.agent_profile_name_input.clone())
+                .child(div().text_xs().text_color(rgb(MUTED)).child(
+                    "Adapter for new Command Profile:"
+                ))
+                .child(
+                    div().flex().flex_wrap().gap_2().children(
+                        alera_core::agent_descriptor::AGENT_DESCRIPTORS
+                            .iter()
+                            .enumerate()
+                            .map(|(index, descriptor)| {
+                                let id = descriptor.id.to_owned();
+                                let selected = self.agent_profile_new_adapter == descriptor.id;
+                                div()
+                                    .id(("native-create-profile-adapter", index))
+                                    .cursor_pointer()
+                                    .p_2()
+                                    .rounded_md()
+                                    .text_xs()
+                                    .bg(rgb(if selected { ACTIVE } else { PANEL }))
+                                    .text_color(rgb(if selected { TEXT } else { MUTED }))
+                                    .child(descriptor.display_name)
+                                    .on_click(cx.listener(move |view, _, _, cx| {
+                                        view.agent_profile_new_adapter = id.clone();
+                                        cx.notify();
+                                    }))
+                            }),
+                    ),
+                )
+                .child(
+                    div().flex().gap_3()
+                        .child(
+                            div().id("native-create-agent-profile")
+                                .cursor_pointer().text_sm()
+                                .text_color(rgb(if self.agent_profile_mutation_busy { MUTED } else { TEXT }))
+                                .child("Create command profile")
+                                .on_click(cx.listener(|view, _, _, cx| {
+                                    view.save_host_agent_profile(false, cx);
+                                }))
+                        )
+                        .child(
+                            div().id("native-rename-agent-profile")
+                                .cursor_pointer().text_sm()
+                                .text_color(rgb(if self.agent_profile_mutation_busy { MUTED } else { TEXT }))
+                                .child("Rename selected")
+                                .on_click(cx.listener(|view, _, _, cx| {
+                                    view.save_host_agent_profile(true, cx);
+                                }))
+                        )
+                )
+                .child(div().text_xs().text_color(rgb(MUTED)).child(
+                    if self.agent_profile_mutation_busy {
+                        "Saving Host Agent Profile…".to_owned()
+                    } else {
+                        self.agent_profile_mutation_status.clone()
                     },
                 ))
                 .child(div().mt_3().text_sm().child("Local Agent executables (Classic parity)"))

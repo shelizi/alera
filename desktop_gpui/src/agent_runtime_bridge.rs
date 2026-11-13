@@ -2,7 +2,8 @@
 //! authentication, Agent launch semantics, MCP injection and PTY lifetimes.
 //! No generic process runner is exposed to GPUI views.
 use crate::agent_profiles::{
-    parse_launched_agent, parse_profile_catalog, safe_runtime_id, AgentProfileRow, LaunchedAgentTab,
+    parse_launched_agent, parse_profile_catalog, safe_runtime_id, validate_profile_name,
+    AgentProfileRow, LaunchedAgentTab,
 };
 use crate::runtime_bridge::RuntimeCliBridge;
 use alera_core::child_process::windowless_command;
@@ -21,6 +22,19 @@ const LAUNCH_TIMEOUT: Duration = Duration::from_secs(30);
 
 enum AllowedAgentRequest<'a> {
     List,
+    CreateCommand {
+        name: &'a str,
+        agent_type: &'a str,
+        command: &'a str,
+    },
+    Rename {
+        id: &'a str,
+        expected_revision: i64,
+        name: &'a str,
+    },
+    Reorder {
+        profiles: &'a [AgentProfileRow],
+    },
     Launch {
         profile_id: &'a str,
         workspace_id: &'a str,
@@ -38,6 +52,42 @@ fn args_for(runtime: &Path, request: &AllowedAgentRequest<'_>) -> Vec<OsString> 
     ];
     match request {
         AllowedAgentRequest::List => args.push(OsString::from("list")),
+        AllowedAgentRequest::CreateCommand {
+            name,
+            agent_type,
+            command,
+        } => {
+            args.push(OsString::from("create"));
+            args.push(OsString::from(format!("--name={name}")));
+            args.push(OsString::from(format!("--agent-type={agent_type}")));
+            args.push(OsString::from("--launch-mode=command"));
+            args.push(OsString::from(format!("--command={command}")));
+        }
+        AllowedAgentRequest::Rename {
+            id,
+            expected_revision,
+            name,
+        } => {
+            args.push(OsString::from("update"));
+            args.push(OsString::from(format!("--profile-id={id}")));
+            args.push(OsString::from(format!(
+                "--expected-revision={expected_revision}"
+            )));
+            args.push(OsString::from(format!("--name={name}")));
+        }
+        AllowedAgentRequest::Reorder { profiles } => {
+            args.push(OsString::from("reorder"));
+            for profile in *profiles {
+                args.push(OsString::from(format!("--id={}", profile.id)));
+            }
+            for profile in *profiles {
+                args.push(OsString::from(format!(
+                    "--expected-revision={}={}",
+                    profile.id,
+                    profile.revision.unwrap_or(-1)
+                )));
+            }
+        }
         AllowedAgentRequest::Launch {
             profile_id,
             workspace_id,
@@ -50,6 +100,16 @@ fn args_for(runtime: &Path, request: &AllowedAgentRequest<'_>) -> Vec<OsString> 
         }
     }
     args
+}
+
+fn parse_saved_profile(value: Value) -> io::Result<AgentProfileRow> {
+    let mut profiles = parse_profile_catalog(&serde_json::json!({"items":[value]}))?;
+    profiles.pop().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Host returned no saved Agent Profile",
+        )
+    })
 }
 
 fn wait_bounded(child: &mut Child, timeout: Duration) -> io::Result<std::process::ExitStatus> {
@@ -79,6 +139,131 @@ impl RuntimeCliBridge {
     pub fn list_agent_profiles(&self) -> io::Result<Vec<AgentProfileRow>> {
         let response = self.invoke_existing_host_agent(AllowedAgentRequest::List)?;
         parse_profile_catalog(&response)
+    }
+
+    /// Create only a normal command-mode profile with the canonical default
+    /// executable. Advanced managed settings remain Host/Classic owned.
+    pub fn create_command_agent_profile(
+        &self,
+        raw_name: &str,
+        agent_type: &str,
+    ) -> io::Result<AgentProfileRow> {
+        let name = validate_profile_name(raw_name)?;
+        let descriptor = alera_core::agent_descriptor::agent_descriptor(agent_type)
+            .filter(|d| d.id == agent_type)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "Unknown Agent adapter"))?;
+        let saved = self.invoke_existing_host_agent(AllowedAgentRequest::CreateCommand {
+            name: &name,
+            agent_type,
+            command: descriptor.default_command,
+        })?;
+        let row = parse_saved_profile(saved)?;
+        if row.name != name || row.agent_type != agent_type || row.managed || row.revision.is_none()
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Host did not confirm created Agent Profile",
+            ));
+        }
+        Ok(row)
+    }
+
+    /// Rename only: leave Host-managed command/config/prompt/credentials
+    /// untouched. Refuse overwriting a revision the user never observed.
+    pub fn rename_agent_profile(
+        &self,
+        profile_id: &str,
+        expected_revision: i64,
+        raw_name: &str,
+    ) -> io::Result<AgentProfileRow> {
+        if !safe_runtime_id(profile_id, 128) || expected_revision < 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Invalid Agent Profile revision or ID",
+            ));
+        }
+        let name = validate_profile_name(raw_name)?;
+        let saved = self.invoke_existing_host_agent(AllowedAgentRequest::Rename {
+            id: profile_id,
+            expected_revision,
+            name: &name,
+        })?;
+        let row = parse_saved_profile(saved)?;
+        if row.id != profile_id
+            || row.name != name
+            || row
+                .revision
+                .is_none_or(|revision| revision <= expected_revision)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Host did not confirm revision-guarded Agent Profile rename",
+            ));
+        }
+        Ok(row)
+    }
+
+    /// Change exactly one adjacent position using the complete Host revision
+    /// snapshot. Never reorder silently when another view changed the catalog.
+    pub fn move_agent_profile(
+        &self,
+        observed: &[AgentProfileRow],
+        profile_id: &str,
+        toward_start: bool,
+    ) -> io::Result<Vec<AgentProfileRow>> {
+        if observed.len() < 2 || observed.len() > 96 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Profile reorder needs at least two Host Profiles",
+            ));
+        }
+        for (index, profile) in observed.iter().enumerate() {
+            if !safe_runtime_id(&profile.id, 128)
+                || profile.revision.is_none_or(|revision| revision < 0)
+                || observed[..index]
+                    .iter()
+                    .any(|previous| previous.id == profile.id)
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "Profile reorder requires unique IDs and all Host revisions",
+                ));
+            }
+        }
+        let Some(from) = observed.iter().position(|profile| profile.id == profile_id) else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Selected Agent Profile is no longer listed",
+            ));
+        };
+        let target = if toward_start {
+            from.checked_sub(1)
+        } else {
+            (from + 1 < observed.len()).then_some(from + 1)
+        };
+        let Some(to) = target else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Agent Profile is already at this end",
+            ));
+        };
+        let mut ordered = observed.to_vec();
+        ordered.swap(from, to);
+        let response =
+            self.invoke_existing_host_agent(AllowedAgentRequest::Reorder { profiles: &ordered })?;
+        let readback = parse_profile_catalog(&response)?;
+        if readback.len() != ordered.len()
+            || readback
+                .iter()
+                .zip(&ordered)
+                .any(|(actual, requested)| actual.id != requested.id)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Host did not confirm requested Agent Profile order",
+            ));
+        }
+        Ok(readback)
     }
 
     pub fn launch_agent_profile(
@@ -119,13 +304,16 @@ impl RuntimeCliBridge {
             ));
         }
         let prompt = match &request {
-            AllowedAgentRequest::List => None,
+            AllowedAgentRequest::List
+            | AllowedAgentRequest::CreateCommand { .. }
+            | AllowedAgentRequest::Rename { .. }
+            | AllowedAgentRequest::Reorder { .. } => None,
             AllowedAgentRequest::Launch { prompt, .. } => Some(prompt.as_bytes()),
         };
-        let timeout = if prompt.is_some() {
-            LAUNCH_TIMEOUT
-        } else {
+        let timeout = if matches!(request, AllowedAgentRequest::List) {
             LIST_TIMEOUT
+        } else {
+            LAUNCH_TIMEOUT
         };
         let mut command = windowless_command(exe);
         command
@@ -192,6 +380,71 @@ mod tests {
     use super::*;
 
     #[test]
+    fn profile_create_and_rename_are_explicit_no_start_and_revision_guarded() {
+        let root = Path::new("C:/isolated/runtime");
+        let create = args_for(
+            root,
+            &AllowedAgentRequest::CreateCommand {
+                name: "Reviewer",
+                agent_type: "codex",
+                command: "codex",
+            },
+        );
+        assert_eq!(create[1], "--no-start");
+        assert!(create.iter().any(|arg| arg == "create"));
+        assert!(create.iter().any(|arg| arg == "--launch-mode=command"));
+        assert!(create.iter().any(|arg| arg == "--name=Reviewer"));
+        assert!(create.iter().any(|arg| arg == "--agent-type=codex"));
+        let rename = args_for(
+            root,
+            &AllowedAgentRequest::Rename {
+                id: "profile_1",
+                expected_revision: 3,
+                name: "Review Updated",
+            },
+        );
+        assert_eq!(rename[1], "--no-start");
+        assert!(rename.iter().any(|arg| arg == "update"));
+        assert!(rename.iter().any(|arg| arg == "--profile-id=profile_1"));
+        assert!(rename.iter().any(|arg| arg == "--expected-revision=3"));
+        assert!(rename.iter().any(|arg| arg == "--name=Review Updated"));
+    }
+
+    #[test]
+    fn profile_reorder_sends_full_snapshot_and_each_expected_revision() {
+        let rows = [
+            AgentProfileRow {
+                id: "profile_2".into(),
+                name: "B".into(),
+                agent_type: "claude".into(),
+                managed: false,
+                revision: Some(0),
+            },
+            AgentProfileRow {
+                id: "profile_1".into(),
+                name: "A".into(),
+                agent_type: "codex".into(),
+                managed: false,
+                revision: Some(3),
+            },
+        ];
+        let args = args_for(
+            Path::new("C:/isolated/runtime"),
+            &AllowedAgentRequest::Reorder { profiles: &rows },
+        );
+        assert_eq!(args[1], "--no-start");
+        assert!(args.iter().any(|part| part == "reorder"));
+        assert!(args.iter().any(|part| part == "--id=profile_2"));
+        assert!(args.iter().any(|part| part == "--id=profile_1"));
+        assert!(args
+            .iter()
+            .any(|part| part == "--expected-revision=profile_2=0"));
+        assert!(args
+            .iter()
+            .any(|part| part == "--expected-revision=profile_1=3"));
+    }
+
+    #[test]
     fn agent_cli_uses_only_explicit_no_start_json_verbs_and_never_exposes_prompt_in_argv() {
         let runtime = Path::new("C:/isolated/runtime");
         let list = args_for(runtime, &AllowedAgentRequest::List);
@@ -229,6 +482,41 @@ mod tests {
                 .unwrap_err()
                 .kind(),
             io::ErrorKind::NotConnected
+        );
+        assert_eq!(
+            bridge
+                .create_command_agent_profile("Review", "codex")
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::NotConnected
+        );
+        assert_eq!(
+            bridge
+                .rename_agent_profile("p_1", 0, "Review Updated")
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::NotConnected
+        );
+        assert_eq!(
+            bridge
+                .create_command_agent_profile("  ", "codex")
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidInput
+        );
+        assert_eq!(
+            bridge
+                .create_command_agent_profile("Review", "unknown-adapter")
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidInput
+        );
+        assert_eq!(
+            bridge
+                .rename_agent_profile("p_1", -1, "Review")
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidInput
         );
         assert!(!runtime.exists());
         assert_eq!(

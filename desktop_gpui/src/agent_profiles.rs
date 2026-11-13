@@ -15,6 +15,8 @@ pub struct AgentProfileRow {
     pub name: String,
     pub agent_type: String,
     pub managed: bool,
+    /// Host revision for optimistic edits; never a command or credential.
+    pub revision: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -30,6 +32,17 @@ pub fn safe_runtime_id(value: &str, max_len: usize) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':'))
+}
+
+pub fn validate_profile_name(name: &str) -> io::Result<String> {
+    let name = name.trim();
+    if name.is_empty() || name.len() > MAX_NAME_BYTES || name.chars().any(|c| c.is_control()) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Profile name must be 1–256 bytes without control characters",
+        ));
+    }
+    Ok(name.to_owned())
 }
 
 fn invalid(message: &str) -> io::Error {
@@ -62,6 +75,15 @@ pub fn parse_profile_catalog(value: &Value) -> io::Result<Vec<AgentProfileRow>> 
             .get("launchMode")
             .and_then(Value::as_str)
             .unwrap_or("command");
+        let revision = match item.get("revision") {
+            None => None,
+            Some(value) => Some(
+                value
+                    .as_i64()
+                    .filter(|n| *n >= 0)
+                    .ok_or_else(|| invalid("Agent Profile has an invalid Host revision"))?,
+            ),
+        };
         if !safe_runtime_id(id, 128)
             || name.is_empty()
             || name.len() > MAX_NAME_BYTES
@@ -84,6 +106,7 @@ pub fn parse_profile_catalog(value: &Value) -> io::Result<Vec<AgentProfileRow>> 
             name: name.to_owned(),
             agent_type: agent_type.to_owned(),
             managed: launch_mode == "managed",
+            revision,
         });
     }
     Ok(result)
@@ -240,6 +263,36 @@ mod tests {
         let mut wrong_tab = session;
         wrong_tab.tab_id = "tab_other".into();
         assert!(matching_agent_handle(&pending, &[wrong_tab], "codex").is_none());
+    }
+
+    #[test]
+    fn editable_profile_catalog_carries_revision_but_never_commands() {
+        let rows = parse_profile_catalog(&serde_json::json!({"items":[{
+            "id":"profile_1","name":"Review","agentType":"codex",
+            "launchMode":"command","revision":4,
+            "command":"SECRET_COMMAND","managedConfig":{"secret":"VERY_SECRET"}
+        }]}))
+        .unwrap();
+        assert_eq!(rows[0].revision, Some(4));
+        assert!(!format!("{rows:?}").contains("SECRET"));
+        assert!(validate_profile_name("  Review Runner  ").is_ok());
+        assert!(validate_profile_name("   ").is_err());
+        assert!(validate_profile_name("line\nfeed").is_err());
+        assert!(validate_profile_name(&"x".repeat(257)).is_err());
+        let missing = parse_profile_catalog(&serde_json::json!({"items":[{
+            "id":"profile_2","name":"Legacy","agentType":"claude"
+        }]}))
+        .unwrap();
+        assert_eq!(missing[0].revision, None);
+        let first = parse_profile_catalog(&json!({"items":[{
+            "id":"profile_3","name":"First","agentType":"claude","revision":0
+        }]}))
+        .unwrap();
+        assert_eq!(first[0].revision, Some(0), "Host starts revisions at zero");
+        assert!(parse_profile_catalog(&json!({"items":[{
+            "id":"profile_4","name":"Invalid","agentType":"claude","revision":-1
+        }]}))
+        .is_err());
     }
 
     #[test]
