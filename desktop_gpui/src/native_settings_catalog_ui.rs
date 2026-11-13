@@ -5,7 +5,8 @@
 use super::*;
 use alera_gpui_desktop::native_i18n::{tr, UiLocale};
 use alera_gpui_desktop::settings_menu_catalog::{
-    shared_setting_row_path, PreviewRow, SettingsSection,
+    settings_operational_action, settings_support_counts, shared_setting_row_path, PreviewRow,
+    SettingsOperationalAction, SettingsSection,
 };
 use gpui_kit::component::switch::Switch;
 
@@ -160,6 +161,46 @@ impl Workbench {
                 .on_click(cx.listener(|view, _, window, cx| {
                     view.show_project_management = true;
                     view.dismiss_native_settings(window, cx);
+                })),
+            )
+            .into_any_element()
+    }
+
+    /// The Quotas section already has a real Host-backed provider overview
+    /// in the status bar. Do not leave its Settings entry as a fake action.
+    fn render_provider_quotas_setting(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        div()
+            .p_3()
+            .bg(rgb(PANEL))
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap_3()
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(div().text_sm().child(tr(self.settings_menu_locale, "Provider Quotas")))
+                    .child(div().text_xs().text_color(rgb(MUTED)).child(
+                        "Open the existing provider/account quota overview and refresh from Runtime Host.",
+                    )),
+            )
+            .child(
+                native_components::action_button(
+                    "native-settings-provider-quotas",
+                    "Open Quota Overview",
+                    false,
+                    false,
+                )
+                .on_click(cx.listener(|view, _, window, cx| {
+                    view.dismiss_native_settings(window, cx);
+                    view.quota_popover_account = None;
+                    view.quota_popover_open = true;
+                    view.refresh_agent_quotas(true, None, cx);
+                    cx.notify();
                 })),
             )
             .into_any_element()
@@ -473,8 +514,14 @@ impl Workbench {
         row_index: usize,
         cx: &mut Context<Self>,
     ) -> Option<gpui::AnyElement> {
-        if section == "projects" && row.title == "Projects" {
-            return Some(self.render_project_management_setting(cx));
+        match settings_operational_action(section, row.title) {
+            Some(SettingsOperationalAction::ManageProjects) => {
+                return Some(self.render_project_management_setting(cx));
+            }
+            Some(SettingsOperationalAction::OpenQuotaOverview) => {
+                return Some(self.render_provider_quotas_setting(cx));
+            }
+            None => {}
         }
         if section == "agents" {
             match row.title {
@@ -530,11 +577,23 @@ impl Workbench {
         locale: UiLocale,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
+        let support = settings_support_counts(selected);
         div()
             .id("native-settings-catalog-groups")
             .flex()
             .flex_col()
             .gap_3()
+            .child(
+                div()
+                    .px_4()
+                    .py_2()
+                    .text_xs()
+                    .text_color(rgb(MUTED))
+                    .child(format!(
+                    "Host-backed controls: {} · Actions: {} · Read-only: {} · Not available: {}",
+                    support.editable, support.actions, support.read_only, support.unavailable
+                )),
+            )
             .children(
                 selected
                     .groups
