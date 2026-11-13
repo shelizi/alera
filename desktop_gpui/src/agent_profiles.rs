@@ -45,6 +45,125 @@ pub fn validate_profile_name(name: &str) -> io::Result<String> {
     Ok(name.to_owned())
 }
 
+/// Only secret-free reference counts and Host identity are retained in GPUI.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentProfileRemovalImpact {
+    pub profile_id: String,
+    pub revision: i64,
+    pub is_default: bool,
+    pub has_automation_policy: bool,
+    pub automation_count: usize,
+    pub tab_count: usize,
+    pub execution_policy_count: usize,
+    pub blocking_reference_count: usize,
+}
+
+impl AgentProfileRemovalImpact {
+    pub fn has_blocking_references(&self) -> bool {
+        self.blocking_reference_count > 0
+            || self.automation_count > 0
+            || self.tab_count > 0
+            || self.execution_policy_count > 0
+    }
+
+    pub fn removal_message(&self, name: &str) -> String {
+        if self.has_blocking_references() {
+            return format!(
+                "{name} is referenced by {} automation(s), {} tab(s), {} execution policy run(s). Remove these references before deleting.",
+                self.automation_count, self.tab_count, self.execution_policy_count,
+            );
+        }
+        let default_note = if self.is_default {
+            " The shared default will be cleared."
+        } else {
+            ""
+        };
+        let policy_note = if self.has_automation_policy {
+            " Its automation policy will be cleared."
+        } else {
+            ""
+        };
+        format!("{name} has no blocking references. Deletion cannot be undone.{default_note}{policy_note}")
+    }
+}
+
+/// A missing or mismatched Host impact field must never enable deletion.
+pub fn parse_profile_removal_impact(
+    value: &Value,
+    expected_id: &str,
+    expected_revision: i64,
+) -> io::Result<AgentProfileRemovalImpact> {
+    if !safe_runtime_id(expected_id, 128) || expected_revision < 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Invalid Profile removal target",
+        ));
+    }
+    let flag = |field: &str| {
+        value
+            .get(field)
+            .and_then(Value::as_bool)
+            .ok_or_else(|| invalid("Host removal impact omitted required boolean"))
+    };
+    let count = |field: &str| {
+        value
+            .get(field)
+            .and_then(Value::as_u64)
+            .and_then(|n| usize::try_from(n).ok())
+            .ok_or_else(|| invalid("Host removal impact omitted required count"))
+    };
+    if value.get("profileId").and_then(Value::as_str) != Some(expected_id)
+        || value.get("revision").and_then(Value::as_i64) != Some(expected_revision)
+        || !flag("exists")?
+    {
+        return Err(invalid("Host removal impact identity or revision changed"));
+    }
+    let list = |field: &str| {
+        value
+            .get(field)
+            .and_then(Value::as_array)
+            .ok_or_else(|| invalid("Host removal impact omitted references"))
+    };
+    let automations = list("automationIds")?;
+    let executions = list("executionPolicyRunIds")?;
+    let tabs = list("tabs")?;
+    if automations.len() > 4096
+        || executions.len() > 4096
+        || tabs.len() > 4096
+        || automations
+            .iter()
+            .chain(executions.iter())
+            .any(|v| v.as_str().is_none_or(|id| !safe_runtime_id(id, 256)))
+        || tabs.iter().any(|tab| {
+            tab.get("workspaceId")
+                .and_then(Value::as_str)
+                .is_none_or(|id| !safe_runtime_id(id, 256))
+                || tab
+                    .get("tabId")
+                    .and_then(Value::as_str)
+                    .is_none_or(|id| !safe_runtime_id(id, 256))
+        })
+    {
+        return Err(invalid("Host removal impact has invalid references"));
+    }
+    let blocking_reference_count = count("blockingReferenceCount")?;
+    if blocking_reference_count < automations.len() + executions.len() + tabs.len()
+        || count("referenceCount")? < blocking_reference_count
+    {
+        return Err(invalid("Host removal impact reference counts conflict"));
+    }
+    Ok(AgentProfileRemovalImpact {
+        profile_id: expected_id.to_owned(),
+        revision: expected_revision,
+        is_default: flag("isDefault")?,
+        has_automation_policy: flag("hasAutomationPolicy")?,
+        automation_count: automations.len(),
+        tab_count: tabs.len(),
+        execution_policy_count: executions.len(),
+        blocking_reference_count,
+    })
+}
+
 fn invalid(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
 }
@@ -178,6 +297,32 @@ pub fn matching_agent_handle<'a>(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn profile_removal_preview_is_revision_guarded_and_fails_closed_on_references() {
+        let safe = json!({
+            "profileId": "prof_1", "exists": true, "revision": 2,
+            "isDefault": false, "hasAutomationPolicy": false,
+            "automationIds": [], "executionPolicyRunIds": [], "tabs": [],
+            "referenceCount": 0, "blockingReferenceCount": 0
+        });
+        let preview = parse_profile_removal_impact(&safe, "prof_1", 2).unwrap();
+        assert!(!preview.has_blocking_references());
+        assert!(parse_profile_removal_impact(&safe, "prof_2", 2).is_err());
+        assert!(parse_profile_removal_impact(&safe, "prof_1", 3).is_err());
+        let blocked = json!({
+            "profileId": "prof_1", "exists": true, "revision": 2,
+            "isDefault": true, "hasAutomationPolicy": false,
+            "automationIds": ["auto_1"], "executionPolicyRunIds": [],
+            "tabs": [{"workspaceId":"ws_1","tabId":"tab_1"}],
+            "referenceCount": 3, "blockingReferenceCount": 2
+        });
+        let preview = parse_profile_removal_impact(&blocked, "prof_1", 2).unwrap();
+        assert!(preview.has_blocking_references());
+        assert!(preview.removal_message("Review").contains("automation"));
+        assert!(preview.removal_message("Review").contains("tab"));
+        assert!(parse_profile_removal_impact(&json!({"profileId":"prof_1"}), "prof_1", 2).is_err());
+    }
 
     #[test]
     fn attached_agent_must_match_the_registered_host_workspace_and_tab() {

@@ -25,7 +25,7 @@ use alera_core::git::{
     prepare_staged_commit_prompt, verify_staged_commit_prompt, GitStagedCommitPrompt,
 };
 use alera_gpui_desktop::agent_profiles::{
-    matching_agent_handle, AgentProfileRow, LaunchedAgentTab,
+    matching_agent_handle, AgentProfileRemovalImpact, AgentProfileRow, LaunchedAgentTab,
 };
 use alera_gpui_desktop::agent_quota::QuotaSnapshot;
 use alera_gpui_desktop::agent_status_notifications::{
@@ -693,6 +693,7 @@ struct Workbench {
     agent_profile_mutation_busy: bool,
     agent_profile_mutation_request: u64,
     agent_profile_mutation_status: String,
+    agent_profile_removal_preview: Option<AgentProfileRemovalImpact>,
     agent_prompt_input: Entity<QuickOpenInput>,
     agent_override_selected_id: Option<String>,
     agent_override_input: Entity<QuickOpenInput>,
@@ -6228,6 +6229,7 @@ impl Workbench {
         if self.agent_profiles_loading {
             return;
         }
+        self.agent_profile_removal_preview = None;
         if self.runtime_bridge.is_none() {
             self.runtime_bridge = RuntimeCliBridge::discover().ok();
         }
@@ -14316,6 +14318,7 @@ fn main() {
                             agent_profile_mutation_busy: false,
                             agent_profile_mutation_request: 0,
                             agent_profile_mutation_status: "Create a standard command profile, or rename the selected Host profile".into(),
+                            agent_profile_removal_preview: None,
                             agent_prompt_input: cx.new(|cx| {
                                 QuickOpenInput::with_placeholder("Task for selected Agent…", cx)
                             }),

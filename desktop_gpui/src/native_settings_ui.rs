@@ -176,6 +176,7 @@ impl Workbench {
         if self.agent_profile_mutation_busy {
             return;
         }
+        self.agent_profile_removal_preview = None;
         if self.agent_profile_name_input.read(cx).composing() {
             self.agent_profile_mutation_status = "Finish IME composition before saving".into();
             cx.notify();
@@ -287,6 +288,7 @@ impl Workbench {
         if self.agent_profile_mutation_busy || self.agent_profiles_loading {
             return;
         }
+        self.agent_profile_removal_preview = None;
         if !self
             .agent_profiles
             .iter()
@@ -345,6 +347,137 @@ impl Workbench {
             .ok();
         })
         .detach();
+        cx.notify();
+    }
+
+    /// Step 1 of deletion: show the Host's revision-pinned impact. No state
+    /// is removed or changed by preview; missing references fail closed.
+    fn preview_host_agent_profile_removal(&mut self, cx: &mut Context<Self>) {
+        if self.agent_profile_mutation_busy || self.agent_profiles_loading {
+            return;
+        }
+        let Some(profile) = self
+            .agent_profiles
+            .iter()
+            .find(|row| Some(row.id.as_str()) == self.agent_selected_profile.as_deref())
+            .cloned()
+        else {
+            self.agent_profile_mutation_status = "Select a Host Profile to review deletion".into();
+            cx.notify();
+            return;
+        };
+        let Some(revision) = profile.revision else {
+            self.agent_profile_mutation_status =
+                "Host revision missing; refresh before removal".into();
+            cx.notify();
+            return;
+        };
+        if self.runtime_bridge.is_none() {
+            self.runtime_bridge = RuntimeCliBridge::discover().ok();
+        }
+        let Some(bridge) = self.runtime_bridge.clone() else {
+            self.agent_profile_mutation_status =
+                "Alera CLI missing; cannot inspect Profile references".into();
+            cx.notify();
+            return;
+        };
+        self.agent_profile_removal_preview = None;
+        self.agent_profile_mutation_busy = true;
+        self.agent_profile_mutation_request = self.agent_profile_mutation_request.wrapping_add(1);
+        let request = self.agent_profile_mutation_request;
+        let generation = self.workspace_generation;
+        self.agent_profile_mutation_status =
+            "Checking Host Profile references before deletion…".into();
+        cx.spawn(async move |view, cx| {
+            let result = cx.background_spawn(async move {
+                bridge.preview_agent_profile_removal(&profile.id, revision)
+                    .map(|preview| (preview, profile.name))
+            }).await;
+            view.update(cx, |view, cx| {
+                if view.workspace_generation != generation || view.agent_profile_mutation_request != request {
+                    return;
+                }
+                view.agent_profile_mutation_busy = false;
+                match result {
+                    Ok((impact, name)) => {
+                        if view.agent_selected_profile.as_deref() == Some(impact.profile_id.as_str()) {
+                            view.agent_profile_mutation_status = impact.removal_message(&name);
+                            view.agent_profile_removal_preview = Some(impact);
+                        } else {
+                            view.agent_profile_mutation_status = "Selection changed; preview again".into();
+                        }
+                    }
+                    Err(error) => {
+                        view.agent_profile_mutation_status =
+                            format!("Could not inspect Profile references: {error}. Refresh before retrying.");
+                    }
+                }
+                cx.notify();
+            }).ok();
+        }).detach();
+        cx.notify();
+    }
+
+    /// Step 2: a distinct user click. The bridge rechecks Host impact before
+    /// an explicit, revision-guarded --confirm and verifies Host list readback.
+    fn confirm_host_agent_profile_removal(&mut self, cx: &mut Context<Self>) {
+        if self.agent_profile_mutation_busy || self.agent_profiles_loading {
+            return;
+        }
+        let Some(impact) = self.agent_profile_removal_preview.take() else {
+            self.agent_profile_mutation_status = "Review deletion impact before confirming".into();
+            cx.notify();
+            return;
+        };
+        if impact.has_blocking_references()
+            || self.agent_selected_profile.as_deref() != Some(impact.profile_id.as_str())
+            || !self.agent_profiles.iter().any(|profile| {
+                profile.id == impact.profile_id && profile.revision == Some(impact.revision)
+            })
+        {
+            self.agent_profile_mutation_status =
+                "Profile selection, revision or references changed; review again".into();
+            cx.notify();
+            return;
+        }
+        let Some(bridge) = self.runtime_bridge.clone() else {
+            self.agent_profile_mutation_status =
+                "Alera CLI missing; cannot delete Host Profile".into();
+            cx.notify();
+            return;
+        };
+        self.agent_profile_mutation_busy = true;
+        self.agent_profile_mutation_request = self.agent_profile_mutation_request.wrapping_add(1);
+        let request = self.agent_profile_mutation_request;
+        let generation = self.workspace_generation;
+        self.agent_profile_mutation_status =
+            "Deleting selected Host Profile after reference recheck…".into();
+        cx.spawn(async move |view, cx| {
+            let result = cx.background_spawn(async move { bridge.remove_agent_profile(&impact) }).await;
+            view.update(cx, |view, cx| {
+                if view.workspace_generation != generation || view.agent_profile_mutation_request != request {
+                    return;
+                }
+                view.agent_profile_mutation_busy = false;
+                match result {
+                    Ok(()) => {
+                        view.agent_selected_profile = None;
+                        view.agent_profile_name_input.update(cx, |input, cx| input.clear(cx));
+                        view.agent_profile_mutation_status = "Host confirmed Profile deletion; catalog refreshing".into();
+                        view.agent_profiles_loading = false;
+                        view.agent_profiles_request = view.agent_profiles_request.wrapping_add(1);
+                        view.refresh_agent_profiles(cx);
+                        view.refresh_shared_desktop_settings(cx);
+                    }
+                    Err(error) => {
+                        view.agent_profile_mutation_status = format!(
+                            "Host Profile deletion not confirmed: {error}. Refresh and preview again."
+                        );
+                    }
+                }
+                cx.notify();
+            }).ok();
+        }).detach();
         cx.notify();
     }
 
@@ -753,6 +886,7 @@ impl Workbench {
                                 .child(format!("{} {label}", if selected { "●" } else { "○" }))
                                 .on_click(cx.listener(move |view, _, _, cx| {
                                     view.agent_selected_profile = Some(selection_id.clone());
+                                    view.agent_profile_removal_preview = None;
                                     view.agent_profile_name_input.update(cx, |input, cx| {
                                         input.set_query(&name_for_edit, cx);
                                     });
@@ -872,9 +1006,39 @@ impl Workbench {
                                 }))
                         )
                 )
+                .child(
+                    div().mt_2().flex().gap_3()
+                        .child(
+                            div().id("native-preview-delete-agent-profile")
+                                .cursor_pointer().text_sm()
+                                .text_color(rgb(if self.agent_profile_mutation_busy { MUTED } else { TEXT }))
+                                .child("Review deletion impact")
+                                .on_click(cx.listener(|view, _, _, cx| {
+                                    view.preview_host_agent_profile_removal(cx);
+                                }))
+                        )
+                        .children(
+                            self.agent_profile_removal_preview.as_ref()
+                                .filter(|impact| !impact.has_blocking_references()
+                                    && self.agent_selected_profile.as_deref() == Some(impact.profile_id.as_str())
+                                    && self.agent_profiles.iter().any(|profile| {
+                                        profile.id == impact.profile_id
+                                            && profile.revision == Some(impact.revision)
+                                    }))
+                                .map(|_| {
+                                    div().id("native-confirm-delete-agent-profile")
+                                        .cursor_pointer().text_sm()
+                                        .text_color(rgb(TEXT))
+                                        .child("Confirm delete selected")
+                                        .on_click(cx.listener(|view, _, _, cx| {
+                                            view.confirm_host_agent_profile_removal(cx);
+                                        }))
+                                })
+                        )
+                )
                 .child(div().text_xs().text_color(rgb(MUTED)).child(
                     if self.agent_profile_mutation_busy {
-                        "Saving Host Agent Profile…".to_owned()
+                        "Checking or saving Host Agent Profile…".to_owned()
                     } else {
                         self.agent_profile_mutation_status.clone()
                     },

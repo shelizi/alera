@@ -2,8 +2,8 @@
 //! authentication, Agent launch semantics, MCP injection and PTY lifetimes.
 //! No generic process runner is exposed to GPUI views.
 use crate::agent_profiles::{
-    parse_launched_agent, parse_profile_catalog, safe_runtime_id, validate_profile_name,
-    AgentProfileRow, LaunchedAgentTab,
+    parse_launched_agent, parse_profile_catalog, parse_profile_removal_impact, safe_runtime_id,
+    validate_profile_name, AgentProfileRemovalImpact, AgentProfileRow, LaunchedAgentTab,
 };
 use crate::runtime_bridge::RuntimeCliBridge;
 use alera_core::child_process::windowless_command;
@@ -34,6 +34,14 @@ enum AllowedAgentRequest<'a> {
     },
     Reorder {
         profiles: &'a [AgentProfileRow],
+    },
+    RemovalImpact {
+        id: &'a str,
+        expected_revision: i64,
+    },
+    RemoveConfirmed {
+        id: &'a str,
+        expected_revision: i64,
     },
     Launch {
         profile_id: &'a str,
@@ -87,6 +95,27 @@ fn args_for(runtime: &Path, request: &AllowedAgentRequest<'_>) -> Vec<OsString> 
                     profile.revision.unwrap_or(-1)
                 )));
             }
+        }
+        AllowedAgentRequest::RemovalImpact {
+            id,
+            expected_revision,
+        } => {
+            args.push(OsString::from("removal-impact"));
+            args.push(OsString::from(format!("--profile-id={id}")));
+            args.push(OsString::from(format!(
+                "--expected-revision={expected_revision}"
+            )));
+        }
+        AllowedAgentRequest::RemoveConfirmed {
+            id,
+            expected_revision,
+        } => {
+            args.push(OsString::from("remove"));
+            args.push(OsString::from(format!("--profile-id={id}")));
+            args.push(OsString::from(format!(
+                "--expected-revision={expected_revision}"
+            )));
+            args.push(OsString::from("--confirm"));
         }
         AllowedAgentRequest::Launch {
             profile_id,
@@ -266,6 +295,64 @@ impl RuntimeCliBridge {
         Ok(readback)
     }
 
+    /// Preview every Host reference before presenting an explicit deletion confirmation.
+    pub fn preview_agent_profile_removal(
+        &self,
+        profile_id: &str,
+        expected_revision: i64,
+    ) -> io::Result<AgentProfileRemovalImpact> {
+        if !safe_runtime_id(profile_id, 128) || expected_revision < 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Invalid Agent Profile removal ID or revision",
+            ));
+        }
+        let result = self.invoke_existing_host_agent(AllowedAgentRequest::RemovalImpact {
+            id: profile_id,
+            expected_revision,
+        })?;
+        parse_profile_removal_impact(&result, profile_id, expected_revision)
+    }
+
+    /// Only after an explicit UI confirmation: refetch the exact impact before
+    /// issuing Host's revision-guarded --confirm. Host remains authoritative.
+    pub fn remove_agent_profile(&self, observed: &AgentProfileRemovalImpact) -> io::Result<()> {
+        if observed.has_blocking_references() {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "Profile is still used by active automation, policies or tabs",
+            ));
+        }
+        let fresh = self.preview_agent_profile_removal(&observed.profile_id, observed.revision)?;
+        if fresh != *observed {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "Host Profile references changed since deletion preview; preview again",
+            ));
+        }
+        let reply = self.invoke_existing_host_agent(AllowedAgentRequest::RemoveConfirmed {
+            id: &observed.profile_id,
+            expected_revision: observed.revision,
+        })?;
+        if reply.get("removed").and_then(Value::as_bool) != Some(true) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Host did not confirm Agent Profile removal",
+            ));
+        }
+        if self
+            .list_agent_profiles()?
+            .iter()
+            .any(|profile| profile.id == observed.profile_id)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Deleted Agent Profile still appears in Host catalog",
+            ));
+        }
+        Ok(())
+    }
+
     pub fn launch_agent_profile(
         &self,
         profile_id: &str,
@@ -307,7 +394,9 @@ impl RuntimeCliBridge {
             AllowedAgentRequest::List
             | AllowedAgentRequest::CreateCommand { .. }
             | AllowedAgentRequest::Rename { .. }
-            | AllowedAgentRequest::Reorder { .. } => None,
+            | AllowedAgentRequest::Reorder { .. }
+            | AllowedAgentRequest::RemovalImpact { .. }
+            | AllowedAgentRequest::RemoveConfirmed { .. } => None,
             AllowedAgentRequest::Launch { prompt, .. } => Some(prompt.as_bytes()),
         };
         let timeout = if matches!(request, AllowedAgentRequest::List) {
@@ -442,6 +531,34 @@ mod tests {
         assert!(args
             .iter()
             .any(|part| part == "--expected-revision=profile_1=3"));
+    }
+
+    #[test]
+    fn profile_removal_requires_revision_no_start_and_explicit_confirmation() {
+        let runtime = Path::new("C:/isolated/runtime");
+        let impact = args_for(
+            runtime,
+            &AllowedAgentRequest::RemovalImpact {
+                id: "prof_1",
+                expected_revision: 4,
+            },
+        );
+        assert_eq!(impact[1], "--no-start");
+        assert!(impact.iter().any(|arg| arg == "removal-impact"));
+        assert!(impact.iter().any(|arg| arg == "--expected-revision=4"));
+        assert!(!impact.iter().any(|arg| arg == "--confirm"));
+        let remove = args_for(
+            runtime,
+            &AllowedAgentRequest::RemoveConfirmed {
+                id: "prof_1",
+                expected_revision: 4,
+            },
+        );
+        assert_eq!(remove[1], "--no-start");
+        assert!(remove.iter().any(|arg| arg == "remove"));
+        assert!(remove.iter().any(|arg| arg == "--profile-id=prof_1"));
+        assert!(remove.iter().any(|arg| arg == "--expected-revision=4"));
+        assert!(remove.iter().any(|arg| arg == "--confirm"));
     }
 
     #[test]

@@ -30,7 +30,7 @@
 ## 待辦與限制
 
 - 此輪 Create 僅支援**標準 Command Profile + 共用 Descriptor 預設命令**；Rename 只改顯示名稱，不改 agent_type、command、Managed Config、custom prompt 或配額分組。Classic 的完整 Edit／Clone／Managed options、拖曳式排序 UX **尚未對齊**。Up／Down 已完成排序功能本身。
-- **Delete** 尚未接上 GPUI；應先由 Host 讀取 Removal Impact、阻擋仍被 Automation／Tab／Policy 引用的 Profile，要求明確確認並使用 revision CAS。不得直接用一鍵刪除替代 Classic 的防護。
+- **後續 2026-11-13 已實作 Delete**：採 Host Removal Impact 預覽、引用阻擋、二次確認、Revision CAS 與 Host 刪後清單回讀；隔離 Windows GUI 正向流程通過，詳見 [T07 刪除驗收](gpui-t07-host-profile-removal-acceptance-20261113.md)。真實被 Automation／Tab／ExecutionPolicy 引用時的 GUI 阻擋尚未獨立實測，Rust 解析／防護測試已通過。
 - 真實 Provider 未登入／過期憑證的 UI 提示尚未完成獨立實測；Host Profile 被建立／Hook 出現／PTY 存在均不等於 Provider 登入成功。
 
 **NOW 仍 T07，supported=false**。沒有合併 `main`、Push、部署、Release，Classic 與正式 Runtime 的資料未更動。
