@@ -3,9 +3,11 @@
 //! No generic process runner is exposed to GPUI views.
 use crate::agent_profiles::{
     parse_launched_agent, parse_profile_catalog, parse_profile_content_fields,
-    parse_profile_removal_impact, parse_profile_routing_fields, safe_runtime_id,
+    parse_profile_managed_selection_fields, parse_profile_removal_impact,
+    parse_profile_routing_fields, safe_runtime_id, validate_managed_selection_text,
     validate_profile_name, validate_profile_routing_fields, AgentProfileContentFields,
-    AgentProfileRemovalImpact, AgentProfileRoutingFields, AgentProfileRow, LaunchedAgentTab,
+    AgentProfileManagedSelectionFields, AgentProfileRemovalImpact, AgentProfileRoutingFields,
+    AgentProfileRow, LaunchedAgentTab,
 };
 use crate::runtime_bridge::RuntimeCliBridge;
 use alera_core::child_process::windowless_command;
@@ -37,6 +39,13 @@ enum AllowedAgentRequest<'a> {
     /// Command/Custom Prompt edits travel as stdin JSON (`content`); argv
     /// carries only the --edit-content-stdin opt-in flag.
     UpdateCommandPrompt {
+        id: &'a str,
+        expected_revision: i64,
+        content: &'a str,
+    },
+    /// Only a bounded model/persona patch goes over stdin. The CLI merges
+    /// into Host's full Managed config, preserving every other option.
+    UpdateManagedSelection {
         id: &'a str,
         expected_revision: i64,
         content: &'a str,
@@ -121,6 +130,18 @@ fn args_for(runtime: &Path, request: &AllowedAgentRequest<'_>) -> Vec<OsString> 
                 "--expected-revision={expected_revision}"
             )));
             args.push(OsString::from("--edit-content-stdin"));
+        }
+        AllowedAgentRequest::UpdateManagedSelection {
+            id,
+            expected_revision,
+            ..
+        } => {
+            args.push(OsString::from("update"));
+            args.push(OsString::from(format!("--profile-id={id}")));
+            args.push(OsString::from(format!(
+                "--expected-revision={expected_revision}"
+            )));
+            args.push(OsString::from("--edit-managed-selection-stdin"));
         }
         AllowedAgentRequest::CreateCommand {
             name,
@@ -403,6 +424,134 @@ impl RuntimeCliBridge {
             ));
         }
         Ok(content)
+    }
+
+    /// Read only model/persona from a Host Show response, discard all other
+    /// Managed options without logging or storing them in Native preferences.
+    pub fn load_agent_profile_managed_selection(
+        &self,
+        selected: &AgentProfileRow,
+    ) -> io::Result<AgentProfileManagedSelectionFields> {
+        if !selected.managed
+            || !safe_runtime_id(&selected.id, 128)
+            || selected.revision.is_none_or(|revision| revision < 0)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "A selected Managed Profile and observed revision are required",
+            ));
+        }
+        let response =
+            self.invoke_existing_host_agent(AllowedAgentRequest::Show { id: &selected.id })?;
+        let fields = parse_profile_managed_selection_fields(&response)?;
+        if fields.id != selected.id || Some(fields.revision) != selected.revision {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "Host Managed Profile changed; refresh before editing",
+            ));
+        }
+        Ok(fields)
+    }
+
+    /// Update the model/persona allowlist only. The CLI reads a short stdin
+    /// JSON patch, merges it with the live Host Managed options, checks revision
+    /// and applies its existing reduced-protections confirmation gate.
+    pub fn update_agent_profile_managed_selection(
+        &self,
+        selected: &AgentProfileRow,
+        model: Option<Option<&str>>,
+        persona: Option<Option<&str>>,
+    ) -> io::Result<AgentProfileRow> {
+        let revision = selected
+            .revision
+            .filter(|revision| *revision >= 0)
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "Managed edit needs a current Host revision",
+                )
+            })?;
+        if !selected.managed || !safe_runtime_id(&selected.id, 128) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Managed edit needs a valid Managed Host Profile",
+            ));
+        }
+        let descriptor = alera_core::agent_descriptor::agent_descriptor(&selected.agent_type)
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidInput, "Unknown Managed Agent adapter")
+            })?;
+        if model.is_some()
+            && descriptor.model_override
+                == alera_core::agent_descriptor::AgentModelOverride::Unsupported
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "This Agent adapter does not support Model selection",
+            ));
+        }
+        if persona.is_some() && !descriptor.supports_persona {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "This Agent adapter does not support Persona selection",
+            ));
+        }
+        let mut edit = serde_json::Map::new();
+        let append = |edit: &mut serde_json::Map<String, Value>,
+                      key: &str,
+                      value: Option<Option<&str>>|
+         -> io::Result<()> {
+            if let Some(value) = value {
+                edit.insert(
+                    key.to_owned(),
+                    match value {
+                        Some(text) => Value::String(validate_managed_selection_text(text)?),
+                        None => Value::Null,
+                    },
+                );
+            }
+            Ok(())
+        };
+        append(&mut edit, "model", model)?;
+        append(&mut edit, "persona", persona)?;
+        if edit.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Select a Model/Persona change before saving",
+            ));
+        }
+        let content = Value::Object(edit).to_string();
+        let response =
+            self.invoke_existing_host_agent(AllowedAgentRequest::UpdateManagedSelection {
+                id: &selected.id,
+                expected_revision: revision,
+                content: &content,
+            })?;
+        let saved = parse_saved_profile(response)?;
+        if saved.id != selected.id
+            || saved.revision.is_none_or(|updated| updated <= revision)
+            || saved.agent_type != selected.agent_type
+            || !saved.managed
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Host did not confirm a revision-guarded Managed edit",
+            ));
+        }
+        let verified = self.load_agent_profile_managed_selection(&saved)?;
+        if model.is_some_and(|value| match value {
+            Some(text) => verified.model != text.trim(),
+            None => !verified.model.is_empty(),
+        }) || persona.is_some_and(|value| match value {
+            Some(text) => verified.persona != text.trim(),
+            None => !verified.persona.is_empty(),
+        }) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Host Managed selection readback differs from saved edit",
+            ));
+        }
+        Ok(saved)
     }
 
     /// Patch only routing fields via CLI update; the CLI's Host draft retains
@@ -740,7 +889,10 @@ impl RuntimeCliBridge {
             | AllowedAgentRequest::RemovalImpact { .. }
             | AllowedAgentRequest::RemoveConfirmed { .. } => None,
             AllowedAgentRequest::Launch { prompt, .. } => Some(prompt.as_bytes()),
-            AllowedAgentRequest::UpdateCommandPrompt { content, .. } => Some(content.as_bytes()),
+            AllowedAgentRequest::UpdateCommandPrompt { content, .. }
+            | AllowedAgentRequest::UpdateManagedSelection { content, .. } => {
+                Some(content.as_bytes())
+            }
         };
         let timeout = if matches!(request, AllowedAgentRequest::List) {
             LIST_TIMEOUT
@@ -810,6 +962,108 @@ impl RuntimeCliBridge {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn managed_selection_uses_revision_guard_and_stdin_without_exposing_model_in_argv() {
+        let root = Path::new("C:/isolated/runtime");
+        let content = r#"{"model":"claude-new","persona":"reviewer"}"#;
+        let argv = args_for(
+            root,
+            &AllowedAgentRequest::UpdateManagedSelection {
+                id: "profile_m",
+                expected_revision: 7,
+                content,
+            },
+        );
+        assert_eq!(argv[1], "--no-start");
+        assert!(argv.iter().any(|part| part == "--profile-id=profile_m"));
+        assert!(argv.iter().any(|part| part == "--expected-revision=7"));
+        assert!(argv
+            .iter()
+            .any(|part| part == "--edit-managed-selection-stdin"));
+        assert!(!argv.iter().any(|part| {
+            part.to_string_lossy().contains("claude-new")
+                || part.to_string_lossy().contains("reviewer")
+                || part.to_string_lossy().contains("managedConfig")
+        }));
+
+        let dir = tempfile::tempdir().unwrap();
+        let bridge = RuntimeCliBridge::new(
+            dir.path().join("missing-cli.exe"),
+            &dir.path().join("runtime"),
+        );
+        let profile = AgentProfileRow {
+            id: "profile_m".into(),
+            name: "Managed".into(),
+            agent_type: "claude".into(),
+            managed: true,
+            revision: Some(7),
+        };
+        assert_eq!(
+            bridge
+                .load_agent_profile_managed_selection(&profile)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::NotConnected
+        );
+        assert_eq!(
+            bridge
+                .update_agent_profile_managed_selection(
+                    &profile,
+                    Some(Some("claude-new")),
+                    Some(Some("reviewer"))
+                )
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::NotConnected
+        );
+        assert!(!dir.path().join("runtime").exists());
+        let command_profile = AgentProfileRow {
+            managed: false,
+            ..profile.clone()
+        };
+        assert_eq!(
+            bridge
+                .update_agent_profile_managed_selection(
+                    &command_profile,
+                    Some(Some("claude-new")),
+                    None
+                )
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidInput
+        );
+        let no_revision = AgentProfileRow {
+            revision: None,
+            ..profile.clone()
+        };
+        assert_eq!(
+            bridge
+                .update_agent_profile_managed_selection(
+                    &no_revision,
+                    Some(Some("claude-new")),
+                    None
+                )
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidInput
+        );
+        let unsupported_persona = AgentProfileRow {
+            agent_type: "codex".into(),
+            ..profile
+        };
+        assert_eq!(
+            bridge
+                .update_agent_profile_managed_selection(
+                    &unsupported_persona,
+                    None,
+                    Some(Some("reviewer"))
+                )
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidInput
+        );
+    }
 
     #[test]
     fn routing_update_requires_observed_revision_and_explicit_clear_flags() {

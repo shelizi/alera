@@ -131,6 +131,63 @@ pub fn parse_profile_content_fields(value: &Value) -> io::Result<AgentProfileCon
     })
 }
 
+/// Only the display-safe Managed selection fields are projected from a
+/// transient Host Show result. All other managedConfig fields remain Host-owned
+/// and are never copied to GPUI or its persisted desktop settings.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentProfileManagedSelectionFields {
+    pub id: String,
+    pub revision: i64,
+    pub model: String,
+    /// Classic's "Persona" is stored under managedConfig.agent.
+    pub persona: String,
+}
+
+pub fn validate_managed_selection_text(raw: &str) -> io::Result<String> {
+    let value = raw.trim();
+    if value.is_empty() || value.len() > 256 || value.chars().any(char::is_control) {
+        return Err(invalid(
+            "Managed Model/Persona must be a nonempty single-line ID (up to 256 bytes)",
+        ));
+    }
+    Ok(value.to_owned())
+}
+
+pub fn parse_profile_managed_selection_fields(
+    value: &Value,
+) -> io::Result<AgentProfileManagedSelectionFields> {
+    let id = value
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|id| safe_runtime_id(id, 128))
+        .ok_or_else(|| invalid("Host Managed Profile ID is invalid"))?;
+    let revision = value
+        .get("revision")
+        .and_then(Value::as_i64)
+        .filter(|revision| *revision >= 0)
+        .ok_or_else(|| invalid("Host Managed Profile revision is invalid"))?;
+    if value.get("launchMode").and_then(Value::as_str) != Some("managed") {
+        return Err(invalid("Model/Persona editing requires a Managed Profile"));
+    }
+    let config = value
+        .get("managedConfig")
+        .and_then(Value::as_object)
+        .ok_or_else(|| invalid("Host Managed Profile config is unavailable"))?;
+    let field = |key: &str| -> io::Result<String> {
+        match config.get(key) {
+            None | Some(Value::Null) => Ok(String::new()),
+            Some(Value::String(text)) => validate_managed_selection_text(text),
+            _ => Err(invalid("Host Managed selection field has invalid type")),
+        }
+    };
+    Ok(AgentProfileManagedSelectionFields {
+        id: id.to_owned(),
+        revision,
+        model: field("model")?,
+        persona: field("agent")?,
+    })
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LaunchedAgentTab {
     pub workspace_id: String,
@@ -443,6 +500,50 @@ pub fn matching_agent_handle<'a>(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn managed_selection_projection_only_keeps_model_and_persona() {
+        let row = json!({
+            "id":"profile_m","revision":8,"launchMode":"managed",
+            "agentType":"claude","managedConfig":{
+                "model":"claude-sonnet","agent":"reviewer",
+                "permissionMode":"manual",
+                "apiKey":"SECRET_DO_NOT_COPY",
+                "customOptions":{"token":"SECRET_TOO"}
+            },
+            "customPrompt":"SECRET_PROMPT","command":"SECRET_COMMAND"
+        });
+        let fields = parse_profile_managed_selection_fields(&row).unwrap();
+        assert_eq!(fields.id, "profile_m");
+        assert_eq!(fields.revision, 8);
+        assert_eq!(fields.model, "claude-sonnet");
+        assert_eq!(fields.persona, "reviewer");
+        assert!(!format!("{fields:?}").contains("SECRET"));
+        for invalid_row in [
+            json!({"id":"profile_m","revision":8,"launchMode":"command","managedConfig":{}}),
+            json!({"id":"../p","revision":8,"launchMode":"managed","managedConfig":{}}),
+            json!({"id":"profile_m","revision":-1,"launchMode":"managed","managedConfig":{}}),
+            json!({"id":"profile_m","revision":8,"launchMode":"managed","managedConfig":{"model":2}}),
+            json!({"id":"profile_m","revision":8,"launchMode":"managed","managedConfig":{"agent":"bad\nline"}}),
+            json!({"id":"profile_m","revision":8,"launchMode":"managed","managedConfig":{"model":"x".repeat(257)}}),
+        ] {
+            assert!(parse_profile_managed_selection_fields(&invalid_row).is_err());
+        }
+        let empty =
+            json!({"id":"profile_m","revision":8,"launchMode":"managed","managedConfig":{}});
+        assert_eq!(
+            parse_profile_managed_selection_fields(&empty)
+                .unwrap()
+                .model,
+            ""
+        );
+        assert_eq!(
+            parse_profile_managed_selection_fields(&empty)
+                .unwrap()
+                .persona,
+            ""
+        );
+    }
 
     #[test]
     fn command_prompt_content_projection_preserves_multiline_without_managed_secrets() {

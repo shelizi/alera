@@ -25,8 +25,8 @@ use alera_core::git::{
     prepare_staged_commit_prompt, verify_staged_commit_prompt, GitStagedCommitPrompt,
 };
 use alera_gpui_desktop::agent_profiles::{
-    matching_agent_handle, AgentProfileContentFields, AgentProfileRemovalImpact, AgentProfileRow,
-    LaunchedAgentTab,
+    matching_agent_handle, AgentProfileContentFields, AgentProfileManagedSelectionFields,
+    AgentProfileRemovalImpact, AgentProfileRow, LaunchedAgentTab,
 };
 use alera_gpui_desktop::agent_quota::QuotaSnapshot;
 use alera_gpui_desktop::agent_status_notifications::{
@@ -696,6 +696,10 @@ struct Workbench {
     agent_profile_routing_loaded: Option<(String, i64)>,
     /// Temporary edit-only values; never persisted in shared desktop settings.
     agent_profile_content_loaded: Option<AgentProfileContentFields>,
+    /// Transient Host-owned Model/Persona selection; no other Managed config.
+    agent_profile_managed_loaded: Option<AgentProfileManagedSelectionFields>,
+    agent_profile_model_input: Entity<QuickOpenInput>,
+    agent_profile_persona_input: Entity<QuickOpenInput>,
     agent_profile_command_input: Entity<QuickOpenInput>,
     agent_profile_custom_prompt_input: Entity<QuickOpenInput>,
     agent_profile_new_adapter: String,
@@ -6312,6 +6316,24 @@ impl Workbench {
                                             && row.managed == fields.managed
                                     })
                             });
+                        let managed_is_current = view
+                            .agent_profile_managed_loaded
+                            .as_ref()
+                            .is_some_and(|fields| {
+                                view.agent_selected_profile.as_deref() == Some(fields.id.as_str())
+                                    && view.agent_profiles.iter().any(|row| {
+                                        row.id == fields.id
+                                            && row.revision == Some(fields.revision)
+                                            && row.managed
+                                    })
+                            });
+                        if !managed_is_current {
+                            view.agent_profile_managed_loaded = None;
+                            view.agent_profile_model_input
+                                .update(cx, |input, cx| input.clear(cx));
+                            view.agent_profile_persona_input
+                                .update(cx, |input, cx| input.clear(cx));
+                        }
                         if !content_is_current {
                             view.agent_profile_content_loaded = None;
                             view.agent_profile_command_input
@@ -6325,6 +6347,11 @@ impl Workbench {
                         view.agent_selected_profile = None;
                         view.agent_profile_routing_loaded = None;
                         view.agent_profile_content_loaded = None;
+                        view.agent_profile_managed_loaded = None;
+                        view.agent_profile_model_input
+                            .update(cx, |input, cx| input.clear(cx));
+                        view.agent_profile_persona_input
+                            .update(cx, |input, cx| input.clear(cx));
                         view.agent_profile_command_input
                             .update(cx, |input, cx| input.clear(cx));
                         view.agent_profile_custom_prompt_input
@@ -14382,6 +14409,13 @@ fn main() {
                             }),
                             agent_profile_routing_loaded: None,
                             agent_profile_content_loaded: None,
+                            agent_profile_managed_loaded: None,
+                            agent_profile_model_input: cx.new(|cx| {
+                                QuickOpenInput::with_placeholder("Exact Model ID (empty = default)…", cx)
+                            }),
+                            agent_profile_persona_input: cx.new(|cx| {
+                                QuickOpenInput::with_placeholder("Exact Persona / Agent name (empty = default)…", cx)
+                            }),
                             agent_profile_command_input: cx.new(|cx| {
                                 QuickOpenInput::profile_command(cx)
                             }),

@@ -3,7 +3,7 @@
 日期：2026-11-13（Asia/Taipei）
 工作分支：`feat/gpui-sweflash-t07-managed-20261113`
 Base：`f6d09cdd8326e2d6522ffde849805e79e018a382`
-目前狀態：**CLI 底層程式已驗證，4/4 定向測試與 1/1 隔離 Host 寫入／讀回通過；尚未接 GPUI Managed UI。**
+目前狀態：**CLI Managed 後端 4/4＋隔離 Host 1/1 PASS；GPUI Managed UI 已接線、Native 專項 2/2 與 Binary 回歸 34/34 PASS；Windows GUI 實際操作待驗收。**
 
 ## 需求／實作
 
@@ -14,14 +14,23 @@ Base：`f6d09cdd8326e2d6522ffde849805e79e018a382`
 - `--edit-managed-selection-stdin` 和全量 Managed config、Command／Prompt 編輯、其他 Profile 欄位異動相互排斥，要求明確 revision。
 - 新增 CLI tests：既有風險控制保留、只有支援的 adapter 能修改 Persona／Model、清空、違規欄位／過長輸入拒絕；另有隔離 Host conformance 測試含 CAS 舊版拒絕與獨立讀回。
 
+## GPUI Native UI 接線（本輪）
+
+- `agent_profiles.rs` 只解析 Host Show 的 ID、revision、Model、Persona（Rust `managedConfig.agent`）。其餘 Managed Config、Permission、Sandbox、Prompt、憑證不進入 Native UI state 或共享設定。
+- `agent_runtime_bridge.rs` 新增明確的 `load_agent_profile_managed_selection` 與 `update_agent_profile_managed_selection`；只以 `--edit-managed-selection-stdin` 傳有界 Model/Persona JSON，argv 不帶模型或 Persona 名稱；Host 回傳須推進 revision，另以 Show 獨立讀回確定值一致。
+- `main.rs` 設定窗只儲存瞬時選取欄位，切換 Profile、Host catalog 修改 revision／選取失效／Host 斷線便清除輸入與快照，不寫入持久化設定。
+- `native_settings_ui.rs` 依共用 Rust Agent Descriptor 的 `model_override`／`supports_persona` 顯示真正支援的欄位，提供 Load / Save / Clear Model / Clear Persona；IME composition 期間拒絕儲存，清空原有欄位必須明確按 Clear，CLI 保留所有未知或安全相關 Managed 選項。
+- Classic 探索能力資料分布於 Dart AiAssist 模型 registry 與 AgentProfile PersonaDiscovery；GPUI 目前先支援精確 ID 手動輸入，**動態 Model/Persona 選項探索尚未接線**，避免另造過時/不可信模型清單。
+
 ## 驗證進展
 
 - CLI 專項原始四項測試 **4/4 PASS**，確認原設定保留、Adapter 支援限制與旗標衝突。
+- GPUI Managed Host 投影與 Bridge 定向 Rust **2/2 PASS**，Native Binary 回歸 **34/34 PASS**；Windows 原生 `cargo check --bin alera-gpui-desktop` **PASS**；Native Binary **34/34 PASS**、Windows Debug EXE `cargo build --bin alera-gpui-desktop` **PASS**。
 - 第一輪隔離 Host conformance 在測試 Profile 建立時被 Host 拒絕，原因先後是測試使用不合法的 `customFlag` 和 `persona` Managed key；已修正測試 fixture 並依 Classic/Host 契約將 Persona 變更對應到 `agent`。更正後 **CLI 4/4 PASS、隔離 Host 1/1 PASS**；Host 實測模型／Persona 寫入、Permission Mode 保留、舊 revision 拒絕、清空及獨立 Show 讀回。
 
 ## 驗收界線
 
 - Subagent SWE-2 Flash High 僅完成程式碼閱讀，執行逾時沒有生成修改；本輪由主控依原計畫補最小 Host API。
 - 所有程式修改均在獨立 feature worktree。Cargo 使用既有 Windows 外部 target 快取，由主控執行。
-- **尚未接上 GPUI Model／Persona 輸入、選單及 Host 讀回 UI**，不能宣稱 T07 Managed 功能完整或 Windows GUI PASS。
+- **GPUI Model／Persona 編輯 UI 與 Host 讀回已接上，但尚未有 Classic 等效的動態模型／Persona 來源選單、也未執行 Windows 手動 GUI 點擊／注音測試**，不能宣稱 T07 Managed 功能完整或 Windows GUI PASS。
 - 已核對 CLI／Host 整合測試結果，並保留降低沙盒／核准防護的既有確認門檻；沒有修改真實憑證、正式 Runtime／PTY，也不合併 main、Push、部署、Release。原主追蹤 `NOW=T07`、`supported=false`。
