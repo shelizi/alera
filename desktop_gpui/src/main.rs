@@ -306,6 +306,15 @@ mod g05_branch_remote_ui_tests {
         assert!(!GitUiAction::StashSave.is_worktree_independent());
     }
 }
+#[test]
+fn g06_create_commit_worktree_may_proceed_with_unsaved_editor_but_merge_cannot() {
+    let creation = GitUiAction::CreateWorktreeAtCommit("a".repeat(40), "feat/g06-checkout".into());
+    assert!(creation.is_worktree_independent());
+    assert!(!GitUiAction::SwitchBranch("feat/g06-checkout".into()).is_worktree_independent());
+    assert!(
+        !GitUiAction::MergeWithoutConflicts("feat/g06-checkout".into()).is_worktree_independent()
+    );
+}
 impl GitUiAction {
     /// Index-only Git actions may proceed with a dirty Native Editor.
     /// They stage saved disk bytes, never the unsaved editor buffer.
@@ -316,15 +325,19 @@ impl GitUiAction {
         )
     }
 
-    /// These actions never modify checked-out files or the active Editor:
-    /// Fetch updates remote-tracking refs; selected branch Pull updates only
-    /// a branch guaranteed not to be checked out; Push transfers committed
-    /// objects. Dirty Editor buffers remain entirely local.
+    /// These actions leave the currently checked-out Workspace/Editor alone:
+    /// Fetch updates remote refs, selected Pull changes an inactive branch,
+    /// Push transfers committed objects, and commit-based Worktree creation
+    /// checks out into an entirely separate managed directory.
     fn is_worktree_independent(&self) -> bool {
         self.is_index_only()
             || matches!(
                 self,
-                Self::Fetch | Self::PullSelected(_) | Self::PushSelected(_) | Self::PushUpstream
+                Self::Fetch
+                    | Self::PullSelected(_)
+                    | Self::PushSelected(_)
+                    | Self::PushUpstream
+                    | Self::CreateWorktreeAtCommit(_, _)
             )
     }
 }
@@ -5352,14 +5365,14 @@ impl Workbench {
             return;
         }
         self.worktree_delete_pending = None;
-        if self
-            .editor
-            .as_ref()
-            .is_some_and(|editor| editor.read(cx).switch_allowed().is_err())
-            || self.model.root().starts_with(&target)
-        {
+        // Removal affects only the selected, inactive managed checkout.
+        // The Git WorktreeManager independently refuses a dirty TARGET,
+        // primary/active worktree, locked checkout or unmanaged path.
+        // Dirty buffers in this unrelated current Workspace are not a
+        // reason to refuse removal of a clean, inactive worktree.
+        if self.model.root().starts_with(&target) {
             self.model
-                .set_status("Cannot remove active Worktree or leave unsaved editor changes");
+                .set_status("Cannot remove the active Worktree; switch Workspace first");
             cx.notify();
             return;
         }
