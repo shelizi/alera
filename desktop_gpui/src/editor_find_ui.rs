@@ -12,6 +12,8 @@ pub(super) fn bind_find_keys(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("ctrl-f", ShowFind, Some("AleraGpuiEditorSurface")),
         KeyBinding::new("cmd-f", ShowFind, Some("AleraGpuiEditorSurface")),
+        KeyBinding::new("ctrl-h", ShowFind, Some("AleraGpuiEditorSurface")),
+        KeyBinding::new("cmd-alt-f", ShowFind, Some("AleraGpuiEditorSurface")),
         KeyBinding::new("enter", FindNext, Some("AleraGpuiEditorFind")),
         KeyBinding::new("shift-enter", FindPrevious, Some("AleraGpuiEditorFind")),
         KeyBinding::new("escape", HideFind, Some("AleraGpuiEditorFind")),
