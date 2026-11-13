@@ -689,6 +689,10 @@ struct Workbench {
     agent_profiles_request: u64,
     agent_selected_profile: Option<String>,
     agent_profile_name_input: Entity<QuickOpenInput>,
+    agent_profile_description_input: Entity<QuickOpenInput>,
+    agent_profile_quota_group_input: Entity<QuickOpenInput>,
+    /// Loaded Host identity/revision; no routing values in shared settings.
+    agent_profile_routing_loaded: Option<(String, i64)>,
     agent_profile_new_adapter: String,
     agent_profile_mutation_busy: bool,
     agent_profile_mutation_request: u64,
@@ -6271,10 +6275,36 @@ impl Workbench {
                                 .or_else(|| profiles.first().map(|profile| profile.id.clone()));
                         }
                         view.agent_profiles = profiles;
+                        let routing_is_current =
+                            view.agent_profile_routing_loaded.as_ref().is_some_and(
+                                |(id, revision)| {
+                                    view.agent_selected_profile.as_deref() == Some(id.as_str())
+                                        && view.agent_profiles.iter().any(|row| {
+                                            row.id == *id && row.revision == Some(*revision)
+                                        })
+                                },
+                            );
+                        if !routing_is_current {
+                            view.agent_profile_routing_loaded = None;
+                            view.agent_profile_description_input
+                                .update(cx, |input, cx| input.clear(cx));
+                            view.agent_profile_quota_group_input
+                                .update(cx, |input, cx| input.clear(cx));
+                            if view.settings_section.as_deref() == Some("agentProfiles")
+                                && !view.agent_profile_mutation_busy
+                            {
+                                view.load_selected_agent_profile_routing(cx);
+                            }
+                        }
                     }
                     Err(error) => {
                         view.agent_profiles.clear();
                         view.agent_selected_profile = None;
+                        view.agent_profile_routing_loaded = None;
+                        view.agent_profile_description_input
+                            .update(cx, |input, cx| input.clear(cx));
+                        view.agent_profile_quota_group_input
+                            .update(cx, |input, cx| input.clear(cx));
                         view.agent_status = format!("Agent Profiles unavailable: {error}");
                     }
                 }
@@ -14314,6 +14344,13 @@ fn main() {
                             agent_profile_name_input: cx.new(|cx| {
                                 QuickOpenInput::with_placeholder("New Profile name / Rename selected Profile…", cx)
                             }),
+                            agent_profile_description_input: cx.new(|cx| {
+                                QuickOpenInput::with_placeholder("Description (empty clears)", cx)
+                            }),
+                            agent_profile_quota_group_input: cx.new(|cx| {
+                                QuickOpenInput::with_placeholder("Quota Group (empty clears)", cx)
+                            }),
+                            agent_profile_routing_loaded: None,
                             agent_profile_new_adapter: "codex".into(),
                             agent_profile_mutation_busy: false,
                             agent_profile_mutation_request: 0,

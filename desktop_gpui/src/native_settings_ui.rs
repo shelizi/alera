@@ -277,6 +277,185 @@ impl Workbench {
         cx.notify();
     }
 
+    /// Read a non-secret routing projection from the existing Host. The
+    /// selection and observed revision guard against stale UI writebacks.
+    pub(super) fn load_selected_agent_profile_routing(&mut self, cx: &mut Context<Self>) {
+        if self.agent_profile_mutation_busy || self.agent_profiles_loading {
+            return;
+        }
+        let Some(selected) = self
+            .agent_profiles
+            .iter()
+            .find(|profile| Some(profile.id.as_str()) == self.agent_selected_profile.as_deref())
+            .cloned()
+        else {
+            self.agent_profile_mutation_status = "Select a Host Profile to edit Routing".into();
+            cx.notify();
+            return;
+        };
+        self.agent_profile_routing_loaded = None;
+        self.agent_profile_description_input
+            .update(cx, |input, cx| input.clear(cx));
+        self.agent_profile_quota_group_input
+            .update(cx, |input, cx| input.clear(cx));
+        if self.runtime_bridge.is_none() {
+            self.runtime_bridge = RuntimeCliBridge::discover().ok();
+        }
+        let Some(bridge) = self.runtime_bridge.clone() else {
+            self.agent_profile_mutation_status = "Alera CLI missing; cannot load Routing".into();
+            cx.notify();
+            return;
+        };
+        self.agent_profile_mutation_busy = true;
+        self.agent_profile_mutation_request = self.agent_profile_mutation_request.wrapping_add(1);
+        let ticket = self.agent_profile_mutation_request;
+        let generation = self.workspace_generation;
+        self.agent_profile_mutation_status =
+            "Loading Description and Quota Group from Host…".into();
+        cx.spawn(async move |view, cx| {
+            let result = cx
+                .background_spawn(async move { bridge.load_agent_profile_routing(&selected) })
+                .await;
+            let _ = view.update(cx, |view, cx| {
+                if view.workspace_generation != generation
+                    || view.agent_profile_mutation_request != ticket
+                {
+                    return;
+                }
+                view.agent_profile_mutation_busy = false;
+                match result {
+                    Ok(fields)
+                        if view.agent_selected_profile.as_deref() == Some(fields.id.as_str())
+                            && view.agent_profiles.iter().any(|profile| {
+                                profile.id == fields.id && profile.revision == Some(fields.revision)
+                            }) =>
+                    {
+                        view.agent_profile_description_input
+                            .update(cx, |input, cx| {
+                                input.set_query(&fields.description, cx);
+                            });
+                        view.agent_profile_quota_group_input
+                            .update(cx, |input, cx| {
+                                input.set_query(&fields.quota_group, cx);
+                            });
+                        view.agent_profile_routing_loaded = Some((fields.id, fields.revision));
+                        view.agent_profile_mutation_status =
+                            "Host Routing loaded; edit and save these fields only".into();
+                    }
+                    Ok(_) => {
+                        view.agent_profile_mutation_status =
+                            "Profile changed during Routing load; refresh and select it again"
+                                .into()
+                    }
+                    Err(error) => {
+                        view.agent_profile_mutation_status =
+                            format!("Unable to load Host Routing: {error}")
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// Only Description/Quota Group are writable here; existing Host Command,
+    /// Prompt and Managed configurations are never part of Native UI state.
+    fn save_selected_agent_profile_routing(&mut self, cx: &mut Context<Self>) {
+        if self.agent_profile_mutation_busy || self.agent_profiles_loading {
+            return;
+        }
+        let Some(selected) = self
+            .agent_profiles
+            .iter()
+            .find(|profile| Some(profile.id.as_str()) == self.agent_selected_profile.as_deref())
+            .cloned()
+        else {
+            self.agent_profile_mutation_status =
+                "Select a Host Profile before saving Routing".into();
+            cx.notify();
+            return;
+        };
+        if self
+            .agent_profile_routing_loaded
+            .as_ref()
+            .is_none_or(|(id, revision)| id != &selected.id || Some(*revision) != selected.revision)
+        {
+            // Never submit a Profile that the user has not explicitly loaded.
+            self.agent_profile_mutation_status =
+                "Load the selected Profile Routing before saving".into();
+            cx.notify();
+            return;
+        }
+        if self.agent_profile_description_input.read(cx).composing()
+            || self.agent_profile_quota_group_input.read(cx).composing()
+        {
+            self.agent_profile_mutation_status =
+                "Finish IME composition before saving Routing".into();
+            cx.notify();
+            return;
+        }
+        let (description, quota_group) =
+            match alera_gpui_desktop::agent_profiles::validate_profile_routing_fields(
+                self.agent_profile_description_input.read(cx).query(),
+                self.agent_profile_quota_group_input.read(cx).query(),
+            ) {
+                Ok(values) => values,
+                Err(error) => {
+                    self.agent_profile_mutation_status = error.to_string();
+                    cx.notify();
+                    return;
+                }
+            };
+        if self.runtime_bridge.is_none() {
+            self.runtime_bridge = RuntimeCliBridge::discover().ok();
+        }
+        let Some(bridge) = self.runtime_bridge.clone() else {
+            self.agent_profile_mutation_status = "Alera CLI missing; cannot save Routing".into();
+            cx.notify();
+            return;
+        };
+        self.agent_profile_mutation_busy = true;
+        self.agent_profile_mutation_request = self.agent_profile_mutation_request.wrapping_add(1);
+        let ticket = self.agent_profile_mutation_request;
+        let generation = self.workspace_generation;
+        self.agent_profile_mutation_status = "Saving Description and Quota Group to Host…".into();
+        cx.spawn(async move |view, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    bridge.save_agent_profile_routing(&selected, &description, &quota_group)
+                })
+                .await;
+            let _ = view.update(cx, |view, cx| {
+                if view.workspace_generation != generation
+                    || view.agent_profile_mutation_request != ticket
+                {
+                    return;
+                }
+                view.agent_profile_mutation_busy = false;
+                match result {
+                    Ok(saved) => {
+                        view.agent_profile_routing_loaded =
+                            Some((saved.id.clone(), saved.revision.unwrap_or(-1)));
+                        view.agent_profile_mutation_status =
+                            "Routing saved in Host; catalog refreshing for independent readback"
+                                .into();
+                        view.agent_profiles_loading = false;
+                        view.agent_profiles_request = view.agent_profiles_request.wrapping_add(1);
+                        view.refresh_agent_profiles(cx);
+                    }
+                    Err(error) => {
+                        view.agent_profile_mutation_status =
+                            format!("Host Routing not saved: {error}. Reload before retrying.")
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
     /// Clone the complete Host-owned source using only its ID/revision here.
     /// The CLI reads commands, prompts and Managed options from the Host.
     fn clone_selected_host_agent_profile(&mut self, cx: &mut Context<Self>) {
@@ -967,11 +1146,18 @@ impl Workbench {
                                 .text_color(rgb(if selected { TEXT } else { MUTED }))
                                 .child(format!("{} {label}", if selected { "●" } else { "○" }))
                                 .on_click(cx.listener(move |view, _, _, cx| {
+                                    if view.agent_profile_mutation_busy {
+                                        view.agent_profile_mutation_status =
+                                            "Finish the current Host Profile operation first".into();
+                                        cx.notify();
+                                        return;
+                                    }
                                     view.agent_selected_profile = Some(selection_id.clone());
                                     view.agent_profile_removal_preview = None;
                                     view.agent_profile_name_input.update(cx, |input, cx| {
                                         input.set_query(&name_for_edit, cx);
                                     });
+                                    view.load_selected_agent_profile_routing(cx);
                                     cx.notify();
                                 })),
                         )
@@ -1037,7 +1223,7 @@ impl Workbench {
                 ))
                 .child(div().mt_3().text_sm().child("Manage Host Agent Profiles"))
                 .child(div().text_xs().text_color(rgb(MUTED)).child(
-                    "Create a default Command Profile, rename, or clone a selected Host Profile. Clone preserves Host settings; advanced editing and reduced-protection confirmation remain in Classic or CLI.",
+                    "Create, rename, clone, or edit Routing for a selected Host Profile. Managed options/model/persona editing and reduced-protection confirmation remain in Classic or CLI.",
                 ))
                 .child(self.agent_profile_name_input.clone())
                 .child(div().text_xs().text_color(rgb(MUTED)).child(
@@ -1096,6 +1282,39 @@ impl Workbench {
                                     view.clone_selected_host_agent_profile(cx);
                                 }))
                         )
+                )
+                .child(div().mt_3().text_sm().child("Routing · selected Host Profile"))
+                .child(div().text_xs().text_color(rgb(MUTED)).child(
+                    "Edit only Description and Quota Group. Existing Command, Prompt and Managed options remain Host-owned.",
+                ))
+                .child(div().flex().flex_wrap().gap_3()
+                    .child(div().id("native-load-profile-routing")
+                        .cursor_pointer().text_sm()
+                        .text_color(rgb(if self.agent_profile_mutation_busy { MUTED } else { TEXT }))
+                        .child("Load routing")
+                        .on_click(cx.listener(|view, _, _, cx| {
+                            view.load_selected_agent_profile_routing(cx);
+                        })))
+                    .child(div().id("native-save-profile-routing")
+                        .cursor_pointer().text_sm()
+                        .text_color(rgb(if self.agent_profile_mutation_busy { MUTED } else { TEXT }))
+                        .child("Save routing")
+                        .on_click(cx.listener(|view, _, _, cx| {
+                            view.save_selected_agent_profile_routing(cx);
+                        })))
+                )
+                .when(
+                    self.agent_profile_routing_loaded.as_ref().is_some_and(|(id, revision)| {
+                        selected_profile.as_deref() == Some(id.as_str())
+                        && self.agent_profiles.iter().any(|profile| {
+                            profile.id == *id && profile.revision == Some(*revision)
+                        })
+                    }),
+                    |panel| panel
+                        .child(div().text_xs().text_color(rgb(MUTED)).child("Description"))
+                        .child(self.agent_profile_description_input.clone())
+                        .child(div().text_xs().text_color(rgb(MUTED)).child("Quota Group"))
+                        .child(self.agent_profile_quota_group_input.clone())
                 )
                 .child(
                     div().mt_2().flex().gap_3()

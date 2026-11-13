@@ -2,8 +2,10 @@
 //! authentication, Agent launch semantics, MCP injection and PTY lifetimes.
 //! No generic process runner is exposed to GPUI views.
 use crate::agent_profiles::{
-    parse_launched_agent, parse_profile_catalog, parse_profile_removal_impact, safe_runtime_id,
-    validate_profile_name, AgentProfileRemovalImpact, AgentProfileRow, LaunchedAgentTab,
+    parse_launched_agent, parse_profile_catalog, parse_profile_removal_impact,
+    parse_profile_routing_fields, safe_runtime_id, validate_profile_name,
+    validate_profile_routing_fields, AgentProfileRemovalImpact, AgentProfileRoutingFields,
+    AgentProfileRow, LaunchedAgentTab,
 };
 use crate::runtime_bridge::RuntimeCliBridge;
 use alera_core::child_process::windowless_command;
@@ -22,6 +24,15 @@ const LAUNCH_TIMEOUT: Duration = Duration::from_secs(30);
 
 enum AllowedAgentRequest<'a> {
     List,
+    Show {
+        id: &'a str,
+    },
+    UpdateRouting {
+        id: &'a str,
+        expected_revision: i64,
+        description: &'a str,
+        quota_group: &'a str,
+    },
     CreateCommand {
         name: &'a str,
         agent_type: &'a str,
@@ -65,6 +76,32 @@ fn args_for(runtime: &Path, request: &AllowedAgentRequest<'_>) -> Vec<OsString> 
     ];
     match request {
         AllowedAgentRequest::List => args.push(OsString::from("list")),
+        AllowedAgentRequest::Show { id } => {
+            args.push(OsString::from("show"));
+            args.push(OsString::from(format!("--profile-id={id}")));
+        }
+        AllowedAgentRequest::UpdateRouting {
+            id,
+            expected_revision,
+            description,
+            quota_group,
+        } => {
+            args.push(OsString::from("update"));
+            args.push(OsString::from(format!("--profile-id={id}")));
+            args.push(OsString::from(format!(
+                "--expected-revision={expected_revision}"
+            )));
+            if description.is_empty() {
+                args.push(OsString::from("--clear-description"));
+            } else {
+                args.push(OsString::from(format!("--description={description}")));
+            }
+            if quota_group.is_empty() {
+                args.push(OsString::from("--clear-quota-group"));
+            } else {
+                args.push(OsString::from(format!("--quota-group={quota_group}")));
+            }
+        }
         AllowedAgentRequest::CreateCommand {
             name,
             agent_type,
@@ -246,6 +283,81 @@ impl RuntimeCliBridge {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "Host did not confirm a distinct matching Agent Profile copy",
+            ));
+        }
+        Ok(row)
+    }
+
+    /// Display-only Host routing metadata: never store the full Show response
+    /// in a Native view or settings file.
+    pub fn load_agent_profile_routing(
+        &self,
+        selected: &AgentProfileRow,
+    ) -> io::Result<AgentProfileRoutingFields> {
+        if !safe_runtime_id(&selected.id, 128)
+            || selected.revision.is_none_or(|revision| revision < 0)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "A valid Host Profile revision is required to load Routing",
+            ));
+        }
+        let value =
+            self.invoke_existing_host_agent(AllowedAgentRequest::Show { id: &selected.id })?;
+        let fields = parse_profile_routing_fields(&value)?;
+        if fields.id != selected.id || Some(fields.revision) != selected.revision {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "Host Profile changed; refresh before editing Routing",
+            ));
+        }
+        Ok(fields)
+    }
+
+    /// Patch only routing fields via CLI update; the CLI's Host draft retains
+    /// Command, Custom Prompt and the full Managed configuration unchanged.
+    pub fn save_agent_profile_routing(
+        &self,
+        selected: &AgentProfileRow,
+        raw_description: &str,
+        raw_group: &str,
+    ) -> io::Result<AgentProfileRow> {
+        let revision = selected
+            .revision
+            .filter(|revision| *revision >= 0)
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "Missing observed Host Profile revision",
+                )
+            })?;
+        if !safe_runtime_id(&selected.id, 128) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Invalid Host Profile ID",
+            ));
+        }
+        let (description, quota_group) =
+            validate_profile_routing_fields(raw_description, raw_group)?;
+        let value = self.invoke_existing_host_agent(AllowedAgentRequest::UpdateRouting {
+            id: &selected.id,
+            expected_revision: revision,
+            description: &description,
+            quota_group: &quota_group,
+        })?;
+        let fields = parse_profile_routing_fields(&value)?;
+        let row = parse_saved_profile(value)?;
+        if fields.id != selected.id
+            || row.id != selected.id
+            || fields.description != description
+            || fields.quota_group != quota_group
+            || row.revision.is_none_or(|saved| saved <= revision)
+            || row.agent_type != selected.agent_type
+            || row.managed != selected.managed
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Host did not confirm a revision-guarded Routing update",
             ));
         }
         Ok(row)
@@ -446,6 +558,8 @@ impl RuntimeCliBridge {
         }
         let prompt = match &request {
             AllowedAgentRequest::List
+            | AllowedAgentRequest::Show { .. }
+            | AllowedAgentRequest::UpdateRouting { .. }
             | AllowedAgentRequest::CreateCommand { .. }
             | AllowedAgentRequest::Clone { .. }
             | AllowedAgentRequest::Rename { .. }
@@ -522,6 +636,40 @@ impl RuntimeCliBridge {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn routing_update_requires_observed_revision_and_explicit_clear_flags() {
+        let runtime = Path::new("C:/isolated/runtime");
+        let show = args_for(runtime, &AllowedAgentRequest::Show { id: "prof_r1" });
+        assert_eq!(show[1], "--no-start");
+        assert!(show.iter().any(|arg| arg == "show"));
+        let update = args_for(
+            runtime,
+            &AllowedAgentRequest::UpdateRouting {
+                id: "prof_r1",
+                expected_revision: 3,
+                description: "Review QA",
+                quota_group: "team-a",
+            },
+        );
+        assert!(update.iter().any(|arg| arg == "--expected-revision=3"));
+        assert!(update.iter().any(|arg| arg == "--description=Review QA"));
+        assert!(update.iter().any(|arg| arg == "--quota-group=team-a"));
+        let clear = args_for(
+            runtime,
+            &AllowedAgentRequest::UpdateRouting {
+                id: "prof_r1",
+                expected_revision: 4,
+                description: "",
+                quota_group: "",
+            },
+        );
+        assert!(clear.iter().any(|arg| arg == "--clear-description"));
+        assert!(clear.iter().any(|arg| arg == "--clear-quota-group"));
+        assert!(!clear.iter().any(|arg| arg == "--command"));
+        assert!(!clear.iter().any(|arg| arg == "--managed-config"));
+        assert!(!clear.iter().any(|arg| arg == "--custom-prompt"));
+    }
 
     #[test]
     fn clone_cli_request_uses_only_host_identity_revision_and_new_name() {

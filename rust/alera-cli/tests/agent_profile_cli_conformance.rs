@@ -325,3 +325,147 @@ fn agent_profile_clone_preserves_settings_and_refuses_stale_or_unconfirmed_risk(
     let listed = success_json(temp.path(), &["list"]);
     assert_eq!(listed["items"].as_array().unwrap().len(), 4);
 }
+
+/// Native Routing editing must retain all untouched Host fields.
+#[test]
+fn agent_profile_routing_updates_only_requested_fields_and_guards_revision() {
+    let temp = tempfile::tempdir().unwrap();
+    let _guard = RuntimeGuard {
+        runtime_dir: temp.path().to_path_buf(),
+    };
+    start_isolated_runtime(temp.path());
+    let command = success_json(
+        temp.path(),
+        &[
+            "create",
+            "--name",
+            "Routing QA",
+            "--agent-type",
+            "codex",
+            "--launch-mode",
+            "command",
+            "--command",
+            "cmd.exe /Q",
+            "--custom-prompt",
+            "Keep project instructions",
+            "--description",
+            "Original Routing",
+            "--quota-group",
+            "qa-original",
+        ],
+    );
+    let id = command["id"].as_str().unwrap();
+    let shown = success_json(temp.path(), &["show", "--profile-id", id]);
+    assert_eq!(shown["revision"], 0);
+    assert_eq!(shown["description"], "Original Routing");
+    assert_eq!(shown["quotaGroup"], "qa-original");
+    let updated = success_json(
+        temp.path(),
+        &[
+            "update",
+            "--profile-id",
+            id,
+            "--expected-revision",
+            "0",
+            "--description",
+            "After Native edit",
+            "--quota-group",
+            "qa-updated",
+        ],
+    );
+    assert_eq!(updated["revision"], 1);
+    assert_eq!(updated["description"], "After Native edit");
+    assert_eq!(updated["quotaGroup"], "qa-updated");
+    for key in [
+        "id",
+        "agentType",
+        "launchMode",
+        "command",
+        "customPrompt",
+        "managedConfig",
+    ] {
+        assert_eq!(updated[key], command[key], "Routing changed {key}");
+    }
+    let stale = run(
+        temp.path(),
+        &[
+            "update",
+            "--profile-id",
+            id,
+            "--expected-revision",
+            "0",
+            "--description",
+            "Stale edit",
+        ],
+    );
+    assert!(!stale.status.success());
+    assert!(String::from_utf8_lossy(&stale.stderr).contains("revision conflict"));
+    let cleared = success_json(
+        temp.path(),
+        &[
+            "update",
+            "--profile-id",
+            id,
+            "--expected-revision",
+            "1",
+            "--clear-description",
+            "--clear-quota-group",
+        ],
+    );
+    assert_eq!(cleared["revision"], 2);
+    assert_eq!(cleared["description"], "");
+    assert!(cleared["quotaGroup"].is_null());
+    assert_eq!(cleared["command"], command["command"]);
+    assert_eq!(cleared["customPrompt"], command["customPrompt"]);
+
+    let managed = success_json(
+        temp.path(),
+        &[
+            "create",
+            "--name",
+            "Managed Routing QA",
+            "--agent-type",
+            "codex",
+            "--launch-mode",
+            "managed",
+            "--managed-config",
+            r#"{"approvalPolicy":"never","model":"test-model"}"#,
+            "--custom-prompt",
+            "Keep managed instructions",
+            "--quota-group",
+            "managed-old",
+            "--confirm-reduced-protections",
+        ],
+    );
+    let managed_id = managed["id"].as_str().unwrap();
+    let managed_updated = success_json(
+        temp.path(),
+        &[
+            "update",
+            "--profile-id",
+            managed_id,
+            "--expected-revision",
+            "0",
+            "--description",
+            "Managed routing only",
+            "--quota-group",
+            "managed-updated",
+        ],
+    );
+    assert_eq!(managed_updated["revision"], 1);
+    for key in [
+        "id",
+        "agentType",
+        "launchMode",
+        "command",
+        "customPrompt",
+        "managedConfig",
+    ] {
+        assert_eq!(
+            managed_updated[key], managed[key],
+            "Managed Routing changed {key}"
+        );
+    }
+    assert_eq!(managed_updated["description"], "Managed routing only");
+    assert_eq!(managed_updated["quotaGroup"], "managed-updated");
+}

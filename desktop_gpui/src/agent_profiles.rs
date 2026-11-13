@@ -19,6 +19,65 @@ pub struct AgentProfileRow {
     pub revision: Option<i64>,
 }
 
+/// Only routing metadata is available to Native's editor; the Host retains
+/// command lines, Managed config, prompts, environment and credentials.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentProfileRoutingFields {
+    pub id: String,
+    pub revision: i64,
+    pub description: String,
+    pub quota_group: String,
+}
+
+pub fn validate_profile_routing_fields(
+    description: &str,
+    quota_group: &str,
+) -> io::Result<(String, String)> {
+    let description = description.trim();
+    let quota_group = quota_group.trim();
+    if description.len() > 4096
+        || quota_group.len() > 256
+        || description.chars().any(char::is_control)
+        || quota_group.chars().any(char::is_control)
+    {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput,
+            "Routing fields must be single-line (Description <=4096 bytes, Quota Group <=256 bytes)"));
+    }
+    Ok((description.to_owned(), quota_group.to_owned()))
+}
+
+/// Project just non-secret routing fields from a complete transient Host
+/// response, discarding commands, prompts and Managed configuration.
+pub fn parse_profile_routing_fields(value: &Value) -> io::Result<AgentProfileRoutingFields> {
+    let id = value
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|id| safe_runtime_id(id, 128))
+        .ok_or_else(|| invalid("Host Routing Profile ID is invalid"))?;
+    let revision = value
+        .get("revision")
+        .and_then(Value::as_i64)
+        .filter(|n| *n >= 0)
+        .ok_or_else(|| invalid("Host Routing Profile revision is invalid"))?;
+    let description = match value.get("description") {
+        None | Some(Value::Null) => "",
+        Some(Value::String(text)) => text.as_str(),
+        _ => return Err(invalid("Host Routing Description is invalid")),
+    };
+    let quota_group = match value.get("quotaGroup") {
+        None | Some(Value::Null) => "",
+        Some(Value::String(text)) => text.as_str(),
+        _ => return Err(invalid("Host Routing Quota Group is invalid")),
+    };
+    let (description, quota_group) = validate_profile_routing_fields(description, quota_group)?;
+    Ok(AgentProfileRoutingFields {
+        id: id.to_owned(),
+        revision,
+        description,
+        quota_group,
+    })
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LaunchedAgentTab {
     pub workspace_id: String,
@@ -331,6 +390,32 @@ pub fn matching_agent_handle<'a>(
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn routing_fields_are_host_owned_secret_free_projection() {
+        let source = json!({
+            "id":"prof_abc", "revision":3, "description":"Routing QA",
+            "quotaGroup":"team-a", "command":"SECRET_COMMAND",
+            "customPrompt":"SECRET_PROMPT",
+            "managedConfig":{"token":"SECRET_MANAGED"}
+        });
+        let routing = parse_profile_routing_fields(&source).unwrap();
+        assert_eq!(routing.id, "prof_abc");
+        assert_eq!(routing.revision, 3);
+        assert_eq!(routing.description, "Routing QA");
+        assert_eq!(routing.quota_group, "team-a");
+        let debug = format!("{routing:?}");
+        for forbidden in ["SECRET_COMMAND", "SECRET_PROMPT", "SECRET_MANAGED"] {
+            assert!(!debug.contains(forbidden));
+        }
+        assert!(parse_profile_routing_fields(&json!({
+            "id":"prof_abc","revision":-1,"description":"x"
+        }))
+        .is_err());
+        let (description, group) = validate_profile_routing_fields(" Routing ", " Team ").unwrap();
+        assert_eq!((description.as_str(), group.as_str()), ("Routing", "Team"));
+        assert!(validate_profile_routing_fields("bad\nline", "group").is_err());
+    }
+
     #[test]
     fn clone_name_is_unique_and_respects_utf8_byte_limit() {
         let row = |name: String| AgentProfileRow {
