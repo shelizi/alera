@@ -438,6 +438,18 @@ impl NativeEditor {
         true
     }
 
+    /// Align native keyboard traversal with the restored workbench strip.
+    pub fn restore_tab_order_by_instances(
+        &mut self,
+        desired: &[u64],
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let changed = self.tabs.restore_order_by_instances(desired);
+        if changed {
+            cx.notify();
+        }
+        changed
+    }
     pub fn close_tab_instance(&mut self, instance: u64, cx: &mut Context<Self>) -> bool {
         let Some(index) = self.tabs.index_for_instance(instance) else {
             return false;

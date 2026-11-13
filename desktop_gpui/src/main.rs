@@ -8143,6 +8143,35 @@ impl Workbench {
                 &self.terminals.sessions,
             );
         }
+        // Scratch drafts are discovered before file-backed Editors. Reorder
+        // both the visible strip and the native Ctrl+Tab sequence only after
+        // transferring the actual document owners to their saved panes.
+        for (slot, saved_keys) in [
+            (PaneSlot::Primary, &saved.primary_editors),
+            (PaneSlot::Secondary, &saved.secondary_editors),
+        ] {
+            let desired = saved_keys
+                .iter()
+                .filter_map(|wanted| {
+                    keys.iter()
+                        .find(|(_, key)| key == wanted)
+                        .map(|(id, _)| id.clone())
+                })
+                .collect::<Vec<_>>();
+            self.mixed_panes.restore_editor_order(slot, &desired);
+            let instances = desired
+                .iter()
+                .filter_map(|id| match id {
+                    WorkbenchTabIdentity::Editor { instance, .. } => Some(*instance),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            if let Some(owner) = self.editor_for_pane(slot) {
+                owner.update(cx, |editor, cx| {
+                    editor.restore_tab_order_by_instances(&instances, cx);
+                });
+            }
+        }
         // Rehydrate only file-backed Editor pins after actual NativeEditor
         // sessions have been installed/transferred. Host pins do not restore.
         for (id, key) in &keys {

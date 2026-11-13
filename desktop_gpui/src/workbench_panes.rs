@@ -294,6 +294,41 @@ impl WorkbenchPaneLayout {
             .collect()
     }
 
+    /// Rehydrate the saved Editor subsequence without moving Host previews
+    /// or changing focus. Scratch recovery precedes file tab restoration,
+    /// so its discovery order is not necessarily the user's strip order.
+    pub fn restore_editor_order(
+        &mut self,
+        slot: PaneSlot,
+        desired: &[WorkbenchTabIdentity],
+    ) -> bool {
+        let tabs = match slot {
+            PaneSlot::Primary => &mut self.primary,
+            PaneSlot::Secondary => &mut self.secondary,
+        };
+        let before = tabs.clone();
+        let available = tabs
+            .iter()
+            .filter(|id| matches!(id, WorkbenchTabIdentity::Editor { .. }))
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut ordered = Vec::with_capacity(available.len());
+        for id in desired.iter().chain(available.iter()) {
+            if matches!(id, WorkbenchTabIdentity::Editor { .. })
+                && available.contains(id)
+                && !ordered.contains(id)
+            {
+                ordered.push(id.clone());
+            }
+        }
+        let mut next = ordered.into_iter();
+        for tab in tabs.iter_mut() {
+            if matches!(tab, WorkbenchTabIdentity::Editor { .. }) {
+                *tab = next.next().expect("editor count unchanged");
+            }
+        }
+        *tabs != before
+    }
     /// A same-pane drag reorders labels without transferring a Host PTY or
     /// Editor buffer. Cross-pane moves must use the guarded owner transfer.
     pub fn reorder_within(
@@ -703,6 +738,52 @@ mod tests {
         );
     }
 
+    #[test]
+    fn restored_editor_order_handles_scratch_files_and_preserves_host_slots() {
+        let scratch_b = editor(7, 11);
+        let scratch_a = editor(7, 12);
+        let file_b = editor(7, 13);
+        let file_a = editor(7, 14);
+        let new_file = editor(7, 15);
+        let terminal = host("retained-terminal");
+        let mut panes = WorkbenchPaneLayout::new();
+        // Startup recovery observes scratch drafts before file-backed tabs.
+        panes.reconcile(&[
+            scratch_b.clone(),
+            terminal.clone(),
+            scratch_a.clone(),
+            file_b.clone(),
+            file_a.clone(),
+            new_file.clone(),
+        ]);
+        panes.move_to(&file_b, PaneSlot::Secondary);
+        panes.move_to(&file_a, PaneSlot::Secondary);
+        panes.activate(&scratch_b);
+        let old_active = panes.active_in(PaneSlot::Primary).cloned();
+        let stale = editor(3, 999);
+        assert!(panes.restore_editor_order(
+            PaneSlot::Primary,
+            &[
+                scratch_a.clone(),
+                stale,
+                scratch_b.clone(),
+                scratch_a.clone()
+            ],
+        ));
+        assert!(panes.restore_editor_order(
+            PaneSlot::Secondary,
+            &[file_a.clone(), file_b.clone(), scratch_a.clone()],
+        ));
+        expect(
+            &panes,
+            PaneSlot::Primary,
+            &[scratch_a.clone(), terminal, scratch_b.clone(), new_file],
+        );
+        expect(&panes, PaneSlot::Secondary, &[file_a, file_b]);
+        assert_eq!(panes.active_in(PaneSlot::Primary), old_active.as_ref());
+        assert!(!panes.restore_editor_order(PaneSlot::Primary, &[scratch_a, scratch_b]));
+        assert_unique(&panes);
+    }
     #[test]
     fn close_others_and_right_skip_pins_and_other_pane() {
         let first = editor(6, 1);

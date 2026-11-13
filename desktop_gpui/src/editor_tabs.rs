@@ -402,6 +402,25 @@ impl EditorTabs {
         true
     }
 
+    /// Rehydrate native Ctrl+Tab order without reopening a document.
+    /// move_tab carries each EditorSession, undo stack and active identity.
+    pub fn restore_order_by_instances(&mut self, desired: &[u64]) -> bool {
+        let mut seen = Vec::new();
+        let mut next_index = 0;
+        let mut changed = false;
+        for instance in desired {
+            if seen.contains(instance) {
+                continue;
+            }
+            let Some(current_index) = self.index_for_instance(*instance) else {
+                continue;
+            };
+            seen.push(*instance);
+            changed |= self.move_tab(current_index, next_index);
+            next_index += 1;
+        }
+        changed
+    }
     pub fn save(&mut self) -> SaveCommit {
         match self.active_session_mut() {
             Some(session) => session.save(),
@@ -796,6 +815,34 @@ mod tests {
         assert_eq!(recovered.document().unwrap().content(), "pane sentinel");
     }
 
+    #[test]
+    fn restored_native_editor_order_preserves_active_buffer_and_undo() {
+        let root = tempfile::tempdir().unwrap();
+        let mut tabs = EditorTabs::new(None);
+        for content in ["scratch-A", "scratch-B", "scratch-C"] {
+            tabs.open_scratch(root.path()).unwrap();
+            tabs.document_mut().unwrap().replace(None, content).unwrap();
+        }
+        let first = tabs.tab_instance_at(0).unwrap();
+        let middle = tabs.tab_instance_at(1).unwrap();
+        let last = tabs.tab_instance_at(2).unwrap();
+        tabs.activate(1);
+        assert!(tabs.restore_order_by_instances(&[last, first, middle, 999_999]));
+        assert_eq!(
+            (0..3)
+                .map(|n| tabs.tab_instance_at(n).unwrap())
+                .collect::<Vec<_>>(),
+            [last, first, middle],
+        );
+        assert_eq!(
+            tabs.tab_instance_at(tabs.active_index().unwrap()),
+            Some(middle)
+        );
+        assert_eq!(tabs.document().unwrap().content(), "scratch-B");
+        assert!(tabs.document_mut().unwrap().undo());
+        assert_eq!(tabs.document().unwrap().content(), "");
+        assert!(!tabs.restore_order_by_instances(&[last, first, middle]));
+    }
     #[test]
     fn scratch_restart_is_independent_idempotent_and_workspace_scoped() {
         let workspace = tempfile::tempdir().unwrap();
