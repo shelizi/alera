@@ -15,11 +15,21 @@ _version: 2
   zh-TW: "有效的配對邀請"
   zh-CN: "有效的配对邀请"
   ja: "有効なペアリング招待"
+"Add":
+  en: "Add"
+  zh-TW: "新增"
+  zh-CN: "添加"
+  ja: "追加"
 "Advanced":
   en: "Advanced"
   zh-TW: "進階"
   zh-CN: "高级"
   ja: "詳細設定"
+"Agent Finished Notifications":
+  en: "Agent Finished Notifications"
+  zh-TW: "Agent 完成通知"
+  zh-CN: "Agent 完成通知"
+  ja: "Agent 完了時の通知"
 "Agent hooks, notifications and Alera skills.":
   en: "Agent hooks, notifications and Alera skills."
   zh-TW: "代理程式 Hook、通知與 Alera 技能。"
@@ -40,6 +50,11 @@ _version: 2
   zh-TW: "Agent Profiles Skill"
   zh-CN: "Agent Profiles Skill"
   ja: "Agent Profiles Skill"
+"Agent Status Notifications":
+  en: "Agent Status Notifications"
+  zh-TW: "Agent 狀態通知"
+  zh-CN: "Agent 状态通知"
+  ja: "Agent のステータス通知"
 "Agents":
   en: "Agents"
   zh-TW: "代理程式"
@@ -65,6 +80,11 @@ _version: 2
   zh-TW: "所有 Alera Skills"
   zh-CN: "所有 Alera Skills"
   ja: "すべての Alera Skills"
+"Also notify when an agent reports completion.":
+  en: "Also notify when an agent reports completion."
+  zh-TW: "Agent 完成工作時也發送通知。"
+  zh-CN: "Agent 完成任务时也发送通知。"
+  ja: "Agent の作業完了時にも通知します。"
 "App Language":
   en: "App Language"
   zh-TW: "應用程式語言"
@@ -170,6 +190,11 @@ _version: 2
   zh-TW: "以上為介面預覽 · 下方既有 Native 控制項仍會修改設定"
   zh-CN: "以上为界面预览 · 下方现有 Native 控件仍会修改设置"
   ja: "上の項目は UI プレビューです · 下部の既存 Native 設定は変更されます"
+"change via language selector":
+  en: "change via language selector"
+  zh-TW: "請透過語言選擇器修改"
+  zh-CN: "请通过语言选择器修改"
+  ja: "言語選択で変更"
 "Check releases for this platform.":
   en: "Check releases for this platform."
   zh-TW: "檢查此平台的發布版本。"
@@ -300,6 +325,11 @@ _version: 2
   zh-TW: "憑證"
   zh-CN: "凭据"
   ja: "認証情報"
+"Ctrl+P excludes matching directory names regardless of Git ignored visibility. Explorer search is unchanged.":
+  en: "Ctrl+P excludes matching directory names regardless of Git ignored visibility. Explorer search is unchanged."
+  zh-TW: "Ctrl+P 會排除相符的資料夾名稱，不受 Git 忽略檔案顯示設定影響；檔案總管搜尋不變。"
+  zh-CN: "Ctrl+P 会排除匹配的文件夹名称，不受 Git 忽略文件显示设置影响；文件管理器搜索不变。"
+  ja: "Ctrl+P では Git の無視ファイル表示設定にかかわらず一致するフォルダーを除外します。エクスプローラー検索は変わりません。"
 "Cursor":
   en: "Cursor"
   zh-TW: "游標"
@@ -310,6 +340,11 @@ _version: 2
   zh-TW: "游標形狀"
   zh-CN: "光标形状"
   ja: "カーソルの形状"
+"days (0 disables)":
+  en: "days (0 disables)"
+  zh-TW: "天（0 表示停用）"
+  zh-CN: "天（0 表示停用）"
+  ja: "日（0 で無効）"
 "Desktop":
   en: "Desktop"
   zh-TW: "桌面"
@@ -320,16 +355,36 @@ _version: 2
   zh-TW: "診斷"
   zh-CN: "诊断"
   ja: "診断"
+"Disabled":
+  en: "Disabled"
+  zh-TW: "已停用"
+  zh-CN: "已停用"
+  ja: "無効"
 "Display agent tab titles in the project tree.":
   en: "Display agent tab titles in the project tree."
   zh-TW: "在專案樹狀檢視中顯示 Agent 分頁標題。"
   zh-CN: "在项目树中显示 Agent 标签页标题。"
   ja: "プロジェクトツリーに Agent タブのタイトルを表示します。"
+"edit in Classic":
+  en: "edit in Classic"
+  zh-TW: "請在 Classic 中修改"
+  zh-CN: "请在 Classic 中修改"
+  ja: "Classic で変更"
+"Editable":
+  en: "Editable"
+  zh-TW: "可編輯設定"
+  zh-CN: "可编辑设置"
+  ja: "編集可能"
 "Editor":
   en: "Editor"
   zh-TW: "編輯器"
   zh-CN: "编辑器"
   ja: "エディター"
+"Enabled":
+  en: "Enabled"
+  zh-TW: "已啟用"
+  zh-CN: "已启用"
+  ja: "有効"
 "Excluded Directories":
   en: "Excluded Directories"
   zh-TW: "排除的目錄"
@@ -375,6 +430,11 @@ _version: 2
   zh-TW: "生成"
   zh-CN: "生成"
   ja: "生成"
+"History Sync":
+  en: "History Sync"
+  zh-TW: "歷史紀錄同步"
+  zh-CN: "历史记录同步"
+  ja: "履歴同期"
 "Host Agent Profiles":
   en: "Host Agent Profiles"
   zh-TW: "Host Agent 設定檔"
@@ -470,6 +530,11 @@ _version: 2
   zh-TW: "連結裝置"
   zh-CN: "关联设备"
   ja: "デバイスを関連付け"
+"Loading Rust Host settings":
+  en: "Loading Rust Host settings"
+  zh-TW: "正在讀取 Rust Host 設定"
+  zh-CN: "正在读取 Rust Host 设置"
+  ja: "Rust Host の設定を読み込み中"
 "Local agent assistance for commits, pull requests, diffs, workspace identity, and speech.":
   en: "Local agent assistance for commits, pull requests, diffs, workspace identity, and speech."
   zh-TW: "用於 Commit、Pull Request、差異、工作區識別與語音的本機代理程式輔助。"
@@ -500,6 +565,11 @@ _version: 2
   zh-TW: "管理此裝置的帳號身分。"
   zh-CN: "管理此设备的账号身份。"
   ja: "このデバイスのアカウント情報を管理します。"
+"Manage Projects":
+  en: "Manage Projects"
+  zh-TW: "管理專案"
+  zh-CN: "管理项目"
+  ja: "プロジェクト管理"
 "Manage registered runtime owners.":
   en: "Manage registered runtime owners."
   zh-TW: "管理已註冊的 Runtime 擁有者。"
@@ -575,11 +645,26 @@ _version: 2
   zh-TW: "沒有符合的設定。"
   zh-CN: "没有匹配的设置。"
   ja: "一致する設定がありません。"
+"Not available":
+  en: "Not available"
+  zh-TW: "尚未提供"
+  zh-CN: "暂不可用"
+  ja: "未対応"
+"Not available in GPUI yet":
+  en: "Not available in GPUI yet"
+  zh-TW: "GPUI 尚未提供"
+  zh-CN: "GPUI 暂未提供"
+  ja: "GPUI ではまだ利用できません"
 "Notification configuration.":
   en: "Notification configuration."
   zh-TW: "通知設定。"
   zh-CN: "通知设置。"
   ja: "通知設定。"
+"Notify when an agent needs attention.":
+  en: "Notify when an agent needs attention."
+  zh-TW: "Agent 需要處理時發送通知。"
+  zh-CN: "Agent 需要处理时发送通知。"
+  ja: "Agent の対応が必要なときに通知します。"
 "Notify When Checks Fail":
   en: "Notify When Checks Fail"
   zh-TW: "檢查失敗時通知"
@@ -600,6 +685,21 @@ _version: 2
   zh-TW: "使用外部編輯器開啟檔案。"
   zh-CN: "使用外部编辑器打开文件。"
   ja: "外部エディターでファイルを開きます。"
+"Open Quota Overview":
+  en: "Open Quota Overview"
+  zh-TW: "開啟額度總覽"
+  zh-CN: "打开额度总览"
+  ja: "利用枠の概要を開く"
+"Open the existing native project and worktree manager.":
+  en: "Open the existing native project and worktree manager."
+  zh-TW: "開啟現有的原生專案與 Worktree 管理介面。"
+  zh-CN: "打开现有的原生项目与 Worktree 管理界面。"
+  ja: "既存のネイティブプロジェクトと Worktree 管理画面を開きます。"
+"Open the existing provider/account quota overview and refresh from Runtime Host.":
+  en: "Open the existing provider/account quota overview and refresh from Runtime Host."
+  zh-TW: "開啟現有供應商／帳號額度總覽，並從 Runtime Host 重新整理。"
+  zh-CN: "打开现有服务商／账号额度总览，并从 Runtime Host 刷新。"
+  ja: "既存のプロバイダー／アカウント利用枠を開き、Runtime Host から更新します。"
 "Ownership":
   en: "Ownership"
   zh-TW: "擁有權"
@@ -700,6 +800,11 @@ _version: 2
   zh-TW: "配額"
   zh-CN: "配额"
   ja: "使用枠"
+"Read-only":
+  en: "Read-only"
+  zh-TW: "唯讀"
+  zh-CN: "只读"
+  ja: "読み取り専用"
 "Read-only credential environment status.":
   en: "Read-only credential environment status."
   zh-TW: "以唯讀方式檢視憑證環境狀態。"
@@ -745,6 +850,11 @@ _version: 2
   zh-TW: "還原預設的快捷鍵綁定。"
   zh-CN: "恢复默认快捷键绑定。"
   ja: "既定のキー割り当てを復元します。"
+"Restore Defaults":
+  en: "Restore Defaults"
+  zh-TW: "恢復預設值"
+  zh-CN: "恢复默认值"
+  ja: "既定値に戻す"
 "Review configuration across devices.":
   en: "Review configuration across devices."
   zh-TW: "檢視跨裝置的設定。"
@@ -780,6 +890,16 @@ _version: 2
   zh-TW: "Runtime 擁有權"
   zh-CN: "Runtime 所有权"
   ja: "Runtime の所有権"
+"Rust Host":
+  en: "Rust Host"
+  zh-TW: "Rust Host"
+  zh-CN: "Rust Host"
+  ja: "Rust Host"
+"Rust Host settings unavailable":
+  en: "Rust Host settings unavailable"
+  zh-TW: "無法取得 Rust Host 設定"
+  zh-CN: "无法获取 Rust Host 设置"
+  ja: "Rust Host の設定を取得できません"
 "Safety":
   en: "Safety"
   zh-TW: "安全性"
@@ -825,6 +945,11 @@ _version: 2
   zh-TW: "設定"
   zh-CN: "设置"
   ja: "設定"
+"Share Agent conversation history across account groups through Runtime Host.":
+  en: "Share Agent conversation history across account groups through Runtime Host."
+  zh-TW: "透過 Runtime Host 在不同帳號群組間共享 Agent 對話紀錄。"
+  zh-CN: "通过 Runtime Host 在不同账号组之间共享 Agent 对话记录。"
+  ja: "Runtime Host を介してアカウントグループ間で Agent の会話履歴を共有します。"
 "Shortcuts and key bindings.":
   en: "Shortcuts and key bindings."
   zh-TW: "快速鍵與按鍵綁定。"
@@ -835,6 +960,11 @@ _version: 2
   zh-TW: "檢查失敗時顯示原生通知。"
   zh-CN: "检查失败时显示原生通知。"
   ja: "チェック失敗時にネイティブ通知を表示します。"
+"Show agent review count on the tray icon.":
+  en: "Show agent review count on the tray icon."
+  zh-TW: "在系統匣圖示顯示待檢閱的 Agent 數量。"
+  zh-CN: "在系统托盘图标显示待审核的 Agent 数量。"
+  ja: "トレイアイコンにレビュー待ちの Agent 数を表示します。"
 "Show Dock Badge":
   en: "Show Dock Badge"
   zh-TW: "顯示 Dock／工作列徽章"
@@ -865,6 +995,11 @@ _version: 2
   zh-TW: "顯示裝置配對流程。"
   zh-CN: "显示设备配对流程。"
   ja: "デバイスのペアリング手順を表示します。"
+"Show Tray Badge":
+  en: "Show Tray Badge"
+  zh-TW: "顯示系統匣徽章"
+  zh-CN: "显示系统托盘徽章"
+  ja: "トレイバッジを表示"
 "Show Tray Icon":
   en: "Show Tray Icon"
   zh-TW: "顯示系統匣圖示"

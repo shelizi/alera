@@ -6,7 +6,7 @@ use super::*;
 use alera_gpui_desktop::native_i18n::{tr, UiLocale};
 use alera_gpui_desktop::settings_menu_catalog::{
     settings_operational_action, settings_support_counts, shared_setting_row_path, PreviewRow,
-    SettingsOperationalAction, SettingsSection,
+    SettingsOperationalAction, SettingsSection, SettingsSupportCounts,
 };
 use gpui_kit::component::switch::Switch;
 
@@ -79,6 +79,21 @@ fn render_unavailable_row(
         .into_any_element()
 }
 
+/// All counts remain numeric; labels reflect the persisted Host language.
+fn settings_support_summary(locale: UiLocale, counts: SettingsSupportCounts) -> String {
+    format!(
+        "{}: {} · {}: {} · {}: {} · {}: {}",
+        tr(locale, "Editable"),
+        counts.editable,
+        tr(locale, "Actions"),
+        counts.actions,
+        tr(locale, "Read-only"),
+        counts.read_only,
+        tr(locale, "Not available"),
+        counts.unavailable,
+    )
+}
+
 impl Workbench {
     fn shared_catalog_state(&self) -> CatalogHostState {
         catalog_host_state(
@@ -144,17 +159,15 @@ impl Workbench {
                             .text_sm()
                             .child(tr(self.settings_menu_locale, "Projects")),
                     )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(rgb(MUTED))
-                            .child("Open the existing native project and worktree manager."),
-                    ),
+                    .child(div().text_xs().text_color(rgb(MUTED)).child(tr(
+                        self.settings_menu_locale,
+                        "Open the existing native project and worktree manager.",
+                    ))),
             )
             .child(
                 native_components::action_button(
                     "native-settings-open-projects",
-                    "Manage Projects",
+                    tr(self.settings_menu_locale, "Manage Projects"),
                     false,
                     false,
                 )
@@ -185,13 +198,13 @@ impl Workbench {
                     .gap_1()
                     .child(div().text_sm().child(tr(self.settings_menu_locale, "Provider Quotas")))
                     .child(div().text_xs().text_color(rgb(MUTED)).child(
-                        "Open the existing provider/account quota overview and refresh from Runtime Host.",
+                        tr(self.settings_menu_locale, "Open the existing provider/account quota overview and refresh from Runtime Host."),
                     )),
             )
             .child(
                 native_components::action_button(
                     "native-settings-provider-quotas",
-                    "Open Quota Overview",
+                    tr(self.settings_menu_locale, "Open Quota Overview"),
                     false,
                     false,
                 )
@@ -226,7 +239,7 @@ impl Workbench {
             .gap_3()
             .child(div().text_sm().child(tr(self.settings_menu_locale, "Excluded Directories")))
             .child(div().text_xs().text_color(rgb(MUTED)).child(
-                "Ctrl+P excludes matching directory names regardless of Git ignored visibility. Explorer search is unchanged.",
+                tr(self.settings_menu_locale, "Ctrl+P excludes matching directory names regardless of Git ignored visibility. Explorer search is unchanged."),
             ))
             .child(
                 div().flex().flex_wrap().gap_2()
@@ -258,7 +271,7 @@ impl Workbench {
                         .border_color(rgb(BORDER)).bg(rgb(TOOLBAR)).p_2()
                         .child(self.settings_exclusion_input.clone()))
                     .child(native_components::action_button(
-                        "quick-open-exclusion-add", "Add", false, false
+                        "quick-open-exclusion-add", tr(self.settings_menu_locale, "Add"), false, false
                     ).on_click(cx.listener(|view, _, _, cx| {
                         let name = view.settings_exclusion_input.read(cx).query().trim().to_owned();
                         if !alera_core::desktop_settings_contract::valid_excluded_directory_name(&name) {
@@ -284,7 +297,7 @@ impl Workbench {
                         view.change_shared_desktop_setting(PATH, serde_json::json!(next), cx);
                     })))
                     .child(native_components::action_button(
-                        "quick-open-exclusion-reset", "Restore Defaults", false, false,
+                        "quick-open-exclusion-reset", tr(self.settings_menu_locale, "Restore Defaults"), false, false,
                     ).on_click(cx.listener(|view, _, _, cx| {
                         view.change_shared_desktop_setting(
                             PATH,
@@ -329,15 +342,15 @@ impl Workbench {
             _ => None,
         }?;
         let status = match source {
-            serde_json::Value::Bool(enabled) => {
-                if enabled {
-                    "Enabled".to_owned()
-                } else {
-                    "Disabled".to_owned()
-                }
-            }
+            serde_json::Value::Bool(enabled) => tr(
+                self.settings_menu_locale,
+                if enabled { "Enabled" } else { "Disabled" },
+            ),
             serde_json::Value::Number(days) if row.title == "Auto-Archive After Inactivity" => {
-                format!("{days} days (0 disables)")
+                format!(
+                    "{days} {}",
+                    tr(self.settings_menu_locale, "days (0 disables)")
+                )
             }
             serde_json::Value::String(language) => language,
             value => value.to_string(),
@@ -355,12 +368,16 @@ impl Workbench {
                         .child(tr(self.settings_menu_locale, row.title)),
                 )
                 .child(div().text_xs().text_color(rgb(MUTED)).child(format!(
-                    "Rust Host: {status} · {}",
-                    if row.title == "App Language" {
-                        "change via language selector"
-                    } else {
-                        "edit in Classic"
-                    }
+                    "{}: {status} · {}",
+                    tr(self.settings_menu_locale, "Rust Host"),
+                    tr(
+                        self.settings_menu_locale,
+                        if row.title == "App Language" {
+                            "change via language selector"
+                        } else {
+                            "edit in Classic"
+                        }
+                    )
                 )))
                 .into_any_element(),
         )
@@ -589,10 +606,7 @@ impl Workbench {
                     .py_2()
                     .text_xs()
                     .text_color(rgb(MUTED))
-                    .child(format!(
-                    "Host-backed controls: {} · Actions: {} · Read-only: {} · Not available: {}",
-                    support.editable, support.actions, support.read_only, support.unavailable
-                )),
+                    .child(settings_support_summary(locale, support)),
             )
             .children(
                 selected
@@ -693,7 +707,27 @@ impl Workbench {
 
 #[cfg(test)]
 mod tests {
-    use super::{catalog_host_state, CatalogHostState};
+    use super::{catalog_host_state, settings_support_summary, CatalogHostState};
+    use alera_gpui_desktop::native_i18n::UiLocale;
+    use alera_gpui_desktop::settings_menu_catalog::SettingsSupportCounts;
+
+    #[test]
+    fn s04_settings_capability_summary_follows_host_locale() {
+        let counts = SettingsSupportCounts {
+            editable: 6,
+            actions: 2,
+            read_only: 3,
+            unavailable: 9,
+        };
+        assert_eq!(
+            settings_support_summary(UiLocale::English, counts),
+            "Editable: 6 · Actions: 2 · Read-only: 3 · Not available: 9"
+        );
+        assert_eq!(
+            settings_support_summary(UiLocale::TraditionalChinese, counts),
+            "可編輯設定: 6 · 操作: 2 · 唯讀: 3 · 尚未提供: 9"
+        );
+    }
 
     #[test]
     fn installed_snapshot_is_not_writable_when_runtime_host_disconnects() {
