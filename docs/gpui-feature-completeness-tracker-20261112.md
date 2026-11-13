@@ -107,14 +107,18 @@
 | DONE | **T04** | Attach 既有 Host Session、Tab 切換／關閉／主副 Pane 重新 Attach、GUI 重開保留 Session | **Windows GUI + Host 2/2 PASS**；[驗收紀錄](gpui-t04-attach-session-two-pane-acceptance-20261112.md)，原 Pane 位置持久化移 T05 |
 | DONE | **T05** | Host Pane 持久化、真實 Claude Agent 跨 Pane 拖曳焦點、乾淨 Editor／Terminal 批次關閉 | **Windows GUI + 隔離 Host PASS**；Library **516/516**、Native **31/31**；[T05A](gpui-t05-host-pane-persistence-tdd-20261112.md)／[T05B](gpui-t05b-agent-tab-and-bulk-close-acceptance-20261112.md) |
 | DONE | **T06** | Windows 真正注音候選／選字及 Host 提交，雙 Pane 中文輸入、普通鍵盤快捷鍵、副 Pane 多列選取 | **2026-11-13 Windows GUI／隔離 Host PASS**：主 Pane 候選「你」，副 Pane 方向鍵選「擬」，Host 獨立讀回均正確、無 `su3`，未提交候選跨 Pane 失焦取消沒有 PTY 輸出；副 Pane 拖選 3 列 GUI 高亮 PASS。Library **524 PASS／1 FILTERED**、Native **32/32 PASS**、EXE PASS。詳見 [T06 實測](gpui-t06-native-clipboard-keyboard-acceptance-20261113.md) |
-| **NOW** | **T07** | Profile 冷啟動、Override、基本 CRUD／Clone、Description／Quota Group Host Routing 編輯已實機驗收；繼續 Classic Command／Prompt、Managed 進階編輯與 Provider Auth | T07 Routing：隔離 Windows GPUI 正常 GUI 填寫→Save，Host Command rev0→1、清空 rev1→2，Managed rev0→1，完整原 Command／Prompt／Managed JSON 保留；CLI conformance **3/3 PASS**（Description clear=`""`、Quota Group clear=`null`），GPUI Library **538 PASS／1 FILTERED**、Native **33/33**、Windows EXE PASS。[Routing 驗收](gpui-t07-host-profile-routing-editor-acceptance-20261113.md)。Classic 模型 Persona／Provider 真實未登入過期仍未完成，`supported=false` |
-| NEXT | E01 → E02 → E03 → E04 → E05 → E06 | 編輯／檔案管理／搜尋正常閉環 | 排隊 |
+| INTEGRATED／待 GUI 驗收 | **T07** | Host Profile、Command／Custom Prompt、Managed Model／Persona、Provider 安全提示已整合 GPUI 分支；維持正常功能優先 | `7c300ec04`：整合測試 Managed 2/2、選項探索 4/4、Provider 提示 1/1、Native 34/34、Windows cargo check PASS。未登入／Token 過期的 Provider typed status、實際 GUI 編輯待後續單獨驗收；**不再阻塞 E01/E02**，`supported=false` |
+| INTEGRATED／待 GUI 驗收 | **E01** | Explorer 預覽、正式開檔、Quick Open、同檔 Dirty Buffer/Undo，修正注音 Enter 和 Editor 開檔確認 | `15c15b496`：E01 Rust 2/2、Native 36/36、Windows cargo check PASS。真 GUI 點擊/注音候選保留驗收，但不因其未測而停住後續日常功能 |
+| **NOW** | **E02** | Editor 文字編輯／尋找取代／Undo Redo／存檔／Save As 的正常閉環 | 用隔離 UTF-8 檔執行編輯→查找→取代→復原→儲存→重開讀回；先修實際缺口，再進入 E03 |
+| NEXT | E03 → E04 → E05 → E06 | Explorer 檔案管理、快速搜尋、跨 Worktree、草稿多 Pane | 排隊 |
 | NEXT | G01 → G02 → G03 → G04 → G05 → G06 | Source Control／中央 Diff／Graph／分支／Worktree | 排隊 |
 | NEXT | S01 → S02 → S03 → S04 | Settings 接線、Rust 共用設定與語系 | 排隊 |
 | NEXT | H01 → H02 → H03 | Hook 四態、設定、Windows 通知 | 排隊 |
 | NEXT | U01 → U02 → U03 → U04 | UI／UX 功能可用性與 Classic 操作一致 | 排隊 |
 
 **排程規則：** 該工作包完成基本正向 UI 驗收就移到下一項，不因極端案例未驗證而反覆停留；發現正常情境確實壞掉才回頭修。某項已有正常操作 PASS 可縮短，立即移到下一項。保留安全回歸，不以省時間為由刪除原有測試。
+
+**2026-11-13 NOW 調整（避免 T07 驗收無限阻塞）**：使用者明確要求繼續功能實作，不再把所有真實 Provider 未登入／逾期與 GUI 進階驗收列為開發排隊的前置條件。已在 GPUI **整合分支**提交 T07 功能 `7c300ec04`（Managed 2/2、Model/Persona 4/4、Provider 1/1、Native 34/34、cargo check PASS），以及 E01 `15c15b496`（預覽／正式開檔／同檔 Dirty Buffer/Undo 2/2、Native 36/36、cargo check PASS）。**這不是聲稱 T07／E01 GUI 實機 DONE**：Windows 實際操作與真 Provider typed auth 另列後續驗收，原矩陣的歷史證據不覆蓋。**NOW 改 E02**，保留 `supported=false`，`main`／Push／部署／Release 均不動。
 
 ## 5. 每次「繼續／進度」的更新規約
 

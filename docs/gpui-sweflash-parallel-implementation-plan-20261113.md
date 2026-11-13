@@ -41,10 +41,10 @@ B 分支：feat/gpui-sweflash-e01-open-20261113；預備 worktree：.worktrees/g
 
 | 工作包 | 分支 | 子代理狀態 | 提交／驗收 | 整合 |
 | --- | --- | --- | --- | --- |
-| T07 Command/Prompt | feat/gpui-sweflash-t07-command-prompt-20261113 | REVIEW／GUI 待驗 | 安全 stdin 5f0d602e6、UI f6d09cdd8；CLI 7/7、GPUI 3/3、隔離 Host 1/1、內容投影與多行輸入 2/2、Native EXE／回歸 PASS；GUI 測試受工作區政策阻擋 | 先審後整合 |
-| E01 Preview/Open | feat/gpui-sweflash-e01-open-20261113 | REVIEW／正常功能已修 | 草稿 25926c6b9：預覽→正式開檔/重開及跨 Worktree 路徑 Rust 2/2；IME Enter＋正確 Editor 開檔確認修正 08546db8b：新測試 2/2、Native Bin 35/35、Windows EXE PASS，GUI 待驗 | 等 T07 GUI 門檻通過後整合 |
-| T07 Managed Model／Persona | feat/gpui-sweflash-t07-managed-20261113 | REVIEW／Native→Host E2E 已驗 | CLI 4d934b687：4/4＋Host 1/1；Native UI 8dfd89405：2/2；探索 5262b589e：3/3；Native→隔離 Host E2E ee60c06e6：1/1；安全 Provider UX ee4fa0f82；Windows 假 CLI 真程序探索 717f35624：1/1；Binary 34/34、Windows EXE PASS。GUI 實際操作待驗 | 不合中央分支 |
-| T07 Provider 登入／過期提示 | feat/gpui-sweflash-t07-provider-ux-20261113 | REVIEW／部分完成 | 安全錯誤分類 ba999e6c9；Rust 1/1、Windows GPUI cargo check PASS。未登入／過期仍缺可信 Host typed auth state，不能猜測 | T07 內先審後整合 |
+| T07 Command/Prompt | feat/gpui-sweflash-t07-command-prompt-20261113 | INTEGRATED／GUI 待驗 | 安全 stdin 5f0d602e6、Native UI f6d09cdd8 均已隨 T07 整合 Commit 7c300ec04 進 GPUI integration；原 CLI 7/7、Host 1/1、原生編譯 PASS。真 GUI 多行操作保留待驗 | 已整合 GPUI；不合 main |
+| E01 Preview/Open | feat/gpui-sweflash-e01-open-20261113 | INTEGRATED／GUI 待驗 | 預覽／正式編輯與 Dirty buffer、跨 Worktree 身分 2/2；Quick Open IME Enter／正確 Editor 開檔驗證 2/2，已隨 15c15b496 整合；Native 36/36、cargo check PASS | 已整合 GPUI；下一項 NOW E02 |
+| T07 Managed Model／Persona | feat/gpui-sweflash-t07-managed-20261113 | INTEGRATED／GUI 待驗 | Host-owned CAS 4d934b687、Native UI 8dfd89405、唯讀探索 5262b589e、隔離 Host ee60c06e6、mock CLI 717f35624，皆經 T07 整合 7c300ec04 納入 GPUI；Managed 2/2、選項 4/4、Provider 1/1、Native 34/34 | 已整合 GPUI；真 GUI/Provider 另追蹤 |
+| T07 Provider 登入／過期提示 | feat/gpui-sweflash-t07-provider-ux-20261113 | INTEGRATED／typed Auth 待補 | 安全啟動分類 ba999e6c9 已透過 T07 7c300ec04 整合；Host 無權限不等於 Provider Token 過期，未接真 Provider typed auth | 後續獨立驗收，不阻塞 E02 |
 
 PREPARED 並不代表子代理已啟動；必須有真實 CLI session 和輸出才可改成 RUNNING。只有經整合者驗收的正常 GUI 功能才能標 DONE。
 
@@ -63,3 +63,6 @@ PREPARED 並不代表子代理已啟動；必須有真實 CLI session 和輸出�
 **第六輪 GPUI Native→隔離 Host 與 T07 子功能收斂（2026-11-13）**：在 `feat/gpui-sweflash-t07-managed-20261113` 新增 `ee60c06e6`，以本工作樹編譯的測試 CLI 在 tempfile 啟停一次性 Host，GPUI `RuntimeCliBridge` 真實依序執行 Model／Persona Load、Save、獨立 Show 讀回、舊 revision CAS 拒寫、Clear Persona，並確認 Permission Mode／Prompt 保留；**選配測試 1/1 PASS**（`#[ignore]` 避免正常測試啟動 Host）。確認 Host 的 `unauthorized` 是 Runtime client 授權類別，不能等同 Provider 登入過期；將先前 `ba999e6c9` 安全 Provider 提示經匯入衝突審核後整合在**同一個 T07 專用功能分支**，新增 `ee4fa0f82`，Native rust Provider 1/1、Managed 2/2、探索 3/3、Binary 34/34、Windows EXE 編譯與 rustfmt/diff PASS。此項只是 T07 feature branch 收斂，不是中央 GPUI 整合：使用者 Windows 桌面當時有其他前景應用，本輪未搶焦點，先前獨立 GUI Host 也受工作區政策阻擋；因此**實際 GUI／IME、真 Provider 動態探索、可信 Provider auth typed 狀態仍待驗**。NOW=T07、`supported=false`，E01 不提前整合；沒有合併 main、Push、部署或發版。
 
 **第七輪 T07 Model／Persona 假 CLI 正向與 E01 日常功能實作（2026-11-13）**：以 `feat/gpui-sweflash-t07-managed-20261113` 的唯讀 CLI 探索接線新增 Windows 可拋棄 `.cmd` 端到端測試 `717f35624`；測試真正從 `discover_choices` 呼叫具有空白路徑的假 CLI，驗證固定 `models`／`agent list`、stdout 和 Model/Persona 選項。修正測試用 CMD 的括號跳脫後重跑 **1/1 PASS**，無真 Provider／憑證／使用者 GUI 操作。E01 平行 worktree 的既有 Explorer 預覽→正式開檔→Quick Open 重開 Dirty Buffer、跨 Worktree 同名檔 **2/2 Rust PASS**；發現 Quick Open 在注音組字期間按 Enter 會過早開啟第一結果，另即使 Native Editor 未開啟目標也會關 Dialog。已以 `08546db8b` 修正實際 `quick_open_ui.rs`／`native_action_dialog_ui.rs`，新測試 **2/2 PASS**、Native Binary **35/35 PASS**、Windows EXE Build／fmt／diff PASS。工作仍在各自隔離功能分支，中央整合只更新文件；**NOW 仍 T07**，GUI 實機待驗，E01 不提前整合，`supported=false`、無 main 合併／Push／部署／Release。
+
+
+**第八輪結束 T07 停滯／推進 E02（2026-11-13）**：使用者確認開發卡在 T07 過久，將進階 Provider Token 失效與實機 GUI 尚未驗證事項改為非阻塞後續驗收。主控在 `integrate/gpui-central-diff-into-main-20261112` 將已完成 Command／Prompt、Managed／Persona、Provider 安全分類的 T07 功能全數**合入 GPUI integration**，Commit `7c300ec04`，整合測試 Managed 2/2、唯讀探索 4/4、Provider 1/1、Windows Native 34/34、`cargo check` PASS；再合入 E01 Preview／正式開檔／Quick Open／注音 Enter 與 Editor 開檔確認，Commit `15c15b496`，E01 2/2、Native 36/36、`cargo check` PASS。E01 合併時只遇 `quick_open_ui.rs` 測試區一處衝突，保留 T07 多行 Prompt 與 E01 Enter/Editor activation 測試，已重跑通過。**下一個 NOW E02**，不宣稱兩項 GUI 實機 PASS；`main` 未變、不 Push／部署／Release，`supported=false`。
