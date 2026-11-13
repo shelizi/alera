@@ -41,9 +41,13 @@ B 分支：feat/gpui-sweflash-e01-open-20261113；預備 worktree：.worktrees/g
 
 | 工作包 | 分支 | 子代理狀態 | 提交／驗收 | 整合 |
 | --- | --- | --- | --- | --- |
-| T07 Command/Prompt | feat/gpui-sweflash-t07-command-prompt-20261113 | PAUSED（權限／建置隔離） | 未有功能 Commit；停止外部 target Junction 嘗試，待安全的免建置編輯流程 | 先審後整合 |
-| E01 Preview/Open | feat/gpui-sweflash-e01-open-20261113 | DRAFT／REVIEW | 測試稿 25926c6b9；fmt／diff PASS，Rust／Windows GUI 仍未驗收 | 等 T07 DONE |
+| T07 Command/Prompt | feat/gpui-sweflash-t07-command-prompt-20261113 | REVIEW／GUI 待驗 | 安全 stdin 5f0d602e6、UI f6d09cdd8；CLI 7/7、GPUI 3/3、隔離 Host 1/1、內容投影與多行輸入 2/2、Native EXE／回歸 PASS；GUI 測試受工作區政策阻擋 | 先審後整合 |
+| E01 Preview/Open | feat/gpui-sweflash-e01-open-20261113 | REVIEW／Rust 專項 PASS | 測試稿 25926c6b9；2/2 Rust PASS、fmt／diff PASS；Windows GUI 待驗 | 等 T07 DONE |
 
 PREPARED 並不代表子代理已啟動；必須有真實 CLI session 和輸出才可改成 RUNNING。只有經整合者驗收的正常 GUI 功能才能標 DONE。
 
 **首次 Dispatch 安全紀錄**：兩條 SWE-2 Flash CLI 曾真實啟動，但因 build-storage 準備在各自新 worktree 建立 rust/target → D: 共用目標 Junction，不符隔離要求，已結束子代理程序並只解除兩個 Junction 連結（未刪除 D: 共用快取）。T07 無 Code Commit；E01 僅測試草稿已在專用分支提交、尚未整合。後續子代理不得自行建 junction 或操作外部 build target；改由整合者先核准可用的獨立建置位置，或僅授權 source edit、由整合者統一測試。
+
+**第二輪續作（2026-11-13）**：T07 SWE Flash 已在專屬 worktree 提交 stdin 更新通道 5f0d602e6，主控審查並修正測試後，CLI 編輯驗證 7/7、GPUI Bridge 3/3，並啟動 UI 多行 Prompt 實作。E01 專用分支原有兩個測試再次編譯成功 2/2。主控依 repo Windows Build Storage 規範準備 checkout-local Junction 並單獨調度 Cargo；不允許子代理自行執行建置。兩項尚未完成 Windows GUI 與全 Host 接線驗收，**原 NOW T07 與主線整合順序維持不變**。
+
+**第三輪續作（2026-11-13）**：T07 主控在 SWE Flash 安全 stdin 分支上接完 GPUI Command／Custom Prompt 載入、儲存及明確清空，多行輸入含 Windows IME preedit 防護，Host save 另做獨立讀回。功能分支新增 Commit `f6d09cdd8`，隔離 Host stdin 正向 1/1、GPUI 投影與多行輸入 2/2、Windows EXE 編譯及 Rust 回歸命令均 exit 0。兩次隔離 GUI Host 啟動嘗試被工具政策 `WORKSPACE_PATH_PROTECTED` 在執行前拒絕，未建立測試目錄／未操作正式 Host，故 **GUI 仍待驗、T07 仍 NOW、未整合功能 Commit**。E01 Rust 專項 2/2 PASS 且保持隔離。UI SWE Flash 子代理本輪逾時且未修改程式，由主控完成接線，沒有背景執行中的子代理。

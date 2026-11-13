@@ -163,4 +163,6 @@
 - **其他舊里程碑：** [gpui-p0-p1-p2-tdd-closure-20261108.md](gpui-p0-p1-p2-tdd-closure-20261108.md)、[gpui-active-work-ledger-20261107.md](gpui-active-work-ledger-20261107.md)。
 - **最新程式回歸（U05 額度彈出真 Host Pin CAS＋錯誤狀態修正）：** GPUI Library **540 PASS／0 FAIL／1 FILTERED**（Git History 既有長測未執行）、Native Binary **33/33 PASS**、Rust Core **136/136 PASS**、Windows GPUI EXE 與新 CLI 編譯 PASS，Rust fmt／diff PASS。TDD 驗證一個帳號刷新失敗僅其讀數 stale；CLI 只容許規範內額度 Pin 陣列。真實隔離 Host 跨不同 CLI 連線的 Pin 寫入、獨立讀回、解除、CAS 衝突拒絕、非法鍵拒絕、重啟持久化 PASS；舊 Rust Bin 雙同時 Client 測試這輪連結 timeout，非 PASS。正式 Classic Host 未升級、兩個桌面 GUI 未做同步實機；T07 仍 NOW，`supported=false`。
 
+**T07 平行支線最新成果（未整合）**：`feat/gpui-sweflash-t07-command-prompt-20261113` 的安全 stdin Host Command／Prompt 通道 `5f0d602e6` 與 Native UI `f6d09cdd8` 已獨立提交。隔離 Host stdin 讀改寫、GUI Module 與 Windows EXE／Rust 回歸已通過；**GUI 實際點擊驗收被工具工作區權限阻擋，仍須驗收，不是 T07 DONE，也不提前合併 E01**。詳見功能分支的 `docs/gpui-sweflash-t07-command-prompt-ui-handoff-20261113.md` 與 [平行計畫](gpui-sweflash-parallel-implementation-plan-20261113.md)。
+
 **SWE-2 Flash 平行研發協議（2026-11-13）**：詳見 [兩條 worktree 子代理實作／審核與整合門檻](gpui-sweflash-parallel-implementation-plan-20261113.md)。允許 T07 與 E01 先行隔離開發，但 **NOW 仍 T07**；只按原 F1→F2→F3→F4→F5→F6 順序整合、驗收與更新 DONE。子代理無權自行合 main、Push 或發版。
