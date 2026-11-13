@@ -169,4 +169,6 @@
 
 **T07 Managed／Provider 支線（尚未整合）**：Managed Host-owned stdin 更新 `4d934b687` 通過 CLI 4/4 與隔離 Host 1/1；Native Managed UI `8dfd89405` 通過專項 2/2、Windows EXE/Bin 34/34；唯讀動態 Model／Persona 選項 `5262b589e` 通過解析 3/3、Windows EXE/Bin 34/34。Persona UI 欄位對應 Rust Managed `agent`，不改 Permission／Sandbox；探索限 Classic 支援命令且必須明確點擊，未對真實 Provider 做正向實測。Provider 安全啟動提示 `ba999e6c9` 通過 Rust 1/1 與 GPUI 編譯檢查，不將未知登入狀態誤判成 Token 過期。**可信 Host 認證狀態、Windows 實際 GUI／IME 驗收仍待完成，T07 未結案**，E01 不提前整合。詳見 [平行計畫](gpui-sweflash-parallel-implementation-plan-20261113.md)。
 
+**T07／E01 正常功能進展（尚未整合）**：T07 Model／Persona 探索新增實際 Windows 假 CLI 正向測試 `717f35624`：固定唯讀命令與選項解析 **1/1 PASS**，沒有連真 Provider／帳號。E01 既有預覽→正式開檔→Quick Open Dirty Buffer 與跨 Worktree 同名路徑 **2/2 PASS**；實際修正 Quick Open **注音組字期間 Enter 不誤開檔**，以及只有 Native Editor 真正持有目標檔才關 Dialog，功能 Commit `08546db8b`，新 TDD **2/2**、Native Binary **35/35**、Windows EXE Build PASS。Windows 桌面仍有其他前景程式，未搶焦點，無實機 GUI 點擊證據；**原 NOW=T07、E01 隔離開發不提前合入中央分支**，`supported=false`。詳見 [平行計畫](gpui-sweflash-parallel-implementation-plan-20261113.md)。
+
 **SWE-2 Flash 平行研發協議（2026-11-13）**：詳見 [兩條 worktree 子代理實作／審核與整合門檻](gpui-sweflash-parallel-implementation-plan-20261113.md)。允許 T07 與 E01 先行隔離開發，但 **NOW 仍 T07**；只按原 F1→F2→F3→F4→F5→F6 順序整合、驗收與更新 DONE。子代理無權自行合 main、Push 或發版。
