@@ -1,6 +1,7 @@
 //! Read-only, structured local-branch comparison for the Native Git Graph.
 //! A comparison always uses merge-base -> selected target. It never switches
 //! HEAD, touches the index, or reads uncommitted working tree contents.
+use crate::git_inspect::{GitChangeArea, GitOriginalSnapshot};
 use git2::{BranchType, Delta, DiffFindOptions, DiffFormat, DiffOptions, Oid, Repository};
 use std::path::{Component, Path, PathBuf};
 
@@ -253,6 +254,62 @@ pub fn original_compared_file(
     ))
 }
 
+/// Open the exact merge-base committed blob as an immutable Native Git
+/// Original tab. Unlike a textual comparison preview, this preserves a
+/// selectable tab and never reads or saves the current worktree file.
+pub fn open_compared_original_snapshot(
+    root: &Path,
+    comparison: &BranchFileComparison,
+    index: usize,
+) -> Result<GitOriginalSnapshot, String> {
+    let item = comparison
+        .files
+        .get(index)
+        .ok_or("Comparison file selection is stale")?;
+    let path = item
+        .old_path
+        .as_deref()
+        .or(item.new_path.as_deref())
+        .ok_or("Comparison has no original path")?;
+    if !safe_git_path(path) {
+        return Err("Unsafe comparison original path".into());
+    }
+    if comparison.merge_base_oid.len() != 40
+        || !comparison
+            .merge_base_oid
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err("Invalid merge-base commit ID".into());
+    }
+    let repo = repo_at(root)?;
+    let base = repo
+        .find_commit(Oid::from_str(&comparison.merge_base_oid).map_err(|e| e.to_string())?)
+        .and_then(|commit| commit.tree())
+        .map_err(|error| error.to_string())?;
+    let entry = base
+        .get_path(path)
+        .map_err(|_| "New file has no merge-base original to open".to_owned())?;
+    let blob = repo
+        .find_blob(entry.id())
+        .map_err(|_| "Merge-base original is not a regular Git blob".to_owned())?;
+    if blob.content().len() > 32 * 1024 {
+        return Err("Merge-base original exceeds read-only tab size limit".into());
+    }
+    if blob.is_binary() || blob.content().contains(&0) {
+        return Err("Binary merge-base original cannot open as text".into());
+    }
+    let content = std::str::from_utf8(blob.content())
+        .map_err(|_| "Merge-base original is not UTF-8 text".to_owned())?
+        .to_owned();
+    Ok(GitOriginalSnapshot {
+        relative: path.to_path_buf(),
+        area: GitChangeArea::Staged,
+        blob_oid: entry.id().to_string(),
+        content,
+        revision_label: Some(format!("MERGE BASE {}", &comparison.merge_base_oid[..8])),
+    })
+}
 /// Show the patch for a selected file using the captured immutable Git trees.
 /// The result is bounded and never operates on the current index/workdir.
 pub fn diff_compared_file(
@@ -384,6 +441,16 @@ mod tests {
         assert!(original_compared_file(dir.path(), &current_to_selected, 0)
             .unwrap()
             .contains("base\n"));
+        let snap = open_compared_original_snapshot(dir.path(), &current_to_selected, 0).unwrap();
+        assert_eq!(snap.content, "base\n");
+        assert!(snap
+            .revision_label
+            .as_deref()
+            .unwrap_or_default()
+            .contains("MERGE BASE"));
+        let mut originals = crate::git_original_tabs::GitOriginalTabs::default();
+        originals.open(snap).unwrap();
+        assert!(originals.active().unwrap().title().contains("MERGE BASE"));
         let selected_to_current =
             compare_branch_files(dir.path(), "topic", CompareDirection::SelectedToCurrent).unwrap();
         assert_eq!(selected_to_current.target_oid, current_id.to_string());

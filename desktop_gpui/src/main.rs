@@ -54,8 +54,8 @@ use alera_gpui_desktop::git_actions::{
     GitUntrackedTrashCandidate,
 };
 use alera_gpui_desktop::git_branch_compare::{
-    compare_branch_files, diff_compared_file, original_compared_file, BranchFileComparison,
-    CompareDirection,
+    compare_branch_files, diff_compared_file, open_compared_original_snapshot,
+    original_compared_file, BranchFileComparison, CompareDirection,
 };
 use alera_gpui_desktop::git_graph_layout::{layout_git_graph, GraphCommit};
 use alera_gpui_desktop::git_graph_search::{GitGraphRefTab, GitGraphSearch};
@@ -3226,6 +3226,60 @@ impl Workbench {
             .ok();
         })
         .detach();
+        cx.notify();
+    }
+
+    /// Open the exact merge-base file in an immutable Git Original tab.
+    /// A changed comparison or Workspace cannot install an obsolete result.
+    fn open_git_compared_original_tab(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(comparison) = self.git_branch_comparison.clone() else {
+            self.model
+                .set_status("Select a Git branch comparison first");
+            cx.notify();
+            return;
+        };
+        let root = self.model.root().to_path_buf();
+        let generation = self.workspace_generation;
+        self.git_original_request = self.git_original_request.wrapping_add(1);
+        let request = self.git_original_request;
+        cx.spawn(async move |view, cx| {
+            let result = cx.background_spawn(async move {
+                open_compared_original_snapshot(&root, &comparison, index)
+                    .map(|snapshot| (comparison, snapshot))
+            }).await;
+            view.update(cx, |view, cx| {
+                if view.workspace_generation != generation || view.git_original_request != request {
+                    return;
+                }
+                let result = result.and_then(|(comparison, snapshot)| {
+                    let current = view.git_branch_comparison.as_ref().ok_or_else(|| {
+                        "Git comparison changed; select a file again".to_owned()
+                    })?;
+                    if current.selected_branch != comparison.selected_branch
+                        || current.merge_base_oid != comparison.merge_base_oid
+                        || current.target_oid != comparison.target_oid
+                        || current.direction != comparison.direction
+                    {
+                        return Err("Git comparison changed; select a file again".into());
+                    }
+                    view.git_original_tabs.open(snapshot)
+                });
+                match result {
+                    Ok(_) => {
+                        view.git_original_active = true;
+                        view.explorer_preview_active = false;
+                        view.center_view = CenterView::Editor;
+                        view.model.set_status(
+                            "Opened immutable merge-base Git original tab; editing and saving are disabled",
+                        );
+                    }
+                    Err(error) => {
+                        view.model.set_status(format!("Cannot open compared original: {error}"));
+                    }
+                }
+                cx.notify();
+            }).ok();
+        }).detach();
         cx.notify();
     }
 
@@ -11713,9 +11767,9 @@ impl Render for Workbench {
                                                                 this.preview_git_compared_file(index, false, cx);
                                                             })))
                                                         .child(icon_button(("git-compare-original", index), UiIcon::Open,
-                                                            "View original at merge-base (read-only)", false)
+                                                            "Open merge-base original as a read-only Git tab", false)
                                                             .on_click(cx.listener(move |this, _, _, cx| {
-                                                                this.preview_git_compared_file(index, true, cx);
+                                                                this.open_git_compared_original_tab(index, cx);
                                                             })))
                                                 }))))
                                     })

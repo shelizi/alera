@@ -473,6 +473,9 @@ pub struct GitOriginalSnapshot {
     pub area: GitChangeArea,
     pub blob_oid: String,
     pub content: String,
+    /// Optional immutable commit-tree source (e.g. a Git Graph merge base).
+    /// None retains the normal HEAD or Index labels.
+    pub revision_label: Option<String>,
 }
 
 impl GitOriginalSnapshot {
@@ -482,11 +485,11 @@ impl GitOriginalSnapshot {
             .file_name()
             .unwrap_or_default()
             .to_string_lossy();
-        let revision = match self.area {
+        let revision = self.revision_label.as_deref().unwrap_or(match self.area {
             GitChangeArea::Staged => "HEAD",
             GitChangeArea::Changes => "INDEX",
             GitChangeArea::Untracked | GitChangeArea::Conflicts => "invalid",
-        };
+        });
         format!("{filename} · {revision} · {}", &self.blob_oid[..8])
     }
 }
@@ -568,6 +571,7 @@ pub fn read_git_original_snapshot(
         area,
         blob_oid: id.to_string(),
         content,
+        revision_label: None,
     })
 }
 
