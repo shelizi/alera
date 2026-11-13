@@ -89,6 +89,8 @@ pub struct GitCommitApplyPreview {
 pub struct GitAmendPreview {
     pub head_oid: String,
     pub staged_tree_oid: String,
+    /// Whether the confirmed amend also changes commit contents, not just its message.
+    pub staged_changes: bool,
     pub current_message: String,
     pub replacement_message: String,
 }
@@ -1560,17 +1562,42 @@ impl GitActions {
         if message.is_empty() || message.len() > 4096 || message.contains('\0') {
             return Err("Commit message must be nonempty, NUL-free and bounded".into());
         }
-        let head = self.repo.head().map_err(|e| e.to_string())?;
-        if !head.is_branch() {
-            return Err("Committing from detached HEAD is disabled".into());
-        }
-        let parent = head.peel_to_commit().map_err(|error| error.to_string())?;
+        // A fresh repository has a symbolic local branch HEAD without any
+        // commit yet. Permit its first real staged commit, but not detached
+        // HEAD or an empty initial tree.
+        let parent = match self.repo.head() {
+            Ok(head) => {
+                if !head.is_branch() {
+                    return Err("Committing from detached HEAD is disabled".into());
+                }
+                Some(head.peel_to_commit().map_err(|error| error.to_string())?)
+            }
+            Err(error) if error.code() == git2::ErrorCode::UnbornBranch => {
+                let head = self
+                    .repo
+                    .find_reference("HEAD")
+                    .map_err(|e| e.to_string())?;
+                if !head
+                    .symbolic_target()
+                    .map_err(|e| e.to_string())?
+                    .is_some_and(|target| target.starts_with("refs/heads/"))
+                {
+                    return Err("Initial commit requires a symbolic local branch HEAD".into());
+                }
+                None
+            }
+            Err(error) => return Err(error.to_string()),
+        };
         let mut index = self.repo.index().map_err(|error| error.to_string())?;
         if index.has_conflicts() {
             return Err("Resolve Git index conflicts before committing".into());
         }
         let tree_oid = index.write_tree().map_err(|error| error.to_string())?;
-        if tree_oid == parent.tree_id() {
+        if (parent.is_none() && index.len() == 0)
+            || parent
+                .as_ref()
+                .is_some_and(|parent| tree_oid == parent.tree_id())
+        {
             return Err("No staged changes to commit".into());
         }
         let tree = self
@@ -1581,9 +1608,10 @@ impl GitActions {
             .repo
             .signature()
             .map_err(|_| "Configure Git user.name/user.email before committing".to_string())?;
+        let parents = parent.iter().collect::<Vec<_>>();
         let oid = self
             .repo
-            .commit(Some("HEAD"), &author, &author, message, &tree, &[&parent])
+            .commit(Some("HEAD"), &author, &author, message, &tree, &parents)
             .map_err(|error| error.to_string())?;
         Ok(oid.to_string())
     }
@@ -1638,6 +1666,7 @@ impl GitActions {
         Ok(GitAmendPreview {
             head_oid: commit.id().to_string(),
             staged_tree_oid: tree.to_string(),
+            staged_changes: tree != commit.tree_id(),
             current_message,
             replacement_message: replacement.to_owned(),
         })
@@ -2851,6 +2880,109 @@ mod tests {
     }
 
     #[test]
+    fn g03_initial_commit_then_history_and_preview_in_new_repo() {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = Repository::init(temp.path()).unwrap();
+        repo.config()
+            .unwrap()
+            .set_bool("core.autocrlf", false)
+            .unwrap();
+        repo.config()
+            .unwrap()
+            .set_str("user.name", "Git QA")
+            .unwrap();
+        repo.config()
+            .unwrap()
+            .set_str("user.email", "qa@example.invalid")
+            .unwrap();
+        assert!(repo.head().is_err(), "fresh repo must have no HEAD commit");
+        let root = dunce::canonicalize(temp.path()).unwrap();
+        fs::write(root.join("initial.txt"), "first saved content\n").unwrap();
+        fs::write(root.join("unstaged.txt"), "private untracked content\n").unwrap();
+        drop(repo);
+        let actions = GitActions::open(&root).unwrap();
+        assert!(actions.commit("empty initial commit").is_err());
+        actions.stage_file(Path::new("initial.txt")).unwrap();
+        let new_oid = actions.commit("first Native commit").unwrap();
+        let head = actions.repo.head().unwrap().peel_to_commit().unwrap();
+        assert_eq!(head.id().to_string(), new_oid);
+        assert_eq!(head.parent_count(), 0);
+        assert_eq!(head.message().unwrap(), "first Native commit");
+        assert!(head
+            .tree()
+            .unwrap()
+            .get_path(Path::new("initial.txt"))
+            .is_ok());
+        assert!(head
+            .tree()
+            .unwrap()
+            .get_path(Path::new("unstaged.txt"))
+            .is_err());
+        let history = crate::git_history::GitHistorySnapshot::load(&root).unwrap();
+        assert_eq!(history.commits.len(), 1);
+        assert_eq!(history.commits[0].oid, new_oid);
+        let preview = crate::git_history::preview_commit(&root, &new_oid).unwrap();
+        assert!(preview.contains("first Native commit"), "{preview}");
+        assert!(preview.contains("+first saved content"), "{preview}");
+        assert_eq!(
+            fs::read_to_string(root.join("unstaged.txt")).unwrap(),
+            "private untracked content\n"
+        );
+        assert_eq!(
+            fs::read_to_string(root.join("initial.txt")).unwrap(),
+            "first saved content\n"
+        );
+    }
+
+    #[test]
+    fn g03_commit_amend_history_readback_preserves_unsaved_disk_changes() {
+        let (_temp, actions) = repo_fixture();
+        let root = actions.root().to_path_buf();
+        fs::write(root.join("a.txt"), "staged version\n").unwrap();
+        actions.stage_file(Path::new("a.txt")).unwrap();
+        fs::write(root.join("a.txt"), "later worktree edit\n").unwrap();
+        fs::write(root.join("untracked.txt"), "private not staged\n").unwrap();
+        let new_oid = actions.commit("work in progress").unwrap();
+        let new_commit = actions
+            .repo
+            .find_commit(Oid::from_str(&new_oid).unwrap())
+            .unwrap();
+        assert_eq!(new_commit.parent_count(), 1);
+        let blob = new_commit
+            .tree()
+            .unwrap()
+            .get_path(Path::new("a.txt"))
+            .unwrap()
+            .to_object(&actions.repo)
+            .unwrap()
+            .peel_to_blob()
+            .unwrap();
+        assert_eq!(blob.content(), b"staged version\n");
+        assert_eq!(
+            fs::read_to_string(root.join("a.txt")).unwrap(),
+            "later worktree edit\n"
+        );
+        let preview = actions.preview_amend_commit("finished work").unwrap();
+        assert_eq!(preview.head_oid, new_oid);
+        actions.apply_amend_preview(&preview).unwrap();
+        let amended_oid = actions.repo.head().unwrap().target().unwrap();
+        assert_ne!(amended_oid.to_string(), new_oid);
+        let history = crate::git_history::GitHistorySnapshot::load(&root).unwrap();
+        assert_eq!(history.commits[0].oid, amended_oid.to_string());
+        assert_eq!(history.commits[0].subject, "finished work");
+        let changed = crate::git_history::preview_commit(&root, &amended_oid.to_string()).unwrap();
+        assert!(changed.contains("+staged version"), "{changed}");
+        assert!(!changed.contains("later worktree edit"));
+        assert_eq!(
+            fs::read_to_string(root.join("a.txt")).unwrap(),
+            "later worktree edit\n"
+        );
+        assert_eq!(
+            fs::read_to_string(root.join("untracked.txt")).unwrap(),
+            "private not staged\n"
+        );
+    }
+    #[test]
     fn offline_commit_draft_uses_staged_changes_only_and_never_moves_head() {
         let (_dir, actions) = repo_fixture();
         let before = actions.repo.head().unwrap().target();
@@ -3106,6 +3238,7 @@ mod tests {
             .preview_amend_commit("replace commit message")
             .unwrap();
         assert_eq!(preview.head_oid, old.to_string());
+        assert!(preview.staged_changes);
         assert_eq!(actions.repo.head().unwrap().target(), Some(old));
         let message = actions.apply_amend_preview(&preview).unwrap();
         assert!(message.contains("Amended"));
@@ -3140,6 +3273,7 @@ mod tests {
         assert!(actions.preview_amend_commit(&original).is_err());
         assert!(actions.preview_amend_commit("").is_err());
         let preview = actions.preview_amend_commit("message-only amend").unwrap();
+        assert!(!preview.staged_changes);
         fs::write(actions.root().join("a.txt"), "changed after preview").unwrap();
         actions.stage_file(Path::new("a.txt")).unwrap();
         assert!(actions.apply_amend_preview(&preview).is_err());

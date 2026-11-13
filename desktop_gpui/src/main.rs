@@ -299,6 +299,30 @@ impl GitUiAction {
     }
 }
 
+/// Clear only a successfully submitted Commit or Amend message; keep edits
+/// typed while the background Git operation was running.
+fn should_clear_git_commit_input(submitted: Option<&str>, current: &str) -> bool {
+    submitted.is_some_and(|message| current.trim() == message)
+}
+
+#[cfg(test)]
+mod g03_commit_input_tests {
+    use super::should_clear_git_commit_input;
+
+    #[test]
+    fn commit_success_clears_only_the_unmodified_submitted_message() {
+        assert!(should_clear_git_commit_input(
+            Some("create project"),
+            " create project "
+        ));
+        assert!(!should_clear_git_commit_input(
+            Some("create project"),
+            "new pending message"
+        ));
+        assert!(!should_clear_git_commit_input(None, "create project"));
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ConfirmGitAction {
     StashSave,
@@ -3296,6 +3320,11 @@ impl Workbench {
         }
         let unsaved_editors = self.editor_dirty(cx);
         let index_only = action.is_index_only();
+        let submitted_commit_message = match &action {
+            GitUiAction::Commit(message) => Some(message.clone()),
+            GitUiAction::Amend(preview) => Some(preview.replacement_message.clone()),
+            _ => None,
+        };
         if unsaved_editors && !index_only {
             self.git_action_status = "Save unsaved editor buffers before changing Git".into();
             cx.notify();
@@ -3422,6 +3451,12 @@ impl Workbench {
                         } else {
                             message
                         };
+                        if should_clear_git_commit_input(
+                            submitted_commit_message.as_deref(),
+                            view.git_commit_input.read(cx).query(),
+                        ) {
+                            view.git_commit_input.update(cx, |input, cx| input.clear(cx));
+                        }
                         view.git_branch_delete_armed = None;
                         view.git_amend_preview = None;
                         view.git_commit_ref_target = None;
@@ -3747,8 +3782,13 @@ impl Workbench {
                 view.git_amend_loading = false;
                 match result {
                     Ok(plan) => {
+                        let impact = if plan.staged_changes {
+                            "including the current staged file contents"
+                        } else {
+                            "message only (staged tree unchanged)"
+                        };
                         view.git_action_status = format!(
-                            "Amend warning: replace local HEAD {} with message '{}'. Click Amend again to confirm. Never force-push automatically.",
+                            "Amend warning: replace local HEAD {} ({impact}) with message '{}'. Click Amend again to confirm. Never force-push automatically.",
                             &plan.head_oid[..8], plan.replacement_message);
                         view.git_amend_preview = Some(plan);
                     }
