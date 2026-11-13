@@ -493,6 +493,12 @@ fn check_name(name: &str) -> io::Result<()> {
 fn invalid(message: &str) -> io::Error {
     io::Error::new(ErrorKind::InvalidInput, message)
 }
+/// True when an Explorer rename/move/cut would invalidate a live Editor's
+/// source path. Directory moves also affect every open descendant.
+pub fn affects_open_editor_path(source: &Path, open_files: &[PathBuf]) -> bool {
+    open_files.iter().any(|open| open.starts_with(source))
+}
+
 /// Local Explorer clipboard; never trusts OS clipboard text as a path to
 /// overwrite and never moves a file across different Git worktrees.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -611,6 +617,28 @@ impl ExplorerClipboardBatch {
 
     pub fn consumed(&self) -> bool {
         self.entries.is_empty()
+    }
+
+    /// Copy never changes the source file, even if an unrelated Editor is
+    /// dirty. Cut must not move a file (or a folder containing a file) still
+    /// held by a live Native Editor buffer. Check this at the filesystem
+    /// boundary as well as in the UI; failure preserves the clipboard.
+    pub fn paste_into_with_open_files(
+        &mut self,
+        files: &ExplorerFiles,
+        destination_folder: &Path,
+        open_files: &[PathBuf],
+    ) -> io::Result<Vec<PathBuf>> {
+        if self.entries.iter().any(|entry| {
+            entry.mode() == ExplorerClipboardMode::Cut
+                && affects_open_editor_path(entry.source(), open_files)
+        }) {
+            return Err(io::Error::new(
+                ErrorKind::WouldBlock,
+                "Close Editor tabs for files in the Cut selection before pasting",
+            ));
+        }
+        self.paste_into(files, destination_folder)
     }
 
     pub fn paste_into(
@@ -1004,6 +1032,71 @@ mod tests {
         assert_eq!(cut.paste_into(&files, &two).unwrap(), two.join("item.txt"));
         assert!(!source.exists());
         assert!(cut.consumed());
+    }
+
+    #[test]
+    fn e03_explorer_copy_can_paste_with_dirty_editor_while_cut_protects_open_tabs() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = dunce::canonicalize(temp.path()).unwrap();
+        let files = ExplorerFiles::new(&root).unwrap();
+        let source = files.create_folder(&root, "source").unwrap();
+        let dest = files.create_folder(&root, "dest").unwrap();
+        let nested = files.create_folder(&source, "nested").unwrap();
+        let file = files.create_file(&nested, "note.txt").unwrap();
+        let unrelated = files.create_file(&root, "dirty-editor.txt").unwrap();
+        fs::write(&file, "saved on disk").unwrap();
+        fs::write(&unrelated, "original disk").unwrap();
+
+        assert!(!affects_open_editor_path(&file, &[unrelated.clone()]));
+        assert!(affects_open_editor_path(&file, &[file.clone()]));
+        assert!(affects_open_editor_path(&source, &[file.clone()]));
+
+        // A dirty Editor elsewhere must not forbid copying a disk file.
+        let mut copy =
+            ExplorerClipboardBatch::capture(&files, &[file.clone()], ExplorerClipboardMode::Copy)
+                .unwrap();
+        let pasted = copy
+            .paste_into_with_open_files(&files, &dest, &[unrelated.clone(), file.clone()])
+            .unwrap();
+        assert_eq!(pasted, vec![dest.join("note.txt")]);
+        assert_eq!(fs::read_to_string(&pasted[0]).unwrap(), "saved on disk");
+        assert!(file.exists(), "Copy never moves or deletes the source");
+
+        let mut cut =
+            ExplorerClipboardBatch::capture(&files, &[file.clone()], ExplorerClipboardMode::Cut)
+                .unwrap();
+        let blocked = cut.paste_into_with_open_files(&files, &dest, &[file.clone()]);
+        assert_eq!(blocked.unwrap_err().kind(), ErrorKind::WouldBlock);
+        assert!(!cut.consumed());
+        assert!(file.exists());
+
+        // Closing the source Editor permits a Cut even with an unrelated
+        // dirty document open. No global "all editors clean" gate.
+        let empty_folder = files.create_folder(&root, "empty-target").unwrap();
+        let moved = cut
+            .paste_into_with_open_files(&files, &empty_folder, &[unrelated.clone()])
+            .unwrap();
+        assert_eq!(moved, vec![empty_folder.join("note.txt")]);
+        assert!(cut.consumed());
+        assert!(!file.exists());
+        assert_eq!(fs::read_to_string(&unrelated).unwrap(), "original disk");
+
+        let dir = files
+            .create_folder(&root, "folder-with-open-child")
+            .unwrap();
+        let child = files.create_file(&dir, "child.txt").unwrap();
+        let mut cut_folder =
+            ExplorerClipboardBatch::capture(&files, &[dir.clone()], ExplorerClipboardMode::Cut)
+                .unwrap();
+        assert_eq!(
+            cut_folder
+                .paste_into_with_open_files(&files, &dest, &[child.clone()])
+                .unwrap_err()
+                .kind(),
+            ErrorKind::WouldBlock,
+        );
+        assert!(dir.exists() && child.exists());
+        assert!(!cut_folder.consumed());
     }
 
     #[test]

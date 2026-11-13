@@ -42,7 +42,8 @@ use alera_gpui_desktop::editor_tabs::{EditorTabs, SaveAllReport, MAX_EDITOR_TABS
 use alera_gpui_desktop::explorer_drag::ExplorerDragBatch;
 use alera_gpui_desktop::explorer_git_badges::{ExplorerGitBadge, ExplorerGitBadges};
 use alera_gpui_desktop::explorer_ops::{
-    ExplorerClipboardBatch, ExplorerClipboardMode, ExplorerDeleteBatch, ExplorerFiles,
+    affects_open_editor_path, ExplorerClipboardBatch, ExplorerClipboardMode, ExplorerDeleteBatch,
+    ExplorerFiles,
 };
 use alera_gpui_desktop::explorer_selection::{ExplorerMultiSelection, ExplorerNavigation};
 use alera_gpui_desktop::explorer_visibility::ExplorerVisibilityOptions;
@@ -982,12 +983,15 @@ impl Workbench {
     }
 
     fn paste_explorer_clipboard(&mut self, cx: &mut Context<Self>) {
-        if self.editor_dirty(cx) {
-            self.model
-                .set_status("Save unsaved editor changes before Explorer Paste");
-            cx.notify();
-            return;
-        }
+        // Do not block ordinary Copy because an unrelated Editor is dirty.
+        // Cut is checked against the exact open files at paste time, so an
+        // existing Editor tab cannot silently keep a stale moved path.
+        let open_paths: Vec<PathBuf> = self
+            .all_editor_files_and_active(cx)
+            .0
+            .into_iter()
+            .map(|(_, path)| path)
+            .collect();
         let Some(clipboard) = self.explorer_clipboard.as_mut() else {
             self.model
                 .set_status("Explorer clipboard is empty; Copy or Cut a file first");
@@ -1006,8 +1010,8 @@ impl Workbench {
                 }
             })
             .unwrap_or_else(|| root.clone());
-        let result =
-            ExplorerFiles::new(&root).and_then(|files| clipboard.paste_into(&files, &folder));
+        let result = ExplorerFiles::new(&root)
+            .and_then(|files| clipboard.paste_into_with_open_files(&files, &folder, &open_paths));
         let consumed = clipboard.consumed();
         if consumed {
             self.explorer_clipboard = None;
@@ -1470,24 +1474,26 @@ impl Workbench {
             .map(|input| input.read(cx).query().trim().to_owned())
             .unwrap_or_default();
 
-        if matches!(
-            action,
-            ExplorerAction::Rename
-                | ExplorerAction::Move
-                | ExplorerAction::Copy
-                | ExplorerAction::Duplicate
-                | ExplorerAction::Delete
-        ) && self
-            .editor
-            .as_ref()
-            .is_some_and(|editor| editor.read(cx).switch_allowed().is_err())
-        {
-            self.model
-                .set_status("Save or discard editor changes before file operations");
-            cx.notify();
-            return;
-        }
         let source = selected.unwrap_or_else(|| self.model.directory().to_path_buf());
+        // Copy/Duplicate only read saved disk bytes, so an unrelated dirty
+        // Editor must not block them. Rename/Move instead refuse *only* when
+        // the selected source (including a directory ancestor) is still held
+        // by a live primary or secondary Editor tab.
+        if matches!(action, ExplorerAction::Rename | ExplorerAction::Move) {
+            let open_paths: Vec<PathBuf> = self
+                .all_editor_files_and_active(cx)
+                .0
+                .into_iter()
+                .map(|(_, path)| path)
+                .collect();
+            if affects_open_editor_path(&source, &open_paths) {
+                self.model.set_status(
+                    "Close Editor tabs for the selected file or folder before Rename/Move",
+                );
+                cx.notify();
+                return;
+            }
+        }
         let parent = if source.is_dir() {
             source.clone()
         } else {

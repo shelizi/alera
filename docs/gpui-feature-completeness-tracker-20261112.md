@@ -48,7 +48,7 @@
 | --- | --- | --- | --- |
 | **E01** | Explorer 單擊預覽、雙擊／Quick Open 正式開檔 | **部分完成**：先前有重複 Tab 問題，歷史分支曾修正單 Pane；本整合分支需核對 | `README.md` 預覽→雙擊→`Ctrl+P` 重開同檔，不產生意外兩個可編輯 Tab；Dirty 不遺失 |
 | **E02** | Editor 文字輸入、尋找／取代、Undo／Redo、`Ctrl+S`、Save As | **部分完成**：GUI 編輯存檔和磁碟讀回有實測；Find/Replace 有程式與測試 | 一個繁中 UTF-8 檔依序編輯、尋找、取代、Undo、儲存、重新開啟，檔案結果一致 |
-| **E03** | Explorer 開檔、建立／重新命名／複製／剪下／貼上／拖放 | **已有實作／待操作驗收**：有 Explorer 安全操作與 OS 拖放底層 | 用隔離目錄完成上述常用動作，畫面與實際檔案一致；不需做罕見惡意路徑壓測 |
+| **E03** | Explorer 開檔、建立／重新命名／複製／剪下／貼上／拖放 | **核心已接線／待 GUI**：檔案操作 23/23、選取 7/7、拖曳 3/3、Native 36/36、Windows EXE PASS；Copy／Duplicate 不因無關 Dirty Editor 被拒，Cut／Rename／Move 保護仍在 Editor 開啟的檔案。詳見 [E03](gpui-e03-explorer-normal-operations-20261113.md) | Windows 實際操作、OS 外部檔案拖出／系統剪貼簿雙向尚未驗收；未聲稱 Classic 100% parity，不阻塞 E04 |
 | **E04** | `Ctrl+P`、Explorer 篩選與全文搜尋；快速定位檔案 | **部分完成**：Quick Open、模糊搜尋／內容搜尋有實作，長檔名 GUI 部分驗收 | 在含巢狀／同名檔的隔離專案搜尋、開啟、顯示相對路徑並定位 |
 | **E05** | 跨 Worktree 內容搜尋與結果開啟 | **待核對**：現有內容搜尋的跨 Worktree 範圍需與 Classic 比對 | 確認搜尋範圍選項，結果可開到正確 Worktree，不誤開當前工作樹同名檔 |
 | **E06** | 多 Editor Pane、Dirty／草稿保存、關閉／重開復原 | **部分完成**：Rust 身分／Undo／草稿回歸已有；GUI 部分驗證 | 左右各開一份檔案、新增草稿、儲存／重開；未儲存內容與檔案關聯正確 |
@@ -110,8 +110,9 @@
 | INTEGRATED／待 GUI 驗收 | **T07** | Host Profile、Command／Custom Prompt、Managed Model／Persona、Provider 安全提示已整合 GPUI 分支；維持正常功能優先 | `7c300ec04`：整合測試 Managed 2/2、選項探索 4/4、Provider 提示 1/1、Native 34/34、Windows cargo check PASS。未登入／Token 過期的 Provider typed status、實際 GUI 編輯待後續單獨驗收；**不再阻塞 E01/E02**，`supported=false` |
 | INTEGRATED／待 GUI 驗收 | **E01** | Explorer 預覽、正式開檔、Quick Open、同檔 Dirty Buffer/Undo，修正注音 Enter 和 Editor 開檔確認 | `15c15b496`：E01 Rust 2/2、Native 36/36、Windows cargo check PASS。真 GUI 點擊/注音候選保留驗收，但不因其未測而停住後續日常功能 |
 | INTEGRATED／待 GUI 驗收 | **E02** | Editor 輸入、尋找／取代、Unicode Undo/Redo、Save/Save As；新增常用取代快捷鍵 | Rust EditorSearch 5/5、Save As Guard 2/2、Undo/Redo 1/1、磁碟儲存 1/1，合計 **9/9 PASS**；`baa157e18` 新增 Ctrl+H、Cmd+Alt+F，Native 36/36、Windows cargo check PASS。真 GUI 與完整存檔→重開測試另驗，不擋 E03 |
-| **NOW** | **E03** | Explorer 檔案建立／重新命名／複製／剪下／貼上／拖曳與開啟 | 依 Classic 正常流程檢查既有 GPUI UI，先修實際常用缺口；只用隔離目錄，不改使用者資料 |
-| NEXT | E04 → E05 → E06 | 快速搜尋、跨 Worktree、草稿多 Pane | 排隊 |
+| INTEGRATED／待 GUI 與 OS 拖出驗收 | **E03** | Explorer New／Rename／Copy／Cut／Paste／Duplicate／Move／內部拖曳、多選、外部拖入 | 正常操作已接線；修正 Copy／Duplicate 被無關 Dirty Editor 全域阻擋，Cut／Rename／Move 僅攔截被開啟 Editor 擁有的檔案或父目錄。ExplorerOps **23/23**、Selection **7/7**、Drag **3/3**、Native **36/36**、Windows EXE PASS。OS 剪貼簿雙向與拖出、真 GUI 仍待驗；[E03 驗證](gpui-e03-explorer-normal-operations-20261113.md) |
+| **NOW** | **E04** | `Ctrl+P` Quick Open、Explorer 篩選與全文搜尋／相對路徑定位 | 先檢查實際搜尋 UI 與長檔名、同名檔定位；有正常缺口才修，隔離 Worktree 測試，不卡在 E03 OS 拖出驗收 |
+| NEXT | E05 → E06 | 跨 Worktree 內容搜尋、雙 Editor Pane／草稿保存與還原 | 排隊 |
 | NEXT | G01 → G02 → G03 → G04 → G05 → G06 | Source Control／中央 Diff／Graph／分支／Worktree | 排隊 |
 | NEXT | S01 → S02 → S03 → S04 | Settings 接線、Rust 共用設定與語系 | 排隊 |
 | NEXT | H01 → H02 → H03 | Hook 四態、設定、Windows 通知 | 排隊 |
@@ -122,6 +123,8 @@
 **2026-11-13 NOW 調整（避免 T07 驗收無限阻塞）**：使用者明確要求繼續功能實作，不再把所有真實 Provider 未登入／逾期與 GUI 進階驗收列為開發排隊的前置條件。已在 GPUI **整合分支**提交 T07 功能 `7c300ec04`（Managed 2/2、Model/Persona 4/4、Provider 1/1、Native 34/34、cargo check PASS），以及 E01 `15c15b496`（預覽／正式開檔／同檔 Dirty Buffer/Undo 2/2、Native 36/36、cargo check PASS）。**這不是聲稱 T07／E01 GUI 實機 DONE**：Windows 實際操作與真 Provider typed auth 另列後續驗收，原矩陣的歷史證據不覆蓋。**NOW 改 E02**，保留 `supported=false`，`main`／Push／部署／Release 均不動。
 
 **2026-11-13 E02 核心驗證與往 E03 推進**：原生 Editor 已具備尋找／取代、Unicode Undo／Redo、Save As／未儲存草稿保護與磁碟衝突拒絕。整合分支直接跑 Rust EditorSearch **5/5**、Save As 版本保護 **2/2**、Undo／Redo **1/1**、磁碟儲存與衝突 **1/1**，**共 9/9 PASS**。新增一般使用者常用的取代面板入口 Windows `Ctrl+H`／macOS `Cmd+Alt+F`，Commit `baa157e18`，Windows Native **36/36 PASS**、cargo check PASS。這是**正常功能核心驗證，不代表 GUI 點擊或完整存檔重開已實測**；為避免重複卡關，E02 列為「INTEGRATED／待 GUI」，**NOW 前進 E03**，保留 `supported=false`，沒有合 main／Push／部署／Release。
+
+**2026-11-13 E03 正常檔案管理修正→NOW E04**：確認 Explorer New／Rename／Copy／Cut／Paste／Duplicate／Move、多選、內部拖曳與外部檔案匯入均已有核心程式。修正 Clipboard Paste／右鍵 Copy／Duplicate 對無關 Dirty Editor 的全域拒絕；Cut、Rename、Move 僅在來源仍被主／副 Editor 開啟（包括選取資料夾的子檔案）時拒絕，以免留下失效的 Editor 路徑。實際 tempfile Windows Rust 回歸 ExplorerOps **23/23**、Selection **7/7**、Drag **3/3**、Native **36/36**；Windows EXE Build、cargo check、fmt／diff 全 PASS。**Windows GUI 與 OS 剪貼簿雙向／從 GPUI 拖出檔案仍待驗**，E03 註明非完整 Classic parity，但不因其卡住日常功能主線；下一個 NOW E04。
 
 ## 5. 每次「繼續／進度」的更新規約
 
