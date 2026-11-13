@@ -165,4 +165,6 @@
 
 **T07 平行支線最新成果（未整合）**：`feat/gpui-sweflash-t07-command-prompt-20261113` 的安全 stdin Host Command／Prompt 通道 `5f0d602e6` 與 Native UI `f6d09cdd8` 已獨立提交。隔離 Host stdin 讀改寫、GUI Module 與 Windows EXE／Rust 回歸已通過；**GUI 實際點擊驗收被工具工作區權限阻擋，仍須驗收，不是 T07 DONE，也不提前合併 E01**。詳見功能分支的 `docs/gpui-sweflash-t07-command-prompt-ui-handoff-20261113.md` 與 [平行計畫](gpui-sweflash-parallel-implementation-plan-20261113.md)。
 
+**T07 Managed／Provider 支線（尚未整合）**：Model／Persona Host-owned stdin 更新後端 `4d934b687` 已通過 CLI 4/4 與隔離 Host 1/1；Persona UI 欄位對應 Rust Managed `agent`，原安全選項保留。Provider 安全啟動提示 `ba999e6c9` 已通過 Rust 1/1 與 GPUI 編譯檢查，不將未知登入狀態誤判成 Token 過期。**Managed UI、可信 Host 認證狀態、Windows 實際 GUI 驗收仍待完成，T07 未結案**，E01 不提前整合。詳見 [平行計畫](gpui-sweflash-parallel-implementation-plan-20261113.md)。
+
 **SWE-2 Flash 平行研發協議（2026-11-13）**：詳見 [兩條 worktree 子代理實作／審核與整合門檻](gpui-sweflash-parallel-implementation-plan-20261113.md)。允許 T07 與 E01 先行隔離開發，但 **NOW 仍 T07**；只按原 F1→F2→F3→F4→F5→F6 順序整合、驗收與更新 DONE。子代理無權自行合 main、Push 或發版。

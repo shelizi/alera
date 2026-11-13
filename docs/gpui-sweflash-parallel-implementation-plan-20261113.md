@@ -43,8 +43,8 @@ B 分支：feat/gpui-sweflash-e01-open-20261113；預備 worktree：.worktrees/g
 | --- | --- | --- | --- | --- |
 | T07 Command/Prompt | feat/gpui-sweflash-t07-command-prompt-20261113 | REVIEW／GUI 待驗 | 安全 stdin 5f0d602e6、UI f6d09cdd8；CLI 7/7、GPUI 3/3、隔離 Host 1/1、內容投影與多行輸入 2/2、Native EXE／回歸 PASS；GUI 測試受工作區政策阻擋 | 先審後整合 |
 | E01 Preview/Open | feat/gpui-sweflash-e01-open-20261113 | REVIEW／Rust 專項 PASS | 測試稿 25926c6b9；2/2 Rust PASS、fmt／diff PASS；Windows GUI 待驗 | 等 T07 DONE |
-| T07 Managed Model／Persona | feat/gpui-sweflash-t07-managed-20261113 | RUNNING／SWE Flash High | 從 f6d09cdd8 獨立 worktree；先做 Host-owned 欄位安全更新，防護確認不得自動略過；尚無 Commit／驗收 | T07 內先審後整合 |
-| T07 Provider 登入／過期提示 | feat/gpui-sweflash-t07-provider-ux-20261113 | RUNNING／SWE Flash High | 從 f6d09cdd8 獨立 worktree；區分 CLI 未安裝、Host 離線、明確 auth 錯誤與未知；尚無 Commit／驗收 | T07 內先審後整合 |
+| T07 Managed Model／Persona | feat/gpui-sweflash-t07-managed-20261113 | REVIEW／底層已驗 | CLI stdin 選項安全更新 4d934b687；CLI 4/4＋隔離 Host 1/1 PASS；Persona→Host `agent`，其餘設定與風險控制保留；GPUI UI 待接 | T07 內先審後整合 |
+| T07 Provider 登入／過期提示 | feat/gpui-sweflash-t07-provider-ux-20261113 | REVIEW／部分完成 | 安全錯誤分類 ba999e6c9；Rust 1/1、Windows GPUI cargo check PASS。未登入／過期仍缺可信 Host typed auth state，不能猜測 | T07 內先審後整合 |
 
 PREPARED 並不代表子代理已啟動；必須有真實 CLI session 和輸出才可改成 RUNNING。只有經整合者驗收的正常 GUI 功能才能標 DONE。
 
@@ -55,3 +55,5 @@ PREPARED 並不代表子代理已啟動；必須有真實 CLI session 和輸出�
 **第三輪續作（2026-11-13）**：T07 主控在 SWE Flash 安全 stdin 分支上接完 GPUI Command／Custom Prompt 載入、儲存及明確清空，多行輸入含 Windows IME preedit 防護，Host save 另做獨立讀回。功能分支新增 Commit `f6d09cdd8`，隔離 Host stdin 正向 1/1、GPUI 投影與多行輸入 2/2、Windows EXE 編譯及 Rust 回歸命令均 exit 0。兩次隔離 GUI Host 啟動嘗試被工具政策 `WORKSPACE_PATH_PROTECTED` 在執行前拒絕，未建立測試目錄／未操作正式 Host，故 **GUI 仍待驗、T07 仍 NOW、未整合功能 Commit**。E01 Rust 專項 2/2 PASS 且保持隔離。UI SWE Flash 子代理本輪逾時且未修改程式，由主控完成接線，沒有背景執行中的子代理。
 
 **第四輪平行派工（2026-11-13）**：以 T07 正向編輯分支 Commit `f6d09cdd8` 作共同 base，建立 `feat/gpui-sweflash-t07-managed-20261113` 與 `feat/gpui-sweflash-t07-provider-ux-20261113` 兩個獨立 worktree，分別透過 Devin SWE-2 Flash High 啟動 Managed Model/Persona 安全更新以及 Provider 錯誤狀態 UX。限制為 source-only，不可執行 Cargo／Host／Provider、建立外部建置 Junction、Push 或部署。子代理完成前表內的 RUNNING 不是驗收通過；主控依 test+review Gate 審查，**原 NOW 仍 T07，E01 仍待 T07 正向 GUI 結案才能整合**。
+
+**第四輪派工結果（2026-11-13）**：兩個 SWE Flash High 子代理確實啟動但停留於盤點，其中 Provider 工作線由主控停止、Managed 逾時，**都未由子代理產生程式修改**。主控接手並在各自隔離分支提交：Provider 安全啟動錯誤提示 `ba999e6c9`（Rust 1/1、Windows GPUI check PASS，未知認證不能誤判過期）；Managed CLI Model／Persona 有界 stdin patch `4d934b687`（CLI 4/4、可拋棄 Host 1/1 PASS；實測發現 Classic Persona 實際對應 Rust Managed `agent`，已修正映射，其他 Host-managed 參數與 risk gate 保留）。兩支皆無 Windows GUI 驗收，**不合入 GPUI integration／main，不 Push、不部署**；T07 仍 NOW，E01 依原順序排隊。
