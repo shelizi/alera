@@ -24,6 +24,12 @@
 - 獨立的 `alera-cli agent-profile --no-start --json list` 再讀回 **0 筆**，確認此測試 Profile 不存在，沒有誤刪其他 Profile。隔離 GUI 正常關閉（PID `44052` 不再存活），僅停止此輪獨立 Host，最終 `running=false`。
 - 保護測試專案 `.gpui-center-diff-smoke` 的原有 `M center-diff-smoke.txt`、`?? center-diff-source-switch-untracked.txt` 完全未變；未清理 `target/`，沒有碰觸正式 Runtime、任何 Provider 登入或正式 Agent Profile。
 
+## 追加獨立 Host CAS 負向驗收（同日）
+
+- 使用另一個完全隔離的 Runtime：`desktop_gpui/target/smoke-t07-removal-independent-runtime-20261113-0850`，只建一次性 `codex`／`cmd.exe` Command Profile（沒有啟動 Provider），不存取正式帳號。第一次建立、讀取 `removal-impact`（0 個阻擋引用）、`--confirm` 刪除與最後 `list` 0 筆均成功。
+- 第二次在相同隔離 Runtime 建 Profile，先以 Host `update --expected-revision 0` 將名稱與 revision 更新為 **1**。接著使用**舊 revision 0** 執行 `removal-impact`，Host 回覆 revision conflict 並拒絕；即使加上 `remove --confirm --expected-revision 0`，Host 仍拒絕且再次 `list` 證實原 Profile 及 revision 1 保留。
+- 重新查詢 revision 1 的 impact（`blockingReferenceCount=0`），再以 revision 1 刪除，Host 回覆 `removed=true`。僅停止該隔離 Host，重複核對直到 `running=false`；原 fixture／正式 Runtime 及憑證未更動。**這是 Host CLI 實測，非被引用 Profile 的 GUI 阻擋實測。**
+
 ## 邊界與後續
 
 - **被引用的實際 Host Profile 未在 GUI 觸發真實 Automation／Tab 引用案例**；本輪對此有 Rust parser/狀態限制測試，不把未實測的阻擋 GUI 情境寫成 PASS。
