@@ -90,8 +90,14 @@ async fn run_command(command: AgentProfileCommand) -> Result<()> {
             let existing = select_profile(&profiles, &args.target.selector)?;
             let expected_revision =
                 ensure_expected_revision(existing, args.target.expected_revision)?;
-            let managed_config =
-                managed_config_for_update(existing, &args, &mut std::io::stdin().lock())?;
+            let managed_config = if args.edit_managed_selection_stdin {
+                Some(read_managed_selection_patch(
+                    existing,
+                    &mut std::io::stdin().lock(),
+                )?)
+            } else {
+                managed_config_for_update(existing, &args, &mut std::io::stdin().lock())?
+            };
             let draft = draft_for_update(existing, &args, managed_config)?;
             ensure_risk_confirmation(Some(existing), &draft, args.confirm_reduced_protections)?;
             let mut capabilities = vec![RUNTIME_HOST_AGENT_PROFILE_REVISIONS_CAPABILITY];
@@ -311,6 +317,83 @@ pub(crate) async fn ensure_capabilities(
         }
     }
     Ok(())
+}
+
+const MAX_MANAGED_SELECTION_BYTES: u64 = 4096;
+const MAX_MANAGED_CHOICE_BYTES: usize = 256;
+
+/// Narrow Host-owned Managed edit. Never reconstruct the whole Managed config
+/// from Native's display projection, and never place model/persona in argv.
+/// The original config (including unrecognized and risk-related options) is
+/// preserved, then passed through existing risk confirmation and Host CAS.
+fn read_managed_selection_patch(existing: &AgentProfile, stdin: &mut impl Read) -> Result<Value> {
+    if existing.launch_mode != AgentProfileLaunchMode::Managed {
+        bail!("model/persona editing requires an existing Managed Profile");
+    }
+    let descriptor = alera_core::agent_descriptor::agent_descriptor(&existing.agent_type)
+        .ok_or_else(|| anyhow!("Unknown Agent adapter; cannot edit Managed selection"))?;
+    let mut raw = String::new();
+    stdin
+        .by_ref()
+        .take(MAX_MANAGED_SELECTION_BYTES + 1)
+        .read_to_string(&mut raw)
+        .context("failed to read Managed model/persona patch from stdin")?;
+    if raw.len() as u64 > MAX_MANAGED_SELECTION_BYTES {
+        bail!("Managed model/persona patch exceeds size limit");
+    }
+    let value: Value =
+        serde_json::from_str(&raw).context("Managed model/persona patch must be valid JSON")?;
+    let edits = value
+        .as_object()
+        .ok_or_else(|| anyhow!("Managed model/persona patch must be an object"))?;
+    if edits.is_empty()
+        || edits
+            .keys()
+            .any(|key| !matches!(key.as_str(), "model" | "persona"))
+    {
+        bail!("Managed model/persona patch requires only model or persona fields");
+    }
+    let mut config = existing
+        .managed_config
+        .as_ref()
+        .and_then(Value::as_object)
+        .cloned()
+        .ok_or_else(|| anyhow!("Existing Managed config is unavailable"))?;
+    for (key, value) in edits {
+        if key == "model"
+            && descriptor.model_override
+                == alera_core::agent_descriptor::AgentModelOverride::Unsupported
+        {
+            bail!("This Agent adapter does not support model selection");
+        }
+        if key == "persona" && !descriptor.supports_persona {
+            bail!("This Agent adapter does not support persona selection");
+        }
+        // Classic's Persona selector is stored in the Host launch spec's
+        // `agent` field, never an unrecognized `persona` config key.
+        let managed_key = if key == "persona" {
+            "agent"
+        } else {
+            key.as_str()
+        };
+        match value {
+            Value::Null => {
+                config.remove(managed_key);
+            }
+            Value::String(text) => {
+                let normalized = text.trim();
+                if normalized.is_empty()
+                    || normalized.len() > MAX_MANAGED_CHOICE_BYTES
+                    || normalized.chars().any(char::is_control)
+                {
+                    bail!("Managed model/persona selection must be a nonempty safe string");
+                }
+                config.insert(managed_key.to_owned(), Value::String(normalized.to_owned()));
+            }
+            _ => bail!("Managed model/persona fields must be strings or null to clear"),
+        }
+    }
+    Ok(Value::Object(config))
 }
 
 const MAX_EDIT_CONTENT_STDIN_BYTES: u64 = 32 * 1024;

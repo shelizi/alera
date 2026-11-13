@@ -575,3 +575,111 @@ fn agent_profile_stdin_command_prompt_roundtrip_on_isolated_host() {
     assert_eq!(after_clear["description"], "Description stays");
     assert_eq!(after_clear["quotaGroup"], "group-original");
 }
+
+/// Managed Model/Persona edits are revision-guarded and must not replace or
+/// expose the rest of Host-owned options.
+#[test]
+fn agent_profile_managed_selection_stdin_preserves_host_options() {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    fn managed_patch(runtime_dir: &Path, id: &str, revision: i64, body: &str) -> Output {
+        let mut child = windowless_command(env!("CARGO_BIN_EXE_alera"))
+            .arg("agent-profile")
+            .arg("--runtime-dir")
+            .arg(runtime_dir)
+            .arg("--json")
+            .arg("--no-start")
+            .args([
+                "update",
+                "--profile-id",
+                id,
+                "--expected-revision",
+                &revision.to_string(),
+                "--edit-managed-selection-stdin",
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("disposable CLI process");
+        child
+            .stdin
+            .take()
+            .expect("piped input")
+            .write_all(body.as_bytes())
+            .expect("send limited selection");
+        child.wait_with_output().expect("Host update result")
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let _guard = RuntimeGuard {
+        runtime_dir: temp.path().to_path_buf(),
+    };
+    start_isolated_runtime(temp.path());
+    let created = success_json(
+        temp.path(),
+        &[
+            "create",
+            "--name",
+            "Managed Model Persona QA",
+            "--agent-type",
+            "claude",
+            "--launch-mode",
+            "managed",
+            "--managed-config",
+            r#"{"model":"claude-old","agent":"old-style","permissionMode":"manual"}"#,
+            "--custom-prompt",
+            "Unchanged prompt",
+            "--quota-group",
+            "qa-original",
+        ],
+    );
+    let id = created["id"].as_str().unwrap();
+    assert_eq!(created["revision"], 0);
+
+    let output = managed_patch(
+        temp.path(),
+        id,
+        0,
+        r#"{"model":"claude-new","persona":"reviewer"}"#,
+    );
+    assert!(
+        output.status.success(),
+        "managed patch failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let saved: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(saved["revision"], 1);
+    let shown = success_json(temp.path(), &["show", "--profile-id", id]);
+    assert_eq!(shown["managedConfig"]["model"], "claude-new");
+    assert_eq!(shown["managedConfig"]["agent"], "reviewer");
+    assert_eq!(shown["managedConfig"]["permissionMode"], "manual");
+    assert_eq!(shown["customPrompt"], "Unchanged prompt");
+    assert_eq!(shown["quotaGroup"], "qa-original");
+
+    let stale = managed_patch(temp.path(), id, 0, r#"{"model":"stale"}"#);
+    assert!(!stale.status.success());
+    let disallowed = managed_patch(
+        temp.path(),
+        id,
+        1,
+        r#"{"permissionMode":"bypassPermissions"}"#,
+    );
+    assert!(!disallowed.status.success());
+    let after_rejected = success_json(temp.path(), &["show", "--profile-id", id]);
+    assert_eq!(after_rejected["revision"], 1);
+    assert_eq!(after_rejected["managedConfig"]["model"], "claude-new");
+
+    let cleared = managed_patch(temp.path(), id, 1, r#"{"persona":null}"#);
+    assert!(
+        cleared.status.success(),
+        "clear failed: {}",
+        String::from_utf8_lossy(&cleared.stderr)
+    );
+    let readback = success_json(temp.path(), &["show", "--profile-id", id]);
+    assert_eq!(readback["revision"], 2);
+    assert!(readback["managedConfig"].get("agent").is_none());
+    assert_eq!(readback["managedConfig"]["model"], "claude-new");
+    assert_eq!(readback["managedConfig"]["permissionMode"], "manual");
+}

@@ -125,6 +125,7 @@ fn update_args() -> AgentProfileUpdateArgs {
         quota_group: None,
         clear_quota_group: false,
         edit_content_stdin: true,
+        edit_managed_selection_stdin: false,
         confirm_reduced_protections: false,
     }
 }
@@ -306,4 +307,155 @@ fn stdin_command_edit_rejects_managed_profiles_before_mutation() {
     let error = draft_for_update(&existing, &args, None).unwrap_err();
 
     assert!(error.to_string().contains("--launch-mode command"));
+}
+
+#[test]
+fn managed_selection_patch_preserves_host_config_and_existing_risk_controls() {
+    use serde_json::json;
+    use std::io::Cursor;
+    let mut existing = profile("prof_m", "Managed", 7);
+    existing.launch_mode = AgentProfileLaunchMode::Managed;
+    existing.command.clear();
+    existing.managed_config = Some(json!({
+        "model": "gpt-old",
+        "approvalPolicy": "never",
+        "sandbox": "read-only",
+        "customProviderValue": {"retained": true}
+    }));
+    let updated =
+        read_managed_selection_patch(&existing, &mut Cursor::new(br#"{"model":"gpt-new"}"#))
+            .unwrap();
+    assert_eq!(updated["model"], "gpt-new");
+    assert_eq!(updated["approvalPolicy"], "never");
+    assert_eq!(updated["sandbox"], "read-only");
+    assert_eq!(updated["customProviderValue"], json!({"retained":true}));
+    assert_eq!(
+        existing.managed_config.as_ref().unwrap()["model"],
+        "gpt-old"
+    );
+
+    let mut args = update_args();
+    args.edit_content_stdin = false;
+    args.edit_managed_selection_stdin = true;
+    let draft = draft_for_update(&existing, &args, Some(updated)).unwrap();
+    // Existing risky controls are not newly introduced by this model edit.
+    assert!(ensure_risk_confirmation(Some(&existing), &draft, false).is_ok());
+    assert_eq!(
+        draft.managed_config.as_ref().unwrap()["approvalPolicy"],
+        "never"
+    );
+    assert_eq!(draft.managed_config.as_ref().unwrap()["model"], "gpt-new");
+}
+
+#[test]
+fn managed_selection_patch_respects_descriptor_and_explicit_clear() {
+    use serde_json::json;
+    use std::io::Cursor;
+    let mut profile = profile("prof_m", "Managed", 0);
+    profile.launch_mode = AgentProfileLaunchMode::Managed;
+    profile.command.clear();
+    profile.agent_type = "claude".into();
+    profile.managed_config = Some(json!({
+        "model": "old", "agent": "old-persona", "permissionMode":"manual"
+    }));
+    let changed = read_managed_selection_patch(
+        &profile,
+        &mut Cursor::new(br#"{"model":"new","persona":"quality-review"}"#),
+    )
+    .unwrap();
+    assert_eq!(changed["model"], "new");
+    assert_eq!(changed["agent"], "quality-review");
+    assert_eq!(changed["permissionMode"], "manual");
+
+    let cleared =
+        read_managed_selection_patch(&profile, &mut Cursor::new(br#"{"persona":null}"#)).unwrap();
+    assert!(cleared.get("agent").is_none());
+    assert_eq!(cleared["model"], "old");
+
+    profile.agent_type = "codex".into();
+    assert!(read_managed_selection_patch(
+        &profile,
+        &mut Cursor::new(br#"{"persona":"unsupported"}"#)
+    )
+    .is_err());
+    profile.launch_mode = AgentProfileLaunchMode::Command;
+    assert!(
+        read_managed_selection_patch(&profile, &mut Cursor::new(br#"{"model":"no"}"#)).is_err()
+    );
+}
+
+#[test]
+fn managed_selection_patch_rejects_malformed_or_unbounded_edits_without_mutation() {
+    use serde_json::json;
+    use std::io::Cursor;
+    let mut existing = profile("prof_m", "Managed", 2);
+    existing.launch_mode = AgentProfileLaunchMode::Managed;
+    existing.managed_config = Some(json!({"model":"original","sandbox":"read-only"}));
+    let before = existing.managed_config.clone();
+    for raw in [
+        "{}",
+        "[]",
+        r#"{"command":"unsafe"}"#,
+        r#"{"model":""}"#,
+        r#"{"model":42}"#,
+        r#"{"model":"line\nbreak"}"#,
+        r#"{"model":true}"#,
+        r#"{"model":{},"persona":"x"}"#,
+        "not-json",
+    ] {
+        assert!(
+            read_managed_selection_patch(&existing, &mut Cursor::new(raw)).is_err(),
+            "invalid case should be rejected"
+        );
+        assert_eq!(existing.managed_config, before);
+    }
+    let overlong = format!(r#"{{"model":"{}"}}"#, "x".repeat(300));
+    assert!(read_managed_selection_patch(&existing, &mut Cursor::new(overlong)).is_err());
+    let huge = format!(r#"{{"model":"{}"}}"#, "x".repeat(5000));
+    assert!(read_managed_selection_patch(&existing, &mut Cursor::new(huge)).is_err());
+}
+
+#[test]
+fn managed_selection_stdin_flag_requires_revision_and_conflicts_with_full_config() {
+    use crate::cli::{Cli, Command};
+    let args = [
+        "alera",
+        "agent-profile",
+        "--no-start",
+        "update",
+        "--profile-id",
+        "prof_1",
+        "--expected-revision",
+        "3",
+        "--edit-managed-selection-stdin",
+    ];
+    let parsed = Cli::try_parse_from(args).unwrap();
+    let Command::AgentProfile(parsed) = parsed.command else {
+        panic!("agent-profile")
+    };
+    let AgentProfileAction::Update(update) = parsed.action else {
+        panic!("update")
+    };
+    assert!(update.edit_managed_selection_stdin);
+    assert!(Cli::try_parse_from([
+        "alera",
+        "agent-profile",
+        "update",
+        "--profile-id",
+        "prof_1",
+        "--edit-managed-selection-stdin"
+    ])
+    .is_err());
+    assert!(Cli::try_parse_from([
+        "alera",
+        "agent-profile",
+        "update",
+        "--profile-id",
+        "prof_1",
+        "--expected-revision",
+        "3",
+        "--edit-managed-selection-stdin",
+        "--managed-config-stdin"
+    ])
+    .is_err());
 }
