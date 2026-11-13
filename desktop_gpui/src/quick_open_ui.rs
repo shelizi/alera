@@ -20,6 +20,28 @@ fn accepts_native_text_event(has_focus: bool) -> bool {
     has_focus
 }
 
+/// Enter accepts an actual Quick Open result only after IME candidate
+/// composition has finished. During zhuyin/other IME preedit, Enter belongs
+/// to the native candidate picker and must not navigate away from the query.
+pub(super) fn quick_open_enter_accepts_match(key: &str, composing: bool, has_match: bool) -> bool {
+    has_match
+        && !composing
+        && (key.eq_ignore_ascii_case("enter") || key.eq_ignore_ascii_case("return"))
+}
+
+/// Only dismiss Quick Open after the active Native Editor owns the exact
+/// requested disk file. A failed open must not silently close the dialog
+/// while leaving some unrelated dirty buffer focused.
+pub(super) fn quick_open_target_is_active(
+    requested: &std::path::Path,
+    active: Option<&std::path::Path>,
+) -> bool {
+    let Ok(target) = dunce::canonicalize(requested) else {
+        return false;
+    };
+    active == Some(target.as_path())
+}
+
 /// Drop only the provisional marked text when an Explorer input loses focus.
 /// Previously committed query content must survive a Terminal focus switch.
 fn remove_marked_preedit(text: &mut String, marked: Option<Range<usize>>) -> Option<usize> {
@@ -455,7 +477,35 @@ impl Render for QuickOpenInput {
 
 #[cfg(test)]
 mod tests {
-    use super::{accepts_native_text_event, remove_marked_preedit};
+    use super::{
+        accepts_native_text_event, quick_open_enter_accepts_match, quick_open_target_is_active,
+        remove_marked_preedit,
+    };
+
+    #[test]
+    fn e01_quick_open_dialog_only_closes_for_the_actual_target_editor() {
+        let workspace = tempfile::tempdir().unwrap();
+        let first = workspace.path().join("first.txt");
+        let second = workspace.path().join("second.txt");
+        std::fs::write(&first, "first").unwrap();
+        std::fs::write(&second, "second").unwrap();
+        assert!(!quick_open_target_is_active(&first, None));
+        assert!(!quick_open_target_is_active(&first, Some(second.as_path())));
+        assert!(quick_open_target_is_active(
+            &first,
+            Some(dunce::canonicalize(&first).unwrap().as_path()),
+        ));
+    }
+
+    #[test]
+    fn e01_quick_open_enter_ignores_ime_candidate_confirmation() {
+        assert!(!quick_open_enter_accepts_match("enter", true, true));
+        assert!(!quick_open_enter_accepts_match("return", true, true));
+        assert!(!quick_open_enter_accepts_match("enter", false, false));
+        assert!(!quick_open_enter_accepts_match("escape", false, true));
+        assert!(quick_open_enter_accepts_match("Enter", false, true));
+        assert!(quick_open_enter_accepts_match("return", false, true));
+    }
 
     #[test]
     fn both_terminal_and_explorer_reject_delayed_ime_events_after_blur() {
