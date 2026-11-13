@@ -38,7 +38,9 @@ impl Workbench {
             self.reject_shared_mcp_setting(&command.request_id, "ui_operation_failed", cx);
             return;
         };
-        if !NativeSettings::writable(path) {
+        // Host ownership determines the read path. Being read-only to MCP
+        // must NOT fall back to the obsolete Native JSON state.
+        if !NativeSettings::shared_host_owned(path) {
             self.reject_shared_mcp_setting(&command.request_id, "ui_not_ready", cx);
             return;
         }
@@ -49,6 +51,12 @@ impl Workbench {
         let operation = if command.action == "get_setting" {
             None
         } else if command.action == "update_setting" {
+            // Writes remain limited to the original five explicitly approved
+            // MCP scalar paths; shared read-only fields cannot be bypassed.
+            if !NativeSettings::writable(path) {
+                self.reject_shared_mcp_setting(&command.request_id, "ui_not_ready", cx);
+                return;
+            }
             match (
                 command.arguments.get("expectedValue"),
                 command.arguments.get("value"),

@@ -223,6 +223,14 @@ impl NativeSettings {
         })
     }
 
+    /// Ownership is independent of MCP write permission. Every Classic/GPUI
+    /// shared setting must be read from the Rust Runtime Host snapshot, even
+    /// when its user-facing control is read-only to MCP.
+    pub fn shared_host_owned(path: &str) -> bool {
+        alera_core::desktop_settings_contract::SHARED_DESKTOP_PATHS.contains(&path)
+            || alera_core::desktop_settings_contract::extended_portable(path)
+            || path == "agents.quotaUnpinnedKeys"
+    }
     pub fn writable(path: &str) -> bool {
         matches!(
             path,
@@ -635,6 +643,39 @@ impl Drop for SettingsFileLock {
 mod tests {
     use super::*;
 
+    #[test]
+    fn s02_mcp_shared_reads_use_host_for_read_only_and_extended_settings() {
+        for path in [
+            "editor.twoRowTabs",
+            "general.confirmProjectRemoval",
+            "general.confirmWorkspaceRemoval",
+            "general.autoArchiveWorkspacesAfterDays",
+            "terminal.fontFamily",
+            "editor.themeName",
+            "agents.quotaUnpinnedKeys",
+            "agents.defaultAgentProfileId",
+            "editor.quickOpenExcludedDirectories",
+        ] {
+            assert!(
+                NativeSettings::shared_host_owned(path),
+                "MCP get_setting must use Host snapshot, never old Native JSON: {path}"
+            );
+        }
+        assert!(!NativeSettings::writable("editor.twoRowTabs"));
+        assert!(!NativeSettings::writable("general.confirmProjectRemoval"));
+        assert!(NativeSettings::shared_host_owned("editor.tabSize"));
+        assert!(NativeSettings::writable("editor.tabSize"));
+        for unknown in [
+            "native.agentExecutablePath",
+            "ai.provider.apiKey",
+            "unsupported",
+        ] {
+            assert!(
+                !NativeSettings::shared_host_owned(unknown),
+                "unowned MCP setting must fail closed: {unknown}"
+            );
+        }
+    }
     #[test]
     fn legacy_two_row_tabs_persists_for_one_time_host_migration_only() {
         let dir = tempfile::tempdir().unwrap();

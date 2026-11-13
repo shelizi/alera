@@ -5835,73 +5835,11 @@ impl Workbench {
     /// The Host authenticates the Agent and allowlists the path. Native
     /// independently rechecks its live Workspace registration and store,
     /// and acknowledges shared scalar settings only after Rust Host readback.
+    /// Shared settings have one owner: Rust Runtime Host. The historical
+    /// Native JSON store is migration-only and must never answer MCP get or
+    /// update requests, including read-only safety and extended preferences.
     fn apply_native_mcp_setting(&mut self, command: &NativeMcpUiCommand, cx: &mut Context<Self>) {
-        if command
-            .arguments
-            .get("path")
-            .and_then(serde_json::Value::as_str)
-            .is_some_and(NativeSettings::writable)
-        {
-            self.apply_shared_mcp_setting(command.clone(), cx);
-            return;
-        }
-        let result: Result<(NativeSettings, serde_json::Value), &'static str> = (|| {
-            let authorized = self.mcp_host_workspaces.iter().any(|workspace| {
-                workspace.id == command.workspace_id
-                    && dunce::canonicalize(&workspace.path).is_ok_and(|path| path.is_dir())
-            });
-            if !authorized {
-                return Err("workspace_missing");
-            }
-            let path = command
-                .arguments
-                .get("path")
-                .and_then(|value| value.as_str())
-                .ok_or("ui_operation_failed")?;
-            let store = self.native_settings_store.as_ref().ok_or("ui_not_ready")?;
-            let settings = if command.action == "get_setting" {
-                store.read().map_err(|_| "ui_operation_failed")?
-            } else {
-                let expected = command
-                    .arguments
-                    .get("expectedValue")
-                    .ok_or("ui_operation_failed")?;
-                let value = command
-                    .arguments
-                    .get("value")
-                    .ok_or("ui_operation_failed")?;
-                store
-                    .compare_and_set(path, expected, value)
-                    .map_err(|_| "ui_operation_failed")?
-            };
-            let readback = settings.get(path).ok_or("ui_operation_failed")?;
-            Ok((settings, readback))
-        })();
-        match result {
-            Ok((settings, readback)) => {
-                self.install_native_settings(settings, cx);
-                if let Some(bridge) = self.mcp_ui_bridge.as_mut() {
-                    if bridge
-                        .complete_setting(&command.request_id, &readback)
-                        .is_err()
-                    {
-                        self.mcp_ui_status =
-                            "MCP: Native setting applied, but Host receipt failed".into();
-                    } else {
-                        self.mcp_ui_status =
-                            format!("MCP: Native {} readback confirmed", command.action);
-                    }
-                }
-            }
-            Err(code) => {
-                self.mcp_ui_status =
-                    "MCP: Native setting not changed or readback unavailable".into();
-                if let Some(bridge) = self.mcp_ui_bridge.as_mut() {
-                    let _ = bridge.complete(&command.request_id, false, None, Some(code));
-                }
-            }
-        }
-        cx.notify();
+        self.apply_shared_mcp_setting(command.clone(), cx);
     }
 
     fn change_native_setting(
