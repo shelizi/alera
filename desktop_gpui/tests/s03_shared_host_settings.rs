@@ -433,3 +433,163 @@ fn s03_classic_cli_and_gpui_bridge_share_cas_and_persist_after_host_restart() {
     restarted.stop();
     assert!(!runtime.join("runtime-host.json").exists());
 }
+
+#[test]
+#[ignore = "opt in with ALERA_GPUI_TEST_CLI pointing at the experimental Windows alera.exe"]
+fn h02_classic_hook_switches_and_native_notification_settings_persist_through_real_host_restart() {
+    let cli = PathBuf::from(
+        std::env::var_os("ALERA_GPUI_TEST_CLI")
+            .expect("Set ALERA_GPUI_TEST_CLI to the absolute tested Windows CLI"),
+    );
+    assert!(cli.is_absolute() && cli.is_file());
+    let temp = tempfile::tempdir().unwrap();
+    let runtime = temp.path().join("h02-runtime");
+    let home = temp.path().join("h02-home");
+    std::fs::create_dir_all(&runtime).unwrap();
+    std::fs::create_dir_all(&home).unwrap();
+    let native = RuntimeCliBridge::new(&cli, &runtime);
+    assert!(native.agent_hook_settings_versioned_snapshot().is_err());
+    assert!(!runtime.join("runtime-host.json").exists());
+
+    let host = IsolatedHost::start(&cli, &runtime, &home);
+    let hooks_before = native.agent_hook_settings_versioned_snapshot().unwrap();
+    let codex_old = hooks_before.switches.get("codex").copied().unwrap_or(false);
+    let codex_new = !codex_old;
+    let native_changed = native
+        .agent_hook_settings_compare_and_set(&hooks_before, "codex", codex_new)
+        .expect("Native Codex Hook Host CAS");
+    assert_eq!(native_changed.revision, hooks_before.revision + 1);
+    assert_eq!(native_changed.switches.get("codex"), Some(&codex_new));
+    assert_eq!(
+        native
+            .agent_hook_settings_versioned_snapshot()
+            .unwrap()
+            .switches
+            .get("codex"),
+        Some(&codex_new)
+    );
+
+    // Classic uses authenticated runtimeSettings.update with an atomic
+    // expectedRevision. A stale Native observed snapshot must now fail.
+    let mut classic = ClassicRpc::connect(&host);
+    let classic_hooks = classic.call("runtimeSettings.get", json!({}));
+    assert_eq!(classic_hooks["ok"], true);
+    assert_eq!(
+        classic_hooks["payload"]["revision"],
+        native_changed.revision
+    );
+    assert_eq!(
+        classic_hooks["payload"]["agentStatusHooks"]["codex"],
+        codex_new
+    );
+    let claude_old = classic_hooks["payload"]["agentStatusHooks"]["claude"]
+        .as_bool()
+        .unwrap_or(false);
+    let claude_new = !claude_old;
+    let mut next_hooks = classic_hooks["payload"]["agentStatusHooks"]
+        .as_object()
+        .expect("Classic Host Hook map")
+        .clone();
+    next_hooks.insert("claude".into(), json!(claude_new));
+    let changed_by_classic = classic.call(
+        "runtimeSettings.update",
+        json!({"expectedRevision":native_changed.revision,"agentStatusHooks":next_hooks}),
+    );
+    assert_eq!(
+        changed_by_classic["ok"], true,
+        "Classic Hook update: {changed_by_classic}"
+    );
+    assert!(
+        classic
+            .events
+            .iter()
+            .any(|name| name == "runtimeSettingsChanged"),
+        "Classic connected client did not receive Host Hook change notification"
+    );
+    let after_classic = native.agent_hook_settings_versioned_snapshot().unwrap();
+    assert_eq!(after_classic.revision, native_changed.revision + 1);
+    assert_eq!(after_classic.switches.get("codex"), Some(&codex_new));
+    assert_eq!(after_classic.switches.get("claude"), Some(&claude_new));
+    assert!(
+        native
+            .agent_hook_settings_compare_and_set(&native_changed, "codex", codex_old)
+            .is_err(),
+        "stale Host revision cannot rewrite another desktop's Hook settings"
+    );
+    let still_new = native.agent_hook_settings_versioned_snapshot().unwrap();
+    assert_eq!(still_new.switches, after_classic.switches);
+    assert_eq!(still_new.revision, after_classic.revision);
+
+    // Notifications are *portable desktop settings*, not the Hook runtime
+    // revision; Classic's actual batch RPC is the writer for both booleans.
+    let notifications_before = classic.get();
+    let initial_enabled = notifications_before["values"]["agents.agentStatusNotificationsEnabled"]
+        .as_bool()
+        .unwrap();
+    let initial_finished = notifications_before["values"]
+        ["agents.agentStatusFinishedNotificationsEnabled"]
+        .as_bool()
+        .unwrap();
+    let changed_notifications = classic.batch(json!([
+        {"path":"agents.agentStatusNotificationsEnabled",
+         "expectedValue":initial_enabled,"value":!initial_enabled},
+        {"path":"agents.agentStatusFinishedNotificationsEnabled",
+         "expectedValue":initial_finished,"value":!initial_finished}
+    ]));
+    assert_eq!(
+        changed_notifications["ok"], true,
+        "Classic notification preference batch"
+    );
+    let native_prefs = native.desktop_settings_snapshot().unwrap();
+    assert_eq!(
+        native_prefs["values"]["agents.agentStatusNotificationsEnabled"],
+        !initial_enabled
+    );
+    assert_eq!(
+        native_prefs["values"]["agents.agentStatusFinishedNotificationsEnabled"],
+        !initial_finished
+    );
+    // Native settings controls update one reviewed scalar via separate CLI
+    // CAS and must not revert Classic's unrelated preferences.
+    native
+        .desktop_settings_compare_and_set(
+            "agents.agentStatusFinishedNotificationsEnabled",
+            &json!(!initial_finished),
+            &json!(initial_finished),
+        )
+        .unwrap();
+    assert_eq!(
+        classic.get()["values"]["agents.agentStatusFinishedNotificationsEnabled"],
+        initial_finished
+    );
+    assert!(
+        native
+            .desktop_settings_compare_and_set(
+                "agents.agentStatusNotificationsEnabled",
+                &json!(initial_enabled),
+                &json!(initial_enabled)
+            )
+            .is_err(),
+        "stale expected value must not overwrite Classic notification switch"
+    );
+
+    drop(classic);
+    host.stop();
+    assert!(native.agent_hook_settings_versioned_snapshot().is_err());
+    assert!(native.desktop_settings_snapshot().is_err());
+
+    let restarted = IsolatedHost::start(&cli, &runtime, &home);
+    let hooks_after_restart = native.agent_hook_settings_versioned_snapshot().unwrap();
+    assert_eq!(hooks_after_restart.revision, after_classic.revision);
+    assert_eq!(hooks_after_restart.switches, after_classic.switches);
+    let prefs_after_restart = native.desktop_settings_snapshot().unwrap();
+    assert_eq!(
+        prefs_after_restart["values"]["agents.agentStatusNotificationsEnabled"],
+        !initial_enabled
+    );
+    assert_eq!(
+        prefs_after_restart["values"]["agents.agentStatusFinishedNotificationsEnabled"],
+        initial_finished
+    );
+    restarted.stop();
+}
