@@ -4,6 +4,16 @@ use serde::Deserialize;
 use serde_json::Value;
 
 pub const REFRESH_INTERVAL_SECS: u64 = 5 * 60;
+/// Keep Classic/GPUI quota pin visibility in sync while its popover is open.
+/// Avoid the more frequent Host settings polling when neither UI is visible.
+pub const fn shared_quota_pin_poll_seconds(settings_open: bool, quota_popover_open: bool) -> u64 {
+    if settings_open || quota_popover_open {
+        3
+    } else {
+        15
+    }
+}
+
 const MAX_SNAPSHOTS: usize = 128;
 
 const PROVIDERS: &[(&str, &str)] = &[
@@ -361,10 +371,53 @@ pub fn merge_quota_snapshots(
     next
 }
 
+/// A failed account-scoped refresh only invalidates that one account's
+/// last readings; an all-provider refresh failure invalidates every row.
+/// This matches Classic and keeps unrelated healthy quota chips current.
+pub fn mark_failed_quota_refresh(snapshots: &mut [QuotaSnapshot], account: Option<(&str, &str)>) {
+    for snapshot in snapshots {
+        let affected = account.is_none_or(|(provider, account_id)| {
+            snapshot.provider == provider && snapshot.account_id == account_id
+        });
+        if affected && snapshot.status == "ok" {
+            snapshot.status = "stale".to_owned();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn failing_one_account_refresh_does_not_stale_unrelated_provider_readings() {
+        let fixtures = json!({"snapshots":[
+            {"provider":"claude","accountId":"default","status":"ok","windows":[{"label":"5h","usedPercent":20}]},
+            {"provider":"claude","accountId":"work","status":"ok","windows":[{"label":"5h","usedPercent":40}]},
+            {"provider":"codex","accountId":"default","status":"ok","windows":[{"label":"week","usedPercent":30}]}
+        ]});
+        let mut rows = parse_quota_snapshots(&fixtures).unwrap();
+        mark_failed_quota_refresh(&mut rows, Some(("claude", "work")));
+        assert_eq!(
+            rows.iter().map(|r| r.status.as_str()).collect::<Vec<_>>(),
+            vec!["ok", "stale", "ok"]
+        );
+        assert_eq!(rows[1].readings()[0].value, "60%");
+        mark_failed_quota_refresh(&mut rows, Some(("claude", "missing")));
+        assert_eq!(rows[0].status, "ok");
+        assert_eq!(rows[2].status, "ok");
+        mark_failed_quota_refresh(&mut rows, None);
+        assert!(rows.iter().all(|r| r.status == "stale"));
+    }
+
+    #[test]
+    fn quota_popover_prioritizes_shared_classic_pin_sync_without_fast_idle_polling() {
+        assert_eq!(shared_quota_pin_poll_seconds(false, false), 15);
+        assert_eq!(shared_quota_pin_poll_seconds(true, false), 3);
+        assert_eq!(shared_quota_pin_poll_seconds(false, true), 3);
+        assert_eq!(shared_quota_pin_poll_seconds(true, true), 3);
+    }
 
     #[test]
     fn classic_status_bar_refreshes_five_minutes_and_uses_compact_account_labels() {

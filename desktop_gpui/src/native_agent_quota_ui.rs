@@ -2,7 +2,8 @@
 //! Every query is read-only and performed on the background executor.
 use super::*;
 use alera_gpui_desktop::agent_quota::{
-    merge_quota_snapshots, parse_quota_snapshots, status_bar_account_label, QuotaReading,
+    mark_failed_quota_refresh, merge_quota_snapshots, parse_quota_snapshots,
+    status_bar_account_label, QuotaReading,
 };
 use std::io;
 use std::sync::OnceLock;
@@ -120,7 +121,7 @@ fn quota_overview_status(loading: bool, failed: bool, has_entries: bool) -> &'st
     } else if failed && !has_entries {
         "Quota unavailable · connect to the existing Runtime Host"
     } else if failed {
-        "Last refresh failed; previous readings are stale"
+        "Last refresh failed; affected readings may be stale"
     } else if !has_entries {
         "No quota data returned from Runtime Host"
     } else {
@@ -407,13 +408,14 @@ impl Workbench {
                         view.quota_error = None;
                     }
                     Err(error) => {
-                        // No new numbers were validated. Keep the old values
-                        // but mark them stale rather than claiming freshness.
-                        for item in &mut view.quota_snapshots {
-                            if item.status == "ok" {
-                                item.status = "stale".to_owned();
-                            }
-                        }
+                        // A failed single-account refresh must never stale
+                        // unrelated healthy providers in the status bar.
+                        mark_failed_quota_refresh(
+                            &mut view.quota_snapshots,
+                            account
+                                .as_ref()
+                                .map(|(provider, id)| (provider.as_str(), id.as_str())),
+                        );
                         view.quota_error = Some(error.to_string());
                     }
                 }

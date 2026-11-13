@@ -9340,7 +9340,9 @@ impl Workbench {
                     // Poll a narrow six-field Host snapshot off the UI
                     // thread: fast while Settings is open, bounded otherwise.
                     let settings_refresh_secs =
-                        if view.settings_section.is_some() { 3 } else { 15 };
+                        alera_gpui_desktop::agent_quota::shared_quota_pin_poll_seconds(
+                            view.settings_section.is_some(), view.quota_popover_open,
+                        );
                     if view.settings_shared_last_refresh.elapsed()
                         >= Duration::from_secs(settings_refresh_secs)
                     {

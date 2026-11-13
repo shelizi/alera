@@ -210,10 +210,62 @@ pub fn cli_writable(path: &str) -> bool {
     CLI_WRITABLE_PATHS.contains(&path)
 }
 
+/// CLI only accepts scalars except for the reviewed Classic quota pin array.
+/// Never broaden arbitrary shared Settings or credential writes.
+pub fn cli_set_value_allowed(path: &str, value: &serde_json::Value) -> bool {
+    if !cli_writable(path) {
+        return false;
+    }
+    if path == "agents.quotaUnpinnedKeys" {
+        valid_quota_unpinned_keys(value)
+    } else {
+        !value.is_array() && !value.is_object()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::collections::HashSet;
+
+    #[test]
+    fn cli_set_accepts_only_validated_quota_pin_arrays_not_arbitrary_objects_or_lists() {
+        let valid = serde_json::json!(["claude:default", "agy", "codex:work"]);
+        assert!(cli_set_value_allowed("agents.quotaUnpinnedKeys", &valid));
+        assert!(cli_set_value_allowed(
+            "agents.quotaUnpinnedKeys",
+            &serde_json::json!([])
+        ));
+        assert!(!cli_set_value_allowed(
+            "agents.quotaUnpinnedKeys",
+            &serde_json::json!(["agy", "agy"])
+        ));
+        assert!(!cli_set_value_allowed(
+            "agents.quotaUnpinnedKeys",
+            &serde_json::json!(true)
+        ));
+        assert!(!cli_set_value_allowed(
+            "agents.quotaUnpinnedKeys",
+            &serde_json::json!({"tokens":"secret"})
+        ));
+        assert!(!cli_set_value_allowed("general.language", &valid));
+        assert!(!cli_set_value_allowed(
+            "editor.twoRowTabs",
+            &serde_json::json!({"enabled":true})
+        ));
+        assert!(cli_set_value_allowed(
+            "general.language",
+            &serde_json::json!("system")
+        ));
+        assert!(cli_set_value_allowed(
+            "editor.twoRowTabs",
+            &serde_json::json!(true)
+        ));
+        assert!(!cli_set_value_allowed(
+            "agents.executablePath",
+            &serde_json::json!("private")
+        ));
+    }
 
     #[test]
     fn safe_cli_writes_are_only_a_subset_of_shared_rust_settings() {
