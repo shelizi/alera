@@ -37,3 +37,9 @@ Base：`f6d09cdd8326e2d6522ffde849805e79e018a382`
 - 所有程式修改均在獨立 feature worktree。Cargo 使用既有 Windows 外部 target 快取，由主控執行。
 - **GPUI Model／Persona 編輯 UI、Host 讀回與指定 Agent 的唯讀動態探索選單已接上，但沒有連接真實 Provider 的探索正向結果或 Windows GUI 滑鼠／鍵盤／注音實測**。某些 Classic 靜態清單和所有 Managed 安全進階選項仍待對齊，不能宣稱整體 T07 DONE。
 - 已核對 CLI／Host 整合測試結果，並保留降低沙盒／核准防護的既有確認門檻；沒有修改真實憑證、正式 Runtime／PTY，也不合併 main、Push、部署、Release。原主追蹤 `NOW=T07`、`supported=false`。
+
+## Native Bridge 實際 Host 驗證與 T07 功能支線收斂（2026-11-13）
+
+- 新增獨立可選的 Rust 測試 `agent_runtime_bridge::tests::managed_selection_native_bridge_roundtrip_via_disposable_host`，以同 worktree 編譯 CLI、臨時 Runtime 啟動/停止可拋棄 Host，不讀正式帳號資料；實測 **1/1 PASS**。Native Bridge 真實執行 Load Model/Persona、Model/Persona Save、Host Show 讀回、舊版 CAS 拒寫及 Clear Persona，原有 Permission Mode／Custom Prompt 都未被覆蓋。CLI 透過 `ALERA_GPUI_TEST_CLI_PATH` 明確選取；一般 Cargo 測試 `#[ignore]` 不會自動啟動 Host。
+- 已將先前獨立 Provider 啟動錯誤提示 `ba999e6c9` 在此專用 T07 功能 worktree 做功能層收斂，保留 `local_agent_detection.rs` 分類與 `main.rs` 使用靜態安全文案。它只能區分 Host 無法連接、CLI 不存在、權限拒絕、Profile 改變等**可確認失敗**，不能把 Runtime Host 的 `unauthorized` 當成 Provider Token 過期，沒有可信認證資料時保持「登入狀態未知」。
+- 收斂後定向 Rust **Provider 1/1、Managed 2/2、探索 3/3 PASS**，Windows Native Binary **34/34 PASS**，EXE 編譯結果依本輪終端記錄；實際 Windows GUI 點擊/注音與真 Provider 認證仍待驗。此收斂只在 feature branch；**沒有合進中央 GPUI integration 或 main**，不 Push、部署或發版，`supported=false`。

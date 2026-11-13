@@ -79,7 +79,9 @@ use alera_gpui_desktop::history_sync_bridge::{
 use alera_gpui_desktop::host_tab_pins::{
     host_pin_owner_coverage, host_pin_query_workspaces, HostPinOwnerCoverage, HostTabPinSnapshot,
 };
-use alera_gpui_desktop::local_agent_detection::{detect_installed_agent_clis, InstalledAgentCli};
+use alera_gpui_desktop::local_agent_detection::{
+    classify_agent_profile_launch_failure, detect_installed_agent_clis, InstalledAgentCli,
+};
 use alera_gpui_desktop::managed_choice_discovery::{
     discover_choices, discovery_arguments, ManagedChoiceKind,
 };
@@ -6525,8 +6527,9 @@ impl Workbench {
                     }
                     Err(error) => {
                         view.agent_launch_pane = None;
+                        let guidance = classify_agent_profile_launch_failure(&error).guidance();
                         view.agent_status = format!(
-                            "Agent launch not confirmed: {error}. Check Attach existing before retrying; the Host might have created the tab"
+                            "Agent launch not confirmed: {guidance} Check Attach existing before retrying; the Host might have created the tab."
                         );
                         view.refresh_terminals(cx);
                     }
