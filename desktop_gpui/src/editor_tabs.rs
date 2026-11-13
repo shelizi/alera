@@ -1558,6 +1558,105 @@ mod tests {
     }
 
     #[test]
+    fn e01_preview_promote_and_quick_open_reopen_keep_one_dirty_buffer() {
+        use crate::model::WorkbenchModel;
+
+        let workspace = tempfile::tempdir().unwrap();
+        let mut model = WorkbenchModel::new(workspace.path()).unwrap();
+        let root = model.root().to_path_buf();
+        let file = root.join("notes.txt");
+        fs::write(&file, "first\nsecond\n").unwrap();
+
+        // Single-click Explorer preview: one replaceable read-only tab.
+        assert!(model.preview_path(&file));
+        assert_eq!(model.tabs().len(), 1);
+        assert!(model.active_document().unwrap().transient);
+
+        // Double-click promote: the preview chip pins, the editable workbench
+        // takes canonical ownership and the read-only chip is released.
+        assert!(model.open_path(&file));
+        assert!(!model.active_document().unwrap().transient);
+        let mut tabs = EditorTabs::new(None);
+        assert!(matches!(
+            tabs.open_file(&root, &file).unwrap(),
+            OpenEffect::Opened { recovered: false }
+        ));
+        assert!(model.release_path(&file));
+        assert!(model.tabs().is_empty());
+
+        // Dirty buffer and Undo live in the single editable session.
+        tabs.document_mut()
+            .unwrap()
+            .replace(None, "edited")
+            .unwrap();
+        assert!(tabs.document().unwrap().is_dirty());
+        assert!(tabs.document_mut().unwrap().undo());
+        assert!(!tabs.document().unwrap().is_dirty());
+        tabs.document_mut()
+            .unwrap()
+            .replace(None, "edited")
+            .unwrap();
+        assert!(tabs.document().unwrap().is_dirty());
+
+        // Ctrl+P reopening the SAME file must not mint a second editable tab.
+        // The quick-open path pins a preview chip first; the editor focus
+        // path then releases it, exactly like the Explorer promote flow.
+        assert!(model.open_path(&file));
+        assert!(matches!(
+            tabs.open_file(&root, &file).unwrap(),
+            OpenEffect::Focused | OpenEffect::AlreadyOpen
+        ));
+        assert_eq!(tabs.tab_labels().len(), 1);
+        assert_eq!(tabs.document().unwrap().content(), "first\nsecond\nedited");
+        assert!(tabs.document().unwrap().is_dirty());
+        assert!(model.release_path(&file));
+        assert!(model.tabs().is_empty());
+        assert_eq!(tabs.document().unwrap().path(), Some(file.as_path()));
+    }
+
+    #[test]
+    fn e01_same_basename_files_in_different_worktrees_stay_distinct() {
+        // Two worktrees can hold the same relative file name. Canonical
+        // root+path identity keeps them as separate editable documents.
+        let worktree_a = tempfile::tempdir().unwrap();
+        let worktree_b = tempfile::tempdir().unwrap();
+        fs::create_dir_all(worktree_a.path().join("src")).unwrap();
+        fs::create_dir_all(worktree_b.path().join("src")).unwrap();
+        let file_a = worktree_a.path().join("src").join("main.rs");
+        let file_b = worktree_b.path().join("src").join("main.rs");
+        fs::write(&file_a, "fn a() {}").unwrap();
+        fs::write(&file_b, "fn b() {}").unwrap();
+
+        let mut tabs = EditorTabs::new(None);
+        tabs.open_file(worktree_a.path(), &file_a).unwrap();
+        tabs.open_file(worktree_b.path(), &file_b).unwrap();
+        assert_eq!(tabs.tab_labels().len(), 2);
+        let first = tabs.tab_instance_at(0).unwrap();
+        let second = tabs.tab_instance_at(1).unwrap();
+        assert_ne!(first, second);
+
+        // Reopening either worktree's file focuses its own buffer and never
+        // collapses the two same-basename documents into one tab.
+        assert!(matches!(
+            tabs.open_file(worktree_a.path(), &file_a).unwrap(),
+            OpenEffect::Focused | OpenEffect::AlreadyOpen
+        ));
+        assert_eq!(tabs.tab_labels().len(), 2);
+        assert!(!tabs.document().unwrap().is_dirty());
+        assert_eq!(tabs.document().unwrap().content(), "fn a() {}");
+        assert!(matches!(
+            tabs.open_file(worktree_b.path(), &file_b).unwrap(),
+            OpenEffect::Focused | OpenEffect::AlreadyOpen
+        ));
+        assert_eq!(tabs.tab_labels().len(), 2);
+        assert_eq!(tabs.document().unwrap().content(), "fn b() {}");
+        assert_eq!(
+            tabs.document().unwrap().root(),
+            dunce::canonicalize(worktree_b.path()).unwrap().as_path()
+        );
+    }
+
+    #[test]
     fn pane_transfer_during_chinese_ime_preedit_is_refused_until_commit() {
         let workspace = tempfile::tempdir().unwrap();
         let root = workspace.path();

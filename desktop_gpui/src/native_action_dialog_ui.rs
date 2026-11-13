@@ -568,6 +568,7 @@ impl Workbench {
         cx: &mut Context<Self>,
     ) -> Option<gpui::AnyElement> {
         let input = self.quick_open.clone()?;
+        let input_for_enter = input.clone();
         if self.settings_section.is_some() || self.explorer_action.is_some() {
             return None;
         }
@@ -643,9 +644,11 @@ impl Workbench {
         let content = content.on_key_down(cx.listener(
             move |view, event: &gpui::KeyDownEvent, window, cx| {
                 let key = event.keystroke.key.as_str();
-                if (key.eq_ignore_ascii_case("enter") || key.eq_ignore_ascii_case("return"))
-                    && first_match.is_some()
-                {
+                if crate::quick_open_ui::quick_open_enter_accepts_match(
+                    key,
+                    input_for_enter.read(cx).composing(),
+                    first_match.is_some(),
+                ) {
                     if let Some(path) = &first_match {
                         view.choose_quick_open_path(path, window, cx);
                     }
@@ -659,6 +662,20 @@ impl Workbench {
     fn choose_quick_open_path(&mut self, path: &Path, window: &mut Window, cx: &mut Context<Self>) {
         if self.model.open_path(path) {
             self.open_editor(cx);
+            let opened_correct_file = self.focused_editor().is_some_and(|editor| {
+                crate::quick_open_ui::quick_open_target_is_active(
+                    path,
+                    editor.read(cx).document().path(),
+                )
+            });
+            if !opened_correct_file {
+                // Keep the dialog open. A failed Native Editor open must not
+                // pretend that the requested file was actually activated.
+                self.model
+                    .set_status("Quick Open could not activate this file; check the editor status");
+                cx.notify();
+                return;
+            }
             self.quick_open = None;
             self.persist_session();
             window.close_dialog(cx);
