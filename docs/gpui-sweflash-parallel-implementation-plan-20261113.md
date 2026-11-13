@@ -41,7 +41,7 @@ B 分支：feat/gpui-sweflash-e01-open-20261113；預備 worktree：.worktrees/g
 
 | 工作包 | 分支 | 子代理狀態 | 提交／驗收 | 整合 |
 | --- | --- | --- | --- | --- |
-| T07 Command/Prompt | feat/gpui-sweflash-t07-command-prompt-20261113 | PREPARED | 待開始 | 先審後整合 |
-| E01 Preview/Open | feat/gpui-sweflash-e01-open-20261113 | PREPARED | 待開始 | 等 T07 DONE |
+| T07 Command/Prompt | feat/gpui-sweflash-t07-command-prompt-20261113 | RUNNING（Devin SWE Flash High） | CLI 盤點中、未有功能 Commit | 先審後整合 |
+| E01 Preview/Open | feat/gpui-sweflash-e01-open-20261113 | RUNNING（Devin SWE Flash High） | CLI 盤點中、未有功能 Commit | 等 T07 DONE |
 
 PREPARED 並不代表子代理已啟動；必須有真實 CLI session 和輸出才可改成 RUNNING。只有經整合者驗收的正常 GUI 功能才能標 DONE。
