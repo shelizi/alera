@@ -66,3 +66,5 @@ PREPARED 並不代表子代理已啟動；必須有真實 CLI session 和輸出�
 
 
 **第八輪結束 T07 停滯／推進 E02（2026-11-13）**：使用者確認開發卡在 T07 過久，將進階 Provider Token 失效與實機 GUI 尚未驗證事項改為非阻塞後續驗收。主控在 `integrate/gpui-central-diff-into-main-20261112` 將已完成 Command／Prompt、Managed／Persona、Provider 安全分類的 T07 功能全數**合入 GPUI integration**，Commit `7c300ec04`，整合測試 Managed 2/2、唯讀探索 4/4、Provider 1/1、Windows Native 34/34、`cargo check` PASS；再合入 E01 Preview／正式開檔／Quick Open／注音 Enter 與 Editor 開檔確認，Commit `15c15b496`，E01 2/2、Native 36/36、`cargo check` PASS。E01 合併時只遇 `quick_open_ui.rs` 測試區一處衝突，保留 T07 多行 Prompt 與 E01 Enter/Editor activation 測試，已重跑通過。**下一個 NOW E02**，不宣稱兩項 GUI 實機 PASS；`main` 未變、不 Push／部署／Release，`supported=false`。
+
+**第九輪 E02 正常功能核心驗證、下一步 E03（2026-11-13）**：在 GPUI integration 分支，既有 EditorSearch 5/5、Save As Guard 2/2、Unicode Undo／Redo 1/1、磁碟 Save／衝突 1/1 合計 **9/9 PASS**；補齊 Windows `Ctrl+H`／macOS `Cmd+Alt+F` 取代入口，Commit `baa157e18`，Native Bin 36/36、Windows cargo check PASS。仍未實測真 GUI 找取代／儲存後重開，這些保留後續驗收，不阻塞正常功能開發。**NOW E03 Explorer 日常檔案操作**；`supported=false`，沒有改 main、Push 或 Release。
