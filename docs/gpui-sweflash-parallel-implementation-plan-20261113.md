@@ -43,7 +43,7 @@ B 分支：feat/gpui-sweflash-e01-open-20261113；預備 worktree：.worktrees/g
 | --- | --- | --- | --- | --- |
 | T07 Command/Prompt | feat/gpui-sweflash-t07-command-prompt-20261113 | REVIEW／GUI 待驗 | 安全 stdin 5f0d602e6、UI f6d09cdd8；CLI 7/7、GPUI 3/3、隔離 Host 1/1、內容投影與多行輸入 2/2、Native EXE／回歸 PASS；GUI 測試受工作區政策阻擋 | 先審後整合 |
 | E01 Preview/Open | feat/gpui-sweflash-e01-open-20261113 | REVIEW／Rust 專項 PASS | 測試稿 25926c6b9；2/2 Rust PASS、fmt／diff PASS；Windows GUI 待驗 | 等 T07 DONE |
-| T07 Managed Model／Persona | feat/gpui-sweflash-t07-managed-20261113 | REVIEW／底層已驗 | CLI stdin 選項安全更新 4d934b687；CLI 4/4＋隔離 Host 1/1 PASS；Persona→Host `agent`，其餘設定與風險控制保留；GPUI UI 待接 | T07 內先審後整合 |
+| T07 Managed Model／Persona | feat/gpui-sweflash-t07-managed-20261113 | REVIEW／Native UI 編譯已驗 | CLI 4d934b687：4/4＋Host 1/1；Native UI 8dfd89405：2/2＋Binary 34/34；唯讀探索 5262b589e：3/3＋Binary 34/34；Windows EXE PASS。真實 GUI／Provider 探索待驗 | T07 內先審後整合 |
 | T07 Provider 登入／過期提示 | feat/gpui-sweflash-t07-provider-ux-20261113 | REVIEW／部分完成 | 安全錯誤分類 ba999e6c9；Rust 1/1、Windows GPUI cargo check PASS。未登入／過期仍缺可信 Host typed auth state，不能猜測 | T07 內先審後整合 |
 
 PREPARED 並不代表子代理已啟動；必須有真實 CLI session 和輸出才可改成 RUNNING。只有經整合者驗收的正常 GUI 功能才能標 DONE。
@@ -57,3 +57,5 @@ PREPARED 並不代表子代理已啟動；必須有真實 CLI session 和輸出�
 **第四輪平行派工（2026-11-13）**：以 T07 正向編輯分支 Commit `f6d09cdd8` 作共同 base，建立 `feat/gpui-sweflash-t07-managed-20261113` 與 `feat/gpui-sweflash-t07-provider-ux-20261113` 兩個獨立 worktree，分別透過 Devin SWE-2 Flash High 啟動 Managed Model/Persona 安全更新以及 Provider 錯誤狀態 UX。限制為 source-only，不可執行 Cargo／Host／Provider、建立外部建置 Junction、Push 或部署。子代理完成前表內的 RUNNING 不是驗收通過；主控依 test+review Gate 審查，**原 NOW 仍 T07，E01 仍待 T07 正向 GUI 結案才能整合**。
 
 **第四輪派工結果（2026-11-13）**：兩個 SWE Flash High 子代理確實啟動但停留於盤點，其中 Provider 工作線由主控停止、Managed 逾時，**都未由子代理產生程式修改**。主控接手並在各自隔離分支提交：Provider 安全啟動錯誤提示 `ba999e6c9`（Rust 1/1、Windows GPUI check PASS，未知認證不能誤判過期）；Managed CLI Model／Persona 有界 stdin patch `4d934b687`（CLI 4/4、可拋棄 Host 1/1 PASS；實測發現 Classic Persona 實際對應 Rust Managed `agent`，已修正映射，其他 Host-managed 參數與 risk gate 保留）。兩支皆無 Windows GUI 驗收，**不合入 GPUI integration／main，不 Push、不部署**；T07 仍 NOW，E01 依原順序排隊。
+
+**第五輪 Native Managed UI 與選項探索（2026-11-13）**：在 Managed 功能 worktree 以既有 CLI `4d934b687` 為基礎，主控新增並提交 GPUI 內容載入／保存／清空 `8dfd89405`（Model／Persona 僅投影、Host revision CAS、獨立 Show 讀回、IME 保護、切換 Profile 清除）。再新增 `5262b589e`：依 Classic 固定 read-only CLI 命令提供選擇性 Refresh Models／Personas 與可點擊選項；Codex/Cursor/Antigravity/Grok/OpenCode 模型與 AGY/OpenCode Persona 有解析契約，其他仍可手動精確輸入。探索不自動觸發、輸出 1 MiB／最多 128 筆／30s、無任意 shell 參數。UI/Bridge 專項 2/2、探索 3/3、Native Bin 34/34、Windows EXE 編譯均 PASS；**沒有對真實 Provider 做探索成功驗收，且 Windows GUI 操作仍待驗，T07 不宣告 DONE／不合主線**。
