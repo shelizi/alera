@@ -63,11 +63,11 @@ use alera_gpui_desktop::git_history::{
     compare_git_refs, preview_commit, GitHistoryOptions, GitHistorySnapshot, HISTORY_PAGE_STEP,
     MAX_HISTORY_PAGE,
 };
-use alera_gpui_desktop::git_inspect::read_file_diff_page;
 use alera_gpui_desktop::git_inspect::{
     read_file_diff, read_file_diff_for_area, read_git_original_for_area, GitChangeArea,
     GitRefreshGate, GitSnapshot,
 };
+use alera_gpui_desktop::git_inspect::{read_file_diff_page, read_file_diff_page_for_area};
 use alera_gpui_desktop::git_original_tabs::GitOriginalTabs;
 use alera_gpui_desktop::git_sidebar_layout::{
     layout_git_sidebar, section_keys, FolderKey, GitSidebarEntry, GitSidebarGroupMode,
@@ -487,7 +487,8 @@ enum RightSidebarView {
 #[derive(Clone)]
 struct GitFileDiffPaging {
     relative: PathBuf,
-    /// Stable for this file selection, even as each page request increments
+    area: Option<GitChangeArea>,
+    /// Stable for this exact file AND status area, even as each request increments
     /// git_diff_request. Re-selecting the same filename gets a fresh identity.
     source_ticket: u64,
     start_line: usize,
@@ -4024,7 +4025,7 @@ impl Workbench {
         // A general Git preview can use the independently bounded patch
         // pager; exact Staged/Changes/Original previews retain their area.
         if native_center_git_diff_ui::uses_paged_git_preview(area, original) {
-            self.preview_git_change_paged(relative, cx);
+            self.preview_git_change_paged(relative, area, cx);
             return;
         }
         self.git_file_diff_paging = None;
@@ -4062,14 +4063,19 @@ impl Workbench {
         cx.notify();
     }
 
-    fn preview_git_change_paged(&mut self, relative: PathBuf, cx: &mut Context<Self>) {
+    fn preview_git_change_paged(
+        &mut self,
+        relative: PathBuf,
+        area: Option<GitChangeArea>,
+        cx: &mut Context<Self>,
+    ) {
         // A new click is a new dialog source even if it chooses the same file.
         // Paging preserves its source ticket, but re-selection invalidates it.
         self.center_git_diff_source = None;
         self.center_git_diff_hunk = None;
         self.center_git_diff_rows = Arc::new(Vec::new());
         self.git_file_diff_paging = None;
-        self.load_git_file_diff_page(relative, 0, Vec::new(), cx);
+        self.load_git_file_diff_page(relative, area, 0, Vec::new(), cx);
     }
 
     fn change_git_file_diff_page(&mut self, forward: bool, cx: &mut Context<Self>) {
@@ -4094,12 +4100,14 @@ impl Workbench {
             previous_start
         };
         let relative = state.relative.clone();
-        self.load_git_file_diff_page(relative, next_start, previous, cx);
+        let area = state.area;
+        self.load_git_file_diff_page(relative, area, next_start, previous, cx);
     }
 
     fn load_git_file_diff_page(
         &mut self,
         relative: PathBuf,
+        area: Option<GitChangeArea>,
         start_line: usize,
         previous_starts: Vec<usize>,
         cx: &mut Context<Self>,
@@ -4116,11 +4124,12 @@ impl Workbench {
         let source_ticket = self
             .git_file_diff_paging
             .as_ref()
-            .filter(|current| current.relative == relative)
+            .filter(|current| current.relative == relative && current.area == area)
             .map(|current| current.source_ticket)
             .unwrap_or(ticket);
         self.git_file_diff_paging = Some(GitFileDiffPaging {
             relative: relative.clone(),
+            area,
             source_ticket,
             start_line,
             next_line: None,
@@ -4130,7 +4139,14 @@ impl Workbench {
         self.git_diff_loading = true;
         cx.spawn(async move |view, cx| {
             let result = cx
-                .background_spawn(async move { read_file_diff_page(&root, &relative, start_line) })
+                .background_spawn(async move {
+                    match area {
+                        Some(area) => {
+                            read_file_diff_page_for_area(&root, &relative, area, start_line)
+                        }
+                        None => read_file_diff_page(&root, &relative, start_line),
+                    }
+                })
                 .await;
             view.update(cx, |view, cx| {
                 if view.workspace_generation != generation || view.git_diff_request != ticket {

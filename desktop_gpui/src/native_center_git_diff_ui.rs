@@ -62,7 +62,9 @@ pub(super) fn uses_paged_git_preview(area: Option<GitChangeArea>, original: bool
     !original
         && matches!(
             area,
-            None | Some(GitChangeArea::Changes) | Some(GitChangeArea::Untracked)
+            None | Some(GitChangeArea::Staged)
+                | Some(GitChangeArea::Changes)
+                | Some(GitChangeArea::Untracked)
         )
 }
 
@@ -166,6 +168,7 @@ impl Workbench {
             workspace_generation: self.workspace_generation,
             source_ticket: paging.source_ticket,
             relative: paging.relative.clone(),
+            area: paging.area,
         });
         // Switch the active surface, not the snapshot ownership: the original
         // remains in GitOriginalTabs and can be selected again without losing data.
@@ -269,7 +272,11 @@ impl Workbench {
                             .text_color(rgb(TEXT))
                             .truncate()
                             .child(format!(
-                                "Git Diff · {}",
+                                "Git Diff · {} · {}",
+                                self.center_git_diff_source
+                                    .as_ref()
+                                    .map(|source| source.area.map_or("AUTO", GitChangeArea::title))
+                                    .unwrap_or("UNKNOWN"),
                                 self.center_git_diff_source
                                     .as_ref()
                                     .map(|source| source.relative.display().to_string())
@@ -469,6 +476,7 @@ mod tests {
             workspace_generation: 3,
             source_ticket: 9,
             relative: "src/diff.txt".into(),
+            area: Some(GitChangeArea::Changes),
         };
         let mut selected_source = Some(source);
         let mut selected_hunk = Some(2);
@@ -512,6 +520,7 @@ mod tests {
             workspace_generation: 5,
             source_ticket: 18,
             relative: "first.txt".into(),
+            area: Some(GitChangeArea::Changes),
         });
         let mut hunk = Some(1);
         let mut original_active = false;
@@ -612,14 +621,24 @@ mod tests {
         assert_eq!(center_hunk_target(&[], Some(0), false), None);
     }
     #[test]
-    fn git_change_rows_expose_bounded_center_diff_without_mixing_staged_previews() {
+    fn g02_staged_patch_can_expand_into_exact_center_paged_source() {
+        assert!(uses_paged_git_preview(Some(GitChangeArea::Staged), false));
+        assert!(uses_paged_git_preview(Some(GitChangeArea::Changes), false));
+        assert!(!uses_paged_git_preview(Some(GitChangeArea::Staged), true));
+        assert!(!uses_paged_git_preview(
+            Some(GitChangeArea::Conflicts),
+            false
+        ));
+    }
+    #[test]
+    fn git_change_rows_expose_bounded_center_diff_with_exact_staged_previews() {
         assert!(uses_paged_git_preview(None, false));
         assert!(uses_paged_git_preview(Some(GitChangeArea::Changes), false));
         assert!(uses_paged_git_preview(
             Some(GitChangeArea::Untracked),
             false
         ));
-        assert!(!uses_paged_git_preview(Some(GitChangeArea::Staged), false));
+        assert!(uses_paged_git_preview(Some(GitChangeArea::Staged), false));
         assert!(!uses_paged_git_preview(
             Some(GitChangeArea::Conflicts),
             false

@@ -168,6 +168,7 @@ pub(super) struct GitDialogFileSource {
     pub(super) workspace_generation: u64,
     pub(super) source_ticket: u64,
     pub(super) relative: PathBuf,
+    pub(super) area: Option<GitChangeArea>,
 }
 
 pub(super) fn git_dialog_file_source_matches(
@@ -177,7 +178,9 @@ pub(super) fn git_dialog_file_source_matches(
 ) -> bool {
     current_generation == expected.workspace_generation
         && current.is_some_and(|paging| {
-            paging.source_ticket == expected.source_ticket && paging.relative == expected.relative
+            paging.source_ticket == expected.source_ticket
+                && paging.relative == expected.relative
+                && paging.area == expected.area
         })
 }
 
@@ -201,6 +204,7 @@ impl Workbench {
                 workspace_generation: self.workspace_generation,
                 source_ticket: paging.source_ticket,
                 relative: paging.relative.clone(),
+                area: paging.area,
             });
         let owner = cx.entity().downgrade();
         let patch_scroll = ScrollHandle::new();
@@ -797,6 +801,7 @@ mod git_preview_tests {
         git_patch_line_color, parse_unified_hunk_header, summarize_git_patch,
         visible_git_diff_rows, visible_git_hunk_targets, GitDialogFileSource, GitFileDiffPaging,
     };
+    use alera_gpui_desktop::git_inspect::GitChangeArea;
 
     #[test]
     fn expanded_git_preview_requires_loaded_nonempty_snapshot() {
@@ -855,9 +860,11 @@ mod git_preview_tests {
             workspace_generation: 42,
             source_ticket: 7,
             relative: "src/dirty.rs".into(),
+            area: Some(GitChangeArea::Changes),
         };
         let mut paging = GitFileDiffPaging {
             relative: "src/dirty.rs".into(),
+            area: Some(GitChangeArea::Changes),
             source_ticket: 7,
             start_line: 0,
             next_line: Some(750),
@@ -894,6 +901,26 @@ mod git_preview_tests {
         ));
     }
 
+    #[test]
+    fn g02_diff_source_refuses_same_file_with_different_staged_area() {
+        let expected = GitDialogFileSource {
+            workspace_generation: 5,
+            source_ticket: 9,
+            relative: "same.txt".into(),
+            area: Some(GitChangeArea::Staged),
+        };
+        let mut paging = GitFileDiffPaging {
+            relative: "same.txt".into(),
+            area: Some(GitChangeArea::Staged),
+            source_ticket: 9,
+            start_line: 0,
+            next_line: None,
+            previous_starts: Vec::new(),
+        };
+        assert!(git_dialog_file_source_matches(5, Some(&paging), &expected));
+        paging.area = Some(GitChangeArea::Changes);
+        assert!(!git_dialog_file_source_matches(5, Some(&paging), &expected));
+    }
     #[test]
     fn git_diff_gutter_tracks_old_and_new_line_numbers_through_multiple_hunks() {
         let patch = concat!(
