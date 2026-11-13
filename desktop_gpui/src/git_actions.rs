@@ -1475,14 +1475,28 @@ impl GitActions {
         for path in paths {
             selected.insert(self.relative(path, true)?);
         }
+        use git2::Status;
         let index = self.repo.index().map_err(|error| error.to_string())?;
-        if selected
-            .iter()
-            .any(|path| index.get_path(path, 0).is_none())
-        {
-            return Err("Selected file is not staged; refresh the Git changes list".into());
+        if index.has_conflicts() {
+            return Err("Resolve index conflicts before unstaging files".into());
         }
         drop(index);
+        // A staged deletion has no stage-0 index entry. Validate the INDEX
+        // status of every path before updating any index entries.
+        let staged_status = Status::INDEX_NEW
+            | Status::INDEX_MODIFIED
+            | Status::INDEX_DELETED
+            | Status::INDEX_RENAMED
+            | Status::INDEX_TYPECHANGE;
+        for path in &selected {
+            let status = self
+                .repo
+                .status_file(path)
+                .map_err(|error| error.to_string())?;
+            if status.contains(Status::CONFLICTED) || !status.intersects(staged_status) {
+                return Err("Selected file is not staged; refresh the Git changes list".into());
+            }
+        }
         match self.repo.head() {
             Ok(head) => {
                 let commit = head.peel_to_commit().map_err(|error| error.to_string())?;
@@ -2730,6 +2744,88 @@ mod tests {
             .is_err());
     }
 
+    #[test]
+    fn g01_batch_stage_unstage_includes_staged_deletion_and_preserves_worktree() {
+        let (_dir, actions) = repo_fixture();
+        let root = actions.root().to_path_buf();
+        // Commit a second tracked file, so its deletion is a normal Git
+        // staged deletion: the path is *absent* from the current index.
+        fs::write(root.join("removed.txt"), "remove from disk").unwrap();
+        actions.stage_file(Path::new("removed.txt")).unwrap();
+        actions.commit("track second file").unwrap();
+        let before_head = actions.repo.head().unwrap().target();
+        fs::remove_file(root.join("removed.txt")).unwrap();
+        fs::write(root.join("a.txt"), "first saved version").unwrap();
+        fs::write(root.join("new.txt"), "untracked contents").unwrap();
+        let selection = [
+            PathBuf::from("a.txt"),
+            PathBuf::from("new.txt"),
+            PathBuf::from("removed.txt"),
+        ];
+        assert_eq!(actions.stage_files(&selection).unwrap(), 3);
+        assert!(actions
+            .repo
+            .index()
+            .unwrap()
+            .get_path(Path::new("removed.txt"), 0)
+            .is_none());
+        // A later working-tree edit must remain untouched by Unstage.
+        fs::write(root.join("a.txt"), "later disk edit").unwrap();
+        let staged = crate::git_inspect::GitSnapshot::load(&root)
+            .unwrap()
+            .visible_rows("");
+        assert!(staged
+            .iter()
+            .any(|row| row.area == crate::git_inspect::GitChangeArea::Staged
+                && row.relative == Path::new("removed.txt")
+                && row.label == "D"));
+        assert!(staged
+            .iter()
+            .any(|row| row.area == crate::git_inspect::GitChangeArea::Changes
+                && row.relative == Path::new("a.txt")));
+        assert_eq!(actions.unstage_files(&selection).unwrap(), 3);
+        let remaining = crate::git_inspect::GitSnapshot::load(&root)
+            .unwrap()
+            .visible_rows("");
+        assert!(remaining
+            .iter()
+            .all(|row| row.area != crate::git_inspect::GitChangeArea::Staged));
+        assert!(remaining
+            .iter()
+            .any(|row| row.area == crate::git_inspect::GitChangeArea::Changes
+                && row.relative == Path::new("removed.txt")));
+        assert!(remaining.iter().any(|row| row.area
+            == crate::git_inspect::GitChangeArea::Untracked
+            && row.relative == Path::new("new.txt")));
+        assert_eq!(
+            fs::read_to_string(root.join("a.txt")).unwrap(),
+            "later disk edit"
+        );
+        assert_eq!(
+            fs::read_to_string(root.join("new.txt")).unwrap(),
+            "untracked contents"
+        );
+        assert!(!root.join("removed.txt").exists());
+        assert_eq!(actions.repo.head().unwrap().target(), before_head);
+    }
+
+    #[test]
+    fn g01_unstage_many_rejects_unstaged_selected_row_without_index_change() {
+        let (_dir, actions) = repo_fixture();
+        let root = actions.root();
+        fs::write(root.join("a.txt"), "staged content").unwrap();
+        fs::write(root.join("other.txt"), "not staged").unwrap();
+        actions.stage_file(Path::new("a.txt")).unwrap();
+        let before = actions.repo.index().unwrap().write_tree().unwrap();
+        assert!(actions
+            .unstage_files(&[PathBuf::from("a.txt"), PathBuf::from("other.txt")])
+            .is_err());
+        assert_eq!(actions.repo.index().unwrap().write_tree().unwrap(), before);
+        assert_eq!(
+            fs::read_to_string(root.join("a.txt")).unwrap(),
+            "staged content"
+        );
+    }
     #[test]
     fn explicit_stage_unstage_commit_do_not_stage_unrelated_file() {
         let (_dir, actions) = repo_fixture();

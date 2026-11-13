@@ -271,6 +271,34 @@ enum GitUiAction {
     MergeWithChoices(GitConflictPlan, Vec<(String, GitConflictChoice)>),
 }
 
+#[cfg(test)]
+mod g01_source_control_action_tests {
+    use super::GitUiAction;
+    use std::path::PathBuf;
+
+    #[test]
+    fn stage_and_unstage_are_index_only_but_discard_checkout_and_merge_are_not() {
+        assert!(GitUiAction::Stage(PathBuf::from("a.txt")).is_index_only());
+        assert!(GitUiAction::Unstage(PathBuf::from("a.txt")).is_index_only());
+        assert!(GitUiAction::StageMany(vec![PathBuf::from("a.txt")]).is_index_only());
+        assert!(GitUiAction::UnstageMany(vec![PathBuf::from("a.txt")]).is_index_only());
+        assert!(!GitUiAction::DiscardTracked(vec![PathBuf::from("a.txt")]).is_index_only());
+        assert!(!GitUiAction::SwitchBranch("feature".into()).is_index_only());
+        assert!(!GitUiAction::MergeWithoutConflicts("feature".into()).is_index_only());
+        assert!(!GitUiAction::Commit("message".into()).is_index_only());
+    }
+}
+impl GitUiAction {
+    /// Index-only Git actions may proceed with a dirty Native Editor.
+    /// They stage saved disk bytes, never the unsaved editor buffer.
+    fn is_index_only(&self) -> bool {
+        matches!(
+            self,
+            Self::Stage(_) | Self::Unstage(_) | Self::StageMany(_) | Self::UnstageMany(_)
+        )
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ConfirmGitAction {
     StashSave,
@@ -3265,7 +3293,9 @@ impl Workbench {
                 return;
             }
         }
-        if self.editor_dirty(cx) {
+        let unsaved_editors = self.editor_dirty(cx);
+        let index_only = action.is_index_only();
+        if unsaved_editors && !index_only {
             self.git_action_status = "Save unsaved editor buffers before changing Git".into();
             cx.notify();
             return;
@@ -3384,7 +3414,13 @@ impl Workbench {
                 view.git_sensitive_armed = None;
                 match result {
                     Ok(message) => {
-                        view.git_action_status = message;
+                        view.git_action_status = if index_only && unsaved_editors {
+                            format!(
+                                "{message}. Only saved disk bytes changed in Git; unsaved Editor text was not staged."
+                            )
+                        } else {
+                            message
+                        };
                         view.git_branch_delete_armed = None;
                         view.git_amend_preview = None;
                         view.git_commit_ref_target = None;
