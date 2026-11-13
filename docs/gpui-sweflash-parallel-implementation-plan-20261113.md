@@ -41,7 +41,9 @@ B 分支：feat/gpui-sweflash-e01-open-20261113；預備 worktree：.worktrees/g
 
 | 工作包 | 分支 | 子代理狀態 | 提交／驗收 | 整合 |
 | --- | --- | --- | --- | --- |
-| T07 Command/Prompt | feat/gpui-sweflash-t07-command-prompt-20261113 | RUNNING（Devin SWE Flash High） | CLI 盤點中、未有功能 Commit | 先審後整合 |
-| E01 Preview/Open | feat/gpui-sweflash-e01-open-20261113 | RUNNING（Devin SWE Flash High） | CLI 盤點中、未有功能 Commit | 等 T07 DONE |
+| T07 Command/Prompt | feat/gpui-sweflash-t07-command-prompt-20261113 | PAUSED（權限／建置隔離） | 未有功能 Commit；停止外部 target Junction 嘗試，待安全的免建置編輯流程 | 先審後整合 |
+| E01 Preview/Open | feat/gpui-sweflash-e01-open-20261113 | DRAFT／REVIEW | 測試稿 25926c6b9；fmt／diff PASS，Rust／Windows GUI 仍未驗收 | 等 T07 DONE |
 
 PREPARED 並不代表子代理已啟動；必須有真實 CLI session 和輸出才可改成 RUNNING。只有經整合者驗收的正常 GUI 功能才能標 DONE。
+
+**首次 Dispatch 安全紀錄**：兩條 SWE-2 Flash CLI 曾真實啟動，但因 build-storage 準備在各自新 worktree 建立 rust/target → D: 共用目標 Junction，不符隔離要求，已結束子代理程序並只解除兩個 Junction 連結（未刪除 D: 共用快取）。T07 無 Code Commit；E01 僅測試草稿已在專用分支提交、尚未整合。後續子代理不得自行建 junction 或操作外部 build target；改由整合者先核准可用的獨立建置位置，或僅授權 source edit、由整合者統一測試。
