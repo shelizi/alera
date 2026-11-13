@@ -577,7 +577,7 @@ impl RuntimeCliBridge {
                 "Unknown shared Settings path",
             ));
         }
-        self.desktop_settings_command(&[
+        let snapshot = self.desktop_settings_command(&[
             OsString::from("set"),
             OsString::from("--path"),
             OsString::from(path),
@@ -585,7 +585,9 @@ impl RuntimeCliBridge {
             OsString::from(expected.to_string()),
             OsString::from("--value"),
             OsString::from(next.to_string()),
-        ])
+        ])?;
+        validate_desktop_settings_cas_readback(path, next, &snapshot)?;
+        Ok(snapshot)
     }
 
     fn desktop_settings_command(&self, args: &[OsString]) -> io::Result<Value> {
@@ -1764,6 +1766,34 @@ fn validate_agent_hook_cas_readback(
     Ok(after)
 }
 
+/// The CLI may exit successfully while returning a stale/malformed Host
+/// snapshot. Only acknowledge a Settings edit after the specific field reads
+/// back as the requested value; do not confuse the two Client windows.
+fn validate_desktop_settings_cas_readback(
+    path: &str,
+    next: &Value,
+    snapshot: &Value,
+) -> io::Result<()> {
+    let readback = snapshot.get("values").and_then(|values| values.get(path));
+    let matches_requested = readback.is_some_and(|readback| {
+        if path == "terminal.fontSize" {
+            readback
+                .as_f64()
+                .zip(next.as_f64())
+                .is_some_and(|(a, b)| a == b)
+        } else {
+            readback == next
+        }
+    });
+    if !matches_requested {
+        return Err(io::Error::new(
+            ErrorKind::InvalidData,
+            "Shared settings Host CAS readback did not match requested value",
+        ));
+    }
+    Ok(())
+}
+
 fn validate_desktop_settings_response(verb: Option<&str>, response: &Value) -> io::Result<()> {
     let valid = match verb {
         Some("agent-hooks-get") => parse_agent_hook_settings_snapshot(response).is_ok(),
@@ -1788,6 +1818,41 @@ fn validate_desktop_settings_response(verb: Option<&str>, response: &Value) -> i
 mod tests {
     use super::*;
 
+    #[test]
+    fn s03_shared_settings_cas_rejects_mismatched_or_missing_host_readback() {
+        let correct = serde_json::json!({"values":{"editor.tabSize":8}});
+        assert!(validate_desktop_settings_cas_readback(
+            "editor.tabSize",
+            &serde_json::json!(8),
+            &correct
+        )
+        .is_ok());
+        let stale = serde_json::json!({"values":{"editor.tabSize":7}});
+        assert!(validate_desktop_settings_cas_readback(
+            "editor.tabSize",
+            &serde_json::json!(8),
+            &stale
+        )
+        .is_err());
+        assert!(validate_desktop_settings_cas_readback(
+            "editor.tabSize",
+            &serde_json::json!(8),
+            &serde_json::json!({"values":{}})
+        )
+        .is_err());
+        assert!(validate_desktop_settings_cas_readback(
+            "terminal.fontSize",
+            &serde_json::json!(13.0),
+            &serde_json::json!({"values":{"terminal.fontSize":13}})
+        )
+        .is_ok());
+        assert!(validate_desktop_settings_cas_readback(
+            "general.language",
+            &serde_json::json!("english"),
+            &serde_json::json!({"values":{"general.language":"system"}})
+        )
+        .is_err());
+    }
     #[test]
     fn discovers_classic_host_before_stale_standalone_cli_runtime() {
         let root = tempfile::tempdir().unwrap();
