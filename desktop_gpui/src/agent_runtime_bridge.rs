@@ -1065,6 +1065,141 @@ mod tests {
         );
     }
 
+    /// End-to-end T07 Native bridge test against a disposable Host.
+    /// Explicitly ignored by ordinary test runs: it requires a purpose-built
+    /// Alera CLI executable and must never discover or alter a user's Host.
+    #[test]
+    #[ignore = "requires ALERA_GPUI_TEST_CLI_PATH and a disposable isolated Runtime Host"]
+    fn managed_selection_native_bridge_roundtrip_via_disposable_host() {
+        use std::ffi::OsString;
+        use std::path::PathBuf;
+
+        let cli_path = std::env::var_os("ALERA_GPUI_TEST_CLI_PATH")
+            .map(PathBuf::from)
+            .expect("set ALERA_GPUI_TEST_CLI_PATH to an explicitly built test CLI");
+        assert!(
+            cli_path.is_absolute() && cli_path.is_file(),
+            "test CLI path must be an existing absolute executable"
+        );
+        let isolated_dir = tempfile::tempdir().expect("dedicated disposable runtime directory");
+        let runtime_dir = isolated_dir.path().join("runtime");
+        std::fs::create_dir(&runtime_dir).expect("isolated runtime state directory");
+
+        struct StopIsolatedHost {
+            cli: PathBuf,
+            runtime: PathBuf,
+        }
+        impl Drop for StopIsolatedHost {
+            fn drop(&mut self) {
+                let _ = windowless_command(&self.cli)
+                    .args([
+                        OsString::from("runtime"),
+                        OsString::from("--runtime-dir"),
+                        self.runtime.as_os_str().to_owned(),
+                        OsString::from("stop"),
+                        OsString::from("--force"),
+                    ])
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status();
+            }
+        }
+        let _host_guard = StopIsolatedHost {
+            cli: cli_path.clone(),
+            runtime: runtime_dir.clone(),
+        };
+        let started = windowless_command(&cli_path)
+            .arg("runtime")
+            .arg("--runtime-dir")
+            .arg(&runtime_dir)
+            .arg("start")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .expect("start explicit isolated Host");
+        assert!(started.success(), "dedicated test Host must start");
+
+        let cli = |args: &[&str]| -> Value {
+            let result = windowless_command(&cli_path)
+                .arg("agent-profile")
+                .arg("--runtime-dir")
+                .arg(&runtime_dir)
+                .arg("--json")
+                .arg("--no-start")
+                .args(args)
+                .output()
+                .expect("call isolated Agent Profile API");
+            assert!(
+                result.status.success(),
+                "test CLI returned nonzero status; never expose raw Host stderr"
+            );
+            serde_json::from_slice(&result.stdout).expect("Host Agent Profile response JSON")
+        };
+        let created = cli(&[
+            "create",
+            "--name",
+            "Managed Native Bridge QA",
+            "--agent-type",
+            "claude",
+            "--launch-mode",
+            "managed",
+            "--managed-config",
+            r#"{"model":"claude-old","agent":"old-persona","permissionMode":"manual"}"#,
+            "--custom-prompt",
+            "Keep these existing instructions",
+        ]);
+        let first = parse_saved_profile(created).expect("new Managed Host row");
+        assert_eq!(first.revision, Some(0));
+        assert!(first.managed);
+
+        let bridge = RuntimeCliBridge::new(cli_path.clone(), &runtime_dir);
+        let displayed = bridge
+            .load_agent_profile_managed_selection(&first)
+            .expect("Native should read only selected Model/Persona");
+        assert_eq!(displayed.model, "claude-old");
+        assert_eq!(displayed.persona, "old-persona");
+
+        let changed = bridge
+            .update_agent_profile_managed_selection(
+                &first,
+                Some(Some("claude-new")),
+                Some(Some("reviewer")),
+            )
+            .expect("Native typed stdin patch and post-save readback");
+        assert_eq!(changed.revision, Some(1));
+        let selected = bridge
+            .load_agent_profile_managed_selection(&changed)
+            .expect("confirmed updated selection");
+        assert_eq!(selected.model, "claude-new");
+        assert_eq!(selected.persona, "reviewer");
+
+        // A stale GPUI tab must not overwrite a newer Host revision.
+        assert!(bridge
+            .update_agent_profile_managed_selection(&first, Some(Some("stale-model")), None,)
+            .is_err());
+
+        let cleared = bridge
+            .update_agent_profile_managed_selection(&changed, None, Some(None))
+            .expect("Native Clear Persona should be a Host CAS patch");
+        assert_eq!(cleared.revision, Some(2));
+        let after_clear = bridge
+            .load_agent_profile_managed_selection(&cleared)
+            .expect("confirmed explicit Persona clear");
+        assert_eq!(after_clear.model, "claude-new");
+        assert!(after_clear.persona.is_empty());
+
+        // Inspect only a disposable fake profile's full JSON to verify other
+        // Host-owned fields were not discarded by Native's narrow edit.
+        let full = cli(&["show", "--profile-id", &first.id]);
+        assert_eq!(full["revision"], 2);
+        assert_eq!(full["managedConfig"]["model"], "claude-new");
+        assert!(full["managedConfig"].get("agent").is_none());
+        assert_eq!(full["managedConfig"]["permissionMode"], "manual");
+        assert_eq!(full["customPrompt"], "Keep these existing instructions");
+    }
+
     #[test]
     fn routing_update_requires_observed_revision_and_explicit_clear_flags() {
         let runtime = Path::new("C:/isolated/runtime");

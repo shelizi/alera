@@ -26,6 +26,8 @@ Base：`f6d09cdd8326e2d6522ffde849805e79e018a382`
 
 - CLI 專項原始四項測試 **4/4 PASS**，確認原設定保留、Adapter 支援限制與旗標衝突。
 - GPUI Managed Host 投影與 Bridge 定向 Rust **2/2 PASS**，Native Binary 回歸 **34/34 PASS**；Windows 原生 `cargo check --bin alera-gpui-desktop` 與 Debug EXE 編譯 **PASS**。
+- 新增 Native Bridge → 真實隔離 Host 選配端到端測試 `managed_selection_native_bridge_roundtrip_via_disposable_host`，明確使用獨立建立的測試 CLI `ALERA_GPUI_TEST_CLI_PATH` 與 tempfile Runtime，不接正式 Host；實測 **1/1 PASS**。覆蓋 Native Load／Model＋Persona Save／獨立 Host Show／舊 revision CAS 拒寫／Clear Persona／既有 Permission Mode 與 Prompt 不遺失。該測試設為 `#[ignore]`，避免一般測試自動啟動 Host。
+
 - Classic 相容 Model／Persona 探索定向 Rust parser **3/3 PASS**；該版 Native Binary 回歸 **34/34 PASS**、Windows 原生 `cargo check --bin alera-gpui-desktop` 與 Debug EXE 完整編譯 **PASS**。
 - 第一輪隔離 Host conformance 在測試 Profile 建立時被 Host 拒絕，原因先後是測試使用不合法的 `customFlag` 和 `persona` Managed key；已修正測試 fixture 並依 Classic/Host 契約將 Persona 變更對應到 `agent`。更正後 **CLI 4/4 PASS、隔離 Host 1/1 PASS**；Host 實測模型／Persona 寫入、Permission Mode 保留、舊 revision 拒絕、清空及獨立 Show 讀回。
 
