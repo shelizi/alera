@@ -8388,6 +8388,7 @@ impl Workbench {
             ("mixed-tab", "mixed-tab-focus", "mixed-tab-close")
         };
         let stopped_label = tab.stopped_label();
+        let agent_tooltip = tab.agent_status_tooltip();
         let identity = tab.identity;
         let icon_kind = match tab.kind {
             WorkbenchTabKind::Terminal | WorkbenchTabKind::Agent => UiIcon::Terminal,
@@ -8430,6 +8431,13 @@ impl Workbench {
             .child(
                 div()
                     .id((focus_id, index))
+                    .when(agent_tooltip.is_some(), |chip| {
+                        let text = agent_tooltip.clone().unwrap_or_default();
+                        chip.tooltip(move |window, cx| {
+                            gpui_kit::component::tooltip::Tooltip::new(text.clone())
+                                .build(window, cx)
+                        })
+                    })
                     .min_w_0()
                     .max_w(px(210.0))
                     .flex()

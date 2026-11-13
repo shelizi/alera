@@ -31,6 +31,33 @@ pub struct WorkbenchTab {
 }
 
 impl WorkbenchTab {
+    /// Human-readable status anchored to the verified Host identity. The
+    /// tooltip never reports a Hook for a stopped PTY, generic terminal or
+    /// Editor; labels contain no Agent prompt, tool input or credentials.
+    pub fn agent_status_tooltip(&self) -> Option<String> {
+        if self.kind != WorkbenchTabKind::Agent || !self.running {
+            return None;
+        }
+        let state = self.agent_state?;
+        let WorkbenchTabIdentity::Host(target) = &self.identity else {
+            return None;
+        };
+        let state_label = match (state, self.interrupted) {
+            (AgentActivityState::Working, _) => "Agent working",
+            (AgentActivityState::Waiting, _) => "Agent waiting",
+            (AgentActivityState::Blocked, _) => "Agent blocked",
+            (AgentActivityState::Done, true) => "Agent interrupted",
+            (AgentActivityState::Done, false) => "Agent done",
+        };
+        Some(format!(
+            "{state_label} · {}\nHost session: {} · Workspace: {} · Tab: {}",
+            self.title,
+            target.handle,
+            target.workspace_id(),
+            target.tab_id()
+        ))
+    }
+
     /// A stopped Host preview retains its last screen but must not look live.
     /// Editors are not Host PTYs, even if stale projection says otherwise.
     pub fn stopped_label(&self) -> Option<&'static str> {
@@ -361,6 +388,106 @@ mod tests {
         );
     }
 
+    #[test]
+    fn h01_agent_tooltip_reports_four_host_states_and_exact_tab_without_claiming_stopped_pty() {
+        let (mut agent, _) = host("pty-42", true);
+        assert!(agent.agent_status_tooltip().is_none());
+        for (state, label) in [
+            (AgentActivityState::Working, "Agent working"),
+            (AgentActivityState::Waiting, "Agent waiting"),
+            (AgentActivityState::Blocked, "Agent blocked"),
+            (AgentActivityState::Done, "Agent done"),
+        ] {
+            agent.agent_state = Some(state);
+            let tooltip = agent
+                .agent_status_tooltip()
+                .expect("Host-confirmed tooltip");
+            assert!(tooltip.contains(label), "{tooltip}");
+            assert!(tooltip.contains("pty-42"), "{tooltip}");
+            assert!(tooltip.contains("tab-pty-42"), "{tooltip}");
+            assert!(tooltip.contains("ws"), "{tooltip}");
+        }
+        agent.interrupted = true;
+        assert!(agent
+            .agent_status_tooltip()
+            .unwrap()
+            .contains("interrupted"));
+        agent.running = false;
+        assert!(
+            agent.agent_status_tooltip().is_none(),
+            "a stopped PTY cannot show a live Hook state"
+        );
+        let (mut shell, _) = host("pty-shell", false);
+        shell.agent_state = Some(AgentActivityState::Waiting);
+        assert!(
+            shell.agent_status_tooltip().is_none(),
+            "a plain terminal never claims an Agent Hook"
+        );
+        let mut editor = editor(7, 9);
+        editor.agent_state = Some(AgentActivityState::Waiting);
+        assert!(
+            editor.agent_status_tooltip().is_none(),
+            "editor Tabs never own Hook presence"
+        );
+    }
+
+    #[test]
+    fn h01_four_host_states_remain_in_original_split_pane_without_focus_or_pin_changes() {
+        use crate::workbench_panes::{PaneSlot, WorkbenchPaneLayout};
+        let (primary, primary_dock) = host("pty-primary", true);
+        let (secondary, secondary_dock) = host("pty-secondary", true);
+        let mut tabs = WorkbenchTabs::for_workspace(7);
+        let identities = vec![primary.identity.clone(), secondary.identity.clone()];
+        tabs.reconcile(
+            7,
+            vec![primary.clone(), secondary.clone()],
+            Some(primary.identity.clone()),
+        );
+        let mut panes = WorkbenchPaneLayout::new();
+        panes.reconcile(&identities);
+        assert!(panes.split_with(&secondary.identity));
+        assert!(tabs.set_pinned(&primary.identity, true));
+        let active = tabs.active().cloned();
+        for (state, interrupted) in [
+            (AgentActivityState::Working, false),
+            (AgentActivityState::Waiting, false),
+            (AgentActivityState::Blocked, false),
+            (AgentActivityState::Done, true),
+        ] {
+            let mut one = primary_dock.sessions[0].clone();
+            let mut two = secondary_dock.sessions[0].clone();
+            one.agent_state = Some(AgentActivityState::Working);
+            two.agent_state = Some(state);
+            two.interrupted = interrupted;
+            let _ = tabs.refresh_agent_statuses(&[one, two]);
+            let primary_visible = panes.visible_tabs_in(PaneSlot::Primary, tabs.entries());
+            let secondary_visible = panes.visible_tabs_in(PaneSlot::Secondary, tabs.entries());
+            assert_eq!(primary_visible.len(), 1);
+            assert_eq!(secondary_visible.len(), 1);
+            assert_eq!(primary_visible[0].identity, primary.identity);
+            assert_eq!(secondary_visible[0].identity, secondary.identity);
+            assert_eq!(
+                primary_visible[0].agent_state,
+                Some(AgentActivityState::Working)
+            );
+            assert_eq!(secondary_visible[0].agent_state, Some(state));
+            assert_eq!(secondary_visible[0].interrupted, interrupted);
+            assert!(secondary_visible[0]
+                .agent_status_tooltip()
+                .unwrap()
+                .contains("pty-secondary"));
+            assert!(!secondary_visible[0]
+                .agent_status_tooltip()
+                .unwrap()
+                .contains("pty-primary"));
+            assert_eq!(tabs.active(), active.as_ref());
+            assert_eq!(
+                panes.active_in(PaneSlot::Secondary),
+                Some(&secondary.identity)
+            );
+            assert!(tabs.is_pinned(&primary.identity));
+        }
+    }
     #[test]
     fn agent_hook_refresh_only_updates_exact_host_metadata_without_stealing_tab_focus() {
         let (agent, dock) = host("pty-agent-1", true);

@@ -2227,7 +2227,18 @@ impl TerminalDock {
                 }
                 continue;
             }
-            if change.agent_type.as_ref() != session.agent_type.as_ref() || change.state.is_none() {
+            // The Host may list a running PTY before its first Agent Hook.
+            // A redacted, authenticated delta with the same session/workspace/
+            // tab identity may identify it without creating or moving a PTY.
+            // Never replace a previously confirmed adapter with another one.
+            if change.state.is_none()
+                || change.agent_type.is_none()
+                || session
+                    .agent_type
+                    .as_ref()
+                    .zip(change.agent_type.as_ref())
+                    .is_some_and(|(known, incoming)| known != incoming)
+            {
                 continue;
             }
             let Some(incoming_time) = agent_host_utc_time_key(&change.updated_at) else {
@@ -2243,10 +2254,14 @@ impl TerminalDock {
             }
             let next_interrupted =
                 change.state == Some(AgentActivityState::Done) && change.interrupted;
-            if session.agent_state != change.state
+            if session.agent_type.is_none()
+                || session.agent_state != change.state
                 || session.interrupted != next_interrupted
                 || session.agent_updated_at.as_deref() != Some(change.updated_at.as_str())
             {
+                if session.agent_type.is_none() {
+                    session.agent_type = change.agent_type.clone();
+                }
                 session.agent_state = change.state;
                 session.interrupted = next_interrupted;
                 session.agent_state_started_at = Some(change.state_started_at.clone());
@@ -3737,6 +3752,69 @@ mod tests {
         assert!(!agent_presence_refresh_due(12, &[]));
     }
 
+    #[test]
+    fn h01_late_authenticated_hook_identifies_exact_running_session_without_waiting_for_inventory()
+    {
+        let mut dock = TerminalDock::for_workspace(17);
+        let initial = json!({"items":[
+            {"handle":"pty-late","workspaceId":"ws-1","tabId":"tab-A","running":true},
+            {"handle":"pty-other","workspaceId":"ws-1","tabId":"tab-B","running":true,
+                "agentType":"claude","agentState":"working","stateStartedAt":"2026-11-13T13:00:00Z","updatedAt":"2026-11-13T13:00:00Z"}
+        ]});
+        assert!(dock.apply_session_list(17, parse_terminal_list(&initial).unwrap()));
+        assert!(dock.open("pty-late"));
+        assert_eq!(dock.sessions[0].agent_type, None);
+        let change = AgentPresenceChange {
+            session_id: "pty-late".into(),
+            workspace_id: "ws-1".into(),
+            tab_id: "tab-A".into(),
+            agent_type: Some("codex".into()),
+            state: Some(AgentActivityState::Waiting),
+            state_started_at: "2026-11-13T13:00:01Z".into(),
+            updated_at: "2026-11-13T13:00:02Z".into(),
+            interrupted: false,
+            removed: false,
+        };
+        assert!(dock.apply_agent_presence_changes(&[change.clone()]));
+        assert_eq!(dock.sessions[0].agent_type.as_deref(), Some("codex"));
+        assert_eq!(
+            dock.sessions[0].agent_state,
+            Some(AgentActivityState::Waiting)
+        );
+        assert_eq!(
+            dock.sessions[1].agent_state,
+            Some(AgentActivityState::Working)
+        );
+        assert_eq!(dock.active_tab, Some(0));
+        assert_eq!(dock.tabs.len(), 1);
+
+        let mut wrong_tab = change.clone();
+        wrong_tab.tab_id = "tab-B".into();
+        wrong_tab.state = Some(AgentActivityState::Blocked);
+        assert!(!dock.apply_agent_presence_changes(&[wrong_tab]));
+        let mut wrong_adapter = change.clone();
+        wrong_adapter.agent_type = Some("claude".into());
+        wrong_adapter.state = Some(AgentActivityState::Done);
+        assert!(!dock.apply_agent_presence_changes(&[wrong_adapter]));
+        assert_eq!(
+            dock.sessions[0].agent_state,
+            Some(AgentActivityState::Waiting)
+        );
+
+        for (moment, state) in [
+            ("2026-11-13T13:00:03Z", AgentActivityState::Blocked),
+            ("2026-11-13T13:00:04Z", AgentActivityState::Done),
+            ("2026-11-13T13:00:05Z", AgentActivityState::Working),
+        ] {
+            let mut next = change.clone();
+            next.state = Some(state);
+            next.updated_at = moment.into();
+            next.state_started_at = moment.into();
+            assert!(dock.apply_agent_presence_changes(&[next]));
+            assert_eq!(dock.sessions[0].agent_state, Some(state));
+            assert_eq!(dock.active_tab, Some(0));
+        }
+    }
     #[test]
     fn host_presence_delta_rejects_stale_events_and_old_inventory_snapshots() {
         let mut dock = TerminalDock::for_workspace(7);
