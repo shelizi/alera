@@ -165,6 +165,8 @@
 
 **T07 平行支線最新成果（未整合）**：`feat/gpui-sweflash-t07-command-prompt-20261113` 的安全 stdin Host Command／Prompt 通道 `5f0d602e6` 與 Native UI `f6d09cdd8` 已獨立提交。隔離 Host stdin 讀改寫、GUI Module 與 Windows EXE／Rust 回歸已通過；**GUI 實際點擊驗收被工具工作區權限阻擋，仍須驗收，不是 T07 DONE，也不提前合併 E01**。詳見功能分支的 `docs/gpui-sweflash-t07-command-prompt-ui-handoff-20261113.md` 與 [平行計畫](gpui-sweflash-parallel-implementation-plan-20261113.md)。
 
+**T07 Native→隔離 Host 端到端驗證（尚未中央整合）**：`feat/gpui-sweflash-t07-managed-20261113` 新增 `ee60c06e6`，Native Managed Bridge 在 tempfile 一次性 Host 真正驗收 Load／Save／CAS 拒寫／Clear／Show 讀回，Permission Mode 與 Prompt 保留，**1/1 PASS**。另將已驗證的 Provider 安全提示收斂到同一條 T07 feature branch `ee4fa0f82`（只處理匯入區衝突），Provider 1/1、Managed 2/2、探索 3/3、Native Bin 34/34、Windows Debug EXE PASS。這**不是** GPUI 中央整合或 GUI 滑鼠／鍵盤驗收：桌面仍有前景應用，避免搶焦點；真 Provider 認證、實際模型探索與 GUI／IME 待驗。原 NOW=T07、`supported=false`，E01 不提前整合；詳見 [平行計畫](gpui-sweflash-parallel-implementation-plan-20261113.md)。
+
 **T07 Managed／Provider 支線（尚未整合）**：Managed Host-owned stdin 更新 `4d934b687` 通過 CLI 4/4 與隔離 Host 1/1；Native Managed UI `8dfd89405` 通過專項 2/2、Windows EXE/Bin 34/34；唯讀動態 Model／Persona 選項 `5262b589e` 通過解析 3/3、Windows EXE/Bin 34/34。Persona UI 欄位對應 Rust Managed `agent`，不改 Permission／Sandbox；探索限 Classic 支援命令且必須明確點擊，未對真實 Provider 做正向實測。Provider 安全啟動提示 `ba999e6c9` 通過 Rust 1/1 與 GPUI 編譯檢查，不將未知登入狀態誤判成 Token 過期。**可信 Host 認證狀態、Windows 實際 GUI／IME 驗收仍待完成，T07 未結案**，E01 不提前整合。詳見 [平行計畫](gpui-sweflash-parallel-implementation-plan-20261113.md)。
 
 **SWE-2 Flash 平行研發協議（2026-11-13）**：詳見 [兩條 worktree 子代理實作／審核與整合門檻](gpui-sweflash-parallel-implementation-plan-20261113.md)。允許 T07 與 E01 先行隔離開發，但 **NOW 仍 T07**；只按原 F1→F2→F3→F4→F5→F6 順序整合、驗收與更新 DONE。子代理無權自行合 main、Push 或發版。
