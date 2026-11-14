@@ -69,12 +69,13 @@ Rust Windows 專項 h03_com_（COM callback、錯 App ID 拒絕、ClassFactory�
 - 新 Native COM test 子程序呼叫已註冊的 ClassFactory，驗證非同一程序的 `CoCreateInstance`、Activate 與 Token 取回；先前使用的假 EXE 會得到 `0x800700C1`（不是有效 Win32 程式），已移除該假登錄測試環境，不能據此斷定真正 Native Click 失敗。
 - GPUI 接收到通知時先等待已認證 Host Session 清單載入完畢；精確驗證 Session／Workspace／Tab／Agent 類型，再依 Host 註冊的唯一 Workspace ID 找到真實根目錄，透過既有保護未儲存 Editor 的 Workspace 切換流程導航，最後聚焦正確 Pane。通知點擊**不建立或終止 Host PTY**。
 - `h03_winrt_smoke_toast_show_and_activation_for_isolated_agent` 現為 opt-in 手動 OS 驗收；它不在 Cargo Test 程序中註冊 COM ClassFactory，須由**真正已安裝 Native EXE**承接 Windows Action Center Click，不能再以假執行檔代替。
-- **本輪已實測**：Windows `cargo test --offline --locked --no-default-features --lib h03_ -j 2` **9 PASS／0 FAIL／1 intentionally ignored**（OS 真實點擊測試）；`cargo fmt --all` **PASS**、`git diff --check` **PASS**、Native Installer PowerShell Parser **PASS**。完整 Native GUI Binary `cargo check` 結果獨立記錄，未通過前不能聲稱有可用的新 EXE。
-- **驗收邊界**：靜態實作與單元／跨程序 COM 驗證不等於 OS Action Center 真實點擊；Classic／Native 的正式獨佔通知 owner 仍未實作，正式版 Native 不能啟用重複發送，`supported=false`，不合併主線／Push／部署。
+- **本輪程式與建置已實測**：Windows `cargo test --offline --locked --no-default-features --lib h03_ -j 2` **9 PASS／0 FAIL／1 預設 ignored**；Native GUI `cargo check --offline --locked --bin alera-gpui-desktop -j 4` **PASS**、`cargo build --offline --locked --bin alera-gpui-desktop -j 4` **PASS（實際 EXE）**，`cargo fmt --all`／`git diff --check`／Native 安裝腳本 PowerShell Parser **PASS**。核心程式提交 `1968d6ce8`。
+- **真 Windows Action Center 點擊 1/1 PASS（選擇式 Smoke）**：以新版真 `alera-gpui-desktop.exe` 註冊 Native 專用 `LocalServer32` 與開始選單捷徑；Cargo Runner **不註冊 COM Factory**。發送合成 Waiting Agent Toast 後，通知中心 History `Ok(8)`、在 Windows 桌面實際點擊，真正 Native LocalServer 程序取用 DPAPI 一次性 Token，測試 **1 PASS／0 FAIL**；桌面截圖亦確認新的 Alera Native GPUI 視窗載入既有工作區。隨後正常關閉測試視窗，Native 專用 HKCU COM 登錄及 Start Menu 捷徑 **Uninstall PASS／Check missing PASS**，Classic 未動。
+- **驗收邊界**：合成通知只證明 **Action Center → COM → 新 Native 程序 → Token → GUI 開啟**；真 Agent Waiting／Done 經 Host 再驗證並聚焦到指定 Pane／跨 Workspace 仍待真 Host GUI 正向驗收。Classic／Native 的正式獨佔通知 owner 尚未實作，正式版 Native 仍禁重複發送，`supported=false`，不合併主線／Push／部署。
 
 ## 完成邊界與下一步
 
 - 已驗證：Agent 通知的核心冷卻、狀態聚合、失效防護；本輪新增雙 Pane 精確路由與 Stale Host 身分拒絕。
-- **已驗證**：Native AppUserModelID＋ToastActivatorCLSID 的 ShellLink 屬性、HKCU COM LocalServer32 精確註冊與卸載、Windows 通知中心能看到 Waiting Toast；全部測試登錄及捷徑均已還原。**尚未通過**：Action Center Click callback、由背景喚醒 GPUI HWND 並聚焦正確 Pane、真 Host Waiting／Done、跨 Workspace 導航。
+- **已驗證**：Native AppUserModelID＋ToastActivatorCLSID 屬性、HKCU COM LocalServer32 真 EXE 啟動／卸載、Windows 通知中心顯示 Waiting Toast、**真實點擊觸發 COM 回呼與跨程序 DPAPI Token 消耗、Native GPUI 視窗成功開啟**；測試登錄及捷徑已還原。**尚未通過**：實際 Host Waiting／Done 點擊後的完整 Session／Workspace／Pane 精確聚焦與真跨 Workspace 互動。
 - **尚未完成**：Classic 與 Native 同時執行時的 Host 協調／獨佔 Toast ownership。安全原則是正式版 Native 在無可靠互斥所有權時不投遞，避免重複通知；不能把 Debug opt-in 當成 Host lease。
 - 不修改正式 Runtime Host、Agent Hooks、Provider 帳號或使用者資料；不動受保護 `desktop_gpui/target`／`.gpui-center-diff-smoke`；不合 `main`、不 Push／部署／Release；`supported=false`。
