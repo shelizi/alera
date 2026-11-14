@@ -220,6 +220,124 @@ impl Workbench {
             .into_any_element()
     }
 
+    /// Search registered GPUI shortcuts by command, context, or physical key.
+    /// This is a discovery view; Classic's editable override/reset store is
+    /// not implemented in Native and is deliberately not exposed here.
+    fn render_keyboard_shortcut_search(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let query = self.settings_shortcut_search.read(cx).query().to_owned();
+        let matches = alera_gpui_desktop::native_shortcut_catalog::search_native_shortcuts(&query);
+        let count = matches.len();
+        div()
+            .p_3()
+            .bg(rgb(PANEL))
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                div()
+                    .text_sm()
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .text_color(rgb(TEXT))
+                    .child("Search GPUI shortcuts"),
+            )
+            .child(
+                div()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(rgb(BORDER))
+                    .bg(rgb(TOOLBAR))
+                    .p_2()
+                    .child(self.settings_shortcut_search.clone()),
+            )
+            .child(div().text_xs().text_color(rgb(MUTED)).child(format!(
+                "{count} common registered shortcuts · {}",
+                if cfg!(target_os = "macos") {
+                    "macOS"
+                } else {
+                    "Windows / Linux"
+                }
+            )))
+            .child(div().text_xs().text_color(rgb(MUTED)).child(
+                "Search is read-only. Native shortcut overrides and reset are not available yet.",
+            ))
+            .when(count == 0, |list| {
+                list.child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(MUTED))
+                        .child("No shortcuts match"),
+                )
+            })
+            .children(matches.into_iter().enumerate().map(|(i, shortcut)| {
+                let binding = if cfg!(target_os = "macos") {
+                    shortcut.mac
+                } else {
+                    shortcut.windows
+                };
+                div()
+                    .id(("native-shortcut-row", i))
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_2()
+                    .p_2()
+                    .rounded_sm()
+                    .border_b_1()
+                    .border_color(rgb(BORDER))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(div().text_sm().text_color(rgb(TEXT)).child(shortcut.action))
+                            .child(div().text_xs().text_color(rgb(MUTED)).child(shortcut.scope)),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .text_color(rgb(TEXT))
+                            .child(binding),
+                    )
+            }))
+            .into_any_element()
+    }
+
+    /// The Host Agent Profiles manager already renders below the catalog.
+    /// Replace the misleading 'not available' preview with an operational
+    /// refresh action; never duplicate profile editing or credential handling.
+    fn render_host_agent_profiles_setting(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        div()
+            .p_3()
+            .bg(rgb(PANEL))
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap_3()
+            .child(
+                div().flex().flex_col().gap_1()
+                    .child(div().text_sm().text_color(rgb(TEXT)).child("Host Agent Profiles"))
+                    .child(
+                        div().text_xs().text_color(rgb(MUTED))
+                            .child("Create, edit, select, and remove Host profiles using the connected manager below."),
+                    ),
+            )
+            .child(
+                native_components::action_button(
+                    "native-settings-profiles-refresh",
+                    if self.agent_profiles_loading { "Loading…" } else { "Refresh Profiles" },
+                    false,
+                    false,
+                )
+                .on_click(cx.listener(|view, _, _, cx| {
+                    if !view.agent_profiles_loading {
+                        view.refresh_agent_profiles(cx);
+                    }
+                })),
+            )
+            .into_any_element()
+    }
+
     fn render_settings_excluded_directories(
         &self,
         items: &[serde_json::Value],
@@ -538,6 +656,12 @@ impl Workbench {
             }
             Some(SettingsOperationalAction::OpenQuotaOverview) => {
                 return Some(self.render_provider_quotas_setting(cx));
+            }
+            Some(SettingsOperationalAction::SearchNativeKeyboardShortcuts) => {
+                return Some(self.render_keyboard_shortcut_search(cx));
+            }
+            Some(SettingsOperationalAction::RefreshHostAgentProfiles) => {
+                return Some(self.render_host_agent_profiles_setting(cx));
             }
             None => {}
         }

@@ -131,7 +131,10 @@
 | INTEGRATED／待 GUI 驗收 | **U02** | Quick Open／Explorer 搜尋長檔名與列表密度 | 緊湊結果列、目錄分欄、完整路徑／Tab Tooltip、28px 檔案樹均已接線，Windows `cargo check` EXIT 0、fmt／diff PASS；Bin 單測因連結耗時停止，不列為 PASS |
 | INTEGRATED／待 GUI 驗收 | **U03** | Editor／搜尋 IME、鍵盤焦點與快捷鍵 | QuickOpenInput 組字中的 Backspace／Select All／Paste 不再搶候選，核心 Editor 已具 marked guard；Rust cargo check EXIT 0、fmt PASS；Windows 真 GUI 待驗 |
 | INTEGRATED／待 GUI 驗收 | **U04** | Workbench／Tab／草稿重啟還原 | 新增 Host Terminal／Agent Pin 的已認證三重身分復原，舊 V1 格式相容；Windows cargo check EXIT 0，GUI 重啟待驗 |
-| **NOW** | **U05** | Agent 額度與 Usage 日常功能差異收斂 | 已接 Open Usage 7／30 天唯讀 Host 聚合、補 Classic Reset 倒數與完整讀數名稱；GPUI Library 編譯 PASS，完整 CLI／GPUI Bin、隔離 Host／真 GUI 正向驗證待補；登入切換／Codex Reset/H03 COM 高風險難點後置，`supported=false` |
+| INTEGRATED／待 GUI／CLI 驗收 | **U05** | Agent 額度與 Usage 日常功能差異收斂 | 已接 Open Usage 7／30 天唯讀 Host 聚合、補 Classic Reset 倒數與完整讀數名稱；GPUI Library 編譯 PASS，完整 CLI／GPUI Bin、隔離 Host／真 GUI 正向驗證待補；登入切換／Codex Reset/H03 COM 高風險難點後置，`supported=false` |
+| **NOW** | **S05** | Settings 日常操作：Keyboard 查詢、Host Agent Profiles 導覽 | 把舊版 Keyboard「Search shortcuts」由不可用預覽接成 GPUI 目前**實際註冊**的 21 項常用快捷鍵查詢（按指令、作用域、Windows/macOS 鍵組合搜尋），新增獨立輸入框；「Reset Keyboard Shortcuts」仍明示不可用，不虛構編輯權限。Agent Profiles 目錄由 Not available 改成真實 Host Refresh 動作，沿用同頁已有原生 Profiles 管理器。獨立 `rustc --test` 2/2 PASS，`rustfmt`、Git 差異檢查 PASS；GPUI 整合 Cargo 因套件快取鎖等待，完整 Bin/GUI 待驗；`supported=false` |
+
+**2026-11-14 S05 Classic → GPUI Settings 日常差異**：對照 `desktop_gpui/src/settings_menu_catalog.rs` 的 Keyboard Search、Agent Profiles 原預覽，以及 Native Settings 現有 Profile manager。新增 `native_shortcut_catalog.rs` 靜態只讀**常用**快捷鍵清單（21 條；Global、Explorer、Editor，含 Windows/macOS 快捷鍵；不假稱完整重綁定支援），用獨立 `QuickOpenInput` 即時搜尋，並測試宣稱的每個組合在 `main.rs`、`editor_ui.rs`、`editor_find_ui.rs` 的真 `KeyBinding` 註冊中存在。Agent Profiles 目錄現在顯示真 Host 管理器的 Refresh 按鈕（原本 Native 已提供選取、改名等完整管理操作），不再顯示 Not available；原管理器仍保留 Host 授權與資料所有權。Keyboard Reset／自訂快捷鍵仍無 Native 實作，不能冒稱功能齊全。獨立 `rustc --test` 新測試 **2/2 PASS**、格式化與差異檢查 PASS；本機 Cargo 套件鎖佔用時 Native 完整編譯與 GUI 驗收未完成，需擇機補驗；不更動 `main`／Push／部署／Release，`supported=false`。
 
 **排程規則：** 該工作包完成基本正向 UI 驗收就移到下一項，不因極端案例未驗證而反覆停留；發現正常情境確實壞掉才回頭修。某項已有正常操作 PASS 可縮短，立即移到下一項。保留安全回歸，不以省時間為由刪除原有測試。
 

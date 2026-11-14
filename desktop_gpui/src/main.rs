@@ -796,6 +796,7 @@ struct Workbench {
     settings_shared_last_refresh: Instant,
     settings_shared_error: Option<String>,
     settings_menu_search: Entity<QuickOpenInput>,
+    settings_shortcut_search: Entity<QuickOpenInput>,
     settings_exclusion_input: Entity<QuickOpenInput>,
     last_auto_git_fetch: Instant,
     agent_profiles: Vec<AgentProfileRow>,
@@ -14627,6 +14628,11 @@ fn main() {
                             cx.new(|cx| QuickOpenInput::with_placeholder("Search settings", cx));
                         cx.observe(&settings_menu_search, |_, _, cx| cx.notify())
                             .detach();
+                        let settings_shortcut_search = cx.new(|cx| {
+                            QuickOpenInput::with_placeholder("Search shortcut or key…", cx)
+                        });
+                        cx.observe(&settings_shortcut_search, |_, _, cx| cx.notify())
+                            .detach();
                         let settings_exclusion_input = cx.new(|cx| {
                             QuickOpenInput::with_placeholder(
                                 "Add directory name (e.g. generated)",
@@ -14888,6 +14894,7 @@ fn main() {
                                 .unwrap_or_else(Instant::now),
                             settings_shared_error: None,
                             settings_menu_search,
+                            settings_shortcut_search,
                             settings_exclusion_input,
                             last_auto_git_fetch: Instant::now(),
                             agent_profiles: Vec::new(),

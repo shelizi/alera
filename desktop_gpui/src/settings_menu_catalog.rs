@@ -316,7 +316,7 @@ mod shared_row_tests {
             "Host-backed controls unexpectedly missing"
         );
         assert_eq!(
-            totals.actions, 2,
+            totals.actions, 4,
             "only real Native actions may be clickable"
         );
         assert_eq!(
@@ -349,6 +349,19 @@ mod shared_row_tests {
                 }
             }
         }
+        assert_eq!(
+            settings_support_counts(section("keyboard").unwrap()).actions,
+            1
+        );
+        assert_eq!(
+            settings_support_counts(section("agentProfiles").unwrap()).actions,
+            1
+        );
+        assert_eq!(
+            settings_row_support("keyboard", "Reset Keyboard Shortcuts"),
+            SettingsRowSupport::Unavailable,
+            "Reset cannot claim capability until overrides exist"
+        );
         assert_eq!(
             shared_setting_row_path("editor", "Two-row tabs"),
             Some("editor.twoRowTabs"),
@@ -464,6 +477,8 @@ pub fn settings_row_support(section: &str, title: &str) -> SettingsRowSupport {
 pub enum SettingsOperationalAction {
     ManageProjects,
     OpenQuotaOverview,
+    SearchNativeKeyboardShortcuts,
+    RefreshHostAgentProfiles,
 }
 
 pub fn settings_operational_action(
@@ -473,6 +488,12 @@ pub fn settings_operational_action(
     match (section, title) {
         ("projects", "Projects") => Some(SettingsOperationalAction::ManageProjects),
         ("quotas", "Provider Quotas") => Some(SettingsOperationalAction::OpenQuotaOverview),
+        ("keyboard", "Search shortcuts") => {
+            Some(SettingsOperationalAction::SearchNativeKeyboardShortcuts)
+        }
+        ("agentProfiles", "Agent Profiles") => {
+            Some(SettingsOperationalAction::RefreshHostAgentProfiles)
+        }
         _ => None,
     }
 }
