@@ -2,8 +2,8 @@
 //! Every query is read-only and performed on the background executor.
 use super::*;
 use alera_gpui_desktop::agent_quota::{
-    mark_failed_quota_refresh, merge_quota_snapshots, parse_quota_snapshots, scoped_quota_refresh,
-    status_bar_account_label, QuotaReading,
+    mark_failed_quota_refresh, merge_quota_snapshots, parse_agent_usage_summary,
+    parse_quota_snapshots, scoped_quota_refresh, status_bar_account_label, QuotaReading,
 };
 use std::io;
 use std::sync::OnceLock;
@@ -433,6 +433,52 @@ impl Workbench {
         .detach();
     }
 
+    /// Read a Host-owned, secret-free usage summary in a background task.
+    /// Selection changes invalidate older requests so 7d/30d cannot race.
+    fn refresh_agent_usage(&mut self, days: u8, cx: &mut Context<Self>) {
+        if !matches!(days, 7 | 30) || (self.quota_usage_loading && self.quota_usage_days == days) {
+            return;
+        }
+        self.quota_usage_days = days;
+        self.quota_usage_loading = true;
+        self.quota_usage_error = None;
+        self.quota_usage_summary = None;
+        self.quota_usage_request = self.quota_usage_request.wrapping_add(1);
+        let request = self.quota_usage_request;
+        let bridge = self.runtime_bridge.clone();
+        cx.notify();
+        cx.spawn(async move |view, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    let bridge = bridge.ok_or_else(|| {
+                        io::Error::new(io::ErrorKind::NotConnected, "Alera CLI is unavailable")
+                    })?;
+                    let payload = bridge.agent_usage_summary(days)?;
+                    parse_agent_usage_summary(&payload)
+                        .map_err(|reason| io::Error::new(io::ErrorKind::InvalidData, reason))
+                })
+                .await;
+            let _ = view.update(cx, |view, cx| {
+                if view.quota_usage_request != request {
+                    return;
+                }
+                view.quota_usage_loading = false;
+                match result {
+                    Ok(summary) => {
+                        view.quota_usage_summary = Some(summary);
+                        view.quota_usage_error = None;
+                    }
+                    Err(error) => {
+                        view.quota_usage_summary = None;
+                        view.quota_usage_error = Some(error.to_string());
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     pub(super) fn render_native_quota_status(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let has_data = !self.quota_snapshots.is_empty();
         let label = if self.quota_loading && !has_data {
@@ -505,12 +551,14 @@ impl Workbench {
                     if *hovering {
                         view.quota_popover_open = true;
                         view.quota_popover_account = Some(account_key.clone());
+                        view.quota_usage_open = false;
                         cx.notify();
                     }
                 }))
                 .on_click(cx.listener(move |view, _, _, cx| {
                     view.quota_popover_open = true;
                     view.quota_popover_account = Some(click_account_key.clone());
+                    view.quota_usage_open = false;
                     cx.notify();
                 }))
         })
@@ -545,6 +593,7 @@ impl Workbench {
                     .on_click(cx.listener(|view, _, _, cx| {
                         view.quota_popover_open = !view.quota_popover_open;
                         view.quota_popover_account = None;
+                        view.quota_usage_open = false;
                         cx.notify();
                     })),
             )
@@ -597,14 +646,275 @@ impl Workbench {
                         .bg(rgb(ELEVATED))
                         .shadow_lg()
                         .p_2()
-                        .child(self.render_native_quota_overview(404.0, cx))
+                        .child(if self.quota_usage_open {
+                            self.render_native_usage_overview(404.0, cx)
+                        } else {
+                            self.render_native_quota_overview(404.0, cx)
+                        })
                         .on_mouse_down_out(cx.listener(|view, _, _, cx| {
                             view.quota_popover_open = false;
                             view.quota_popover_account = None;
+                            view.quota_usage_open = false;
                             cx.notify();
                         })),
                 )
             })
+            .into_any_element()
+    }
+
+    fn render_native_usage_overview(
+        &self,
+        height: f32,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let loading = self.quota_usage_loading;
+        let period = self.quota_usage_days;
+        let summary = self.quota_usage_summary.clone();
+        let error = self.quota_usage_error.clone();
+        let empty = !loading && summary.is_none() && error.is_none();
+        div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_2()
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .text_color(rgb(TEXT))
+                            .child("Agent Usage"),
+                    )
+                    .child(
+                        div()
+                            .id("native-usage-back-to-quotas")
+                            .cursor_pointer()
+                            .rounded_md()
+                            .bg(rgb(PANEL))
+                            .px_2()
+                            .py_1()
+                            .text_xs()
+                            .child("Quotas")
+                            .on_click(cx.listener(|view, _, _, cx| {
+                                view.quota_usage_open = false;
+                                view.quota_popover_account = None;
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        div()
+                            .id("native-usage-close")
+                            .cursor_pointer()
+                            .px_2()
+                            .text_color(rgb(MUTED))
+                            .child("×")
+                            .on_click(cx.listener(|view, _, _, cx| {
+                                view.quota_usage_open = false;
+                                view.quota_popover_open = false;
+                                cx.notify();
+                            })),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .id("native-usage-7days")
+                            .cursor_pointer()
+                            .rounded_md()
+                            .bg(rgb(if period == 7 { ACTIVE } else { PANEL }))
+                            .px_2()
+                            .py_1()
+                            .text_xs()
+                            .child("7 days")
+                            .on_click(cx.listener(|view, _, _, cx| {
+                                if view.quota_usage_days != 7 {
+                                    view.refresh_agent_usage(7, cx);
+                                }
+                            })),
+                    )
+                    .child(
+                        div()
+                            .id("native-usage-30days")
+                            .cursor_pointer()
+                            .rounded_md()
+                            .bg(rgb(if period == 30 { ACTIVE } else { PANEL }))
+                            .px_2()
+                            .py_1()
+                            .text_xs()
+                            .child("30 days")
+                            .on_click(cx.listener(|view, _, _, cx| {
+                                if view.quota_usage_days != 30 {
+                                    view.refresh_agent_usage(30, cx);
+                                }
+                            })),
+                    )
+                    .child(
+                        div()
+                            .id("native-usage-refresh")
+                            .cursor_pointer()
+                            .rounded_md()
+                            .bg(rgb(PANEL))
+                            .px_2()
+                            .py_1()
+                            .text_xs()
+                            .text_color(rgb(if loading { MUTED } else { TEXT }))
+                            .child(if loading { "Loading…" } else { "Refresh" })
+                            .on_click(cx.listener(|view, _, _, cx| {
+                                if !view.quota_usage_loading {
+                                    let days = view.quota_usage_days;
+                                    view.refresh_agent_usage(days, cx);
+                                }
+                            })),
+                    ),
+            )
+            .child(
+                div()
+                    .id("native-usage-scroll")
+                    .max_h(px(height))
+                    .overflow_y_scroll()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .when(loading, |list| {
+                        list.child(
+                            div()
+                                .text_xs()
+                                .text_color(rgb(MUTED))
+                                .child("Reading usage from existing Runtime Host…"),
+                        )
+                    })
+                    .children(error.into_iter().map(|message| {
+                        div()
+                            .text_xs()
+                            .text_color(rgb(AGENT_BLOCKED))
+                            .child(message)
+                    }))
+                    .when(empty, |list| {
+                        list.child(
+                            div()
+                                .text_xs()
+                                .text_color(rgb(MUTED))
+                                .child("No usage data loaded"),
+                        )
+                    })
+                    .children(summary.into_iter().map(|usage| {
+                        let has_usage = usage.total_tokens > 0;
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap_1()
+                                    .p_2()
+                                    .rounded_md()
+                                    .bg(rgb(PANEL))
+                                    .child(div().text_xs().text_color(rgb(MUTED)).child(format!(
+                                        "{} – {}",
+                                        usage.since_day, usage.until_day
+                                    )))
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                                            .text_color(rgb(TEXT))
+                                            .child(format!(
+                                                "{} tokens · USD {:.2}",
+                                                usage.total_tokens, usage.cost_usd
+                                            )),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(rgb(MUTED))
+                                            .child("Estimated cost; not actual billed charges"),
+                                    )
+                                    .when(
+                                        usage.incomplete_sources || usage.unpriced_records > 0,
+                                        |panel| {
+                                            panel.child(
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(rgb(AGENT_WAITING))
+                                                    .child(format!(
+                                                        "{} unpriced records{}",
+                                                        usage.unpriced_records,
+                                                        if usage.incomplete_sources {
+                                                            " · some sources unavailable"
+                                                        } else {
+                                                            ""
+                                                        },
+                                                    )),
+                                            )
+                                        },
+                                    ),
+                            )
+                            .when(!has_usage, |panel| {
+                                panel.child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(rgb(MUTED))
+                                        .child("No recorded Agent usage for this period"),
+                                )
+                            })
+                            .children(usage.providers.into_iter().enumerate().map(|(i, row)| {
+                                div()
+                                    .id(("native-usage-provider", i))
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .gap_2()
+                                    .p_2()
+                                    .rounded_sm()
+                                    .bg(rgb(PANEL))
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .gap_2()
+                                            .child(quota_provider_icon(&row.provider, 16.0))
+                                            .child(row.provider),
+                                    )
+                                    .child(div().text_xs().text_color(rgb(TEXT)).child(format!(
+                                        "{} tokens · USD {:.2}",
+                                        row.tokens, row.cost_usd
+                                    )))
+                            }))
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .text_color(rgb(MUTED))
+                                    .child("Daily usage"),
+                            )
+                            .children(usage.days.into_iter().rev().enumerate().map(|(i, day)| {
+                                div()
+                                    .id(("native-usage-day", i))
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .gap_2()
+                                    .px_2()
+                                    .py_1()
+                                    .child(div().text_xs().text_color(rgb(MUTED)).child(day.day))
+                                    .child(div().text_xs().text_color(rgb(TEXT)).child(format!(
+                                        "{} tokens · USD {:.2}",
+                                        day.tokens, day.cost_usd
+                                    )))
+                            }))
+                    })),
+            )
             .into_any_element()
     }
 
@@ -899,6 +1209,22 @@ impl Workbench {
                                     )
                                 },
                             )
+                    })),
+            )
+            .child(
+                div()
+                    .id("native-quota-open-usage")
+                    .cursor_pointer()
+                    .rounded_md()
+                    .bg(rgb(PANEL))
+                    .p_2()
+                    .text_xs()
+                    .text_color(rgb(TEXT))
+                    .child("Open Usage · 7 / 30 days")
+                    .on_click(cx.listener(|view, _, _, cx| {
+                        view.quota_usage_open = true;
+                        view.quota_popover_account = None;
+                        view.refresh_agent_usage(7, cx);
                     })),
             )
             .into_any_element()

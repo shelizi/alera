@@ -390,6 +390,12 @@ pub enum AgentQuotaAction {
         #[arg(long, requires = "provider")]
         account_id: Option<String>,
     },
+    /// Read a bounded, aggregated Host-owned usage summary; never starts Host.
+    Usage {
+        /// Only the last 7 or 30 days, including today.
+        #[arg(long, default_value_t = 7)]
+        days: u8,
+    },
     /// Return a secret-free projection of Host quota provider ordering.
     Config,
 }

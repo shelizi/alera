@@ -28,7 +28,7 @@ use alera_gpui_desktop::agent_profiles::{
     matching_agent_handle, AgentProfileContentFields, AgentProfileManagedSelectionFields,
     AgentProfileRemovalImpact, AgentProfileRow, LaunchedAgentTab,
 };
-use alera_gpui_desktop::agent_quota::QuotaSnapshot;
+use alera_gpui_desktop::agent_quota::{AgentUsageSummary, QuotaSnapshot};
 use alera_gpui_desktop::agent_status_notifications::{
     enabled_notice_sessions, validated_notice_pane_target, validated_notice_target, AgentNotice,
     AgentNotificationDelivery, AgentNotificationPolicy,
@@ -755,6 +755,12 @@ struct Workbench {
     quota_enabled_order: Option<Vec<String>>,
     quota_popover_open: bool,
     quota_popover_account: Option<String>,
+    quota_usage_open: bool,
+    quota_usage_days: u8,
+    quota_usage_loading: bool,
+    quota_usage_error: Option<String>,
+    quota_usage_summary: Option<AgentUsageSummary>,
+    quota_usage_request: u64,
     mcp_ui_bridge: Option<NativeMcpUiBridge>,
     mcp_ui_window_id: String,
     mcp_ui_status: String,
@@ -14839,6 +14845,12 @@ fn main() {
                             .as_deref()
                                 == Ok("1"),
                             quota_popover_account: None,
+                            quota_usage_open: false,
+                            quota_usage_days: 7,
+                            quota_usage_loading: false,
+                            quota_usage_error: None,
+                            quota_usage_summary: None,
+                            quota_usage_request: 0,
                             mcp_ui_bridge: None,
                             mcp_ui_window_id: NativeMcpUiBridge::new_window_id(),
                             mcp_ui_status: "Waiting for existing Runtime Host".into(),

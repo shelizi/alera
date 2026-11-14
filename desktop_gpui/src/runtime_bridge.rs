@@ -198,6 +198,76 @@ impl RuntimeCliBridge {
         Ok(result)
     }
 
+    /// Retrieve the existing Host's read-only daily usage projection. The
+    /// CLI resolves configured accounts inside the Host and strips raw
+    /// transcript/model/account details before Native receives the summary.
+    pub fn agent_usage_summary(&self, days: u8) -> io::Result<Value> {
+        if days != 7 && days != 30 {
+            return Err(io::Error::new(
+                ErrorKind::InvalidInput,
+                "Usage period must be 7 or 30 days",
+            ));
+        }
+        if !self.runtime_dir.join("host.json").is_file()
+            && !self.runtime_dir.join("runtime-host.json").is_file()
+        {
+            return Err(io::Error::new(
+                ErrorKind::NotConnected,
+                "Classic Runtime Host is not running",
+            ));
+        }
+        let mut child = windowless_command(&self.executable)
+            .arg("quota")
+            .arg("--no-start")
+            .arg("--json")
+            .arg("--runtime-dir")
+            .arg(&self.runtime_dir)
+            .arg("usage")
+            .arg("--days")
+            .arg(days.to_string())
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| io::Error::other("Usage CLI stdout missing"))?;
+        let reader = thread::spawn(move || -> io::Result<Vec<u8>> {
+            let mut bytes = Vec::new();
+            stdout
+                .take(MAX_QUOTA_RESPONSE_BYTES + 1)
+                .read_to_end(&mut bytes)?;
+            Ok(bytes)
+        });
+        let status = match wait_with_timeout(&mut child, Duration::from_secs(105)) {
+            Ok(status) => status,
+            Err(error) => {
+                let _ = reader.join();
+                return Err(error);
+            }
+        };
+        let bytes = reader
+            .join()
+            .map_err(|_| io::Error::other("Usage CLI reader panicked"))??;
+        if !status.success() {
+            return Err(io::Error::other(
+                "Usage unavailable: existing Runtime Host/CLI is offline or incompatible",
+            ));
+        }
+        if bytes.len() as u64 > MAX_QUOTA_RESPONSE_BYTES {
+            return Err(io::Error::new(
+                ErrorKind::InvalidData,
+                "Usage response exceeds 512 KiB",
+            ));
+        }
+        let result: Value = serde_json::from_slice(&bytes)
+            .map_err(|error| io::Error::new(ErrorKind::InvalidData, error))?;
+        crate::agent_quota::parse_agent_usage_summary(&result)
+            .map_err(|reason| io::Error::new(ErrorKind::InvalidData, reason))?;
+        Ok(result)
+    }
+
     /// Return only the Host-configured enabled provider order. No environment
     /// keys, credentials, profile command lines or other Host fields.
     pub fn agent_quota_enabled_order(&self) -> io::Result<Vec<String>> {
@@ -2018,6 +2088,21 @@ mod tests {
                 io::ErrorKind::InvalidData
             );
         }
+    }
+
+    #[test]
+    fn u05_usage_bridge_rejects_unsupported_period_without_starting_host() {
+        let runtime = tempfile::tempdir().unwrap();
+        let bridge = RuntimeCliBridge::new(runtime.path().join("missing"), runtime.path());
+        assert_eq!(
+            bridge.agent_usage_summary(1).unwrap_err().kind(),
+            ErrorKind::InvalidInput
+        );
+        assert_eq!(
+            bridge.agent_usage_summary(7).unwrap_err().kind(),
+            ErrorKind::NotConnected
+        );
+        assert!(!runtime.path().join("runtime-host.json").exists());
     }
 
     #[test]

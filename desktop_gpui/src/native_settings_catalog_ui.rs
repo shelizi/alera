@@ -211,6 +211,7 @@ impl Workbench {
                 .on_click(cx.listener(|view, _, window, cx| {
                     view.dismiss_native_settings(window, cx);
                     view.quota_popover_account = None;
+                    view.quota_usage_open = false;
                     view.quota_popover_open = true;
                     view.refresh_agent_quotas(true, None, cx);
                     cx.notify();

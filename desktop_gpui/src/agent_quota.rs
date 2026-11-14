@@ -362,6 +362,64 @@ pub fn scoped_quota_refresh(
     Ok(matched)
 }
 
+/// Read-only, Host-aggregated usage projection for the Native quota popover.
+/// No raw transcript, credential, account identifier or model metadata is kept.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentUsageRow {
+    pub provider: String,
+    pub tokens: u64,
+    pub cost_usd: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentUsageDay {
+    pub day: String,
+    pub tokens: u64,
+    pub cost_usd: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentUsageSummary {
+    pub since_day: String,
+    pub until_day: String,
+    pub total_tokens: u64,
+    pub cost_usd: f64,
+    pub unpriced_records: u64,
+    pub incomplete_sources: bool,
+    pub providers: Vec<AgentUsageRow>,
+    pub days: Vec<AgentUsageDay>,
+}
+
+pub fn parse_agent_usage_summary(payload: &Value) -> Result<AgentUsageSummary, &'static str> {
+    let summary: AgentUsageSummary =
+        serde_json::from_value(payload.clone()).map_err(|_| "Invalid Host usage summary")?;
+    if summary.since_day.len() != 10
+        || summary.until_day.len() != 10
+        || summary.providers.len() > 3
+        || summary.days.len() > 30
+        || !summary.cost_usd.is_finite()
+        || summary.cost_usd < 0.0
+        || summary.providers.iter().any(|row| {
+            !matches!(row.provider.as_str(), "claude" | "codex" | "grok")
+                || !row.cost_usd.is_finite()
+                || row.cost_usd < 0.0
+        })
+        || summary.days.iter().any(|row| {
+            row.day.len() != 10
+                || row.day < summary.since_day
+                || row.day > summary.until_day
+                || !row.cost_usd.is_finite()
+                || row.cost_usd < 0.0
+        })
+    {
+        return Err("Host usage summary exceeds limits or has invalid values");
+    }
+    Ok(summary)
+}
+
 /// Keep the last successful quota if a provider fails during a full refresh;
 /// partial refreshes replace only the targeted provider/account.
 pub fn merge_quota_snapshots(
@@ -410,6 +468,29 @@ pub fn mark_failed_quota_refresh(snapshots: &mut [QuotaSnapshot], account: Optio
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn u05_usage_summary_is_bounded_and_cannot_inject_provider_metadata() {
+        let sample = json!({
+            "sinceDay":"2026-11-08","untilDay":"2026-11-14",
+            "totalTokens":111,"costUsd":1.25,"unpricedRecords":1,
+            "incompleteSources":false,
+            "providers":[{"provider":"claude","tokens":111,"costUsd":1.25}],
+            "days":[{"day":"2026-11-14","tokens":111,"costUsd":1.25}]
+        });
+        let parsed = parse_agent_usage_summary(&sample).unwrap();
+        assert_eq!(parsed.total_tokens, 111);
+        assert_eq!(parsed.providers[0].provider, "claude");
+        let mut invalid = sample.clone();
+        invalid["providers"][0]["provider"] = json!("private");
+        assert!(parse_agent_usage_summary(&invalid).is_err());
+        invalid = sample.clone();
+        invalid["costUsd"] = json!(-1.0);
+        assert!(parse_agent_usage_summary(&invalid).is_err());
+        invalid = sample;
+        invalid["days"][0]["day"] = json!("2099-01-01");
+        assert!(parse_agent_usage_summary(&invalid).is_err());
+    }
 
     #[test]
     fn u05_account_scoped_refresh_rejects_missing_result_and_ignores_other_accounts() {
