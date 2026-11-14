@@ -60,6 +60,44 @@ does **not** supply a second Google OAuth login, cross-account native resume,
 or a verified separate-user Host router. GPUI account registration works but
 GPUI per-account new-Agent selection remains gated on a verified backend.
 
+### Actual Runtime Host OS identity diagnostic (fourth stage)
+
+An authenticated `runtimeSettings.get` from the **running Host process** now
+includes `hostOsIdentity.kind` and `hostOsIdentity.subjectHash`. On Windows,
+the Host gets its security principal SID from the current process access token
+(`OpenProcessToken` / `GetTokenInformation` / `TokenUser`), not from
+`USERPROFILE`, `HOME` or a spoofable username. A domain-separated SHA-256
+digest is published instead of the raw SID. Unix uses effective UID (only
+useful within the corresponding OS instance). Unsupported or failed lookups
+are shown as null, never silently considered authenticated.
+
+`alera runtime --json agy-accounts get` passes that Host-derived identity and
+`hostOsUserProof=os-token-digest` through to Native GPUI, which validates the
+type, digest and proof state, and shows a short read-only fingerprint.
+
+Two Host runtime directories under one Windows user will report the **same
+fingerprint**, correctly showing that they cannot isolate AGY's single
+`gemini:antigravity` keyring entry. A different fingerprint is only evidence
+of a different local OS user, **not** proof of an independently authenticated
+Google account or secure cross-user Host pairing. No token/keyring operations
+or OS-user creation are performed.
+
+Remaining: provision a second real OS user, establish least-privileged
+cross-user transport and ownership verification, and route AGY quota plus
+new Agent PTYs to that verified Host. The existing Classic client has one
+local Runtime Host socket, so the routing layer is genuinely not present
+yet. Do not loosen the safety gate until it is.
+
+Fourth-stage verification on Windows:
+
+- `cargo check --offline -p alera-cli --bin alera`: PASS (exit 0).
+- `cargo check --offline --bin alera-gpui-desktop`: PASS (exit 0).
+- Rust format check and staged Git whitespace check: PASS.
+- Targeted Rust OS-identity tests were started but **not executed**: compiling
+  the large `alera-cli` test executable consumed excessive time, so the
+  local test build was stopped. The tests remain unverified; compilation
+  success must not be reported as a test pass.
+
 Current verification: `flutter test --no-pub
 test/unit/agy_account_registration_controller_test.dart` passed (1/1).
 `flutter test --no-pub` for account environment, account controller,

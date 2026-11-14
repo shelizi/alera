@@ -90,6 +90,7 @@ pub struct AgyAccountRegistration {
 pub struct AgyIdentityCapability {
     pub credential_scope: String,
     pub account_authentication: String,
+    pub host_os_user_proof: String,
     pub supports_independent_local_accounts: bool,
     pub supports_account_switching: bool,
     pub recommended_isolation: String,
@@ -98,9 +99,17 @@ pub struct AgyIdentityCapability {
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgyHostOsIdentity {
+    pub kind: String,
+    pub subject_hash: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AgyAccountsSnapshot {
     pub revision: i64,
     pub agy_accounts: Vec<AgyAccountRegistration>,
+    pub host_os_identity: Option<AgyHostOsIdentity>,
     pub identity_capability: AgyIdentityCapability,
 }
 
@@ -109,8 +118,23 @@ impl AgyAccountsSnapshot {
         let mut ids = std::collections::HashSet::new();
         let mut names = std::collections::HashSet::new();
         let identity = &self.identity_capability;
+        let host_proof_valid = match &self.host_os_identity {
+            Some(host_identity) => {
+                matches!(
+                    host_identity.kind.as_str(),
+                    "windows-token-sid" | "unix-effective-uid"
+                ) && host_identity.subject_hash.len() == 64
+                    && host_identity
+                        .subject_hash
+                        .bytes()
+                        .all(|byte| byte.is_ascii_hexdigit())
+                    && identity.host_os_user_proof == "os-token-digest"
+            }
+            None => identity.host_os_user_proof == "unavailable",
+        };
         if self.revision < 0
             || self.agy_accounts.len() > 32
+            || !host_proof_valid
             || identity.credential_scope != "host-os-user"
             || identity.account_authentication != "unverified"
             || identity.supports_account_switching
@@ -358,9 +382,11 @@ mod tests {
         let valid = json!({
             "revision": 7,
             "agyAccounts": [{"accountId": "research", "alias": "Research"}],
+            "hostOsIdentity": {"kind": "windows-token-sid", "subjectHash": "a".repeat(64)},
             "identityCapability": {
                 "credentialScope": "host-os-user",
                 "accountAuthentication": "unverified",
+                "hostOsUserProof": "os-token-digest",
                 "supportsIndependentLocalAccounts": false,
                 "supportsAccountSwitching": false,
                 "recommendedIsolation": "separate-os-user-runtime-host",
@@ -373,6 +399,12 @@ mod tests {
         let mut fake = valid.clone();
         fake["identityCapability"]["supportsAccountSwitching"] = json!(true);
         assert!(serde_json::from_value::<AgyAccountsSnapshot>(fake)
+            .unwrap()
+            .validate()
+            .is_err());
+        let mut forged_home = valid.clone();
+        forged_home["hostOsIdentity"]["kind"] = json!("userprofile-env");
+        assert!(serde_json::from_value::<AgyAccountsSnapshot>(forged_home)
             .unwrap()
             .validate()
             .is_err());

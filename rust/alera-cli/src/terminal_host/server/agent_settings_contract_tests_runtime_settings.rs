@@ -22,6 +22,12 @@ async fn agy_registration_is_shared_across_clients_and_rejects_stale_revision() 
     .await;
     let original = actor.runtime_settings_snapshot().await.unwrap();
     assert_eq!(original["agentQuotas"]["agyProfiles"], json!([]));
+    assert!(
+        original["hostOsIdentity"]["subjectHash"]
+            .as_str()
+            .is_some_and(|hash| hash.len() == 64 && hash.bytes().all(|b| b.is_ascii_hexdigit())),
+        "Host must publish the actual OS-user fingerprint, not HOME or USERPROFILE"
+    );
     let mut quotas = original["agentQuotas"].clone();
     quotas["agyProfiles"] = json!([{
         "alias": "Research", "accountId": "research"
@@ -47,6 +53,10 @@ async fn agy_registration_is_shared_across_clients_and_rejects_stale_revision() 
     assert_eq!(
         classic["payload"]["agentQuotas"]["agyProfiles"][0]["alias"],
         "Research"
+    );
+    assert_eq!(
+        classic["payload"]["hostOsIdentity"], original["hostOsIdentity"],
+        "Independent clients of one Host must see the same token-derived OS identity"
     );
 
     quotas["agyProfiles"] = json!([]);

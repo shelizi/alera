@@ -382,6 +382,22 @@ impl Workbench {
                 ))
                 .into_any_element();
         };
+        let os_user_diagnostic = match &snapshot.host_os_identity {
+            Some(host) => format!(
+                "Runtime Host OS user: {} / {}… (token-derived fingerprint; does not prove a Google login)",
+                host.kind,
+                &host.subject_hash[..16]
+            ),
+            None => String::from(
+                "Runtime Host OS user could not be verified. Never assume another profile directory is an isolated account.",
+            ),
+        };
+        content = content.child(
+            div()
+                .text_xs()
+                .text_color(rgb(MUTED))
+                .child(os_user_diagnostic),
+        );
         if snapshot.agy_accounts.is_empty() {
             content = content.child(
                 div()

@@ -7,6 +7,7 @@ use serde_json::{json, Value};
 
 use crate::cli::{RuntimeAgyAccountsAction, RuntimeDirArgs};
 use crate::runtime_host_client::RuntimeHostRpcClient;
+use crate::runtime_os_identity::HostOsIdentity;
 use crate::{print_error, print_value, runtime_dir};
 
 fn decode_host_snapshot(value: &Value) -> Result<(i64, RuntimeAgentQuotaSettings), &'static str> {
@@ -101,13 +102,19 @@ fn apply_account_change(
 
 /// The real keyring is scoped to the Host OS user, not to a HOME directory
 /// or an arbitrary account alias. Expose capability limitations explicitly.
-fn account_response(revision: i64, settings: &RuntimeAgentQuotaSettings) -> Value {
+fn account_response(
+    revision: i64,
+    settings: &RuntimeAgentQuotaSettings,
+    host_os_identity: Option<&HostOsIdentity>,
+) -> Value {
     json!({
         "revision": revision,
         "agyAccounts": settings.agy_profiles,
+        "hostOsIdentity": host_os_identity,
         "identityCapability": {
             "credentialScope": "host-os-user",
             "accountAuthentication": "unverified",
+            "hostOsUserProof": if host_os_identity.is_some() { "os-token-digest" } else { "unavailable" },
             "supportsIndependentLocalAccounts": false,
             "supportsAccountSwitching": false,
             "recommendedIsolation": "separate-os-user-runtime-host",
@@ -138,9 +145,14 @@ pub(crate) async fn run(
         Ok(value) => value,
         Err(error) => return print_error(error),
     };
+    let host_os_identity = raw
+        .get("hostOsIdentity")
+        .cloned()
+        .and_then(|value| serde_json::from_value::<HostOsIdentity>(value).ok())
+        .filter(HostOsIdentity::validated);
     if matches!(action, RuntimeAgyAccountsAction::Get) {
         print_value(
-            &account_response(revision, &settings),
+            &account_response(revision, &settings, host_os_identity.as_ref()),
             json_output,
             "Runtime Host Antigravity registrations loaded",
         );
@@ -188,7 +200,11 @@ pub(crate) async fn run(
         Err(error) => return print_error(error),
     };
     print_value(
-        &account_response(updated_revision, &result_settings),
+        &account_response(
+            updated_revision,
+            &result_settings,
+            host_os_identity.as_ref(),
+        ),
         json_output,
         "Antigravity registration saved on Runtime Host",
     );
@@ -219,7 +235,7 @@ mod tests {
             decode_host_snapshot(&json!({"revision":0,"agentQuotas":value})).unwrap();
         assert!(settings.agy_profiles.is_empty());
         assert_eq!(
-            account_response(0, &settings)["identityCapability"]["supportsAccountSwitching"],
+            account_response(0, &settings, None)["identityCapability"]["supportsAccountSwitching"],
             false
         );
     }

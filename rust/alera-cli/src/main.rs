@@ -52,6 +52,7 @@ mod runtime_commands;
 mod runtime_history_sync_cli;
 mod runtime_host_client;
 mod runtime_host_command;
+mod runtime_os_identity;
 mod ssh_bootstrap;
 mod tab_record_factory;
 mod tailscale;

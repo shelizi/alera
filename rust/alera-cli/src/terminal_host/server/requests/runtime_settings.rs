@@ -9,9 +9,20 @@ use super::ServerActor;
 
 impl ServerActor {
     pub(crate) async fn runtime_settings_snapshot(&self) -> HostResult<Value> {
-        RuntimeSettingsStoreHandler::new(&self.runtime_store)
+        let mut snapshot = RuntimeSettingsStoreHandler::new(&self.runtime_store)
             .snapshot()
-            .await
+            .await?;
+        // This identity is derived inside the actual Host OS process, not
+        // from a CLI caller's user, HOME or supplied runtime directory.
+        // Expose only a stable one-way digest; failure is explicit.
+        snapshot["hostOsIdentity"] = match crate::runtime_os_identity::current_host_os_identity() {
+            Ok(identity) => json!(identity),
+            Err(error) => {
+                tracing::warn!("Host OS user identity unavailable: {error}");
+                Value::Null
+            }
+        };
+        Ok(snapshot)
     }
 
     pub(crate) async fn persist_runtime_settings_update(
