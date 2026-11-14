@@ -60,6 +60,18 @@ Rust Windows 專項 h03_com_（COM callback、錯 App ID 拒絕、ClassFactory�
 
 結論：OS 投遞 PASS、COM 介面與 HKCU 註冊／撤銷測試 PASS；實際 Action Center Click→Native Callback→Pane/Session 仍 NOT PASS，Classic／Native Host 單一通知所有權也未做。H03 維持 NOW，supported=false，沒有合 main、Push、部署或 Release。
 
+## 第四階段：跨程序通知點擊功能補齊（2026-11-14）
+
+本階段從已提交的 `3c15da403` 繼續，實際修改 Native Rust 與 Windows Native-only 安裝腳本：
+
+- Windows COM LocalServer32 改為真正 Native EXE 加 `-ToastActivated`；GPUI 不把 COM 啟動參數 `-ToastActivated`、`-Embedding` 誤當專案路徑，無儲存 Workspace 時使用使用者目錄作安全起始視窗。
+- 每則單一 Agent Toast 先將完整 Session／Workspace／Tab／Agent 身分以 Windows DPAPI CurrentUser 加密保存於 Native 專用狀態目錄，Windows Toast XML 只送隨機 `alera-native:` Token；跨程序 COM callback 依 Token 一次性取用，過期、錯誤格式、重複使用都拒絕；限制檔案數與負載大小。
+- 新 Native COM test 子程序呼叫已註冊的 ClassFactory，驗證非同一程序的 `CoCreateInstance`、Activate 與 Token 取回；先前使用的假 EXE 會得到 `0x800700C1`（不是有效 Win32 程式），已移除該假登錄測試環境，不能據此斷定真正 Native Click 失敗。
+- GPUI 接收到通知時先等待已認證 Host Session 清單載入完畢；精確驗證 Session／Workspace／Tab／Agent 類型，再依 Host 註冊的唯一 Workspace ID 找到真實根目錄，透過既有保護未儲存 Editor 的 Workspace 切換流程導航，最後聚焦正確 Pane。通知點擊**不建立或終止 Host PTY**。
+- `h03_winrt_smoke_toast_show_and_activation_for_isolated_agent` 現為 opt-in 手動 OS 驗收；它不在 Cargo Test 程序中註冊 COM ClassFactory，須由**真正已安裝 Native EXE**承接 Windows Action Center Click，不能再以假執行檔代替。
+- **本輪已實測**：Windows `cargo test --offline --locked --no-default-features --lib h03_ -j 2` **9 PASS／0 FAIL／1 intentionally ignored**（OS 真實點擊測試）；`cargo fmt --all` **PASS**、`git diff --check` **PASS**、Native Installer PowerShell Parser **PASS**。完整 Native GUI Binary `cargo check` 結果獨立記錄，未通過前不能聲稱有可用的新 EXE。
+- **驗收邊界**：靜態實作與單元／跨程序 COM 驗證不等於 OS Action Center 真實點擊；Classic／Native 的正式獨佔通知 owner 仍未實作，正式版 Native 不能啟用重複發送，`supported=false`，不合併主線／Push／部署。
+
 ## 完成邊界與下一步
 
 - 已驗證：Agent 通知的核心冷卻、狀態聚合、失效防護；本輪新增雙 Pane 精確路由與 Stale Host 身分拒絕。

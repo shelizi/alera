@@ -89,7 +89,9 @@ fn build_windows_toast_xml_with_launch(
 #[cfg(windows)]
 mod windows_toast {
     use super::*;
+    use crate::native_toast_activation::NativeToastActivationStore;
     use std::collections::VecDeque;
+    use std::path::PathBuf;
     use std::sync::mpsc::{self, Receiver, Sender};
     use windows::core::{IInspectable, HSTRING};
     use windows::Data::Xml::Dom::XmlDocument;
@@ -98,19 +100,26 @@ mod windows_toast {
         NotificationSetting, ToastFailedEventArgs, ToastNotification, ToastNotificationManager,
     };
 
-    /// The UI thread holds this presenter while open; the WinRT activation
-    /// callback sends only the typed, identity-checked Host location.
+    /// The UI thread resolves a one-time opaque token against the per-user
+    /// DPAPI store, then revalidates the live Host identity before focusing.
     pub struct WindowsAgentToastPresenter {
-        activation_tx: Sender<AgentNotice>,
-        activation_rx: Receiver<AgentNotice>,
+        activation_tx: Sender<(String, AgentNotice)>,
+        activation_rx: Receiver<(String, AgentNotice)>,
         failure_tx: Sender<String>,
         failure_rx: Receiver<String>,
+        activation_store: Option<NativeToastActivationStore>,
         activation_tokens: VecDeque<(String, AgentNotice)>,
         live_toasts: VecDeque<ToastNotification>,
     }
 
     impl WindowsAgentToastPresenter {
         pub fn new() -> Self {
+            let state_dir = crate::session::PreviewSessionStore::platform_default()
+                .map(|store| store.state_dir().to_path_buf());
+            Self::with_state_dir(state_dir)
+        }
+
+        pub fn with_state_dir(state_dir: Option<PathBuf>) -> Self {
             let (activation_tx, activation_rx) = mpsc::channel();
             let (failure_tx, failure_rx) = mpsc::channel();
             Self {
@@ -118,6 +127,7 @@ mod windows_toast {
                 activation_rx,
                 failure_tx,
                 failure_rx,
+                activation_store: state_dir.map(NativeToastActivationStore::new),
                 activation_tokens: VecDeque::new(),
                 live_toasts: VecDeque::new(),
             }
@@ -145,10 +155,13 @@ mod windows_toast {
             // Grouped notices open Native without secretly selecting a Tab.
             if notices.len() == 1 {
                 let target = notices[0].clone();
+                let token = launch_token
+                    .clone()
+                    .expect("single Agent toast has a launch token");
                 let sender = self.activation_tx.clone();
                 let on_click =
                     TypedEventHandler::<ToastNotification, IInspectable>::new(move |_, _| {
-                        let _ = sender.send(target.clone());
+                        let _ = sender.send((token.clone(), target.clone()));
                         Ok(())
                     });
                 toast
@@ -183,12 +196,31 @@ mod windows_toast {
             if setting != NotificationSetting::Enabled {
                 return Err(format!("Windows blocked Native notifications: {setting:?}"));
             }
-            notifier
-                .Show(&toast)
-                .map_err(|error| format!("Windows toast display: {error}"))?;
-            if let Some(token) = launch_token {
-                self.activation_tokens
-                    .push_back((token, notices[0].clone()));
+            let durable_token = if let (Some(token), Some(store)) =
+                (launch_token.as_deref(), self.activation_store.as_ref())
+            {
+                store
+                    .store_notice(token, &notices[0])
+                    .map_err(|error| format!("Native toast activation store: {error}"))?;
+                true
+            } else {
+                false
+            };
+            if let Err(error) = notifier.Show(&toast) {
+                if durable_token {
+                    if let (Some(token), Some(store)) =
+                        (launch_token.as_deref(), self.activation_store.as_ref())
+                    {
+                        let _ = store.remove_notice(token);
+                    }
+                }
+                return Err(format!("Windows toast display: {error}"));
+            }
+            if !durable_token {
+                if let Some(token) = launch_token {
+                    self.activation_tokens
+                        .push_back((token, notices[0].clone()));
+                }
             }
             self.live_toasts.push_back(toast);
             while self.live_toasts.len() > 16 {
@@ -201,19 +233,28 @@ mod windows_toast {
         }
 
         pub fn take_activation(&mut self) -> Option<AgentNotice> {
-            if let Ok(notice) = self.activation_rx.try_recv() {
-                self.activation_tokens.retain(|(_, existing)| {
-                    existing.session_id != notice.session_id
-                        || existing.workspace_id != notice.workspace_id
-                        || existing.tab_id != notice.tab_id
-                        || existing.agent_type != notice.agent_type
-                });
+            if let Ok((token, notice)) = self.activation_rx.try_recv() {
+                if let Some(store) = &self.activation_store {
+                    let _ = store.remove_notice(&token);
+                }
+                self.activation_tokens
+                    .retain(|(existing, _)| existing != &token);
                 return Some(notice);
             }
-            // Action Center calls the COM server, often *after* the popup
-            // disappears. Tokens from another process/old app session cannot
-            // resolve into a live Host identity and are simply discarded.
+            // COM can launch a fresh GPUI process after the original one exits.
+            // Resolve the opaque launch token through the DPAPI-protected
+            // per-user store; a claimed token is consumed exactly once.
             while let Some(token) = crate::native_toast_activation::take_token() {
+                if let Some(store) = &self.activation_store {
+                    match store.take_notice(&token) {
+                        Ok(Some(notice)) => return Some(notice),
+                        Ok(None) => continue,
+                        Err(error) => {
+                            eprintln!("Alera Native: toast activation lookup failed: {error}");
+                            continue;
+                        }
+                    }
+                }
                 if let Some(index) = self
                     .activation_tokens
                     .iter()
@@ -314,20 +355,19 @@ mod tests {
         assert!(build_windows_toast_xml_with_launch(&notes, Some("host:sensitive")).is_none());
     }
 
-    /// Opt-in only: tests a real Windows notification, but never starts a
-    /// Runtime Host, changes Hooks or emits a real Agent status.
+    /// Opt-in OS end-to-end test. It intentionally does NOT register a COM
+    /// class factory in this Cargo process: clicking the toast must launch the
+    /// actual Native LocalServer32 EXE, whose new process consumes the DPAPI
+    /// token mapping. It never starts a Runtime Host or Agent.
     #[cfg(windows)]
     #[test]
-    #[ignore = "Requires interactive Windows desktop, registered Native AUMID, and manual Toast click"]
+    #[ignore = "Requires interactive Windows desktop, real Native LocalServer32 registration, and manual Action Center click"]
     fn h03_winrt_smoke_toast_show_and_activation_for_isolated_agent() {
         assert_eq!(
             std::env::var("ALERA_GPUI_AGENT_TOAST_SMOKE").as_deref(),
             Ok("1"),
             "opt in explicitly; this test displays a synthetic Windows Toast"
         );
-        // The real Native app calls this before starting GPUI. A cargo test
-        // harness must explicitly assume the same AppUserModelID; otherwise
-        // CreateToastNotifierWithId can return success without OS delivery.
         #[link(name = "shell32")]
         extern "system" {
             fn SetCurrentProcessExplicitAppUserModelID(app_id: *const u16) -> i32;
@@ -341,8 +381,6 @@ mod tests {
             hr >= 0,
             "Windows Native test AppUserModelID setup failed: {hr:#x}"
         );
-        let _server = crate::native_toast_activation::NativeToastComRegistration::register()
-            .expect("Native COM class factory registration for isolated smoke");
 
         let notice = AgentNotice {
             session_id: "h03-isolated-session".into(),
@@ -351,21 +389,35 @@ mod tests {
             agent_type: "H03 test Agent".into(),
             state: AgentActivityState::Waiting,
         };
-        // Read the OS's authoritative notification gate before attempting to
-        // deliver: Toast.Show() may succeed even if banners are suppressed.
+        let state_dir = crate::session::PreviewSessionStore::platform_default()
+            .expect("per-user Native state directory")
+            .state_dir()
+            .to_path_buf();
+        let store = crate::native_toast_activation::NativeToastActivationStore::new(state_dir);
+        let token = crate::native_toast_activation::new_token().expect("opaque launch token");
+        store
+            .store_notice(&token, &notice)
+            .expect("persist DPAPI activation payload before Toast.Show");
+
+        let xml = build_windows_toast_xml_with_launch(&[notice], Some(&token))
+            .expect("safe synthetic toast");
+        let doc = windows::Data::Xml::Dom::XmlDocument::new().expect("H03 XML document");
+        doc.LoadXml(&windows::core::HSTRING::from(xml))
+            .expect("H03 Toast XML");
+        let toast = windows::UI::Notifications::ToastNotification::CreateToastNotification(&doc)
+            .expect("H03 Toast");
         let notifier =
             windows::UI::Notifications::ToastNotificationManager::CreateToastNotifierWithId(
                 &windows::core::HSTRING::from(crate::edition::NATIVE_WINDOWS_APP_ID),
             )
             .expect("H03 notifier");
-        eprintln!(
-            "H03 OS notification setting: {:?}",
-            notifier.Setting().expect("H03 setting")
+        assert_eq!(
+            notifier.Setting().expect("H03 setting"),
+            windows::UI::Notifications::NotificationSetting::Enabled,
+            "Windows must allow Native Toast delivery"
         );
-        let mut presenter = WindowsAgentToastPresenter::new();
-        presenter.show(&[notice.clone()]).expect(
-            "WinRT Toast show requires a registered Native AUMID and Windows notification permission",
-        );
+        notifier.Show(&toast).expect("H03 Toast.Show");
+
         let history = windows::UI::Notifications::ToastNotificationManager::History()
             .and_then(|history| {
                 history.GetHistoryWithId(&windows::core::HSTRING::from(
@@ -373,22 +425,19 @@ mod tests {
                 ))
             })
             .and_then(|entries| entries.Size());
-        eprintln!("H03 notification center history: {history:?}");
-        eprintln!("H03 test: click the synthetic Windows Toast within 45 seconds");
+        eprintln!("H03 Action Center history after Show: {history:?}");
+        eprintln!(
+            "H03 test: click the synthetic Waiting Toast; the registered Native EXE must launch and consume the DPAPI token within 60 seconds"
+        );
         let start = std::time::Instant::now();
-        while start.elapsed() < std::time::Duration::from_secs(45) {
-            if let Some(error) = presenter.take_failure() {
-                panic!("Windows reported asynchronous Toast.Failed: {error}");
-            }
-            if let Some(activated) = presenter.take_activation() {
-                assert_eq!(
-                    activated, notice,
-                    "the Toast callback must preserve exact in-process Agent identity"
-                );
+        while start.elapsed() < std::time::Duration::from_secs(60) {
+            if !store.contains(&token).expect("check pending DPAPI token") {
+                eprintln!("H03 COM LocalServer process consumed the one-time DPAPI token");
                 return;
             }
             std::thread::sleep(std::time::Duration::from_millis(250));
         }
-        panic!("WinRT reported Toast.show success but no activation callback was received");
+        let _ = store.remove_notice(&token);
+        panic!("Action Center click did not launch Native LocalServer or consume its DPAPI activation token");
     }
 }

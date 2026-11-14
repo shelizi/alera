@@ -108,12 +108,12 @@ use alera_gpui_desktop::session::{
 };
 use alera_gpui_desktop::terminal::{
     encode_terminal_key, estimate_terminal_viewport_with_line_height, raw_key_reply_may_drain,
-    select_registered_host_workspace, terminal_clipboard_payload,
-    terminal_ime_anchor_with_line_height, terminal_key_dispatch, AgentActivityState,
-    TerminalAutoResizeGate, TerminalClipboardShortcut, TerminalCreateFlow, TerminalCreateTick,
-    TerminalDock, TerminalKeyDispatch, TerminalLineSelection, TerminalPollCadence,
-    TerminalPollGate, TerminalSession, TerminalTabContextTarget, TerminalViewMode,
-    TerminalViewportProposal, HOST_SESSION_LIST_SCOPE,
+    resolve_registered_host_workspace_path, select_registered_host_workspace,
+    terminal_clipboard_payload, terminal_ime_anchor_with_line_height, terminal_key_dispatch,
+    AgentActivityState, TerminalAutoResizeGate, TerminalClipboardShortcut, TerminalCreateFlow,
+    TerminalCreateTick, TerminalDock, TerminalKeyDispatch, TerminalLineSelection,
+    TerminalPollCadence, TerminalPollGate, TerminalSession, TerminalTabContextTarget,
+    TerminalViewMode, TerminalViewportProposal, HOST_SESSION_LIST_SCOPE,
 };
 use alera_gpui_desktop::terminal_panes::{TerminalPaneLayout, TerminalSplitDirection};
 use alera_gpui_desktop::terminal_stream_bridge::{
@@ -871,6 +871,7 @@ struct Workbench {
     #[cfg(windows)]
     agent_windows_toast: WindowsAgentToastPresenter,
     agent_toast_activation: Option<AgentNotice>,
+    agent_toast_activation_retries: u8,
     terminal_read_loading: Option<String>,
     terminal_split_read_loading: bool,
     terminal_poll: TerminalPollGate,
@@ -9317,6 +9318,7 @@ impl Workbench {
         #[cfg(windows)]
         if let Some(clicked) = self.agent_windows_toast.take_activation() {
             self.agent_toast_activation = Some(clicked);
+            self.agent_toast_activation_retries = 0;
             cx.notify();
         }
     }
@@ -9330,19 +9332,86 @@ impl Workbench {
         // Clicking a WinRT notification never gives the Host permission to
         // start/terminate a PTY. Cross-workspace changes must use the normal
         // confirmed selection path; fail closed until it is implemented.
-        if self.terminals.session_list_is_stale()
-            || validated_notice_target(&notice, &self.terminals.sessions).is_none()
-        {
-            self.terminals.status = "Agent notice is stale; refresh Host sessions".into();
+        // The COM-launched Native process starts with no Host inventory.
+        // An empty list is not proof the clicked session has gone away.
+        // Wait for the authenticated async read, counting actual attempts,
+        // not GPUI render frames (which can complete before the CLI read).
+        if self.terminal_list_loading {
+            self.agent_toast_activation = Some(notice);
+            return;
+        }
+        if self.terminals.session_list_is_stale() || self.terminals.sessions.is_empty() {
+            if self.agent_toast_activation_retries < 3 {
+                self.agent_toast_activation_retries += 1;
+                self.agent_toast_activation = Some(notice);
+                self.refresh_terminals(cx);
+            } else {
+                self.terminals.status =
+                    "Cannot verify Agent notice: Host session list is unavailable".into();
+                cx.notify();
+            }
+            return;
+        }
+        if validated_notice_target(&notice, &self.terminals.sessions).is_none() {
+            self.terminals.status = "Agent notice is stale; Host session no longer exists".into();
             cx.notify();
             return;
         }
         let current_workspace =
             select_registered_host_workspace(self.model.root(), &self.mcp_host_workspaces).ok();
         if current_workspace.as_deref() != Some(notice.workspace_id.as_str()) {
-            self.terminals.status =
-                "Agent is in another workspace; open it before attaching the notice".into();
-            cx.notify();
+            // An OS toast click is an explicit request to navigate to the
+            // Agent. Use the exact authenticated Host workspace ID, never
+            // guess from the repo name or toast payload, and reuse the normal
+            // draft-safe workspace switch.
+            if self.mcp_host_workspaces_loading {
+                self.agent_toast_activation = Some(notice);
+                return;
+            }
+            match resolve_registered_host_workspace_path(
+                &notice.workspace_id,
+                &self.mcp_host_workspaces,
+            ) {
+                Ok(target_root) => {
+                    if self.model.root() != target_root.as_path() {
+                        self.switch_workspace(target_root.clone(), cx);
+                        if self.model.root() != target_root.as_path() {
+                            self.terminals.status =
+                                "Agent notice cannot switch workspace; save your draft first"
+                                    .into();
+                            cx.notify();
+                            return;
+                        }
+                    }
+                    // The new workspace reads Host sessions and restores pane
+                    // layout asynchronously. Focus only after those are fresh.
+                    self.agent_toast_activation = Some(notice);
+                    self.agent_toast_activation_retries = 0;
+                    cx.notify();
+                }
+                Err(_)
+                    if self.mcp_host_workspaces.is_empty()
+                        && self.agent_toast_activation_retries < 3 =>
+                {
+                    if self.runtime_bridge.is_none() {
+                        self.runtime_bridge = RuntimeCliBridge::discover().ok();
+                    }
+                    if self.runtime_bridge.is_some() {
+                        self.agent_toast_activation_retries += 1;
+                        self.agent_toast_activation = Some(notice);
+                        self.refresh_mcp_host_workspaces(cx);
+                    } else {
+                        self.terminals.status =
+                            "Cannot navigate Agent notice: Alera Host CLI unavailable".into();
+                        cx.notify();
+                    }
+                }
+                Err(error) => {
+                    self.terminals.status =
+                        format!("Cannot navigate Agent notice to registered workspace: {error}");
+                    cx.notify();
+                }
+            }
             return;
         }
         if !self.terminals.tabs.iter().any(|tab| {
@@ -9362,6 +9431,7 @@ impl Workbench {
             &self.mixed_panes,
         );
         if let Some((id, _pane)) = target {
+            self.agent_toast_activation_retries = 0;
             self.focus_mixed_tab(&id, window, cx);
         } else {
             self.terminals.status = "Agent Host tab is no longer available".into();
@@ -14261,11 +14331,21 @@ fn main() {
     let session_store = PreviewSessionStore::platform_default();
     // Windows COM LocalServer32 may launch with -Embedding instead of a
     // workspace argument. It must not be opened as a relative project path.
-    let root = std::env::args_os()
-        .skip(1)
+    let launch_arguments = std::env::args_os().skip(1).collect::<Vec<_>>();
+    let toast_activated_launch = launch_arguments.iter().any(|argument| {
+        let arg = argument.to_string_lossy();
+        arg.eq_ignore_ascii_case("-ToastActivated")
+    });
+    if toast_activated_launch {
+        eprintln!("Alera Native: started for Windows Action Center toast activation");
+    }
+    let root = launch_arguments
+        .into_iter()
         .find(|argument| {
             let arg = argument.to_string_lossy();
-            !arg.eq_ignore_ascii_case("-Embedding") && !arg.eq_ignore_ascii_case("/Embedding")
+            !arg.eq_ignore_ascii_case("-Embedding")
+                && !arg.eq_ignore_ascii_case("/Embedding")
+                && !arg.eq_ignore_ascii_case("-ToastActivated")
         })
         .map(std::path::PathBuf::from)
         .or_else(|| {
@@ -14275,6 +14355,13 @@ fn main() {
                     None
                 })
             })
+        })
+        .or_else(|| {
+            if toast_activated_launch {
+                std::env::var_os("USERPROFILE").map(std::path::PathBuf::from)
+            } else {
+                None
+            }
         })
         .unwrap_or_else(|| std::env::current_dir().expect("current working directory"));
     let mut model = match WorkbenchModel::new(root) {
@@ -14822,6 +14909,7 @@ fn main() {
                             #[cfg(windows)]
                             agent_windows_toast: WindowsAgentToastPresenter::new(),
                             agent_toast_activation: None,
+                            agent_toast_activation_retries: 0,
                             terminal_read_loading: None,
                             terminal_split_read_loading: false,
                             terminal_poll: TerminalPollGate::default(),

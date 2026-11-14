@@ -875,6 +875,61 @@ pub fn select_registered_host_workspace(
     })
 }
 
+/// Resolve a notification's exact authenticated Host workspace ID to a
+/// canonical existing directory. A duplicate ID is ambiguous even when two
+/// entries point at the same folder. Never guess from a repo name.
+pub fn resolve_registered_host_workspace_path(
+    workspace_id: &str,
+    registered: &[RegisteredHostWorkspace],
+) -> io::Result<PathBuf> {
+    if !valid_host_id(workspace_id) {
+        return Err(invalid("Invalid Agent notification Host workspace ID"));
+    }
+    let mut matched = registered.iter().filter(|entry| entry.id == workspace_id);
+    let first = matched.next().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            "Agent workspace is not registered with Host",
+        )
+    })?;
+    if matched.next().is_some() || !first.path.is_absolute() {
+        return Err(invalid("Ambiguous or relative Agent workspace path"));
+    }
+    let canonical = dunce::canonicalize(&first.path)?;
+    if !canonical.is_dir() {
+        return Err(invalid("Agent workspace directory is not available"));
+    }
+    Ok(canonical)
+}
+
+#[cfg(test)]
+mod h03_workspace_notice_tests {
+    use super::*;
+
+    #[test]
+    fn notification_workspace_routing_requires_exact_unique_host_id_and_existing_directory() {
+        let temp = tempfile::tempdir().expect("temp workspace");
+        let root = dunce::canonicalize(temp.path()).expect("canonical workspace");
+        let registered = vec![RegisteredHostWorkspace {
+            id: "h03-workspace".to_owned(),
+            path: root.clone(),
+        }];
+        assert_eq!(
+            resolve_registered_host_workspace_path("h03-workspace", &registered).unwrap(),
+            root
+        );
+        assert!(resolve_registered_host_workspace_path("other-workspace", &registered).is_err());
+        let mut ambiguous = registered.clone();
+        ambiguous.push(registered[0].clone());
+        assert!(resolve_registered_host_workspace_path("h03-workspace", &ambiguous).is_err());
+        let relative = vec![RegisteredHostWorkspace {
+            id: "h03-workspace".to_owned(),
+            path: PathBuf::from("relative"),
+        }];
+        assert!(resolve_registered_host_workspace_path("h03-workspace", &relative).is_err());
+    }
+}
+
 /// Parse the real Host `terminal create` reply:
 /// `{tab:{id,workspaceId,payload:{terminalSessionId}},attachment:{sessionId}}`.
 /// Older Hosts may also include attachment.workspaceId/tabId instead of the

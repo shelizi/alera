@@ -241,7 +241,9 @@ function Get-VerifiedNativeServer([string]$ExpectedExe) {
         return $false
     }
     $actual = (Get-Item -LiteralPath $comServerKey -ErrorAction Stop).GetValue('')
-    $expected = '"' + [IO.Path]::GetFullPath($ExpectedExe) + '"'
+    # COM starts this executable for an Action Center click. The explicit
+    # marker prevents its argument from being mistaken for a workspace path.
+    $expected = '"' + [IO.Path]::GetFullPath($ExpectedExe) + '" -ToastActivated'
     return [string]::Equals($actual, $expected, [StringComparison]::OrdinalIgnoreCase)
 }
 
@@ -327,7 +329,7 @@ try {
         New-Item -Path $comClassRoot -ErrorAction Stop | Out-Null
         $createdRegistry = $true
         New-Item -Path $comServerKey -ErrorAction Stop | Out-Null
-        Set-Item -LiteralPath $comServerKey -Value ('"' + $resolvedExe + '"') -ErrorAction Stop
+        Set-Item -LiteralPath $comServerKey -Value ('"' + $resolvedExe + '" -ToastActivated') -ErrorAction Stop
         if (-not (Get-VerifiedNativeServer $resolvedExe)) {
             throw 'COM LocalServer32 target read-back mismatch'
         }
