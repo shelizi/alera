@@ -60,16 +60,35 @@ class PromptWorkspaceRuntimeClient(
     required bool requireIdempotency,
     String? agyAccountId,
   }) async {
+    await beforeAccess?.call();
     // Never send a registered-but-unverified account to an older Host that
     // may silently ignore this field and run the default Google login.
     if (agyAccountId != null && agyAccountId != 'default') {
-      throw UnsupportedError(
-        'Selected Google / Antigravity account has no isolated login. '
-        'Switch to Default in Settings, or connect a separately authenticated '
-        'OS-user Runtime Host. No Agent was started.',
+      final snapshot = _asMap(
+        await _client.runtimeRequest('runtimeSettings.get'),
       );
+      final quotasValue = snapshot['agentQuotas'];
+      // Old Hosts have no AGY routing settings; treat their response as
+      // unsupported instead of surfacing a generic decoding exception.
+      final quotas = quotasValue is Map
+          ? Map<String, Object?>.from(quotasValue)
+          : const <String, Object?>{};
+      final profiles = quotas['agyProfiles'];
+      final paired =
+          profiles is List &&
+          profiles.whereType<Map>().any(
+            (entry) =>
+                entry['accountId'] == agyAccountId &&
+                entry['sshTargetId'] is String &&
+                entry['hostIdentityHash'] is String,
+          );
+      if (snapshot['agySshRoutingVersion'] != 1 || !paired) {
+        throw UnsupportedError(
+          'Selected Google account has no identity-pinned SSH route on a compatible Runtime Host. '
+          'No Agent was started.',
+        );
+      }
     }
-    await beforeAccess?.call();
     final requestPayload = <String, Object?>{
       'workspaceId': workspaceId,
       'profileId': profileId,
@@ -85,7 +104,8 @@ class PromptWorkspaceRuntimeClient(
         requestPayload,
       );
     } on StateError catch (error) {
-      if (requireIdempotency ||
+      if ((agyAccountId != null && agyAccountId != 'default') ||
+          requireIdempotency ||
           error.message !=
               'Unknown terminal host request: agentProfile.launchIdempotent') {
         rethrow;

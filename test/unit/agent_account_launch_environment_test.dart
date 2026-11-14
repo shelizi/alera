@@ -81,6 +81,29 @@ void main() {
     );
   });
 
+  test('paired Google SSH Host identity survives settings roundtrip and rename', () {
+    final hash = List<String>.filled(64, 'a').join();
+    final settings = AgentQuotaHostSettings(
+      agyProfiles: [
+        AgyQuotaProfileSettings(
+          alias: 'Work',
+          accountId: 'work',
+          sshTargetId: 'agy2-ssh',
+          hostIdentityHash: hash,
+        ),
+      ],
+      selectedAgyAccountId: 'work',
+    );
+    final rebuilt = AgentQuotaHostSettings.fromJson(settings.toMap());
+    final paired = rebuilt.agyProfiles.single;
+    expect(paired.sshTargetId, 'agy2-ssh');
+    expect(paired.hostIdentityHash, hash);
+    expect(rebuilt.selectedAgyAccountId, 'work');
+    final renamed = paired.copyWith(alias: 'New Work');
+    expect(renamed.sshTargetId, 'agy2-ssh');
+    expect(renamed.hostIdentityHash, hash);
+  });
+
   test('account configuration and selection survive settings round trips', () {
     final settings = AgentQuotaHostSettings.fromJson({
       'codexProfiles': [

@@ -88,6 +88,57 @@ new Agent PTYs to that verified Host. The existing Classic client has one
 local Runtime Host socket, so the routing layer is genuinely not present
 yet. Do not loosen the safety gate until it is.
 
+### Loopback SSH independent-user account backend (fifth stage, feature branch)
+
+The original missing remote-user routing is now implemented in the isolated
+worktree, reusing the existing Runtime SSH Target catalog instead of inventing
+an unscoped cross-user Host control token. `runtime agy-accounts bind` pins a
+registered AGY account ID to an existing **loopback, public-key-only SSH
+Target**, after checking its SSH host key via OpenSSH's strict known-hosts
+policy and comparing the remote Windows user's token-derived identity to the
+real local Host OS user. `unbind` clears only the binding. Both use the
+revisioned Host settings update and reject old Hosts.
+
+The Host re-probes the remote OS identity before each AGY quota fetch and
+each new AGY Terminal PTY. Bound-account quota fetches read the separately
+logged-in user's existing Host's `agy:default` quota and remap only the
+resulting display account ID; they never fetch the local default quota for
+the bound account. A new AGY Tab stores its account ID and uses interactive
+SSH in the second Windows user's shell, first selecting the original workspace
+directory using an encoded PowerShell command. The remote user must have
+access to that directory. Failed SSH login/identity/working-directory checks
+never silently fall back to the local Google account.
+
+Classic New Agent and Prompt Workspace check `agySshRoutingVersion=1` and
+an actual paired profile before requesting the new Agent. Native GPUI and
+Classic show the paired target; pairing commands, host-key authorization and
+real Google login are documented in
+`docs/agy-ssh-isolated-windows-host-20261114.md`.
+
+**Real deployment is still unverified and disabled on this machine**: the
+inspected Windows host has `ssh.exe`, but no installed `sshd` service or
+configured second Windows user. Neither Google credentials nor OS account
+permissions were changed, and no SSH listener was installed. The backend
+source must pass the current build and unit tests before any claim of
+release readiness or merge to `main`.
+
+Fifth-stage verification on Windows:
+
+- `cargo check --offline -p alera-cli --bin alera -j 2`: **PASS**, exit 0.
+- `cargo check --offline --bin alera-gpui-desktop -j 2`: **PASS**, exit 0.
+- `flutter test --no-pub test/unit/prompt_workspace_runtime_client_test.dart`:
+  **7/7 PASS** after fixing legacy Host no-routing graceful rejection.
+- `flutter test --no-pub test/unit/agent_account_launch_environment_test.dart`:
+  **6/6 PASS**, including persistent SSH-target / OS-user-pin round trip.
+- The initial combined Flutter test attempt (13/14 pass) exposed and led to
+  that legacy Host fix; the two focused suites above were subsequently
+  rerun and passed. The initial tool-congested builds timed out; no live
+  second Windows user, SSH daemon or separate AGY login was provisioned.
+- Additional Rust and Native unit tests for SSH routing, identity binding and
+  partial metadata remain pending, and no actual two-identity E2E acceptance
+  has been performed. Native GPUI only displays paired state; initial SSH
+  binding requires the documented CLI command.
+
 Fourth-stage verification on Windows:
 
 - `cargo check --offline -p alera-cli --bin alera`: PASS (exit 0).

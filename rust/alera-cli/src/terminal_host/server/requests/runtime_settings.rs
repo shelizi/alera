@@ -22,6 +22,9 @@ impl ServerActor {
                 Value::Null
             }
         };
+        // Client launchers must see this before sending a non-default AGY
+        // account to the Host; older Hosts would ignore that account selector.
+        snapshot["agySshRoutingVersion"] = json!(1);
         Ok(snapshot)
     }
 

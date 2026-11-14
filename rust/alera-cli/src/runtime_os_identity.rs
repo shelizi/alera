@@ -49,7 +49,6 @@ impl HostOsIdentity {
     /// Same Windows SID is definitively not two independently keyring-scoped
     /// accounts. Different identities still require a separate authenticated
     /// Host connection and verified Google login before routing any Agent.
-    #[cfg(test)]
     pub(crate) fn definitely_same_os_user(&self, other: &Self) -> bool {
         self.validated()
             && other.validated()

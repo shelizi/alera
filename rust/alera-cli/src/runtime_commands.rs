@@ -108,6 +108,17 @@ pub(crate) async fn run_runtime_command(command: RuntimeCommand) -> i32 {
             )
             .await
         }
+        RuntimeAction::OsIdentity => match crate::runtime_os_identity::current_host_os_identity() {
+            Ok(identity) => {
+                print_value(
+                    &serde_json::json!(identity),
+                    command.output.json,
+                    "Current OS-user identity",
+                );
+                0
+            }
+            Err(error) => print_error(format!("Could not read OS identity: {error}")),
+        },
     }
 }
 

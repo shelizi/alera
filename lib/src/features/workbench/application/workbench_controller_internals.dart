@@ -22,6 +22,29 @@ mixin _WorkbenchControllerInternals on _$WorkbenchController
         .selectedAgyAccountId;
   }
 
+  Future<bool> _hasVerifiedAgySshRoute(String hostId, String accountId) async {
+    final settings = ref
+        .read(settingsControllerProvider)
+        .agents
+        .quotas
+        .forHost(hostId);
+    final paired = settings.agyProfiles.any(
+      (entry) =>
+          entry.accountId == accountId &&
+          entry.sshTargetId != null &&
+          entry.hostIdentityHash != null,
+    );
+    if (!paired) return false;
+    try {
+      final snapshot = await ref
+          .read(runtimeHostClientProvider)
+          .runtimeRequest('runtimeSettings.get');
+      return snapshot is Map && snapshot['agySshRoutingVersion'] == 1;
+    } catch (_) {
+      return false; // Older Hosts must never silently use the default keyring.
+    }
+  }
+
   /// Subscription registries, resource cleaners and teardown ordering live
   /// behind a narrow host port so the owner stays free of provider reads.
   /// Constructed first: the other owners reach its registries through the

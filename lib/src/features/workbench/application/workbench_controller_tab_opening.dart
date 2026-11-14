@@ -43,17 +43,21 @@ mixin _WorkbenchControllerTabOpening
     String? targetGroupId,
     String? executablePath,
   }) async {
+    String? newAgyAccountId;
     if (agentType.key == 'agy' || agentType.key == 'antigravity') {
       // Settings load asynchronously on startup. Never mistake the temporary
       // default value for the user's persisted Google-account selection.
       final selected = await _selectedAgyAccountIdForHost(workspace.hostId);
       if (selected != 'default') {
-        final message =
-            'Google account "$selected" has no independently verified login. '
-            'No Agent tab was created and the default account was not used. '
-            'Select Default in Settings or use a separately authenticated OS-user Runtime Host.';
-        state = state.copyWith(error: message);
-        throw StateError(message);
+        if (!await _hasVerifiedAgySshRoute(workspace.hostId, selected)) {
+          final message =
+              'Google account "$selected" has no verified SSH user binding, '
+              'or the Runtime Host cannot route it safely. '
+              'No Agent was started and Default was not used.';
+          state = state.copyWith(error: message);
+          throw StateError(message);
+        }
+        newAgyAccountId = selected;
       }
     }
     return await _tabLayoutOwner.createAgentTab(
@@ -61,6 +65,7 @@ mixin _WorkbenchControllerTabOpening
       agentType: agentType,
       targetGroupId: targetGroupId,
       executablePath: executablePath,
+      agyAccountId: newAgyAccountId,
     );
   }
 

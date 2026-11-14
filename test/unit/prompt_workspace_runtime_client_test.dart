@@ -27,7 +27,46 @@ void main() {
         ),
         throwsUnsupportedError,
       );
-      expect(host.requests, isEmpty);
+      expect(host.requests, <String>['runtimeSettings.get']);
+    },
+  );
+
+  test(
+    'paired separate-user AGY launch uses current Host and account scope',
+    () async {
+      final requests = <Map<String, Object?>>[];
+      final host = _FakeRuntimeHostClient((type, payload) async {
+        requests.add(payload);
+        if (type == 'runtimeSettings.get') {
+          return <String, Object?>{
+            'agySshRoutingVersion': 1,
+            'agentQuotas': <String, Object?>{
+              'agyProfiles': <Object?>[
+                <String, Object?>{
+                  'accountId': 'research',
+                  'sshTargetId': 'ssh-123',
+                  'hostIdentityHash': List<String>.filled(64, 'a').join(),
+                },
+              ],
+            },
+          };
+        }
+        return result;
+      });
+      final client = PromptWorkspaceRuntimeClient(host);
+      await client.launchAgent(
+        workspaceId: 'workspace-1',
+        profileId: 'agy-profile',
+        prompt: 'Do work',
+        clientMutationId: 'mutation-2',
+        requireIdempotency: true,
+        agyAccountId: 'research',
+      );
+      expect(host.requests, [
+        'runtimeSettings.get',
+        'agentProfile.launchIdempotent',
+      ]);
+      expect(requests.last['agyAccountId'], 'research');
     },
   );
 

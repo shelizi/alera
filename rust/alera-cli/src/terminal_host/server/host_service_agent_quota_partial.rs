@@ -141,6 +141,8 @@ mod tests {
         configured.agy_profiles = vec![alera_core::runtime::RuntimeAgyQuotaProfile {
             alias: "Research".into(),
             account_id: "research".into(),
+            ssh_target_id: None,
+            host_identity_hash: None,
         }];
         let payload = quota_fetch_payload(&configured, &json!({}), Some("agy"), Some("research"));
         assert_eq!(payload["accountId"], "research");

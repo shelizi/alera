@@ -49,7 +49,9 @@ class const AgyQuotaProfilesControl({
           for (final profile in profiles)
             DropdownMenuItem<String>(
               value: profile.accountId,
-              child: Text('${profile.alias} (login unverified)'),
+              child: Text(
+                '${profile.alias} (${profile.sshTargetId == null ? 'login unverified' : 'isolated SSH Host'})',
+              ),
             ),
         ],
         onChanged: (value) {
@@ -61,9 +63,9 @@ class const AgyQuotaProfilesControl({
           padding: const EdgeInsets.only(bottom: AleraTokens.space8),
           child: Text(
             context.tr(
-              'This account is registered but not independently signed in. '
-              'New AGY Agent terminals will be blocked until an isolated '
-              'credential backend is verified. Existing terminals are unchanged.',
+              'A separate Windows OS-user Host is required. Registered but '
+              'unpaired accounts cannot launch. An SSH-paired account is '
+              'verified again before every new launch. Existing terminals are unchanged.',
             ),
             style: Theme.of(context).textTheme.bodySmall,
           ),
@@ -87,7 +89,9 @@ class const AgyQuotaProfilesControl({
                     Text(profile.accountId, style: AleraTokens.monoStyle),
                     Text(
                       context.tr(
-                        'Pending isolated login - quota and launch unavailable',
+                        profile.sshTargetId == null
+                            ? 'Pending isolated login - quota and launch unavailable'
+                            : 'Paired SSH Host: ${profile.sshTargetId} (Google login checked on refresh)',
                       ),
                       style: Theme.of(context).textTheme.bodySmall,
                     ),
@@ -147,6 +151,12 @@ class _AgyAccountDialogState extends State<_AgyAccountDialog> {
   void _save() {
     final alias = _alias.text.trim();
     final accountId = _accountId.text.trim();
+    if (widget.initial?.sshTargetId != null &&
+        accountId != widget.initial!.accountId) {
+      setState(() => _error =
+          'A paired account ID is immutable; unpair the SSH target before renaming the ID.');
+      return;
+    }
     if (alias.isEmpty ||
         alias.length > 80 ||
         alias.contains(RegExp(r'[\x00-\x1f]')) ||
@@ -166,8 +176,10 @@ class _AgyAccountDialogState extends State<_AgyAccountDialog> {
       setState(() => _error = 'Account name and ID must be unique.');
       return;
     }
-    Navigator.of(context)
-        .pop(AgyQuotaProfileSettings(alias: alias, accountId: accountId));
+    Navigator.of(context).pop(
+      widget.initial?.copyWith(alias: alias, accountId: accountId) ??
+          AgyQuotaProfileSettings(alias: alias, accountId: accountId),
+    );
   }
 
   @override

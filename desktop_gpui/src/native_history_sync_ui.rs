@@ -373,7 +373,7 @@ impl Workbench {
                 div()
                     .text_xs()
                     .text_color(rgb(MUTED))
-                    .child("Registration only. AGY uses the OS user's shared keyring, so adding a label does not log in or enable quota refresh or account switching. Use a separate OS-user Runtime Host for an independent login."),
+                    .child("AGY login is scoped to the Windows OS user. An unpaired label cannot launch. Pair a separate Windows user's localhost SSH Target with 'alera runtime agy-accounts bind'; quota and new Terminal routing then verify the remote user before use. Google login remains under that user's control."),
             );
         let Some(snapshot) = self.agy_accounts_snapshot.as_ref() else {
             return content
@@ -485,12 +485,14 @@ impl Workbench {
                             .flex_col()
                             .min_w_0()
                             .child(div().text_sm().child(account.alias))
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(rgb(MUTED))
-                                    .child(format!("{} · Login unverified", account.account_id)),
-                            ),
+                            .child(div().text_xs().text_color(rgb(MUTED)).child(format!(
+                                        "{} · {}",
+                                        account.account_id,
+                                        account.ssh_target_id
+                                            .as_ref()
+                                            .map(|target| format!("SSH paired: {target}"))
+                                            .unwrap_or_else(|| "Login unverified".to_string())
+                                    ))),
                     )
                     .child(actions)
             },

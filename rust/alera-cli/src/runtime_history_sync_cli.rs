@@ -79,6 +79,8 @@ fn pending_agy_profiles_appear_in_history_catalog_but_cannot_mirror() {
         .push(alera_core::runtime::RuntimeAgyQuotaProfile {
             alias: "Research".into(),
             account_id: "research".into(),
+            ssh_target_id: None,
+            host_identity_hash: None,
         });
     let all = accounts(&settings);
     let extra = all

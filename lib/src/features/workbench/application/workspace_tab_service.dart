@@ -67,6 +67,8 @@ class WorkspaceTabService._(
     bool spawnOnCreate = false,
     bool initialCommandOnce = false,
     bool autoCloseOnSuccess = false,
+    String? agentType,
+    String? agyAccountId,
   }) async {
     final existing = await _repository.listWorkspaceTabs(workspaceId);
     final tabId = _uuid.v4();
@@ -93,6 +95,9 @@ class WorkspaceTabService._(
           workspaceTabInitialManagedAgentLaunchPayloadKey:
               Map<String, Object?>.unmodifiable(initialManagedAgentLaunch),
         if (spawnOnCreate) workspaceTabSpawnOnCreatePayloadKey: true,
+        if (agentType != null) 'agentType': agentType,
+        if (agyAccountId != null && agyAccountId != 'default')
+          'agyAccountId': agyAccountId,
         if (autoCloseOnSuccess) workspaceTabAutoCloseOnSuccessPayloadKey: true,
       },
     );

@@ -38,6 +38,8 @@ extension WorkbenchTabLayoutOwnerOpening on WorkbenchTabLayoutOwner {
     bool spawnOnCreate = false,
     bool initialCommandOnce = false,
     bool autoCloseOnSuccess = false,
+    String? agentType,
+    String? agyAccountId,
   }) async {
     try {
       final previousTabs = _host.readState().tabsFor(workspace.id);
@@ -51,6 +53,8 @@ extension WorkbenchTabLayoutOwnerOpening on WorkbenchTabLayoutOwner {
           spawnOnCreate: spawnOnCreate,
           initialCommandOnce: initialCommandOnce,
           autoCloseOnSuccess: autoCloseOnSuccess,
+          agentType: agentType,
+          agyAccountId: agyAccountId,
         ),
         planPlacement: (tab) => planWorkbenchTabAddedToGroup(
           previousTabs: previousTabs,
@@ -81,7 +85,22 @@ extension WorkbenchTabLayoutOwnerOpening on WorkbenchTabLayoutOwner {
     required AgentType agentType,
     String? targetGroupId,
     String? executablePath,
+    String? agyAccountId,
   }) {
+    if (agyAccountId != null && agyAccountId != 'default') {
+      if (agentType.key != 'agy' && agentType.key != 'antigravity') {
+        throw StateError('Only Antigravity can use an AGY SSH account');
+      }
+      return createTerminalTab(
+        workspace,
+        targetGroupId: targetGroupId,
+        title: agentDisplayName(agentType),
+        initialCommand: 'agy',
+        agentType: 'agy',
+        agyAccountId: agyAccountId,
+        spawnOnCreate: true,
+      );
+    }
     final configuredExecutable = executablePath?.trim();
     if (configuredExecutable != null && configuredExecutable.isNotEmpty) {
       return createTerminalTab(
@@ -93,6 +112,7 @@ extension WorkbenchTabLayoutOwnerOpening on WorkbenchTabLayoutOwner {
           'arguments': <String>[],
         },
         spawnOnCreate: true,
+        agentType: agentType.key,
       );
     }
     final command = agentProfileDefaultCommands[agentType];
@@ -105,6 +125,7 @@ extension WorkbenchTabLayoutOwnerOpening on WorkbenchTabLayoutOwner {
       title: agentDisplayName(agentType),
       initialCommand: command,
       spawnOnCreate: true,
+      agentType: agentType.key,
     );
   }
 

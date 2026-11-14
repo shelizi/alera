@@ -506,6 +506,8 @@ pub enum RuntimeAction {
     HistorySync(RuntimeHistorySyncCommand),
     /// Register Antigravity account labels on the existing Host (no OAuth or login).
     AgyAccounts(RuntimeAgyAccountsCommand),
+    /// Identify the current OS user without starting a Runtime Host.
+    OsIdentity,
 }
 
 #[derive(Debug, Args)]
@@ -529,6 +531,22 @@ pub enum RuntimeAgyAccountsAction {
     },
     /// Remove a registration and its history group assignment, not any native files.
     Remove {
+        #[arg(long)]
+        account_id: String,
+        #[arg(long)]
+        expected_revision: i64,
+    },
+    /// Bind a registered AGY account to an existing loopback public-key SSH target.
+    Bind {
+        #[arg(long)]
+        account_id: String,
+        #[arg(long)]
+        ssh_target_id: String,
+        #[arg(long)]
+        expected_revision: i64,
+    },
+    /// Remove only the paired independent OS-user route; keep the account label.
+    Unbind {
         #[arg(long)]
         account_id: String,
         #[arg(long)]

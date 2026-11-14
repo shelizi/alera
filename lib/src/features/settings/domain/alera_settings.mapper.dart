@@ -2161,17 +2161,31 @@ class AgyQuotaProfileSettingsMapper
     'accountId',
     _$accountId,
   );
+  static String? _$sshTargetId(AgyQuotaProfileSettings v) => v.sshTargetId;
+  static const Field<AgyQuotaProfileSettings, String> _f$sshTargetId = Field(
+    'sshTargetId',
+    _$sshTargetId,
+    opt: true,
+  );
+  static String? _$hostIdentityHash(AgyQuotaProfileSettings v) =>
+      v.hostIdentityHash;
+  static const Field<AgyQuotaProfileSettings, String> _f$hostIdentityHash =
+      Field('hostIdentityHash', _$hostIdentityHash, opt: true);
 
   @override
   final MappableFields<AgyQuotaProfileSettings> fields = const {
     #alias: _f$alias,
     #accountId: _f$accountId,
+    #sshTargetId: _f$sshTargetId,
+    #hostIdentityHash: _f$hostIdentityHash,
   };
 
   static AgyQuotaProfileSettings _instantiate(DecodingData data) {
     return AgyQuotaProfileSettings(
       alias: data.dec(_f$alias),
       accountId: data.dec(_f$accountId),
+      sshTargetId: data.dec(_f$sshTargetId),
+      hostIdentityHash: data.dec(_f$hostIdentityHash),
     );
   }
 
@@ -2245,7 +2259,12 @@ abstract class AgyQuotaProfileSettingsCopyWith<
   $Out
 >
     implements ClassCopyWith<$R, $In, $Out> {
-  $R call({String? alias, String? accountId});
+  $R call({
+    String? alias,
+    String? accountId,
+    String? sshTargetId,
+    String? hostIdentityHash,
+  });
   AgyQuotaProfileSettingsCopyWith<$R2, $In, $Out2> $chain<$R2, $Out2>(
     Then<$Out2, $R2> t,
   );
@@ -2261,16 +2280,25 @@ class _AgyQuotaProfileSettingsCopyWithImpl<$R, $Out>
   late final ClassMapperBase<AgyQuotaProfileSettings> $mapper =
       AgyQuotaProfileSettingsMapper.ensureInitialized();
   @override
-  $R call({String? alias, String? accountId}) => $apply(
+  $R call({
+    String? alias,
+    String? accountId,
+    String? sshTargetId,
+    String? hostIdentityHash,
+  }) => $apply(
     FieldCopyWithData({
       if (alias != null) #alias: alias,
       if (accountId != null) #accountId: accountId,
+      if (sshTargetId != null) #sshTargetId: sshTargetId,
+      if (hostIdentityHash != null) #hostIdentityHash: hostIdentityHash,
     }),
   );
   @override
   AgyQuotaProfileSettings $make(CopyWithData data) => AgyQuotaProfileSettings(
     alias: data.get(#alias, or: $value.alias),
     accountId: data.get(#accountId, or: $value.accountId),
+    sshTargetId: data.get(#sshTargetId, or: $value.sshTargetId),
+    hostIdentityHash: data.get(#hostIdentityHash, or: $value.hostIdentityHash),
   );
 
   @override

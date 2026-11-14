@@ -106,11 +106,19 @@ class const CodexQuotaProfileSettings({
 class const AgyQuotaProfileSettings({
   required this.alias,
   required this.accountId,
+  this.sshTargetId,
+  this.hostIdentityHash,
 }) with AgyQuotaProfileSettingsMappable {
   final String alias;
 
   /// A local identifier, not an email, token, or CLI data directory.
   final String accountId;
+
+  /// Bound loopback public-key SSH target for a different Windows OS user.
+  final String? sshTargetId;
+
+  /// Host-token-derived pin; does not prove a Google account is signed in.
+  final String? hostIdentityHash;
 }
 
 @MappableClass()

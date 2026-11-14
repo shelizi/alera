@@ -163,6 +163,21 @@ impl ServerActor {
                         );
                         continue;
                     }
+                    if tab
+                        .payload
+                        .get("agyAccountId")
+                        .and_then(Value::as_str)
+                        .is_some_and(|id| id != "default")
+                    {
+                        // SSH unavailable on restart is temporary. Preserve
+                        // the owner's tab and transcript rather than deleting
+                        // a registered separate-user session.
+                        tracing::warn!(
+                            "preserving isolated AGY terminal {} after SSH startup refusal",
+                            tab.id
+                        );
+                        continue;
+                    }
                     let _ = TerminalSpawnPersistence::new(&self.runtime_store)
                         .remove_tab(&tab.id)
                         .await;
@@ -473,11 +488,43 @@ impl ServerActor {
             .as_ref()
             .and_then(tab_agent_type)
             .or(forced_agent_hook);
-        crate::agent_account_environment::validate_agy_launch_account(
-            &mut launch.environment,
-            selected_agent,
-        )
-        .map_err(|error| HostError::state(error.to_string()))?;
+        let pinned_account = tab_for_launch
+            .as_ref()
+            .and_then(|tab| tab.payload.get("agyAccountId").and_then(Value::as_str));
+        if let Some(account_id) = pinned_account.filter(|id| *id != "default") {
+            if !matches!(selected_agent, Some("agy" | "antigravity")) {
+                return Err(HostError::state(
+                    "Only an Antigravity Agent tab may use an isolated Google account",
+                ));
+            }
+            let settings = self
+                .runtime_store
+                .agent_quota_settings()
+                .await
+                .map_err(|error| HostError::state(error.to_string()))?;
+            let profile = settings
+                .agy_profiles
+                .iter()
+                .find(|entry| entry.account_id == account_id)
+                .ok_or_else(|| HostError::state("Selected AGY account is no longer registered"))?;
+            let route = crate::agy_ssh_route::verify_ssh_route(&self.runtime_store, profile)
+                .await
+                .map_err(|error| {
+                    HostError::state(format!("Isolated AGY Host verification failed: {error}"))
+                })?;
+            let (shell, arguments) =
+                crate::agy_ssh_route::interactive_ssh_launch(&route, &working_directory)
+                    .map_err(|error| HostError::state(error.to_string()))?;
+            launch.shell = shell;
+            launch.arguments = arguments;
+            launch.environment.remove("ALERA_ACCOUNT_AGY_ID");
+        } else {
+            crate::agent_account_environment::validate_agy_launch_account(
+                &mut launch.environment,
+                selected_agent,
+            )
+            .map_err(|error| HostError::state(error.to_string()))?;
+        }
         self.disarm_terminal_pulse(&session_id);
         self.account_push.damper.reset_session(&session_id);
         let mut agent_settings = AgentHookSettingsQuery::new(&self.runtime_store)

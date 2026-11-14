@@ -2,7 +2,7 @@
 //! This does not access Credential Manager, tokens or an AGY process.
 //! A Google account label is NOT an independently authenticated identity.
 
-use alera_core::runtime::{RuntimeAgentQuotaSettings, RuntimeAgyQuotaProfile};
+use alera_core::runtime::{RuntimeAgentQuotaSettings, RuntimeAgyQuotaProfile, RuntimeStore};
 use serde_json::{json, Value};
 
 use crate::cli::{RuntimeAgyAccountsAction, RuntimeDirArgs};
@@ -76,6 +76,8 @@ fn apply_account_change(
                 settings.agy_profiles.push(RuntimeAgyQuotaProfile {
                     alias: name.to_owned(),
                     account_id: account_id.clone(),
+                    ssh_target_id: None,
+                    host_identity_hash: None,
                 });
             }
             Ok(())
@@ -97,6 +99,7 @@ fn apply_account_change(
                 .remove(&format!("agy:{account_id}"));
             Ok(())
         }
+        RuntimeAgyAccountsAction::Bind { .. } | RuntimeAgyAccountsAction::Unbind { .. } => Ok(()),
     }
 }
 
@@ -117,6 +120,7 @@ fn account_response(
             "hostOsUserProof": if host_os_identity.is_some() { "os-token-digest" } else { "unavailable" },
             "supportsIndependentLocalAccounts": false,
             "supportsAccountSwitching": false,
+            "supportsIsolatedSshRouting": true,
             "recommendedIsolation": "separate-os-user-runtime-host",
             "canRegisterNames": true
         }
@@ -165,13 +169,94 @@ pub(crate) async fn run(
         }
         | RuntimeAgyAccountsAction::Remove {
             expected_revision, ..
+        }
+        | RuntimeAgyAccountsAction::Bind {
+            expected_revision, ..
+        }
+        | RuntimeAgyAccountsAction::Unbind {
+            expected_revision, ..
         } => *expected_revision,
     };
     if expected != revision {
         return print_error("Runtime account registrations changed; refresh and retry");
     }
+    if matches!(
+        &action,
+        RuntimeAgyAccountsAction::Bind { .. } | RuntimeAgyAccountsAction::Unbind { .. }
+    ) && raw.get("agySshRoutingVersion").and_then(Value::as_i64) != Some(1)
+    {
+        return print_error(
+            "Runtime Host must support verified AGY SSH routing before account pairing",
+        );
+    }
     if let Err(error) = apply_account_change(&mut settings, &action) {
         return print_error(error);
+    }
+    match &action {
+        RuntimeAgyAccountsAction::Bind {
+            account_id,
+            ssh_target_id,
+            ..
+        } => {
+            if let Err(error) = validate_account_id(account_id) {
+                return print_error(error);
+            }
+            if ssh_target_id.is_empty()
+                || ssh_target_id.len() > 128
+                || !ssh_target_id
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'))
+            {
+                return print_error("Invalid SSH target ID");
+            }
+            let Some(profile) = settings
+                .agy_profiles
+                .iter_mut()
+                .find(|p| p.account_id == *account_id)
+            else {
+                return print_error("Register the Google account before binding its SSH target");
+            };
+            let Some(local_identity) = host_os_identity.as_ref() else {
+                return print_error("Current Runtime Host cannot prove its OS user identity");
+            };
+            let store = match RuntimeStore::open(&runtime_dir(runtime)).await {
+                Ok(store) => store,
+                Err(error) => return print_error(error),
+            };
+            let target = match store.find_ssh_target(ssh_target_id).await {
+                Ok(Some(target)) => target,
+                Ok(None) => {
+                    return print_error("SSH target is not registered on this Runtime Host")
+                }
+                Err(error) => return print_error(error),
+            };
+            let remote = match crate::agy_ssh_route::probe_separate_ssh_target(
+                &target,
+                local_identity,
+            )
+            .await
+            {
+                Ok(remote) => remote,
+                Err(error) => return print_error(format!("Cannot bind AGY identity: {error}")),
+            };
+            profile.ssh_target_id = Some(ssh_target_id.clone());
+            profile.host_identity_hash = Some(remote.subject_hash);
+        }
+        RuntimeAgyAccountsAction::Unbind { account_id, .. } => {
+            if let Err(error) = validate_account_id(account_id) {
+                return print_error(error);
+            }
+            let Some(profile) = settings
+                .agy_profiles
+                .iter_mut()
+                .find(|p| p.account_id == *account_id)
+            else {
+                return print_error("Unknown Google account");
+            };
+            profile.ssh_target_id = None;
+            profile.host_identity_hash = None;
+        }
+        _ => {}
     }
     let wanted_accounts = json!(settings.agy_profiles);
     let wanted_groups = json!(settings.history_sync.account_groups);

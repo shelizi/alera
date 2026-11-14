@@ -126,9 +126,18 @@ impl ServerActor {
                         provider.as_deref(),
                         account_id.as_deref(),
                     );
-                    fetch_agent_quotas(quota_payload)
+                    let mut reply = fetch_agent_quotas(quota_payload)
                         .await
-                        .map_err(|error| HostError::state(error.to_string()))
+                        .map_err(|error| HostError::state(error.to_string()))?;
+                    crate::agy_ssh_route::replace_verified_agy_ssh_quotas(
+                        &settings_query.runtime_store,
+                        &settings,
+                        provider.as_deref(),
+                        account_id.as_deref(),
+                        &mut reply,
+                    )
+                    .await;
+                    Ok(reply)
                 }
                 .await;
                 let _ = inbox.send(ServerCommand::AgentQuotaFinished {

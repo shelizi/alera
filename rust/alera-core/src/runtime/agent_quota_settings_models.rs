@@ -105,6 +105,20 @@ impl RuntimeAgentQuotaSettings {
         for profile in &mut self.agy_profiles {
             profile.alias = profile.alias.trim().to_string();
             profile.account_id = profile.account_id.trim().to_string();
+            let valid_target = profile.ssh_target_id.as_deref().is_some_and(|id| {
+                !id.is_empty()
+                    && id.len() <= 128
+                    && id
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+            });
+            let valid_identity = profile.host_identity_hash.as_deref().is_some_and(|hash| {
+                hash.len() == 64 && hash.bytes().all(|b| b.is_ascii_hexdigit())
+            });
+            if !valid_target || !valid_identity {
+                profile.ssh_target_id = None;
+                profile.host_identity_hash = None;
+            }
         }
         self.agy_profiles.retain(|entry| {
             !entry.alias.is_empty()
@@ -211,6 +225,12 @@ pub struct RuntimeCodexQuotaProfile {
 pub struct RuntimeAgyQuotaProfile {
     pub alias: String,
     pub account_id: String,
+    /// Existing loopback SSH target for a different OS user's Host; no passwords.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh_target_id: Option<String>,
+    /// Pinned remote OS-token-derived subject hash. Never a Google credential.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_identity_hash: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -316,6 +336,45 @@ fn default_true() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn agy_ssh_binding_requires_complete_non_secret_target_and_identity_pin() {
+        let settings: RuntimeAgentQuotaSettings = serde_json::from_value(serde_json::json!({
+            "agyProfiles": [
+                {
+                    "alias": "Work",
+                    "accountId": "work",
+                    "sshTargetId": "agy2-ssh",
+                    "hostIdentityHash": "a".repeat(64)
+                },
+                {"alias": "Partial", "accountId": "partial", "sshTargetId": "agy2-ssh"},
+                {
+                    "alias": "Invalid",
+                    "accountId": "invalid",
+                    "sshTargetId": "../bad",
+                    "hostIdentityHash": "b".repeat(64)
+                }
+            ]
+        }))
+        .unwrap();
+        let normalized = settings.normalized();
+        assert_eq!(normalized.agy_profiles.len(), 3);
+        let expected_hash = "a".repeat(64);
+        assert_eq!(
+            normalized.agy_profiles[0].ssh_target_id.as_deref(),
+            Some("agy2-ssh")
+        );
+        assert_eq!(
+            normalized.agy_profiles[0].host_identity_hash.as_deref(),
+            Some(expected_hash.as_str())
+        );
+        assert!(normalized.agy_profiles[1].ssh_target_id.is_none());
+        assert!(normalized.agy_profiles[1].host_identity_hash.is_none());
+        assert!(normalized.agy_profiles[2].ssh_target_id.is_none());
+        let encoded = serde_json::to_value(&normalized).unwrap();
+        assert!(encoded["agyProfiles"][0].get("token").is_none());
+        assert_eq!(encoded["agyProfiles"][0]["sshTargetId"], "agy2-ssh");
+    }
 
     #[test]
     fn agy_accounts_are_optional_non_secret_metadata_and_normalize_unique_ids() {

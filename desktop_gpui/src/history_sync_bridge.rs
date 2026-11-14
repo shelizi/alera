@@ -83,6 +83,10 @@ impl HistorySyncSnapshot {
 pub struct AgyAccountRegistration {
     pub account_id: String,
     pub alias: String,
+    #[serde(default)]
+    pub ssh_target_id: Option<String>,
+    #[serde(default)]
+    pub host_identity_hash: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
@@ -93,6 +97,8 @@ pub struct AgyIdentityCapability {
     pub host_os_user_proof: String,
     pub supports_independent_local_accounts: bool,
     pub supports_account_switching: bool,
+    #[serde(default)]
+    pub supports_isolated_ssh_routing: bool,
     pub recommended_isolation: String,
     pub can_register_names: bool,
 }
@@ -148,6 +154,17 @@ impl AgyAccountsSnapshot {
                     || account.alias.chars().any(char::is_control)
                     || !ids.insert(account.account_id.as_str())
                     || !names.insert(account.alias.as_str())
+                    || account.ssh_target_id.is_some() != account.host_identity_hash.is_some()
+                    || account.ssh_target_id.as_ref().is_some_and(|id| {
+                        id.is_empty()
+                            || id.len() > 128
+                            || !id
+                                .bytes()
+                                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'))
+                    })
+                    || account.host_identity_hash.as_ref().is_some_and(|hash| {
+                        hash.len() != 64 || !hash.bytes().all(|b| b.is_ascii_hexdigit())
+                    })
             })
         {
             return Err(io::Error::new(
@@ -411,6 +428,48 @@ mod tests {
         let mut fake_id = valid;
         fake_id["agyAccounts"][0]["accountId"] = json!("../escape");
         assert!(serde_json::from_value::<AgyAccountsSnapshot>(fake_id)
+            .unwrap()
+            .validate()
+            .is_err());
+    }
+
+    #[test]
+    fn native_agy_account_requires_complete_ssh_identity_binding() {
+        let baseline = json!({
+            "revision": 2,
+            "agyAccounts": [{
+                "accountId": "work",
+                "alias": "Work",
+                "sshTargetId": "agy2-ssh",
+                "hostIdentityHash": "f".repeat(64)
+            }],
+            "hostOsIdentity": {"kind": "windows-token-sid", "subjectHash": "a".repeat(64)},
+            "identityCapability": {
+                "credentialScope": "host-os-user",
+                "accountAuthentication": "unverified",
+                "hostOsUserProof": "os-token-digest",
+                "supportsIndependentLocalAccounts": false,
+                "supportsAccountSwitching": false,
+                "supportsIsolatedSshRouting": true,
+                "recommendedIsolation": "separate-os-user-runtime-host",
+                "canRegisterNames": true
+            }
+        });
+        let paired: AgyAccountsSnapshot = serde_json::from_value(baseline.clone()).unwrap();
+        paired.validate().unwrap();
+        assert!(paired.identity_capability.supports_isolated_ssh_routing);
+        let mut partial = baseline.clone();
+        partial["agyAccounts"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("hostIdentityHash");
+        assert!(serde_json::from_value::<AgyAccountsSnapshot>(partial)
+            .unwrap()
+            .validate()
+            .is_err());
+        let mut forged_path = baseline;
+        forged_path["agyAccounts"][0]["sshTargetId"] = json!("../otheruser");
+        assert!(serde_json::from_value::<AgyAccountsSnapshot>(forged_path)
             .unwrap()
             .validate()
             .is_err());

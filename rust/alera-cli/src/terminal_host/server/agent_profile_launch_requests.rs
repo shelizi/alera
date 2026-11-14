@@ -18,13 +18,20 @@ use crate::terminal_host::orchestration::agent_profile_launch_snapshot::{
 
 const CLIENT_MUTATION_ID_MAX_BYTES: usize = 128;
 
-fn verify_agy_profile_account_request(payload: &Value) -> HostResult<()> {
+fn verify_agy_profile_account_request(payload: &Value) -> HostResult<Option<&str>> {
     match payload.get("agyAccountId") {
-        None => Ok(()),
-        Some(Value::String(id)) if id == "default" => Ok(()),
-        Some(Value::String(_)) => Err(HostError::state(
-            "Additional Google / Antigravity account has no verified isolated login. Alera did not start an Agent or use the default Google account.",
-        )),
+        None => Ok(None),
+        Some(Value::String(id)) if id == "default" => Ok(None),
+        Some(Value::String(id))
+            if !id.is_empty()
+                && id.len() <= 64
+                && id
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_')) =>
+        {
+            Ok(Some(id))
+        }
+        Some(Value::String(_)) => Err(HostError::format("Invalid AGY account ID")),
         Some(_) => Err(HostError::format("agyAccountId must be a string.")),
     }
 }
@@ -38,10 +45,9 @@ impl ServerActor {
         let workspace_id = required_non_blank(payload, "workspaceId")?;
         let profile_id = required_non_blank(payload, "profileId")?;
         let prompt = required_non_blank(payload, "prompt")?;
-        // The current AGY runtime has no verified independent credential
-        // namespace. Reject account-scoped requests before writing receipts,
-        // creating tabs or starting PTYs; never silently use the default login.
-        verify_agy_profile_account_request(payload)?;
+        // Validate the requested account before idempotency lookup. Nondefault
+        // accounts must pass live SSH verification before any new PTY is made.
+        let selected_agy_account = verify_agy_profile_account_request(payload)?;
         let client_mutation_id = match payload.get("clientMutationId") {
             None => None,
             Some(Value::String(value)) if !value.trim().is_empty() => {
@@ -82,13 +88,20 @@ impl ServerActor {
             .and_then(Value::as_bool)
             .unwrap_or(false);
         let payload_digest = client_mutation_id.as_ref().map(|_| {
-            agent_profile_launch_payload_digest(
+            let digest = agent_profile_launch_payload_digest(
                 &workspace_id,
                 &profile_id,
                 &prompt,
                 automation_run_id.as_deref(),
                 automation_owned,
-            )
+            );
+            if let Some(account_id) = selected_agy_account {
+                hex::encode(Sha256::digest(
+                    format!("{digest}\0agy:{account_id}").as_bytes(),
+                ))
+            } else {
+                digest
+            }
         });
         if let (Some(mutation_id), Some(scope), Some(digest)) = (
             client_mutation_id.as_deref(),
@@ -140,6 +153,26 @@ impl ServerActor {
             .await
             .map_err(|error| HostError::state(error.to_string()))?
             .ok_or_else(|| HostError::state(format!("Agent profile not found: {profile_id}")))?;
+        if let Some(account_id) = selected_agy_account {
+            if !matches!(profile.agent_type.as_str(), "agy" | "antigravity") {
+                return Err(HostError::format(
+                    "AGY account routing requires an Antigravity Agent profile",
+                ));
+            }
+            let quota_settings = self
+                .runtime_store
+                .agent_quota_settings()
+                .await
+                .map_err(|error| HostError::state(error.to_string()))?;
+            let registered = quota_settings
+                .agy_profiles
+                .iter()
+                .find(|registered| registered.account_id == account_id)
+                .ok_or_else(|| HostError::state("Google account has no registered SSH Host"))?;
+            crate::agy_ssh_route::verify_ssh_route(&self.runtime_store, registered)
+                .await
+                .map_err(|error| HostError::state(format!("AGY SSH Host not verified: {error}")))?;
+        }
         let title_prompt = prompt.clone();
         let prompt = compose_agent_prompt(
             &prompt,
@@ -174,6 +207,7 @@ impl ServerActor {
             "spawnOnCreate": true,
             "automationRunId": automation_run_id,
             "automationOwned": automation_owned,
+            "agyAccountId": selected_agy_account,
         });
         tab_payload[AGENT_PROFILE_LAUNCH_SNAPSHOT_KEY] = serde_json::to_value(launch_snapshot)
             .map_err(|error| {
@@ -384,15 +418,19 @@ mod tests {
     use crate::terminal_host::server::actor_test_harness::{mobile_client, test_actor};
 
     #[test]
-    fn agent_profile_launch_rejects_unverified_google_account_before_host_mutation() {
+    fn agent_profile_launch_validates_google_account_scope_before_host_mutation() {
         for request in [
-            json!({"agyAccountId": "research"}),
             json!({"agyAccountId": ""}),
             json!({"agyAccountId": null}),
             json!({"agyAccountId": 123}),
+            json!({"agyAccountId": "../escape"}),
         ] {
             assert!(verify_agy_profile_account_request(&request).is_err());
         }
+        assert_eq!(
+            verify_agy_profile_account_request(&json!({"agyAccountId": "research"})).unwrap(),
+            Some("research")
+        );
         assert!(verify_agy_profile_account_request(&json!({})).is_ok());
         assert!(verify_agy_profile_account_request(&json!({"agyAccountId": "default"})).is_ok());
     }
