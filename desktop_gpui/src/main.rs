@@ -5940,17 +5940,17 @@ impl Workbench {
                     cx.notify();
                     return Ok(None);
                 }
-                // Native cannot honor Flutter's multiple-buffer 'new' mode
-                // or external editor settings yet. Fail rather than falsely
-                // acknowledging an unperformed operation.
-                if args.get("openMode").and_then(|mode| mode.as_str()) == Some("new")
-                    || args
-                        .get("editor")
-                        .and_then(|editor| editor.as_str())
-                        .is_some_and(|editor| editor != "alera")
-                {
-                    return Err("ui_not_ready");
-                }
+                // Reuse the Host's already-authorized external-editor choice,
+                // but independently enforce the workspace boundary and line/
+                // column arguments before acknowledging a process spawn.
+                let mode = args
+                    .get("openMode")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("reuse");
+                let editor_choice = args
+                    .get("editor")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("alera");
                 let line = args
                     .get("line")
                     .map(|value| value.as_u64().ok_or("invalid_path"))
@@ -5961,6 +5961,42 @@ impl Workbench {
                     .transpose()?;
                 if column.is_some() && line.is_none() {
                     return Err("invalid_path");
+                }
+                if mode == "new" || !matches!(mode, "reuse" | "new") {
+                    // Distinct built-in new-buffer tabs remain a separate gap.
+                    return Err("ui_not_ready");
+                }
+                if matches!(editor_choice, "zed" | "vscode") {
+                    match alera_gpui_desktop::git_external_open::launch_mcp_external_editor(
+                        self.model.root(),
+                        relative_path,
+                        editor_choice,
+                        line,
+                        column,
+                    ) {
+                        Ok(()) => {
+                            self.model.set_status(format!(
+                                "MCP: opened {} in {}",
+                                relative_path.display(),
+                                if editor_choice == "zed" {
+                                    "Zed"
+                                } else {
+                                    "VS Code"
+                                },
+                            ));
+                            cx.notify();
+                            return Ok(None);
+                        }
+                        Err(error) => {
+                            self.model
+                                .set_status(format!("MCP external editor unavailable: {error}"));
+                            cx.notify();
+                            return Err("ui_not_ready");
+                        }
+                    }
+                }
+                if editor_choice != "alera" {
+                    return Err("ui_not_ready");
                 }
                 if !self.model.open_path(&target_file) {
                     return Err("file_missing");

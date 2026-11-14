@@ -552,7 +552,7 @@ mod tests {
         assert_eq!(quota_reset_text(None, None, now), None);
         let values = parse_quota_snapshots(&json!({"snapshots":[{
             "provider":"claude","status":"ok",
-            "windows":[{"label":"weekly","usedPercent":30,"resetsAt":1900000000000}]
+            "windows":[{"label":"weekly","usedPercent":30,"resetsAt":1_900_000_000_000_i64}]
         }]}))
         .unwrap();
         assert!(values[0].readings()[0]
