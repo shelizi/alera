@@ -464,6 +464,20 @@ impl ServerActor {
                 "A runtime mutation is in progress. Wait for it to finish and retry.",
             ));
         }
+        let tab_for_launch = WorkspaceTabStoreHandler::new(&self.runtime_store)
+            .find(&tab_id)
+            .await
+            .ok()
+            .flatten();
+        let selected_agent = tab_for_launch
+            .as_ref()
+            .and_then(tab_agent_type)
+            .or(forced_agent_hook);
+        crate::agent_account_environment::validate_agy_launch_account(
+            &mut launch.environment,
+            selected_agent,
+        )
+        .map_err(|error| HostError::state(error.to_string()))?;
         self.disarm_terminal_pulse(&session_id);
         self.account_push.damper.reset_session(&session_id);
         let mut agent_settings = AgentHookSettingsQuery::new(&self.runtime_store)
@@ -505,10 +519,7 @@ impl ServerActor {
         // profile. A nested shell may inherit its parent's environment, but
         // that is never evidence of authority for a newly created session.
         launch.environment.remove("ALERA_MCP_UI_TOKEN");
-        if let Ok(Some(tab)) = WorkspaceTabStoreHandler::new(&self.runtime_store)
-            .find(&tab_id)
-            .await
-        {
+        if let Some(tab) = tab_for_launch {
             apply_host_owned_tab_identity(&mut launch, &tab, &workspace_id, &tab_id, &session_id);
             if tab_agent_type(&tab).is_some() || agent_profile_id(&tab).is_some() {
                 let ui_capability = self.mcp_ui.mint_token(&session_id);

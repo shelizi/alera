@@ -11,6 +11,26 @@ void main() {
     'profileId': 'profile-1',
   };
 
+  test(
+    'unverified AGY login is blocked before calling a legacy Host',
+    () async {
+      final host = _FakeRuntimeHostClient((_, _) async => result);
+      final client = PromptWorkspaceRuntimeClient(host);
+      await expectLater(
+        client.launchAgent(
+          workspaceId: 'workspace-1',
+          profileId: 'agy-profile',
+          prompt: 'Do work',
+          clientMutationId: 'mutation-1',
+          requireIdempotency: false,
+          agyAccountId: 'research',
+        ),
+        throwsUnsupportedError,
+      );
+      expect(host.requests, isEmpty);
+    },
+  );
+
   test('uses the atomic idempotent launch verb', () async {
     final host = _FakeRuntimeHostClient((type, _) async => result);
     final client = PromptWorkspaceRuntimeClient(host);

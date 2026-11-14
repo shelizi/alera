@@ -13,6 +13,8 @@ class const AgyQuotaProfilesControl({
   super.key,
   required final List<AgyQuotaProfileSettings> profiles,
   required final ValueChanged<List<AgyQuotaProfileSettings>> onChanged,
+  required final String selectedAccountId,
+  required final ValueChanged<String> onSelected,
 }) extends StatelessWidget {
   Future<void> _edit(
     BuildContext context, [
@@ -34,6 +36,38 @@ class const AgyQuotaProfilesControl({
   Widget build(BuildContext context) => Column(
     crossAxisAlignment: .stretch,
     children: [
+      DropdownButton<String>(
+        isExpanded: true,
+        value: profiles.any((entry) => entry.accountId == selectedAccountId)
+            ? selectedAccountId
+            : 'default',
+        items: [
+          DropdownMenuItem<String>(
+            value: 'default',
+            child: Text(context.tr('Default Google account')),
+          ),
+          for (final profile in profiles)
+            DropdownMenuItem<String>(
+              value: profile.accountId,
+              child: Text('${profile.alias} (login unverified)'),
+            ),
+        ],
+        onChanged: (value) {
+          if (value != null) onSelected(value);
+        },
+      ),
+      if (selectedAccountId != 'default')
+        Padding(
+          padding: const EdgeInsets.only(bottom: AleraTokens.space8),
+          child: Text(
+            context.tr(
+              'This account is registered but not independently signed in. '
+              'New AGY Agent terminals will be blocked until an isolated '
+              'credential backend is verified. Existing terminals are unchanged.',
+            ),
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+        ),
       if (profiles.isEmpty)
         Text(
           context.tr('No additional Antigravity accounts registered'),

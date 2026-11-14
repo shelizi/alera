@@ -292,7 +292,45 @@ Future<void> showCreateWorkspaceFlow(
               parentWorkspaceId: parentWorkspaceId,
             );
           },
-      launchAgent: runtime.launchAgent,
+      launchAgent:
+          ({
+            required workspaceId,
+            required profileId,
+            required prompt,
+            required clientMutationId,
+            required requireIdempotency,
+          }) async {
+            final profile = profiles
+                .where((entry) => entry.id == profileId)
+                .firstOrNull;
+            final isAgy =
+                profile?.agentType == 'agy' ||
+                profile?.agentType == 'antigravity';
+            final workbench = ref.read(workbenchControllerProvider);
+            final selectedWorkspace = workbench.workspacesByProject.values
+                .expand((entries) => entries)
+                .where((entry) => entry.id == workspaceId)
+                .firstOrNull;
+            if (isAgy) {
+              await ref.read(settingsControllerProvider.notifier).load();
+            }
+            final accountId = isAgy
+                ? ref
+                      .read(settingsControllerProvider)
+                      .agents
+                      .quotas
+                      .forHost(selectedWorkspace?.hostId ?? 'local')
+                      .selectedAgyAccountId
+                : null;
+            return await runtime.launchAgent(
+              workspaceId: workspaceId,
+              profileId: profileId,
+              prompt: prompt,
+              clientMutationId: clientMutationId,
+              requireIdempotency: requireIdempotency,
+              agyAccountId: accountId,
+            );
+          },
       supportsIdempotentAgentLaunch: () =>
           runtime.supportsIdempotentAgentLaunch().catchError((_) => false),
       onCreateAnother: ({required creation, required agentTabId}) async {

@@ -53,6 +53,34 @@ void main() {
     );
   });
 
+  test('AGY selection scopes future launches and persists locally', () {
+    const settings = AgentQuotaHostSettings(
+      agyProfiles: [
+        AgyQuotaProfileSettings(alias: 'Research', accountId: 'research'),
+      ],
+      selectedAgyAccountId: 'research',
+    );
+    expect(agentAccountLaunchEnvironment(settings), {
+      'ALERA_ACCOUNT_AGY_ID': 'research',
+    });
+    expect(
+      agentAccountLaunchEnvironment(
+        settings.copyWith(selectedAgyAccountId: 'default'),
+      ),
+      isEmpty,
+    );
+    expect(
+      agentAccountLaunchEnvironment(
+        const AgentQuotaHostSettings(selectedAgyAccountId: 'deleted'),
+      ),
+      isEmpty,
+    );
+    expect(
+      AgentQuotaHostSettings.fromJson(settings.toMap()).selectedAgyAccountId,
+      'research',
+    );
+  });
+
   test('account configuration and selection survive settings round trips', () {
     final settings = AgentQuotaHostSettings.fromJson({
       'codexProfiles': [

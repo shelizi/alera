@@ -58,13 +58,24 @@ class PromptWorkspaceRuntimeClient(
     required String prompt,
     required String clientMutationId,
     required bool requireIdempotency,
+    String? agyAccountId,
   }) async {
+    // Never send a registered-but-unverified account to an older Host that
+    // may silently ignore this field and run the default Google login.
+    if (agyAccountId != null && agyAccountId != 'default') {
+      throw UnsupportedError(
+        'Selected Google / Antigravity account has no isolated login. '
+        'Switch to Default in Settings, or connect a separately authenticated '
+        'OS-user Runtime Host. No Agent was started.',
+      );
+    }
     await beforeAccess?.call();
     final requestPayload = <String, Object?>{
       'workspaceId': workspaceId,
       'profileId': profileId,
       'prompt': prompt,
       'clientMutationId': clientMutationId,
+      if (agyAccountId != null) 'agyAccountId': agyAccountId,
     };
     Object? response;
     var idempotent = true;

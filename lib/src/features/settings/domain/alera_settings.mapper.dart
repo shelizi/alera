@@ -1414,6 +1414,15 @@ class AgentQuotaHostSettingsMapper
     opt: true,
     def: const <AgyQuotaProfileSettings>[],
   );
+  static String _$selectedAgyAccountId(AgentQuotaHostSettings v) =>
+      v.selectedAgyAccountId;
+  static const Field<AgentQuotaHostSettings, String> _f$selectedAgyAccountId =
+      Field(
+        'selectedAgyAccountId',
+        _$selectedAgyAccountId,
+        opt: true,
+        def: 'default',
+      );
   static AgentHistorySyncSettings _$historySync(AgentQuotaHostSettings v) =>
       v.historySync;
   static const Field<AgentQuotaHostSettings, AgentHistorySyncSettings>
@@ -1455,6 +1464,7 @@ class AgentQuotaHostSettingsMapper
     #codexProfiles: _f$codexProfiles,
     #selectedCodexProfile: _f$selectedCodexProfile,
     #agyProfiles: _f$agyProfiles,
+    #selectedAgyAccountId: _f$selectedAgyAccountId,
     #historySync: _f$historySync,
     #environment: _f$environment,
     #unpinnedQuotaKeys: _f$unpinnedQuotaKeys,
@@ -1471,6 +1481,7 @@ class AgentQuotaHostSettingsMapper
       codexProfiles: data.dec(_f$codexProfiles),
       selectedCodexProfile: data.dec(_f$selectedCodexProfile),
       agyProfiles: data.dec(_f$agyProfiles),
+      selectedAgyAccountId: data.dec(_f$selectedAgyAccountId),
       historySync: data.dec(_f$historySync),
       environment: data.dec(_f$environment),
       unpinnedQuotaKeys: data.dec(_f$unpinnedQuotaKeys),
@@ -1607,6 +1618,7 @@ abstract class AgentQuotaHostSettingsCopyWith<
     List<CodexQuotaProfileSettings>? codexProfiles,
     String? selectedCodexProfile,
     List<AgyQuotaProfileSettings>? agyProfiles,
+    String? selectedAgyAccountId,
     AgentHistorySyncSettings? historySync,
     AgentQuotaEnvironmentSettings? environment,
     List<String>? unpinnedQuotaKeys,
@@ -1715,6 +1727,7 @@ class _AgentQuotaHostSettingsCopyWithImpl<$R, $Out>
     List<CodexQuotaProfileSettings>? codexProfiles,
     String? selectedCodexProfile,
     List<AgyQuotaProfileSettings>? agyProfiles,
+    String? selectedAgyAccountId,
     AgentHistorySyncSettings? historySync,
     AgentQuotaEnvironmentSettings? environment,
     List<String>? unpinnedQuotaKeys,
@@ -1734,6 +1747,8 @@ class _AgentQuotaHostSettingsCopyWithImpl<$R, $Out>
       if (selectedCodexProfile != null)
         #selectedCodexProfile: selectedCodexProfile,
       if (agyProfiles != null) #agyProfiles: agyProfiles,
+      if (selectedAgyAccountId != null)
+        #selectedAgyAccountId: selectedAgyAccountId,
       if (historySync != null) #historySync: historySync,
       if (environment != null) #environment: environment,
       if (unpinnedQuotaKeys != null) #unpinnedQuotaKeys: unpinnedQuotaKeys,
@@ -1765,6 +1780,10 @@ class _AgentQuotaHostSettingsCopyWithImpl<$R, $Out>
       or: $value.selectedCodexProfile,
     ),
     agyProfiles: data.get(#agyProfiles, or: $value.agyProfiles),
+    selectedAgyAccountId: data.get(
+      #selectedAgyAccountId,
+      or: $value.selectedAgyAccountId,
+    ),
     historySync: data.get(#historySync, or: $value.historySync),
     environment: data.get(#environment, or: $value.environment),
     unpinnedQuotaKeys: data.get(

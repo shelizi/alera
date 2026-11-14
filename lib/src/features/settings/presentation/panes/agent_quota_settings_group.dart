@@ -245,6 +245,13 @@ class const AgentQuotaSettingsPane({
               controlWidth: 420,
               child: AgyQuotaProfilesControl(
                 profiles: hostSettings.agyProfiles,
+                selectedAccountId: hostSettings.selectedAgyAccountId,
+                onSelected: (accountId) => unawaited(
+                  controller.setSelectedAgyAccount(
+                    hostId: hostId,
+                    accountId: accountId,
+                  ),
+                ),
                 onChanged: (profiles) => unawaited(
                   controller.setAgyQuotaProfiles(
                     hostId: hostId,

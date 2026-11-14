@@ -34,11 +34,49 @@ another client. Existing PTYs and the default AGY login are untouched.
 Classic also cleans only removed AGY group metadata, while keeping unrelated
 Codex/Claude groups.
 
+### New AGY account selection and safe launch boundaries (third stage)
+
+Classic settings now persist `selectedAgyAccountId` for each Host (default:
+`default`) alongside the existing Codex/Claude selected profile. The Google
+account registration list includes a selector and a clear warning that
+additional registered accounts are **not** signed in. Removing a selected
+registration resets the choice to Default. New terminal launch environment
+hints carry `ALERA_ACCOUNT_AGY_ID` only for valid registered selections.
+
+No additional Google account is allowed to masquerade as the default login:
+
+- Classic New Agent tab creation checks the selected AGY account **after**
+  loading persisted settings and before asking the Host to create a tab.
+- Prompt Workspace `agentProfile.launch` requests check the same selected
+  account in Classic before contacting even an older, unaware Runtime Host.
+- The updated Runtime Host refuses an explicit non-default `agyAccountId`
+  at `agentProfile.launch` before creating an idempotency receipt, tab or PTY.
+- For managed AGY terminal creation the Host rejects
+  `ALERA_ACCOUNT_AGY_ID != default` before PTY startup and strips this
+  Alera-only hint for generic shells and other providers.
+
+Only Default is launchable on the current Windows OS-user keyring. This stage
+does **not** supply a second Google OAuth login, cross-account native resume,
+or a verified separate-user Host router. GPUI account registration works but
+GPUI per-account new-Agent selection remains gated on a verified backend.
+
 Current verification: `flutter test --no-pub
 test/unit/agy_account_registration_controller_test.dart` passed (1/1).
+`flutter test --no-pub` for account environment, account controller,
+prompt-workspace runtime client, AGY registration widget, and Workbench
+provider-boundary test passed **14/14**. The full Workbench controller
+compiled and its focused bootstrap regression passed **1/1**.
+`dart run build_runner build --build-filter=lib/src/features/settings/domain/alera_settings.mapper.dart`
+passed, generating the new `selectedAgyAccountId` mapping without deleting
+unrelated tracked output.
 `cargo check --offline --bin alera-gpui-desktop` passed (Windows native,
 exit 0). `cargo check --offline -p alera-cli --bin alera` also passed
 (Windows, exit 0). Two-account live sign-in remains a separate gate.
+
+The new Rust unit cases covering the terminal identity rejection and
+`agentProfile.launch` rejection have not been individually executed.
+No WSL distribution is configured in the inspected Windows environment; no
+new Windows OS user or Google credentials were created or modified.
 
 Additional regression tests were added for the versioned account CLI
 (reject legacy Host responses, invalid and duplicate labels, metadata-only

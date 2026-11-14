@@ -291,6 +291,12 @@ mixin _SettingsControllerLocalUiSettings on _$SettingsController {
     final validKeys = <String>{
       for (final profile in normalized) 'agy:${profile.accountId}',
     };
+    final selected =
+        normalized.any(
+          (entry) => entry.accountId == current.selectedAgyAccountId,
+        )
+        ? current.selectedAgyAccountId
+        : 'default';
     final validHistoryAccounts = <String>{'agy:default', ...validKeys};
     final groups = <String, String>{...current.historySync.accountGroups}
       ..removeWhere(
@@ -301,11 +307,31 @@ mixin _SettingsControllerLocalUiSettings on _$SettingsController {
       hostId,
       current.copyWith(
         agyProfiles: normalized,
+        selectedAgyAccountId: selected,
         historySync: current.historySync.copyWith(accountGroups: groups),
         unpinnedQuotaKeys: current.unpinnedQuotaKeys
             .where((key) => !key.startsWith('agy:') || validKeys.contains(key))
             .toList(),
       ),
+    );
+  });
+
+  Future<void> setSelectedAgyAccount({
+    required String hostId,
+    required String accountId,
+  }) => _controller._serialize(() async {
+    final current = state.agents.quotas.forHost(hostId);
+    if (accountId != 'default' &&
+        !current.agyProfiles.any((entry) => entry.accountId == accountId)) {
+      throw ArgumentError.value(
+        accountId,
+        'accountId',
+        'Unknown Google account',
+      );
+    }
+    await _controller._saveQuotaHost(
+      hostId,
+      current.copyWith(selectedAgyAccountId: accountId),
     );
   });
 

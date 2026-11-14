@@ -13,5 +13,9 @@ Map<String, String> agentAccountLaunchEnvironment(
       (entry) => entry.profile == settings.selectedClaudeProfile,
     ))
       'ALERA_ACCOUNT_CLAUDE_PROFILE': settings.selectedClaudeProfile,
+    if (settings.agyProfiles.any(
+      (entry) => entry.accountId == settings.selectedAgyAccountId,
+    ))
+      'ALERA_ACCOUNT_AGY_ID': settings.selectedAgyAccountId,
   };
 }

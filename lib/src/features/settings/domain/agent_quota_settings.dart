@@ -185,6 +185,7 @@ class const AgentQuotaHostSettings({
   this.codexProfiles = const <CodexQuotaProfileSettings>[],
   this.selectedCodexProfile = 'default',
   this.agyProfiles = const <AgyQuotaProfileSettings>[],
+  this.selectedAgyAccountId = 'default',
   this.historySync = AgentHistorySyncSettings.defaults,
   this.environment = AgentQuotaEnvironmentSettings.defaults,
   this.unpinnedQuotaKeys = const <String>[],
@@ -199,6 +200,10 @@ class const AgentQuotaHostSettings({
   final List<CodexQuotaProfileSettings> codexProfiles;
   final String selectedCodexProfile;
   final List<AgyQuotaProfileSettings> agyProfiles;
+
+  /// Classic-local selection for future AGY Agent terminals only. A
+  /// registration is not proof of a separate Google login.
+  final String selectedAgyAccountId;
   final AgentHistorySyncSettings historySync;
   final AgentQuotaEnvironmentSettings environment;
 

@@ -56,9 +56,14 @@ void main() {
           AgyQuotaProfileSettings(alias: ' Research ', accountId: 'research'),
         ],
       );
+      await controller.setSelectedAgyAccount(
+        hostId: 'remote',
+        accountId: 'research',
+      );
       final saved = repository.settings.agents.quotas.forHost('remote');
       expect(saved.agyProfiles.single.alias, 'Research');
       expect(saved.agyProfiles.single.accountId, 'research');
+      expect(saved.selectedAgyAccountId, 'research');
       expect(saved.historySync.accountGroups.containsKey('agy:old'), isFalse);
       expect(saved.historySync.accountGroups['agy:default'], 'team');
       expect(saved.historySync.accountGroups['codex:default'], 'other');
@@ -80,6 +85,16 @@ void main() {
             .single
             .accountId,
         'research',
+      );
+      await controller.setAgyQuotaProfiles(
+        hostId: 'remote',
+        profiles: const [],
+      );
+      expect(
+        repository.settings.agents.quotas
+            .forHost('remote')
+            .selectedAgyAccountId,
+        'default',
       );
     },
   );

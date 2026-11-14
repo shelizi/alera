@@ -3,6 +3,25 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Result};
 
+/// An AGY registration label is not an independent Windows keyring login.
+/// Strip this Alera-only hint from every shell and refuse an unverified
+/// non-default selection for managed AGY Agent tabs. Generic shells and
+/// other Agent providers are unaffected.
+pub(crate) fn validate_agy_launch_account(
+    environment: &mut BTreeMap<String, String>,
+    agent_type: Option<&str>,
+) -> Result<()> {
+    let selected = environment.remove("ALERA_ACCOUNT_AGY_ID");
+    if matches!(agent_type, Some("agy" | "antigravity"))
+        && selected.as_deref().is_some_and(|id| id != "default")
+    {
+        return Err(anyhow!(
+            "Selected Google / Antigravity account has no verified isolated login. Select Default in Settings, or use a separately authenticated OS-user Runtime Host."
+        ));
+    }
+    Ok(())
+}
+
 pub(crate) async fn claude_profile_directory(profile: &str) -> Result<PathBuf> {
     let path = Path::new(profile);
     if path.is_absolute() {
@@ -50,6 +69,38 @@ pub(crate) async fn resolve_account_launch_environment(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn registered_agy_account_cannot_launch_under_default_windows_login() {
+        for agent_type in ["agy", "antigravity"] {
+            let mut environment = BTreeMap::from([
+                ("ALERA_ACCOUNT_AGY_ID".to_string(), "research".to_string()),
+                ("PATH".to_string(), "unchanged".to_string()),
+            ]);
+            let result = validate_agy_launch_account(&mut environment, Some(agent_type));
+            assert!(result.is_err());
+            assert!(!environment.contains_key("ALERA_ACCOUNT_AGY_ID"));
+            assert_eq!(
+                environment.get("PATH").map(String::as_str),
+                Some("unchanged")
+            );
+        }
+    }
+
+    #[test]
+    fn default_agy_and_unrelated_terminal_unchanged() {
+        for agent_type in [None, Some("codex"), Some("claude"), Some("agy")] {
+            let selected = if matches!(agent_type, Some("agy")) {
+                "default"
+            } else {
+                "research"
+            };
+            let mut environment =
+                BTreeMap::from([("ALERA_ACCOUNT_AGY_ID".to_string(), selected.to_string())]);
+            validate_agy_launch_account(&mut environment, agent_type).unwrap();
+            assert!(environment.is_empty());
+        }
+    }
 
     #[tokio::test]
     async fn explicit_claude_directory_and_codex_home_stay_scoped() {

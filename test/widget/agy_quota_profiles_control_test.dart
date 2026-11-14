@@ -13,6 +13,8 @@ void main() {
         home: Scaffold(
           body: AgyQuotaProfilesControl(
             profiles: const [],
+            selectedAccountId: 'default',
+            onSelected: (_) {},
             onChanged: (updated) => registrations = updated,
           ),
         ),

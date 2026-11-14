@@ -18,6 +18,17 @@ use crate::terminal_host::orchestration::agent_profile_launch_snapshot::{
 
 const CLIENT_MUTATION_ID_MAX_BYTES: usize = 128;
 
+fn verify_agy_profile_account_request(payload: &Value) -> HostResult<()> {
+    match payload.get("agyAccountId") {
+        None => Ok(()),
+        Some(Value::String(id)) if id == "default" => Ok(()),
+        Some(Value::String(_)) => Err(HostError::state(
+            "Additional Google / Antigravity account has no verified isolated login. Alera did not start an Agent or use the default Google account.",
+        )),
+        Some(_) => Err(HostError::format("agyAccountId must be a string.")),
+    }
+}
+
 impl ServerActor {
     pub(super) async fn launch_agent_profile(
         &mut self,
@@ -27,6 +38,10 @@ impl ServerActor {
         let workspace_id = required_non_blank(payload, "workspaceId")?;
         let profile_id = required_non_blank(payload, "profileId")?;
         let prompt = required_non_blank(payload, "prompt")?;
+        // The current AGY runtime has no verified independent credential
+        // namespace. Reject account-scoped requests before writing receipts,
+        // creating tabs or starting PTYs; never silently use the default login.
+        verify_agy_profile_account_request(payload)?;
         let client_mutation_id = match payload.get("clientMutationId") {
             None => None,
             Some(Value::String(value)) if !value.trim().is_empty() => {
@@ -367,6 +382,20 @@ mod tests {
     use crate::terminal_host::client::ClientHandle;
     use crate::terminal_host::host_error::{HostError, OutcomeClass};
     use crate::terminal_host::server::actor_test_harness::{mobile_client, test_actor};
+
+    #[test]
+    fn agent_profile_launch_rejects_unverified_google_account_before_host_mutation() {
+        for request in [
+            json!({"agyAccountId": "research"}),
+            json!({"agyAccountId": ""}),
+            json!({"agyAccountId": null}),
+            json!({"agyAccountId": 123}),
+        ] {
+            assert!(verify_agy_profile_account_request(&request).is_err());
+        }
+        assert!(verify_agy_profile_account_request(&json!({})).is_ok());
+        assert!(verify_agy_profile_account_request(&json!({"agyAccountId": "default"})).is_ok());
+    }
 
     #[test]
     fn payload_digest_uses_the_effective_launch_payload() {

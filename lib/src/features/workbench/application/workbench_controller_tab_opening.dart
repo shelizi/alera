@@ -42,12 +42,27 @@ mixin _WorkbenchControllerTabOpening
     required AgentType agentType,
     String? targetGroupId,
     String? executablePath,
-  }) => _tabLayoutOwner.createAgentTab(
-    workspace,
-    agentType: agentType,
-    targetGroupId: targetGroupId,
-    executablePath: executablePath,
-  );
+  }) async {
+    if (agentType.key == 'agy' || agentType.key == 'antigravity') {
+      // Settings load asynchronously on startup. Never mistake the temporary
+      // default value for the user's persisted Google-account selection.
+      final selected = await _selectedAgyAccountIdForHost(workspace.hostId);
+      if (selected != 'default') {
+        final message =
+            'Google account "$selected" has no independently verified login. '
+            'No Agent tab was created and the default account was not used. '
+            'Select Default in Settings or use a separately authenticated OS-user Runtime Host.';
+        state = state.copyWith(error: message);
+        throw StateError(message);
+      }
+    }
+    return await _tabLayoutOwner.createAgentTab(
+      workspace,
+      agentType: agentType,
+      targetGroupId: targetGroupId,
+      executablePath: executablePath,
+    );
+  }
 
   Future<WorkspaceTabRecord> openMermanPreviewTab({
     required Workspace workspace,

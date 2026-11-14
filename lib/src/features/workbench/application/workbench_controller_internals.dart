@@ -8,6 +8,20 @@ mixin _WorkbenchControllerInternals on _$WorkbenchController
         WorkbenchLifecycleOwnerHost {
   bool _disposed = false;
 
+  /// Resolve the persisted account selection through one narrow provider
+  /// boundary; controller parts and tab owners stay provider-free. This must
+  /// await the initial settings read to prevent a temporary Default value
+  /// from overriding the user's selected Google account on app startup.
+  Future<String> _selectedAgyAccountIdForHost(String hostId) async {
+    await ref.read(settingsControllerProvider.notifier).load();
+    return ref
+        .read(settingsControllerProvider)
+        .agents
+        .quotas
+        .forHost(hostId)
+        .selectedAgyAccountId;
+  }
+
   /// Subscription registries, resource cleaners and teardown ordering live
   /// behind a narrow host port so the owner stays free of provider reads.
   /// Constructed first: the other owners reach its registries through the
