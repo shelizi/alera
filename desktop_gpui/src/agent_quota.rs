@@ -341,6 +341,27 @@ pub fn parse_quota_snapshots(payload: &Value) -> Result<Vec<QuotaSnapshot>, &'st
     Ok(result)
 }
 
+/// An account-scoped refresh must update exactly the requested account.
+/// Some Host/provider adapters return an empty set (or another account)
+/// without a transport error. Treat that as failure so the old percentage
+/// becomes stale instead of being misreported as freshly checked.
+pub fn scoped_quota_refresh(
+    fresh: Vec<QuotaSnapshot>,
+    account: Option<(&str, &str)>,
+) -> Result<Vec<QuotaSnapshot>, &'static str> {
+    let Some((provider, account_id)) = account else {
+        return Ok(fresh);
+    };
+    let matched = fresh
+        .into_iter()
+        .filter(|snapshot| snapshot.provider == provider && snapshot.account_id == account_id)
+        .collect::<Vec<_>>();
+    if matched.is_empty() {
+        return Err("Host quota refresh did not return the requested account");
+    }
+    Ok(matched)
+}
+
 /// Keep the last successful quota if a provider fails during a full refresh;
 /// partial refreshes replace only the targeted provider/account.
 pub fn merge_quota_snapshots(
@@ -389,6 +410,27 @@ pub fn mark_failed_quota_refresh(snapshots: &mut [QuotaSnapshot], account: Optio
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn u05_account_scoped_refresh_rejects_missing_result_and_ignores_other_accounts() {
+        let rows = parse_quota_snapshots(&json!({"snapshots": [
+            {"provider":"claude","accountId":"default","status":"ok","windows":[{"label":"5h","usedPercent":20}]},
+            {"provider":"claude","accountId":"work","status":"ok","windows":[{"label":"5h","usedPercent":40}]},
+            {"provider":"codex","accountId":"default","status":"ok","windows":[{"label":"week","usedPercent":30}]}
+        ]})).unwrap();
+        let matching = scoped_quota_refresh(rows.clone(), Some(("claude", "work"))).unwrap();
+        assert_eq!(matching.len(), 1);
+        assert_eq!(matching[0].key(), "claude:work");
+        assert_eq!(
+            scoped_quota_refresh(rows.clone(), Some(("claude", "missing"))).unwrap_err(),
+            "Host quota refresh did not return the requested account"
+        );
+        assert_eq!(
+            scoped_quota_refresh(Vec::new(), Some(("claude", "work"))).unwrap_err(),
+            "Host quota refresh did not return the requested account"
+        );
+        assert_eq!(scoped_quota_refresh(rows.clone(), None).unwrap(), rows);
+    }
 
     #[test]
     fn failing_one_account_refresh_does_not_stale_unrelated_provider_readings() {

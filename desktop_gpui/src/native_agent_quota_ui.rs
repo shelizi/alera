@@ -2,7 +2,7 @@
 //! Every query is read-only and performed on the background executor.
 use super::*;
 use alera_gpui_desktop::agent_quota::{
-    mark_failed_quota_refresh, merge_quota_snapshots, parse_quota_snapshots,
+    mark_failed_quota_refresh, merge_quota_snapshots, parse_quota_snapshots, scoped_quota_refresh,
     status_bar_account_label, QuotaReading,
 };
 use std::io;
@@ -390,6 +390,14 @@ impl Workbench {
                 .await
                 .and_then(|(data, order)| {
                     parse_quota_snapshots(&data)
+                        .and_then(|snapshots| {
+                            scoped_quota_refresh(
+                                snapshots,
+                                account
+                                    .as_ref()
+                                    .map(|(provider, id)| (provider.as_str(), id.as_str())),
+                            )
+                        })
                         .map(|snapshots| (snapshots, order))
                         .map_err(|reason| io::Error::new(io::ErrorKind::InvalidData, reason))
                 });
@@ -625,6 +633,7 @@ impl Workbench {
                 .unwrap_or(usize::MAX);
             (rank, row.account_id != "default", row.account_id.clone())
         });
+        let account_filtered = self.quota_popover_account.is_some();
         if let Some(account) = self.quota_popover_account.as_ref() {
             entries.retain(|row| &row.key() == account);
         }
@@ -633,7 +642,11 @@ impl Workbench {
             .settings_extra_values
             .contains_key("agents.quotaUnpinnedKeys");
         let status =
-            quota_overview_status(loading, self.quota_error.is_some(), !entries.is_empty());
+            if account_filtered && entries.is_empty() && !loading && self.quota_error.is_none() {
+                "Selected account is no longer available · choose All accounts"
+            } else {
+                quota_overview_status(loading, self.quota_error.is_some(), !entries.is_empty())
+            };
         #[cfg(all(feature = "quota-visual-fixture", debug_assertions))]
         let status = if Self::quota_visual_fixture_enabled() {
             "SYNTHETIC TEST DATA - not actual quota"
@@ -663,6 +676,24 @@ impl Workbench {
                                     .text_color(rgb(TEXT))
                                     .child("Agent Quotas"),
                             )
+                            .when(account_filtered, |header| {
+                                header.child(
+                                    div()
+                                        .id("native-quota-back-to-all-accounts")
+                                        .cursor_pointer()
+                                        .rounded_md()
+                                        .px_2()
+                                        .py_1()
+                                        .bg(rgb(PANEL))
+                                        .text_xs()
+                                        .text_color(rgb(TEXT))
+                                        .child("All accounts")
+                                        .on_click(cx.listener(|view, _, _, cx| {
+                                            view.quota_popover_account = None;
+                                            cx.notify();
+                                        })),
+                                )
+                            })
                             .child(
                                 div()
                                     .id("native-quota-refresh-all")
