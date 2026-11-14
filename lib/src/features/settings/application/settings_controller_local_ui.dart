@@ -264,6 +264,8 @@ mixin _SettingsControllerLocalUiSettings on _$SettingsController {
     required List<AgyQuotaProfileSettings> profiles,
   }) => _controller._serialize(() async {
     final ids = <String>{};
+    final names = <String>{};
+    final normalized = <AgyQuotaProfileSettings>[];
     for (final profile in profiles) {
       final id = profile.accountId.trim();
       final label = profile.alias.trim();
@@ -272,20 +274,34 @@ mixin _SettingsControllerLocalUiSettings on _$SettingsController {
           label.isEmpty ||
           label.length > 80 ||
           label.contains(RegExp(r'[\x00-\x1f]')) ||
-          !ids.add(id)) {
+          !ids.add(id) ||
+          !names.add(label)) {
         throw ArgumentError(
           'Invalid or duplicate Antigravity account registration',
         );
       }
+      normalized.add(profile.copyWith(alias: label, accountId: id));
+    }
+    if (normalized.length > 32) {
+      throw ArgumentError(
+        'At most 32 additional Antigravity accounts per Host',
+      );
     }
     final current = state.agents.quotas.forHost(hostId);
     final validKeys = <String>{
-      for (final profile in profiles) 'agy:${profile.accountId}',
+      for (final profile in normalized) 'agy:${profile.accountId}',
     };
+    final validHistoryAccounts = <String>{'agy:default', ...validKeys};
+    final groups = <String, String>{...current.historySync.accountGroups}
+      ..removeWhere(
+        (key, value) =>
+            key.startsWith('agy:') && !validHistoryAccounts.contains(key),
+      );
     await _controller._saveQuotaHost(
       hostId,
       current.copyWith(
-        agyProfiles: profiles,
+        agyProfiles: normalized,
+        historySync: current.historySync.copyWith(accountGroups: groups),
         unpinnedQuotaKeys: current.unpinnedQuotaKeys
             .where((key) => !key.startsWith('agy:') || validKeys.contains(key))
             .toList(),

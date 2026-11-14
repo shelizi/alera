@@ -1,10 +1,23 @@
 //! GPUI presentation for history sync policy stored by the shared Runtime Host.
 //! Native's own settings JSON is intentionally never read or written here.
 use super::*;
+use alera_gpui_desktop::history_sync_bridge::{valid_agy_account_id, AgyAccountRegistration};
 
 enum HistorySyncChange {
     Mode(HistorySyncMode),
     Group(HistorySyncAccount, String),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum AgyAccountEdit {
+    New,
+    Existing(String),
+}
+
+#[derive(Clone, Debug)]
+enum AgyAccountChange {
+    Upsert { account_id: String, alias: String },
+    Remove { account_id: String },
 }
 
 impl Workbench {
@@ -27,8 +40,10 @@ impl Workbench {
         let request = self.history_sync_request;
         let generation = self.workspace_generation;
         cx.spawn(async move |view, cx| {
-            let result = cx
-                .background_spawn(async move { bridge.read_history_sync() })
+            let (result, accounts) = cx
+                .background_spawn(async move {
+                    (bridge.read_history_sync(), bridge.read_agy_accounts())
+                })
                 .await;
             view.update(cx, |view, cx| {
                 if view.workspace_generation != generation || view.history_sync_request != request {
@@ -38,11 +53,17 @@ impl Workbench {
                 match result {
                     Ok(snapshot) => {
                         view.history_sync_snapshot = Some(snapshot);
-                        view.history_sync_status =
-                            "Shared Runtime Host history settings loaded".into();
+                        view.agy_accounts_snapshot = accounts.ok();
+                        view.history_sync_status = if view.agy_accounts_snapshot.is_some() {
+                            "Shared Host history and Google account registrations loaded".into()
+                        } else {
+                            "History loaded; AGY registration requires a compatible Runtime Host"
+                                .into()
+                        };
                     }
                     Err(error) => {
                         view.history_sync_snapshot = None;
+                        view.agy_accounts_snapshot = None;
                         view.history_sync_status = format!("History settings unavailable: {error}");
                     }
                 }
@@ -78,16 +99,22 @@ impl Workbench {
         let request = self.history_sync_request;
         self.history_sync_status = "Saving shared history policy on Runtime Host…".into();
         cx.spawn(async move |view, cx| {
-            let result = cx
+            let (result, accounts) = cx
                 .background_spawn(async move {
-                    match change {
+                    let result = match change {
                         HistorySyncChange::Mode(mode) => {
                             bridge.update_history_sync_mode(revision, mode)
                         }
                         HistorySyncChange::Group(account, group) => {
                             bridge.update_history_sync_group(revision, &account, &group)
                         }
-                    }
+                    };
+                    let accounts = if result.is_ok() {
+                        bridge.read_agy_accounts().ok()
+                    } else {
+                        None
+                    };
+                    (result, accounts)
                 })
                 .await;
             view.update(cx, |view, cx| {
@@ -98,6 +125,7 @@ impl Workbench {
                 match result {
                     Ok(snapshot) => {
                         view.history_sync_snapshot = Some(snapshot);
+                        view.agy_accounts_snapshot = accounts;
                         view.history_sync_status =
                             "Saved to the shared Runtime Host (Classic and GPUI)".into();
                         view.history_sync_edit = None;
@@ -107,6 +135,162 @@ impl Workbench {
                     Err(error) => {
                         // Keep the edit and last visible value, but never silently
                         // overwrite a concurrent Classic/GPUI settings update.
+                        view.history_sync_status =
+                            format!("Not saved: {error}. Refresh and retry.");
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn begin_agy_account_edit(
+        &mut self,
+        existing: Option<AgyAccountRegistration>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.history_sync_loading
+            || self.history_sync_busy
+            || self.agy_accounts_snapshot.is_none()
+        {
+            return;
+        }
+        let (editing, account_id, alias) = match existing {
+            Some(account) => (
+                AgyAccountEdit::Existing(account.account_id.clone()),
+                account.account_id,
+                account.alias,
+            ),
+            None => (AgyAccountEdit::New, String::new(), String::new()),
+        };
+        self.agy_account_id_input
+            .update(cx, |input, cx| input.set_query(&account_id, cx));
+        self.agy_account_name_input
+            .update(cx, |input, cx| input.set_query(&alias, cx));
+        window.focus(&self.agy_account_name_input.read(cx).focus_handle(cx), cx);
+        self.agy_account_edit = Some(editing);
+        self.agy_account_remove_confirm = None;
+        cx.notify();
+    }
+
+    fn save_agy_account_edit(&mut self, cx: &mut Context<Self>) {
+        let Some(editing) = self.agy_account_edit.clone() else {
+            return;
+        };
+        let account = self.agy_account_id_input.read(cx);
+        let name = self.agy_account_name_input.read(cx);
+        if account.composing() || name.composing() {
+            self.history_sync_status = "Finish IME composition before saving".into();
+            cx.notify();
+            return;
+        }
+        let id = account.query().trim().to_owned();
+        let alias = name.query().trim().to_owned();
+        if !valid_agy_account_id(&id)
+            || alias.is_empty()
+            || alias.chars().count() > 80
+            || alias.chars().any(char::is_control)
+        {
+            self.history_sync_status =
+                "Use a valid ID (1-64 letters, numbers, - or _) and a nonempty name".into();
+            cx.notify();
+            return;
+        }
+        if let AgyAccountEdit::Existing(previous_id) = editing {
+            if id != previous_id {
+                self.history_sync_status =
+                    "Account IDs are immutable; remove the registration and add a new one".into();
+                cx.notify();
+                return;
+            }
+        }
+        self.change_agy_account(
+            AgyAccountChange::Upsert {
+                account_id: id,
+                alias,
+            },
+            cx,
+        );
+    }
+
+    fn change_agy_account(&mut self, action: AgyAccountChange, cx: &mut Context<Self>) {
+        if self.history_sync_loading || self.history_sync_busy {
+            return;
+        }
+        let Some(agy_snapshot) = self.agy_accounts_snapshot.as_ref() else {
+            self.history_sync_status = "Refresh to load AGY account capabilities from Host".into();
+            cx.notify();
+            return;
+        };
+        let Some(history) = self.history_sync_snapshot.as_ref() else {
+            self.history_sync_status = "Refresh shared Runtime Host settings first".into();
+            cx.notify();
+            return;
+        };
+        if agy_snapshot.revision != history.revision {
+            self.history_sync_status =
+                "Host settings changed; refresh before editing accounts".into();
+            cx.notify();
+            return;
+        }
+        if self.runtime_bridge.is_none() {
+            self.runtime_bridge = RuntimeCliBridge::discover().ok();
+        }
+        let Some(bridge) = self.runtime_bridge.clone() else {
+            self.history_sync_status = "Alera CLI unavailable".into();
+            cx.notify();
+            return;
+        };
+        let revision = history.revision;
+        let generation = self.workspace_generation;
+        self.history_sync_busy = true;
+        self.history_sync_request = self.history_sync_request.wrapping_add(1);
+        let request = self.history_sync_request;
+        self.history_sync_status = "Saving Google account registration on Runtime Host…".into();
+        cx.spawn(async move |view, cx| {
+            let (result, updated_history) = cx
+                .background_spawn(async move {
+                    let result = match action {
+                        AgyAccountChange::Upsert { account_id, alias } => {
+                            bridge.upsert_agy_account(revision, &account_id, &alias)
+                        }
+                        AgyAccountChange::Remove { account_id } => {
+                            bridge.remove_agy_account(revision, &account_id)
+                        }
+                    };
+                    let updated_history = if result.is_ok() {
+                        bridge.read_history_sync().ok()
+                    } else {
+                        None
+                    };
+                    (result, updated_history)
+                })
+                .await;
+            view.update(cx, |view, cx| {
+                if view.workspace_generation != generation || view.history_sync_request != request {
+                    return;
+                }
+                view.history_sync_busy = false;
+                match result {
+                    Ok(snapshot) => {
+                        view.agy_accounts_snapshot = Some(snapshot);
+                        view.history_sync_snapshot = updated_history;
+                        view.history_sync_status = if view.history_sync_snapshot.is_some() {
+                            "Saved account registration on Host; Google login is still unverified"
+                                .into()
+                        } else {
+                            "Registration saved; refresh to reload shared history settings".into()
+                        };
+                        view.agy_account_edit = None;
+                        view.agy_account_remove_confirm = None;
+                    }
+                    Err(error) => {
+                        // No optimistic UI update: a concurrent Classic write
+                        // or an old Host must not appear as successful.
                         view.history_sync_status =
                             format!("Not saved: {error}. Refresh and retry.");
                     }
@@ -160,6 +344,193 @@ impl Workbench {
             return;
         }
         self.change_shared_history_sync(HistorySyncChange::Group(account, group), cx);
+    }
+
+    fn render_agy_account_registrations(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let mut content = div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .p_3()
+            .rounded_md()
+            .bg(rgb(PANEL))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(div().text_sm().child("Google / Antigravity accounts"))
+                    .child(
+                        native_components::action_button(
+                            "native-agy-add-account", "Add Google Account", false, false,
+                        )
+                        .on_click(cx.listener(|view, _, window, cx| {
+                            view.begin_agy_account_edit(None, window, cx);
+                        })),
+                    ),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(MUTED))
+                    .child("Registration only. AGY uses the OS user's shared keyring, so adding a label does not log in or enable quota refresh or account switching. Use a separate OS-user Runtime Host for an independent login."),
+            );
+        let Some(snapshot) = self.agy_accounts_snapshot.as_ref() else {
+            return content
+                .child(div().text_xs().text_color(rgb(MUTED)).child(
+                    "Account editing requires a compatible, connected Runtime Host. Click Refresh.",
+                ))
+                .into_any_element();
+        };
+        if snapshot.agy_accounts.is_empty() {
+            content = content.child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(MUTED))
+                    .child("No additional Google accounts registered on this Host."),
+            );
+        }
+        content = content.children(snapshot.agy_accounts.iter().cloned().enumerate().map(
+            |(index, account)| {
+                let edit_account = account.clone();
+                let confirm_remove =
+                    self.agy_account_remove_confirm.as_deref() == Some(account.account_id.as_str());
+                let remove_id = account.account_id.clone();
+                let request_remove_id = account.account_id.clone();
+                let mut actions = div().flex().items_center().gap_2().child(
+                    native_components::action_button(
+                        ("native-agy-edit", index),
+                        "Edit",
+                        false,
+                        false,
+                    )
+                    .on_click(cx.listener(move |view, _, window, cx| {
+                        view.begin_agy_account_edit(Some(edit_account.clone()), window, cx);
+                    })),
+                );
+                if confirm_remove {
+                    actions = actions
+                        .child(
+                            native_components::action_button(
+                                ("native-agy-confirm-remove", index),
+                                "Confirm remove",
+                                false,
+                                false,
+                            )
+                            .on_click(cx.listener(
+                                move |view, _, _, cx| {
+                                    view.change_agy_account(
+                                        AgyAccountChange::Remove {
+                                            account_id: remove_id.clone(),
+                                        },
+                                        cx,
+                                    );
+                                },
+                            )),
+                        )
+                        .child(
+                            native_components::action_button(
+                                ("native-agy-cancel-remove", index),
+                                "Cancel",
+                                false,
+                                false,
+                            )
+                            .on_click(cx.listener(|view, _, _, cx| {
+                                view.agy_account_remove_confirm = None;
+                                cx.notify();
+                            })),
+                        );
+                } else {
+                    actions = actions.child(
+                        native_components::action_button(
+                            ("native-agy-remove", index),
+                            "Remove",
+                            false,
+                            false,
+                        )
+                        .on_click(cx.listener(move |view, _, _, cx| {
+                            view.agy_account_remove_confirm = Some(request_remove_id.clone());
+                            cx.notify();
+                        })),
+                    );
+                }
+                div()
+                    .id(("native-agy-account", index))
+                    .rounded_md()
+                    .px_3()
+                    .py_2()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_2()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .min_w_0()
+                            .child(div().text_sm().child(account.alias))
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(rgb(MUTED))
+                                    .child(format!("{} · Login unverified", account.account_id)),
+                            ),
+                    )
+                    .child(actions)
+            },
+        ));
+        if self.agy_account_edit.is_some() {
+            content =
+                content.child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .p_3()
+                        .rounded_md()
+                        .bg(rgb(ACTIVE))
+                        .child(div().text_sm().child("Account name"))
+                        .child(self.agy_account_name_input.clone())
+                        .child(div().text_sm().child(
+                            "Local ID (1-64 letters, digits, _ or -; immutable after creation)",
+                        ))
+                        .child(self.agy_account_id_input.clone())
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .child(
+                                    native_components::action_button(
+                                        "native-agy-save-account",
+                                        "Save registration",
+                                        false,
+                                        false,
+                                    )
+                                    .on_click(cx.listener(
+                                        |view, _, _, cx| {
+                                            view.save_agy_account_edit(cx);
+                                        },
+                                    )),
+                                )
+                                .child(
+                                    native_components::action_button(
+                                        "native-agy-cancel-account",
+                                        "Cancel",
+                                        false,
+                                        false,
+                                    )
+                                    .on_click(cx.listener(
+                                        |view, _, _, cx| {
+                                            view.agy_account_edit = None;
+                                            cx.notify();
+                                        },
+                                    )),
+                                ),
+                        ),
+                );
+        }
+        content.into_any_element()
     }
 
     pub(super) fn render_history_sync_settings(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
@@ -222,6 +593,7 @@ impl Workbench {
                 }
             )));
         }
+        content = content.child(self.render_agy_account_registrations(cx));
         let modes = [
             (
                 HistorySyncMode::Separate,

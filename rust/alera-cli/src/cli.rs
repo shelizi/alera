@@ -504,6 +504,36 @@ pub enum RuntimeAction {
     Agents(RuntimeAgentsCommand),
     /// Read or configure host-owned cross-account history sharing.
     HistorySync(RuntimeHistorySyncCommand),
+    /// Register Antigravity account labels on the existing Host (no OAuth or login).
+    AgyAccounts(RuntimeAgyAccountsCommand),
+}
+
+#[derive(Debug, Args)]
+pub struct RuntimeAgyAccountsCommand {
+    #[command(subcommand)]
+    pub action: RuntimeAgyAccountsAction,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum RuntimeAgyAccountsAction {
+    /// Read registered Google account labels and identity isolation capabilities.
+    Get,
+    /// Register or rename an account; does not sign in or update credentials.
+    Upsert {
+        #[arg(long)]
+        account_id: String,
+        #[arg(long)]
+        alias: String,
+        #[arg(long)]
+        expected_revision: i64,
+    },
+    /// Remove a registration and its history group assignment, not any native files.
+    Remove {
+        #[arg(long)]
+        account_id: String,
+        #[arg(long)]
+        expected_revision: i64,
+    },
 }
 
 #[derive(Debug, Args)]

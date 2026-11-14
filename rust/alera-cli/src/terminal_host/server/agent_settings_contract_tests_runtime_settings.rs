@@ -7,6 +7,68 @@ use super::agent_settings_contract_tests::{read_response, wire_call};
 use crate::terminal_host::client::ClientHandle;
 
 #[tokio::test]
+async fn agy_registration_is_shared_across_clients_and_rejects_stale_revision() {
+    let dir = tempfile::tempdir().unwrap();
+    let (gpui_handle, mut gpui_responses) = ClientHandle::test_channels();
+    let (classic_handle, mut classic_responses) = ClientHandle::test_channels();
+    let mut actor = test_actor(
+        &dir,
+        HashMap::from([
+            (1, local_client(gpui_handle)),
+            (2, local_client(classic_handle)),
+        ]),
+        HashMap::new(),
+    )
+    .await;
+    let original = actor.runtime_settings_snapshot().await.unwrap();
+    assert_eq!(original["agentQuotas"]["agyProfiles"], json!([]));
+    let mut quotas = original["agentQuotas"].clone();
+    quotas["agyProfiles"] = json!([{
+        "alias": "Research", "accountId": "research"
+    }]);
+    wire_call(
+        &mut actor,
+        1,
+        310,
+        "runtimeSettings.update",
+        json!({"expectedRevision":0,"agentQuotas":quotas.clone()}),
+    )
+    .await;
+    let saved = read_response(&mut gpui_responses, 310).await;
+    assert_eq!(saved["ok"], true, "{saved}");
+    assert_eq!(saved["payload"]["revision"], 1);
+    assert_eq!(
+        saved["payload"]["agentQuotas"]["agyProfiles"][0]["accountId"],
+        "research"
+    );
+
+    wire_call(&mut actor, 2, 311, "runtimeSettings.get", json!({})).await;
+    let classic = read_response(&mut classic_responses, 311).await;
+    assert_eq!(
+        classic["payload"]["agentQuotas"]["agyProfiles"][0]["alias"],
+        "Research"
+    );
+
+    quotas["agyProfiles"] = json!([]);
+    wire_call(
+        &mut actor,
+        2,
+        312,
+        "runtimeSettings.update",
+        json!({"expectedRevision":0,"agentQuotas":quotas}),
+    )
+    .await;
+    let stale = read_response(&mut classic_responses, 312).await;
+    assert_eq!(stale["ok"], false, "{stale}");
+    assert_eq!(stale["errorCode"], "runtime_settings_revision_conflict");
+    assert_eq!(
+        actor.runtime_settings_snapshot().await.unwrap()["agentQuotas"]["agyProfiles"][0]
+            ["accountId"],
+        "research"
+    );
+}
+
+#[tokio::test]
 async fn classic_and_gpui_history_sync_share_revisioned_host_state() {
     let dir = tempfile::tempdir().unwrap();
     let (gpui_handle, mut gpui_responses) = ClientHandle::test_channels();

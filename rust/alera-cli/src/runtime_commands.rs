@@ -100,6 +100,14 @@ pub(crate) async fn run_runtime_command(command: RuntimeCommand) -> i32 {
             )
             .await
         }
+        RuntimeAction::AgyAccounts(request) => {
+            crate::runtime_agy_accounts_cli::run(
+                &command.runtime,
+                command.output.json,
+                request.action,
+            )
+            .await
+        }
     }
 }
 

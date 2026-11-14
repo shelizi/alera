@@ -10,6 +10,35 @@ The feature branch now includes the later `main` History Sync implementation
 and its shared Classic/GPUI Host policy. No new native history format or
 credential-copying mechanism was introduced.
 
+### Host-owned registrations and Native UI (second stage)
+
+The Rust CLI now offers `alera runtime --json agy-accounts get|upsert|remove`
+against an **existing** Host only. Every mutation requires a matching
+`expectedRevision`, is rejected on an older Host, and confirms the resulting
+AGY list and group policy from the Host reply. It does not launch AGY, attempt
+OAuth, read credentials or start a Host.
+
+The Host's capability response deliberately reports
+`credentialScope=host-os-user`, `accountAuthentication=unverified`,
+`supportsIndependentLocalAccounts=false`, and
+`supportsAccountSwitching=false`. Registration is metadata only; per-account
+credential isolation and Google account identity verification remain a
+separate A1 gate. The recommended integration is a **separately authenticated
+OS-user Runtime Host** per independent local login, not a rewritten keyring
+entry or a modified `USERPROFILE`.
+
+GPUI Shared Agent History now reads both Host revisions and includes Add,
+Edit and confirmed Remove for Google registrations. Edits run through the
+same versioned Host RPC as Classic; a stale revision never silently overwrites
+another client. Existing PTYs and the default AGY login are untouched.
+Classic also cleans only removed AGY group metadata, while keeping unrelated
+Codex/Claude groups.
+
+Current verification: `flutter test --no-pub
+test/unit/agy_account_registration_controller_test.dart` passed (1/1).
+`cargo check --offline --bin alera-gpui-desktop` passed (Windows native,
+exit 0). Rust CLI tests and two-account live sign-in are separate gates.
+
 The next incremental step registers **pending** AGY account labels and stable
 non-default account IDs in `RuntimeAgentQuotaSettings.agyProfiles`. IDs are
 restricted to 1-64 ASCII letters/digits/`_`/`-`, cannot be `default`,
@@ -111,10 +140,12 @@ cross-account native Resume, or a completed A1 credential-isolation backend.
 | --- | --- | --- |
 | A0 | AGY non-default `accountId` does not launch `agy` or return a Default snapshot | Implemented; AGY-focused Rust tests pass (18/18) |
 | A1 | Per-platform identity capabilities; authenticated context proves unique account; reject alias-only identities | Not started |
+| A1a | Host-owned credential-scope capability report (explicitly no local multi-login); no keyring mutation | Implemented in feature worktree; independent-identity proof still pending |
 | A2a | Host-safe AGY account label registration; unavailable per-account quota placeholders; shared history catalog | Implemented in feature worktree; validation pending |
 | A2b | Per-account verified credential binding, independent quota fetches and partial refresh | Blocked on A1 |
 | A3a | Classic Add Google Account registration dialog and group labels | Implemented in feature worktree; validation pending |
-| A3b | GPUI account-add operation, real quota cards/pins and selected account for new Terminal | Blocked on A2b |
+| A3a-GPUI | GPUI Add/Edit/Remove metadata-only account registration with CAS Host readback | Implemented; Windows native check passed, live GUI not yet tested |
+| A3b | Real quota cards/pins and selected AGY account for a new Terminal | Blocked on A2b |
 | A4 | Two-account live smoke on Windows and Linux/macOS; no cross-account leaks, no shared-keyring mutation, no active-PTY interruption | Not started |
 
 No merge, release, auto-deployment or default Host replacement until A1-A4

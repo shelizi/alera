@@ -2,6 +2,7 @@
 //! Never shares Native's settings JSON with Classic; the Host owns this policy.
 use crate::runtime_bridge::{wait_with_timeout, RuntimeCliBridge};
 use alera_core::child_process::windowless_command;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -77,7 +78,133 @@ impl HistorySyncSnapshot {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgyAccountRegistration {
+    pub account_id: String,
+    pub alias: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgyIdentityCapability {
+    pub credential_scope: String,
+    pub account_authentication: String,
+    pub supports_independent_local_accounts: bool,
+    pub supports_account_switching: bool,
+    pub recommended_isolation: String,
+    pub can_register_names: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgyAccountsSnapshot {
+    pub revision: i64,
+    pub agy_accounts: Vec<AgyAccountRegistration>,
+    pub identity_capability: AgyIdentityCapability,
+}
+
+impl AgyAccountsSnapshot {
+    fn validate(&self) -> io::Result<()> {
+        let mut ids = std::collections::HashSet::new();
+        let mut names = std::collections::HashSet::new();
+        let identity = &self.identity_capability;
+        if self.revision < 0
+            || self.agy_accounts.len() > 32
+            || identity.credential_scope != "host-os-user"
+            || identity.account_authentication != "unverified"
+            || identity.supports_account_switching
+            || identity.supports_independent_local_accounts
+            || !identity.can_register_names
+            || self.agy_accounts.iter().any(|account| {
+                !valid_agy_account_id(&account.account_id)
+                    || account.alias.trim() != account.alias
+                    || account.alias.chars().count() > 80
+                    || account.alias.is_empty()
+                    || account.alias.chars().any(char::is_control)
+                    || !ids.insert(account.account_id.as_str())
+                    || !names.insert(account.alias.as_str())
+            })
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Runtime Host returned invalid Antigravity account capabilities",
+            ));
+        }
+        Ok(())
+    }
+}
+
+pub fn valid_agy_account_id(value: &str) -> bool {
+    value != "default"
+        && !value.is_empty()
+        && value.len() <= 64
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_'))
+}
+
 impl RuntimeCliBridge {
+    pub fn read_agy_accounts(&self) -> io::Result<AgyAccountsSnapshot> {
+        self.agy_accounts_request(&[OsString::from("get")])
+    }
+
+    pub fn upsert_agy_account(
+        &self,
+        revision: i64,
+        account_id: &str,
+        alias: &str,
+    ) -> io::Result<AgyAccountsSnapshot> {
+        if revision < 0
+            || !valid_agy_account_id(account_id)
+            || alias.trim() != alias
+            || alias.is_empty()
+            || alias.chars().count() > 80
+            || alias.chars().any(char::is_control)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Invalid Antigravity registration",
+            ));
+        }
+        self.agy_accounts_request(&[
+            OsString::from("upsert"),
+            OsString::from("--account-id"),
+            OsString::from(account_id),
+            OsString::from("--alias"),
+            OsString::from(alias),
+            OsString::from("--expected-revision"),
+            OsString::from(revision.to_string()),
+        ])
+    }
+
+    pub fn remove_agy_account(
+        &self,
+        revision: i64,
+        account_id: &str,
+    ) -> io::Result<AgyAccountsSnapshot> {
+        if revision < 0 || !valid_agy_account_id(account_id) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Invalid Antigravity account ID",
+            ));
+        }
+        self.agy_accounts_request(&[
+            OsString::from("remove"),
+            OsString::from("--account-id"),
+            OsString::from(account_id),
+            OsString::from("--expected-revision"),
+            OsString::from(revision.to_string()),
+        ])
+    }
+
+    fn agy_accounts_request(&self, action: &[OsString]) -> io::Result<AgyAccountsSnapshot> {
+        let snapshot: AgyAccountsSnapshot =
+            self.runtime_settings_request("agy-accounts", action)?;
+        snapshot.validate()?;
+        Ok(snapshot)
+    }
+
     pub fn read_history_sync(&self) -> io::Result<HistorySyncSnapshot> {
         self.history_sync_request(&[OsString::from("get")])
     }
@@ -134,6 +261,23 @@ impl RuntimeCliBridge {
     }
 
     fn history_sync_request(&self, action: &[OsString]) -> io::Result<HistorySyncSnapshot> {
+        let snapshot: HistorySyncSnapshot =
+            self.runtime_settings_request("history-sync", action)?;
+        if snapshot.revision < 0 || snapshot.accounts.len() > 256 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Invalid history sync response",
+            ));
+        }
+        Ok(snapshot)
+    }
+
+    /// Shared bounded no-start JSON transport for Host-owned settings.
+    fn runtime_settings_request<T: DeserializeOwned>(
+        &self,
+        command: &str,
+        action: &[OsString],
+    ) -> io::Result<T> {
         let (executable, runtime_dir) = self.agent_cli_paths();
         if !runtime_dir.join("host.json").is_file()
             && !runtime_dir.join("runtime-host.json").is_file()
@@ -149,7 +293,7 @@ impl RuntimeCliBridge {
             .arg("--runtime-dir")
             .arg(runtime_dir)
             .arg("--json")
-            .arg("history-sync")
+            .arg(command)
             .args(action)
             .env_remove("ALERA_WORKSPACE_ID")
             .stdin(Stdio::null())
@@ -198,14 +342,8 @@ impl RuntimeCliBridge {
                 "Host history sync response too large",
             ));
         }
-        let snapshot: HistorySyncSnapshot = serde_json::from_slice(&output)
+        let snapshot: T = serde_json::from_slice(&output)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-        if snapshot.revision < 0 || snapshot.accounts.len() > 256 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "Invalid history sync response",
-            ));
-        }
         Ok(snapshot)
     }
 }
@@ -214,6 +352,66 @@ impl RuntimeCliBridge {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn agy_snapshot_reports_explicit_unverified_keyring_and_rejects_fake_switching() {
+        let valid = json!({
+            "revision": 7,
+            "agyAccounts": [{"accountId": "research", "alias": "Research"}],
+            "identityCapability": {
+                "credentialScope": "host-os-user",
+                "accountAuthentication": "unverified",
+                "supportsIndependentLocalAccounts": false,
+                "supportsAccountSwitching": false,
+                "recommendedIsolation": "separate-os-user-runtime-host",
+                "canRegisterNames": true
+            }
+        });
+        let snapshot: AgyAccountsSnapshot = serde_json::from_value(valid.clone()).unwrap();
+        snapshot.validate().unwrap();
+        assert!(!snapshot.identity_capability.supports_account_switching);
+        let mut fake = valid.clone();
+        fake["identityCapability"]["supportsAccountSwitching"] = json!(true);
+        assert!(serde_json::from_value::<AgyAccountsSnapshot>(fake)
+            .unwrap()
+            .validate()
+            .is_err());
+        let mut fake_id = valid;
+        fake_id["agyAccounts"][0]["accountId"] = json!("../escape");
+        assert!(serde_json::from_value::<AgyAccountsSnapshot>(fake_id)
+            .unwrap()
+            .validate()
+            .is_err());
+    }
+
+    #[test]
+    fn agy_offline_registration_never_starts_host_or_accepts_bad_ids() {
+        let temp = tempfile::tempdir().unwrap();
+        let bridge = RuntimeCliBridge::new(temp.path().join("missing-cli"), temp.path());
+        assert_eq!(
+            bridge.read_agy_accounts().unwrap_err().kind(),
+            io::ErrorKind::NotConnected
+        );
+        assert_eq!(
+            bridge.remove_agy_account(0, "default").unwrap_err().kind(),
+            io::ErrorKind::InvalidInput
+        );
+        assert_eq!(
+            bridge
+                .upsert_agy_account(0, "../escape", "Research")
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidInput
+        );
+        assert_eq!(
+            bridge
+                .upsert_agy_account(0, "research", "Foo\nBar")
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidInput
+        );
+        assert!(!temp.path().join("host.json").exists());
+    }
 
     #[test]
     fn reads_shared_host_policy_and_scopes_each_account_group() {

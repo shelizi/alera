@@ -45,6 +45,7 @@ mod project_config_toml;
 mod project_management;
 #[cfg(windows)]
 mod pty_job_bootstrap;
+mod runtime_agy_accounts_cli;
 mod runtime_archive;
 mod runtime_clear;
 mod runtime_commands;

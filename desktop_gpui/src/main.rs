@@ -15,6 +15,7 @@ mod native_ui_icons;
 mod native_ui_theme;
 mod quick_open_ui;
 mod win_ime;
+use native_history_sync_ui::AgyAccountEdit;
 
 // GPUI Kit re-exports its pinned GPUI runtime. Use a single version of all
 // GPUI types throughout Native instead of mixing gpui 0.2.x and gpui-pre.
@@ -72,7 +73,7 @@ use alera_gpui_desktop::git_sidebar_layout::{
 };
 use alera_gpui_desktop::git_watch::GitWatchService;
 use alera_gpui_desktop::history_sync_bridge::{
-    HistorySyncAccount, HistorySyncMode, HistorySyncSnapshot,
+    AgyAccountsSnapshot, HistorySyncAccount, HistorySyncMode, HistorySyncSnapshot,
 };
 use alera_gpui_desktop::host_tab_pins::{
     host_pin_owner_coverage, host_pin_query_workspaces, HostPinOwnerCoverage, HostTabPinSnapshot,
@@ -648,6 +649,11 @@ struct Workbench {
     history_sync_status: String,
     history_sync_edit: Option<HistorySyncAccount>,
     history_sync_input: Entity<QuickOpenInput>,
+    agy_accounts_snapshot: Option<AgyAccountsSnapshot>,
+    agy_account_edit: Option<AgyAccountEdit>,
+    agy_account_remove_confirm: Option<String>,
+    agy_account_id_input: Entity<QuickOpenInput>,
+    agy_account_name_input: Entity<QuickOpenInput>,
     settings_section: Option<String>,
     settings_modal_focus: gpui::FocusHandle,
     settings_kit_dialog_open: bool,
@@ -13470,6 +13476,18 @@ fn main() {
                             history_sync_edit: None,
                             history_sync_input: cx.new(|cx| {
                                 QuickOpenInput::with_placeholder("Group (empty = independent)", cx)
+                            }),
+                            agy_accounts_snapshot: None,
+                            agy_account_edit: None,
+                            agy_account_remove_confirm: None,
+                            agy_account_id_input: cx.new(|cx| {
+                                QuickOpenInput::with_placeholder(
+                                    "Local account ID (not an email)",
+                                    cx,
+                                )
+                            }),
+                            agy_account_name_input: cx.new(|cx| {
+                                QuickOpenInput::with_placeholder("Google account label", cx)
                             }),
                             settings_section: None,
                             settings_modal_focus: cx.focus_handle(),

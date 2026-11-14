@@ -101,6 +101,7 @@ impl RuntimeAgentQuotaSettings {
                 && seen_profiles.insert(entry.profile.clone())
         });
         let mut seen_agy = std::collections::HashSet::new();
+        let mut seen_agy_aliases = std::collections::HashSet::new();
         for profile in &mut self.agy_profiles {
             profile.alias = profile.alias.trim().to_string();
             profile.account_id = profile.account_id.trim().to_string();
@@ -116,8 +117,12 @@ impl RuntimeAgentQuotaSettings {
                     .account_id
                     .chars()
                     .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_'))
+                && !seen_agy.contains(&entry.account_id)
+                && !seen_agy_aliases.contains(&entry.alias)
                 && seen_agy.insert(entry.account_id.clone())
+                && seen_agy_aliases.insert(entry.alias.clone())
         });
+        self.agy_profiles.truncate(32);
         self.history_sync.normalize();
         self
     }
@@ -324,7 +329,8 @@ mod tests {
                 {"alias": "Duplicate", "accountId": "research"},
                 {"alias": "Reserved", "accountId": "default"},
                 {"alias": "Wrong path", "accountId": "../escape"},
-                {"alias": " Personal ", "accountId": "home_2"}
+                {"alias": " Personal ", "accountId": "home_2"},
+                {"alias": "Research", "accountId": "different_id"}
             ]
         }))
         .unwrap();
