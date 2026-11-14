@@ -1,0 +1,3 @@
+// Use exactly the same icon as the shipping Alera Classic Windows runner.
+// ID 101 is Classic's IDI_APP_ICON and the first/only icon group here.
+101 ICON "../windows/runner/resources/app_icon.ico"

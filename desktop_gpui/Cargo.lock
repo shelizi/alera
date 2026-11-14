@@ -182,6 +182,7 @@ dependencies = [
  "alera-core",
  "base64",
  "dunce",
+ "embed-resource",
  "git2",
  "gpui-kit",
  "notify",

@@ -61,6 +61,23 @@ This is an **experimental, independent Rust UI frontend**, not a replacement of 
 
 **Step-by-step engineering execution plan:** [GPUI detailed execution and acceptance plan](../docs/gpui-desktop-detailed-execution-plan-20261107.md). This is the current ordered task checklist (G0–G6), with commands, test cases, source touchpoints, stop conditions, dependencies and release gates. Do not treat it as evidence that the planned GUI/IME work has been completed.
 
+## Native application icon (Windows)
+
+The Native Windows executable now embeds **the exact same icon** as Alera
+Classic: `windows/runner/resources/app_icon.ico` (Classic's `IDI_APP_ICON=101`).
+`desktop_gpui/native_app_icon.rc` references that existing tracked asset;
+the Windows build script compiles it into the Native EXE using the already
+locked `embed-resource` dependency. Do not replace it with the default
+GPUI/Rust icon or a re-drawn copy. Icon appearance is shared, but Native's
+AppUserModelID, shortcut grouping, application data and lifecycle remain
+separate from Classic.
+
+When changing the Classic icon, rebuild Native to refresh its embedded icon.
+After a rebuilt `AleraNative.exe` replaces an older preview, Windows Explorer
+may cache the prior icon; restart the application and refresh the relevant
+shortcut/taskbar pin before attributing a stale graphic to the binary.
+macOS app-bundle icon packaging remains a separate distribution concern.
+
 ## Run
 
 Use the Rust 1.98 toolchain and platform graphics development tools; for Windows, native GPUI builds may additionally require the Windows SDK `fxc.exe` shader compiler.
