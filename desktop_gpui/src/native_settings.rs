@@ -32,6 +32,14 @@ const fn default_explorer_show_hidden() -> bool {
     !cfg!(windows)
 }
 
+const fn default_terminal_scrollback_lines() -> u64 {
+    10_000
+}
+
+pub fn valid_terminal_scrollback_lines(lines: u64) -> bool {
+    (100..=200_000).contains(&lines)
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NativeSettings {
@@ -39,6 +47,10 @@ pub struct NativeSettings {
     pub auto_git_fetch_enabled: bool,
     pub auto_git_fetch_interval_minutes: u64,
     pub terminal_font_size: f64,
+    /// Native Alacritty viewport history limit. Classic's Flutter preference
+    /// is not shared, and Runtime Host retains PTY output by *bytes*.
+    #[serde(default = "default_terminal_scrollback_lines")]
+    pub terminal_scrollback_lines: u64,
     pub editor_autosave_enabled: bool,
     pub editor_tab_size: u64,
     /// Legacy Native JSON fallback. When Host is available, Rust Core's
@@ -74,6 +86,7 @@ impl Default for NativeSettings {
             auto_git_fetch_enabled: true,
             auto_git_fetch_interval_minutes: 5,
             terminal_font_size: 13.0,
+            terminal_scrollback_lines: default_terminal_scrollback_lines(),
             editor_autosave_enabled: false,
             editor_tab_size: 4,
             editor_two_row_tabs: false,
@@ -208,6 +221,7 @@ impl NativeSettings {
             "general.autoGitFetchEnabled" => json!(self.auto_git_fetch_enabled),
             "general.autoGitFetchIntervalMinutes" => json!(self.auto_git_fetch_interval_minutes),
             "terminal.fontSize" => json!(self.terminal_font_size),
+            "terminal.nativeScrollbackLines" => json!(self.terminal_scrollback_lines),
             "editor.autosaveEnabled" => json!(self.editor_autosave_enabled),
             "editor.tabSize" => json!(self.editor_tab_size),
             "editor.twoRowTabs" => json!(self.editor_two_row_tabs),
@@ -256,6 +270,9 @@ impl NativeSettings {
             }
             "editor.tabSize" => value.as_u64().is_some_and(|v| (1..=16).contains(&v)),
             "general.autoArchiveWorkspacesAfterDays" => value.as_u64().is_some_and(|v| v <= 36_500),
+            "terminal.nativeScrollbackLines" => {
+                value.as_u64().is_some_and(valid_terminal_scrollback_lines)
+            }
             "terminal.fontSize" => value
                 .as_f64()
                 .is_some_and(|v| v.is_finite() && (8.0..=48.0).contains(&v)),
@@ -279,6 +296,10 @@ impl NativeSettings {
                     json!(self.auto_git_fetch_interval_minutes),
                 ),
                 ("terminal.fontSize", json!(self.terminal_font_size)),
+                (
+                    "terminal.nativeScrollbackLines",
+                    json!(self.terminal_scrollback_lines),
+                ),
                 (
                     "editor.autosaveEnabled",
                     json!(self.editor_autosave_enabled),
@@ -439,6 +460,41 @@ impl NativeSettingsStore {
         if readback.get(path) != settings.get(path) {
             return Err(io::Error::other(
                 "Native settings readback did not match write",
+            ));
+        }
+        Ok(readback)
+    }
+
+    /// A Native-only preference deliberately absent from the Host's MCP
+    /// get/update allowlist and shared Classic DesktopSettings contract.
+    /// CAS and disk readback prevent multiple Native windows from clobbering
+    /// each other's chosen scrollback limits.
+    pub fn compare_and_set_terminal_scrollback_lines(
+        &self,
+        expected: u64,
+        next: u64,
+    ) -> io::Result<NativeSettings> {
+        if !valid_terminal_scrollback_lines(expected) || !valid_terminal_scrollback_lines(next) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Native scrollback lines out of range",
+            ));
+        }
+        let _lock = self.lock()?;
+        let mut settings = self.read()?;
+        if settings.terminal_scrollback_lines != expected {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "Native scrollback preference was changed in another window",
+            ));
+        }
+        settings.terminal_scrollback_lines = next;
+        settings.validate()?;
+        self.persist(&settings)?;
+        let readback = self.read()?;
+        if readback.terminal_scrollback_lines != next {
+            return Err(io::Error::other(
+                "Native scrollback preference readback did not match write",
             ));
         }
         Ok(readback)
@@ -795,6 +851,44 @@ mod tests {
             }}))
             .is_err());
         assert_eq!(state, previous);
+    }
+
+    #[test]
+    fn native_scrollback_is_local_persistent_bounded_and_not_mcp_writable() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = NativeSettingsStore::new(dir.path());
+        assert_eq!(store.read().unwrap().terminal_scrollback_lines, 10_000);
+        assert_eq!(
+            store.get("terminal.nativeScrollbackLines").unwrap(),
+            json!(10_000)
+        );
+        assert!(!NativeSettings::writable("terminal.nativeScrollbackLines"));
+        assert!(!NativeSettings::shared_host_owned(
+            "terminal.nativeScrollbackLines"
+        ));
+        assert_eq!(
+            store
+                .compare_and_set_terminal_scrollback_lines(10_000, 20_000)
+                .unwrap()
+                .terminal_scrollback_lines,
+            20_000
+        );
+        assert_eq!(
+            NativeSettingsStore::new(dir.path())
+                .read()
+                .unwrap()
+                .terminal_scrollback_lines,
+            20_000
+        );
+        assert!(store
+            .compare_and_set_terminal_scrollback_lines(10_000, 100)
+            .is_err());
+        for invalid in [0, 99, 200_001, u64::MAX] {
+            assert!(store
+                .compare_and_set_terminal_scrollback_lines(20_000, invalid)
+                .is_err());
+        }
+        assert_eq!(store.read().unwrap().terminal_scrollback_lines, 20_000);
     }
 
     #[test]

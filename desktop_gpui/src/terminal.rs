@@ -4,7 +4,7 @@
 use crate::runtime_bridge::RuntimeCliBridge;
 use crate::session::TerminalLayout;
 use crate::terminal_output_budget::TerminalParseBudget;
-use crate::vt_screen::VtScreen;
+use crate::vt_screen::{VtScreen, DEFAULT_SCROLLBACK_LINES};
 use serde_json::Value;
 use std::collections::VecDeque;
 use std::ffi::OsString;
@@ -1529,7 +1529,7 @@ impl TerminalTab {
         self.generation
     }
 
-    fn new(session: &TerminalSession, generation: u64) -> Self {
+    fn new(session: &TerminalSession, generation: u64, scrollback_lines: usize) -> Self {
         Self {
             handle: session.handle.clone(),
             tab_id: session.tab_id.clone(),
@@ -1541,7 +1541,7 @@ impl TerminalTab {
             running: session.running,
             output: String::new(),
             next_cursor: None,
-            screen: VtScreen::default(),
+            screen: VtScreen::with_scrollback(24, 80, scrollback_lines),
             parse_budget: TerminalParseBudget::default(),
             generation,
             decoder: TextDecoder::default(),
@@ -1989,7 +1989,7 @@ impl TerminalPollGate {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct TerminalDock {
     pub sessions: Vec<TerminalSession>,
     pub tabs: Vec<TerminalTab>,
@@ -1999,6 +1999,23 @@ pub struct TerminalDock {
     session_list_stale: bool,
     next_generation: u64,
     workspace_generation: u64,
+    scrollback_lines: usize,
+}
+
+impl Default for TerminalDock {
+    fn default() -> Self {
+        Self {
+            sessions: Vec::new(),
+            tabs: Vec::new(),
+            active_tab: None,
+            status: String::new(),
+            view_mode: TerminalViewMode::default(),
+            session_list_stale: false,
+            next_generation: 0,
+            workspace_generation: 0,
+            scrollback_lines: DEFAULT_SCROLLBACK_LINES,
+        }
+    }
 }
 
 impl TerminalDock {
@@ -2007,6 +2024,24 @@ impl TerminalDock {
             workspace_generation: generation,
             ..Self::default()
         }
+    }
+
+    /// Native-only visible VT scrollback cap; Host byte retention is separate.
+    /// Apply a new selection to all live screen emulators without destroying
+    /// output or changing Host session/PTY identity.
+    pub fn set_scrollback_lines(&mut self, lines: usize) {
+        let lines = lines.clamp(
+            crate::vt_screen::MIN_SCROLLBACK_LINES,
+            crate::vt_screen::MAX_SCROLLBACK_LINES,
+        );
+        self.scrollback_lines = lines;
+        for tab in &mut self.tabs {
+            tab.screen.set_scrollback_lines(lines);
+        }
+    }
+
+    pub fn scrollback_lines(&self) -> usize {
+        self.scrollback_lines
     }
 
     pub fn workspace_generation(&self) -> u64 {
@@ -2072,7 +2107,7 @@ impl TerminalDock {
         tab.output.clear();
         // Use the original PTY dimensions before replaying absolute cursor
         // moves/hard wraps. This changes only local VT preview geometry.
-        tab.screen = VtScreen::new(rows, cols);
+        tab.screen = VtScreen::with_scrollback(rows, cols, tab.screen.scrollback_lines());
         tab.decoder = TextDecoder::default();
         tab.stream_utf8_pending.clear();
         tab.parse_budget = TerminalParseBudget::default();
@@ -2378,7 +2413,8 @@ impl TerminalDock {
                 // Explicitly selecting a new session with a reused handle
                 // must not silently attach an old transcript.
                 self.next_generation = self.next_generation.wrapping_add(1);
-                self.tabs[index] = TerminalTab::new(session, self.next_generation);
+                self.tabs[index] =
+                    TerminalTab::new(session, self.next_generation, self.scrollback_lines);
             }
             self.active_tab = Some(index);
             return true;
@@ -2388,8 +2424,11 @@ impl TerminalDock {
             return false;
         }
         self.next_generation = self.next_generation.wrapping_add(1);
-        self.tabs
-            .push(TerminalTab::new(session, self.next_generation));
+        self.tabs.push(TerminalTab::new(
+            session,
+            self.next_generation,
+            self.scrollback_lines,
+        ));
         self.active_tab = Some(self.tabs.len() - 1);
         true
     }
@@ -3172,7 +3211,7 @@ mod tests {
     fn native_parse_budget_restarts_after_host_cursor_reset_or_truncation() {
         let s = session("pty-1");
         let started = Instant::now();
-        let mut rewind_tab = TerminalTab::new(&s, 1);
+        let mut rewind_tab = TerminalTab::new(&s, 1, DEFAULT_SCROLLBACK_LINES);
         rewind_tab
             .parse_budget
             .observe(started, 16 * 1024, Duration::from_millis(1));
@@ -3181,7 +3220,7 @@ mod tests {
         assert!(rewind_tab.apply(chunk("pty-1", 0, 10, "reset")));
         assert_eq!(rewind_tab.parse_budget.max_read_bytes(), 16 * 1024);
 
-        let mut truncated_tab = TerminalTab::new(&s, 2);
+        let mut truncated_tab = TerminalTab::new(&s, 2, DEFAULT_SCROLLBACK_LINES);
         truncated_tab
             .parse_budget
             .observe(started, 16 * 1024, Duration::from_millis(1));
@@ -3301,6 +3340,40 @@ mod tests {
         assert_eq!(recovery_read.cursor, None);
         assert!(dock.apply_workspace_read(13, &recovery_read, chunk("pty-1", 0, 7, "host\n")));
         assert_eq!(dock.active().unwrap().output, "host\n");
+    }
+
+    #[test]
+    fn native_scrollback_setting_applies_to_live_and_replayed_host_tabs() {
+        let mut dock = TerminalDock::for_workspace(13);
+        assert_eq!(dock.scrollback_lines(), DEFAULT_SCROLLBACK_LINES);
+        dock.set_scrollback_lines(2_000);
+        dock.update_sessions(vec![session("pty-1")]);
+        assert!(dock.open("pty-1"));
+        let tab = dock.active().unwrap();
+        assert_eq!(tab.screen.scrollback_lines(), 2_000);
+        let identity = dock.context_target_at(0).unwrap();
+        dock.tabs[0].screen.feed("original");
+        dock.set_scrollback_lines(300);
+        assert_eq!(dock.tabs[0].screen.scrollback_lines(), 300);
+        assert!(dock.tabs[0].screen.contents().contains("original"));
+        assert!(dock.apply_stream_snapshot(
+            &identity.handle,
+            &identity.workspace_id,
+            &identity.tab_id,
+            3,
+            24,
+            80,
+            b"new",
+        ));
+        assert_eq!(dock.tabs[0].screen.scrollback_lines(), 300);
+        dock.update_sessions(vec![session("pty-1"), session("pty-2")]);
+        assert!(dock.open("pty-2"));
+        assert_eq!(dock.active().unwrap().screen.scrollback_lines(), 300);
+        // A different Workspace receives the saved Native cap from Workbench,
+        // not from stale tabs in the previous workspace.
+        let mut next = TerminalDock::for_workspace(14);
+        next.set_scrollback_lines(300);
+        assert_eq!(next.scrollback_lines(), 300);
     }
 
     fn session(handle: &str) -> TerminalSession {

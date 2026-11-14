@@ -781,6 +781,8 @@ struct Workbench {
     native_settings_store: Option<NativeSettingsStore>,
     native_settings: NativeSettings,
     native_settings_error: Option<String>,
+    native_scrollback_busy: bool,
+    native_scrollback_status: String,
     history_sync_snapshot: Option<HistorySyncSnapshot>,
     history_sync_loading: bool,
     history_sync_busy: bool,
@@ -5655,6 +5657,8 @@ impl Workbench {
         // them on workspace changes to prevent cross-project output leakage.
         // Existing Host sessions remain alive and under Host ownership.
         self.terminals = TerminalDock::for_workspace(self.workspace_generation);
+        self.terminals
+            .set_scrollback_lines(self.native_settings.terminal_scrollback_lines as usize);
         self.terminal_auto_resize.clear();
         self.terminal_line_selection = None;
         self.terminal_panes.reset();
@@ -5835,6 +5839,8 @@ impl Workbench {
             self.last_auto_git_fetch = Instant::now();
         }
         let tab_size = settings.editor_tab_size;
+        self.terminals
+            .set_scrollback_lines(settings.terminal_scrollback_lines as usize);
         self.native_settings = settings;
         self.native_settings_error = None;
         for editor in [self.editor.clone(), self.secondary_editor.clone()]
@@ -7817,6 +7823,40 @@ impl Workbench {
     /// Do not let both native pane surfaces forward keys via the shared
     /// TerminalDock active index. The clicked/focused pane must still own
     /// the exact authenticated Host tab at dispatch time.
+    /// The Native VT owns the scrollback viewport; a full-screen TUI on
+    /// Alacritty's alternate screen keeps receiving its own PageUp/PageDown.
+    fn scroll_native_terminal_page(
+        &mut self,
+        pane: PaneSlot,
+        toward_older: bool,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.terminals.view_mode != TerminalViewMode::Screen {
+            return false;
+        }
+        let Some(index) = self.terminal_index_in_pane(pane) else {
+            return false;
+        };
+        let Some(tab) = self.terminals.tabs.get_mut(index) else {
+            return false;
+        };
+        if tab.screen.alternate_screen() {
+            return false;
+        }
+        let changed = tab.screen.scroll_history_page(toward_older);
+        let offset = tab.screen.scrollback_offset();
+        if changed {
+            self.terminals.status = if offset == 0 {
+                "Terminal returned to live output".to_owned()
+            } else {
+                format!("Terminal viewing history: {offset} lines above live output")
+            };
+            self.terminal_line_selection = None;
+            cx.notify();
+        }
+        true
+    }
+
     fn send_terminal_key_for_pane(
         &mut self,
         pane: PaneSlot,
@@ -7842,6 +7882,17 @@ impl Workbench {
             PaneSlot::Primary => self.terminal_input.read(cx).composing(),
             PaneSlot::Secondary => self.secondary_terminal_input.read(cx).composing(),
         };
+        if !composing
+            && !win_ime::focused_native_text_mode()
+            && event.keystroke.modifiers.shift
+            && !event.keystroke.modifiers.control
+            && !event.keystroke.modifiers.alt
+            && !event.keystroke.modifiers.platform
+            && matches!(event.keystroke.key.as_str(), "pageup" | "pagedown")
+            && self.scroll_native_terminal_page(pane, event.keystroke.key == "pageup", cx)
+        {
+            return true;
+        }
         match terminal_key_dispatch(
             &event.keystroke.key,
             event.keystroke.key_char.as_deref(),
@@ -12842,6 +12893,24 @@ impl Render for Workbench {
                                             ),
                                     )
                                     .child(
+                                        icon_button("native-terminal-history-up-primary", UiIcon::ChevronUp,
+                                            "Scroll terminal history up one page (Shift+PageUp)", false)
+                                            .when(!terminal_is_vt || !mixed_primary_active.as_ref().is_some_and(|id|
+                                                matches!(id, WorkbenchTabIdentity::Host(_))), |button| button.hidden())
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.scroll_native_terminal_page(PaneSlot::Primary, true, cx);
+                                            })),
+                                    )
+                                    .child(
+                                        icon_button("native-terminal-history-down-primary", UiIcon::ChevronDown,
+                                            "Scroll terminal history down one page (Shift+PageDown)", false)
+                                            .when(!terminal_is_vt || !mixed_primary_active.as_ref().is_some_and(|id|
+                                                matches!(id, WorkbenchTabIdentity::Host(_))), |button| button.hidden())
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.scroll_native_terminal_page(PaneSlot::Primary, false, cx);
+                                            })),
+                                    )
+                                    .child(
                                         icon_button("mixed-pane-actions", UiIcon::More, "Pane actions", false)
                                             .dropdown_menu(Self::kit_pane_actions_menu(
                                                 cx.entity().downgrade(),
@@ -12968,6 +13037,22 @@ impl Render for Workbench {
                                                                 }
                                                             })
                                                     })
+                                                    .child(
+                                                        icon_button("native-terminal-history-up-secondary", UiIcon::ChevronUp,
+                                                            "Scroll second-pane terminal history up (Shift+PageUp)", false)
+                                                            .when(!terminal_is_vt || mixed_secondary_host.is_none(), |button| button.hidden())
+                                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                                this.scroll_native_terminal_page(PaneSlot::Secondary, true, cx);
+                                                            })),
+                                                    )
+                                                    .child(
+                                                        icon_button("native-terminal-history-down-secondary", UiIcon::ChevronDown,
+                                                            "Scroll second-pane terminal history down (Shift+PageDown)", false)
+                                                            .when(!terminal_is_vt || mixed_secondary_host.is_none(), |button| button.hidden())
+                                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                                this.scroll_native_terminal_page(PaneSlot::Secondary, false, cx);
+                                                            })),
+                                                    )
                                                     .child(
                                                         icon_button("mixed-secondary-pane-actions", UiIcon::More, "Second pane actions", false)
                                                             .dropdown_menu(Self::kit_pane_actions_menu(
@@ -13470,6 +13555,22 @@ impl Render for Workbench {
                                                                 }
                                                             })
                                                     })
+                                                    .child(
+                                                        icon_button("native-terminal-history-up-secondary", UiIcon::ChevronUp,
+                                                            "Scroll second-pane terminal history up (Shift+PageUp)", false)
+                                                            .when(!terminal_is_vt || mixed_secondary_host.is_none(), |button| button.hidden())
+                                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                                this.scroll_native_terminal_page(PaneSlot::Secondary, true, cx);
+                                                            })),
+                                                    )
+                                                    .child(
+                                                        icon_button("native-terminal-history-down-secondary", UiIcon::ChevronDown,
+                                                            "Scroll second-pane terminal history down (Shift+PageDown)", false)
+                                                            .when(!terminal_is_vt || mixed_secondary_host.is_none(), |button| button.hidden())
+                                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                                this.scroll_native_terminal_page(PaneSlot::Secondary, false, cx);
+                                                            })),
+                                                    )
                                                     .child(
                                                         icon_button("mixed-secondary-pane-actions", UiIcon::More, "Second pane actions", false)
                                                             .dropdown_menu(Self::kit_pane_actions_menu(
@@ -14545,6 +14646,8 @@ fn main() {
         show_hidden: native_settings.explorer_show_hidden,
     };
 
+    let initial_native_scrollback_lines = native_settings.terminal_scrollback_lines as usize;
+
     gpui_kit::application()
         .with_assets(gpui_kit::assets::Assets)
         .run(move |cx: &mut App| {
@@ -14936,6 +15039,8 @@ fn main() {
                             native_settings_store,
                             native_settings,
                             native_settings_error,
+                            native_scrollback_busy: false,
+                            native_scrollback_status: String::new(),
                             history_sync_snapshot: None,
                             history_sync_loading: false,
                             history_sync_busy: false,
@@ -15021,7 +15126,11 @@ fn main() {
                             agent_pending_tab: None,
                             agent_launch_pane: None,
                             agent_status: "Select an Agent Profile and enter a task".into(),
-                            terminals: TerminalDock::for_workspace(0),
+                            terminals: {
+                                let mut dock = TerminalDock::for_workspace(0);
+                                dock.set_scrollback_lines(initial_native_scrollback_lines);
+                                dock
+                            },
                             terminal_panes: TerminalPaneLayout::default(),
                             terminal_input,
                             secondary_terminal_input,

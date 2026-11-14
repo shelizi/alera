@@ -8,14 +8,18 @@
 use std::ops::Range;
 
 use alacritty_terminal::event::VoidListener;
-use alacritty_terminal::grid::Dimensions;
+use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::term::color::Colors;
 use alacritty_terminal::term::{Config, Osc52, Term, TermMode};
 use alacritty_terminal::vte::ansi::{Color, NamedColor, Processor, Rgb};
 
-const MAX_SCROLLBACK_LINES: usize = 240;
+/// Match Classic's default; the Native preference remains local, and Host PTY
+/// retention in bytes is separately controlled by the Runtime Host.
+pub const DEFAULT_SCROLLBACK_LINES: usize = 10_000;
+pub const MIN_SCROLLBACK_LINES: usize = 100;
+pub const MAX_SCROLLBACK_LINES: usize = 200_000;
 const DEFAULT_ROWS: u16 = 24;
 const DEFAULT_COLS: u16 = 80;
 const MAX_RESIZE_CSI_BYTES: usize = 32;
@@ -225,6 +229,7 @@ pub struct VtScreen {
     processor: Processor,
     rows: u16,
     cols: u16,
+    scrollback_lines: usize,
     resize_probe: ConptyResizeProbe,
 }
 
@@ -246,10 +251,15 @@ impl Default for VtScreen {
 
 impl VtScreen {
     pub fn new(rows: u16, cols: u16) -> Self {
+        Self::with_scrollback(rows, cols, DEFAULT_SCROLLBACK_LINES)
+    }
+
+    pub fn with_scrollback(rows: u16, cols: u16, scrollback_lines: usize) -> Self {
+        let scrollback_lines = scrollback_lines.clamp(MIN_SCROLLBACK_LINES, MAX_SCROLLBACK_LINES);
         let rows = rows.clamp(5, 200);
         let cols = cols.clamp(20, 512);
         let config = Config {
-            scrolling_history: MAX_SCROLLBACK_LINES,
+            scrolling_history: scrollback_lines,
             // A Host transcript must never trigger a GPUI clipboard read/write.
             osc52: Osc52::Disabled,
             ..Config::default()
@@ -264,6 +274,7 @@ impl VtScreen {
             processor: Processor::new(),
             rows,
             cols,
+            scrollback_lines,
             resize_probe: ConptyResizeProbe::default(),
         }
     }
@@ -286,7 +297,58 @@ impl VtScreen {
     }
 
     pub fn reset(&mut self) {
-        *self = Self::new(self.rows, self.cols);
+        *self = Self::with_scrollback(self.rows, self.cols, self.scrollback_lines);
+    }
+
+    pub fn scrollback_lines(&self) -> usize {
+        self.scrollback_lines
+    }
+
+    /// Update the Alacritty ring in place. This applies to existing sessions
+    /// without dropping their screen, dirty input, active PTY or ANSI state.
+    pub fn set_scrollback_lines(&mut self, lines: usize) {
+        let lines = lines.clamp(MIN_SCROLLBACK_LINES, MAX_SCROLLBACK_LINES);
+        if lines == self.scrollback_lines {
+            return;
+        }
+        self.scrollback_lines = lines;
+        self.terminal.set_options(Config {
+            scrolling_history: lines,
+            osc52: Osc52::Disabled,
+            ..Config::default()
+        });
+    }
+
+    pub fn scrollback_offset(&self) -> usize {
+        self.terminal.grid().display_offset()
+    }
+
+    pub fn scrollback_available(&self) -> usize {
+        self.terminal.grid().history_size()
+    }
+
+    /// Scroll only the standard terminal buffer, never a full-screen TUI's
+    /// alternate screen. Returning false lets the normal PTY key path work.
+    pub fn scroll_history_page(&mut self, toward_older: bool) -> bool {
+        if self.alternate_screen() {
+            return false;
+        }
+        let before = self.scrollback_offset();
+        self.terminal.scroll_display(if toward_older {
+            Scroll::PageUp
+        } else {
+            Scroll::PageDown
+        });
+        self.scrollback_offset() != before
+    }
+
+    pub fn scroll_to_live(&mut self) -> bool {
+        if self.alternate_screen() {
+            return false;
+        }
+        let before = self.scrollback_offset();
+        self.terminal.scroll_display(Scroll::Bottom);
+        self.scrollback_offset() != before
     }
 
     /// Visible text snapshot only. Escape and OSC control sequences cannot
@@ -310,13 +372,14 @@ impl VtScreen {
         let grid = self.terminal.grid();
         let colors = self.terminal.colors();
         let cursor = grid.cursor.point;
-        let show_cursor = self.terminal.mode().contains(TermMode::SHOW_CURSOR);
+        let offset = self.terminal.grid().display_offset() as i32;
+        let show_cursor = offset == 0 && self.terminal.mode().contains(TermMode::SHOW_CURSOR);
         (0..self.rows)
             .map(|row| {
                 let mut text = String::with_capacity(usize::from(self.cols) * 2);
                 let mut spans: Vec<StyleSpan> = Vec::new();
                 for col in 0..self.cols {
-                    let cell = &grid[Line(i32::from(row))][Column(usize::from(col))];
+                    let cell = &grid[Line(i32::from(row) - offset)][Column(usize::from(col))];
                     if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
                         continue;
                     }
@@ -391,6 +454,47 @@ impl VtScreen {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scrollback_lines_are_real_bounded_history_not_just_a_ui_preference() {
+        let mut screen = VtScreen::with_scrollback(5, 20, 100);
+        assert_eq!(screen.scrollback_lines(), 100);
+        for i in 0..140 {
+            screen.feed(&format!("line{i:03}\r\n"));
+        }
+        assert_eq!(screen.scrollback_available(), 100);
+        assert_eq!(screen.scrollback_offset(), 0);
+        let live = screen.contents();
+        assert!(live.contains("line139"));
+        assert!(screen.scroll_history_page(true));
+        assert!(screen.scrollback_offset() > 0);
+        assert_ne!(
+            screen.contents(),
+            live,
+            "rendering must follow Alacritty display offset"
+        );
+        assert!(screen.scroll_to_live());
+        assert_eq!(screen.contents(), live);
+        screen.set_scrollback_lines(200);
+        assert_eq!(screen.scrollback_lines(), 200);
+        screen.feed("after-change\r\n");
+        assert!(screen.contents().contains("after-change"));
+        screen.reset();
+        assert_eq!(
+            screen.scrollback_lines(),
+            200,
+            "Host replay/reset must preserve chosen cap"
+        );
+    }
+
+    #[test]
+    fn alternate_screen_does_not_hijack_full_screen_tui_scrollback_keys() {
+        let mut screen = VtScreen::with_scrollback(5, 20, 100);
+        screen.feed("\u{1b}[?1049hfull screen TUI");
+        assert!(screen.alternate_screen());
+        assert!(!screen.scroll_history_page(true));
+        assert_eq!(screen.scrollback_offset(), 0);
+    }
 
     fn style_at(row: &StyledRow, byte: usize) -> CellStyle {
         row.spans

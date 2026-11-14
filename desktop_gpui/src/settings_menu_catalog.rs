@@ -392,6 +392,10 @@ mod shared_row_tests {
             SettingsRowSupport::ReadOnly
         );
         assert_eq!(
+            settings_operational_action("terminal", "Scrollback Lines"),
+            Some(SettingsOperationalAction::ConfigureNativeScrollback)
+        );
+        assert_eq!(
             settings_row_support("account", "Mobile Push"),
             SettingsRowSupport::Unavailable
         );
@@ -480,6 +484,7 @@ pub enum SettingsOperationalAction {
     OpenQuotaOverview,
     SearchNativeKeyboardShortcuts,
     RefreshHostAgentProfiles,
+    ConfigureNativeScrollback,
 }
 
 pub fn settings_operational_action(
@@ -497,6 +502,9 @@ pub fn settings_operational_action(
         }
         ("agentProfiles", "Agent Profiles") => {
             Some(SettingsOperationalAction::RefreshHostAgentProfiles)
+        }
+        ("terminal", "Scrollback Lines") => {
+            Some(SettingsOperationalAction::ConfigureNativeScrollback)
         }
         _ => None,
     }

@@ -78,6 +78,26 @@ may cache the prior icon; restart the application and refresh the relevant
 shortcut/taskbar pin before attributing a stale graphic to the binary.
 macOS app-bundle icon packaging remains a separate distribution concern.
 
+## Native terminal scrollback (Windows / macOS / Linux)
+
+**Settings → Terminal → Advanced → Scrollback Lines** now changes the *real*
+Alacritty VT history ring in Native. Default **10,000 lines** (Classic's
+first-run default); valid **100–200,000 lines**. Use the presets or 100-line
+fine adjustment. Changes are CAS-saved in the independent
+`native-settings-v1.json` and immediately applied to all open terminals,
+including both split panes, without stopping their Host PTY sessions.
+New/replaced tabs, workspace switching, Host stream snapshots and screen resets
+reuse the selected cap.
+
+Use **Shift+PageUp / Shift+PageDown** or the up/down history toolbar icons in
+either terminal pane to browse and return to live output. Full-screen
+alternate-screen TUIs keep their normal shortcuts. This feature does not
+change the Host's **byte-based** scrollback retention or overwrite Classic's
+Flutter preferences; history older than the Host's retained data cannot be
+restored into a newly attached Native screen. Mouse-wheel scrollback is not
+yet wired to this viewport. Rust model tests and Native Windows binary checks
+pass; interactive GUI acceptance remains pending.
+
 ## Run
 
 Use the Rust 1.98 toolchain and platform graphics development tools; for Windows, native GPUI builds may additionally require the Windows SDK `fxc.exe` shader compiler.

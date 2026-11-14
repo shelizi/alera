@@ -10,6 +10,57 @@ use alera_gpui_desktop::settings_menu_catalog::{
 use gpui_kit::component::switch::Switch;
 
 impl Workbench {
+    /// Native's Alacritty history ring is separate from the Host's byte
+    /// retention. Save the actual local cap under CAS, then apply it live to
+    /// existing primary/secondary terminal buffers. No Host MCP permission is
+    /// widened and no session or PTY is restarted.
+    pub(super) fn change_native_scrollback_lines(&mut self, next: u64, cx: &mut Context<Self>) {
+        if self.native_scrollback_busy {
+            return;
+        }
+        if !alera_gpui_desktop::native_settings::valid_terminal_scrollback_lines(next) {
+            self.native_scrollback_status = "Choose 100–200,000 lines".into();
+            cx.notify();
+            return;
+        }
+        let expected = self.native_settings.terminal_scrollback_lines;
+        if next == expected {
+            return;
+        }
+        let Some(store) = self.native_settings_store.clone() else {
+            self.native_scrollback_status = "Native settings storage unavailable".into();
+            cx.notify();
+            return;
+        };
+        self.native_scrollback_busy = true;
+        self.native_scrollback_status = "Saving Native scrollback history limit…".into();
+        cx.spawn(async move |view, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    store.compare_and_set_terminal_scrollback_lines(expected, next)
+                })
+                .await;
+            view.update(cx, |view, cx| {
+                view.native_scrollback_busy = false;
+                match result {
+                    Ok(settings) => {
+                        view.install_native_settings(settings, cx);
+                        view.native_scrollback_status =
+                            "Native terminal scrollback saved and applied to open tabs".into();
+                    }
+                    Err(error) => {
+                        view.native_scrollback_status =
+                            format!("Scrollback save refused: {error}; reopen Settings to retry");
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
     fn change_native_two_row_tabs(&mut self, next: bool, cx: &mut Context<Self>) {
         self.change_shared_desktop_setting("editor.twoRowTabs", serde_json::json!(next), cx);
     }

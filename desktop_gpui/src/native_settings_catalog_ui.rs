@@ -245,6 +245,94 @@ impl Workbench {
             .into_any_element()
     }
 
+    fn render_native_scrollback_setting(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let current = self.native_settings.terminal_scrollback_lines;
+        let busy = self.native_scrollback_busy;
+        const OPTIONS: [u64; 9] = [
+            100, 500, 1_000, 5_000, 10_000, 20_000, 50_000, 100_000, 200_000,
+        ];
+        let status = if self.native_scrollback_status.is_empty() {
+            "Shift+PageUp / Shift+PageDown scrolls the Native VT history. Full-screen TUIs keep their own keys."
+        } else {
+            &self.native_scrollback_status
+        };
+        div()
+            .rounded_lg()
+            .bg(rgb(PANEL))
+            .p_3()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                div()
+                    .text_sm()
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .text_color(rgb(TEXT))
+                    .child(format!("Scrollback Lines · {current}")),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(MUTED))
+                    .child("Native Alacritty history retained per terminal. Classic's setting is independent; the Host byte buffer can impose a shorter restore window."),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .gap_2()
+                    .children(OPTIONS.into_iter().enumerate().map(|(index, next)| {
+                        div()
+                            .id(("native-scrollback-choice", index))
+                            .cursor_pointer()
+                            .px_3()
+                            .py_2()
+                            .rounded_md()
+                            .border_1()
+                            .border_color(rgb(BORDER))
+                            .bg(rgb(if current == next { ACTIVE } else { TOOLBAR }))
+                            .text_xs()
+                            .text_color(rgb(if current == next { TEXT } else { MUTED }))
+                            .child(format!("{next}"))
+                            .on_click(cx.listener(move |view, _, _, cx| {
+                                if !view.native_scrollback_busy {
+                                    view.change_native_scrollback_lines(next, cx);
+                                }
+                            }))
+                    })),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        native_components::action_button(
+                            "native-scrollback-minus-100", "-100", busy || current <= 100, false
+                        ).on_click(cx.listener(|view, _, _, cx| {
+                            let next = view.native_settings.terminal_scrollback_lines.saturating_sub(100).max(100);
+                            view.change_native_scrollback_lines(next, cx);
+                        })),
+                    )
+                    .child(
+                        native_components::action_button(
+                            "native-scrollback-plus-100", "+100", busy || current >= 200_000, false
+                        ).on_click(cx.listener(|view, _, _, cx| {
+                            let next = (view.native_settings.terminal_scrollback_lines + 100).min(200_000);
+                            view.change_native_scrollback_lines(next, cx);
+                        })),
+                    )
+                    .child(div().text_xs().text_color(rgb(MUTED))
+                        .child("Fine adjustment · 100 lines per step")),
+            )
+            .child(div().text_xs().text_color(rgb(MUTED)).child(if busy {
+                "Saving setting and updating open terminal screens…".to_owned()
+            } else {
+                status.to_owned()
+            }))
+            .into_any_element()
+    }
+
     fn render_project_management_setting(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         div()
             .p_3()
@@ -768,6 +856,9 @@ impl Workbench {
             }
             Some(SettingsOperationalAction::RefreshHostAgentProfiles) => {
                 return Some(self.render_host_agent_profiles_setting(cx));
+            }
+            Some(SettingsOperationalAction::ConfigureNativeScrollback) => {
+                return Some(self.render_native_scrollback_setting(cx));
             }
             None => {}
         }
