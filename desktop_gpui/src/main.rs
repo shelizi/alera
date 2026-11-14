@@ -87,7 +87,8 @@ use alera_gpui_desktop::managed_choice_discovery::{
     discover_choices, discovery_arguments, ManagedChoiceKind,
 };
 use alera_gpui_desktop::mcp_ui_bridge::{
-    matching_host_tab_handle, NativeMcpUiBridge, NativeMcpUiCommand, NativeMcpUiEvent,
+    matching_host_tab_handle, native_mcp_file_open_requires_new, NativeMcpUiBridge,
+    NativeMcpUiCommand, NativeMcpUiEvent,
 };
 use alera_gpui_desktop::mcp_workspace_creation::HostManagedWorkspaceRequest;
 use alera_gpui_desktop::model::WorkbenchModel;
@@ -5962,8 +5963,8 @@ impl Workbench {
                 if column.is_some() && line.is_none() {
                     return Err("invalid_path");
                 }
-                if mode == "new" || !matches!(mode, "reuse" | "new") {
-                    // Distinct built-in new-buffer tabs remain a separate gap.
+                if !matches!(mode, "reuse" | "new") || (editor_choice != "alera" && mode != "reuse")
+                {
                     return Err("ui_not_ready");
                 }
                 if matches!(editor_choice, "zed" | "vscode") {
@@ -5998,6 +5999,23 @@ impl Workbench {
                 if editor_choice != "alera" {
                     return Err("ui_not_ready");
                 }
+                let already_open = self.editor_instance_for_path(&target_file, cx).is_some();
+                // "new" is a real new file-backed Tab when this path has no
+                // editor. Reopening an already-editable path as another
+                // mutable buffer is not safe in Native's two-pane document
+                // ownership model; reject rather than fake a new Tab.
+                let requires_new = match native_mcp_file_open_requires_new(mode, already_open) {
+                    Ok(create) => create,
+                    Err(code) => {
+                        if mode == "new" && already_open {
+                            self.model.set_status(
+                                "This file already has a writable Editor tab. Native cannot create a second independent writable buffer; use openMode=reuse.",
+                            );
+                            cx.notify();
+                        }
+                        return Err(code);
+                    }
+                };
                 if !self.model.open_path(&target_file) {
                     return Err("file_missing");
                 }
@@ -6007,6 +6025,7 @@ impl Workbench {
                 };
                 if editor.read(cx).document().path() != Some(target_file.as_path())
                     || self.center_view != CenterView::Editor
+                    || (requires_new && self.editor_instance_for_path(&target_file, cx).is_none())
                 {
                     return Err("not_visible");
                 }
