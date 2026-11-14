@@ -30,8 +30,8 @@ use alera_gpui_desktop::agent_profiles::{
 };
 use alera_gpui_desktop::agent_quota::QuotaSnapshot;
 use alera_gpui_desktop::agent_status_notifications::{
-    enabled_notice_sessions, validated_notice_target, AgentNotice, AgentNotificationDelivery,
-    AgentNotificationPolicy,
+    enabled_notice_sessions, validated_notice_pane_target, validated_notice_target, AgentNotice,
+    AgentNotificationDelivery, AgentNotificationPolicy,
 };
 #[cfg(windows)]
 use alera_gpui_desktop::agent_windows_notifications::WindowsAgentToastPresenter;
@@ -9348,16 +9348,13 @@ impl Workbench {
             self.select_terminal(notice.session_id.clone(), cx);
             self.sync_mixed_tabs(cx);
         }
-        let target = self.mixed_tabs.entries().iter().find_map(|tab| {
-            let WorkbenchTabIdentity::Host(host) = &tab.identity else {
-                return None;
-            };
-            (host.handle == notice.session_id
-                && host.workspace_id() == notice.workspace_id
-                && host.tab_id() == notice.tab_id)
-                .then(|| tab.identity.clone())
-        });
-        if let Some(id) = target {
+        let target = validated_notice_pane_target(
+            &notice,
+            &self.terminals.sessions,
+            &self.mixed_tabs,
+            &self.mixed_panes,
+        );
+        if let Some((id, _pane)) = target {
             self.focus_mixed_tab(&id, window, cx);
         } else {
             self.terminals.status = "Agent Host tab is no longer available".into();
