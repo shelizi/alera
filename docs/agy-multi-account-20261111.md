@@ -37,7 +37,14 @@ Codex/Claude groups.
 Current verification: `flutter test --no-pub
 test/unit/agy_account_registration_controller_test.dart` passed (1/1).
 `cargo check --offline --bin alera-gpui-desktop` passed (Windows native,
-exit 0). Rust CLI tests and two-account live sign-in are separate gates.
+exit 0). `cargo check --offline -p alera-cli --bin alera` also passed
+(Windows, exit 0). Two-account live sign-in remains a separate gate.
+
+Additional regression tests were added for the versioned account CLI
+(reject legacy Host responses, invalid and duplicate labels, metadata-only
+removal), Native GPUI capability validation/offline behavior, and two-client
+Host revision conflict. These Rust test cases are not yet individually
+executed; the Rust CLI binary and Native GPUI pass compilation/type checking.
 
 The next incremental step registers **pending** AGY account labels and stable
 non-default account IDs in `RuntimeAgentQuotaSettings.agyProfiles`. IDs are
