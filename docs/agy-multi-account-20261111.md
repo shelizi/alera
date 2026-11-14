@@ -44,6 +44,13 @@ cross-account native Resume, or a completed A1 credential-isolation backend.
   EOF normalizer and targeted Dart formatting succeeded. Unrelated output
   deletions caused by the build filter were individually restored from HEAD.
 - `rustfmt --edition 2021 --check`: passed for modified Rust files.
+- `flutter test test/unit/agent_history_sync_settings_test.dart`:
+  passed (6/6), including pending AGY account model roundtrip.
+- `flutter test --no-pub test/widget/agy_quota_profiles_control_test.dart`:
+  passed (1/1), including invalid IDs and explicit registration-only warning.
+- `cargo test --offline -p alera-cli agy_registered_account_is_unavailable_without_touching_default_keyring`:
+  targeted unit test passed (1/1), but the overall Cargo command reached its
+  process deadline while traversing unrelated integration-test executables.
 - The Host/CLI test suite, Classic/GPUI UI compilation and two-account live
   sign-in are separate validation gates; never interpret the metadata-only
   registration as an authenticated account.
