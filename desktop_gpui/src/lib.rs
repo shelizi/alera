@@ -43,6 +43,7 @@ pub mod native_shortcut_catalog;
 #[cfg(windows)]
 pub mod native_toast_activation;
 pub mod project_search;
+pub mod project_settings_preview;
 pub mod project_tree;
 pub mod runtime_bridge;
 pub mod runtime_catalog;

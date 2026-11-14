@@ -476,6 +476,7 @@ pub fn settings_row_support(section: &str, title: &str) -> SettingsRowSupport {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsOperationalAction {
     ManageProjects,
+    ViewHostProjectSettings,
     OpenQuotaOverview,
     SearchNativeKeyboardShortcuts,
     RefreshHostAgentProfiles,
@@ -487,6 +488,9 @@ pub fn settings_operational_action(
 ) -> Option<SettingsOperationalAction> {
     match (section, title) {
         ("projects", "Projects") => Some(SettingsOperationalAction::ManageProjects),
+        ("projects", "Project Settings") => {
+            Some(SettingsOperationalAction::ViewHostProjectSettings)
+        }
         ("quotas", "Provider Quotas") => Some(SettingsOperationalAction::OpenQuotaOverview),
         ("keyboard", "Search shortcuts") => {
             Some(SettingsOperationalAction::SearchNativeKeyboardShortcuts)

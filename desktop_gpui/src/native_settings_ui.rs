@@ -66,6 +66,88 @@ impl Workbench {
         });
     }
 
+    /// Read the selected project's actual Classic Runtime Host config.
+    /// Never open a shadow JSON editor or expose setup shell commands in a
+    /// generic Settings search preview.
+    pub(super) fn refresh_host_project_settings(&mut self, cx: &mut Context<Self>) {
+        if self.project_settings_loading {
+            return;
+        }
+        let Some(project_id) = self.runtime_catalog.as_ref().and_then(|catalog| {
+            alera_gpui_desktop::project_settings_preview::project_id_for_workspace(
+                catalog,
+                self.model.root(),
+            )
+            .map(str::to_owned)
+        }) else {
+            self.project_settings_project_id = None;
+            self.project_settings_rows.clear();
+            self.project_settings_error = Some(
+                "This workspace is not in the current Host project catalog. Refresh Projects."
+                    .to_owned(),
+            );
+            cx.notify();
+            return;
+        };
+        let Some(bridge) = self.runtime_bridge.clone() else {
+            self.project_settings_error = Some("Runtime Host CLI unavailable".to_owned());
+            cx.notify();
+            return;
+        };
+        self.project_settings_loading = true;
+        self.project_settings_error = None;
+        self.project_settings_request = self.project_settings_request.wrapping_add(1);
+        let request = self.project_settings_request;
+        let generation = self.workspace_generation;
+        cx.spawn(async move |view, cx| {
+            let project = project_id.clone();
+            let result = cx
+                .background_spawn(async move { bridge.read_project_settings(&project) })
+                .await;
+            view.update(cx, |view, cx| {
+                if view.project_settings_request != request {
+                    return;
+                }
+                if view.workspace_generation != generation {
+                    view.project_settings_loading = false;
+                    view.project_settings_project_id = None;
+                    view.project_settings_rows.clear();
+                    view.project_settings_error = Some(
+                        "Workspace changed; refresh Project Settings".to_owned(),
+                    );
+                    cx.notify();
+                    return;
+                }
+                view.project_settings_loading = false;
+                match result {
+                    Ok(value) => {
+                        match alera_gpui_desktop::project_settings_preview::project_settings_summary(&value) {
+                            Ok(rows) => {
+                                view.project_settings_rows = rows;
+                                view.project_settings_project_id = Some(project_id);
+                                view.project_settings_error = None;
+                            }
+                            Err(error) => {
+                                view.project_settings_rows.clear();
+                                view.project_settings_project_id = None;
+                                view.project_settings_error = Some(error.to_owned());
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        view.project_settings_rows.clear();
+                        view.project_settings_project_id = None;
+                        view.project_settings_error = Some(format!(
+                            "Host Project Settings unavailable: {error}"
+                        ));
+                    }
+                }
+                cx.notify();
+            }).ok();
+        }).detach();
+        cx.notify();
+    }
+
     pub(super) fn show_native_settings_section(
         &mut self,
         section: &str,
@@ -94,6 +176,7 @@ impl Workbench {
             "agents" => self.refresh_terminals(cx),
             "historySync" => self.refresh_shared_history_sync(cx),
             "agentProfiles" => self.refresh_agent_profiles(cx),
+            "projects" => self.refresh_host_project_settings(cx),
             _ => {}
         }
         cx.notify();

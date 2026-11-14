@@ -142,6 +142,109 @@ impl Workbench {
             .into_any_element()
     }
 
+    /// Only the effective, registered Host ProjectConfig is summarized here.
+    /// Worktree setup commands and prompt bodies are counted, not displayed,
+    /// because a search preview must not reveal potential secret values.
+    fn render_host_project_settings(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let project = self.runtime_catalog.as_ref().and_then(|catalog| {
+            let id = alera_gpui_desktop::project_settings_preview::project_id_for_workspace(
+                catalog,
+                self.model.root(),
+            )?;
+            catalog.projects.iter().find(|project| project.id == id)
+        });
+        let project_id = project.map(|project| project.id.as_str());
+        let project_name = project
+            .map(|project| project.name.clone())
+            .unwrap_or_else(|| "No registered Host project for this workspace".to_owned());
+        let loaded = project_id.is_some()
+            && self.project_settings_project_id.as_deref() == project_id
+            && !self.project_settings_loading
+            && self.project_settings_error.is_none();
+        let rows = if loaded {
+            self.project_settings_rows.clone()
+        } else {
+            Vec::new()
+        };
+        let status = if self.project_settings_loading {
+            "Loading Host ProjectConfig…".to_owned()
+        } else if let Some(error) = self.project_settings_error.as_deref() {
+            error.to_owned()
+        } else if loaded {
+            "Read-only summary from Runtime Host; edit fields in Classic until Native has a safe form."
+                .to_owned()
+        } else {
+            "Refresh to inspect this registered project's actual configuration.".to_owned()
+        };
+        div()
+            .p_3()
+            .bg(rgb(PANEL))
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_3()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .text_color(rgb(TEXT))
+                                    .child("Project Settings"),
+                            )
+                            .child(div().text_xs().text_color(rgb(MUTED)).child(project_name)),
+                    )
+                    .child(
+                        native_components::action_button(
+                            "native-settings-host-project-config-refresh",
+                            if self.project_settings_loading { "Loading…" } else if project.is_none() {
+                                "Refresh Projects"
+                            } else {
+                                "Refresh Config"
+                            },
+                            false,
+                            false,
+                        )
+                        .on_click(cx.listener(|view, _, _, cx| {
+                            if view.project_settings_loading {
+                                return;
+                            }
+                            if view.runtime_catalog.as_ref().and_then(|catalog| {
+                                alera_gpui_desktop::project_settings_preview::project_id_for_workspace(
+                                    catalog, view.model.root(),
+                                )
+                            }).is_none() {
+                                view.refresh_project_tree(cx);
+                            } else {
+                                view.refresh_host_project_settings(cx);
+                            }
+                        })),
+                    ),
+            )
+            .child(div().text_xs().text_color(rgb(MUTED)).child(status))
+            .children(rows.into_iter().enumerate().map(|(i, (name, value))| {
+                div()
+                    .id(("native-host-project-config-row", i))
+                    .flex()
+                    .justify_between()
+                    .gap_3()
+                    .p_2()
+                    .border_b_1()
+                    .border_color(rgb(BORDER))
+                    .child(div().text_xs().text_color(rgb(TEXT)).child(name))
+                    .child(div().text_xs().text_color(rgb(MUTED)).child(value))
+            }))
+            .into_any_element()
+    }
+
     fn render_project_management_setting(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         div()
             .p_3()
@@ -653,6 +756,9 @@ impl Workbench {
         match settings_operational_action(section, row.title) {
             Some(SettingsOperationalAction::ManageProjects) => {
                 return Some(self.render_project_management_setting(cx));
+            }
+            Some(SettingsOperationalAction::ViewHostProjectSettings) => {
+                return Some(self.render_host_project_settings(cx));
             }
             Some(SettingsOperationalAction::OpenQuotaOverview) => {
                 return Some(self.render_provider_quotas_setting(cx));
