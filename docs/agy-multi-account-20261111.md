@@ -74,7 +74,7 @@ cross-account native Resume, or a completed A1 credential-isolation backend.
 ### Verification ledger for this feature worktree
 
 - `cargo test --offline -p alera-core --features runtime agy_accounts_are_optional_non_secret_metadata_and_normalize_unique_ids`:
-  passed (1/1) before the alias character-count normalization adjustment.
+  passed (1/1), including the final account ID/name deduplication rules.
 - `dart run build_runner build --build-filter=lib/src/features/settings/domain/alera_settings.mapper.dart`:
   passed, produced the AGY profile and Host settings mapping. The generated
   EOF normalizer and targeted Dart formatting succeeded. Unrelated output
