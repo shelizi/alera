@@ -200,4 +200,57 @@ mod tests {
             "batch grouped, not 2 separate toasts"
         );
     }
+    /// Opt-in only: tests a real Windows notification, but never starts a
+    /// Runtime Host, changes Hooks or emits a real Agent status.
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "Requires interactive Windows desktop, registered Native AUMID, and manual Toast click"]
+    fn h03_winrt_smoke_toast_show_and_activation_for_isolated_agent() {
+        assert_eq!(
+            std::env::var("ALERA_GPUI_AGENT_TOAST_SMOKE").as_deref(),
+            Ok("1"),
+            "opt in explicitly; this test displays a synthetic Windows Toast"
+        );
+        // The real Native app calls this before starting GPUI. A cargo test
+        // harness must explicitly assume the same AppUserModelID; otherwise
+        // CreateToastNotifierWithId can return success without OS delivery.
+        #[link(name = "shell32")]
+        extern "system" {
+            fn SetCurrentProcessExplicitAppUserModelID(app_id: *const u16) -> i32;
+        }
+        let app_id = crate::edition::NATIVE_WINDOWS_APP_ID
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect::<Vec<_>>();
+        let hr = unsafe { SetCurrentProcessExplicitAppUserModelID(app_id.as_ptr()) };
+        assert!(
+            hr >= 0,
+            "Windows Native test AppUserModelID setup failed: {hr:#x}"
+        );
+
+        let notice = AgentNotice {
+            session_id: "h03-isolated-session".into(),
+            workspace_id: "h03-isolated-workspace".into(),
+            tab_id: "h03-isolated-tab".into(),
+            agent_type: "H03 test Agent".into(),
+            state: AgentActivityState::Waiting,
+        };
+        let mut presenter = WindowsAgentToastPresenter::new();
+        presenter.show(&[notice.clone()]).expect(
+            "WinRT Toast show requires a registered Native AUMID and Windows notification permission",
+        );
+        eprintln!("H03 test: click the synthetic Windows Toast within 45 seconds");
+        let start = std::time::Instant::now();
+        while start.elapsed() < std::time::Duration::from_secs(45) {
+            if let Some(activated) = presenter.take_activation() {
+                assert_eq!(
+                    activated, notice,
+                    "the Toast callback must preserve exact in-process Agent identity"
+                );
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(250));
+        }
+        panic!("WinRT reported Toast.show success but no activation callback was received");
+    }
 }
