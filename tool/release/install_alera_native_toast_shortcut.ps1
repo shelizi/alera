@@ -17,6 +17,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $appId = 'dev.leynier.alera.native'
+$activatorClsid = [guid]'{9C44E5C2-8303-4570-A80A-A78B41F532BD}'
 $startMenuShortcut = Join-Path ([Environment]::GetFolderPath('StartMenu')) 'Programs\Alera Native Preview.lnk'
 
 # The standard WScript shortcut API cannot store System.AppUserModel.ID.
@@ -109,10 +110,16 @@ namespace AleraNativeToastShortcut
                 new Guid("9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3"), 5);
         }
 
+        static PropertyKey ToastActivatorKey()
+        {
+            return new PropertyKey(
+                new Guid("9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3"), 26);
+        }
+
         [DllImport("ole32.dll")]
         static extern int PropVariantClear(ref PropVariant variant);
 
-        public static void Create(string path, string executable, string appId)
+        public static void Create(string path, string executable, string appId, string activatorClsid)
         {
             object com = new ShellLinkClass();
             try
@@ -126,16 +133,23 @@ namespace AleraNativeToastShortcut
                 PropVariant value = new PropVariant();
                 value.VarType = 31; // VT_LPWSTR
                 value.StringValue = Marshal.StringToCoTaskMemUni(appId);
+                PropertyKey toastKey = ToastActivatorKey();
+                PropVariant toastValue = new PropVariant();
+                toastValue.VarType = 72; // VT_CLSID
+                toastValue.StringValue = Marshal.AllocCoTaskMem(16);
+                Marshal.StructureToPtr(new Guid(activatorClsid), toastValue.StringValue, false);
                 try
                 {
                     store.SetValue(ref key, ref value);
+                    store.SetValue(ref toastKey, ref toastValue);
                     store.Commit();
-                    // Keep the PROPVARIANT alive until the .lnk is persisted.
+                    // Keep both PROPVARIANT buffers alive through ShellLink Save.
                     ((IPersistFile)com).Save(path, true);
                 }
                 finally
                 {
                     Marshal.FreeCoTaskMem(value.StringValue);
+                    Marshal.FreeCoTaskMem(toastValue.StringValue);
                 }
             }
             finally
@@ -171,6 +185,33 @@ namespace AleraNativeToastShortcut
                 Marshal.ReleaseComObject(com);
             }
         }
+
+        public static Guid? ReadActivatorClsid(string shortcut)
+        {
+            object com = new ShellLinkClass();
+            try
+            {
+                ((IPersistFile)com).Load(shortcut, 0);
+                IPropertyStore store = (IPropertyStore)com;
+                PropertyKey key = ToastActivatorKey();
+                PropVariant value;
+                store.GetValue(ref key, out value);
+                try
+                {
+                    if (value.VarType != 72 || value.StringValue == IntPtr.Zero)
+                        return null;
+                    return (Guid)Marshal.PtrToStructure(value.StringValue, typeof(Guid));
+                }
+                finally
+                {
+                    PropVariantClear(ref value);
+                }
+            }
+            finally
+            {
+                Marshal.ReleaseComObject(com);
+            }
+        }
     }
 }
 '@ -ErrorAction Stop
@@ -178,11 +219,35 @@ namespace AleraNativeToastShortcut
 function Get-VerifiedNativeShortcut([string]$Path) {
     if (-not [IO.File]::Exists($Path)) { return $false }
     $actual = [AleraNativeToastShortcut.NativeShortcut]::ReadAppId($Path)
-    return [string]::Equals($actual, $appId, [StringComparison]::Ordinal)
+    $actualClsid = [AleraNativeToastShortcut.NativeShortcut]::ReadActivatorClsid($Path)
+    return [string]::Equals($actual, $appId, [StringComparison]::Ordinal) -and
+        $actualClsid -eq $activatorClsid
+}
+
+$comClassRoot = Join-Path 'HKCU:\Software\Classes\CLSID' $activatorClsid.ToString('B')
+$comServerKey = Join-Path $comClassRoot 'LocalServer32'
+
+function Get-NativeShortcutTarget([string]$Path) {
+    $shell = New-Object -ComObject WScript.Shell
+    try {
+        return $shell.CreateShortcut($Path).TargetPath
+    } finally {
+        [Runtime.InteropServices.Marshal]::ReleaseComObject($shell) | Out-Null
+    }
+}
+
+function Get-VerifiedNativeServer([string]$ExpectedExe) {
+    if (-not $ExpectedExe -or -not (Test-Path -LiteralPath $comServerKey)) {
+        return $false
+    }
+    $actual = (Get-Item -LiteralPath $comServerKey -ErrorAction Stop).GetValue('')
+    $expected = '"' + [IO.Path]::GetFullPath($ExpectedExe) + '"'
+    return [string]::Equals($actual, $expected, [StringComparison]::OrdinalIgnoreCase)
 }
 
 if ($Mode -eq 'Check') {
-    if (Get-VerifiedNativeShortcut $startMenuShortcut) {
+    if ((Get-VerifiedNativeShortcut $startMenuShortcut) -and
+        (Get-VerifiedNativeServer (Get-NativeShortcutTarget $startMenuShortcut))) {
         Write-Output "NATIVE_TOAST_SHORTCUT=registered:$startMenuShortcut"
     } else {
         Write-Output "NATIVE_TOAST_SHORTCUT=missing_or_not_native:$startMenuShortcut"
@@ -195,6 +260,11 @@ if ($Mode -eq 'Uninstall') {
     if (-not (Get-VerifiedNativeShortcut $startMenuShortcut)) {
         throw 'Refusing to remove an unowned or missing Start Menu shortcut'
     }
+    $targetExe = Get-NativeShortcutTarget $startMenuShortcut
+    if (-not (Get-VerifiedNativeServer $targetExe)) {
+        throw 'Refusing to remove an unowned or missing Native COM LocalServer32'
+    }
+    Remove-Item -LiteralPath $comClassRoot -Recurse -Force -ErrorAction Stop
     Remove-Item -LiteralPath $startMenuShortcut -Force -ErrorAction Stop
     Write-Output "NATIVE_TOAST_SHORTCUT=removed:$startMenuShortcut"
     exit 0
@@ -222,6 +292,9 @@ if ([IO.Path]::GetFileName($resolvedExe) -notin @('AleraNative.exe', 'alera-gpui
     throw 'Refusing to register a non-Native executable under the Native app identity'
 }
 if ($Mode -eq 'Install') {
+    if (Test-Path -LiteralPath $comClassRoot) {
+        throw "Refusing existing COM CLSID registration: $comClassRoot"
+    }
     $target = $startMenuShortcut
 } else {
     if (-not [IO.Path]::IsPathRooted($ShortcutPath)) {
@@ -240,15 +313,31 @@ $parent = [IO.Path]::GetDirectoryName($target)
 if (-not [IO.Directory]::Exists($parent)) {
     throw "Target directory is missing; refusing to create OS folders: $parent"
 }
+$createdRegistry = $false
 try {
-    [AleraNativeToastShortcut.NativeShortcut]::Create($target, $resolvedExe, $appId)
+    [AleraNativeToastShortcut.NativeShortcut]::Create($target, $resolvedExe, $appId, $activatorClsid.ToString('B'))
     if (-not (Get-VerifiedNativeShortcut $target)) {
-        throw 'Shortcut AppUserModelID read-back mismatch'
+        throw 'Shortcut AppUserModelID or ToastActivatorCLSID read-back mismatch'
+    }
+    if ($Mode -eq 'Install') {
+        # Never overwrite another COM class, including Classic's registry data.
+        if (Test-Path -LiteralPath $comClassRoot) {
+            throw "Refusing existing COM CLSID registration: $comClassRoot"
+        }
+        New-Item -Path $comClassRoot -ErrorAction Stop | Out-Null
+        $createdRegistry = $true
+        New-Item -Path $comServerKey -ErrorAction Stop | Out-Null
+        Set-Item -LiteralPath $comServerKey -Value ('"' + $resolvedExe + '"') -ErrorAction Stop
+        if (-not (Get-VerifiedNativeServer $resolvedExe)) {
+            throw 'COM LocalServer32 target read-back mismatch'
+        }
     }
     Write-Output "NATIVE_TOAST_SHORTCUT=registered:$target"
 } catch {
-    # Only remove the file created in this call, never overwrite/delete a
-    # pre-existing shortcut or any Classic registration.
+    if ($createdRegistry -and (Test-Path -LiteralPath $comClassRoot)) {
+        Remove-Item -LiteralPath $comClassRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    # Only remove a file created in this call; never touch any Classic shortcut.
     if ([IO.File]::Exists($target)) {
         Remove-Item -LiteralPath $target -Force -ErrorAction SilentlyContinue
     }

@@ -25,6 +25,13 @@ fn escape_xml_text(text: &str) -> String {
 /// Toast XML. Activation uses an in-process callback bound to a typed notice.
 /// Native is a separate AUMID; never register Classic's icon/notification ID.
 pub fn build_windows_toast_xml(notices: &[AgentNotice]) -> Option<String> {
+    build_windows_toast_xml_with_launch(notices, None)
+}
+
+fn build_windows_toast_xml_with_launch(
+    notices: &[AgentNotice],
+    launch_token: Option<&str>,
+) -> Option<String> {
     if notices.is_empty() || notices.len() > 128 {
         return None;
     }
@@ -60,8 +67,21 @@ pub fn build_windows_toast_xml(notices: &[AgentNotice]) -> Option<String> {
         };
         format!("{} {status}", notice.agent_type)
     };
+    let launch = match launch_token {
+        Some(token)
+            if token.len() == "alera-native:".len() + 32
+                && token.starts_with("alera-native:")
+                && token["alera-native:".len()..]
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit()) =>
+        {
+            format!(" launch=\"{token}\"")
+        }
+        Some(_) => return None,
+        None => String::new(),
+    };
     Some(format!(
-        "<toast duration=\"short\"><visual><binding template=\"ToastGeneric\"><text>{}</text><text>{}</text></binding></visual></toast>",
+        "<toast{launch} duration=\"short\"><visual><binding template=\"ToastGeneric\"><text>{}</text><text>{}</text></binding></visual></toast>",
         escape_xml_text(&title), escape_xml_text(&body)
     ))
 }
@@ -74,28 +94,48 @@ mod windows_toast {
     use windows::core::{IInspectable, HSTRING};
     use windows::Data::Xml::Dom::XmlDocument;
     use windows::Foundation::TypedEventHandler;
-    use windows::UI::Notifications::{ToastNotification, ToastNotificationManager};
+    use windows::UI::Notifications::{
+        NotificationSetting, ToastFailedEventArgs, ToastNotification, ToastNotificationManager,
+    };
 
     /// The UI thread holds this presenter while open; the WinRT activation
     /// callback sends only the typed, identity-checked Host location.
     pub struct WindowsAgentToastPresenter {
         activation_tx: Sender<AgentNotice>,
         activation_rx: Receiver<AgentNotice>,
+        failure_tx: Sender<String>,
+        failure_rx: Receiver<String>,
+        activation_tokens: VecDeque<(String, AgentNotice)>,
         live_toasts: VecDeque<ToastNotification>,
     }
 
     impl WindowsAgentToastPresenter {
         pub fn new() -> Self {
             let (activation_tx, activation_rx) = mpsc::channel();
+            let (failure_tx, failure_rx) = mpsc::channel();
             Self {
                 activation_tx,
                 activation_rx,
+                failure_tx,
+                failure_rx,
+                activation_tokens: VecDeque::new(),
                 live_toasts: VecDeque::new(),
             }
         }
 
         pub fn show(&mut self, notices: &[AgentNotice]) -> Result<(), String> {
-            let xml = build_windows_toast_xml(notices).ok_or("Invalid attention notice")?;
+            // A randomly generated per-toast key is all Windows sees. Never
+            // serialize raw Host session/workspace/tab identities in XML.
+            let launch_token = if notices.len() == 1 {
+                Some(
+                    crate::native_toast_activation::new_token()
+                        .map_err(|error| format!("Native notice token: {error}"))?,
+                )
+            } else {
+                None
+            };
+            let xml = build_windows_toast_xml_with_launch(notices, launch_token.as_deref())
+                .ok_or("Invalid attention notice")?;
             let doc = XmlDocument::new().map_err(|error| format!("Toast XML: {error}"))?;
             doc.LoadXml(&HSTRING::from(xml))
                 .map_err(|error| format!("Toast markup: {error}"))?;
@@ -115,6 +155,21 @@ mod windows_toast {
                     .Activated(&on_click)
                     .map_err(|error| format!("Toast activation: {error}"))?;
             }
+            let failure_sender = self.failure_tx.clone();
+            let on_failure = TypedEventHandler::<ToastNotification, ToastFailedEventArgs>::new(
+                move |_, args| {
+                    let code = args
+                        .as_ref()
+                        .and_then(|event| event.ErrorCode().ok())
+                        .map(|value| format!("{value:?}"))
+                        .unwrap_or_else(|| "unknown toast error".to_owned());
+                    let _ = failure_sender.send(code);
+                    Ok(())
+                },
+            );
+            toast
+                .Failed(&on_failure)
+                .map_err(|error| format!("Toast failure callback: {error}"))?;
             // A separate Native AUMID prevents writing to Classic's
             // notification history; Windows may still require a registered
             // Start Menu shortcut, which is an explicit H5 acceptance gate.
@@ -122,18 +177,61 @@ mod windows_toast {
                 crate::edition::NATIVE_WINDOWS_APP_ID,
             ))
             .map_err(|error| format!("Native toast identity: {error}"))?;
+            let setting = notifier
+                .Setting()
+                .map_err(|error| format!("Windows notification setting: {error}"))?;
+            if setting != NotificationSetting::Enabled {
+                return Err(format!("Windows blocked Native notifications: {setting:?}"));
+            }
             notifier
                 .Show(&toast)
                 .map_err(|error| format!("Windows toast display: {error}"))?;
+            if let Some(token) = launch_token {
+                self.activation_tokens
+                    .push_back((token, notices[0].clone()));
+            }
             self.live_toasts.push_back(toast);
             while self.live_toasts.len() > 16 {
                 self.live_toasts.pop_front();
             }
+            while self.activation_tokens.len() > 16 {
+                self.activation_tokens.pop_front();
+            }
             Ok(())
         }
 
-        pub fn take_activation(&self) -> Option<AgentNotice> {
-            self.activation_rx.try_recv().ok()
+        pub fn take_activation(&mut self) -> Option<AgentNotice> {
+            if let Ok(notice) = self.activation_rx.try_recv() {
+                self.activation_tokens.retain(|(_, existing)| {
+                    existing.session_id != notice.session_id
+                        || existing.workspace_id != notice.workspace_id
+                        || existing.tab_id != notice.tab_id
+                        || existing.agent_type != notice.agent_type
+                });
+                return Some(notice);
+            }
+            // Action Center calls the COM server, often *after* the popup
+            // disappears. Tokens from another process/old app session cannot
+            // resolve into a live Host identity and are simply discarded.
+            while let Some(token) = crate::native_toast_activation::take_token() {
+                if let Some(index) = self
+                    .activation_tokens
+                    .iter()
+                    .position(|(existing, _)| existing == &token)
+                {
+                    return self
+                        .activation_tokens
+                        .remove(index)
+                        .map(|(_, notice)| notice);
+                }
+            }
+            None
+        }
+
+        /// WinRT may reject a toast asynchronously after Show() returned Ok.
+        /// Report only the OS error code, never Host identifiers or prompt text.
+        pub fn take_failure(&self) -> Option<String> {
+            self.failure_rx.try_recv().ok()
         }
     }
 }
@@ -200,6 +298,22 @@ mod tests {
             "batch grouped, not 2 separate toasts"
         );
     }
+    #[test]
+    fn h03_toast_launch_contains_only_random_token_and_no_host_identity() {
+        let notes = vec![AgentNotice {
+            session_id: "h03-secret-session".into(),
+            workspace_id: "h03-secret-workspace".into(),
+            tab_id: "h03-secret-tab".into(),
+            agent_type: "codex".into(),
+            state: AgentActivityState::Waiting,
+        }];
+        let token = "alera-native:0123456789abcdef0123456789abcdef";
+        let xml = build_windows_toast_xml_with_launch(&notes, Some(token)).expect("safe launch");
+        assert!(xml.contains(&format!("launch=\"{token}\"")));
+        assert!(!xml.contains("h03-secret"));
+        assert!(build_windows_toast_xml_with_launch(&notes, Some("host:sensitive")).is_none());
+    }
+
     /// Opt-in only: tests a real Windows notification, but never starts a
     /// Runtime Host, changes Hooks or emits a real Agent status.
     #[cfg(windows)]
@@ -227,6 +341,8 @@ mod tests {
             hr >= 0,
             "Windows Native test AppUserModelID setup failed: {hr:#x}"
         );
+        let _server = crate::native_toast_activation::NativeToastComRegistration::register()
+            .expect("Native COM class factory registration for isolated smoke");
 
         let notice = AgentNotice {
             session_id: "h03-isolated-session".into(),
@@ -235,13 +351,35 @@ mod tests {
             agent_type: "H03 test Agent".into(),
             state: AgentActivityState::Waiting,
         };
+        // Read the OS's authoritative notification gate before attempting to
+        // deliver: Toast.Show() may succeed even if banners are suppressed.
+        let notifier =
+            windows::UI::Notifications::ToastNotificationManager::CreateToastNotifierWithId(
+                &windows::core::HSTRING::from(crate::edition::NATIVE_WINDOWS_APP_ID),
+            )
+            .expect("H03 notifier");
+        eprintln!(
+            "H03 OS notification setting: {:?}",
+            notifier.Setting().expect("H03 setting")
+        );
         let mut presenter = WindowsAgentToastPresenter::new();
         presenter.show(&[notice.clone()]).expect(
             "WinRT Toast show requires a registered Native AUMID and Windows notification permission",
         );
+        let history = windows::UI::Notifications::ToastNotificationManager::History()
+            .and_then(|history| {
+                history.GetHistoryWithId(&windows::core::HSTRING::from(
+                    crate::edition::NATIVE_WINDOWS_APP_ID,
+                ))
+            })
+            .and_then(|entries| entries.Size());
+        eprintln!("H03 notification center history: {history:?}");
         eprintln!("H03 test: click the synthetic Windows Toast within 45 seconds");
         let start = std::time::Instant::now();
         while start.elapsed() < std::time::Duration::from_secs(45) {
+            if let Some(error) = presenter.take_failure() {
+                panic!("Windows reported asynchronous Toast.Failed: {error}");
+            }
             if let Some(activated) = presenter.take_activation() {
                 assert_eq!(
                     activated, notice,

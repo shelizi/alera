@@ -39,6 +39,8 @@ pub mod model;
 pub mod native_i18n;
 pub mod native_modal;
 pub mod native_settings;
+#[cfg(windows)]
+pub mod native_toast_activation;
 pub mod project_search;
 pub mod project_tree;
 pub mod runtime_bridge;

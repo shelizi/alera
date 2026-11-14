@@ -9307,6 +9307,13 @@ impl Workbench {
                 cx.notify();
             }
         }
+        // Toast.Show() can succeed before Windows reports an asynchronous
+        // delivery error. Never silently present that as a delivered notice.
+        #[cfg(windows)]
+        if let Some(error) = self.agent_windows_toast.take_failure() {
+            self.agent_status = format!("Windows Agent notice failed: {error}");
+            cx.notify();
+        }
         #[cfg(windows)]
         if let Some(clicked) = self.agent_windows_toast.take_activation() {
             self.agent_toast_activation = Some(clicked);
@@ -14240,9 +14247,26 @@ fn install_native_windows_app_identity() {
 fn main() {
     #[cfg(windows)]
     install_native_windows_app_identity();
+    // Only this process registers its ephemeral class factory. Persistent
+    // registry/Start Menu registration remains an explicit Native-only action.
+    #[cfg(windows)]
+    let _native_toast_com =
+        match alera_gpui_desktop::native_toast_activation::NativeToastComRegistration::register() {
+            Ok(registration) => Some(registration),
+            Err(error) => {
+                eprintln!("Alera Native: Windows toast COM activation unavailable: {error}");
+                None
+            }
+        };
     let session_store = PreviewSessionStore::platform_default();
+    // Windows COM LocalServer32 may launch with -Embedding instead of a
+    // workspace argument. It must not be opened as a relative project path.
     let root = std::env::args_os()
-        .nth(1)
+        .skip(1)
+        .find(|argument| {
+            let arg = argument.to_string_lossy();
+            !arg.eq_ignore_ascii_case("-Embedding") && !arg.eq_ignore_ascii_case("/Embedding")
+        })
         .map(std::path::PathBuf::from)
         .or_else(|| {
             session_store.as_ref().and_then(|store| {
