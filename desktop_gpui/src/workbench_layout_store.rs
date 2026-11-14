@@ -125,10 +125,14 @@ pub struct SavedWorkbenchLayoutV1 {
     pub primary_active_editor: Option<String>,
     /// Active editor key of the secondary pane, if any.
     pub secondary_active_editor: Option<String>,
-    /// Optional file-backed Editor pin keys; Host PTY ids stay excluded.
+    /// Optional Editor pin keys, including recovered scratch identities.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pinned_editors: Vec<String>,
-    /// Inert Host placement hints; older V1 snapshots omit all four fields.
+    /// Inert Host pin hints. Never authorize an attach or a new PTY, and
+    /// only restore pins for currently verified live Host pane identities.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pinned_hosts: Vec<SavedWorkbenchHostTab>,
+    /// Inert Host placement hints; older V1 snapshots omit these fields.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub primary_hosts: Vec<SavedWorkbenchHostTab>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -208,6 +212,8 @@ impl SavedWorkbenchLayoutV1 {
         let primary_hosts = normalize_hosts(&self.primary_hosts);
         let mut secondary_hosts = normalize_hosts(&self.secondary_hosts);
         secondary_hosts.retain(|host| !primary_hosts.contains(host));
+        let mut pinned_hosts = normalize_hosts(&self.pinned_hosts);
+        pinned_hosts.retain(|host| primary_hosts.contains(host) || secondary_hosts.contains(host));
         let primary_active_host = self
             .primary_active_host
             .clone()
@@ -242,6 +248,7 @@ impl SavedWorkbenchLayoutV1 {
             primary_active_editor,
             secondary_active_editor,
             pinned_editors,
+            pinned_hosts,
             primary_hosts,
             secondary_hosts,
             primary_active_host,
@@ -317,6 +324,7 @@ mod tests {
             primary_active_editor: Some("editor:7:2".into()),
             secondary_active_editor: Some("editor:8:3".into()),
             pinned_editors: Vec::new(),
+            pinned_hosts: Vec::new(),
             primary_hosts: Vec::new(),
             secondary_hosts: Vec::new(),
             primary_active_host: None,
@@ -351,6 +359,45 @@ mod tests {
         assert!(older.primary_hosts.is_empty());
         assert!(older.secondary_hosts.is_empty());
         assert!(older.to_json().unwrap().contains("\"version\":1"));
+    }
+
+    #[test]
+    fn u04_host_pins_survive_restart_only_for_current_verified_pane_triples() {
+        let mut state = sample();
+        let live = SavedWorkbenchHostTab::new("pty-live", "ws-live", "tab-live");
+        let other = SavedWorkbenchHostTab::new("pty-other", "ws-live", "tab-other");
+        let expired = SavedWorkbenchHostTab::new("pty-old", "ws-live", "tab-old");
+        state.primary_hosts.push(live.clone());
+        state.secondary_hosts.push(other.clone());
+        state.pinned_hosts = vec![
+            live.clone(),
+            live.clone(),
+            other.clone(),
+            expired,
+            SavedWorkbenchHostTab::new("bad", "", "tab"),
+        ];
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("layout.json");
+        state.save_to_path(&path).unwrap();
+        let restored = SavedWorkbenchLayoutV1::load_from_path(&path)
+            .unwrap()
+            .unwrap();
+        assert_eq!(restored.pinned_hosts, vec![live.clone(), other.clone()]);
+
+        let mut closed = restored;
+        closed.primary_hosts.clear();
+        closed.save_to_path(&path).unwrap();
+        let no_stale_pins = SavedWorkbenchLayoutV1::load_from_path(&path)
+            .unwrap()
+            .unwrap();
+        assert_eq!(no_stale_pins.pinned_hosts, vec![other]);
+
+        let old_json = sample().to_json().unwrap();
+        assert!(!old_json.contains("pinned_hosts"));
+        assert!(SavedWorkbenchLayoutV1::from_json(&old_json)
+            .unwrap()
+            .pinned_hosts
+            .is_empty());
     }
 
     #[test]

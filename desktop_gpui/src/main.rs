@@ -8143,6 +8143,12 @@ impl Workbench {
                 .iter()
                 .filter_map(&key_for)
                 .collect(),
+            pinned_hosts: self
+                .mixed_tabs
+                .pinned()
+                .iter()
+                .filter_map(&host_for)
+                .collect(),
             primary_hosts: host_keys(PaneSlot::Primary),
             secondary_hosts: host_keys(PaneSlot::Secondary),
             primary_active_host: self
@@ -8305,11 +8311,43 @@ impl Workbench {
                 });
             }
         }
-        // Rehydrate only file-backed Editor pins after actual NativeEditor
-        // sessions have been installed/transferred. Host pins do not restore.
+        // Restore Editor pins only for tabs that actually exist in the
+        // recovered NativeEditor instances.
         for (id, key) in &keys {
             if saved.pinned_editors.contains(key) {
                 self.mixed_tabs.set_pinned(id, true);
+            }
+        }
+        // A Host pin is only a display preference. Validate all three
+        // identities against the currently authenticated and running Host
+        // inventory before pinning an already-visible preview; never use a
+        // saved hint to create or attach a PTY.
+        if !self.terminals.session_list_is_stale() {
+            for hint in &saved.pinned_hosts {
+                let verified = self.terminals.sessions.iter().any(|session| {
+                    session.running
+                        && session.handle == hint.handle
+                        && session.workspace_id == hint.workspace_id
+                        && session.tab_id == hint.tab_id
+                });
+                if !verified {
+                    continue;
+                }
+                let existing = self
+                    .mixed_panes
+                    .tabs_in(PaneSlot::Primary)
+                    .iter()
+                    .chain(self.mixed_panes.tabs_in(PaneSlot::Secondary).iter())
+                    .find(|id| {
+                        matches!(id, WorkbenchTabIdentity::Host(target)
+                            if target.handle == hint.handle
+                            && target.workspace_id() == hint.workspace_id
+                            && target.tab_id() == hint.tab_id)
+                    })
+                    .cloned();
+                if let Some(id) = existing {
+                    self.mixed_tabs.set_pinned(&id, true);
+                }
             }
         }
         for wanted in [
