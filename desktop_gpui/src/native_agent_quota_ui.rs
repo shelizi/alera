@@ -142,6 +142,7 @@ mod quota_ui_tests {
     fn status_bar_remaining_colors_follow_classic_thresholds_without_stale_green() {
         let mut reading = QuotaReading {
             label: "W".into(),
+            full_label: "Weekly".into(),
             value: "19%".into(),
             remaining_percent: Some(19.0),
             reset: None,
@@ -234,17 +235,16 @@ fn quota_pin_button_label(shared_host_supports_pins: bool, pinned: bool) -> &'st
     }
 }
 
-fn quota_reading_element(status: &str, reading: &QuotaReading) -> gpui::AnyElement {
+fn quota_reading_element(status: &str, reading: &QuotaReading, detailed: bool) -> gpui::AnyElement {
     div()
         .flex()
         .items_center()
         .gap_1()
-        .child(
-            div()
-                .text_xs()
-                .text_color(rgb(MUTED))
-                .child(reading.label.clone()),
-        )
+        .child(div().text_xs().text_color(rgb(MUTED)).child(if detailed {
+            reading.full_label.clone()
+        } else {
+            reading.label.clone()
+        }))
         .child(
             div()
                 .text_xs()
@@ -537,7 +537,7 @@ impl Workbench {
                 .children(
                     readings
                         .iter()
-                        .map(|reading| quota_reading_element(&snapshot.status, reading)),
+                        .map(|reading| quota_reading_element(&snapshot.status, reading, false)),
                 )
                 .when(snapshot.status != "ok", |chip| {
                     chip.child(
@@ -1184,7 +1184,7 @@ impl Workbench {
                                     .items_center()
                                     .gap_2()
                                     .children(readings.iter().map(|reading| {
-                                        quota_reading_element(&snapshot.status, reading)
+                                        quota_reading_element(&snapshot.status, reading, true)
                                     })),
                             )
                             .children(readings.into_iter().filter_map(|reading| {
@@ -1192,7 +1192,7 @@ impl Workbench {
                                     div()
                                         .text_xs()
                                         .text_color(rgb(MUTED))
-                                        .child(format!("{}: {}", reading.label, reset))
+                                        .child(format!("{}: {}", reading.full_label, reset))
                                 })
                             }))
                             .when(

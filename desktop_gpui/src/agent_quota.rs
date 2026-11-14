@@ -90,10 +90,55 @@ fn default_account() -> String {
 #[derive(Debug, Clone, PartialEq)]
 pub struct QuotaReading {
     pub label: String,
+    pub full_label: String,
     pub value: String,
     pub remaining_percent: Option<f64>,
     pub reset: Option<String>,
     pub order: i32,
+}
+
+/// Classic's quota hover card uses the Host's Unix-millisecond reset time
+/// in preference to an optional provider-supplied description. Format a
+/// compact relative duration rather than silently dropping the reset ETA.
+fn quota_reset_text(
+    resets_at: Option<i64>,
+    description: Option<&str>,
+    now_millis: i64,
+) -> Option<String> {
+    if let Some(resets_at) = resets_at {
+        let millis = resets_at.saturating_sub(now_millis);
+        if millis <= 0 {
+            return Some("Resets in <1m".to_owned());
+        }
+        let minutes = millis.saturating_add(59_999) / 60_000;
+        let days = minutes / 1_440;
+        let hours = (minutes % 1_440) / 60;
+        let minutes = minutes % 60;
+        let mut parts = Vec::with_capacity(3);
+        if days > 0 {
+            parts.push(format!("{days}d"));
+        }
+        if hours > 0 {
+            parts.push(format!("{hours}h"));
+        }
+        if minutes > 0 || parts.is_empty() {
+            parts.push(format!("{minutes}m"));
+        }
+        return Some(format!("Resets in {}", parts.join(" ")));
+    }
+    description
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+}
+
+fn unix_time_millis() -> i64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .and_then(|duration| i64::try_from(duration.as_millis()).ok())
+        .unwrap_or_default()
 }
 
 impl QuotaSnapshot {
@@ -141,6 +186,7 @@ impl QuotaSnapshot {
 
     pub fn readings(&self) -> Vec<QuotaReading> {
         let mut readings = Vec::new();
+        let now_millis = unix_time_millis();
         for metric in self.windows.iter().chain(self.buckets.iter()) {
             let remaining = metric
                 .used_percent
@@ -148,11 +194,16 @@ impl QuotaSnapshot {
                 .map(|v| (100.0 - v).clamp(0.0, 100.0));
             readings.push(QuotaReading {
                 label: short_label(&self.provider, &metric.label),
+                full_label: metric.label.clone(),
                 value: remaining
                     .map(|v| format!("{}%", v.round() as u32))
                     .unwrap_or_else(|| "-".into()),
                 remaining_percent: remaining,
-                reset: metric.reset_description.clone(),
+                reset: quota_reset_text(
+                    metric.resets_at,
+                    metric.reset_description.as_deref(),
+                    now_millis,
+                ),
                 order: reading_order(&self.provider, &metric.label),
             });
         }
@@ -170,9 +221,14 @@ impl QuotaSnapshot {
             };
             readings.push(QuotaReading {
                 label: short_label(&self.provider, &amount.label),
+                full_label: amount.label.clone(),
                 value,
                 remaining_percent: None,
-                reset: amount.reset_description.clone(),
+                reset: quota_reset_text(
+                    amount.resets_at,
+                    amount.reset_description.as_deref(),
+                    now_millis,
+                ),
                 order: 30,
             });
         }
@@ -468,6 +524,42 @@ pub fn mark_failed_quota_refresh(snapshots: &mut [QuotaSnapshot], account: Optio
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn u05_classic_reset_countdown_uses_host_timestamp_and_fallback_description() {
+        let now = 1_800_000_000_000_i64;
+        assert_eq!(
+            quota_reset_text(Some(now + 30_000), None, now).as_deref(),
+            Some("Resets in 1m")
+        );
+        assert_eq!(
+            quota_reset_text(Some(now + 3_600_000), None, now).as_deref(),
+            Some("Resets in 1h")
+        );
+        assert_eq!(
+            quota_reset_text(Some(now + 90_060_000), Some("wrong fallback"), now).as_deref(),
+            Some("Resets in 1d 1h 1m")
+        );
+        assert_eq!(
+            quota_reset_text(Some(now - 100), None, now).as_deref(),
+            Some("Resets in <1m")
+        );
+        assert_eq!(
+            quota_reset_text(None, Some("  resets tomorrow  "), now).as_deref(),
+            Some("resets tomorrow")
+        );
+        assert_eq!(quota_reset_text(None, Some("   "), now), None);
+        assert_eq!(quota_reset_text(None, None, now), None);
+        let values = parse_quota_snapshots(&json!({"snapshots":[{
+            "provider":"claude","status":"ok",
+            "windows":[{"label":"weekly","usedPercent":30,"resetsAt":1900000000000}]
+        }]}))
+        .unwrap();
+        assert!(values[0].readings()[0]
+            .reset
+            .as_ref()
+            .is_some_and(|text| text.starts_with("Resets in ")));
+    }
 
     #[test]
     fn u05_usage_summary_is_bounded_and_cannot_inject_provider_metadata() {
