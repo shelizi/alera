@@ -41,6 +41,7 @@ mod orchestration_command_summaries;
 mod orchestration_commands;
 mod orchestration_delegate;
 mod orchestration_terminal_commands;
+mod project_config_input;
 mod project_config_toml;
 mod project_management;
 #[cfg(windows)]
@@ -491,11 +492,18 @@ async fn run_project_command(command: ProjectCommand) -> i32 {
             }
         }
         ProjectAction::ConfigSet(args) => {
-            if args.config_json.len() > 32 * 1024 {
-                return print_error("Project config JSON exceeds 32 KiB.");
-            }
+            // Native uses --config-json - and pipes the full JSON through
+            // stdin: setup commands and prompts never appear in process argv.
+            // The legacy inline JSON spelling stays compatible with Classic.
+            let config_json = match project_config_input::decode_project_config_json(
+                &args.config_json,
+                std::io::stdin().lock(),
+            ) {
+                Ok(config) => config,
+                Err(error) => return print_error(format!("Invalid project config input: {error}")),
+            };
             let config: alera_core::runtime::ProjectConfig =
-                match serde_json::from_str(&args.config_json) {
+                match serde_json::from_str(&config_json) {
                     Ok(config) => config,
                     Err(error) => return print_error(format!("Invalid project config: {error}")),
                 };

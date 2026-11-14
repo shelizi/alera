@@ -1401,6 +1401,9 @@ impl RuntimeCliBridge {
         }
         // The Alera CLI validates against the complete ProjectConfig type.
         // Avoid enabling RuntimeStore/SQLx in the standalone GPUI binary.
+        // Use its explicit stdin sentinel rather than passing the entire
+        // ProjectConfig in argv: worktree setup commands and prompt text may
+        // contain secrets. Older CLI versions refuse this mode safely.
         let mut command = windowless_command(&self.executable);
         command
             .arg("project")
@@ -1411,13 +1414,25 @@ impl RuntimeCliBridge {
             .arg("--id")
             .arg(project_id)
             .arg("--config-json")
-            .arg(json)
-            .stdin(Stdio::null())
+            .arg("-")
+            .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
         let mut child = command.spawn()?;
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| io::Error::other("Project config stdin pipe missing"))?;
+        if let Err(error) = stdin.write_all(json.as_bytes()) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(error);
+        }
+        drop(stdin); // Required: signal end of input before CLI validates.
         if !wait_with_timeout(&mut child, PROBE_TIMEOUT)?.success() {
-            return Err(io::Error::other("Classic project config update refused"));
+            return Err(io::Error::other(
+                "Classic project config update refused or CLI lacks stdin support",
+            ));
         }
         Ok(())
     }

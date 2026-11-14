@@ -636,7 +636,8 @@ pub enum ProjectAction {
 pub struct ProjectConfigSetArgs {
     #[arg(long)]
     pub id: String,
-    #[arg(long = "config-json")]
+    /// JSON text, or "-" to read a bounded JSON document securely from stdin.
+    #[arg(long = "config-json", allow_hyphen_values = true)]
     pub config_json: String,
 }
 

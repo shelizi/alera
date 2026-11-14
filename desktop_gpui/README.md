@@ -78,6 +78,40 @@ may cache the prior icon; restart the application and refresh the relevant
 shortcut/taskbar pin before attributing a stale graphic to the binary.
 macOS app-bundle icon packaging remains a separate distribution concern.
 
+## Host-backed Project Settings editing (S07)
+
+**Settings → Projects → Project Settings** reads the active Workspace's
+registered ProjectConfig from the existing Runtime Host. The safe summary
+counts Worktree copy/setup rules and reports whether a prompt is configured,
+without expanding command text, paths or project instructions. Choose
+**Edit Project Settings** to explicitly open the Native editor for **Git
+Hosting Provider** (Auto-detect, GitHub, GitLab, Azure DevOps) and **New
+Workspace → Prompt Append**. Choose **Save to Host** or **Cancel**; there is
+no autosave and a new Workspace clears the old edit state.
+
+The Host's `config-set` operation replaces the *whole* configuration.
+Native preserves the exact Worktree copy/setup rules while updating only
+these two reviewed fields, checks for unknown future schema keys, and
+compares against a new Host read before writing. It reports success only
+after a subsequent Host readback matches the intended values. Because the
+existing Host API lacks atomic ProjectConfig compare-and-set, a concurrent
+Classic edit in the narrow interval between preflight and write is still a
+known limitation; the form does **not** claim full cross-client CAS.
+
+The complete config can contain sensitive Worktree Setup commands, copied
+paths or project instructions. To keep it out of OS process arguments,
+the updated `alera.exe` CLI accepts `project config-set --config-json -`
+with a bounded UTF-8 document over **stdin**; Native uses this transport
+exclusively and refuses to fall back to the old argv form if the installed
+CLI is outdated. Build/update the Native-bundled Rust CLI together with the
+Native frontend before using Save. No CLI/Host changes are applied to a
+shipping Classic install automatically.
+
+Worktree **copy/setup rule editing and repository `alera.toml`
+override management are not yet available** in this Native form. The
+read-only summary remains useful even when the CLI cannot save. Interactive
+Windows GUI + live Host acceptance is a separate release gate.
+
 ## Native terminal scrollback (Windows / macOS / Linux)
 
 **Settings → Terminal → Advanced → Scrollback Lines** now changes the *real*

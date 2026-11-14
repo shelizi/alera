@@ -166,12 +166,16 @@ impl Workbench {
         } else {
             Vec::new()
         };
+        let editing = self.project_settings_editing;
+        let busy = self.project_settings_save_busy;
+        let save_status = self.project_settings_save_status.clone();
+        let draft_provider = self.project_settings_draft_provider.clone();
         let status = if self.project_settings_loading {
             "Loading Host ProjectConfig…".to_owned()
         } else if let Some(error) = self.project_settings_error.as_deref() {
             error.to_owned()
         } else if loaded {
-            "Read-only summary from Runtime Host; edit fields in Classic until Native has a safe form."
+            "Runtime Host configuration · prompt text stays hidden until you choose Edit. Worktree copy/setup rules are preserved unchanged."
                 .to_owned()
         } else {
             "Refresh to inspect this registered project's actual configuration.".to_owned()
@@ -205,7 +209,9 @@ impl Workbench {
                     .child(
                         native_components::action_button(
                             "native-settings-host-project-config-refresh",
-                            if self.project_settings_loading { "Loading…" } else if project.is_none() {
+                            if self.project_settings_loading { "Loading…" } else if editing || busy {
+                                "Finish editing first"
+                            } else if project.is_none() {
                                 "Refresh Projects"
                             } else {
                                 "Refresh Config"
@@ -214,7 +220,9 @@ impl Workbench {
                             false,
                         )
                         .on_click(cx.listener(|view, _, _, cx| {
-                            if view.project_settings_loading {
+                            if view.project_settings_loading || view.project_settings_save_busy || view.project_settings_editing {
+                                view.project_settings_save_status = "Save or Cancel the current draft before refreshing".into();
+                                cx.notify();
                                 return;
                             }
                             if view.runtime_catalog.as_ref().and_then(|catalog| {
@@ -242,6 +250,137 @@ impl Workbench {
                     .child(div().text_xs().text_color(rgb(TEXT)).child(name))
                     .child(div().text_xs().text_color(rgb(MUTED)).child(value))
             }))
+            .when(loaded && !editing && !busy, |panel| {
+                panel.child(
+                    native_components::action_button(
+                        "host-project-config-edit",
+                        "Edit Project Settings",
+                        false,
+                        false,
+                    ).on_click(cx.listener(|view, _, _, cx| {
+                        view.begin_host_project_settings_edit(cx);
+                    })),
+                )
+            })
+            .when(loaded && editing, |panel| {
+                let choices: [(&'static str, Option<&'static str>); 4] = [
+                    ("Auto-detect", None),
+                    ("GitHub", Some("github")),
+                    ("GitLab", Some("gitlab")),
+                    ("Azure DevOps", Some("azureDevops")),
+                ];
+                panel.child(
+                    div()
+                        .id("host-project-config-edit-form")
+                        .flex()
+                        .flex_col()
+                        .gap_3()
+                        .p_2()
+                        .rounded_md()
+                        .border_1()
+                        .border_color(rgb(BORDER))
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(rgb(TEXT))
+                                .child("Git Hosting Provider"),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .flex_wrap()
+                                .gap_2()
+                                .children(choices.into_iter().enumerate().map(|(index, (label, choice))| {
+                                    let selected = draft_provider.as_deref() == choice;
+                                    div()
+                                        .id(("host-project-config-provider", index))
+                                        .cursor_pointer()
+                                        .px_2()
+                                        .py_1()
+                                        .rounded_md()
+                                        .border_1()
+                                        .border_color(rgb(BORDER))
+                                        .bg(rgb(if selected { ACTIVE } else { TOOLBAR }))
+                                        .text_xs()
+                                        .text_color(rgb(if selected { TEXT } else { MUTED }))
+                                        .child(label)
+                                        .on_click(cx.listener(move |view, _, _, cx| {
+                                            if !view.project_settings_save_busy && view.project_settings_editing {
+                                                view.project_settings_draft_provider = choice.map(str::to_owned);
+                                                cx.notify();
+                                            }
+                                        }))
+                                })),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(rgb(MUTED))
+                                .child(format!(
+                                    "Selected: {}",
+                                    draft_provider.as_deref().unwrap_or("Auto-detect"),
+                                )),
+                        )
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(rgb(TEXT))
+                                .child("New Workspace · Prompt Append"),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(rgb(MUTED))
+                                .child("These project instructions are revealed only inside this explicit edit form. Existing Worktree copy/setup rules are preserved but not edited here."),
+                        )
+                        .child(
+                            div()
+                                .id("host-project-config-prompt-input")
+                                .rounded_md()
+                                .min_h(px(110.0))
+                                .p_2()
+                                .border_1()
+                                .border_color(rgb(BORDER))
+                                .bg(rgb(TOOLBAR))
+                                .child(self.project_settings_prompt_input.clone()),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .gap_2()
+                                .child(
+                                    native_components::action_button(
+                                        "host-project-config-save",
+                                        if busy { "Saving…" } else { "Save to Host" },
+                                        busy,
+                                        false,
+                                    )
+                                    .on_click(cx.listener(|view, _, _, cx| {
+                                        view.save_host_project_settings_edit(cx);
+                                    })),
+                                )
+                                .child(
+                                    native_components::action_button(
+                                        "host-project-config-cancel",
+                                        "Cancel",
+                                        busy,
+                                        false,
+                                    )
+                                    .on_click(cx.listener(|view, _, _, cx| {
+                                        view.cancel_host_project_settings_edit(cx);
+                                    })),
+                                ),
+                        ),
+                )
+            })
+            .when(!save_status.is_empty(), |panel| {
+                panel.child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(MUTED))
+                        .child(save_status),
+                )
+            })
             .into_any_element()
     }
 

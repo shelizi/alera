@@ -607,6 +607,13 @@ struct Workbench {
     project_settings_loading: bool,
     project_settings_error: Option<String>,
     project_settings_request: u64,
+    project_settings_config: Option<serde_json::Value>,
+    project_settings_editing: bool,
+    project_settings_draft_provider: Option<String>,
+    project_settings_prompt_input: Entity<QuickOpenInput>,
+    project_settings_save_busy: bool,
+    project_settings_save_status: String,
+    project_settings_mutation_request: u64,
     sidebar_pending_action: Option<String>,
     sidebar_rename_target: Option<(String, String)>,
     sidebar_rename_input: Option<Entity<QuickOpenInput>>,
@@ -5639,6 +5646,20 @@ impl Workbench {
         self.mcp_host_workspaces_loading = false;
         self.mcp_host_workspaces_request = self.mcp_host_workspaces_request.wrapping_add(1);
         self.workspace_generation = self.workspace_generation.wrapping_add(1);
+        self.project_settings_request = self.project_settings_request.wrapping_add(1);
+        self.project_settings_mutation_request =
+            self.project_settings_mutation_request.wrapping_add(1);
+        self.project_settings_project_id = None;
+        self.project_settings_config = None;
+        self.project_settings_rows.clear();
+        self.project_settings_editing = false;
+        self.project_settings_loading = false;
+        self.project_settings_save_busy = false;
+        self.project_settings_save_status.clear();
+        self.project_settings_error = None;
+        self.project_settings_draft_provider = None;
+        self.project_settings_prompt_input
+            .update(cx, |input, cx| input.clear(cx));
         self.host_pin_snapshots.clear();
         self.host_pins_loading = false;
         self.host_pins_busy = false;
@@ -14844,6 +14865,13 @@ fn main() {
                             project_settings_loading: false,
                             project_settings_error: None,
                             project_settings_request: 0,
+                            project_settings_config: None,
+                            project_settings_editing: false,
+                            project_settings_draft_provider: None,
+                            project_settings_prompt_input: cx.new(|cx| QuickOpenInput::profile_multiline(cx)),
+                            project_settings_save_busy: false,
+                            project_settings_save_status: String::new(),
+                            project_settings_mutation_request: 0,
                             sidebar_pending_action: None,
                             sidebar_rename_target: None,
                             sidebar_rename_input: None,

@@ -6,6 +6,30 @@ use crate::cli::{
 use crate::cli_orchestration::{OrchestrationAction, OrchestrationCommand};
 
 #[test]
+fn project_config_set_accepts_stdin_sentinel_without_secret_commandline() {
+    let parsed = Cli::try_parse_from([
+        "alera",
+        "project",
+        "--json",
+        "config-set",
+        "--id",
+        "proj-1",
+        "--config-json",
+        "-",
+    ])
+    .expect("bounded stdin marker is a valid ProjectConfig arg");
+    assert!(matches!(
+        parsed.command,
+        Command::Project(crate::cli::ProjectCommand {
+            action: crate::cli::ProjectAction::ConfigSet(
+                crate::cli::ProjectConfigSetArgs { config_json, id }
+            ),
+            ..
+        }) if config_json == "-" && id == "proj-1"
+    ));
+}
+
+#[test]
 fn terminal_stream_is_explicit_no_start_native_ipc_only() {
     let parsed = Cli::try_parse_from(["alera", "terminal", "--no-start", "--json", "stream"])
         .expect("stream command");

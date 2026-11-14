@@ -121,7 +121,10 @@ impl Workbench {
     /// Never open a shadow JSON editor or expose setup shell commands in a
     /// generic Settings search preview.
     pub(super) fn refresh_host_project_settings(&mut self, cx: &mut Context<Self>) {
-        if self.project_settings_loading {
+        if self.project_settings_loading
+            || self.project_settings_editing
+            || self.project_settings_save_busy
+        {
             return;
         }
         let Some(project_id) = self.runtime_catalog.as_ref().and_then(|catalog| {
@@ -132,6 +135,7 @@ impl Workbench {
             .map(str::to_owned)
         }) else {
             self.project_settings_project_id = None;
+            self.project_settings_config = None;
             self.project_settings_rows.clear();
             self.project_settings_error = Some(
                 "This workspace is not in the current Host project catalog. Refresh Projects."
@@ -147,6 +151,8 @@ impl Workbench {
         };
         self.project_settings_loading = true;
         self.project_settings_error = None;
+        self.project_settings_config = None;
+        self.project_settings_save_status.clear();
         self.project_settings_request = self.project_settings_request.wrapping_add(1);
         let request = self.project_settings_request;
         let generation = self.workspace_generation;
@@ -175,11 +181,13 @@ impl Workbench {
                         match alera_gpui_desktop::project_settings_preview::project_settings_summary(&value) {
                             Ok(rows) => {
                                 view.project_settings_rows = rows;
+                                view.project_settings_config = Some(value);
                                 view.project_settings_project_id = Some(project_id);
                                 view.project_settings_error = None;
                             }
                             Err(error) => {
                                 view.project_settings_rows.clear();
+                                view.project_settings_config = None;
                                 view.project_settings_project_id = None;
                                 view.project_settings_error = Some(error.to_owned());
                             }
@@ -187,10 +195,241 @@ impl Workbench {
                     }
                     Err(error) => {
                         view.project_settings_rows.clear();
+                        view.project_settings_config = None;
                         view.project_settings_project_id = None;
                         view.project_settings_error = Some(format!(
                             "Host Project Settings unavailable: {error}"
                         ));
+                    }
+                }
+                cx.notify();
+            }).ok();
+        }).detach();
+        cx.notify();
+    }
+
+    /// The search preview never exposes project prompts. An explicit user
+    /// Edit action reveals this project's current prompt in a dedicated
+    /// multiline input. Unknown Host schema fields forbid a destructive save.
+    pub(super) fn begin_host_project_settings_edit(&mut self, cx: &mut Context<Self>) {
+        if self.project_settings_loading || self.project_settings_save_busy {
+            return;
+        }
+        let Some(config) = self.project_settings_config.as_ref() else {
+            self.project_settings_save_status = "Refresh Project Settings before editing".into();
+            cx.notify();
+            return;
+        };
+        if self.project_settings_project_id.is_none() {
+            self.project_settings_save_status = "No registered Host Project selected".into();
+            cx.notify();
+            return;
+        }
+        let provider = config
+            .get("gitHostingProvider")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned);
+        let prompt = config
+            .pointer("/newWorkspace/promptAppend")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        if let Err(error) = alera_gpui_desktop::project_settings_preview::updated_project_config(
+            config,
+            provider.as_deref(),
+            &prompt,
+        ) {
+            self.project_settings_save_status = error.to_owned();
+            cx.notify();
+            return;
+        }
+        if !self
+            .project_settings_prompt_input
+            .update(cx, |input, cx| input.set_query(&prompt, cx))
+        {
+            self.project_settings_save_status =
+                "Project prompt is too long to edit in Native (8 KiB limit)".into();
+            cx.notify();
+            return;
+        }
+        self.project_settings_draft_provider = provider;
+        self.project_settings_editing = true;
+        self.project_settings_save_status.clear();
+        cx.notify();
+    }
+
+    pub(super) fn cancel_host_project_settings_edit(&mut self, cx: &mut Context<Self>) {
+        if self.project_settings_save_busy {
+            return;
+        }
+        self.project_settings_editing = false;
+        self.project_settings_draft_provider = None;
+        self.project_settings_prompt_input
+            .update(cx, |input, cx| input.clear(cx));
+        self.project_settings_save_status = "Unsaved Project Settings edits discarded".into();
+        cx.notify();
+    }
+
+    /// Replace the complete Classic Host ProjectConfig only after comparing
+    /// with the snapshot this form displayed. The CLI supports no atomic CAS,
+    /// so a preflight comparison reduces conflicts but does not guarantee
+    /// atomicity across concurrent Classic writers.
+    pub(super) fn save_host_project_settings_edit(&mut self, cx: &mut Context<Self>) {
+        if !self.project_settings_editing
+            || self.project_settings_save_busy
+            || self.project_settings_loading
+        {
+            return;
+        }
+        if self.project_settings_prompt_input.read(cx).composing() {
+            self.project_settings_save_status =
+                "Finish the current IME composition before saving".into();
+            cx.notify();
+            return;
+        }
+        let Some(project_id) = self.project_settings_project_id.clone() else {
+            self.project_settings_save_status = "Select and refresh a Host project first".into();
+            cx.notify();
+            return;
+        };
+        if self.runtime_catalog.as_ref().and_then(|catalog| {
+            alera_gpui_desktop::project_settings_preview::project_id_for_workspace(
+                catalog,
+                self.model.root(),
+            )
+        }) != Some(project_id.as_str())
+        {
+            self.project_settings_save_status =
+                "Workspace project changed; reload before saving".into();
+            cx.notify();
+            return;
+        }
+        let Some(original) = self.project_settings_config.as_ref() else {
+            self.project_settings_save_status =
+                "Project config not loaded; refresh before saving".into();
+            cx.notify();
+            return;
+        };
+        let prompt = self
+            .project_settings_prompt_input
+            .read(cx)
+            .query()
+            .to_owned();
+        let revised = match alera_gpui_desktop::project_settings_preview::updated_project_config(
+            original,
+            self.project_settings_draft_provider.as_deref(),
+            &prompt,
+        ) {
+            Ok(config) => config,
+            Err(error) => {
+                self.project_settings_save_status = error.into();
+                cx.notify();
+                return;
+            }
+        };
+        if alera_gpui_desktop::project_settings_preview::host_config_matches(original, &revised) {
+            self.project_settings_editing = false;
+            self.project_settings_prompt_input
+                .update(cx, |input, cx| input.clear(cx));
+            self.project_settings_save_status = "No Project Settings changes to save".into();
+            cx.notify();
+            return;
+        }
+        let Some(bridge) = self.runtime_bridge.clone() else {
+            self.project_settings_save_status = "Runtime Host CLI unavailable".into();
+            cx.notify();
+            return;
+        };
+        let encoded = match serde_json::to_string(&revised) {
+            Ok(encoded) => encoded,
+            Err(_) => {
+                self.project_settings_save_status = "Could not encode ProjectConfig".into();
+                cx.notify();
+                return;
+            }
+        };
+        let original = original.clone();
+        let generation = self.workspace_generation;
+        self.project_settings_mutation_request =
+            self.project_settings_mutation_request.wrapping_add(1);
+        let request = self.project_settings_mutation_request;
+        self.project_settings_save_busy = true;
+        self.project_settings_save_status =
+            "Checking Host version and saving Project Settings…".into();
+        cx.spawn(async move |view, cx| {
+            let project_for_host = project_id.clone();
+            let result = cx.background_spawn(async move {
+                let latest = bridge.read_project_settings(&project_for_host)
+                    .map_err(|error| (error, false))?;
+                if latest != original {
+                    return Err((
+                        std::io::Error::new(
+                            std::io::ErrorKind::AlreadyExists,
+                            "Host ProjectConfig changed since opening this editor",
+                        ),
+                        false,
+                    ));
+                }
+                bridge.write_project_settings(&project_for_host, &encoded)
+                    .map_err(|error| (error, true))?;
+                let readback = bridge.read_project_settings(&project_for_host)
+                    .map_err(|error| (error, true))?;
+                if !alera_gpui_desktop::project_settings_preview::host_config_matches(
+                    &revised,
+                    &readback,
+                ) {
+                    return Err((
+                        std::io::Error::other("Host project settings readback differs from saved values"),
+                        true,
+                    ));
+                }
+                Ok(readback)
+            }).await;
+            view.update(cx, |view, cx| {
+                if view.workspace_generation != generation
+                    || view.project_settings_mutation_request != request
+                {
+                    return;
+                }
+                view.project_settings_save_busy = false;
+                match result {
+                    Ok(readback) => {
+                        match alera_gpui_desktop::project_settings_preview::project_settings_summary(&readback) {
+                            Ok(rows) => {
+                                view.project_settings_config = Some(readback);
+                                view.project_settings_project_id = Some(project_id);
+                                view.project_settings_rows = rows;
+                                view.project_settings_error = None;
+                                view.project_settings_editing = false;
+                                view.project_settings_draft_provider = None;
+                                view.project_settings_prompt_input.update(cx, |input, cx| input.clear(cx));
+                                view.project_settings_save_status =
+                                    "Host Project Settings saved and confirmed by readback".into();
+                            }
+                            Err(error) => {
+                                view.project_settings_save_status = format!(
+                                    "Host saved, but the response is invalid: {error}. Refresh before another save."
+                                );
+                                view.project_settings_editing = false;
+                                view.project_settings_config = None;
+                            }
+                        }
+                    }
+                    Err((error, outcome_unknown)) => {
+                        if outcome_unknown {
+                            // A CLI timeout can occur after the Host committed.
+                            // Never issue a second overwrite without a fresh read.
+                            view.project_settings_editing = false;
+                            view.project_settings_config = None;
+                            view.project_settings_project_id = None;
+                            view.project_settings_rows.clear();
+                            view.project_settings_error = Some(
+                                "Project save outcome is uncertain; refresh from Host before editing again".into()
+                            );
+                        }
+                        view.project_settings_save_status = format!(
+                            "Project Settings save not confirmed: {error}"
+                        );
                     }
                 }
                 cx.notify();
