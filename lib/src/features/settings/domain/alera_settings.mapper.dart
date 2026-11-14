@@ -1318,6 +1318,7 @@ class AgentQuotaHostSettingsMapper
       AgentQuotaProviderIdMapper.ensureInitialized();
       ClaudeQuotaProfileSettingsMapper.ensureInitialized();
       CodexQuotaProfileSettingsMapper.ensureInitialized();
+      AgyQuotaProfileSettingsMapper.ensureInitialized();
       AgentHistorySyncSettingsMapper.ensureInitialized();
       AgentQuotaEnvironmentSettingsMapper.ensureInitialized();
     }
@@ -1403,6 +1404,16 @@ class AgentQuotaHostSettingsMapper
         opt: true,
         def: 'default',
       );
+  static List<AgyQuotaProfileSettings> _$agyProfiles(
+    AgentQuotaHostSettings v,
+  ) => v.agyProfiles;
+  static const Field<AgentQuotaHostSettings, List<AgyQuotaProfileSettings>>
+  _f$agyProfiles = Field(
+    'agyProfiles',
+    _$agyProfiles,
+    opt: true,
+    def: const <AgyQuotaProfileSettings>[],
+  );
   static AgentHistorySyncSettings _$historySync(AgentQuotaHostSettings v) =>
       v.historySync;
   static const Field<AgentQuotaHostSettings, AgentHistorySyncSettings>
@@ -1443,6 +1454,7 @@ class AgentQuotaHostSettingsMapper
     #selectedClaudeProfile: _f$selectedClaudeProfile,
     #codexProfiles: _f$codexProfiles,
     #selectedCodexProfile: _f$selectedCodexProfile,
+    #agyProfiles: _f$agyProfiles,
     #historySync: _f$historySync,
     #environment: _f$environment,
     #unpinnedQuotaKeys: _f$unpinnedQuotaKeys,
@@ -1458,6 +1470,7 @@ class AgentQuotaHostSettingsMapper
       selectedClaudeProfile: data.dec(_f$selectedClaudeProfile),
       codexProfiles: data.dec(_f$codexProfiles),
       selectedCodexProfile: data.dec(_f$selectedCodexProfile),
+      agyProfiles: data.dec(_f$agyProfiles),
       historySync: data.dec(_f$historySync),
       environment: data.dec(_f$environment),
       unpinnedQuotaKeys: data.dec(_f$unpinnedQuotaKeys),
@@ -1560,6 +1573,16 @@ abstract class AgentQuotaHostSettingsCopyWith<
     >
   >
   get codexProfiles;
+  ListCopyWith<
+    $R,
+    AgyQuotaProfileSettings,
+    AgyQuotaProfileSettingsCopyWith<
+      $R,
+      AgyQuotaProfileSettings,
+      AgyQuotaProfileSettings
+    >
+  >
+  get agyProfiles;
   AgentHistorySyncSettingsCopyWith<
     $R,
     AgentHistorySyncSettings,
@@ -1583,6 +1606,7 @@ abstract class AgentQuotaHostSettingsCopyWith<
     String? selectedClaudeProfile,
     List<CodexQuotaProfileSettings>? codexProfiles,
     String? selectedCodexProfile,
+    List<AgyQuotaProfileSettings>? agyProfiles,
     AgentHistorySyncSettings? historySync,
     AgentQuotaEnvironmentSettings? environment,
     List<String>? unpinnedQuotaKeys,
@@ -1643,6 +1667,21 @@ class _AgentQuotaHostSettingsCopyWithImpl<$R, $Out>
     (v) => call(codexProfiles: v),
   );
   @override
+  ListCopyWith<
+    $R,
+    AgyQuotaProfileSettings,
+    AgyQuotaProfileSettingsCopyWith<
+      $R,
+      AgyQuotaProfileSettings,
+      AgyQuotaProfileSettings
+    >
+  >
+  get agyProfiles => ListCopyWith(
+    $value.agyProfiles,
+    (v, t) => v.copyWith.$chain(t),
+    (v) => call(agyProfiles: v),
+  );
+  @override
   AgentHistorySyncSettingsCopyWith<
     $R,
     AgentHistorySyncSettings,
@@ -1675,6 +1714,7 @@ class _AgentQuotaHostSettingsCopyWithImpl<$R, $Out>
     String? selectedClaudeProfile,
     List<CodexQuotaProfileSettings>? codexProfiles,
     String? selectedCodexProfile,
+    List<AgyQuotaProfileSettings>? agyProfiles,
     AgentHistorySyncSettings? historySync,
     AgentQuotaEnvironmentSettings? environment,
     List<String>? unpinnedQuotaKeys,
@@ -1693,6 +1733,7 @@ class _AgentQuotaHostSettingsCopyWithImpl<$R, $Out>
       if (codexProfiles != null) #codexProfiles: codexProfiles,
       if (selectedCodexProfile != null)
         #selectedCodexProfile: selectedCodexProfile,
+      if (agyProfiles != null) #agyProfiles: agyProfiles,
       if (historySync != null) #historySync: historySync,
       if (environment != null) #environment: environment,
       if (unpinnedQuotaKeys != null) #unpinnedQuotaKeys: unpinnedQuotaKeys,
@@ -1723,6 +1764,7 @@ class _AgentQuotaHostSettingsCopyWithImpl<$R, $Out>
       #selectedCodexProfile,
       or: $value.selectedCodexProfile,
     ),
+    agyProfiles: data.get(#agyProfiles, or: $value.agyProfiles),
     historySync: data.get(#historySync, or: $value.historySync),
     environment: data.get(#environment, or: $value.environment),
     unpinnedQuotaKeys: data.get(
@@ -2071,6 +2113,151 @@ class _CodexQuotaProfileSettingsCopyWithImpl<$R, $Out>
   CodexQuotaProfileSettingsCopyWith<$R2, CodexQuotaProfileSettings, $Out2>
   $chain<$R2, $Out2>(Then<$Out2, $R2> t) =>
       _CodexQuotaProfileSettingsCopyWithImpl<$R2, $Out2>($value, $cast, t);
+}
+
+class AgyQuotaProfileSettingsMapper
+    extends ClassMapperBase<AgyQuotaProfileSettings> {
+  AgyQuotaProfileSettingsMapper._();
+
+  static AgyQuotaProfileSettingsMapper? _instance;
+  static AgyQuotaProfileSettingsMapper ensureInitialized() {
+    if (_instance == null) {
+      MapperContainer.globals.use(
+        _instance = AgyQuotaProfileSettingsMapper._(),
+      );
+    }
+    return _instance!;
+  }
+
+  @override
+  final String id = 'AgyQuotaProfileSettings';
+
+  static String _$alias(AgyQuotaProfileSettings v) => v.alias;
+  static const Field<AgyQuotaProfileSettings, String> _f$alias = Field(
+    'alias',
+    _$alias,
+  );
+  static String _$accountId(AgyQuotaProfileSettings v) => v.accountId;
+  static const Field<AgyQuotaProfileSettings, String> _f$accountId = Field(
+    'accountId',
+    _$accountId,
+  );
+
+  @override
+  final MappableFields<AgyQuotaProfileSettings> fields = const {
+    #alias: _f$alias,
+    #accountId: _f$accountId,
+  };
+
+  static AgyQuotaProfileSettings _instantiate(DecodingData data) {
+    return AgyQuotaProfileSettings(
+      alias: data.dec(_f$alias),
+      accountId: data.dec(_f$accountId),
+    );
+  }
+
+  @override
+  final Function instantiate = _instantiate;
+
+  static AgyQuotaProfileSettings fromMap(Map<String, dynamic> map) {
+    return ensureInitialized().decodeMap<AgyQuotaProfileSettings>(map);
+  }
+
+  static AgyQuotaProfileSettings fromJson(String json) {
+    return ensureInitialized().decodeJson<AgyQuotaProfileSettings>(json);
+  }
+}
+
+mixin AgyQuotaProfileSettingsMappable {
+  String toJson() {
+    return AgyQuotaProfileSettingsMapper.ensureInitialized()
+        .encodeJson<AgyQuotaProfileSettings>(this as AgyQuotaProfileSettings);
+  }
+
+  Map<String, dynamic> toMap() {
+    return AgyQuotaProfileSettingsMapper.ensureInitialized()
+        .encodeMap<AgyQuotaProfileSettings>(this as AgyQuotaProfileSettings);
+  }
+
+  AgyQuotaProfileSettingsCopyWith<
+    AgyQuotaProfileSettings,
+    AgyQuotaProfileSettings,
+    AgyQuotaProfileSettings
+  >
+  get copyWith =>
+      _AgyQuotaProfileSettingsCopyWithImpl<
+        AgyQuotaProfileSettings,
+        AgyQuotaProfileSettings
+      >(this as AgyQuotaProfileSettings, $identity, $identity);
+  @override
+  String toString() {
+    return AgyQuotaProfileSettingsMapper.ensureInitialized().stringifyValue(
+      this as AgyQuotaProfileSettings,
+    );
+  }
+
+  @override
+  bool operator ==(Object other) {
+    return AgyQuotaProfileSettingsMapper.ensureInitialized().equalsValue(
+      this as AgyQuotaProfileSettings,
+      other,
+    );
+  }
+
+  @override
+  int get hashCode {
+    return AgyQuotaProfileSettingsMapper.ensureInitialized().hashValue(
+      this as AgyQuotaProfileSettings,
+    );
+  }
+}
+
+extension AgyQuotaProfileSettingsValueCopy<$R, $Out>
+    on ObjectCopyWith<$R, AgyQuotaProfileSettings, $Out> {
+  AgyQuotaProfileSettingsCopyWith<$R, AgyQuotaProfileSettings, $Out>
+  get $asAgyQuotaProfileSettings => $base.as(
+    (v, t, t2) => _AgyQuotaProfileSettingsCopyWithImpl<$R, $Out>(v, t, t2),
+  );
+}
+
+abstract class AgyQuotaProfileSettingsCopyWith<
+  $R,
+  $In extends AgyQuotaProfileSettings,
+  $Out
+>
+    implements ClassCopyWith<$R, $In, $Out> {
+  $R call({String? alias, String? accountId});
+  AgyQuotaProfileSettingsCopyWith<$R2, $In, $Out2> $chain<$R2, $Out2>(
+    Then<$Out2, $R2> t,
+  );
+}
+
+class _AgyQuotaProfileSettingsCopyWithImpl<$R, $Out>
+    extends ClassCopyWithBase<$R, AgyQuotaProfileSettings, $Out>
+    implements
+        AgyQuotaProfileSettingsCopyWith<$R, AgyQuotaProfileSettings, $Out> {
+  _AgyQuotaProfileSettingsCopyWithImpl(super.value, super.then, super.then2);
+
+  @override
+  late final ClassMapperBase<AgyQuotaProfileSettings> $mapper =
+      AgyQuotaProfileSettingsMapper.ensureInitialized();
+  @override
+  $R call({String? alias, String? accountId}) => $apply(
+    FieldCopyWithData({
+      if (alias != null) #alias: alias,
+      if (accountId != null) #accountId: accountId,
+    }),
+  );
+  @override
+  AgyQuotaProfileSettings $make(CopyWithData data) => AgyQuotaProfileSettings(
+    alias: data.get(#alias, or: $value.alias),
+    accountId: data.get(#accountId, or: $value.accountId),
+  );
+
+  @override
+  AgyQuotaProfileSettingsCopyWith<$R2, AgyQuotaProfileSettings, $Out2>
+  $chain<$R2, $Out2>(Then<$Out2, $R2> t) =>
+      _AgyQuotaProfileSettingsCopyWithImpl<$R2, $Out2>($value, $cast, t);
 }
 
 class AgentHistorySyncSettingsMapper

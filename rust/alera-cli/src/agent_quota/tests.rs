@@ -27,6 +27,30 @@ async fn agy_other_account_filter_returns_no_default_snapshot() {
 }
 
 #[tokio::test]
+async fn agy_registered_account_is_unavailable_without_touching_default_keyring() {
+    for provider in ["agy", "antigravity"] {
+        let payload = fetch_agent_quotas(json!({
+            "providers": [provider],
+            "accountId": "research",
+            "agyProfiles": [{"alias": "Research", "accountId": "research"}]
+        }))
+        .await
+        .expect("isolated response");
+        let rows = payload["snapshots"].as_array().expect("snapshots");
+        assert_eq!(rows.len(), 1, "{provider}");
+        assert_eq!(rows[0]["provider"], "agy");
+        assert_eq!(rows[0]["accountId"], "research");
+        assert_eq!(rows[0]["displayName"], "Research");
+        assert_eq!(rows[0]["status"], "unavailable");
+        assert!(rows[0]["windows"].as_array().unwrap().is_empty());
+        assert!(rows[0]["error"]
+            .as_str()
+            .unwrap()
+            .contains("not yet verified"));
+    }
+}
+
+#[tokio::test]
 async fn accepts_only_configured_transient_environment_values() {
     let secret = "quota-secret-must-not-be-returned";
     let payload = fetch_agent_quotas(json!({

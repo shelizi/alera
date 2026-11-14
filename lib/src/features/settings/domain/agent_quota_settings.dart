@@ -99,6 +99,20 @@ class const CodexQuotaProfileSettings({
   final String profile;
 }
 
+/// A pending AGY account registration, not an authenticated Google login.
+/// AGY's Windows credential key is shared within one OS user; storing a
+/// separate alias or Gemini config path cannot isolate that credential.
+@MappableClass()
+class const AgyQuotaProfileSettings({
+  required this.alias,
+  required this.accountId,
+}) with AgyQuotaProfileSettingsMappable {
+  final String alias;
+
+  /// A local identifier, not an email, token, or CLI data directory.
+  final String accountId;
+}
+
 @MappableClass()
 class const AgentQuotaEnvironmentSettings({
   this.kimiApiKey = 'KIMI_API_KEY',
@@ -170,6 +184,7 @@ class const AgentQuotaHostSettings({
   this.selectedClaudeProfile = 'default',
   this.codexProfiles = const <CodexQuotaProfileSettings>[],
   this.selectedCodexProfile = 'default',
+  this.agyProfiles = const <AgyQuotaProfileSettings>[],
   this.historySync = AgentHistorySyncSettings.defaults,
   this.environment = AgentQuotaEnvironmentSettings.defaults,
   this.unpinnedQuotaKeys = const <String>[],
@@ -183,6 +198,7 @@ class const AgentQuotaHostSettings({
   final String selectedClaudeProfile;
   final List<CodexQuotaProfileSettings> codexProfiles;
   final String selectedCodexProfile;
+  final List<AgyQuotaProfileSettings> agyProfiles;
   final AgentHistorySyncSettings historySync;
   final AgentQuotaEnvironmentSettings environment;
 

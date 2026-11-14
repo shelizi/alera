@@ -259,6 +259,40 @@ mixin _SettingsControllerLocalUiSettings on _$SettingsController {
     );
   });
 
+  Future<void> setAgyQuotaProfiles({
+    required String hostId,
+    required List<AgyQuotaProfileSettings> profiles,
+  }) => _controller._serialize(() async {
+    final ids = <String>{};
+    for (final profile in profiles) {
+      final id = profile.accountId.trim();
+      final label = profile.alias.trim();
+      if (id == 'default' ||
+          !RegExp(r'^[a-zA-Z0-9_-]{1,64}$').hasMatch(id) ||
+          label.isEmpty ||
+          label.length > 80 ||
+          label.contains(RegExp(r'[\x00-\x1f]')) ||
+          !ids.add(id)) {
+        throw ArgumentError(
+          'Invalid or duplicate Antigravity account registration',
+        );
+      }
+    }
+    final current = state.agents.quotas.forHost(hostId);
+    final validKeys = <String>{
+      for (final profile in profiles) 'agy:${profile.accountId}',
+    };
+    await _controller._saveQuotaHost(
+      hostId,
+      current.copyWith(
+        agyProfiles: profiles,
+        unpinnedQuotaKeys: current.unpinnedQuotaKeys
+            .where((key) => !key.startsWith('agy:') || validKeys.contains(key))
+            .toList(),
+      ),
+    );
+  });
+
   Future<void> setAgentQuotaPinned({
     required String hostId,
     required String pinKey,

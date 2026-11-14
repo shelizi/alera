@@ -18,6 +18,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'codex_quota_profiles_control.dart';
+import 'agy_quota_profiles_control.dart';
 
 part 'agent_quota_settings_controls.dart';
 
@@ -234,6 +235,27 @@ class const AgentQuotaSettingsPane({
           ],
         ),
         const SizedBox(height: AleraTokens.space16),
+        AleraSettingsGroup(
+          title: 'Google / Antigravity Accounts',
+          description: 'Register additional account labels. Independent Google login requires a verified OS-isolated credential backend; registration alone cannot switch accounts.',
+          children: <Widget>[
+            AleraSettingRow(
+              title: 'Additional Google Accounts',
+              description: 'Registered accounts appear as unavailable until verified. No Google credentials are copied or changed.',
+              controlWidth: 420,
+              child: AgyQuotaProfilesControl(
+                profiles: hostSettings.agyProfiles,
+                onChanged: (profiles) => unawaited(
+                  controller.setAgyQuotaProfiles(
+                    hostId: hostId,
+                    profiles: profiles,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: AleraTokens.space16),
         KeyedSubtree(
           key: groupKeys['historySync'],
           child: AleraSettingsGroup(
@@ -316,11 +338,21 @@ class const AgentQuotaSettingsPane({
                   sync: hostSettings.historySync,
                   controller: controller,
                 ),
+                for (final profile in hostSettings.agyProfiles)
+                  _historySyncGroupRow(
+                    hostId: hostId,
+                    provider: 'agy',
+                    accountId: profile.accountId,
+                    label: 'Antigravity · ${profile.alias} (not supported)',
+                    sync: hostSettings.historySync,
+                    controller: controller,
+                  ),
                 const Padding(
                   padding: EdgeInsets.only(top: AleraTokens.space8),
                   child: Text(
                     'Enter the same group name for accounts that should sync. '
-                    'An empty group remains isolated. Group names do not mix Codex, Claude or AGY formats.',
+                    'An empty group remains isolated. Group names do not mix Codex, Claude or AGY formats. '
+                    'Antigravity history mirroring is not supported yet.',
                   ),
                 ),
               ],

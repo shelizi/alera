@@ -390,6 +390,11 @@ pub(super) fn merge_quota_snapshots(cached: &Value, mut fresh: Value) -> Value {
         if snapshot.get("status").and_then(Value::as_str) == Some("ok") {
             continue;
         }
+        // Pending registrations do not prove an independent OS credential.
+        // Never revive a prior account's readings even as stale data.
+        if snapshot.get("dataQuality").and_then(Value::as_str) == Some("identity-unverified") {
+            continue;
+        }
         let provider = snapshot.get("provider");
         let account_id = snapshot.get("accountId");
         let Some(old) = previous.iter().find(|candidate| {

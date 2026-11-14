@@ -61,6 +61,7 @@ pub(super) fn quota_fetch_payload(
         "claudeDefaultEnabled": claude_default_enabled,
         "codexProfiles": codex_profiles,
         "claudeProfiles": claude_profiles,
+        "agyProfiles": settings.agy_profiles,
         "environmentNames": settings.environment,
         "environmentValues": environment_values,
         "allowCliFallback": false,
@@ -134,6 +135,23 @@ mod tests {
     }
 
     #[test]
+    fn agy_profile_is_passed_as_metadata_never_as_credentials() {
+        let mut configured = settings();
+        configured.enabled_providers = vec!["agy".into()];
+        configured.agy_profiles = vec![alera_core::runtime::RuntimeAgyQuotaProfile {
+            alias: "Research".into(),
+            account_id: "research".into(),
+        }];
+        let payload = quota_fetch_payload(&configured, &json!({}), Some("agy"), Some("research"));
+        assert_eq!(payload["accountId"], "research");
+        assert_eq!(
+            payload["agyProfiles"],
+            json!([{"alias":"Research","accountId":"research"}])
+        );
+        assert!(payload.get("credentials").is_none());
+    }
+
+    #[test]
     fn claude_account_payload_fetches_only_that_profile() {
         let payload = quota_fetch_payload(&settings(), &json!({}), Some("claude"), Some("work"));
         assert_eq!(payload["providers"], json!(["claude"]));
@@ -170,6 +188,23 @@ mod tests {
         assert_eq!(updated["environment"]["KIMI"], false);
         assert_eq!(reply["snapshots"].as_array().unwrap().len(), 1);
         assert_eq!(reply["snapshots"][0]["status"], "stale");
+    }
+
+    #[test]
+    fn unverified_agy_identity_never_revives_cached_quota_readings() {
+        let cached = json!({"snapshots": [{
+            "provider":"agy","accountId":"research","status":"ok",
+            "windows":[{"label":"old login","usedPercent":25}]
+        }]});
+        let fresh = json!({"snapshots": [{
+            "provider":"agy","accountId":"research","status":"unavailable",
+            "dataQuality":"identity-unverified","windows":[],
+            "error":"Independent Google login is not yet verified"
+        }]});
+        let (cache, reply) = apply_partial_quota_update(Some(&cached), fresh);
+        assert_eq!(reply["snapshots"][0]["status"], "unavailable");
+        assert_eq!(reply["snapshots"][0]["windows"], json!([]));
+        assert_eq!(cache.unwrap()["snapshots"][0]["status"], "unavailable");
     }
 
     #[test]

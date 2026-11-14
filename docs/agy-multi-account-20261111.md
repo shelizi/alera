@@ -1,7 +1,52 @@
 # Antigravity (AGY) multi-account: safety contract and staged implementation
 
-Status: **investigation + safety groundwork; full multi-account support is NOT implemented**.
+Status: **staged implementation; real independent AGY login and multi-account
+launch are NOT implemented**.
 Date: 2026-11-11. Branch: `feat/agy-multi-account-20261111`.
+
+## Continuation (2026-11-14)
+
+The feature branch now includes the later `main` History Sync implementation
+and its shared Classic/GPUI Host policy. No new native history format or
+credential-copying mechanism was introduced.
+
+The next incremental step registers **pending** AGY account labels and stable
+non-default account IDs in `RuntimeAgentQuotaSettings.agyProfiles`. IDs are
+restricted to 1-64 ASCII letters/digits/`_`/`-`, cannot be `default`,
+and are deduplicated; aliases are trimmed and bounded. The AGY profile schema
+rejects unknown secret/credential fields.
+
+- Classic Settings > Provider Quotas now has an Add Google Account registration
+  dialog (add/edit/remove), clearly marked **registration only**. This is not
+  Google's OAuth flow and never reads or rewrites Windows Credential Manager.
+- The quota Host passes these labels to its proxy. Their dedicated quota rows
+  are `unavailable`, with an explicit login-isolation reason; the proxy
+  NEVER runs `agy /usage` for those IDs, nor labels the default login as a
+  different account. The `identity-unverified` marker also forbids reviving
+  a previous reading as stale for a pending identity. Existing `default`
+  behavior remains unchanged.
+- Registered IDs appear in History Sync account catalogs as
+  `supported=false`, including GPUI's shared History Sync UI, but the
+  native AGY mirroring worker still does **not** include any AGY directories.
+- No selected AGY account can be launched while identity binding is
+  unverified. Existing PTYs and runtime credentials are unchanged.
+
+This step covers **account registration UX and safe metadata plumbing only**.
+It must not be described as multi-login support, multi-account quota access,
+cross-account native Resume, or a completed A1 credential-isolation backend.
+
+### Verification ledger for this feature worktree
+
+- `cargo test --offline -p alera-core --features runtime agy_accounts_are_optional_non_secret_metadata_and_normalize_unique_ids`:
+  passed (1/1) before the alias character-count normalization adjustment.
+- `dart run build_runner build --build-filter=lib/src/features/settings/domain/alera_settings.mapper.dart`:
+  passed, produced the AGY profile and Host settings mapping. The generated
+  EOF normalizer and targeted Dart formatting succeeded. Unrelated output
+  deletions caused by the build filter were individually restored from HEAD.
+- `rustfmt --edition 2021 --check`: passed for modified Rust files.
+- The Host/CLI test suite, Classic/GPUI UI compilation and two-account live
+  sign-in are separate validation gates; never interpret the metadata-only
+  registration as an authenticated account.
 
 ## Current Alera behavior
 
@@ -59,8 +104,10 @@ Date: 2026-11-11. Branch: `feat/agy-multi-account-20261111`.
 | --- | --- | --- |
 | A0 | AGY non-default `accountId` does not launch `agy` or return a Default snapshot | Implemented; AGY-focused Rust tests pass (18/18) |
 | A1 | Per-platform identity capabilities; authenticated context proves unique account; reject alias-only identities | Not started |
-| A2 | Host settings and migration for AGY account references; account-scoped snapshots and independent partial refresh | Blocked on A1 |
-| A3 | Classic + GPUI settings, quota cards, pinned rows and selected account for new Terminal | Blocked on A2 |
+| A2a | Host-safe AGY account label registration; unavailable per-account quota placeholders; shared history catalog | Implemented in feature worktree; validation pending |
+| A2b | Per-account verified credential binding, independent quota fetches and partial refresh | Blocked on A1 |
+| A3a | Classic Add Google Account registration dialog and group labels | Implemented in feature worktree; validation pending |
+| A3b | GPUI account-add operation, real quota cards/pins and selected account for new Terminal | Blocked on A2b |
 | A4 | Two-account live smoke on Windows and Linux/macOS; no cross-account leaks, no shared-keyring mutation, no active-PTY interruption | Not started |
 
 No merge, release, auto-deployment or default Host replacement until A1-A4

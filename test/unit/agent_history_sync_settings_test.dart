@@ -3,6 +3,32 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   test(
+    'pending Google registrations roundtrip without authenticating accounts',
+    () {
+      final host = AgentQuotaHostSettings.fromJson(<String, Object?>{
+        'agyProfiles': <Object?>[
+          <String, Object?>{'alias': 'Research', 'accountId': 'research'},
+        ],
+        'historySync': <String, Object?>{'mode': 'separate'},
+      });
+      expect(host.agyProfiles.single.alias, 'Research');
+      expect(host.agyProfiles.single.accountId, 'research');
+      expect(
+        host.historySync.shouldSync('agy', 'default', 'research'),
+        isFalse,
+      );
+      final encoded = host.toMap();
+      expect(encoded['agyProfiles'], <Object?>[
+        <String, Object?>{'alias': 'Research', 'accountId': 'research'},
+      ]);
+      expect(
+        AgentQuotaHostSettings.fromJson(encoded).agyProfiles.single.accountId,
+        'research',
+      );
+    },
+  );
+
+  test(
     'legacy settings default to separate accounts unless opted into merging',
     () {
       final host = AgentQuotaHostSettings.fromJson(<String, Object?>{});

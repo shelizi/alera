@@ -200,6 +200,16 @@ impl Workbench {
                     .child("Connect an existing Runtime Host and click Refresh. No local fallback will be written."))
                 .into_any_element();
         };
+        let pending_google_accounts = snapshot
+            .accounts
+            .iter()
+            .filter(|account| account.provider == "agy" && account.account_id != "default")
+            .count();
+        if pending_google_accounts > 0 {
+            content = content.child(div().text_xs().text_color(rgb(MUTED)).child(format!(
+                "{pending_google_accounts} additional Google account registration(s) are pending a verified isolated login. Quota refresh, AGY history mirroring and account switching remain disabled."
+            )));
+        }
         if let Some(archive) = &snapshot.archive_summary {
             content = content.child(div().text_xs().text_color(rgb(MUTED)).child(format!(
                 "Host-private updated history snapshots: {} sessions, {} versions{}",
@@ -275,6 +285,7 @@ impl Workbench {
                         .as_ref()
                         .is_some_and(|editing| editing == &account);
                     let for_edit = account.clone();
+                    let can_mirror = account.supported;
                     let mut row = div()
                         .id(("native-history-sync-account", index))
                         .rounded_md()
@@ -303,6 +314,13 @@ impl Workbench {
                                                     &group
                                                 }
                                             ),
+                                        ))
+                                        .child(div().text_xs().text_color(rgb(MUTED)).child(
+                                            if can_mirror {
+                                                "Native transcript mirroring available"
+                                            } else {
+                                                "Native AGY history mirroring disabled; group labels are metadata only"
+                                            }
                                         )),
                                 )
                                 .child(

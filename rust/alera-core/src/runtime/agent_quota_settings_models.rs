@@ -19,6 +19,10 @@ pub struct RuntimeAgentQuotaSettings {
     pub claude_profiles: Vec<RuntimeClaudeQuotaProfile>,
     #[serde(default)]
     pub codex_profiles: Vec<RuntimeCodexQuotaProfile>,
+    /// Display-only account registrations. AGY uses an OS user-scoped
+    /// keyring; these names are NOT proof of independent authentication.
+    #[serde(default)]
+    pub agy_profiles: Vec<RuntimeAgyQuotaProfile>,
     /// Per-host account history policy; never carries credentials.
     #[serde(default)]
     pub history_sync: RuntimeAgentHistorySyncSettings,
@@ -35,6 +39,7 @@ impl Default for RuntimeAgentQuotaSettings {
             claude_default_show_in_usage: true,
             claude_profiles: Vec::new(),
             codex_profiles: Vec::new(),
+            agy_profiles: Vec::new(),
             history_sync: RuntimeAgentHistorySyncSettings::default(),
             environment: RuntimeAgentQuotaEnvironment::default(),
         }
@@ -94,6 +99,24 @@ impl RuntimeAgentQuotaSettings {
             !entry.alias.is_empty()
                 && std::path::Path::new(&entry.profile).is_absolute()
                 && seen_profiles.insert(entry.profile.clone())
+        });
+        let mut seen_agy = std::collections::HashSet::new();
+        for profile in &mut self.agy_profiles {
+            profile.alias = profile.alias.trim().to_string();
+            profile.account_id = profile.account_id.trim().to_string();
+        }
+        self.agy_profiles.retain(|entry| {
+            !entry.alias.is_empty()
+                && entry.alias.chars().count() <= 80
+                && !entry.alias.chars().any(char::is_control)
+                && entry.account_id != "default"
+                && !entry.account_id.is_empty()
+                && entry.account_id.len() <= 64
+                && entry
+                    .account_id
+                    .chars()
+                    .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_'))
+                && seen_agy.insert(entry.account_id.clone())
         });
         self.history_sync.normalize();
         self
@@ -173,6 +196,16 @@ impl RuntimeAgentHistorySyncSettings {
 pub struct RuntimeCodexQuotaProfile {
     pub alias: String,
     pub profile: String,
+}
+
+/// Metadata only: do not add credentials or an unverified keyring path here.
+/// Non-default AGY profiles cannot be launched or queried until an isolated
+/// identity backend is explicitly validated on the target OS.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeAgyQuotaProfile {
+    pub alias: String,
+    pub account_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -278,6 +311,36 @@ fn default_true() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn agy_accounts_are_optional_non_secret_metadata_and_normalize_unique_ids() {
+        let legacy: RuntimeAgentQuotaSettings =
+            serde_json::from_value(serde_json::json!({})).unwrap();
+        assert!(legacy.agy_profiles.is_empty());
+
+        let settings: RuntimeAgentQuotaSettings = serde_json::from_value(serde_json::json!({
+            "agyProfiles": [
+                {"alias": " Research ", "accountId": "research"},
+                {"alias": "Duplicate", "accountId": "research"},
+                {"alias": "Reserved", "accountId": "default"},
+                {"alias": "Wrong path", "accountId": "../escape"},
+                {"alias": " Personal ", "accountId": "home_2"}
+            ]
+        }))
+        .unwrap();
+        let normalized = settings.normalized();
+        assert_eq!(normalized.agy_profiles.len(), 2);
+        assert_eq!(normalized.agy_profiles[0].alias, "Research");
+        assert_eq!(normalized.agy_profiles[1].account_id, "home_2");
+        let encoded = serde_json::to_value(normalized).unwrap();
+        assert!(encoded["agyProfiles"][0].get("credentials").is_none());
+        assert!(
+            serde_json::from_value::<RuntimeAgyQuotaProfile>(serde_json::json!({
+                "alias": "Other", "accountId": "other", "token": "not-storable"
+            }))
+            .is_err()
+        );
+    }
 
     #[test]
     fn history_sync_defaults_to_separate_for_legacy_settings() {

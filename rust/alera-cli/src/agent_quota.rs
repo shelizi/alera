@@ -63,6 +63,9 @@ struct AgentQuotaFetchRequest {
     claude_profiles: Vec<ClaudeProfileRequest>,
     #[serde(default)]
     codex_profiles: Vec<CodexProfileRequest>,
+    /// Pending AGY registrations; an alias never selects an OS keyring.
+    #[serde(default)]
+    agy_profiles: Vec<AgyProfileRequest>,
     /// Limits Claude, Codex, and OpenCode to one account. Absent means every
     /// account of the selected providers, which is what a full snapshot sends.
     #[serde(default)]
@@ -136,6 +139,13 @@ struct ClaudeProfileRequest {
 struct CodexProfileRequest {
     alias: String,
     profile: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AgyProfileRequest {
+    alias: String,
+    account_id: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -309,6 +319,7 @@ pub(crate) async fn fetch_agent_quotas(payload: Value) -> Result<Value> {
         .map(str::to_string);
     let cli_permits = Arc::new(Semaphore::new(AGENT_QUOTA_CLI_CONCURRENCY));
     let mut tasks = tokio::task::JoinSet::new();
+    let mut pending_agy = Vec::new();
     for provider in providers {
         match provider.as_str() {
             "claude" => {
@@ -364,6 +375,29 @@ pub(crate) async fn fetch_agent_quotas(payload: Value) -> Result<Value> {
                         fetch_tui_provider("agy", "Antigravity", "agy", "/usage").await
                     });
                 }
+                for profile in &request.agy_profiles {
+                    if !quota_account_requested(&selected_account, &profile.account_id)
+                        || profile.account_id == "default"
+                        || profile.account_id.is_empty()
+                        || profile.account_id.len() > 64
+                        || !profile
+                            .account_id
+                            .chars()
+                            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_'))
+                    {
+                        continue;
+                    }
+                    let mut unavailable = QuotaSnapshot::unavailable(
+                        "agy",
+                        &profile.account_id,
+                        &profile.alias,
+                        "Independent Google login is not yet verified; this account cannot be queried or launched",
+                    );
+                    // A permanent identity gate is not a transient upstream
+                    // quota failure. Never revive a prior reading as stale.
+                    unavailable.data_quality = Some("identity-unverified".into());
+                    pending_agy.push(unavailable);
+                }
             }
             "minimax" => {
                 let names = request.environment_names.clone();
@@ -390,7 +424,7 @@ pub(crate) async fn fetch_agent_quotas(payload: Value) -> Result<Value> {
             _ => {}
         }
     }
-    let mut snapshots = Vec::new();
+    let mut snapshots = pending_agy;
     while let Some(result) = tasks.join_next().await {
         if let Ok(snapshot) = result {
             snapshots.push(snapshot);

@@ -57,7 +57,36 @@ fn accounts(settings: &RuntimeAgentQuotaSettings) -> Vec<HistoryAccount> {
             supported: true,
         });
     }
+    // Show registered AGY account names in the shared history settings but
+    // do not claim that native AGY transcript mirroring or resume works.
+    for item in &settings.agy_profiles {
+        result.push(HistoryAccount {
+            provider: "agy",
+            account_id: item.account_id.clone(),
+            label: format!("Antigravity · {}", item.alias),
+            supported: false,
+        });
+    }
     result
+}
+
+#[cfg(test)]
+#[test]
+fn pending_agy_profiles_appear_in_history_catalog_but_cannot_mirror() {
+    let mut settings = RuntimeAgentQuotaSettings::default();
+    settings
+        .agy_profiles
+        .push(alera_core::runtime::RuntimeAgyQuotaProfile {
+            alias: "Research".into(),
+            account_id: "research".into(),
+        });
+    let all = accounts(&settings);
+    let extra = all
+        .iter()
+        .find(|row| row.provider == "agy" && row.account_id == "research")
+        .unwrap();
+    assert_eq!(extra.label, "Antigravity · Research");
+    assert!(!extra.supported);
 }
 
 fn decode_snapshot(value: &Value) -> Result<(i64, RuntimeAgentQuotaSettings), &'static str> {
