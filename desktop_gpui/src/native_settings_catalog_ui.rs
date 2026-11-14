@@ -142,6 +142,182 @@ impl Workbench {
             .into_any_element()
     }
 
+    /// Worktree rules are shown only after the user explicitly chooses Edit.
+    /// The generic Settings search/summary never shows copied paths or setup
+    /// shell commands, which may contain project-local secrets.
+    fn render_host_project_worktree_editor(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let copies = self.project_settings_copy_inputs.len();
+        let setups = self.project_settings_setup_inputs.len();
+        div()
+            .id("host-project-worktree-editor")
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(rgb(TEXT))
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .child(format!("Worktree Copy Rules ({copies})")),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(MUTED))
+                    .child("Relative paths only. From is required; empty To uses From. Overwrite controls replacing an existing destination."),
+            )
+            .children(self.project_settings_copy_inputs.iter().enumerate().map(|(index, rule)| {
+                div()
+                    .id(("project-copy-rule-editor", index))
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .p_2()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(rgb(BORDER))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(rgb(TEXT))
+                            .child(format!("Copy rule {}", index + 1)),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_wrap()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w(px(110.0))
+                                    .flex()
+                                    .flex_col()
+                                    .gap_1()
+                                    .child(div().text_xs().text_color(rgb(MUTED)).child("From"))
+                                    .child(
+                                        div()
+                                            .p_2()
+                                            .border_1()
+                                            .rounded_md()
+                                            .border_color(rgb(BORDER))
+                                            .bg(rgb(TOOLBAR))
+                                            .child(rule.from.clone()),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w(px(110.0))
+                                    .flex()
+                                    .flex_col()
+                                    .gap_1()
+                                    .child(div().text_xs().text_color(rgb(MUTED)).child("To (optional)"))
+                                    .child(
+                                        div()
+                                            .p_2()
+                                            .border_1()
+                                            .rounded_md()
+                                            .border_color(rgb(BORDER))
+                                            .bg(rgb(TOOLBAR))
+                                            .child(rule.to.clone()),
+                                    ),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                native_components::action_button(
+                                    format!("project-copy-overwrite-{index}"),
+                                    if rule.overwrite { "Overwrite: ON" } else { "Overwrite: OFF" },
+                                    rule.overwrite,
+                                    false,
+                                ).on_click(cx.listener(move |view, _, _, cx| {
+                                    view.toggle_host_project_copy_overwrite(index, cx);
+                                })),
+                            )
+                            .child(
+                                native_components::action_button(
+                                    format!("project-copy-remove-{index}"),
+                                    "Remove rule",
+                                    false,
+                                    true,
+                                ).on_click(cx.listener(move |view, _, _, cx| {
+                                    view.remove_host_project_copy_rule(index, cx);
+                                })),
+                            ),
+                    )
+            }))
+            .child(
+                native_components::action_button(
+                    "project-copy-rule-add", "+ Add Copy Rule", false, false,
+                ).on_click(cx.listener(|view, _, _, cx| {
+                    view.add_host_project_copy_rule(cx);
+                })),
+            )
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(rgb(TEXT))
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .child(format!("Worktree Setup Commands ({setups})")),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(MUTED))
+                    .child("Commands run only during later worktree setup; editing these does not execute anything now. Empty commands are omitted when saving."),
+            )
+            .children(self.project_settings_setup_inputs.iter().enumerate().map(|(index, command)| {
+                div()
+                    .id(("project-setup-command-editor", index))
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .p_2()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(rgb(BORDER))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(rgb(TEXT))
+                            .child(format!("Setup command {}", index + 1)),
+                    )
+                    .child(
+                        div()
+                            .min_h(px(55.0))
+                            .p_2()
+                            .rounded_md()
+                            .border_1()
+                            .border_color(rgb(BORDER))
+                            .bg(rgb(TOOLBAR))
+                            .child(command.clone()),
+                    )
+                    .child(
+                        native_components::action_button(
+                            format!("project-setup-remove-{index}"),
+                            "Remove command",
+                            false,
+                            true,
+                        ).on_click(cx.listener(move |view, _, _, cx| {
+                            view.remove_host_project_setup_command(index, cx);
+                        })),
+                    )
+            }))
+            .child(
+                native_components::action_button(
+                    "project-setup-command-add", "+ Add Setup Command", false, false,
+                ).on_click(cx.listener(|view, _, _, cx| {
+                    view.add_host_project_setup_command(cx);
+                })),
+            )
+            .into_any_element()
+    }
+
     /// Only the effective, registered Host ProjectConfig is summarized here.
     /// Worktree setup commands and prompt bodies are counted, not displayed,
     /// because a search preview must not reveal potential secret values.
@@ -262,7 +438,7 @@ impl Workbench {
                     })),
                 )
             })
-            .when(loaded && editing, |panel| {
+            .when(loaded && editing && !busy, |panel| {
                 let choices: [(&'static str, Option<&'static str>); 4] = [
                     ("Auto-detect", None),
                     ("GitHub", Some("github")),
@@ -331,7 +507,7 @@ impl Workbench {
                             div()
                                 .text_xs()
                                 .text_color(rgb(MUTED))
-                                .child("These project instructions are revealed only inside this explicit edit form. Existing Worktree copy/setup rules are preserved but not edited here."),
+                                .child("Project instructions are revealed only in Edit mode. Worktree Copy Rules and Setup Commands can be edited below; Save updates the Host config only after a version check."),
                         )
                         .child(
                             div()
@@ -344,6 +520,7 @@ impl Workbench {
                                 .bg(rgb(TOOLBAR))
                                 .child(self.project_settings_prompt_input.clone()),
                         )
+                        .child(self.render_host_project_worktree_editor(cx))
                         .child(
                             div()
                                 .flex()
@@ -372,6 +549,10 @@ impl Workbench {
                                 ),
                         ),
                 )
+            })
+            .when(busy, |panel| {
+                panel.child(div().p_2().text_xs().text_color(rgb(MUTED))
+                    .child("Saving to Host; editing is locked until readback completes…"))
             })
             .when(!save_status.is_empty(), |panel| {
                 panel.child(

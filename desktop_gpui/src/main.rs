@@ -564,6 +564,15 @@ struct GitFileDiffPaging {
     previous_starts: Vec<usize>,
 }
 
+/// Editable Worktree copy row owned by the explicit Project Settings form.
+/// Input contents remain private to this entity and are dropped on Cancel,
+/// confirmed Save or Workspace switch, never shown in Settings search results.
+struct ProjectCopyRowInputs {
+    from: Entity<QuickOpenInput>,
+    to: Entity<QuickOpenInput>,
+    overwrite: bool,
+}
+
 struct Workbench {
     model: WorkbenchModel,
     center_view: CenterView,
@@ -611,6 +620,8 @@ struct Workbench {
     project_settings_editing: bool,
     project_settings_draft_provider: Option<String>,
     project_settings_prompt_input: Entity<QuickOpenInput>,
+    project_settings_copy_inputs: Vec<ProjectCopyRowInputs>,
+    project_settings_setup_inputs: Vec<Entity<QuickOpenInput>>,
     project_settings_save_busy: bool,
     project_settings_save_status: String,
     project_settings_mutation_request: u64,
@@ -5658,6 +5669,8 @@ impl Workbench {
         self.project_settings_save_status.clear();
         self.project_settings_error = None;
         self.project_settings_draft_provider = None;
+        self.project_settings_copy_inputs.clear();
+        self.project_settings_setup_inputs.clear();
         self.project_settings_prompt_input
             .update(cx, |input, cx| input.clear(cx));
         self.host_pin_snapshots.clear();
@@ -14869,6 +14882,8 @@ fn main() {
                             project_settings_editing: false,
                             project_settings_draft_provider: None,
                             project_settings_prompt_input: cx.new(|cx| QuickOpenInput::profile_multiline(cx)),
+                            project_settings_copy_inputs: Vec::new(),
+                            project_settings_setup_inputs: Vec::new(),
                             project_settings_save_busy: false,
                             project_settings_save_status: String::new(),
                             project_settings_mutation_request: 0,

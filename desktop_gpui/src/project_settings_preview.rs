@@ -214,6 +214,165 @@ pub fn updated_project_config(
     Ok(config)
 }
 
+/// Editable Native copy-rule draft. The UI never expands this in the Settings
+/// search preview; only an explicit Project Settings Edit reveals its paths.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectCopyRuleDraft {
+    pub from: String,
+    pub to: String,
+    pub overwrite: bool,
+}
+
+pub const MAX_PROJECT_RULES: usize = 64;
+pub const MAX_PROJECT_PATH_BYTES: usize = 512;
+pub const MAX_PROJECT_SETUP_COMMAND_BYTES: usize = 4 * 1024;
+
+/// Decode the exact Host ProjectConfig as source-of-truth, with bounded Native
+/// input controls. Never truncate existing commands or paths silently.
+pub fn project_worktree_editor_seed(
+    original: &Value,
+) -> Result<(Vec<ProjectCopyRuleDraft>, Vec<String>), &'static str> {
+    let parsed: SafeHostProjectConfig = serde_json::from_value(original.clone())
+        .map_err(|_| "Host ProjectConfig contains unsupported fields")?;
+    if parsed.worktree.copy.len() > MAX_PROJECT_RULES
+        || parsed.worktree.setup.len() > MAX_PROJECT_RULES
+    {
+        return Err("Too many Worktree rules to edit safely in Native");
+    }
+    let mut rules = Vec::with_capacity(parsed.worktree.copy.len());
+    for rule in parsed.worktree.copy {
+        let to = rule.to.unwrap_or_default();
+        if rule.from.len() > MAX_PROJECT_PATH_BYTES || to.len() > MAX_PROJECT_PATH_BYTES {
+            return Err("Worktree copy path exceeds Native editor limit");
+        }
+        rules.push(ProjectCopyRuleDraft {
+            from: rule.from,
+            to,
+            overwrite: rule.overwrite,
+        });
+    }
+    if parsed
+        .worktree
+        .setup
+        .iter()
+        .any(|command| command.len() > MAX_PROJECT_SETUP_COMMAND_BYTES || command.contains('\0'))
+    {
+        return Err("Worktree setup command exceeds Native editor limit");
+    }
+    Ok((rules, parsed.worktree.setup))
+}
+
+fn normalize_project_copy_path(path: &str) -> Result<String, &'static str> {
+    let normalized = path.trim().replace('\\', "/");
+    if normalized.is_empty()
+        || normalized.starts_with('/')
+        || normalized.contains(':')
+        || normalized.contains('\0')
+    {
+        return Err("Worktree copy paths must be relative and non-empty");
+    }
+    let mut parts = Vec::new();
+    for segment in normalized.split('/') {
+        if segment == ".." {
+            return Err("Worktree copy paths cannot leave the project");
+        }
+        if segment.is_empty() || segment == "." {
+            continue;
+        }
+        parts.push(segment);
+    }
+    if parts.is_empty() {
+        return Err("Worktree copy paths must contain a file or folder name");
+    }
+    let output = parts.join("/");
+    if output.len() > MAX_PROJECT_PATH_BYTES {
+        return Err("Worktree copy path exceeds Native editor limit");
+    }
+    Ok(output)
+}
+
+/// Apply *structured* Copy Rules + Setup Commands to S07's fully validated
+/// Host config. A no-op draft preserves the original worktree JSON exactly.
+/// Other Host project fields are retained; the Host's replace-all operation is
+/// still preceded by an external refresh-compare and followed by readback.
+pub fn updated_project_config_with_worktree(
+    original: &Value,
+    provider: Option<&str>,
+    prompt_append: &str,
+    copy_rules: &[ProjectCopyRuleDraft],
+    setup_commands: &[String],
+) -> Result<Value, &'static str> {
+    let mut updated = updated_project_config(original, provider, prompt_append)?;
+    if copy_rules.len() > MAX_PROJECT_RULES || setup_commands.len() > MAX_PROJECT_RULES {
+        return Err("Too many Worktree rules");
+    }
+    let (original_copy, original_setup) = project_worktree_editor_seed(original)?;
+    if copy_rules == original_copy && setup_commands == original_setup {
+        // Changing only Hosting/Prompt must not rewrite or normalize any
+        // existing Worktree copy path, shell whitespace or command bytes.
+        return Ok(updated);
+    }
+    let mut copy_json = Vec::with_capacity(copy_rules.len());
+    for rule in copy_rules {
+        let from = normalize_project_copy_path(&rule.from)?;
+        let to = if rule.to.trim().is_empty() {
+            None
+        } else {
+            Some(normalize_project_copy_path(&rule.to)?)
+        };
+        let mut serialized = serde_json::json!({
+            "from": from,
+            "overwrite": rule.overwrite,
+        });
+        if let Some(to) = to {
+            serialized["to"] = Value::String(to);
+        }
+        copy_json.push(serialized);
+    }
+    let mut setup_json = Vec::with_capacity(setup_commands.len());
+    for command in setup_commands {
+        if command.len() > MAX_PROJECT_SETUP_COMMAND_BYTES || command.contains('\0') {
+            return Err("Worktree setup command exceeds the 4 KiB limit");
+        }
+        if !command.trim().is_empty() {
+            // Preserve leading/trailing whitespace in real shell commands.
+            setup_json.push(Value::String(command.to_owned()));
+        }
+    }
+    let current_worktree = original
+        .get("worktree")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+    let mut next_worktree = current_worktree.clone();
+    let map = next_worktree
+        .as_object_mut()
+        .ok_or("Invalid Host Worktree settings")?;
+    map.insert("copy".to_owned(), Value::Array(copy_json));
+    map.insert("setup".to_owned(), Value::Array(setup_json));
+    // Preserve worktree byte-level JSON representation if structurally
+    // unchanged (e.g. absent overwrite:false, absent empty list fields).
+    let current_typed: SafeHostWorktreeConfig = serde_json::from_value(current_worktree)
+        .map_err(|_| "Host Worktree settings contain unsupported fields")?;
+    let new_typed: SafeHostWorktreeConfig = serde_json::from_value(next_worktree.clone())
+        .map_err(|_| "Edited Worktree settings are not valid")?;
+    if current_typed != new_typed {
+        updated
+            .as_object_mut()
+            .ok_or("Invalid ProjectConfig root")?
+            .insert("worktree".to_owned(), next_worktree);
+    }
+    let _: SafeHostProjectConfig = serde_json::from_value(updated.clone())
+        .map_err(|_| "Edited ProjectConfig does not match Runtime Host schema")?;
+    if serde_json::to_string(&updated)
+        .map_err(|_| "Could not encode ProjectConfig")?
+        .len()
+        > 32 * 1024
+    {
+        return Err("Edited ProjectConfig exceeds Host size limit");
+    }
+    Ok(updated)
+}
+
 /// Compare a completed write with Host readback using the same typed Runtime
 /// Host schema; absent fields and explicit defaults are equivalent.
 pub fn host_config_matches(expected: &Value, readback: &Value) -> bool {
@@ -227,6 +386,151 @@ mod tests {
     use super::*;
     use crate::runtime_catalog::{RuntimeProject, RuntimeWorkspace};
     use std::path::PathBuf;
+
+    #[test]
+    fn unedited_worktree_paths_and_setup_whitespace_are_exactly_preserved() {
+        let original = serde_json::json!({
+            "worktree": {
+                "copy": [{"from": "src\\windows\\file", "to": "out/./file"}],
+                "setup": ["  export TOKEN=private_value  ", "echo first\necho second\n"]
+            },
+            "newWorkspace": {"promptAppend":"old"},
+            "gitHostingProvider": "github",
+        });
+        let (copy, setup) = project_worktree_editor_seed(&original).unwrap();
+        let updated = updated_project_config_with_worktree(
+            &original,
+            Some("gitlab"),
+            "new prompt",
+            &copy,
+            &setup,
+        )
+        .unwrap();
+        assert_eq!(updated["worktree"], original["worktree"]);
+        assert_eq!(updated["gitHostingProvider"], "gitlab");
+        assert_eq!(updated["newWorkspace"]["promptAppend"], "new prompt");
+    }
+
+    #[test]
+    fn worktree_edit_can_add_modify_and_delete_without_touching_unedited_fields() {
+        let initial = serde_json::json!({
+            "gitHostingProvider": "github",
+            "newWorkspace": {"promptAppend": "existing"},
+            "worktree": {
+                "copy": [{"from": ".env", "overwrite": false}, {"from": "src", "to": "src-copy", "overwrite": true}],
+                "setup": ["pnpm install", "echo old"]
+            }
+        });
+        let (mut copy, mut setup) = project_worktree_editor_seed(&initial).unwrap();
+        assert_eq!(copy.len(), 2);
+        assert_eq!(setup.len(), 2);
+        let untouched = updated_project_config_with_worktree(
+            &initial,
+            Some("github"),
+            "existing",
+            &copy,
+            &setup,
+        )
+        .unwrap();
+        assert_eq!(untouched["worktree"], initial["worktree"]);
+        copy.remove(0);
+        copy[0].to = "changed".into();
+        copy[0].overwrite = false;
+        copy.push(ProjectCopyRuleDraft {
+            from: "docs/./manual".into(),
+            to: "".into(),
+            overwrite: true,
+        });
+        setup.remove(1);
+        setup.push("make bootstrap".into());
+        let edited =
+            updated_project_config_with_worktree(&initial, Some("gitlab"), "new", &copy, &setup)
+                .unwrap();
+        assert_eq!(edited["gitHostingProvider"], "gitlab");
+        assert_eq!(edited["newWorkspace"]["promptAppend"], "new");
+        assert_eq!(
+            edited["worktree"]["copy"],
+            serde_json::json!([
+                {"from":"src","to":"changed","overwrite":false},
+                {"from":"docs/manual","overwrite":true},
+            ])
+        );
+        assert_eq!(
+            edited["worktree"]["setup"],
+            serde_json::json!(["pnpm install", "make bootstrap"])
+        );
+        assert!(!host_config_matches(&initial, &edited));
+        assert!(host_config_matches(&edited, &edited));
+        let cleared = updated_project_config_with_worktree(&edited, None, "", &[], &[]).unwrap();
+        assert_eq!(cleared["worktree"]["copy"], serde_json::json!([]));
+        assert_eq!(cleared["worktree"]["setup"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn worktree_edit_rejects_relative_escape_windows_absolute_paths_and_bounds() {
+        let original = serde_json::json!({
+            "worktree": {"copy": [], "setup": []},
+            "newWorkspace": {"promptAppend": ""},
+        });
+        let make = |path: &str| {
+            vec![ProjectCopyRuleDraft {
+                from: path.to_owned(),
+                to: String::new(),
+                overwrite: false,
+            }]
+        };
+        for path in [
+            "",
+            ".",
+            "..",
+            "../.env",
+            "foo/../outside",
+            "C:\\secrets",
+            "/etc/passwd",
+            "\\\\server\\share",
+        ] {
+            assert!(
+                updated_project_config_with_worktree(&original, None, "", &make(path), &[],)
+                    .is_err(),
+                "{path} should be rejected"
+            );
+        }
+        assert!(updated_project_config_with_worktree(
+            &original,
+            None,
+            "",
+            &make("safe/path"),
+            &["x".repeat(4097)],
+        )
+        .is_err());
+        assert!(updated_project_config_with_worktree(
+            &original,
+            None,
+            "",
+            &make("safe/path"),
+            &vec!["ok".to_owned(); MAX_PROJECT_RULES + 1],
+        )
+        .is_err());
+        assert!(updated_project_config_with_worktree(
+            &original,
+            None,
+            "",
+            &vec![
+                ProjectCopyRuleDraft {
+                    from: "x".into(),
+                    to: "".into(),
+                    overwrite: false,
+                };
+                MAX_PROJECT_RULES + 1
+            ],
+            &[],
+        )
+        .is_err());
+        assert!(project_worktree_editor_seed(&serde_json::json!({
+            "worktree":{"copy":[{"from":"x".repeat(MAX_PROJECT_PATH_BYTES + 1)}]}
+        }))
+        .is_err());
+    }
 
     #[test]
     fn edits_only_explicit_safe_fields_and_preserves_full_worktree_config() {

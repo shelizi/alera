@@ -208,11 +208,127 @@ impl Workbench {
         cx.notify();
     }
 
+    fn new_host_project_copy_rule_input(
+        rule: &alera_gpui_desktop::project_settings_preview::ProjectCopyRuleDraft,
+        cx: &mut Context<Self>,
+    ) -> Result<ProjectCopyRowInputs, &'static str> {
+        let from = cx.new(|cx| QuickOpenInput::with_placeholder("Relative source, e.g. .env", cx));
+        let to = cx.new(|cx| QuickOpenInput::with_placeholder("Optional relative destination", cx));
+        if !from.update(cx, |input, cx| input.set_query(&rule.from, cx))
+            || !to.update(cx, |input, cx| input.set_query(&rule.to, cx))
+        {
+            return Err("Worktree copy path is too long to edit in Native");
+        }
+        Ok(ProjectCopyRowInputs {
+            from,
+            to,
+            overwrite: rule.overwrite,
+        })
+    }
+
+    fn new_host_project_setup_input(
+        command: &str,
+        cx: &mut Context<Self>,
+    ) -> Result<Entity<QuickOpenInput>, &'static str> {
+        let input = cx.new(|cx| QuickOpenInput::profile_multiline(cx));
+        input.update(cx, |editor, cx| {
+            editor.set_placeholder("Command executed in the new worktree…", cx);
+        });
+        if !input.update(cx, |editor, cx| editor.set_query(command, cx)) {
+            return Err("Worktree setup command is too long to edit in Native");
+        }
+        Ok(input)
+    }
+
+    pub(super) fn add_host_project_copy_rule(&mut self, cx: &mut Context<Self>) {
+        if !self.project_settings_editing || self.project_settings_save_busy {
+            return;
+        }
+        if self.project_settings_copy_inputs.len()
+            >= alera_gpui_desktop::project_settings_preview::MAX_PROJECT_RULES
+        {
+            self.project_settings_save_status = "Maximum 64 copy rules".into();
+            cx.notify();
+            return;
+        }
+        let draft = alera_gpui_desktop::project_settings_preview::ProjectCopyRuleDraft {
+            from: String::new(),
+            to: String::new(),
+            overwrite: false,
+        };
+        if let Ok(row) = Self::new_host_project_copy_rule_input(&draft, cx) {
+            self.project_settings_copy_inputs.push(row);
+            self.project_settings_save_status.clear();
+            cx.notify();
+        }
+    }
+
+    pub(super) fn remove_host_project_copy_rule(&mut self, index: usize, cx: &mut Context<Self>) {
+        if self.project_settings_editing
+            && !self.project_settings_save_busy
+            && index < self.project_settings_copy_inputs.len()
+        {
+            self.project_settings_copy_inputs.remove(index);
+            self.project_settings_save_status.clear();
+            cx.notify();
+        }
+    }
+
+    pub(super) fn toggle_host_project_copy_overwrite(
+        &mut self,
+        index: usize,
+        cx: &mut Context<Self>,
+    ) {
+        if self.project_settings_editing && !self.project_settings_save_busy {
+            if let Some(row) = self.project_settings_copy_inputs.get_mut(index) {
+                row.overwrite = !row.overwrite;
+                self.project_settings_save_status.clear();
+                cx.notify();
+            }
+        }
+    }
+
+    pub(super) fn add_host_project_setup_command(&mut self, cx: &mut Context<Self>) {
+        if !self.project_settings_editing || self.project_settings_save_busy {
+            return;
+        }
+        if self.project_settings_setup_inputs.len()
+            >= alera_gpui_desktop::project_settings_preview::MAX_PROJECT_RULES
+        {
+            self.project_settings_save_status = "Maximum 64 setup commands".into();
+            cx.notify();
+            return;
+        }
+        if let Ok(input) = Self::new_host_project_setup_input("", cx) {
+            self.project_settings_setup_inputs.push(input);
+            self.project_settings_save_status.clear();
+            cx.notify();
+        }
+    }
+
+    pub(super) fn remove_host_project_setup_command(
+        &mut self,
+        index: usize,
+        cx: &mut Context<Self>,
+    ) {
+        if self.project_settings_editing
+            && !self.project_settings_save_busy
+            && index < self.project_settings_setup_inputs.len()
+        {
+            self.project_settings_setup_inputs.remove(index);
+            self.project_settings_save_status.clear();
+            cx.notify();
+        }
+    }
+
     /// The search preview never exposes project prompts. An explicit user
     /// Edit action reveals this project's current prompt in a dedicated
     /// multiline input. Unknown Host schema fields forbid a destructive save.
     pub(super) fn begin_host_project_settings_edit(&mut self, cx: &mut Context<Self>) {
-        if self.project_settings_loading || self.project_settings_save_busy {
+        if self.project_settings_loading
+            || self.project_settings_save_busy
+            || self.project_settings_editing
+        {
             return;
         }
         let Some(config) = self.project_settings_config.as_ref() else {
@@ -243,6 +359,38 @@ impl Workbench {
             cx.notify();
             return;
         }
+        let (copy_seed, setup_seed) =
+            match alera_gpui_desktop::project_settings_preview::project_worktree_editor_seed(config)
+            {
+                Ok(seed) => seed,
+                Err(error) => {
+                    self.project_settings_save_status = error.to_owned();
+                    cx.notify();
+                    return;
+                }
+            };
+        let mut copy_inputs = Vec::with_capacity(copy_seed.len());
+        for rule in &copy_seed {
+            match Self::new_host_project_copy_rule_input(rule, cx) {
+                Ok(row) => copy_inputs.push(row),
+                Err(error) => {
+                    self.project_settings_save_status = error.to_owned();
+                    cx.notify();
+                    return;
+                }
+            }
+        }
+        let mut setup_inputs = Vec::with_capacity(setup_seed.len());
+        for command in &setup_seed {
+            match Self::new_host_project_setup_input(command, cx) {
+                Ok(input) => setup_inputs.push(input),
+                Err(error) => {
+                    self.project_settings_save_status = error.to_owned();
+                    cx.notify();
+                    return;
+                }
+            }
+        }
         if !self
             .project_settings_prompt_input
             .update(cx, |input, cx| input.set_query(&prompt, cx))
@@ -252,6 +400,8 @@ impl Workbench {
             cx.notify();
             return;
         }
+        self.project_settings_copy_inputs = copy_inputs;
+        self.project_settings_setup_inputs = setup_inputs;
         self.project_settings_draft_provider = provider;
         self.project_settings_editing = true;
         self.project_settings_save_status.clear();
@@ -266,6 +416,8 @@ impl Workbench {
         self.project_settings_draft_provider = None;
         self.project_settings_prompt_input
             .update(cx, |input, cx| input.clear(cx));
+        self.project_settings_copy_inputs.clear();
+        self.project_settings_setup_inputs.clear();
         self.project_settings_save_status = "Unsaved Project Settings edits discarded".into();
         cx.notify();
     }
@@ -281,7 +433,16 @@ impl Workbench {
         {
             return;
         }
-        if self.project_settings_prompt_input.read(cx).composing() {
+        if self.project_settings_prompt_input.read(cx).composing()
+            || self
+                .project_settings_copy_inputs
+                .iter()
+                .any(|row| row.from.read(cx).composing() || row.to.read(cx).composing())
+            || self
+                .project_settings_setup_inputs
+                .iter()
+                .any(|input| input.read(cx).composing())
+        {
             self.project_settings_save_status =
                 "Finish the current IME composition before saving".into();
             cx.notify();
@@ -315,22 +476,43 @@ impl Workbench {
             .read(cx)
             .query()
             .to_owned();
-        let revised = match alera_gpui_desktop::project_settings_preview::updated_project_config(
-            original,
-            self.project_settings_draft_provider.as_deref(),
-            &prompt,
-        ) {
-            Ok(config) => config,
-            Err(error) => {
-                self.project_settings_save_status = error.into();
-                cx.notify();
-                return;
-            }
-        };
+        let copy_drafts = self
+            .project_settings_copy_inputs
+            .iter()
+            .map(
+                |row| alera_gpui_desktop::project_settings_preview::ProjectCopyRuleDraft {
+                    from: row.from.read(cx).query().to_owned(),
+                    to: row.to.read(cx).query().to_owned(),
+                    overwrite: row.overwrite,
+                },
+            )
+            .collect::<Vec<_>>();
+        let setup_drafts = self
+            .project_settings_setup_inputs
+            .iter()
+            .map(|input| input.read(cx).query().to_owned())
+            .collect::<Vec<_>>();
+        let revised =
+            match alera_gpui_desktop::project_settings_preview::updated_project_config_with_worktree(
+                original,
+                self.project_settings_draft_provider.as_deref(),
+                &prompt,
+                &copy_drafts,
+                &setup_drafts,
+            ) {
+                Ok(config) => config,
+                Err(error) => {
+                    self.project_settings_save_status = error.into();
+                    cx.notify();
+                    return;
+                }
+            };
         if alera_gpui_desktop::project_settings_preview::host_config_matches(original, &revised) {
             self.project_settings_editing = false;
             self.project_settings_prompt_input
                 .update(cx, |input, cx| input.clear(cx));
+            self.project_settings_copy_inputs.clear();
+            self.project_settings_setup_inputs.clear();
             self.project_settings_save_status = "No Project Settings changes to save".into();
             cx.notify();
             return;
@@ -403,6 +585,8 @@ impl Workbench {
                                 view.project_settings_editing = false;
                                 view.project_settings_draft_provider = None;
                                 view.project_settings_prompt_input.update(cx, |input, cx| input.clear(cx));
+                                view.project_settings_copy_inputs.clear();
+                                view.project_settings_setup_inputs.clear();
                                 view.project_settings_save_status =
                                     "Host Project Settings saved and confirmed by readback".into();
                             }
@@ -411,6 +595,8 @@ impl Workbench {
                                     "Host saved, but the response is invalid: {error}. Refresh before another save."
                                 );
                                 view.project_settings_editing = false;
+                                view.project_settings_copy_inputs.clear();
+                                view.project_settings_setup_inputs.clear();
                                 view.project_settings_config = None;
                             }
                         }
@@ -423,6 +609,8 @@ impl Workbench {
                             view.project_settings_config = None;
                             view.project_settings_project_id = None;
                             view.project_settings_rows.clear();
+                            view.project_settings_copy_inputs.clear();
+                            view.project_settings_setup_inputs.clear();
                             view.project_settings_error = Some(
                                 "Project save outcome is uncertain; refresh from Host before editing again".into()
                             );

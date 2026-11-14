@@ -78,21 +78,29 @@ may cache the prior icon; restart the application and refresh the relevant
 shortcut/taskbar pin before attributing a stale graphic to the binary.
 macOS app-bundle icon packaging remains a separate distribution concern.
 
-## Host-backed Project Settings editing (S07)
+## Host-backed Project Settings editing (S07/S08)
 
 **Settings → Projects → Project Settings** reads the active Workspace's
 registered ProjectConfig from the existing Runtime Host. The safe summary
 counts Worktree copy/setup rules and reports whether a prompt is configured,
 without expanding command text, paths or project instructions. Choose
 **Edit Project Settings** to explicitly open the Native editor for **Git
-Hosting Provider** (Auto-detect, GitHub, GitLab, Azure DevOps) and **New
-Workspace → Prompt Append**. Choose **Save to Host** or **Cancel**; there is
-no autosave and a new Workspace clears the old edit state.
+Hosting Provider** (Auto-detect, GitHub, GitLab, Azure DevOps), **New
+Workspace → Prompt Append**, **Worktree Copy Rules** (From/To/Overwrite,
+Add/Remove) and **Worktree Setup Commands** (multiline, Add/Remove).
+Choose **Save to Host** or **Cancel**; there is no autosave and a new
+Workspace clears the old edit state. Editing these setup commands does *not*
+execute them immediately; they are used by later Worktree creation/setup.
 
 The Host's `config-set` operation replaces the *whole* configuration.
-Native preserves the exact Worktree copy/setup rules while updating only
-these two reviewed fields, checks for unknown future schema keys, and
-compares against a new Host read before writing. It reports success only
+Native preserves the exact Worktree copy/setup rules if untouched and
+updates only explicitly edited fields. Copy paths must be relative to the
+project, cannot traverse outside it, and are limited to 512 bytes each.
+Commands are limited to 4 KiB each; each rule list is limited to 64 entries,
+with a total Host config limit of 32 KiB. Unchanged shell command whitespace
+and paths are preserved; empty setup-command rows are skipped on Save.
+Native rejects unknown future schema keys and compares against a new Host
+read before writing. It reports success only
 after a subsequent Host readback matches the intended values. Because the
 existing Host API lacks atomic ProjectConfig compare-and-set, a concurrent
 Classic edit in the narrow interval between preflight and write is still a
@@ -107,10 +115,10 @@ CLI is outdated. Build/update the Native-bundled Rust CLI together with the
 Native frontend before using Save. No CLI/Host changes are applied to a
 shipping Classic install automatically.
 
-Worktree **copy/setup rule editing and repository `alera.toml`
-override management are not yet available** in this Native form. The
-read-only summary remains useful even when the CLI cannot save. Interactive
-Windows GUI + live Host acceptance is a separate release gate.
+Repository **`alera.toml` source selection / Use Repo File** is still
+not available in this Native form; changes write the Host-owned UI override.
+The read-only summary remains useful even when the CLI cannot save.
+Interactive Windows GUI + live Host acceptance is a separate release gate.
 
 ## Native terminal scrollback (Windows / macOS / Linux)
 
