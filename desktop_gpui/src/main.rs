@@ -8412,6 +8412,7 @@ impl Workbench {
             })
             .unwrap_or("");
         let title = tab.title;
+        let tab_tooltip_title = title.clone();
         let for_click = identity.clone();
         let for_middle = identity.clone();
         let for_right = identity.clone();
@@ -8450,6 +8451,7 @@ impl Workbench {
                     .child(icon(icon_kind, 12.0, if selected { TEXT } else { MUTED }))
                     .child(
                         div()
+                            .id(("mixed-tab-title", index))
                             .min_w_0()
                             .max_w(px(if tab.kind == WorkbenchTabKind::Terminal {
                                 92.0
@@ -8458,6 +8460,12 @@ impl Workbench {
                             }))
                             .truncate()
                             .text_sm()
+                            .tooltip(move |window, cx| {
+                                gpui_kit::component::tooltip::Tooltip::new(
+                                    tab_tooltip_title.clone(),
+                                )
+                                .build(window, cx)
+                            })
                             .child(title),
                     )
                     .when(tab.dirty, |entry| entry.child(div().text_xs().child("●")))
@@ -11133,10 +11141,21 @@ impl Render for Workbench {
                                             let selected = explorer_multi_selection.contains(&path);
                                             let row_icon = explorer_file_icon(&label, hit.is_directory, false);
                                             let status_badge = explorer_git_badges.get(&path);
+                                            let full_relative = relative.display().to_string();
+                                            let parent_label = relative
+                                                .parent()
+                                                .filter(|p| !p.as_os_str().is_empty())
+                                                .map(|p| p.display().to_string())
+                                                .unwrap_or_default();
                                             div()
                                                 .id(("explorer-filter-result", i))
                                                 .px_2()
-                                                .py_1()
+                                                .h(px(28.0))
+                                                .min_w_0()
+                                                .tooltip(move |window, cx| {
+                                                    gpui_kit::component::tooltip::Tooltip::new(full_relative.clone())
+                                                        .build(window, cx)
+                                                })
                                                 .flex()
                                                 .items_center()
                                                 .gap_2()
@@ -11144,10 +11163,12 @@ impl Render for Workbench {
                                                 .bg(rgb(if selected { ACTIVE } else { PANEL }))
                                                 .hover(|style| style.bg(rgb(ACTIVE)))
                                                 .child(icon(row_icon, 15.0, if selected { TEXT } else { MUTED }))
-                                                .child(div().min_w_0().flex_1().flex().flex_col()
-                                                    .child(div().text_sm().child(label))
-                                                    .child(div().text_xs().text_color(rgb(MUTED))
-                                                        .child(relative.display().to_string())))
+                                                .child(div().min_w_0().flex_1().flex().items_center().gap_2()
+                                                    .child(div().min_w_0().flex_1().truncate().text_sm().child(label))
+                                                    .when(!parent_label.is_empty(), |row| {
+                                                        row.child(div().min_w_0().max_w(px(180.0)).truncate()
+                                                            .text_xs().text_color(rgb(MUTED)).child(parent_label))
+                                                    }))
                                                 .child(explorer_status_badge(status_badge))
                                                 .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
                                                     this.explorer_context_menu = None;
@@ -11222,7 +11243,7 @@ impl Render for Workbench {
                                                 .id(("explorer-tree-row", i))
                                                 .pl(px(8.0 + item.depth as f32 * 16.0))
                                                 .pr_2()
-                                                .h(px(32.0))
+                                                .h(px(28.0))
                                                 .flex()
                                                 .items_center()
                                                 .gap_1()
@@ -11254,7 +11275,7 @@ impl Render for Workbench {
                                                     div().w(px(20.0)).into_any_element()
                                                 })
                                                 .child(icon(row_icon, 15.0, if selected { TEXT } else { MUTED }))
-                                                .child(div().flex_1().min_w_0().overflow_hidden().text_sm().child(row_label))
+                                                .child(div().flex_1().min_w_0().truncate().text_sm().child(row_label))
                                                 .child(explorer_status_badge(status_badge))
                                                 .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
                                                     this.explorer_context_menu = None;
@@ -11327,7 +11348,7 @@ impl Render for Workbench {
                                                 .id(i)
                                                 .pl_2()
                                                 .pr_2()
-                                                .h(px(32.0))
+                                                .h(px(28.0))
                                                 .flex()
                                                 .items_center()
                                                 .gap_2()
@@ -11335,7 +11356,7 @@ impl Render for Workbench {
                                                 .bg(rgb(if selected { ACTIVE } else { PANEL }))
                                                 .hover(|style| style.bg(rgb(ACTIVE)))
                                                 .child(icon(row_icon, 15.0, if selected { TEXT } else { MUTED }))
-                                                .child(div().flex_1().min_w_0().overflow_hidden().text_sm().child(item.name))
+                                                .child(div().flex_1().min_w_0().truncate().text_sm().child(item.name))
                                                 .child(explorer_status_badge(status_badge))
                                                 .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
                                                     this.explorer_context_menu = None;

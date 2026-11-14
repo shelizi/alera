@@ -5,6 +5,23 @@
 use super::*;
 use native_components::action_button;
 
+/// Keep filename and directory independently readable in narrow Quick Open
+/// dialogs. The full relative path remains available in the row tooltip.
+fn quick_open_display_parts(path: &Path, workspace: &Path) -> (String, String, String) {
+    let relative = path.strip_prefix(workspace).unwrap_or(path);
+    let full = relative.display().to_string();
+    let filename = relative
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| full.clone());
+    let parent = relative
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .map(|parent| parent.display().to_string())
+        .unwrap_or_default();
+    (filename, parent, full)
+}
+
 /// The expanded viewport only displays an already-fetched read-only patch.
 pub(super) fn can_expand_read_only_diff(patch: Option<&str>, loading: bool) -> bool {
     !loading && patch.is_some_and(|text| !text.trim().is_empty())
@@ -629,22 +646,54 @@ impl Workbench {
                     .min_h_0()
                     .overflow_y_scroll()
                     .children(matches.into_iter().enumerate().map(|(index, path)| {
-                        let label = path
-                            .strip_prefix(&workspace)
-                            .unwrap_or(&path)
-                            .display()
-                            .to_string();
-                        native_components::menu_item(
-                            ("native-quick-open-result", index),
-                            label,
-                            index == selected_index,
-                            false,
-                        )
-                        .on_click(cx.listener(
-                            move |view, _, window, cx| {
+                        let (filename, parent, full_path) =
+                            quick_open_display_parts(&path, &workspace);
+                        div()
+                            .id(("native-quick-open-result", index))
+                            .w_full()
+                            .min_w_0()
+                            .h(px(28.0))
+                            .px_2()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .cursor_pointer()
+                            .rounded_sm()
+                            .hover(|style| style.bg(rgb(ACTIVE)))
+                            .text_sm()
+                            .text_color(rgb(TEXT))
+                            .tooltip(move |window, cx| {
+                                gpui_kit::component::tooltip::Tooltip::new(full_path.clone())
+                                    .build(window, cx)
+                            })
+                            .child(div().w(px(16.0)).child(if index == selected_index {
+                                "✓"
+                            } else {
+                                ""
+                            }))
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .flex_1()
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(div().min_w_0().flex_1().truncate().child(filename))
+                                    .when(!parent.is_empty(), |row| {
+                                        row.child(
+                                            div()
+                                                .min_w_0()
+                                                .max_w(px(220.0))
+                                                .truncate()
+                                                .text_xs()
+                                                .text_color(rgb(MUTED))
+                                                .child(parent),
+                                        )
+                                    }),
+                            )
+                            .on_click(cx.listener(move |view, _, window, cx| {
                                 view.choose_quick_open_path(&path, window, cx);
-                            },
-                        ))
+                            }))
                     })),
             );
         let content = content.on_key_down(cx.listener(
@@ -798,10 +847,31 @@ impl Workbench {
 mod git_preview_tests {
     use super::{
         can_expand_read_only_diff, expanded_git_diff_size, git_dialog_file_source_matches,
-        git_patch_line_color, parse_unified_hunk_header, summarize_git_patch,
-        visible_git_diff_rows, visible_git_hunk_targets, GitDialogFileSource, GitFileDiffPaging,
+        git_patch_line_color, parse_unified_hunk_header, quick_open_display_parts,
+        summarize_git_patch, visible_git_diff_rows, visible_git_hunk_targets, GitDialogFileSource,
+        GitFileDiffPaging,
     };
     use alera_gpui_desktop::git_inspect::GitChangeArea;
+    use std::path::Path;
+
+    #[test]
+    fn u02_quick_open_labels_keep_filename_and_avoid_duplicate_directory() {
+        let workspace = Path::new("repo");
+        let file = Path::new("repo/src/deeply/nested/README.md");
+        let (filename, parent, full) = quick_open_display_parts(file, workspace);
+        assert_eq!(filename, "README.md");
+        assert_eq!(parent, Path::new("src/deeply/nested").display().to_string());
+        assert_eq!(
+            full,
+            Path::new("src/deeply/nested/README.md")
+                .display()
+                .to_string()
+        );
+        let (root_filename, root_parent, _) =
+            quick_open_display_parts(Path::new("repo/Cargo.toml"), workspace);
+        assert_eq!(root_filename, "Cargo.toml");
+        assert!(root_parent.is_empty());
+    }
 
     #[test]
     fn expanded_git_preview_requires_loaded_nonempty_snapshot() {
