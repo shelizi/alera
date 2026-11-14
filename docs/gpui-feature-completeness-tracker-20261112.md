@@ -93,7 +93,7 @@
 | --- | --- | --- | --- |
 | **U01** | Classic Mixed Tab／左右 Pane／`+`、右鍵與釘選 | **部分完成（左右 Tab 列對齊已實測）**：GPUI 原先主 Pane Header 在分割容器外、副 Pane 在內而有高低差；現在左右 Tab 同列、共享 pinned row，高度對齊且副 Pane 不再重複顯示第二組 Tab。Windows 3440×1440 實機 PASS；[本輪驗收](gpui-terminal-fullpane-split-tab-alignment-acceptance-20261112.md) | 其餘單／雙 Pane Classic 操作、分割方向、密集 Tab 的日常一致性仍在 U01 驗收，不因這次局部修正就整項結案 |
 | **U02** | Quick Open／檔案樹／Tab 的長檔名與資訊密度 | **核心 UI 改善已寫入／Windows GUI 待驗**：Quick Open 改以檔名優先＋資料夾輔助的單行 28px 結果列、完整路徑 Tooltip；Explorer 篩選列去除重複檔名、改單行 28px 與 Tooltip；檔案樹 32→28px、過長名稱顯示省略提示，Mixed Tab 可 Hover 看完整名稱。新增純路徑格式單測（尚未執行）；重型 Windows Bin 測試因連結耗時主動停止；`cargo check --offline --locked --bin alera-gpui-desktop -j4` **EXIT 0**、cargo fmt 與 git diff --check PASS（有一項未使用 menu_item 的非阻斷警告）。 | 正常 Windows GUI 中驗證窄欄、同名長路徑與 Tab；不因重型 Bin 測試阻擋 U03 |
-| **U03** | 鍵盤焦點、一般 Windows 注音、快捷鍵 | **部分完成**：T06 Terminal 雙 Pane 真實注音候選／選字已通過，Editor／搜尋 IME 焦點與鍵盤 UX 尚須 U03 驗收 | 編輯器、搜尋及 Terminal 正常輸入繁中，快捷鍵不搶組字、不吃大寫 |
+| **U03** | 鍵盤焦點、一般 Windows 注音、快捷鍵 | **搜尋輸入組字保護已接線／GUI 待驗**：T06 Terminal 雙 Pane 實際注音候選／選字已 PASS；本輪發現 QuickOpenInput 的 Backspace 在已標記注音 preedit 時仍執行一般刪字，且 Select All／Paste 可能覆蓋候選。新增統一組字保護、Unicode grapheme 刪字範圍檢查與過期選取防護，增加純函式回歸（尚未執行），Windows `cargo check --offline --locked --bin alera-gpui-desktop -j4` **EXIT 0**、fmt PASS；Editor 核心原有導航／Backspace marked guard 保留。 | 實際 Windows Editor／Quick Open／Find／Explorer 注音候選、焦點和快捷鍵 GUI 驗收待辦，不阻擋 U04 |
 | **U04** | 正常重開後 Workbench／Tab／草稿／釘選／設定維持 | **部分完成**：Host Session 及部分佈局重啟已有實測 | 在隔離 Workspace 關閉重開，日常佈局及資料仍正確，不需要測極端斷電 |
 | **U05** | **Agent 額度狀態列與 Classic 介面密度、圖示、顏色、刷新一致** | **部分完成（Windows 合成 UI＋真正隔離 Host CLI 釘選 CAS PASS）**：維持 5 分鐘額度刷新、Classic 三色門檻、Provider 圖示與多帳號精簡標籤、可點擊明細／Refresh／AGY 五項與固定面板工具列。[原 UI 驗收](gpui-u05-agent-quota-status-classic-parity-20261113.md)。**修正單一帳號刷新失敗原本誤標所有 Provider stale**；額度視窗開啟時共享釘選輪詢 3 秒、閒置 15 秒；發現 CLI `settings set` 原本禁止 JSON 陣列，已改成僅對 `agents.quotaUnpinnedKeys` 接受經 Rust Core 規範驗證的陣列。新版 CLI 隔離 Host 實測釘選 CAS 寫入／第二條連線讀回／取消 AGY／舊值拒絕／非法值拒絕／重啟後持久化均 PASS，正式 Host 未碰。[U05 實測](gpui-u05-quota-popup-refresh-and-pin-sync-20261113.md)。GPUI Library **540 PASS／0 FAIL／1 FILTERED**、Native **33/33 PASS**、Rust Core **136/136 PASS**、Windows CLI／GPUI EXE build PASS | **仍待** 正式 Classic＋GPUI 雙 GUI 配新版 Host 實際釘選同步、逐個真 Provider 額度回應、Codex Reset 等進階操作；Rust CLI 雙 Client 被忽略測試的 Binary 編譯逾時不算 PASS。`supported=false` |
 
@@ -129,8 +129,8 @@
 | DEFERRED | **H03** | WinRT Action Center 點擊啟動 Native 並聚焦已認證 Agent／Pane／Session；Classic／Native 通知去重 | 已有 Native COM 與 DPAPI 冷啟動補救、單一待處理通知安全還原；最新 H03 **10/10 PASS、1 項 Windows 點擊待重驗**，Native EXE 建置成功。歷史 OS 點擊曾成功但仍間歇性漏 Token；真正 Host Pane 驗收與 Classic／Native exclusive owner 未完成。**暫緩，不阻擋 UI 功能**；正式 Native release fail-closed、supported=false。[H03 驗證](gpui-h03-windows-agent-toast-pane-routing-20261114.md) |
 | REVIEW LATER | **U01** | Mixed Tab／左右 Pane／右鍵／釘選 | 兩 Pane Tab 列高度實機 PASS，其餘一般 GUI 操作待驗；不阻擋已知 U02 功能缺口 |
 | INTEGRATED／待 GUI 驗收 | **U02** | Quick Open／Explorer 搜尋長檔名與列表密度 | 緊湊結果列、目錄分欄、完整路徑／Tab Tooltip、28px 檔案樹均已接線，Windows `cargo check` EXIT 0、fmt／diff PASS；Bin 單測因連結耗時停止，不列為 PASS |
-| **NOW** | **U03** | Editor／搜尋 IME、鍵盤焦點與快捷鍵 | 優先修正常態輸入缺口；無需回頭驗 H03 COM |
-| NEXT | U04 | Workbench／Tab／草稿重啟還原 | 先完成一般使用流程，再集中做 GUI 驗收 |
+| INTEGRATED／待 GUI 驗收 | **U03** | Editor／搜尋 IME、鍵盤焦點與快捷鍵 | QuickOpenInput 組字中的 Backspace／Select All／Paste 不再搶候選，核心 Editor 已具 marked guard；Rust cargo check EXIT 0、fmt PASS；Windows 真 GUI 待驗 |
+| **NOW** | **U04** | Workbench／Tab／草稿重啟還原 | 功能完整優先，先處理正常重啟的使用情境；H03 COM 仍暫緩 |
 
 **排程規則：** 該工作包完成基本正向 UI 驗收就移到下一項，不因極端案例未驗證而反覆停留；發現正常情境確實壞掉才回頭修。某項已有正常操作 PASS 可縮短，立即移到下一項。保留安全回歸，不以省時間為由刪除原有測試。
 
@@ -234,6 +234,8 @@
 **2026-11-14 H03 暫緩決策／功能優先**：使用者明確要求難以穩定重現的通知 COM 點擊先跳過。整合 HEAD `4e0e0f7c5` 的單一待處理通知 DPAPI fallback 已提交，H03 專項 **10/10 PASS、1 個 Windows 實際點擊待驗**、Native EXE Build PASS；真 Host Agent→Pane／Classic+Native 單一通知所有權仍未完成。**保留原安全判斷、不設 supported=true、不合 main／Push／部署／Release**。U01 的雙 Pane Tab 列對齊已由舊 Windows 實測確認；進入 **NOW U02**，處理長檔名、檔案搜尋資訊密度與 Tab 可辨識性，接續 U03、U04。
 
 **2026-11-14 U02 功能優先收斂→NOW U03**：整合工作樹在 `4e0e0f7c5` 基礎上新增 Quick Open 檔名／資料夾分欄與完整路徑 Tooltip、28px 列高，Explorer Filter 以單行檔名＋資料夾取代重複二行，Tree View／平面檔案列縮為 28px 並截斷長名稱，Mixed Tab Hover 可看完整標籤。新增路徑格式回歸測試（**測試函式已加入、尚未實際執行**）；`cargo fmt --all`、`git diff --check` PASS、`cargo check --offline --locked --bin alera-gpui-desktop -j4` **EXIT 0**。耗時 Windows Bin Test 在連結階段已主動終止，**不冒稱測試 PASS**；GUI 窄窗／同名檔操作另驗，不擋 **NOW U03**。`supported=false`，未合 main／Push／部署／Release。
+
+**2026-11-14 U03 共用輸入框注音快捷鍵保護→NOW U04**：確認 NativeEditor Core 已在 marked composition 時拒絕箭頭移動與 Backspace／Delete，但 QuickOpenInput（Quick Open、Explorer Search、Editor Find/Replace、Profile 等共用）原 Backspace 仍執行 grapheme 刪除並清除 marked，Select All／Paste 也會覆蓋正在組字的候選。現在補上 preedit 時拒絕這三種普通快捷鍵、UTF-8 有效選取範圍檢查；新增 Unicode／注音狀態純函式 regression（**尚未執行，非 PASS**）。Rust `cargo fmt --all` 與 `cargo check --offline --locked --bin alera-gpui-desktop -j4` **EXIT 0**；下一步 NOW U04 正常重啟功能。T06 已有真正 Windows 注音實測，但 U03 新修正還未在 GUI 人工驗收；`supported=false`，不合 main／Push／部署／Release。
 
 ## 6. 既有實作／Classic 規格來源（保留歷史證據）
 

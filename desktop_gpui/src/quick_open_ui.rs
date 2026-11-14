@@ -48,6 +48,33 @@ pub(super) fn quick_open_move_selection(
     }
 }
 
+/// Windows IME owns Backspace while a candidate is being composed.
+/// Otherwise remove one Unicode grapheme or the selected range. Never slice
+/// through a stale/invalid UTF-8 selection from a previous focus owner.
+fn query_backspace_range(
+    text: &str,
+    selection: Range<usize>,
+    composing: bool,
+) -> Option<Range<usize>> {
+    if composing
+        || selection.start > selection.end
+        || selection.end > text.len()
+        || !text.is_char_boundary(selection.start)
+        || !text.is_char_boundary(selection.end)
+    {
+        return None;
+    }
+    if !selection.is_empty() {
+        return Some(selection);
+    }
+    let left = text[..selection.start]
+        .grapheme_indices(true)
+        .last()
+        .map(|(i, _)| i)
+        .unwrap_or(0);
+    Some(left..selection.start)
+}
+
 /// Only dismiss Quick Open after the active Native Editor owns the exact
 /// requested disk file. A failed open must not silently close the dialog
 /// while leaving some unrelated dirty buffer focused.
@@ -290,15 +317,10 @@ impl QuickOpenInput {
     }
 
     fn backspace(&mut self, _: &QueryBackspace, _: &mut Window, cx: &mut Context<Self>) {
-        let range = if self.selection.is_empty() {
-            let left = self.text[..self.selection.start]
-                .grapheme_indices(true)
-                .last()
-                .map(|(i, _)| i)
-                .unwrap_or(0);
-            left..self.selection.start
-        } else {
-            self.selection.clone()
+        let Some(range) =
+            query_backspace_range(&self.text, self.selection.clone(), self.marked.is_some())
+        else {
+            return;
         };
         self.selection = range;
         self.replace(None, "", false, cx);
@@ -313,11 +335,17 @@ impl QuickOpenInput {
     }
 
     fn select_all(&mut self, _: &QuerySelectAll, _: &mut Window, cx: &mut Context<Self>) {
+        if self.marked.is_some() {
+            return;
+        }
         self.selection = 0..self.text.len();
         cx.notify();
     }
 
     fn paste(&mut self, _: &QueryPaste, _: &mut Window, cx: &mut Context<Self>) {
+        if self.marked.is_some() {
+            return;
+        }
         if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
             self.replace(None, &text, false, cx);
         }
@@ -566,8 +594,9 @@ impl Render for QuickOpenInput {
 #[cfg(test)]
 mod tests {
     use super::{
-        accepts_native_text_event, normalize_input_text, quick_open_enter_accepts_match,
-        quick_open_move_selection, quick_open_target_is_active, remove_marked_preedit,
+        accepts_native_text_event, normalize_input_text, query_backspace_range,
+        quick_open_enter_accepts_match, quick_open_move_selection, quick_open_target_is_active,
+        remove_marked_preedit,
     };
 
     #[test]
@@ -617,6 +646,31 @@ mod tests {
             &first,
             Some(dunce::canonicalize(&first).unwrap().as_path()),
         ));
+    }
+
+    #[test]
+    fn u03_search_backspace_defers_to_ime_during_zhuyin_composition() {
+        let committed = "已搜尋";
+        let marked = "ㄇ";
+        let text = format!("{committed}{marked}");
+        let caret = text.len();
+        assert_eq!(query_backspace_range(&text, caret..caret, true), None);
+        assert_eq!(
+            query_backspace_range(&text, committed.len()..caret, true),
+            None
+        );
+        // Once the OS commits text, Backspace removes exactly one grapheme.
+        let completed = "已搜尋🌏";
+        let caret = completed.len();
+        assert_eq!(
+            query_backspace_range(completed, caret..caret, false),
+            Some("已搜尋".len()..caret)
+        );
+        assert_eq!(
+            query_backspace_range(completed, 0..caret, false),
+            Some(0..caret)
+        );
+        assert_eq!(query_backspace_range(completed, 1..1, false), None);
     }
 
     #[test]
