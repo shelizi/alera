@@ -4,7 +4,7 @@ import 'dart:isolate';
 
 import 'package:alera/src/features/reading_diff/domain/reading_diff_models.dart';
 import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
+import 'package:alera/src/shared/infra/storage/alera_support_directory.dart';
 
 abstract interface class ReadingDiffCache {
   Future<ReadingDiffResult?> read(String key);
@@ -34,7 +34,7 @@ extension ReadingDiffCachePersistence on ReadingDiffCache {
 
 class const FileReadingDiffCache({
   final Future<Directory> Function() directoryProvider =
-      getApplicationSupportDirectory,
+      aleraApplicationSupportDirectory,
   final int maxEntries = 20,
   final int maxBytes = 64 * 1024 * 1024,
 }) implements ReadingDiffCache {

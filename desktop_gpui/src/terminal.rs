@@ -24,6 +24,78 @@ const MAX_TRANSCRIPT_BYTES: usize = 48 * 1024;
 const MAX_HOST_WORKSPACES: usize = 256;
 const MAX_HOST_PATH_BYTES: usize = 4096;
 
+/// Host-confirmed Agent Hook status. This is independent of the PTY process
+/// running flag: a live session may be waiting for user approval, blocked, or
+/// finished with the current turn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum AgentActivityState {
+    Working,
+    Waiting,
+    Blocked,
+    Done,
+}
+
+impl AgentActivityState {
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw {
+            "working" => Some(Self::Working),
+            "waiting" => Some(Self::Waiting),
+            "blocked" => Some(Self::Blocked),
+            "done" => Some(Self::Done),
+            _ => None,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Working => "working",
+            Self::Waiting => "waiting",
+            Self::Blocked => "blocked",
+            Self::Done => "done",
+        }
+    }
+}
+
+/// Sanitized, status-only Host push. No Prompt, tool input, tokens or PTY
+/// bytes cross this model. Exact Host identities prevent recycled-handle
+/// events from changing a different Agent Tab.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AgentPresenceChange {
+    pub session_id: String,
+    pub workspace_id: String,
+    pub tab_id: String,
+    pub agent_type: Option<String>,
+    pub state: Option<AgentActivityState>,
+    pub state_started_at: String,
+    pub updated_at: String,
+    pub interrupted: bool,
+    pub removed: bool,
+}
+
+/// All Host Agent timestamps are UTC; the Host JSON encoder may choose Z
+/// while the delta encoder emits +00:00. Canonicalize fractional seconds so
+/// lexicographic ordering means chronological ordering in UTC.
+pub(crate) fn agent_host_utc_time_key(raw: &str) -> Option<String> {
+    let trimmed = raw
+        .strip_suffix('Z')
+        .or_else(|| raw.strip_suffix("+00:00"))?;
+    let (seconds, fraction) = trimmed.split_once('.').unwrap_or((trimmed, ""));
+    let bytes = seconds.as_bytes();
+    if bytes.len() != 19
+        || !bytes.iter().enumerate().all(|(i, byte)| match i {
+            4 | 7 => *byte == b'-',
+            10 => *byte == b'T',
+            13 | 16 => *byte == b':',
+            _ => byte.is_ascii_digit(),
+        })
+        || fraction.len() > 9
+        || !fraction.bytes().all(|b| b.is_ascii_digit())
+    {
+        return None;
+    }
+    Some(format!("{seconds}.{fraction:0<9}"))
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TerminalSession {
     pub handle: String,
@@ -31,14 +103,56 @@ pub struct TerminalSession {
     pub tab_id: String,
     pub running: bool,
     pub agent_type: Option<String>,
+    /// None means unconfirmed/unknown, never implicitly 'working'.
+    pub agent_state: Option<AgentActivityState>,
+    pub interrupted: bool,
+    /// Host revision of the current state. Used to reject stale async lists.
+    pub agent_state_started_at: Option<String>,
+    pub agent_updated_at: Option<String>,
 }
 
 impl TerminalSession {
     pub fn label(&self) -> String {
         let name = self.agent_type.as_deref().unwrap_or("Terminal");
         let state = if self.running { "●" } else { "○" };
-        format!("{state} {name} · {}", self.handle)
+        let activity = self
+            .agent_state
+            .map(|state| {
+                if state == AgentActivityState::Done && self.interrupted {
+                    " · interrupted"
+                } else {
+                    match state {
+                        AgentActivityState::Working => " · working",
+                        AgentActivityState::Waiting => " · waiting",
+                        AgentActivityState::Blocked => " · blocked",
+                        AgentActivityState::Done => " · done",
+                    }
+                }
+            })
+            .unwrap_or("");
+        format!("{state} {name}{activity} · {}", self.handle)
     }
+
+    /// Menu snapshots must not attach a recycled handle to the wrong Host
+    /// workspace/tab. A valid snapshot and the latest authenticated list
+    /// must agree on all three identifiers and both be running.
+    pub fn matches_running_identity(&self, current: &TerminalSession) -> bool {
+        self.running
+            && current.running
+            && self.handle == current.handle
+            && self.workspace_id == current.workspace_id
+            && self.tab_id == current.tab_id
+    }
+}
+
+/// Uses the existing authenticated no-start Host Terminal list as a bounded
+/// status-refresh fallback. Live Agents refresh every 3s, otherwise every 15s.
+/// This does not create a new Host, Hook receiver or Terminal session.
+pub fn agent_presence_refresh_due(tick: u64, sessions: &[TerminalSession]) -> bool {
+    let active_agent = sessions
+        .iter()
+        .any(|session| session.running && session.agent_type.is_some());
+    tick % if active_agent { 2 } else { 10 } == 1
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -467,6 +581,26 @@ pub fn parse_terminal_list(value: &Value) -> io::Result<Vec<TerminalSession>> {
             .and_then(Value::as_str)
             .filter(|agent| agent.len() <= 64)
             .map(ToString::to_string);
+        // The status is trustworthy only for a live, positively identified
+        // Agent. A plain Terminal or stopped PTY has no current Hook state.
+        let agent_state = (running && agent_type.is_some())
+            .then(|| item.get("agentState").and_then(Value::as_str))
+            .flatten()
+            .and_then(AgentActivityState::parse);
+        let interrupted = agent_state == Some(AgentActivityState::Done)
+            && item.get("interrupted").and_then(Value::as_bool) == Some(true);
+        let agent_state_started_at = agent_state.and_then(|_| {
+            item.get("stateStartedAt")
+                .and_then(Value::as_str)
+                .filter(|value| agent_host_utc_time_key(value).is_some())
+                .map(str::to_string)
+        });
+        let agent_updated_at = agent_state.and_then(|_| {
+            item.get("updatedAt")
+                .and_then(Value::as_str)
+                .filter(|value| agent_host_utc_time_key(value).is_some())
+                .map(str::to_string)
+        });
         if sessions
             .iter()
             .any(|session: &TerminalSession| session.handle == handle)
@@ -479,6 +613,10 @@ pub fn parse_terminal_list(value: &Value) -> io::Result<Vec<TerminalSession>> {
             tab_id: tab_id.to_string(),
             running,
             agent_type,
+            agent_state,
+            interrupted,
+            agent_state_started_at,
+            agent_updated_at,
         });
     }
     Ok(sessions)
@@ -864,6 +1002,16 @@ pub struct TerminalTabContextTarget {
     workspace_generation: u64,
 }
 
+impl TerminalTabContextTarget {
+    pub fn workspace_id(&self) -> &str {
+        &self.workspace_id
+    }
+
+    pub fn tab_id(&self) -> &str {
+        &self.tab_id
+    }
+}
+
 /// An auto-resize request is bound to one exact still-live Host tab, not to
 /// whichever terminal happens to be selected when the background task runs.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -881,15 +1029,26 @@ pub fn estimate_terminal_viewport(
     region_height_px: f32,
     font_px: f32,
 ) -> Option<(u16, u16)> {
+    estimate_terminal_viewport_with_line_height(region_width_px, region_height_px, font_px, 1.3)
+}
+
+pub fn estimate_terminal_viewport_with_line_height(
+    region_width_px: f32,
+    region_height_px: f32,
+    font_px: f32,
+    line_height_factor: f32,
+) -> Option<(u16, u16)> {
     if !region_width_px.is_finite()
         || !region_height_px.is_finite()
         || !font_px.is_finite()
+        || !line_height_factor.is_finite()
+        || !(0.8..=2.4).contains(&line_height_factor)
         || !(8.0..=48.0).contains(&font_px)
     {
         return None;
     }
     let columns = ((region_width_px - 24.0) / (font_px * 0.62)).floor();
-    let lines = ((region_height_px - 16.0) / (font_px * 1.3)).floor();
+    let lines = ((region_height_px - 16.0) / (font_px * line_height_factor)).floor();
     if columns < 20.0 || lines < 5.0 {
         return None;
     }
@@ -907,9 +1066,21 @@ pub fn terminal_ime_anchor_px(
     panel_height_px: f32,
     font_px: f32,
 ) -> Option<(f32, f32)> {
+    terminal_ime_anchor_with_line_height(cursor, panel_width_px, panel_height_px, font_px, 1.3)
+}
+
+pub fn terminal_ime_anchor_with_line_height(
+    cursor: (u16, u16),
+    panel_width_px: f32,
+    panel_height_px: f32,
+    font_px: f32,
+    line_height_factor: f32,
+) -> Option<(f32, f32)> {
     if !panel_width_px.is_finite()
         || !panel_height_px.is_finite()
         || !font_px.is_finite()
+        || !line_height_factor.is_finite()
+        || !(0.8..=2.4).contains(&line_height_factor)
         || !(8.0..=48.0).contains(&font_px)
         || panel_width_px < 32.0
         || panel_height_px < 24.0
@@ -917,7 +1088,7 @@ pub fn terminal_ime_anchor_px(
         return None;
     }
     let cell_width = font_px * 0.62;
-    let line_height = font_px * 1.3;
+    let line_height = font_px * line_height_factor;
     let visible_cols = ((panel_width_px - 24.0) / cell_width).floor().max(1.0);
     let visible_rows = ((panel_height_px - 16.0) / line_height).floor().max(1.0);
     let col = (cursor.1 as f32).min(visible_cols - 1.0);
@@ -1683,6 +1854,40 @@ impl TerminalDock {
     }
 
     pub fn update_sessions(&mut self, sessions: Vec<TerminalSession>) {
+        let mut sessions = sessions;
+        // A snapshot RPC can complete after a newer Host delta. Preserve
+        // that newer exact-identity status, but do not leak it to a recycled
+        // handle, changed Agent type or a stopped session.
+        for current in &mut sessions {
+            if !current.running || current.agent_state.is_none() {
+                continue;
+            }
+            let Some(old) = self.sessions.iter().find(|old| {
+                old.running
+                    && old.handle == current.handle
+                    && old.workspace_id == current.workspace_id
+                    && old.tab_id == current.tab_id
+                    && old.agent_type == current.agent_type
+            }) else {
+                continue;
+            };
+            if let (Some(old_time), Some(current_time)) = (
+                old.agent_updated_at
+                    .as_deref()
+                    .and_then(agent_host_utc_time_key),
+                current
+                    .agent_updated_at
+                    .as_deref()
+                    .and_then(agent_host_utc_time_key),
+            ) {
+                if old_time > current_time {
+                    current.agent_state = old.agent_state;
+                    current.interrupted = old.interrupted;
+                    current.agent_state_started_at = old.agent_state_started_at.clone();
+                    current.agent_updated_at = old.agent_updated_at.clone();
+                }
+            }
+        }
         self.session_list_stale = false;
         for tab in &mut self.tabs {
             if let Some(session) = sessions.iter().find(|item| {
@@ -1700,6 +1905,60 @@ impl TerminalDock {
             "{} existing terminal(s) · all workspaces",
             self.sessions.len()
         );
+    }
+
+    /// Apply redacted authenticated Host deltas to the *existing* exact
+    /// identity only. Cannot open/attach a tab, start PTYs or select panes.
+    /// Older updates never replace newer state, regardless of event order.
+    pub fn apply_agent_presence_changes(&mut self, changes: &[AgentPresenceChange]) -> bool {
+        let mut changed = false;
+        for change in changes.iter().take(MAX_TERMINALS) {
+            let Some(session) = self.sessions.iter_mut().find(|session| {
+                session.running
+                    && session.handle == change.session_id
+                    && session.workspace_id == change.workspace_id
+                    && session.tab_id == change.tab_id
+            }) else {
+                continue;
+            };
+            if change.removed {
+                if session.agent_state.is_some() || session.interrupted {
+                    session.agent_state = None;
+                    session.agent_updated_at = None;
+                    session.agent_state_started_at = None;
+                    session.interrupted = false;
+                    changed = true;
+                }
+                continue;
+            }
+            if change.agent_type.as_ref() != session.agent_type.as_ref() || change.state.is_none() {
+                continue;
+            }
+            let Some(incoming_time) = agent_host_utc_time_key(&change.updated_at) else {
+                continue;
+            };
+            if session
+                .agent_updated_at
+                .as_deref()
+                .and_then(agent_host_utc_time_key)
+                .is_some_and(|previous_time| incoming_time < previous_time)
+            {
+                continue;
+            }
+            let next_interrupted =
+                change.state == Some(AgentActivityState::Done) && change.interrupted;
+            if session.agent_state != change.state
+                || session.interrupted != next_interrupted
+                || session.agent_updated_at.as_deref() != Some(change.updated_at.as_str())
+            {
+                session.agent_state = change.state;
+                session.interrupted = next_interrupted;
+                session.agent_state_started_at = Some(change.state_started_at.clone());
+                session.agent_updated_at = Some(change.updated_at.clone());
+                changed = true;
+            }
+        }
+        changed
     }
 
     /// Recreate only preview tabs whose three Host identities still match.
@@ -1963,6 +2222,34 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn host_menu_target_requires_same_live_triple_not_just_reused_handle() {
+        let expected = TerminalSession {
+            handle: "h1".into(),
+            workspace_id: "workspace-a".into(),
+            tab_id: "tab-1".into(),
+            running: true,
+            agent_type: None,
+            agent_state: None,
+            interrupted: false,
+            agent_state_started_at: None,
+            agent_updated_at: None,
+        };
+        assert!(expected.matches_running_identity(&expected));
+        let mut current = expected.clone();
+        current.tab_id = "tab-2".into();
+        assert!(!expected.matches_running_identity(&current));
+        current = expected.clone();
+        current.workspace_id = "workspace-b".into();
+        assert!(!expected.matches_running_identity(&current));
+        current = expected.clone();
+        current.running = false;
+        assert!(!expected.matches_running_identity(&current));
+        let mut stopped_snapshot = expected.clone();
+        stopped_snapshot.running = false;
+        assert!(!stopped_snapshot.matches_running_identity(&expected));
+    }
+
+    #[test]
     fn native_ime_candidate_anchor_tracks_vt_cursor_inside_each_visible_pane() {
         let at_origin = terminal_ime_anchor_px((0, 0), 420.0, 470.0, 14.0).unwrap();
         assert_eq!(at_origin, (12.0, 8.0));
@@ -1997,6 +2284,33 @@ mod tests {
         let smaller = estimate_terminal_viewport(800.0, 480.0, 13.0).unwrap();
         let larger = estimate_terminal_viewport(1200.0, 780.0, 13.0).unwrap();
         assert!(larger.0 > smaller.0 && larger.1 > smaller.1);
+    }
+
+    #[test]
+    fn shared_terminal_line_height_keeps_pty_rows_and_ime_anchor_in_sync() {
+        let tight = estimate_terminal_viewport_with_line_height(820.0, 470.0, 14.0, 0.8).unwrap();
+        let loose = estimate_terminal_viewport_with_line_height(820.0, 470.0, 14.0, 2.4).unwrap();
+        assert_eq!(tight.0, loose.0, "Line height must not change PTY width");
+        assert!(
+            tight.1 > loose.1,
+            "Larger line height reduces Host PTY rows"
+        );
+        let compact_ime =
+            terminal_ime_anchor_with_line_height((11, 20), 820.0, 470.0, 14.0, 0.8).unwrap();
+        let loose_ime =
+            terminal_ime_anchor_with_line_height((11, 20), 820.0, 470.0, 14.0, 2.4).unwrap();
+        assert!(
+            loose_ime.1 > compact_ime.1,
+            "IME anchor must match visible cursor row"
+        );
+        assert!(estimate_terminal_viewport_with_line_height(820.0, 470.0, 14.0, 0.7).is_none());
+        assert!(
+            terminal_ime_anchor_with_line_height((0, 0), 820.0, 470.0, 14.0, f32::NAN).is_none()
+        );
+        assert_eq!(
+            estimate_terminal_viewport_with_line_height(1200.0, 600.0, 13.0, 1.3),
+            estimate_terminal_viewport(1200.0, 600.0, 13.0)
+        );
     }
 
     #[test]
@@ -2457,6 +2771,10 @@ mod tests {
             tab_id: format!("tab-{handle}"),
             running: true,
             agent_type: Some("codex".into()),
+            agent_state: None,
+            interrupted: false,
+            agent_state_started_at: None,
+            agent_updated_at: None,
         }
     }
 
@@ -2758,6 +3076,118 @@ mod tests {
         assert!(!items[1].running);
         assert!(parse_terminal_list(&json!({"items":[{"handle": "bad\\nvalue"}]})).is_err());
         assert!(parse_terminal_list(&json!({"kind":"terminals"})).is_err());
+    }
+
+    #[test]
+    fn host_agent_status_distinguishes_four_states_from_process_running() {
+        let items = ["working", "waiting", "blocked", "done"]
+            .into_iter()
+            .enumerate()
+            .map(|(i, state)| {
+                json!({
+                    "handle":format!("term-{i}"), "workspaceId":"workspace-1",
+                    "tabId":format!("tab-{i}"), "running":true,
+                    "agentType":"claude", "agentState":state,
+                    "interrupted":state == "done"
+                })
+            })
+            .collect::<Vec<_>>();
+        let parsed = parse_terminal_list(&json!({"items":items})).unwrap();
+        assert_eq!(
+            parsed.iter().map(|s| s.agent_state).collect::<Vec<_>>(),
+            vec![
+                Some(AgentActivityState::Working),
+                Some(AgentActivityState::Waiting),
+                Some(AgentActivityState::Blocked),
+                Some(AgentActivityState::Done),
+            ]
+        );
+        assert!(parsed[1].running, "a waiting agent still owns a live PTY");
+        assert!(parsed[1].label().contains("waiting"));
+        assert!(parsed[3].interrupted);
+        assert!(parsed[3].label().contains("interrupted"));
+    }
+
+    #[test]
+    fn unproven_or_stopped_agent_status_never_defaults_to_working() {
+        let parsed = parse_terminal_list(&json!({"items":[
+            {"handle":"p1","workspaceId":"w","tabId":"t1","running":true,
+             "agentType":"codex"},
+            {"handle":"p2","workspaceId":"w","tabId":"t2","running":true,
+             "agentType":"codex","agentState":"future-extension"},
+            {"handle":"p3","workspaceId":"w","tabId":"t3","running":false,
+             "agentType":"codex","agentState":"working"},
+            {"handle":"p4","workspaceId":"w","tabId":"t4","running":true,
+             "agentType":null,"agentState":"waiting"}
+        ]}))
+        .unwrap();
+        assert!(parsed.iter().all(|s| s.agent_state.is_none()));
+        assert!(parsed.iter().all(|s| !s.label().contains("working")));
+    }
+
+    #[test]
+    fn active_agent_status_polls_faster_without_spinning_when_host_is_idle() {
+        let mut active = session("h1");
+        active.agent_state = Some(AgentActivityState::Waiting);
+        let mut stopped = active.clone();
+        stopped.running = false;
+        assert!(agent_presence_refresh_due(1, &[active.clone()]));
+        assert!(!agent_presence_refresh_due(2, &[active.clone()]));
+        assert!(agent_presence_refresh_due(3, &[active]));
+        assert!(!agent_presence_refresh_due(3, &[stopped]));
+        assert!(agent_presence_refresh_due(11, &[]));
+        assert!(!agent_presence_refresh_due(12, &[]));
+    }
+
+    #[test]
+    fn host_presence_delta_rejects_stale_events_and_old_inventory_snapshots() {
+        let mut dock = TerminalDock::for_workspace(7);
+        let newer = "2026-11-11T07:00:02+00:00";
+        let older = "2026-11-11T07:00:01Z";
+        let start = "2026-11-11T07:00:00Z";
+        let snapshot = json!({"items":[{
+            "handle":"pty-1","workspaceId":"ws-1","tabId":"tab-1",
+            "running":true,"agentType":"codex","agentState":"working",
+            "stateStartedAt":start,"updatedAt":older
+        }]});
+        assert!(dock.apply_session_list(7, parse_terminal_list(&snapshot).unwrap()));
+        let delta = AgentPresenceChange {
+            session_id: "pty-1".into(),
+            workspace_id: "ws-1".into(),
+            tab_id: "tab-1".into(),
+            agent_type: Some("codex".into()),
+            state: Some(AgentActivityState::Waiting),
+            updated_at: newer.into(),
+            state_started_at: start.into(),
+            interrupted: false,
+            removed: false,
+        };
+        assert!(dock.apply_agent_presence_changes(&[delta.clone()]));
+        assert_eq!(
+            dock.sessions[0].agent_state,
+            Some(AgentActivityState::Waiting)
+        );
+        let mut stale = delta.clone();
+        stale.state = Some(AgentActivityState::Blocked);
+        stale.updated_at = older.into();
+        assert!(!dock.apply_agent_presence_changes(&[stale]));
+        assert!(dock.apply_session_list(7, parse_terminal_list(&snapshot).unwrap()));
+        assert_eq!(
+            dock.sessions[0].agent_state,
+            Some(AgentActivityState::Waiting),
+            "old snapshot must not reverse a newer delta"
+        );
+        let mut recycled = delta.clone();
+        recycled.tab_id = "new-tab-with-recycled-handle".into();
+        assert!(!dock.apply_agent_presence_changes(&[recycled]));
+        assert_eq!(
+            dock.sessions[0].agent_state,
+            Some(AgentActivityState::Waiting)
+        );
+        let mut removed = delta;
+        removed.removed = true;
+        assert!(dock.apply_agent_presence_changes(&[removed]));
+        assert_eq!(dock.sessions[0].agent_state, None);
     }
 
     #[test]

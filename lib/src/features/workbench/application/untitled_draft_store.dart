@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
+import 'package:alera/src/shared/infra/storage/alera_support_directory.dart';
 
 /// Durable scratch documents. App support (not the OS temp directory) keeps
 /// untitled tabs recoverable after a normal exit or unexpected termination.
@@ -10,7 +10,7 @@ class UntitledDraftStore {
   static final UntitledDraftStore shared = UntitledDraftStore();
 
   UntitledDraftStore({Future<Directory> Function()? supportDirectory})
-    : _supportDirectory = supportDirectory ?? getApplicationSupportDirectory;
+    : _supportDirectory = supportDirectory ?? aleraApplicationSupportDirectory;
 
   final Future<Directory> Function() _supportDirectory;
   final Map<String, Future<void>> _pending = <String, Future<void>>{};

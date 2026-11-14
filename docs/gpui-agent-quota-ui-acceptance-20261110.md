@@ -1,0 +1,154 @@
+# GPUI Agent 額度 UI：Windows 實機對照（2026-11-10）
+
+## 後續釐清：不是 Classic Host 故障，而是 GPUI 指向不同 Runtime 目錄
+
+經進一步以 Windows 程序、Runtime 控制檔、監聽埠及 **不啟動 Host** 的 CLI 額度查詢交叉比對，已修正前面「Host 離線」的初步判斷：
+
+- **Classic Host 仍正常存在**：實際 Runtime 目錄是 `%APPDATA%/dev.leynier/Alera/terminal_host`，本次檢查的程序 PID 19748（啟動於 11 月 7 日），其 `host.json` 指向 2050 埠；Owner PID 與程序相符，並可建立本機 TCP 連線。
+- **錯誤來源**：GPUI 的 `default_runtime_dir()` 沿用獨立 Rust CLI 的 `%USERPROFILE%/.alera/runtime`。該目錄留有另一個 `runtime-host.json`（11 月 9 日），Owner PID 36180 已不存在、2019 埠無監聽，因此 `quota --no-start` 只對該目錄報 `Existing Alera Runtime Host is not running`。**不能據此宣稱 Classic Host 掛掉**。
+- **真正的額度查詢驗證成功**：使用當前 worktree 編譯的新版 CLI、明確指定 Classic Runtime 目錄執行 `quota --no-start --json --runtime-dir <ClassicRuntime> snapshot`，成功獲得 7 種 Provider 快照：AGY、Codex、Devin、Grok 回傳 `ok`（AGY 五組額度），Claude、Kimi、Z.ai 含 `stale`。這些是 Host 回傳的狀態標記，並非推測。
+- **GPUI 程式修復**：沒有 `ALERA_RUNTIME_DIR` 指定時，Windows 會優先選擇存在 `host.json` 的 Classic Runtime 目錄；明確指定仍優先，找不到 Classic 控制檔才回退獨立 Rust CLI 預設路徑。GPUI **不讀控制檔 token，也不啟動／重啟 Host**；由受控 CLI 完成認證。
+- **測試**：`cargo test --offline --lib runtime_bridge::tests` 10/10 通過（含 Classic 與舊 standalone 路徑競合、使用者明確指定的覆蓋優先權）；全套 `cargo test --offline --lib --bin alera-gpui-desktop`：Library 390/390、Native UI 19/19 通過。Windows `cargo check --offline --bin alera-gpui-desktop` 通過。未更改執行中的 Classic Host／PTY；尚未以這次修正版 GPUI 完成真實帳號 UI 截圖驗收。
+
+下方「Host 離線」為本輪修正前、**針對錯誤 Runtime 路徑**的當時觀察記錄，不再作為 Classic Host 全域狀態判定。
+
+## 範圍與環境
+
+- 重用 `integrate/gpui-p0p1p2-20261108` worktree；對照機器同時開啟 Classic 與新編譯的 GPUI。
+- GPUI、配套 `alera` CLI 由此 worktree 原始碼在 Windows 離線編譯，測試執行檔暫存於 worktree 的 `.quota-ui-test/`；不更動 Classic 安裝檔、工作階段或主分支。
+- 桌面顯示器為 3840×2160，使用縮小截圖檢查布局；亦將 GPUI 最大化檢查底部狀態列。
+
+## 直接觀察
+
+| 檢查 | Classic | GPUI | 判定 |
+| --- | --- | --- | --- |
+| 額度入口 | 底部狀態列配額圖示；滑鼠移入／點擊會展開貼近狀態列的 hover card | 底部額度入口；點擊會開啟畫面中央對話框 | 不一致 |
+| 列表外觀 | 供應商專用圖示、窄行、多組讀數、每列刷新與釘選控制 | 以供應商名稱與讀數為主的長條布局；對話框提供刷新 | 不一致 |
+| 釘選 | Classic 依使用者設定顯示釘選 Provider／Profile | GPUI 目前未使用相同釘選偏好 | 缺口 |
+| 額度總覽 | 已實際打開，看到 Claude Code、Codex、Kimi、Grok Build、Antigravity、Z.ai、Devin 等項目；AGY 顯示五組讀數 | 已實際打開，但 Host 不在線，僅能觀察錯誤／空白狀態 | 部分通過 |
+| 重新整理 | Classic 清單有各項刷新與「開啟用量」 | 已實際按下 GPUI「Refresh all」，UI 未崩潰 | 部分通過 |
+| 即時數據／多帳號 | Classic 畫面有百分比，但即時有效性無法在 Host 中斷時確認 | `alera quota --no-start --json snapshot` 回報 Host 未執行 | 阻塞，不能宣稱通過 |
+
+## Host 阻塞證據
+
+Classic 編輯區顯示：`Terminal host unavailable: Terminal host connection closed`、Host 已停止回應 liveness probes。新編譯 CLI 的唯讀 `quota --no-start --json snapshot` 回傳 `Existing Alera Runtime Host is not running`（exit 1）。`runtime-host.json` 雖存在，但不足以證明 Host 活著。**為避免影響 Classic 的既有 Terminal/PTY，這輪沒有啟動、重啟或替換正式 Host。**
+
+因此尚不能驗證所有供應商真實百分比、AGY 五組動態更新、帳號切換、單帳號刷新與離線後重連。程式資料模型既有單元測試不能取代 UI 驗收。
+
+## 本輪直接修正
+
+1. GPUI 原本在**從未取得任何額度**且讀取失敗時，錯誤顯示「previous readings are stale」；此文案有誤，已改為要求連上既有 Runtime Host。保留**已有額度再刷新失敗**的 stale 提示。
+2. 狀態列左側很長的 Host/Git 異常文字會吃掉額度列空間；已對左側狀態文字設置最大寬度，讓額度入口保有展示空間。
+3. 新增兩項離線／stale 狀態文案回歸測試。
+
+上述修正已重新編譯並**再次在 Windows GPUI 視窗實際開啟額度對話框**核對：
+空資料時顯示 `Quota unavailable · connect to the existing Runtime Host`，不再誤稱存在過期讀數。
+`cargo test --offline --bin alera-gpui-desktop quota_ui_tests`：2 passed、0 failed；`git diff --check` 通過。
+
+## 後續驗收門檻
+
+1. Runtime Host 恢復連線後，再同時觀察兩版：各 Provider 額度、AGY 五組讀數、Profile 名稱、reset 時間與資料新鮮度。
+2. 實作並測試 Classic 的釘選／取消釘選、Provider 圖示、狀態列排列、hover card 或等價的低干擾浮動面板。
+3. 由 GPUI 實際操作單一帳號刷新、全部刷新、列表溢出、窄視窗布局及 Host 中斷重連，確認不會錯誤標示數值為最新。
+
+本文件描述**已實際看到的畫面與 CLI 回應**；未操作到的功能保留為「未驗收」，不是通過。
+
+## 第二輪補齊：Classic 額度列對齊（2026-11-10）
+
+這一輪仍使用原 GPUI 整合 worktree，不啟動／替換 Runtime Host，也不修改安裝中的 Classic。
+
+### 已實作
+
+1. **原版 Provider 圖示**：GPUI 直接編入既有 Classic 的十種 Agent Logo（SVG／PNG），避免執行期依賴 Flutter 素材目錄；狀態列及總覽均使用。已通過 Windows 編譯，**由於 Host 離線，尚無法在真實多 Provider 畫面逐一視覺驗證**。
+2. **共用釘選設定**：由 Rust Core Runtime Store（`agents.quotaUnpinnedKeys`）管理，Classic 首次啟動將既有 Drift 釘選選項 seed-only 遷移，GPUI 使用同一份 Host CAS 欄位級讀寫。釘選鍵遵守 Classic 的 `claude:<account>`、`codex`／`codex:<account>`、`opencode:<account>` 等格式。舊 Host 未支援該欄位時，Classic 保留本機運作；GPUI 則拒絕離線寫入，避免雙份設定不一致。
+3. **排序／顯示**：GPUI 的狀態列僅顯示已釘選帳號，總覽顯示全部；CLI 用 `quota --no-start config` 向既有 Host 讀取排序，**只回傳**白名單的 enabled provider IDs，不將 Host 的環境參數／Key 交給 GPUI。Host 未連線時使用 Classic 預設排序；Host 明確停用全部 Provider 時保持空清單。
+4. **Classic 式浮動面板**：不再使用中央對話框，改由狀態列懸停／點擊開啟上方浮動總覽；有各帳號釘選、單項刷新、全部刷新與關閉操作，點擊其他區域可收起。
+
+### 實際驗證
+
+- Rust Core `desktop_settings_contract` 釘選鍵驗證：通過。
+- Rust Core `runtime` 功能開啟後，兩個 RuntimeStore 連線測試：Classic seed、GPUI CAS 修改、Classic 讀回、stale CAS 拒絕、重啟保留與其他欄位不變，**1/1 通過**。
+- GPUI 的帳號釘選鍵及排序單元測試：**1/1 通過**；錯誤／stale 文案 GUI 測試：**2/2 通過**。
+- CLI 的 `quota` 操作及 secret-free 配置投影測試：**3/3 通過**。
+- Flutter 的 RuntimeSettingsRepository 測試：**16/16 通過**，含新版 Host 釘選遷移、舊版 Host 的本機回退；Dart analyzer 無問題。
+- GPUI Rust Library 全套回歸 **387/387 通過**；包含修正共享設定快照對新增 pin 欄位的驗證，並接受舊版 Host 未提供此可選欄位的相容模式。Windows GPUI `cargo check --offline --bin alera-gpui-desktop` 通過。
+- **Windows 3840×2160 桌面實機**：GPUI 新版浮動面板能從狀態列上方開啟；點面板外可關閉。原版一開始因離線文案太長而擠掉關閉鈕，已拆成「標題 + 刷新 + 關閉」及「狀態訊息」兩列並重新編譯；重新實測後，關閉鈕可見且實際點擊有效。
+
+### 尚未驗收／範圍外
+
+- 本機既有 Runtime Host 仍離線：`alera quota --no-start --json snapshot` 回傳 `Existing Alera Runtime Host is not running`。**無法證明**真實額度、AGY 五組資料、跨視窗即時釘選同步、個別帳號刷新與多 Provider 圖示的最終視覺效果。
+- Classic 的「Open Usage」完整統計、Codex 重置等擴充操作不是本輪額度狀態列對齊範圍，尚未宣稱對齊。
+- 所有測試執行檔只暫存在 worktree，測試後清除；正式 Classic／Runtime Host／main 分支無變動。
+
+## 第三輪：狀態列真實排版驗收（隔離測試資料）
+
+- 既有 Runtime Host 再次以 `cargo run --offline -p alera-cli -- quota --no-start --json snapshot` 讀取確認，仍回覆 `Existing Alera Runtime Host is not running`，本輪沒有啟動、覆蓋或重啟它。
+- 補充明確**關閉預設**的 `desktop_gpui` Cargo feature `quota-visual-fixture`；只有「有此 feature」+「debug_assertions」+「ALERA_GPUI_QUOTA_VISUAL_FIXTURE 環境變數」同時符合，才會讀取編譯內建的固定 JSON 測試資料。正式 release 即使開此 feature 也不會啟用測試資料。所有數字純屬合成，絕不可當成任何真實帳號用量。
+- 測試 JSON 放在 `desktop_gpui/tests/fixtures/agent-quotas-visual.json`：13 個帳號、覆蓋 10 種供應商；Claude 5H／Weekly／Fable，Codex 主副帳號，AGY 五組讀數，MiniMax G/V，OpenCode Go/Zen 與高低額度百分比。測試時兩個樣本帳號取消釘選；釘選的狀態列不顯示它們，但浮動總覽仍可見。
+- **Windows 桌面實機觀察**：一般視窗及最大化尺寸下，狀態列直接顯示 Claude／Codex 多帳號、Kimi／Cursor／Antigravity 等的數值，窄視窗不擠掉分支選單，額度採水平捲動容納其餘項目。浮動清單的多帳號、Unpin／Pin、重新整理、Reset 描述與低額度警示色均可呈現；已測試其視覺位置及版面，沒有用 fake 資料接上正式 Host。
+- 發現並修正原有 Codex、Grok SVG 的 `currentColor` 在 GPUI 深色主題下變成深色、難以辨識，保留原版路徑，僅將 CSS 顏色字串轉成淺色，並使用一次性靜態快取，不增加執行時檔案相依。
+- 由於 Windows 遠端自動化滑鼠座標仍有不穩定情況，改讓**僅測試版**在啟動時展開浮動面板；這可驗證畫面，**不構成已手動點擊所有刷新／釘選按鈕的證據**。各 pin/排序邏輯另由單元及跨連線資料庫測試覆蓋。
+- 以 `ALERA_GPUI_QUOTA_VISUAL_FIXTURE=agy` 直接打開 AGY 的隔離測試帳號詳情，在 Windows 畫面確認五組實際排版：`G·5H 97%`、`G·W 70%`、`C/G·5H 35%`、`C/G·W 6%`、`Ar·W 88%`，其中 6% 顯示低額度警示色；刷新／釘選鈕仍位於可見範圍。
+- 進一步在測試版的狀態列及浮動面板加上 `DEMO quotas`／`SYNTHETIC TEST DATA` 提示，與實際讀取 Host 的正式版明確區分；此提示變更為測試專屬路徑，不會出現在預設建置。
+- 全套 GPUI 測試 `cargo test --offline --lib --bin alera-gpui-desktop`：Library **388/388**、Native UI Binary **19/19** 全數通過，包括測試資料的 10 Provider／13 帳號完整性及 Codex SVG 深色主題修正。
+
+## 第四輪：真正連接 Classic Host 的額度驗收（2026-11-10）
+
+本輪在同一個 `integrate/gpui-p0p1p2-20261108` worktree，使用 `4fefa31bc` 的 GPUI Runtime 目錄選擇修正、同一 worktree 編譯的 `alera.exe`，**不啟用合成數據**，直接向仍執行的 Classic Host 讀取額度。
+
+- Classic Host 位於 `%APPDATA%/dev.leynier/Alera/terminal_host`，可連線 `host.json` 所指向的 2050 埠。GPUI 視窗底部已實際顯示 Claude Code 與 Codex 真實 Host 快照（不保證每筆值都是最新）。
+- `alera quota --no-start --json --runtime-dir <ClassicRuntime> config` 回傳啟用順序：`claude,codex,kimi,grok,agy,zai,devin`。對應 `snapshot` 回傳 **7 種 Provider**，AGY 的 `buckets` 有 **5 組**；Codex、Grok、AGY、Devin 回傳 `ok`，Claude 回傳 `stale`（OAuth 用量來源不可用），Kimi 與 Z.ai 為 `stale`（相關 API Key／額度來源未設定）。這些來源異常不是 GPUI 的連線問題。
+- 只有具備 `quota-visual-fixture` Cargo feature **且是 debug 建置**時，設定 `ALERA_GPUI_QUOTA_LIVE_PREVIEW_OPEN=1` 可在測試視窗啟動時展開**真實 Host** 額度面板，與 `ALERA_GPUI_QUOTA_VISUAL_FIXTURE` 合成資料模式不同。預設及 release 不會自動展開；測試也沒有改變 Host 設定。
+- 已實際看到面板中的 Claude、Codex、Kimi、Grok、AGY 用量與來源錯誤，額度列加入明確 `Stale`／`Unavailable` 標示，避免使用者誤把舊百分比視作即時；浮動面板在狀態列上方、內部項目有清單捲動。
+- 當前 Classic Host 確實拒絕新版共用設定呼叫，回傳 `Unknown terminal host request: desktopSettings.get`。因此在舊 Host 執行期間，GPUI 的跨版本額度釘選**尚不可用**。已讓面板顯示 `Pin N/A` 與需更新 Host 的提示，取消無法完成的釘選點擊；若 Host 支援共用欄位，原 Rust CAS 釘選操作仍可使用。
+- 遠端滑鼠測試的主要問題來自檢視器呈現圖片與 `coordinate_reference.image_width` 的縮放差異。改用與實際圖片大小一致的座標參考後，已可點開浮動面板，點擊面板內部時面板不再意外收起；惟**尚未證明** UI 的 `Refresh all` 與逐帳號刷新在所有 Provider 都可成功更新，亦未進行 Classic 與 GPUI 釘選跨視窗實際同步測試。
+- Rust 全套回歸：`cargo test --offline --lib --bin alera-gpui-desktop`，Library **390/390**、Native UI **21/21** 通過；`cargo check --offline --bin alera-gpui-desktop --features quota-visual-fixture` 通過。這些測試不會啟動第二個 Host。
+
+**安全界線：** Classic Host（及既有 PTY、Agent）、安裝中的 Classic、使用者既有其他 worktree 未被重啟、刪除或覆蓋；所有實機測試執行檔只保留在目前 worktree 暫存目錄並於驗收後清除。
+
+## 第五輪：真實刷新與隔離新版 Host 的釘選寫入驗收（2026-11-10）
+
+保留仍在執行的 Classic Host，不更換它的二進位檔、不修改其 SQLite 設定，也不重啟其 Terminal／PTY。所有測試在既有 GPUI 整合 worktree 進行。
+
+### 對現有 Classic Host 的刷新
+
+- 使用本 worktree 編譯的 CLI，對已存在的 Classic Host 執行 `quota --no-start --json --runtime-dir <ClassicRuntime> snapshot --force-refresh` **一次**。約 3 秒完成，前後都保留 7 個 Provider；AGY、Codex、Devin、Grok 的 `updatedAt` 改變且 `status=ok`，Claude 維持 `stale`（認證錯誤），Kimi／Z.ai 維持 `stale`（未設定額度來源）。沒有把這些狀態假裝成即時值。
+- 再執行一次 `snapshot --force-refresh --provider codex --account-id default`，指定回應只有 **1 筆 Codex**；隨後使用不強制刷新的完整快照查詢，仍保留原來 **7 種 Provider**，沒有因單項刷新而遺失其他資料。
+- 此處驗證 Host RPC 與快照保存；未宣稱已逐一實機點擊所有 GPUI 面板刷新鈕。
+
+### 隔離新版 Host 的真正雙連線測試
+
+- 只在新建的 `.quota-refresh-live-test/isolated-host` 目錄啟動新版 Alera Terminal Host，控制檔／SQLite／認證 Token 與實際 Classic 完全分離。初次 `desktopSettings.get` 回傳 **31 個欄位**，`agents.quotaUnpinnedKeys=[]` 且 `present=false`。
+- 在 `rust/alera-cli/src/runtime_host_client.rs` 加入需明確 `--ignored` 執行的雙 RPC client 測試 `isolated_host_quota_pin_roundtrip_via_two_authenticated_clients`。測試使用 Path guard，拒絕非 `.quota-refresh-live-test/isolated-host` 的目錄；**1/1 通過**。
+- 測試涵蓋第一個 client 的 Classic-style `desktopSettings.seedLocal`、第二個 client 讀到釘選、重複 seed 不覆蓋新版資料、第二個 client 的 `desktopSettings.compareAndSetBatch`、第一個 client 重新讀到更新後資料、舊版 expected CAS 拒絕、非法 pin key 拒絕、其他設定不變。這驗證兩條已認證的 RPC 連線，**不等於兩個實際 GUI 都已操作完成**。
+- 測試 Host 正常停止後，透過相同隔離 Runtime 重新啟動；首個立即讀取遭遇啟動就緒時序問題，後續獨立 `settings get --no-start` 成功，釘選數量 2 且與重啟前一致。沒有發生資料遺失。隨後 `runtime stop` 正常回報 `stopped=true`、`forced=false`、`activeSessions=0`、`activeAgents=0`、`activeJobs=0`。
+
+**剩餘正式環境阻塞：** 目前執行中的 11 月 7 日 Classic Host 仍不認得 `desktopSettings.get`，必須規劃安全升級或接管流程，才可在真正 Classic 與 GPUI 雙視窗中驗收即時釘選同步。此輪沒有對它執行升級；未配置額度來源的 Provider 也不會因 UI 修正而自動變成有效資料。
+
+## 第六輪：雙桌面隔離驗收前置與正式 Host 保護（2026-11-10）
+
+- 重用原整合 worktree；本輪開始時分支 HEAD 為 `dc4f9ecf3`、追蹤檔案乾淨，正式 Classic Host PID `19748` 仍存在。沒有替換、停止、重啟或升級正式 Host。
+- 發現 Classic 雖已在 `alera_support_directory.dart` 提供編譯期 `ALERA_E2E_SUPPORT_DIR` 隔離路徑，但 Agent 額度代理等 17 個檔案仍直接呼叫 `getApplicationSupportDirectory()`，隔離版可能讀寫正式快取或支援檔。已將這 17 個呼叫改由同一個 `aleraApplicationSupportDirectory()` 入口解析；沒有指定編譯期參數時仍回退原系統路徑。
+- 目前 `lib/` 僅隔離入口本身仍直接呼叫 `getApplicationSupportDirectory()`；此處只表示排除了這一類直接呼叫，不代表已審核所有原生程式、Flutter 插件或 HOME 依賴的其他資料路徑。
+- 首次 Windows Build Storage 預備檢查拒絕將 `rust/target` 直接覆蓋既有 `D:\c\t`，未刪除任一端；改採獨立本機 `D:\gq\t` 後，Cargo 快取搬移達本輪 180 秒命令期限仍未完成。原有遷移紀錄須保留供下輪安全續作，不能任意刪除來源或目的地。`dart format --output=none --set-exit-if-changed` 亦在 90 秒期限內沒有回傳結果；本輪**只有**靜態路徑搜尋與 `git diff --check` 通過，Dart 格式、靜態分析、單元測試與真正雙 GUI 測試均**未通過驗收／未取得完成結果**。
+
+### 下一個真正的雙 GUI 驗收 Gate
+
+1. 使用全新且不含真實憑證的測試 Runtime／支援目錄，Classic 測試建置須明確帶入 `--dart-define=ALERA_E2E_SUPPORT_DIR=<isolated-support>`；GPUI 的 `ALERA_RUNTIME_DIR` 須指向其 `terminal_host` 子目錄，並讓兩版使用已驗證的新版 CLI/Host。測試前需再次核對兩份控制檔路徑沒有落到正式 `%APPDATA%/dev.leynier/Alera/terminal_host`。
+2. 隔離環境啟動兩個**實際 GUI** 後，驗證 Classic 取消釘選 → GPUI 状態列同步、GPUI 重新釘選 → Classic 同步、舊版快照寫入時 CAS 衝突拒絕與重讀回復，再驗證兩個 GUI 重啟後釘選持久化；觀察同步延遲並保存可追溯的實機證據。
+3. GPUI 點擊全部／單帳號刷新，對照隔離 Host 回傳且確認無其他帳號遺失；真正的 Provider 用量須連向合法設定的資料來源，無額度來源時只核對 `stale`／`unavailable`，不可將合成資料冒充為真實值。
+4. 測試 Host 只能停止隔離的執行個體。若要在正式 Classic 與 GPUI 實作共用釘選，必須獨立規劃 Host 升級、活躍 PTY／Agent 接管、失敗回滾與設定備份；正式 Host 未更新前，這項同步仍未驗收。
+
+## 第七輪：Windows 建置環境恢復與 Classic 測試（2026-11-11）
+
+- 在 `e43ee3106` 上恢復上輪中斷的 Windows build-storage 遷移：原準備腳本帶入獨立 Cargo 目標 `D:\gq\t` 後以 exit 0 完成，`rust/target`、`cloud/target`、Flutter `build` 等目錄已改為本機磁碟 junction；沒有合併到 `D:\c\t`、刪除原使用者快取或替換正式 Host。
+- 將 17 個更動過的 Dart 檔案交給直接 SDK `dart format --output=none --set-exit-if-changed` 檢查，結果為 **17 files、0 changed、exit 0**。
+- 執行 Flutter 針對性回歸：`alera_support_directory_test.dart`、`runtime_settings_repository_test.dart`、`agent_quota_settings_test.dart`、`agent_quota_refresh_test.dart`，**27/27 通過，exit 0**。涵蓋跨版本 Host 欄位、quota pin 遷移與 CAS、單項刷新不丟失其他快照、刷新失敗只將受影響資料標為 stale。
+- 另執行三組 Flutter UI Widget 測試：`agent_quota_status_bar_test.dart`、`agent_quota_overview_panel_test.dart`、`agent_quota_preview_test.dart`，**22/22 通過，exit 0**。涵蓋狀態列帳號隔離、Provider 排序、釘選互動、逐 Agent 刷新與面板呈現；與上面四組單元測試合計 **49/49**。這些是 Flutter Widget 回歸，並非 GPUI／Classic 雙原生 UI 實測。
+- `dart analyze` 的全 `lib/` 與單檔分析曾停滯，其中單檔程序回報 `The analysis server crashed unexpectedly`。快取恢復後重試單檔仍未能正常完成；此項應記為 **Analyzer 未通過驗收**，不應誤寫為沒有型別錯誤。
+- Windows Debug CMake 首先回報 `No CMAKE_CXX_COMPILER`；深入 `CMakeConfigureLog.yaml` 發現真實原因是 MSBuild `FileTracker` 的 `MSB4018` 路徑初始化例外。執行環境缺少標準 Windows 路徑變數（例如 `ALLUSERSPROFILE`、`CommonProgramFiles`、`SystemDrive`）。只對測試子程序補齊必要路徑並載入 Visual Studio 2026 `vcvars64.bat` 後，`CompilerIdCXX.vcxproj` **成功編譯，exit 0**。沒有修改使用者環境或安裝 Visual Studio。
+- 曾以編譯期 `ALERA_E2E_SUPPORT_DIR=D:/alera-build/checkouts/384f5d721cb4/quota-dual-gui-20261111/classic` 嘗試 Windows Debug 版，經補齊 MSBuild 環境後，仍於 **780 秒固定執行期限**內未完成原生 sidecar 的 `alera-cli` 主程式編譯；建置程序最後回報 `could not compile alera-cli (bin "alera")`、`Build process failed`，**狀態為 timed_out／exit 1**。過程觀察到 `rustc` 正在編譯 `alera-cli/src/main.rs`、記憶體約 2.5 GB，未取得可用的 Classic Debug App，也沒有可歸因於本次 Dart 支援路徑修改的 Rust 編譯診斷。不得將這次建置視為通過，更不得啟動未完成的輸出。
+- 安全補充：遠端工具的 Workspace 沙箱**拒絕**一般程序直接寫入上述 `D:` 測試資料路徑。因此即使第一次 Debug 產物完成，也**不可直接啟動**：真正雙 GUI 測試必須改用 worktree 內已建立的 `.quota-ui-test/dual-20261111/classic`（`terminal_host` 位於其下）和 `.quota-ui-test/dual-20261111/native`，重新編譯帶入該絕對路徑，並在 CMake 子程序設定 `ALERA_E2E_DESKTOP=1`，確保 App ID 不會與任何既有 Alera Dev 衝突。
+- 將標準 Windows 路徑變數只補入編譯子程序後，CMake／MSBuild 確實通過 compiler probe。Windows 全量 Debug 的剩餘阻塞已收斂到 `cargo build --locked -p alera-cli --profile dev` 原生編譯的時限，須以可重用 Cargo 快取與受控較長編譯資源再驗證，**不得跳過最終連結或直接使用舊版 sidecar 冒充新版**。須使用正確的隔離 worktree 路徑與 `ALERA_E2E_DESKTOP=1` 重新建立可安全啟動的測試產物。
+
+正式使用中的 Classic Host PID `19748` 與 PTY 應維持原狀。本輪未授權升級正式 Host、合併 `main`、推送或部署。

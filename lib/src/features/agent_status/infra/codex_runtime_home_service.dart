@@ -7,7 +7,7 @@ import 'package:alera/src/shared/infra/files/posix_file_mode.dart';
 import 'package:crypto/crypto.dart';
 import 'package:meta/meta.dart';
 import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
+import 'package:alera/src/shared/infra/storage/alera_support_directory.dart';
 
 part 'codex_runtime_resource_sync.dart';
 part 'codex_runtime_config_sync.dart';
@@ -61,7 +61,7 @@ final class CodexRuntimeHomeService({
         environment,
       ),
       _applicationSupportDirectory =
-          applicationSupportDirectory ?? getApplicationSupportDirectory,
+          applicationSupportDirectory ?? aleraApplicationSupportDirectory,
       _platform =
           platform ??
           (Platform.isWindows

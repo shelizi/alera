@@ -16,6 +16,8 @@ pub struct WorkspaceCommand {
 pub enum WorkspaceAction {
     /// List workspaces for one project or all projects.
     List(WorkspaceListArgs),
+    /// Rename a registered workspace without renaming its Git branch.
+    Rename(WorkspaceRenameArgs),
     /// Create an Alera-managed Git worktree workspace.
     Add(WorkspaceAddArgs),
     /// Create a managed workspace and launch a declared agent profile.
@@ -32,6 +34,20 @@ pub enum WorkspaceAction {
     Pin(IdArgs),
     /// Unpin a workspace from the desktop sidebar.
     Unpin(IdArgs),
+    /// Put an existing workspace to sleep, closing Host-owned tabs and sessions.
+    Sleep(IdArgs),
+    /// Archive a workspace in the shared RuntimeStore (do not delete Git data).
+    Archive(IdArgs),
+    /// Restore a previously archived workspace.
+    Restore(IdArgs),
+    /// List shared Classic worktree sections.
+    SectionList,
+    /// Create a named section and place one workspace into it.
+    SectionCreate(WorkspaceSectionCreateArgs),
+    /// Move a workspace to an existing section, or clear its section.
+    SectionSet(WorkspaceSectionSetArgs),
+    /// Remove a section; affected workspaces move to Others.
+    SectionRemove(IdArgs),
     /// Add a parent/child relationship.
     Link(WorkspaceLinkArgs),
     /// Remove a parent/child relationship.
@@ -42,6 +58,32 @@ pub enum WorkspaceAction {
     Untag(WorkspaceTagArgs),
     /// Preview opt-in cascade targets.
     CascadePreview(CascadePreviewArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct WorkspaceSectionCreateArgs {
+    #[arg(long)]
+    pub name: String,
+    #[arg(long = "workspace-id")]
+    pub workspace_id: String,
+}
+
+#[derive(Debug, Args)]
+pub struct WorkspaceSectionSetArgs {
+    #[arg(long = "workspace-id")]
+    pub workspace_id: String,
+    #[arg(long = "section-id", conflicts_with = "clear")]
+    pub section_id: Option<String>,
+    #[arg(long)]
+    pub clear: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct WorkspaceRenameArgs {
+    #[arg(long)]
+    pub id: String,
+    #[arg(long)]
+    pub name: String,
 }
 
 #[derive(Debug, Args)]

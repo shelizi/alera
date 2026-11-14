@@ -75,6 +75,9 @@ pub struct SavedWorkbenchLayoutV1 {
     pub primary_active_editor: Option<String>,
     /// Active editor key of the secondary pane, if any.
     pub secondary_active_editor: Option<String>,
+    /// Optional file-backed Editor pin keys; Host PTY ids stay excluded.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pinned_editors: Vec<String>,
 }
 
 impl SavedWorkbenchLayoutV1 {
@@ -140,6 +143,9 @@ impl SavedWorkbenchLayoutV1 {
         let primary_editors = normalize_keys(&self.primary_editors);
         let mut secondary_editors = normalize_keys(&self.secondary_editors);
         secondary_editors.retain(|key| !primary_editors.contains(key));
+        let mut pinned_editors = normalize_keys(&self.pinned_editors);
+        pinned_editors
+            .retain(|key| primary_editors.contains(key) || secondary_editors.contains(key));
         let primary_active_editor = self
             .primary_active_editor
             .clone()
@@ -163,6 +169,7 @@ impl SavedWorkbenchLayoutV1 {
             secondary_editors,
             primary_active_editor,
             secondary_active_editor,
+            pinned_editors,
         }
     }
 }
@@ -220,6 +227,7 @@ mod tests {
             secondary_editors: vec!["editor:8:3".into()],
             primary_active_editor: Some("editor:7:2".into()),
             secondary_active_editor: Some("editor:8:3".into()),
+            pinned_editors: Vec::new(),
         }
     }
 
@@ -254,6 +262,57 @@ mod tests {
         let text = fs::read_to_string(&path).unwrap();
         assert!(text.contains("\"version\":1"));
         assert!(text.contains("\"primary_editors\":[\"editor:7:1\""));
+    }
+
+    #[test]
+    fn old_layout_is_readable_and_pinned_keys_are_pane_scoped() {
+        let old_json = sample().to_json().unwrap();
+        assert!(!old_json.contains("pinned_editors"));
+        assert!(SavedWorkbenchLayoutV1::from_json(&old_json)
+            .unwrap()
+            .pinned_editors
+            .is_empty());
+        let mut saved = sample();
+        saved.pinned_editors = vec![
+            "editor:7:2".into(),
+            "editor:7:2".into(),
+            "editor:8:3".into(),
+            "outside-pane".into(),
+            String::new(),
+        ];
+        let normalized = SavedWorkbenchLayoutV1::from_json(&saved.to_json().unwrap()).unwrap();
+        assert_eq!(normalized.pinned_editors, vec!["editor:7:2", "editor:8:3"]);
+        assert!(normalized.to_json().unwrap().contains("pinned_editors"));
+    }
+
+    #[test]
+    fn pinned_editor_moved_between_panes_survives_restart_and_drops_closed_pin() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("workbench-layout.json");
+        let mut state = sample();
+        state.pinned_editors = vec!["editor:7:1".into(), "editor:8:3".into()];
+        state.primary_editors.retain(|key| key != "editor:7:1");
+        state.secondary_editors.insert(0, "editor:7:1".into());
+        state.save_to_path(&path).unwrap();
+        let restored = SavedWorkbenchLayoutV1::load_from_path(&path)
+            .unwrap()
+            .expect("layout persisted");
+        assert_eq!(restored.secondary_editors, vec!["editor:7:1", "editor:8:3"]);
+        assert_eq!(restored.pinned_editors, vec!["editor:7:1", "editor:8:3"]);
+        assert_eq!(
+            restored.primary_active_editor.as_deref(),
+            Some("editor:7:2")
+        );
+
+        let mut closed = restored;
+        closed.secondary_editors.retain(|key| key != "editor:7:1");
+        closed.pinned_editors.push("editor:7:1".into());
+        closed.save_to_path(&path).unwrap();
+        let without_closed = SavedWorkbenchLayoutV1::load_from_path(&path)
+            .unwrap()
+            .expect("layout still persisted");
+        assert_eq!(without_closed.pinned_editors, vec!["editor:8:3"]);
+        assert_eq!(without_closed.secondary_editors, vec!["editor:8:3"]);
     }
 
     #[test]

@@ -26,6 +26,10 @@ mod configuration_store;
 #[cfg(test)]
 mod configuration_store_tests;
 mod configuration_validation;
+mod desktop_shared_settings;
+mod git_favorites_store;
+#[cfg(test)]
+mod git_favorites_store_tests;
 mod mobile_access_settings_row;
 #[cfg(test)]
 mod mobile_store_tests;
@@ -74,6 +78,7 @@ mod workspace_section_store;
 mod workspace_section_store_tests;
 mod worktree_setup_models;
 
+pub use crate::desktop_settings_contract::SHARED_DESKTOP_PATHS;
 pub use agent_profile_launch_receipt_store::*;
 pub use agent_profile_models::*;
 pub use agent_quota_settings_models::*;
@@ -86,6 +91,7 @@ pub use automation_models::*;
 pub use automation_run_store::*;
 pub use automation_schedule::*;
 pub use automation_templates::*;
+pub use desktop_shared_settings::DesktopSettingChange;
 pub use models::*;
 pub use orchestration_dispatch_store::ORCHESTRATION_CIRCUIT_BREAKER_THRESHOLD;
 pub use orchestration_message_store::{

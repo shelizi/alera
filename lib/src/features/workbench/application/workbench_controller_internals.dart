@@ -311,6 +311,29 @@ mixin _WorkbenchControllerInternals on _$WorkbenchController
     final prefs = state.viewPrefs;
     try {
       await _viewPrefsPersistence.save(repository: repo, prefs: prefs);
+    } on TerminalHostConflictException catch (error) {
+      if (error.code == 'desktop_settings_revision_conflict' ||
+          error.code == 'git_favorites_revision_conflict') {
+        // The other edition won a Host-owned Explorer or Git favorites CAS.
+        try {
+          final authoritative = await repo.load();
+          if (!_disposed) {
+            state = state.copyWith(viewPrefs: authoritative);
+          }
+        } catch (_) {
+          // Host unavailable: retain the current view without writing a
+          // stale local value over the authoritative Rust store.
+        }
+      }
+    } on SharedWorkbenchPreferenceUnavailable {
+      // Fail closed when the Host is offline. Revert optimistic Classic star
+      // UI to the last persisted (read-only legacy) snapshot.
+      try {
+        final persisted = await repo.load();
+        if (!_disposed) {
+          state = state.copyWith(viewPrefs: persisted);
+        }
+      } catch (_) {}
     } catch (_) {
       // Persistence is best-effort; never surface an error from the UI path.
     }

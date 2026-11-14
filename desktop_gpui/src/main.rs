@@ -1,12 +1,20 @@
 //! Experimental Alera desktop shell powered by native GPUI (no Flutter/WebView).
 mod editor_ui;
 mod native_action_dialog_ui;
+mod native_agent_quota_ui;
 mod native_components;
+mod native_git_favorites_ui;
+mod native_history_sync_ui;
+mod native_host_pins_ui;
 mod native_popup_ui;
+mod native_project_sidebar_ui;
+mod native_settings_catalog_ui;
 mod native_settings_ui;
+mod native_shared_settings_ui;
 mod native_ui_icons;
 mod native_ui_theme;
 mod quick_open_ui;
+mod win_ime;
 
 // GPUI Kit re-exports its pinned GPUI runtime. Use a single version of all
 // GPUI types throughout Native instead of mixing gpui 0.2.x and gpui-pre.
@@ -18,6 +26,13 @@ use alera_core::git::{
 use alera_gpui_desktop::agent_profiles::{
     matching_agent_handle, AgentProfileRow, LaunchedAgentTab,
 };
+use alera_gpui_desktop::agent_quota::QuotaSnapshot;
+use alera_gpui_desktop::agent_status_notifications::{
+    enabled_notice_sessions, validated_notice_target, AgentNotice, AgentNotificationDelivery,
+    AgentNotificationPolicy,
+};
+#[cfg(windows)]
+use alera_gpui_desktop::agent_windows_notifications::WindowsAgentToastPresenter;
 use alera_gpui_desktop::ai_commit_bridge::GeneratedAiCommit;
 use alera_gpui_desktop::edition::NATIVE_APP_NAME;
 use alera_gpui_desktop::editor::EditorDraftStore;
@@ -27,7 +42,7 @@ use alera_gpui_desktop::explorer_git_badges::{ExplorerGitBadge, ExplorerGitBadge
 use alera_gpui_desktop::explorer_ops::{
     ExplorerClipboardBatch, ExplorerClipboardMode, ExplorerDeleteBatch, ExplorerFiles,
 };
-use alera_gpui_desktop::explorer_selection::ExplorerMultiSelection;
+use alera_gpui_desktop::explorer_selection::{ExplorerMultiSelection, ExplorerNavigation};
 use alera_gpui_desktop::explorer_visibility::ExplorerVisibilityOptions;
 use alera_gpui_desktop::file_search::WorkspaceFileIndex;
 use alera_gpui_desktop::git_actions::{
@@ -45,6 +60,7 @@ use alera_gpui_desktop::git_history::{
     compare_git_refs, preview_commit, GitHistoryOptions, GitHistorySnapshot, HISTORY_PAGE_STEP,
     MAX_HISTORY_PAGE,
 };
+use alera_gpui_desktop::git_inspect::read_file_diff_page;
 use alera_gpui_desktop::git_inspect::{
     read_file_diff, read_file_diff_for_area, read_git_original_for_area, GitChangeArea,
     GitRefreshGate, GitSnapshot,
@@ -55,41 +71,58 @@ use alera_gpui_desktop::git_sidebar_layout::{
     GitSidebarOptions, GitSidebarViewMode, SectionKey,
 };
 use alera_gpui_desktop::git_watch::GitWatchService;
+use alera_gpui_desktop::history_sync_bridge::{
+    HistorySyncAccount, HistorySyncMode, HistorySyncSnapshot,
+};
+use alera_gpui_desktop::host_tab_pins::{
+    host_pin_owner_coverage, host_pin_query_workspaces, HostPinOwnerCoverage, HostTabPinSnapshot,
+};
 use alera_gpui_desktop::mcp_ui_bridge::{
     matching_host_tab_handle, NativeMcpUiBridge, NativeMcpUiCommand, NativeMcpUiEvent,
 };
 use alera_gpui_desktop::mcp_workspace_creation::HostManagedWorkspaceRequest;
 use alera_gpui_desktop::model::WorkbenchModel;
+use alera_gpui_desktop::native_i18n::UiLocale;
 use alera_gpui_desktop::native_modal::NativeModalSize;
 use alera_gpui_desktop::native_settings::{NativeSettings, NativeSettingsStore};
 use alera_gpui_desktop::project_search::{ContentMatch, ProjectSearch};
-use alera_gpui_desktop::project_tree::{collect_project_tree, ProjectTreeGroup};
-use alera_gpui_desktop::runtime_bridge::RuntimeCliBridge;
+use alera_gpui_desktop::project_tree::{
+    collect_project_tree_with_registered, project_group_matches_search,
+    project_title_matches_search, sidebar_workspaces_for_group, worktree_matches_search,
+    ProjectTreeGroup,
+};
+use alera_gpui_desktop::runtime_bridge::{
+    AgentHookSettingsSnapshot, ProjectRemovalPreview, RuntimeCliBridge,
+};
+use alera_gpui_desktop::runtime_catalog::RuntimeCatalog;
 use alera_gpui_desktop::session::{PreviewSessionStore, TerminalLayout, TerminalLayoutTab};
 use alera_gpui_desktop::terminal::{
-    encode_terminal_key, estimate_terminal_viewport, raw_key_reply_may_drain,
-    select_registered_host_workspace, terminal_ime_anchor_px, TerminalAutoResizeGate,
-    TerminalCreateFlow, TerminalCreateTick, TerminalDock, TerminalLineSelection,
-    TerminalPollCadence, TerminalPollGate, TerminalTabContextTarget, TerminalViewMode,
-    TerminalViewportProposal, HOST_SESSION_LIST_SCOPE,
+    encode_terminal_key, estimate_terminal_viewport_with_line_height, raw_key_reply_may_drain,
+    select_registered_host_workspace, terminal_ime_anchor_with_line_height, AgentActivityState,
+    TerminalAutoResizeGate, TerminalCreateFlow, TerminalCreateTick, TerminalDock,
+    TerminalLineSelection, TerminalPollCadence, TerminalPollGate, TerminalSession,
+    TerminalTabContextTarget, TerminalViewMode, TerminalViewportProposal, HOST_SESSION_LIST_SCOPE,
 };
 use alera_gpui_desktop::terminal_panes::{TerminalPaneLayout, TerminalSplitDirection};
 use alera_gpui_desktop::terminal_stream_bridge::{
     NativeTerminalStreamBridge, StreamViewUpdate, TerminalStreamRetryGate,
 };
 use alera_gpui_desktop::visual_tokens::{
-    ACTIVE, BG, BORDER, BORDER_ACTIVE, ELEVATED, MUTED, PANEL, PROJECTS_SIDEBAR_WIDTH,
-    RIGHT_SIDEBAR_WIDTH, SECTION_HEADER_HEIGHT, STATUS_BAR_HEIGHT, TAB_STRIP_HEIGHT, TEXT, TOOLBAR,
-    TOP_BAR_HEIGHT,
+    ACTIVE, AGENT_BLOCKED, AGENT_DONE, AGENT_WAITING, AGENT_WORKING, BG, BORDER, BORDER_ACTIVE,
+    ELEVATED, MUTED, PANEL, PROJECTS_SIDEBAR_WIDTH, RIGHT_SIDEBAR_WIDTH, SECTION_HEADER_HEIGHT,
+    STATUS_BAR_HEIGHT, TAB_STRIP_HEIGHT, TEXT, TOOLBAR, TOP_BAR_HEIGHT,
 };
 use alera_gpui_desktop::vt_screen::StyledRow;
 use alera_gpui_desktop::workbench_layout_store::{
     SavedWorkbenchAxis, SavedWorkbenchLayoutV1, SavedWorkbenchPane, WORKBENCH_LAYOUT_VERSION,
 };
-use alera_gpui_desktop::workbench_panes::{PaneAxis, PaneSlot, WorkbenchPaneLayout};
+use alera_gpui_desktop::workbench_panes::{
+    PaneAttachGuard, PaneAxis, PaneSlot, WorkbenchPaneLayout,
+};
 use alera_gpui_desktop::workbench_tabs::{
     WorkbenchTab, WorkbenchTabIdentity, WorkbenchTabKind, WorkbenchTabs,
 };
+use alera_gpui_desktop::workspace_sidebar_order::order_worktree_rows;
 use alera_gpui_desktop::workspace_tree::WorkspaceTree;
 use alera_gpui_desktop::worktree_manager::{
     matching_branch_worktree, WorktreeEntry, WorktreeManager,
@@ -97,7 +130,7 @@ use alera_gpui_desktop::worktree_manager::{
 use editor_ui::{bind_editor_keys, NativeEditor};
 use gpui::{
     actions, div, prelude::*, px, rgb, size, App, Bounds, Context, Entity, Focusable, KeyBinding,
-    PathPromptOptions, Window, WindowBounds, WindowOptions,
+    PathPromptOptions, ScrollHandle, Window, WindowBounds, WindowOptions,
 };
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenuItem};
@@ -122,7 +155,18 @@ actions!(
         ExplorerCopy,
         ExplorerCut,
         ExplorerPaste,
-        ExplorerSelectAll
+        ExplorerSelectAll,
+        ExplorerRename,
+        ExplorerDelete,
+        ExplorerRefresh,
+        ExplorerUp,
+        ExplorerDown,
+        ExplorerFirst,
+        ExplorerLast,
+        ExplorerOpen,
+        ExplorerPreview,
+        ExplorerNewFile,
+        ExplorerNewFolder
     ]
 );
 
@@ -306,6 +350,7 @@ enum GitChangeMenuAction {
 #[derive(Clone, Copy)]
 enum MixedContextAction {
     Focus,
+    TogglePin,
     Close,
     CloseOthers,
     CloseToRight,
@@ -337,6 +382,7 @@ enum ExplorerMenuAction {
     Clipboard(ExplorerClipboardMode),
     Paste,
     OpenInAlera,
+    RevealInFileManager,
     ViewCurrentGitDiff,
     CopyAbsolutePath,
     CopyRelativePath,
@@ -359,6 +405,7 @@ impl ExplorerMenuAction {
             Self::Clipboard(ExplorerClipboardMode::Cut) => "Cut selection",
             Self::Paste => "Paste",
             Self::OpenInAlera => "Open in Alera",
+            Self::RevealInFileManager => "Show in file manager",
             Self::ViewCurrentGitDiff => "View current Git changes",
             Self::CopyAbsolutePath => "Copy path",
             Self::CopyRelativePath => "Copy relative path",
@@ -375,10 +422,31 @@ struct ExplorerContextMenu {
     path: Option<PathBuf>,
 }
 
+/// Correlate a pending Host create RPC with the pane that initiated it.
+/// The Host always owns the PTY; this only controls Native preview placement.
+#[derive(Clone, Debug)]
+struct PendingTerminalPane {
+    request_id: u64,
+    target: PaneAttachGuard,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RightSidebarView {
     Explorer,
     Git,
+}
+
+/// File-patch-only navigation. History/branch compare previews must never
+/// inherit a file's paging cursor, and pages are replaced, not concatenated.
+#[derive(Clone)]
+struct GitFileDiffPaging {
+    relative: PathBuf,
+    /// Stable for this file selection, even as each page request increments
+    /// git_diff_request. Re-selecting the same filename gets a fresh identity.
+    source_ticket: u64,
+    start_line: usize,
+    next_line: Option<usize>,
+    previous_starts: Vec<usize>,
 }
 
 struct Workbench {
@@ -397,6 +465,9 @@ struct Workbench {
     /// dropping its existing dirty buffer, tab identity, or undo history.
     explorer_preview_active: bool,
     explorer_keyboard_focus: gpui::FocusHandle,
+    /// Persistent GPUI viewport handle; keyboard movement reveals its real
+    /// variable-height row in the current filtered/tree/flat presentation.
+    explorer_scroll: ScrollHandle,
     explorer_clipboard: Option<ExplorerClipboardBatch>,
     explorer_drop_busy: bool,
     explorer_drop_request: u64,
@@ -414,15 +485,27 @@ struct Workbench {
     recent_workspaces: Vec<PathBuf>,
     saved_projects: Vec<PathBuf>,
     project_tree_groups: Vec<ProjectTreeGroup>,
+    runtime_catalog: Option<RuntimeCatalog>,
+    runtime_catalog_error: Option<String>,
+    sidebar_pending_action: Option<String>,
+    sidebar_rename_target: Option<(String, String)>,
+    sidebar_rename_input: Option<Entity<QuickOpenInput>>,
+    sidebar_selected_parent: Option<(String, String)>,
+    sidebar_project_remove_pending: Option<(String, ProjectRemovalPreview)>,
+    sidebar_create_target: Option<(String, String)>,
+    sidebar_create_input: Option<Entity<QuickOpenInput>>,
     collapsed_project_roots: HashSet<PathBuf>,
     project_tree_loading: bool,
     project_tree_request: u64,
     show_recent_workspaces: bool,
+    sidebar_search_input: Entity<QuickOpenInput>,
     worktrees: Vec<WorktreeEntry>,
     worktree_error: Option<String>,
     worktree_loading: bool,
     worktree_busy: bool,
     worktree_create_input: Option<Entity<QuickOpenInput>>,
+    worktree_create_root: Option<PathBuf>,
+    worktree_create_from_existing: bool,
     worktree_delete_pending: Option<PathBuf>,
     picking_workspace: bool,
     quick_open: Option<Entity<QuickOpenInput>>,
@@ -452,6 +535,9 @@ struct Workbench {
     git_history_open: bool,
     git_graph_ref_tab: GitGraphRefTab,
     git_history_options: GitHistoryOptions,
+    git_favorites_busy: bool,
+    git_favorites_request: u64,
+    git_favorites_last_refresh: Instant,
     git_history_loading: bool,
     git_history_watch_pending: bool,
     git_history_error: Option<String>,
@@ -517,9 +603,15 @@ struct Workbench {
     git_branch_compare_loading: bool,
     git_diff_loading: bool,
     git_diff_request: u64,
+    git_file_diff_paging: Option<GitFileDiffPaging>,
     workspace_generation: u64,
     editor_epoch: u64,
     mixed_tabs: WorkbenchTabs,
+    host_pin_snapshots: HashMap<(String, String), HostTabPinSnapshot>,
+    host_pins_loading: bool,
+    host_pins_busy: bool,
+    host_pins_request: u64,
+    host_pins_error: Option<String>,
     mixed_panes: WorkbenchPaneLayout,
     mixed_layout_restore: Option<SavedWorkbenchLayoutV1>,
     mixed_layout_read_only: bool,
@@ -527,6 +619,14 @@ struct Workbench {
     runtime_bridge: Option<RuntimeCliBridge>,
     runtime_status: String,
     runtime_loading: bool,
+    quota_snapshots: Vec<QuotaSnapshot>,
+    quota_loading: bool,
+    quota_error: Option<String>,
+    quota_last_refresh: Instant,
+    quota_request: u64,
+    quota_enabled_order: Option<Vec<String>>,
+    quota_popover_open: bool,
+    quota_popover_account: Option<String>,
     mcp_ui_bridge: Option<NativeMcpUiBridge>,
     mcp_ui_window_id: String,
     mcp_ui_status: String,
@@ -541,9 +641,28 @@ struct Workbench {
     native_settings_store: Option<NativeSettingsStore>,
     native_settings: NativeSettings,
     native_settings_error: Option<String>,
+    history_sync_snapshot: Option<HistorySyncSnapshot>,
+    history_sync_loading: bool,
+    history_sync_busy: bool,
+    history_sync_request: u64,
+    history_sync_status: String,
+    history_sync_edit: Option<HistorySyncAccount>,
+    history_sync_input: Entity<QuickOpenInput>,
     settings_section: Option<String>,
     settings_modal_focus: gpui::FocusHandle,
     settings_kit_dialog_open: bool,
+    /// The preview language changes only visible text, never host settings.
+    settings_menu_locale: UiLocale,
+    settings_menu_language: String,
+    /// Validated read-only model projection from Rust Host. No local JSON.
+    settings_extra_values: serde_json::Map<String, serde_json::Value>,
+    settings_shared_busy: bool,
+    settings_native_profile_migrated: bool,
+    settings_shared_request: u64,
+    settings_shared_last_refresh: Instant,
+    settings_shared_error: Option<String>,
+    settings_menu_search: Entity<QuickOpenInput>,
+    settings_exclusion_input: Entity<QuickOpenInput>,
     last_auto_git_fetch: Instant,
     agent_profiles: Vec<AgentProfileRow>,
     agent_profiles_loading: bool,
@@ -553,6 +672,9 @@ struct Workbench {
     agent_launch_busy: bool,
     agent_launch_request: u64,
     agent_pending_tab: Option<LaunchedAgentTab>,
+    /// Keep + → Agent's original pane across prompt entry and Host launch
+    /// confirmation; never attach to whichever tab happens to be focused.
+    agent_launch_pane: Option<PaneAttachGuard>,
     agent_status: String,
     terminals: TerminalDock,
     terminal_panes: TerminalPaneLayout,
@@ -566,8 +688,27 @@ struct Workbench {
     terminal_auto_resize: TerminalAutoResizeGate,
     terminal_line_selection: Option<TerminalLineSelection>,
     terminal_create_flow: TerminalCreateFlow,
+    terminal_create_pane: Option<PendingTerminalPane>,
     terminal_layout_restore: Option<TerminalLayout>,
     terminal_list_loading: bool,
+    /// Prevent an async inventory started before a status push from
+    /// resurrecting stale Agent Hook state after the push arrives.
+    agent_presence_event_generation: u64,
+    /// Host events and inventories share one delivery rule engine. No OS
+    /// toast is emitted until explicit Native-only ownership is confirmed.
+    agent_notification_delivery: AgentNotificationDelivery,
+    agent_notification_clock: Instant,
+    /// Separate Host-owned operational Hook settings; unlike the portable
+    /// notification toggle, these live in runtimeSettings.agentStatusHooks.
+    agent_hook_switches: Option<AgentHookSettingsSnapshot>,
+    agent_hook_write_loading: bool,
+    agent_hook_ui_status: String,
+    agent_hook_switches_loading: bool,
+    agent_hook_switches_request: u64,
+    agent_hook_switches_last_refresh: Instant,
+    #[cfg(windows)]
+    agent_windows_toast: WindowsAgentToastPresenter,
+    agent_toast_activation: Option<AgentNotice>,
     terminal_read_loading: Option<String>,
     terminal_split_read_loading: bool,
     terminal_poll: TerminalPollGate,
@@ -641,6 +782,13 @@ impl Workbench {
                 }
                 self.persist_session();
             }
+        } else if let Some((pane, instance)) = self.editor_instance_for_path(path, cx) {
+            // A file already owned by a live editor buffer is reused, never
+            // shadowed by a second read-only preview chip for the same path.
+            self.focus_editor_instance(pane, instance, cx);
+            self.explorer_preview_active = false;
+            self.model
+                .set_status("Focused existing editor buffer; no duplicate opened");
         } else if self.model.preview_path(path) {
             self.explorer_preview_active = true;
             self.center_view = CenterView::Editor;
@@ -653,19 +801,50 @@ impl Workbench {
         let saved = self.saved_projects.clone();
         let recent = self.recent_workspaces.clone();
         let active = self.model.root().to_path_buf();
+        let bridge = self.runtime_bridge.clone();
         let generation = self.workspace_generation;
         self.project_tree_request = self.project_tree_request.wrapping_add(1);
         let request = self.project_tree_request;
         self.project_tree_loading = true;
         cx.spawn(async move |view, cx| {
-            let groups = cx
-                .background_spawn(async move { collect_project_tree(&saved, &recent, &active) })
+            let (groups, runtime_result) = cx
+                .background_spawn(async move {
+                    let runtime_result = bridge.map(|bridge| bridge.list_runtime_catalog());
+                    let registered = runtime_result
+                        .as_ref()
+                        .and_then(|result| result.as_ref().ok())
+                        .map(|catalog| {
+                            catalog
+                                .projects
+                                .iter()
+                                .map(|project| project.root.clone())
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default();
+                    let groups =
+                        collect_project_tree_with_registered(&saved, &recent, &registered, &active);
+                    (groups, runtime_result)
+                })
                 .await;
             view.update(cx, |view, cx| {
                 if view.workspace_generation != generation || view.project_tree_request != request {
                     return;
                 }
                 view.project_tree_groups = groups;
+                match runtime_result {
+                    Some(Ok(catalog)) => {
+                        view.runtime_catalog = Some(catalog);
+                        view.runtime_catalog_error = None;
+                    }
+                    Some(Err(error)) => {
+                        view.runtime_catalog = None;
+                        view.runtime_catalog_error = Some(error.to_string());
+                    }
+                    None => {
+                        view.runtime_catalog = None;
+                        view.runtime_catalog_error = Some("Classic Alera CLI unavailable".into());
+                    }
+                }
                 view.project_tree_loading = false;
                 cx.notify();
             })
@@ -683,57 +862,20 @@ impl Workbench {
         if previous == next {
             return;
         }
-        if let Some(tree) = &mut self.tree {
-            if let Err(error) = tree.set_visibility_options(next) {
-                self.model
-                    .set_status(format!("Explorer visibility update failed: {error}"));
-                cx.notify();
-                return;
-            }
+        // Explorer preferences are shared with Classic. Never optimistically
+        // mutate the tree or write Native JSON before Host CAS acknowledges.
+        if previous.show_hidden != next.show_hidden && previous.show_ignored != next.show_ignored {
+            self.model
+                .set_status("Change one Explorer visibility option at a time");
+            cx.notify();
+            return;
         }
-        if let Some(store) = &self.native_settings_store {
-            match store.compare_and_set_explorer_visibility(previous, next) {
-                Ok(settings) => self.native_settings = settings,
-                Err(error) => {
-                    if let Some(tree) = &mut self.tree {
-                        let _ = tree.set_visibility_options(previous);
-                    }
-                    self.model.set_status(format!(
-                        "Explorer visibility unchanged; settings could not be saved: {error}"
-                    ));
-                    cx.notify();
-                    return;
-                }
-            }
+        let (path, value) = if previous.show_hidden != next.show_hidden {
+            ("explorer.showHiddenFiles", next.show_hidden)
         } else {
-            // A missing native state path must not write Flutter preferences.
-            self.native_settings.explorer_show_hidden = next.show_hidden;
-            self.native_settings.explorer_show_ignored = next.show_ignored;
-        }
-        self.explorer_visibility = next;
-        self.explorer_multi_selection.clear();
-        self.explorer_selection = None;
-        self.explorer_context_menu = None;
-        self.tree_mode = true;
-        self.file_index = None;
-        self.file_index_loading = false;
-        self.file_index_request = self.file_index_request.wrapping_add(1);
-        if !self
-            .explorer_filter_input
-            .read(cx)
-            .query()
-            .trim()
-            .is_empty()
-            || self.quick_open.is_some()
-        {
-            self.ensure_file_index(cx);
-        }
-        self.model.set_status(format!(
-            "Explorer: {} ignored files, {} hidden items",
-            if next.show_ignored { "show" } else { "hide" },
-            if next.show_hidden { "show" } else { "hide" },
-        ));
-        cx.notify();
+            ("explorer.showIgnoredFiles", next.show_ignored)
+        };
+        self.change_shared_desktop_setting(path, serde_json::json!(value), cx);
     }
 
     fn set_explorer_clipboard(&mut self, mode: ExplorerClipboardMode, cx: &mut Context<Self>) {
@@ -979,6 +1121,25 @@ impl Workbench {
                 if let Some(path) = self.explorer_selection.clone() {
                     self.click_explorer_file(&path, true, window, cx);
                 }
+            }
+            ExplorerMenuAction::RevealInFileManager => {
+                let result = self
+                    .explorer_selection
+                    .as_ref()
+                    .ok_or_else(|| {
+                        std::io::Error::new(
+                            std::io::ErrorKind::InvalidInput,
+                            "Select a file or folder first",
+                        )
+                    })
+                    .and_then(|path| {
+                        ExplorerFiles::new(self.model.root())?.reveal_in_file_manager(path)
+                    });
+                self.model.set_status(match result {
+                    Ok(()) => "Opened system file manager".to_owned(),
+                    Err(error) => format!("Cannot reveal selected item: {error}"),
+                });
+                cx.notify();
             }
             ExplorerMenuAction::ViewCurrentGitDiff => {
                 if let Some(path) = self
@@ -1362,6 +1523,39 @@ impl Workbench {
             .or_else(|| self.secondary_editor.clone())
     }
 
+    /// The pane and opaque tab instance already editing `path`, if any.
+    /// Canonical-path comparison lets preview/promotion reuse the live
+    /// buffer instead of opening a second tab for the same file.
+    fn editor_instance_for_path(&self, path: &Path, cx: &Context<Self>) -> Option<(PaneSlot, u64)> {
+        let canonical = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        [PaneSlot::Primary, PaneSlot::Secondary]
+            .into_iter()
+            .find_map(|pane| {
+                let owner = self.editor_for_pane(pane)?;
+                owner
+                    .read(cx)
+                    .file_backed_tab_instances()
+                    .into_iter()
+                    .find(|(_, open)| open == &canonical)
+                    .map(|(instance, _)| (pane, instance))
+            })
+    }
+
+    /// Focus the exact live editor tab `instance` in `pane` and make it the
+    /// workbench's active mixed tab.
+    fn focus_editor_instance(&mut self, pane: PaneSlot, instance: u64, cx: &mut Context<Self>) {
+        if let Some(owner) = self.editor_for_pane(pane) {
+            owner.update(cx, |editor, cx| {
+                editor.activate_tab_instance(instance, cx);
+            });
+        }
+        self.mixed_panes.activate(&WorkbenchTabIdentity::Editor {
+            editor_epoch: self.editor_epoch,
+            instance,
+        });
+        self.center_view = CenterView::Editor;
+    }
+
     fn all_editor_files_and_active(
         &self,
         cx: &Context<Self>,
@@ -1401,11 +1595,18 @@ impl Workbench {
                 workbench.secondary_editor = None;
             }
             let (files, active) = workbench.all_editor_files_and_active(cx);
-            let changed = files != workbench.editor_file_layout_snapshot
-                || active != workbench.editor_active_layout_snapshot;
+            let files_changed = files != workbench.editor_file_layout_snapshot;
+            let changed = files_changed || active != workbench.editor_active_layout_snapshot;
             workbench.editor_file_layout_snapshot = files;
             workbench.editor_active_layout_snapshot = active;
             if changed && workbench.mixed_layout_restore.is_none() {
+                if files_changed {
+                    // A live editor buffer is canonical for its path; drop
+                    // any read-only preview chip that would duplicate it.
+                    for (_, path) in &workbench.editor_file_layout_snapshot {
+                        workbench.model.release_path(path);
+                    }
+                }
                 workbench.sync_mixed_tabs(cx);
                 workbench.save_mixed_pane_layout(cx);
             }
@@ -1432,6 +1633,11 @@ impl Workbench {
     }
 
     fn install_secondary_editor(&mut self, tabs: EditorTabs, cx: &mut Context<Self>) {
+        // The first Editor might be created directly in an existing Host-only
+        // second pane. It still needs a fresh generation-bound document ID.
+        if self.editor.is_none() && self.secondary_editor.is_none() {
+            self.editor_epoch = self.editor_epoch.wrapping_add(1);
+        }
         let editor = cx.new(|cx| NativeEditor::new(tabs, cx));
         editor.update(cx, |editor, cx| {
             editor.set_local_tab_strip_visible(false, cx);
@@ -2834,27 +3040,7 @@ impl Workbench {
     }
 
     fn toggle_git_history_favorite(&mut self, branch: String, cx: &mut Context<Self>) {
-        let mut next = self.git_history_options.favorites.clone();
-        if let Some(index) = next.iter().position(|value| value == &branch) {
-            next.remove(index);
-        } else {
-            next.push(branch);
-        }
-        let result = self
-            .session_store
-            .as_ref()
-            .ok_or_else(|| std::io::Error::other("Native session storage unavailable"))
-            .and_then(|store| store.save_git_favorites(self.model.root(), &next));
-        match result {
-            Ok(()) => {
-                self.git_history_options.favorites = next;
-                self.refresh_git_history(cx);
-            }
-            Err(error) => {
-                self.git_history_error = Some(format!("Cannot persist Git favorites: {error}"))
-            }
-        }
-        cx.notify();
+        self.persist_shared_git_favorite(branch, cx);
     }
 
     fn compare_git_branch_files(
@@ -2947,6 +3133,7 @@ impl Workbench {
         let generation = self.workspace_generation;
         self.git_diff_request = self.git_diff_request.wrapping_add(1);
         let ticket = self.git_diff_request;
+        self.git_file_diff_paging = None;
         self.git_diff = None;
         self.git_diff_loading = true;
         cx.spawn(async move |view, cx| {
@@ -3710,6 +3897,13 @@ impl Workbench {
         original: bool,
         cx: &mut Context<Self>,
     ) {
+        // A general Git preview can use the independently bounded patch
+        // pager; exact Staged/Changes/Original previews retain their area.
+        if area.is_none() && !original {
+            self.preview_git_change_paged(relative, cx);
+            return;
+        }
+        self.git_file_diff_paging = None;
         self.git_diff_request = self.git_diff_request.wrapping_add(1);
         let ticket = self.git_diff_request;
         let generation = self.workspace_generation;
@@ -3736,6 +3930,93 @@ impl Workbench {
                 view.git_diff_loading = false;
                 view.git_diff =
                     Some(result.unwrap_or_else(|error| format!("Diff unavailable: {error}")));
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn preview_git_change_paged(&mut self, relative: PathBuf, cx: &mut Context<Self>) {
+        // A new click is a new dialog source even if it chooses the same file.
+        // Paging preserves its source ticket, but re-selection invalidates it.
+        self.git_file_diff_paging = None;
+        self.load_git_file_diff_page(relative, 0, Vec::new(), cx);
+    }
+
+    fn change_git_file_diff_page(&mut self, forward: bool, cx: &mut Context<Self>) {
+        if self.git_diff_loading {
+            return;
+        }
+        let Some(state) = self.git_file_diff_paging.as_ref() else {
+            return;
+        };
+        let mut previous = state.previous_starts.clone();
+        let next_start = if forward {
+            if previous.len() >= 31 {
+                return;
+            }
+            let Some(next) = state.next_line else { return };
+            previous.push(state.start_line);
+            next
+        } else {
+            let Some(previous_start) = previous.pop() else {
+                return;
+            };
+            previous_start
+        };
+        let relative = state.relative.clone();
+        self.load_git_file_diff_page(relative, next_start, previous, cx);
+    }
+
+    fn load_git_file_diff_page(
+        &mut self,
+        relative: PathBuf,
+        start_line: usize,
+        previous_starts: Vec<usize>,
+        cx: &mut Context<Self>,
+    ) {
+        self.git_diff_request = self.git_diff_request.wrapping_add(1);
+        let ticket = self.git_diff_request;
+        let generation = self.workspace_generation;
+        let root = self.model.root().to_path_buf();
+        let source_ticket = self
+            .git_file_diff_paging
+            .as_ref()
+            .filter(|current| current.relative == relative)
+            .map(|current| current.source_ticket)
+            .unwrap_or(ticket);
+        self.git_file_diff_paging = Some(GitFileDiffPaging {
+            relative: relative.clone(),
+            source_ticket,
+            start_line,
+            next_line: None,
+            previous_starts,
+        });
+        self.git_diff = None;
+        self.git_diff_loading = true;
+        cx.spawn(async move |view, cx| {
+            let result = cx
+                .background_spawn(async move { read_file_diff_page(&root, &relative, start_line) })
+                .await;
+            view.update(cx, |view, cx| {
+                if view.workspace_generation != generation || view.git_diff_request != ticket {
+                    return;
+                }
+                view.git_diff_loading = false;
+                match result {
+                    Ok(page) => {
+                        if let Some(paging) = view.git_file_diff_paging.as_mut() {
+                            paging.next_line = page.next_line;
+                        }
+                        view.git_diff = Some(page.text);
+                    }
+                    Err(error) => {
+                        view.git_file_diff_paging = None;
+                        view.git_diff = Some(format!("Diff unavailable: {error}"));
+                    }
+                }
                 cx.notify();
             })
             .ok();
@@ -3777,6 +4058,278 @@ impl Workbench {
         }
     }
 
+    fn explorer_rename_action(
+        &mut self,
+        _: &ExplorerRename,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.explorer_keyboard_focus.is_focused(window) {
+            self.begin_explorer_action(ExplorerAction::Rename, window, cx);
+        }
+    }
+
+    fn explorer_delete_action(
+        &mut self,
+        _: &ExplorerDelete,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.explorer_keyboard_focus.is_focused(window) {
+            // Existing explicit confirmation still protects deletion.
+            self.begin_explorer_action(ExplorerAction::Delete, window, cx);
+        }
+    }
+
+    fn explorer_refresh_action(
+        &mut self,
+        _: &ExplorerRefresh,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.explorer_keyboard_focus.is_focused(window) {
+            self.run_explorer_menu_action(ExplorerMenuAction::Refresh, window, cx);
+        }
+    }
+
+    /// Exactly the rows rendered by the active Explorer view, so keyboard
+    /// navigation cannot select a filtered-out or collapsed file.
+    fn visible_explorer_paths(&self, cx: &Context<Self>) -> Vec<PathBuf> {
+        let query = self
+            .explorer_filter_input
+            .read(cx)
+            .query()
+            .trim()
+            .to_owned();
+        if !query.is_empty() {
+            return self
+                .file_index
+                .as_ref()
+                .filter(|index| index.root() == self.model.root())
+                .map(|index| index.search_explorer(&query, 200))
+                .unwrap_or_default()
+                .into_iter()
+                .map(|hit| hit.path)
+                .collect();
+        }
+        if self.tree_mode {
+            if let Some(tree) = &self.tree {
+                return tree
+                    .rows()
+                    .iter()
+                    .map(|row| self.model.root().join(&row.relative_path))
+                    .collect();
+            }
+        }
+        self.model
+            .entries()
+            .iter()
+            .map(|entry| entry.path.clone())
+            .collect()
+    }
+
+    fn navigate_explorer_keyboard(
+        &mut self,
+        direction: ExplorerNavigation,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let visible = self.visible_explorer_paths(cx);
+        if visible.is_empty() {
+            // Empty filter results keep keyboard focus in the editable
+            // search field so the user can immediately correct the query.
+            return;
+        }
+        if !self.explorer_keyboard_focus.is_focused(window) {
+            // A permanent Classic-style filter must be usable without a
+            // mouse: Down leaves the search box for the matching rows.
+            // Never steal an unfinished Windows IME composition.
+            let from_filter = {
+                let input = self.explorer_filter_input.read(cx);
+                input.focus_handle(cx).is_focused(window) && !input.composing()
+            };
+            if direction != ExplorerNavigation::Next || !from_filter {
+                return;
+            }
+            window.focus(&self.explorer_keyboard_focus, cx);
+        }
+        if let Some(path) = self.explorer_multi_selection.navigate(
+            self.explorer_selection.as_deref(),
+            &visible,
+            direction,
+        ) {
+            if let Some(index) = self
+                .explorer_multi_selection
+                .visible_row_index(&path, &visible)
+            {
+                // GPUI resolves this against actual painted children. Do not
+                // guess 32px rows: filtered results can have a second line.
+                self.explorer_scroll.scroll_to_item(index);
+            }
+            self.explorer_selection = Some(path);
+            self.explorer_delete_confirmed = false;
+            self.explorer_delete_pending = None;
+            self.explorer_context_menu = None;
+            cx.notify();
+        }
+    }
+
+    fn explorer_up_action(&mut self, _: &ExplorerUp, window: &mut Window, cx: &mut Context<Self>) {
+        self.navigate_explorer_keyboard(ExplorerNavigation::Previous, window, cx);
+    }
+
+    fn explorer_down_action(
+        &mut self,
+        _: &ExplorerDown,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.navigate_explorer_keyboard(ExplorerNavigation::Next, window, cx);
+    }
+
+    fn explorer_first_action(
+        &mut self,
+        _: &ExplorerFirst,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.navigate_explorer_keyboard(ExplorerNavigation::First, window, cx);
+    }
+
+    fn explorer_last_action(
+        &mut self,
+        _: &ExplorerLast,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.navigate_explorer_keyboard(ExplorerNavigation::Last, window, cx);
+    }
+
+    fn explorer_open_action(
+        &mut self,
+        _: &ExplorerOpen,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.explorer_keyboard_focus.is_focused(window) {
+            return;
+        }
+        let Some(path) = self.explorer_selection.clone() else {
+            return;
+        };
+        if !self.visible_explorer_paths(cx).contains(&path) {
+            self.model
+                .set_status("Selected Explorer row is no longer visible");
+            cx.notify();
+            return;
+        }
+        let target =
+            ExplorerFiles::new(self.model.root()).and_then(|files| files.reveal_target(&path));
+        match target {
+            Ok(path) if path.is_file() => self.click_explorer_file(&path, true, window, cx),
+            Ok(path) if path.is_dir() => {
+                let filtered = !self
+                    .explorer_filter_input
+                    .read(cx)
+                    .query()
+                    .trim()
+                    .is_empty();
+                if filtered {
+                    self.tree_mode = true;
+                    if let Some(tree) = &mut self.tree {
+                        if let Ok(relative) = path.strip_prefix(self.model.root()) {
+                            if let Err(error) = tree.reveal_directory(relative) {
+                                self.model
+                                    .set_status(format!("Cannot reveal folder: {error}"));
+                            }
+                        }
+                    }
+                    self.explorer_filter_input
+                        .update(cx, |input, cx| input.clear(cx));
+                } else if self.tree_mode {
+                    if let Some(tree) = &mut self.tree {
+                        if let Ok(relative) = path.strip_prefix(self.model.root()) {
+                            if let Err(error) = tree.toggle(relative) {
+                                self.model
+                                    .set_status(format!("Cannot open folder: {error}"));
+                            }
+                        }
+                    }
+                } else if let Some(index) = self
+                    .model
+                    .entries()
+                    .iter()
+                    .position(|entry| entry.path == path)
+                {
+                    self.model.open_entry(index);
+                    self.persist_session();
+                }
+                cx.notify();
+            }
+            Ok(_) => {
+                self.model
+                    .set_status("Selected Explorer item is unsupported");
+                cx.notify();
+            }
+            Err(error) => {
+                self.model
+                    .set_status(format!("Cannot open Explorer item: {error}"));
+                cx.notify();
+            }
+        }
+    }
+
+    fn explorer_preview_action(
+        &mut self,
+        _: &ExplorerPreview,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.explorer_keyboard_focus.is_focused(window) {
+            return;
+        }
+        let Some(path) = self.explorer_selection.clone() else {
+            return;
+        };
+        if !self.visible_explorer_paths(cx).contains(&path) {
+            self.model
+                .set_status("Selected Explorer row is no longer visible");
+            cx.notify();
+            return;
+        }
+        match ExplorerFiles::new(self.model.root()).and_then(|files| files.reveal_target(&path)) {
+            Ok(path) if path.is_file() => self.click_explorer_file(&path, false, window, cx),
+            Ok(_) => {}
+            Err(error) => {
+                self.model
+                    .set_status(format!("Cannot preview Explorer item: {error}"));
+                cx.notify();
+            }
+        }
+    }
+
+    fn explorer_new_file_action(
+        &mut self,
+        _: &ExplorerNewFile,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.explorer_keyboard_focus.is_focused(window) {
+            self.begin_explorer_action(ExplorerAction::NewFile, window, cx);
+        }
+    }
+
+    fn explorer_new_folder_action(
+        &mut self,
+        _: &ExplorerNewFolder,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.explorer_keyboard_focus.is_focused(window) {
+            self.begin_explorer_action(ExplorerAction::NewFolder, window, cx);
+        }
+    }
+
     fn explorer_select_all_action(
         &mut self,
         _: &ExplorerSelectAll,
@@ -3786,37 +4339,7 @@ impl Workbench {
         if !self.explorer_keyboard_focus.is_focused(window) {
             return;
         }
-        let query = self
-            .explorer_filter_input
-            .read(cx)
-            .query()
-            .trim()
-            .to_owned();
-        let visible: Vec<PathBuf> = if !query.is_empty() {
-            self.file_index
-                .as_ref()
-                .map(|index| index.search_explorer(&query, 200))
-                .unwrap_or_default()
-                .into_iter()
-                .map(|hit| hit.path)
-                .collect()
-        } else if self.tree_mode {
-            self.tree
-                .as_ref()
-                .map(|tree| {
-                    tree.rows()
-                        .iter()
-                        .map(|row| self.model.root().join(&row.relative_path))
-                        .collect()
-                })
-                .unwrap_or_default()
-        } else {
-            self.model
-                .entries()
-                .iter()
-                .map(|entry| entry.path.clone())
-                .collect()
-        };
+        let visible = self.visible_explorer_paths(cx);
         let count = self.explorer_multi_selection.select_visible_all(&visible);
         self.explorer_selection = self
             .explorer_multi_selection
@@ -4064,28 +4587,15 @@ impl Workbench {
         let root = self.model.root().to_path_buf();
         // Never open the same disk file as two independent mutable buffers.
         // If a pane already owns it, focus that exact existing document.
-        for pane in [PaneSlot::Primary, PaneSlot::Secondary] {
-            if let Some(owner) = self.editor_for_pane(pane) {
-                if let Some((instance, _)) = owner
-                    .read(cx)
-                    .file_backed_tab_instances()
-                    .into_iter()
-                    .find(|(_, open)| open == &path)
-                {
-                    owner.update(cx, |editor, cx| {
-                        editor.activate_tab_instance(instance, cx);
-                    });
-                    self.mixed_panes.activate(&WorkbenchTabIdentity::Editor {
-                        editor_epoch: self.editor_epoch,
-                        instance,
-                    });
-                    self.center_view = CenterView::Editor;
-                    self.model
-                        .set_status("Focused existing editor buffer; no duplicate opened");
-                    cx.notify();
-                    return;
-                }
-            }
+        if let Some((pane, instance)) = self.editor_instance_for_path(&path, cx) {
+            self.focus_editor_instance(pane, instance, cx);
+            // The editable buffer is the single canonical tab for this
+            // path; release any read-only preview chip that would duplicate it.
+            self.model.release_path(&path);
+            self.model
+                .set_status("Focused existing editor buffer; no duplicate opened");
+            cx.notify();
+            return;
         }
         if self.editor.is_none() {
             let mut tabs = EditorTabs::new(self.draft_store());
@@ -4093,6 +4603,7 @@ impl Workbench {
                 Ok(effect) => {
                     self.model.set_status(effect.status());
                     self.install_editor(tabs, cx);
+                    self.model.release_path(&path);
                     self.center_view = CenterView::Editor;
                 }
                 Err(error) => self.model.set_status(format!(
@@ -4110,6 +4621,7 @@ impl Workbench {
         match result {
             Ok(effect) => {
                 self.model.set_status(effect.status());
+                self.model.release_path(&path);
                 self.center_view = CenterView::Editor;
             }
             Err(error) => self.model.set_status(format!(
@@ -4188,36 +4700,50 @@ impl Workbench {
         cx.notify();
     }
 
-    fn new_editor(&mut self, cx: &mut Context<Self>) {
+    fn new_editor_in_pane(&mut self, pane: PaneSlot, cx: &mut Context<Self>) {
+        if pane == PaneSlot::Secondary && !self.mixed_panes.has_secondary() {
+            self.model
+                .set_status("Split a tab before creating a file in the second pane");
+            cx.notify();
+            return;
+        }
         self.explorer_preview_active = false;
         let root = self.model.root().to_path_buf();
-        if self.editor.is_none() {
+        if self.editor_for_pane(pane).is_none() {
             let mut tabs = EditorTabs::new(self.draft_store());
             match tabs.open_scratch(&root) {
                 Ok(effect) => {
                     self.model.set_status(effect.status());
-                    self.install_editor(tabs, cx);
+                    match pane {
+                        PaneSlot::Primary => self.install_editor(tabs, cx),
+                        PaneSlot::Secondary => self.install_secondary_editor(tabs, cx),
+                    }
                     self.center_view = CenterView::Editor;
                 }
                 Err(error) => self
                     .model
                     .set_status(format!("Cannot create an editor: {error}")),
             }
-            cx.notify();
-            return;
-        }
-        let owner = self.focused_editor().expect("native editor installed");
-        let result = owner.update(cx, |editor, cx| editor.open_scratch(&root, cx));
-        match result {
-            Ok(effect) => {
-                self.model.set_status(effect.status());
-                self.center_view = CenterView::Editor;
+        } else if let Some(owner) = self.editor_for_pane(pane) {
+            let result = owner.update(cx, |editor, cx| editor.open_scratch(&root, cx));
+            match result {
+                Ok(effect) => {
+                    self.model.set_status(effect.status());
+                    self.center_view = CenterView::Editor;
+                }
+                Err(error) => self
+                    .model
+                    .set_status(format!("Cannot create an editor: {error}")),
             }
-            Err(error) => self
-                .model
-                .set_status(format!("Cannot create an editor: {error}")),
         }
+        self.mixed_panes.focus_pane(pane);
+        self.sync_mixed_tabs(cx);
+        self.save_mixed_pane_layout(cx);
         cx.notify();
+    }
+
+    fn new_editor(&mut self, cx: &mut Context<Self>) {
+        self.new_editor_in_pane(self.mixed_panes.focused_pane(), cx);
     }
 
     fn pick_save_as(&mut self, cx: &mut Context<Self>) {
@@ -4360,12 +4886,40 @@ impl Workbench {
     }
 
     fn toggle_worktree_creator(&mut self, cx: &mut Context<Self>) {
-        self.worktree_create_input = if self.worktree_create_input.is_some() {
-            None
+        if self.worktree_create_input.is_some() {
+            self.worktree_create_input = None;
+            self.worktree_create_root = None;
+            self.worktree_create_from_existing = false;
         } else {
-            Some(cx.new(|cx| QuickOpenInput::with_placeholder("feature/new-branch", cx)))
-        };
+            self.begin_worktree_for_project(self.model.root().to_path_buf(), cx);
+        }
         self.worktree_delete_pending = None;
+        cx.notify();
+    }
+
+    fn begin_worktree_for_project(&mut self, root: PathBuf, cx: &mut Context<Self>) {
+        if self.worktree_busy || self.mcp_workspace_create_busy {
+            return;
+        }
+        let project_root = self
+            .project_tree_groups
+            .iter()
+            .find(|group| {
+                group.root == root || group.worktrees.iter().any(|entry| entry.path == root)
+            })
+            .map(|group| group.root.clone())
+            .unwrap_or(root);
+        if WorktreeManager::discover(&project_root).is_err() {
+            self.model
+                .set_status("Only Git projects can create a Worktree");
+            cx.notify();
+            return;
+        }
+        self.worktree_create_root = Some(project_root);
+        self.worktree_create_from_existing = false;
+        self.worktree_create_input =
+            Some(cx.new(|cx| QuickOpenInput::with_placeholder("feature/new-branch", cx)));
+        self.show_project_management = true;
         cx.notify();
     }
 
@@ -4380,13 +4934,46 @@ impl Workbench {
             return;
         };
         let branch = input.read(cx).query().trim().to_owned();
-        let root = self.model.root().to_path_buf();
+        let root = self
+            .worktree_create_root
+            .clone()
+            .unwrap_or_else(|| self.model.root().to_path_buf());
+        let use_existing = self.worktree_create_from_existing;
+        let registered = self
+            .runtime_catalog
+            .as_ref()
+            .and_then(|catalog| catalog.projects.iter().find(|project| project.root == root))
+            .map(|project| project.id.clone());
+        if self.runtime_bridge.is_some() && self.runtime_catalog.is_none() {
+            self.model.set_status(
+                "Cannot verify Classic registry; refresh projects before creating a Worktree",
+            );
+            cx.notify();
+            return;
+        }
+        let bridge = self.runtime_bridge.clone();
         let generation = self.workspace_generation;
         self.worktree_busy = true;
         cx.spawn(async move |view, cx| {
             let result = cx
                 .background_spawn(async move {
-                    WorktreeManager::discover(&root).and_then(|manager| manager.create(&branch))
+                    if let Some(project_id) = registered {
+                        let bridge = bridge.ok_or_else(|| {
+                            std::io::Error::new(
+                                std::io::ErrorKind::NotConnected,
+                                "Classic Host required for managed worktree",
+                            )
+                        })?;
+                        bridge.create_managed_workspace(&project_id, &root, &branch, use_existing)
+                    } else {
+                        WorktreeManager::discover(&root).and_then(|manager| {
+                            if use_existing {
+                                manager.create_existing(&branch)
+                            } else {
+                                manager.create(&branch)
+                            }
+                        })
+                    }
                 })
                 .await;
             view.update(cx, |view, cx| {
@@ -4397,6 +4984,8 @@ impl Workbench {
                 match result {
                     Ok(path) => {
                         view.worktree_create_input = None;
+                        view.worktree_create_root = None;
+                        view.worktree_create_from_existing = false;
                         view.switch_workspace(path, cx);
                         view.refresh_worktrees(cx);
                     }
@@ -4536,6 +5125,8 @@ impl Workbench {
         self.mixed_tab_context = None;
         self.tree = WorkspaceTree::new_with_options(&canonical, self.explorer_visibility).ok();
         self.explorer_multi_selection = ExplorerMultiSelection::new(&canonical);
+        // Never inherit a remote worktree's vertical list position.
+        self.explorer_scroll.scroll_to_item(0);
         self.explorer_preview_active = false;
         self.explorer_filter_input
             .update(cx, |input, cx| input.clear(cx));
@@ -4596,6 +5187,11 @@ impl Workbench {
                 }
             }
         }
+        self.git_favorites_busy = false;
+        self.git_favorites_request = self.git_favorites_request.wrapping_add(1);
+        self.git_favorites_last_refresh = Instant::now()
+            .checked_sub(Duration::from_secs(20))
+            .unwrap_or_else(Instant::now);
         self.git_history_request = self.git_history_request.wrapping_add(1);
         self.git_history_cancel.store(true, Ordering::Release);
         self.git_amend_preview = None;
@@ -4655,6 +5251,7 @@ impl Workbench {
         self.git_branch_compare_loading = false;
         self.git_diff_loading = false;
         self.git_diff_request = self.git_diff_request.wrapping_add(1);
+        self.git_file_diff_paging = None;
         // Agent profiles are Host-owned, but selection and an in-flight
         // launch response must never attach to a different GPUI workspace.
         self.agent_profiles_request = self.agent_profiles_request.wrapping_add(1);
@@ -4662,6 +5259,7 @@ impl Workbench {
         self.agent_launch_request = self.agent_launch_request.wrapping_add(1);
         self.agent_launch_busy = false;
         self.agent_pending_tab = None;
+        self.agent_launch_pane = None;
         self.agent_prompt_input
             .update(cx, |input, cx| input.clear(cx));
         self.agent_status = "Select an Agent Profile and enter a task".into();
@@ -4669,6 +5267,11 @@ impl Workbench {
         self.mcp_host_workspaces_loading = false;
         self.mcp_host_workspaces_request = self.mcp_host_workspaces_request.wrapping_add(1);
         self.workspace_generation = self.workspace_generation.wrapping_add(1);
+        self.host_pin_snapshots.clear();
+        self.host_pins_loading = false;
+        self.host_pins_busy = false;
+        self.host_pins_request = self.host_pins_request.wrapping_add(1);
+        self.host_pins_error = None;
         self.project_tree_loading = false;
         self.project_tree_groups.clear();
         self.project_tree_request = self.project_tree_request.wrapping_add(1);
@@ -4686,6 +5289,7 @@ impl Workbench {
         self.terminal_line_selection = None;
         self.terminal_panes.reset();
         self.terminal_create_flow.cancel();
+        self.terminal_create_pane = None;
         self.load_terminal_layout();
         self.terminal_key_queue.clear();
         self.terminal_key_queue_target = None;
@@ -4718,6 +5322,7 @@ impl Workbench {
         self.refresh_worktrees(cx);
         self.start_git_watch(cx);
         self.refresh_git(cx);
+        self.refresh_shared_git_favorites(cx);
         cx.notify();
     }
 
@@ -4820,6 +5425,38 @@ impl Workbench {
     }
 
     fn install_native_settings(&mut self, settings: NativeSettings, cx: &mut Context<Self>) {
+        let visibility = ExplorerVisibilityOptions {
+            show_hidden: settings.explorer_show_hidden,
+            show_ignored: settings.explorer_show_ignored,
+        };
+        if self.explorer_visibility != visibility {
+            if let Some(tree) = &mut self.tree {
+                if let Err(error) = tree.set_visibility_options(visibility) {
+                    self.native_settings_error = Some(format!(
+                        "Explorer could not apply Rust Host preferences: {error}"
+                    ));
+                    cx.notify();
+                    return;
+                }
+            }
+            self.explorer_visibility = visibility;
+            self.explorer_multi_selection.clear();
+            self.explorer_selection = None;
+            self.explorer_context_menu = None;
+            self.file_index = None;
+            self.file_index_loading = false;
+            self.file_index_request = self.file_index_request.wrapping_add(1);
+            if !self
+                .explorer_filter_input
+                .read(cx)
+                .query()
+                .trim()
+                .is_empty()
+                || self.quick_open.is_some()
+            {
+                self.ensure_file_index(cx);
+            }
+        }
         if self.native_settings.auto_git_fetch_enabled != settings.auto_git_fetch_enabled
             || self.native_settings.auto_git_fetch_interval_minutes
                 != settings.auto_git_fetch_interval_minutes
@@ -4840,8 +5477,17 @@ impl Workbench {
 
     /// The Host authenticates the Agent and allowlists the path. Native
     /// independently rechecks its live Workspace registration and store,
-    /// and replies only with the value actually read from its own JSON file.
+    /// and acknowledges shared scalar settings only after Rust Host readback.
     fn apply_native_mcp_setting(&mut self, command: &NativeMcpUiCommand, cx: &mut Context<Self>) {
+        if command
+            .arguments
+            .get("path")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(NativeSettings::writable)
+        {
+            self.apply_shared_mcp_setting(command.clone(), cx);
+            return;
+        }
         let result: Result<(NativeSettings, serde_json::Value), &'static str> = (|| {
             let authorized = self.mcp_host_workspaces.iter().any(|workspace| {
                 workspace.id == command.workspace_id
@@ -4850,12 +5496,12 @@ impl Workbench {
             if !authorized {
                 return Err("workspace_missing");
             }
-            let store = self.native_settings_store.as_ref().ok_or("ui_not_ready")?;
             let path = command
                 .arguments
                 .get("path")
                 .and_then(|value| value.as_str())
                 .ok_or("ui_operation_failed")?;
+            let store = self.native_settings_store.as_ref().ok_or("ui_not_ready")?;
             let settings = if command.action == "get_setting" {
                 store.read().map_err(|_| "ui_operation_failed")?
             } else {
@@ -4907,26 +5553,7 @@ impl Workbench {
         value: serde_json::Value,
         cx: &mut Context<Self>,
     ) {
-        let result = self
-            .native_settings_store
-            .as_ref()
-            .ok_or_else(|| std::io::Error::other("Native state directory is unavailable"))
-            .and_then(|store| {
-                let expected = store.get(path)?;
-                store.compare_and_set(path, &expected, &value)
-            });
-        match result {
-            Ok(settings) => {
-                self.install_native_settings(settings, cx);
-                self.model
-                    .set_status(format!("Native {path} saved and read back"));
-            }
-            Err(error) => {
-                self.model
-                    .set_status(format!("Native setting unchanged: {error}"));
-            }
-        }
-        cx.notify();
+        self.change_shared_desktop_setting(path, value, cx);
     }
 
     /// Host has already authorized the target and parameters, but this window
@@ -5291,6 +5918,7 @@ impl Workbench {
         let generation = self.workspace_generation;
         let root = self.model.root().to_path_buf();
         self.git_history_open = true;
+        self.git_file_diff_paging = None;
         self.git_diff_loading = true;
         self.git_diff = None;
         self.model
@@ -5549,6 +6177,33 @@ impl Workbench {
         cx.notify();
     }
 
+    /// The + menu selects a real Host Agent Profile and opens the existing
+    /// task composer; it never launches an Agent before a task is submitted.
+    fn prepare_agent_in_pane(
+        &mut self,
+        profile_id: &str,
+        target: &PaneAttachGuard,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !target.still_valid(self.workspace_generation, &self.mixed_panes)
+            || !self
+                .agent_profiles
+                .iter()
+                .any(|profile| profile.id == profile_id)
+        {
+            self.agent_status = "Pane or Agent Profile changed; reopen + → Agent".into();
+            cx.notify();
+            return;
+        }
+        self.agent_launch_pane = Some(target.clone());
+        self.agent_selected_profile = Some(profile_id.to_owned());
+        self.runtime_details_open = true;
+        self.agent_status = "Enter an Agent task, then choose Launch Agent".into();
+        window.focus(&self.agent_prompt_input.read(cx).focus_handle(cx), cx);
+        cx.notify();
+    }
+
     fn launch_selected_agent(&mut self, cx: &mut Context<Self>) {
         if self.agent_launch_busy || self.agent_pending_tab.is_some() {
             self.agent_status =
@@ -5578,6 +6233,24 @@ impl Workbench {
             cx.notify();
             return;
         }
+        let selected_pane = self.agent_launch_pane.clone().or_else(|| {
+            PaneAttachGuard::capture(
+                self.workspace_generation,
+                self.mixed_panes.focused_pane(),
+                &self.mixed_panes,
+            )
+        });
+        let Some(selected_pane) = selected_pane else {
+            self.agent_status = "Original pane changed; reopen + → Agent".into();
+            cx.notify();
+            return;
+        };
+        if !selected_pane.still_valid(self.workspace_generation, &self.mixed_panes) {
+            self.agent_status = "Agent's original pane closed; reopen + → Agent".into();
+            cx.notify();
+            return;
+        }
+        self.agent_launch_pane = Some(selected_pane);
         if self.runtime_bridge.is_none() {
             self.runtime_bridge = RuntimeCliBridge::discover().ok();
         }
@@ -5613,6 +6286,7 @@ impl Workbench {
                         view.refresh_terminals(cx);
                     }
                     Err(error) => {
+                        view.agent_launch_pane = None;
                         view.agent_status = format!(
                             "Agent launch not confirmed: {error}. Check Attach existing before retrying; the Host might have created the tab"
                         );
@@ -5624,7 +6298,12 @@ impl Workbench {
         }).detach();
     }
 
-    fn create_host_terminal(&mut self, cx: &mut Context<Self>) {
+    fn create_host_terminal_in_pane(&mut self, target: PaneAttachGuard, cx: &mut Context<Self>) {
+        if !target.still_valid(self.workspace_generation, &self.mixed_panes) {
+            self.terminals.status = "Workbench pane changed; reopen the New Tab menu".into();
+            cx.notify();
+            return;
+        }
         if self.terminal_create_flow.is_active() {
             self.terminals.status =
                 "A Host terminal request is pending; confirm, retry its listing, or cancel first"
@@ -5645,6 +6324,7 @@ impl Workbench {
         let Some(request_id) = self.terminal_create_flow.start_request() else {
             return;
         };
+        self.terminal_create_pane = Some(PendingTerminalPane { request_id, target });
         self.terminals.status =
             "Checking registered Host workspaces before creating terminal…".into();
         cx.notify();
@@ -5681,12 +6361,17 @@ impl Workbench {
                         if !view.terminal_create_flow.fail_request(request_id) {
                             return;
                         }
+                        if view.terminal_create_pane.as_ref().is_some_and(|pending| {
+                            pending.request_id == request_id
+                        }) {
+                            view.terminal_create_pane = None;
+                        }
                         view.terminals.status = if error.kind() == std::io::ErrorKind::InvalidData {
                             // The Host RPC may already have created a PTY,
                             // even when the CLI reply failed validation.
                             // Never encourage a second create as a retry.
                             format!(
-                                "Host terminal reply could not be verified: {error}. +                                 A session may already exist; use Attach existing before retrying New Terminal."
+                                "Host terminal reply could not be verified: {error}. A session may already exist; use Attach existing before retrying New Terminal."
                             )
                         } else {
                             format!("Cannot create Host terminal: {error}")
@@ -5710,6 +6395,7 @@ impl Workbench {
 
     fn cancel_host_terminal_confirmation(&mut self, cx: &mut Context<Self>) {
         if self.terminal_create_flow.cancel() {
+            self.terminal_create_pane = None;
             // An RPC in flight can still create a Host terminal. Dismiss
             // only the local expectation; never issue a Host kill request.
             self.terminals.status =
@@ -5733,6 +6419,7 @@ impl Workbench {
         };
         self.terminal_list_loading = true;
         let generation = self.workspace_generation;
+        let presence_generation = self.agent_presence_event_generation;
         self.terminals.status = "Listing existing Host sessions…".into();
         cx.notify();
         cx.spawn(async move |view, cx| {
@@ -5744,6 +6431,12 @@ impl Workbench {
                     return;
                 }
                 view.terminal_list_loading = false;
+                // The Host status stream is newer than this async list
+                // request; discard its result and read a fresh snapshot.
+                if view.agent_presence_event_generation != presence_generation {
+                    view.refresh_terminals(cx);
+                    return;
+                }
                 match result {
                     Ok(sessions) => {
                         let was_disconnected = view.terminals.session_list_is_stale()
@@ -5751,13 +6444,42 @@ impl Workbench {
                         if view.terminals.apply_session_list(generation, sessions) {
                             if was_disconnected && !view.terminals.sessions.is_empty() {
                                 view.terminal_poll.reset();
+                                view.agent_notification_delivery.on_host_reconnected();
                             }
+                            // Never fully reconcile/focus tabs on a periodic
+                            // Host status refresh. Change only the Hook chip
+                            // metadata; pane order, pins and user focus stay.
+                            view.mixed_tabs
+                                .refresh_agent_statuses(&view.terminals.sessions);
+                            view.observe_agent_notification_status();
                             view.restore_terminal_layout_from_host(cx);
+                            view.refresh_host_tab_pins(cx);
                             if let Some(created) = view
                                 .terminal_create_flow
                                 .confirm_sessions(&view.terminals.sessions)
                             {
-                                view.select_terminal(created.handle, cx);
+                                // Never redirect a delayed Host create result to
+                                // whichever pane currently has global focus.
+                                // Only the exact authenticated Host triple may
+                                // be previewed in the still-existing origin.
+                                let pending = view.terminal_create_pane.take();
+                                let session = view.terminals.sessions.iter()
+                                    .find(|session| created.matches_live_session(session))
+                                    .cloned();
+                                if let (Some(pending), Some(session)) = (pending, session) {
+                                    if !pending.target.still_valid(view.workspace_generation, &view.mixed_panes) {
+                                        view.terminals.status =
+                                            "Host terminal created, but its pane changed; use + → Attach existing (PTY kept alive)".into();
+                                    } else if view.attach_live_terminal_to_pane(
+                                        &session, &pending.target, cx,
+                                    ).is_none() {
+                                        view.terminals.status =
+                                            "Host terminal created but Native attach was refused; use + → Attach existing".into();
+                                    }
+                                } else {
+                                    view.terminals.status =
+                                        "Host terminal confirmed without a current pane request; use + → Attach existing".into();
+                                }
                             }
                             // Launch reply contains a Host workspace+tab id,
                             // not a trustworthy PTY handle. Resolve through
@@ -5765,17 +6487,31 @@ impl Workbench {
                             // this to be an Agent session before opening.
                             let found_agent = view.agent_pending_tab.as_ref()
                                 .and_then(|pending| matching_agent_handle(pending, &view.terminals.sessions))
-                                .map(str::to_owned);
-                            if let Some(handle) = found_agent {
-                                view.select_terminal(handle.clone(), cx);
-                                let attached = view.terminals.active_tab
-                                    .and_then(|index| view.terminals.tabs.get(index))
-                                    .is_some_and(|tab| tab.handle == handle);
-                                if attached {
-                                    view.agent_pending_tab = None;
-                                    view.agent_status = "Agent Host tab confirmed and attached".into();
+                                .and_then(|handle| view.terminals.sessions.iter()
+                                    .find(|session| session.handle == handle && session.running)
+                                    .cloned());
+                            if let Some(session) = found_agent {
+                                let target = view.agent_launch_pane.clone();
+                                if let Some(target) = target.filter(|pane| {
+                                    pane.still_valid(view.workspace_generation, &view.mixed_panes)
+                                }) {
+                                    if view.attach_live_terminal_to_pane(&session, &target, cx).is_some() {
+                                        view.agent_pending_tab = None;
+                                        view.agent_launch_pane = None;
+                                        view.agent_status =
+                                            "Agent Host tab confirmed in original pane".into();
+                                    } else {
+                                        view.agent_status =
+                                            "Agent exists, but preview could not attach; close another tab and Refresh, or use + → Attach existing".into();
+                                    }
                                 } else {
-                                    view.agent_status = "Host Agent exists, but Native preview tabs are full; close one and Refresh".into();
+                                    // The Agent still belongs to Runtime Host.
+                                    // Never redirect a stale async reply to
+                                    // whichever pane now has keyboard focus.
+                                    view.agent_pending_tab = None;
+                                    view.agent_launch_pane = None;
+                                    view.agent_status =
+                                        "Agent created; origin pane closed. Use + → Attach existing to place it manually".into();
                                 }
                             }
                         }
@@ -5785,6 +6521,10 @@ impl Workbench {
                         // erase the old VT preview. The Host may restart
                         // and re-expose the same running Session later.
                         view.terminals.note_session_list_failure();
+                        view.agent_notification_delivery.on_host_reconnected();
+                        // A stale Host list cannot substantiate a live
+                        // Working/Waiting/Blocked/Done status dot.
+                        view.mixed_tabs.refresh_agent_statuses(&[]);
                         view.terminals.status = if error.kind() == std::io::ErrorKind::NotConnected {
                             "Runtime Host is offline · use + → New Terminal to start one".into()
                         } else {
@@ -5797,6 +6537,104 @@ impl Workbench {
             .ok();
         })
         .detach();
+    }
+
+    /// Explicit + → Attach and confirmed + → New Terminal share this path.
+    /// A menu snapshot with only a recycled handle is never authorization
+    /// to attach an unrelated Host tab or steal focus from another pane.
+    fn attach_live_terminal_to_pane(
+        &mut self,
+        expected: &TerminalSession,
+        target: &PaneAttachGuard,
+        cx: &mut Context<Self>,
+    ) -> Option<WorkbenchTabIdentity> {
+        if !target.still_valid(self.workspace_generation, &self.mixed_panes) {
+            self.terminals.status = "Pane closed or moved; reopen its New Tab menu".into();
+            cx.notify();
+            return None;
+        }
+        // An authenticated Host refresh may have invalidated an old pane
+        // anchor without painting another GPUI frame yet. Reconcile *before*
+        // opening the new local preview so a stale secondary cannot cause
+        // that preview to be implicitly appended to Primary.
+        self.sync_mixed_tabs(cx);
+        if !target.still_valid(self.workspace_generation, &self.mixed_panes) {
+            self.terminals.status =
+                "Original pane changed; Host session remains available to Attach again".into();
+            cx.notify();
+            return None;
+        }
+        if self.terminals.session_list_is_stale()
+            || !self
+                .terminals
+                .sessions
+                .iter()
+                .any(|current| expected.matches_running_identity(current))
+        {
+            self.terminals.status =
+                "Host session changed or stopped; refresh and choose the exact session again"
+                    .into();
+            cx.notify();
+            return None;
+        }
+        self.select_terminal(expected.handle.clone(), cx);
+        let active_is_expected = self.terminals.active().is_some_and(|tab| {
+            tab.handle == expected.handle
+                && tab.workspace_id == expected.workspace_id
+                && tab.tab_id == expected.tab_id
+        });
+        if !active_is_expected {
+            self.terminals.status =
+                "Cannot attach Host preview: terminal limit or session changed".into();
+            cx.notify();
+            return None;
+        }
+        self.sync_mixed_tabs(cx);
+        if !target.still_valid(self.workspace_generation, &self.mixed_panes) {
+            self.terminals.status = "Pane changed before Host attachment completed".into();
+            cx.notify();
+            return None;
+        }
+        let active = self
+            .terminals
+            .active_tab
+            .and_then(|index| self.terminals.context_target_at(index))?;
+        if !self.terminals.context_target_is_live(&active) {
+            self.terminals.status = "Host session is no longer live".into();
+            cx.notify();
+            return None;
+        }
+        let identity = WorkbenchTabIdentity::Host(active);
+        let pane = target.pane();
+        let positioned = if self.mixed_panes.tabs_in(pane).contains(&identity) {
+            self.mixed_panes.activate(&identity);
+            true
+        } else {
+            self.mixed_panes.move_to(&identity, pane)
+        };
+        if !positioned {
+            self.terminals.status =
+                "Host preview opened, but pane placement failed; choose Attach again".into();
+            cx.notify();
+            return None;
+        }
+        self.mixed_tabs.select(&identity);
+        self.save_mixed_pane_layout(cx);
+        self.refresh_terminal_split_output(cx);
+        // Explicit Attach can happen just after the last Host pin read.
+        // Query its authoritative state now rather than showing a default
+        // unpinned chip until the next periodic session poll.
+        self.refresh_host_tab_pins(cx);
+        self.terminals.status = format!(
+            "Attached Host session in {} pane",
+            if pane == PaneSlot::Secondary {
+                "second"
+            } else {
+                "first"
+            }
+        );
+        cx.notify();
+        Some(identity)
     }
 
     fn select_terminal(&mut self, handle: String, cx: &mut Context<Self>) {
@@ -5952,9 +6790,25 @@ impl Workbench {
     }
 
     fn finish_terminal_line_selection(&mut self, cx: &mut Context<Self>) {
+        let mut completed = false;
         if let Some(selection) = self.terminal_line_selection.as_mut() {
             if selection.is_dragging() {
                 selection.finish();
+                completed = true;
+            }
+        }
+        if completed {
+            // Same opt-in as Classic. Identity/stale-output checks remain in
+            // copy_primary_terminal_text, so a changed Host frame cannot
+            // leak an old selection into the OS clipboard.
+            if self
+                .settings_extra_values
+                .get("terminal.clipboardOnSelect")
+                .and_then(serde_json::Value::as_bool)
+                == Some(true)
+            {
+                self.copy_primary_terminal_text(true, cx);
+            } else {
                 cx.notify();
             }
         }
@@ -6495,6 +7349,12 @@ impl Workbench {
                 .mixed_panes
                 .active_in(PaneSlot::Secondary)
                 .and_then(&key_for),
+            pinned_editors: self
+                .mixed_tabs
+                .pinned()
+                .iter()
+                .filter_map(&key_for)
+                .collect(),
         };
         if let Err(error) = saved.save_to_path(&path) {
             eprintln!("Alera GPUI: could not save mixed pane layout: {error}");
@@ -6512,6 +7372,7 @@ impl Workbench {
         };
         let root = self.model.root().to_path_buf();
         let mut restored = 0_usize;
+        let mut restored_files = Vec::new();
         for key in saved
             .primary_editors
             .iter()
@@ -6530,14 +7391,21 @@ impl Workbench {
                     .is_ok()
                 {
                     restored += 1;
+                    restored_files.push(path);
                 }
             } else {
                 let mut tabs = EditorTabs::new(self.draft_store());
                 if tabs.open_file(&root, &path).is_ok() {
                     self.install_editor(tabs, cx);
                     restored += 1;
+                    restored_files.push(path);
                 }
             }
+        }
+        // A file restored into a real editor buffer is owned by that tab;
+        // drop any read-only preview tab that would render as a duplicate.
+        for path in restored_files {
+            self.model.release_path(&path);
         }
         if restored > 0 {
             let desired = if saved.focused_pane == SavedWorkbenchPane::Secondary {
@@ -6585,6 +7453,13 @@ impl Workbench {
                 self.transfer_editor_to_pane(id, PaneSlot::Secondary, cx);
             }
         }
+        // Rehydrate only file-backed Editor pins after actual NativeEditor
+        // sessions have been installed/transferred. Host IDs never restore.
+        for (id, key) in &keys {
+            if saved.pinned_editors.contains(key) {
+                self.mixed_tabs.set_pinned(id, true);
+            }
+        }
         for wanted in [
             saved.primary_active_editor.as_ref(),
             saved.secondary_active_editor.as_ref(),
@@ -6612,6 +7487,147 @@ impl Workbench {
         }
     }
 
+    /// Both Classic workbench panes use this same chip behavior. Only
+    /// WorkbenchPaneLayout decides which pane renders an identity; this
+    /// presentation never owns, clones or terminates Host PTYs or Editors.
+    fn render_mixed_tab_chip(
+        index: usize,
+        tab: WorkbenchTab,
+        pane: PaneSlot,
+        selected: bool,
+        pinned: bool,
+        drag_generation: u64,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let secondary = pane == PaneSlot::Secondary;
+        let (chip_id, focus_id, close_id) = if secondary {
+            (
+                "mixed-secondary-tab",
+                "mixed-secondary-tab-focus",
+                "mixed-secondary-tab-close",
+            )
+        } else {
+            ("mixed-tab", "mixed-tab-focus", "mixed-tab-close")
+        };
+        let identity = tab.identity;
+        let icon_kind = match tab.kind {
+            WorkbenchTabKind::Terminal | WorkbenchTabKind::Agent => UiIcon::Terminal,
+            WorkbenchTabKind::Editor => UiIcon::File,
+        };
+        let status_color = tab.agent_state.map(|state| match state {
+            AgentActivityState::Working => AGENT_WORKING,
+            AgentActivityState::Waiting => AGENT_WAITING,
+            AgentActivityState::Blocked => AGENT_BLOCKED,
+            AgentActivityState::Done => AGENT_DONE,
+        });
+        let status_text = tab
+            .agent_state
+            .map(|state| {
+                if state == AgentActivityState::Done && tab.interrupted {
+                    "interrupted"
+                } else {
+                    state.label()
+                }
+            })
+            .unwrap_or("");
+        let title = tab.title;
+        let for_click = identity.clone();
+        let for_middle = identity.clone();
+        let for_right = identity.clone();
+        let for_close = identity.clone();
+        let for_drop = identity.clone();
+        let drag_caption = title.clone();
+        div()
+            .id((chip_id, index))
+            .h(px(32.0))
+            .mr_2()
+            .px_1()
+            .flex()
+            .items_center()
+            .rounded_md()
+            .border_1()
+            .border_color(rgb(if selected { BORDER_ACTIVE } else { BORDER }))
+            .bg(rgb(if selected { ELEVATED } else { TOOLBAR }))
+            .child(
+                div()
+                    .id((focus_id, index))
+                    .min_w_0()
+                    .max_w(px(210.0))
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .px_1()
+                    .cursor_pointer()
+                    .text_color(rgb(if selected { TEXT } else { MUTED }))
+                    .child(icon(icon_kind, 12.0, if selected { TEXT } else { MUTED }))
+                    .child(
+                        div()
+                            .min_w_0()
+                            .max_w(px(if tab.kind == WorkbenchTabKind::Terminal {
+                                92.0
+                            } else {
+                                180.0
+                            }))
+                            .truncate()
+                            .text_sm()
+                            .child(title),
+                    )
+                    .when(tab.dirty, |entry| entry.child(div().text_xs().child("●")))
+                    .when(status_color.is_some(), |entry| {
+                        entry.child(
+                            div()
+                                .max_w(px(78.0))
+                                .truncate()
+                                .text_xs()
+                                .text_color(rgb(status_color.unwrap_or(MUTED)))
+                                .child(format!("● {status_text}")),
+                        )
+                    })
+                    .when(pinned, |entry| entry.child(icon(UiIcon::Pin, 12.0, MUTED)))
+                    .when(!tab.running, |entry| {
+                        entry.child(div().text_xs().text_color(rgb(MUTED)).child("○"))
+                    })
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.focus_mixed_tab(&for_click, window, cx);
+                    }))
+                    .on_mouse_up(
+                        gpui::MouseButton::Middle,
+                        cx.listener(move |this, _, _, cx| {
+                            this.close_mixed_tab(&for_middle, cx);
+                        }),
+                    )
+                    .on_drag(
+                        MixedTabDrag {
+                            identity,
+                            workspace_generation: drag_generation,
+                        },
+                        move |_, _, _, cx| {
+                            cx.new(|_| TerminalTabDragPreview {
+                                label: drag_caption.clone(),
+                            })
+                        },
+                    )
+                    .on_drop(cx.listener(move |this, drag: &MixedTabDrag, _, cx| {
+                        this.reorder_mixed_tab(drag, &for_drop, cx);
+                    }))
+                    .context_menu(Self::kit_mixed_tab_context_menu(
+                        cx.entity().downgrade(),
+                        for_right,
+                        secondary,
+                        pinned,
+                    )),
+            )
+            .child(
+                icon_button((close_id, index), UiIcon::Close, "Close tab", false)
+                    .w(px(22.0))
+                    .h(px(22.0))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.close_mixed_tab(&for_close, cx);
+                    })),
+            )
+            .into_any_element()
+    }
+
     /// Project both original state owners into one stable, mixed-order tab
     /// strip. The original editor buffers and Host PTYs remain authoritative.
     fn sync_mixed_tabs(&mut self, cx: &mut Context<Self>) {
@@ -6622,12 +7638,12 @@ impl Workbench {
                 continue;
             };
             let identity = WorkbenchTabIdentity::Host(target);
-            let is_agent = self.terminals.sessions.iter().any(|session| {
+            let agent_session = self.terminals.sessions.iter().find(|session| {
                 session.handle == tab.handle
                     && session.workspace_id == tab.workspace_id
                     && session.tab_id == tab.tab_id
-                    && session.agent_type.is_some()
             });
+            let is_agent = agent_session.is_some_and(|session| session.agent_type.is_some());
             observed.push(WorkbenchTab {
                 identity: identity.clone(),
                 kind: if is_agent {
@@ -6638,6 +7654,12 @@ impl Workbench {
                 title: tab.title.clone(),
                 dirty: false,
                 running: tab.running,
+                agent_state: if is_agent {
+                    agent_session.and_then(|session| session.agent_state)
+                } else {
+                    None
+                },
+                interrupted: is_agent && agent_session.is_some_and(|session| session.interrupted),
             });
             if self.center_view == CenterView::Terminal && self.terminals.active_tab == Some(index)
             {
@@ -6665,6 +7687,8 @@ impl Workbench {
                         title: label.title,
                         dirty: label.dirty,
                         running: true,
+                        agent_state: None,
+                        interrupted: false,
                     });
                 }
             }
@@ -6972,7 +7996,32 @@ impl Workbench {
         {
             return;
         }
-        if self.mixed_tabs.move_to(&drag.identity, target) {
+        let destination = if self
+            .mixed_panes
+            .tabs_in(PaneSlot::Secondary)
+            .contains(target)
+        {
+            PaneSlot::Secondary
+        } else if self.mixed_panes.tabs_in(PaneSlot::Primary).contains(target) {
+            PaneSlot::Primary
+        } else {
+            return;
+        };
+        let source_in_destination = self
+            .mixed_panes
+            .tabs_in(destination)
+            .contains(&drag.identity);
+        if !source_in_destination && !self.transfer_editor_to_pane(&drag.identity, destination, cx)
+        {
+            return;
+        }
+        let pane_reordered = self.mixed_panes.reorder_within(&drag.identity, target);
+        let global_reordered = self.mixed_tabs.move_to(&drag.identity, target);
+        if pane_reordered || global_reordered || !source_in_destination {
+            self.save_mixed_pane_layout(cx);
+            if !source_in_destination {
+                self.refresh_terminal_split_output(cx);
+            }
             cx.notify();
         }
     }
@@ -6992,42 +8041,36 @@ impl Workbench {
         }
         match action {
             MixedContextAction::Focus => self.focus_mixed_tab(&id, window, cx),
+            MixedContextAction::TogglePin => match &id {
+                WorkbenchTabIdentity::Host(target) => {
+                    self.toggle_host_tab_pinned(target.clone(), cx);
+                }
+                WorkbenchTabIdentity::Editor { .. } => {
+                    let next = !self.mixed_tabs.is_pinned(&id);
+                    if self.mixed_tabs.set_pinned(&id, next) {
+                        self.save_mixed_pane_layout(cx);
+                    }
+                }
+            },
             MixedContextAction::Close => self.close_mixed_tab(&id, cx),
             MixedContextAction::CloseOthers | MixedContextAction::CloseToRight => {
-                let entries = self.mixed_tabs.entries();
-                let Some(index) = entries.iter().position(|tab| tab.identity == id) else {
-                    return;
-                };
-                let candidates: Vec<_> = entries
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(i, item)| {
-                        (i != index
-                            && (matches!(action, MixedContextAction::CloseOthers) || i > index))
-                            .then_some(item.identity.clone())
-                    })
-                    .collect();
-                for target in candidates {
+                for target in self.mixed_panes.close_unpinned_candidates(
+                    &id,
+                    matches!(action, MixedContextAction::CloseToRight),
+                    self.mixed_tabs.pinned(),
+                ) {
                     // Editor dirty-buffer protection and Host PTY ownership
                     // are enforced by the original owners for every close.
                     self.close_mixed_tab(&target, cx);
                 }
             }
             MixedContextAction::MoveLeft | MixedContextAction::MoveRight => {
-                let entries = self.mixed_tabs.entries();
-                if let Some(index) = entries.iter().position(|tab| tab.identity == id) {
-                    let other = match action {
-                        MixedContextAction::MoveLeft => index.checked_sub(1),
-                        _ => (index + 1 < entries.len()).then_some(index + 1),
-                    }
-                    .and_then(|index| entries.get(index).map(|tab| tab.identity.clone()));
-                    if let Some(other) = other {
-                        if matches!(action, MixedContextAction::MoveLeft) {
-                            self.mixed_tabs.move_to(&id, &other);
-                        } else {
-                            self.mixed_tabs.move_to(&id, &other);
-                        }
-                    }
+                if let Some(other) = self
+                    .mixed_panes
+                    .adjacent_tab(&id, matches!(action, MixedContextAction::MoveRight))
+                {
+                    self.mixed_panes.reorder_within(&id, &other);
+                    self.mixed_tabs.move_to(&id, &other);
                 }
             }
             MixedContextAction::SecondPane => {
@@ -7159,6 +8202,255 @@ impl Workbench {
             .ok();
         })
         .detach();
+    }
+
+    fn refresh_agent_hook_switches(&mut self, cx: &mut Context<Self>) {
+        if self.agent_hook_switches_loading || self.agent_hook_write_loading {
+            return;
+        }
+        self.agent_hook_switches_last_refresh = Instant::now();
+        if self.runtime_bridge.is_none() {
+            self.runtime_bridge = RuntimeCliBridge::discover().ok();
+        }
+        let Some(bridge) = self.runtime_bridge.clone() else {
+            self.agent_hook_switches = None;
+            self.agent_notification_delivery.on_host_reconnected();
+            return;
+        };
+        self.agent_hook_switches_loading = true;
+        self.agent_hook_switches_request = self.agent_hook_switches_request.wrapping_add(1);
+        let request = self.agent_hook_switches_request;
+        cx.spawn(async move |view, cx| {
+            let result = cx
+                .background_spawn(async move { bridge.agent_hook_settings_versioned_snapshot() })
+                .await;
+            view.update(cx, |view, cx| {
+                if view.agent_hook_switches_request != request {
+                    return;
+                }
+                view.agent_hook_switches_loading = false;
+                match result {
+                    Ok(switches) => {
+                        if view
+                            .agent_hook_switches
+                            .as_ref()
+                            .map(|state| &state.switches)
+                            != Some(&switches.switches)
+                        {
+                            view.agent_notification_delivery.on_host_reconnected();
+                        }
+                        view.agent_hook_switches = Some(switches);
+                    }
+                    Err(_) => {
+                        // Older Host/CLI, malformed readback or disconnected:
+                        // never infer which hooks were enabled.
+                        view.agent_hook_switches = None;
+                        view.agent_notification_delivery.on_host_reconnected();
+                    }
+                }
+                view.observe_agent_notification_status();
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// A Provider toggle is never optimistic. Require a Host-authenticated
+    /// versioned snapshot and exactly one in-flight CAS; any conflict or CLI
+    /// incompatibility invalidates Native's local permission cache.
+    fn change_agent_hook_setting(
+        &mut self,
+        agent: &'static str,
+        enabled: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if !matches!(agent, "codex" | "claude") || self.agent_hook_write_loading {
+            return;
+        }
+        let Some(observed) = self.agent_hook_switches.clone() else {
+            self.agent_hook_ui_status = "Host Hook settings unavailable; refresh required".into();
+            cx.notify();
+            return;
+        };
+        if observed.switches.get(agent).copied().unwrap_or(false) == enabled {
+            return;
+        }
+        let Some(bridge) = self.runtime_bridge.clone() else {
+            self.agent_hook_ui_status = "Existing Runtime Host unavailable".into();
+            cx.notify();
+            return;
+        };
+        self.agent_hook_write_loading = true;
+        self.agent_hook_ui_status = format!("Saving {agent} Hook through Runtime Host…");
+        // Discard any earlier in-flight read from before this CAS.
+        self.agent_hook_switches_request = self.agent_hook_switches_request.wrapping_add(1);
+        self.agent_hook_switches_loading = false;
+        cx.notify();
+        cx.spawn(async move |view, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    bridge.agent_hook_settings_compare_and_set(&observed, agent, enabled)
+                })
+                .await;
+            view.update(cx, |view, cx| {
+                view.agent_hook_write_loading = false;
+                match result {
+                    Ok(snapshot) => {
+                        view.agent_hook_switches = Some(snapshot);
+                        view.agent_hook_ui_status =
+                            format!("Runtime Host confirmed {agent} Hook setting");
+                    }
+                    Err(_) => {
+                        view.agent_hook_switches = None;
+                        view.agent_hook_ui_status =
+                            "Host Hook CAS rejected or unavailable; refresh and retry".into();
+                    }
+                }
+                // No stale Waiting/Blocked notice may survive an operational
+                // Hook toggle, even when the Host changes the provider set.
+                view.agent_notification_delivery.on_host_reconnected();
+                view.observe_agent_notification_status();
+                view.agent_hook_switches_last_refresh = Instant::now()
+                    .checked_sub(Duration::from_secs(30))
+                    .unwrap_or_else(Instant::now);
+                view.refresh_agent_hook_switches(cx);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn native_agent_notification_policy(&self) -> AgentNotificationPolicy {
+        // The runtime Host is the only settings owner. Missing, stale or
+        // incompatible settings fail closed, never invent an opt-in.
+        let enabled = self.settings_shared_error.is_none()
+            && self
+                .settings_extra_values
+                .get("agents.agentStatusNotificationsEnabled")
+                .and_then(serde_json::Value::as_bool)
+                == Some(true);
+        let include_finished = self
+            .settings_extra_values
+            .get("agents.agentStatusFinishedNotificationsEnabled")
+            .and_then(serde_json::Value::as_bool)
+            == Some(true);
+        let enabled_sessions = enabled_notice_sessions(
+            &self.terminals.sessions,
+            self.agent_hook_switches
+                .as_ref()
+                .map(|state| &state.switches),
+        );
+        let has_hook = !self.terminals.session_list_is_stale()
+            && enabled_sessions
+                .iter()
+                .any(|s| s.running && s.agent_type.is_some() && s.agent_state.is_some());
+        // Classic currently owns production Toast delivery. Only an
+        // explicitly isolated *debug* process may exercise the Windows
+        // presenter; release builds can never silently duplicate Classic.
+        let manual_test_owner = cfg!(all(windows, debug_assertions))
+            && std::env::var_os("ALERA_GPUI_AGENT_TOAST_EXCLUSIVE_TEST")
+                == Some(std::ffi::OsString::from("1"));
+        AgentNotificationPolicy {
+            hooks_enabled: has_hook,
+            notifications_enabled: enabled,
+            include_finished,
+            native_owns_delivery: manual_test_owner,
+        }
+    }
+
+    fn observe_agent_notification_status(&mut self) {
+        let policy = self.native_agent_notification_policy();
+        let now_ms = self.agent_notification_clock.elapsed().as_millis() as u64;
+        let enabled_sessions = enabled_notice_sessions(
+            &self.terminals.sessions,
+            self.agent_hook_switches
+                .as_ref()
+                .map(|state| &state.switches),
+        );
+        self.agent_notification_delivery
+            .observe(&enabled_sessions, now_ms, policy);
+    }
+
+    fn flush_agent_notification_delivery(&mut self, cx: &mut Context<Self>) {
+        self.observe_agent_notification_status();
+        let policy = self.native_agent_notification_policy();
+        let now_ms = self.agent_notification_clock.elapsed().as_millis() as u64;
+        let enabled_sessions = enabled_notice_sessions(
+            &self.terminals.sessions,
+            self.agent_hook_switches
+                .as_ref()
+                .map(|state| &state.switches),
+        );
+        let notices = self
+            .agent_notification_delivery
+            .drain(&enabled_sessions, now_ms, policy);
+        if !notices.is_empty() {
+            #[cfg(windows)]
+            if let Err(error) = self.agent_windows_toast.show(&notices) {
+                // Do not report a toast as delivered when Windows rejects
+                // Native AUMID registration/notification permission.
+                self.agent_status = format!("Windows Agent notice unavailable: {error}");
+                cx.notify();
+            }
+        }
+        #[cfg(windows)]
+        if let Some(clicked) = self.agent_windows_toast.take_activation() {
+            self.agent_toast_activation = Some(clicked);
+            cx.notify();
+        }
+    }
+
+    fn activate_agent_notice(
+        &mut self,
+        notice: AgentNotice,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // Clicking a WinRT notification never gives the Host permission to
+        // start/terminate a PTY. Cross-workspace changes must use the normal
+        // confirmed selection path; fail closed until it is implemented.
+        if self.terminals.session_list_is_stale()
+            || validated_notice_target(&notice, &self.terminals.sessions).is_none()
+        {
+            self.terminals.status = "Agent notice is stale; refresh Host sessions".into();
+            cx.notify();
+            return;
+        }
+        let current_workspace =
+            select_registered_host_workspace(self.model.root(), &self.mcp_host_workspaces).ok();
+        if current_workspace.as_deref() != Some(notice.workspace_id.as_str()) {
+            self.terminals.status =
+                "Agent is in another workspace; open it before attaching the notice".into();
+            cx.notify();
+            return;
+        }
+        if !self.terminals.tabs.iter().any(|tab| {
+            tab.handle == notice.session_id
+                && tab.workspace_id == notice.workspace_id
+                && tab.tab_id == notice.tab_id
+        }) {
+            // Only opens a local view of a previously verified running Host
+            // session. Native never creates/starts a Shell here.
+            self.select_terminal(notice.session_id.clone(), cx);
+            self.sync_mixed_tabs(cx);
+        }
+        let target = self.mixed_tabs.entries().iter().find_map(|tab| {
+            let WorkbenchTabIdentity::Host(host) = &tab.identity else {
+                return None;
+            };
+            (host.handle == notice.session_id
+                && host.workspace_id() == notice.workspace_id
+                && host.tab_id() == notice.tab_id)
+                .then(|| tab.identity.clone())
+        });
+        if let Some(id) = target {
+            self.focus_mixed_tab(&id, window, cx);
+        } else {
+            self.terminals.status = "Agent Host tab is no longer available".into();
+            cx.notify();
+        }
     }
 
     fn pump_native_terminal_stream(&mut self, cx: &mut Context<Self>) {
@@ -7295,6 +8587,24 @@ impl Workbench {
                         repaint = true;
                     }
                 }
+                StreamViewUpdate::AgentPresenceChanged { changes } => {
+                    // Strict redacted Host status event, not a PTY update.
+                    self.agent_presence_event_generation =
+                        self.agent_presence_event_generation.wrapping_add(1);
+                    if let Some(changes) = changes {
+                        if self.terminals.apply_agent_presence_changes(&changes) {
+                            self.mixed_tabs
+                                .refresh_agent_statuses(&self.terminals.sessions);
+                            self.observe_agent_notification_status();
+                            repaint = true;
+                        }
+                        // Never auto-attach or create any Host session on
+                        // account of an unrecognized/recycled event.
+                    } else {
+                        // Older Hosts publish invalidation without deltas.
+                        self.refresh_terminals(cx);
+                    }
+                }
                 StreamViewUpdate::Failed(reason) => {
                     // A resync, failed lease, or refused input invalidates
                     // incremental output. Rehydrate from retained Host
@@ -7316,6 +8626,7 @@ impl Workbench {
             stream.note_ui_parse(parsed_bytes, parse_started.elapsed());
         }
         if disconnected {
+            self.agent_notification_delivery.on_host_reconnected();
             self.terminal_stream = None;
             self.terminals.invalidate_stream_observers();
             self.terminal_stream_retry.failed(Instant::now());
@@ -7412,9 +8723,44 @@ impl Workbench {
                     view.terminal_tick = view.terminal_tick.wrapping_add(1);
                     view.flush_auto_terminal_resizes(cx);
                     view.poll_native_mcp_commands(cx);
-                    if view.native_settings.editor_autosave_enabled && view.terminal_tick % 2 == 0 {
+                    // Classic and GPUI may remain open simultaneously.
+                    // Poll a narrow six-field Host snapshot off the UI
+                    // thread: fast while Settings is open, bounded otherwise.
+                    let settings_refresh_secs =
+                        if view.settings_section.is_some() { 3 } else { 15 };
+                    if view.settings_shared_last_refresh.elapsed()
+                        >= Duration::from_secs(settings_refresh_secs)
+                    {
+                        view.refresh_shared_desktop_settings(cx);
+                    }
+                    let hook_refresh_secs =
+                        if view.settings_section.is_some() { 3 } else { 15 };
+                    if !view.agent_hook_switches_loading
+                        && view.agent_hook_switches_last_refresh.elapsed()
+                            >= Duration::from_secs(hook_refresh_secs)
+                    {
+                        view.refresh_agent_hook_switches(cx);
+                    }
+                    let quota_interval = if view.quota_error.is_some() { 45 }
+                        else { alera_gpui_desktop::agent_quota::REFRESH_INTERVAL_SECS };
+                    if !view.quota_loading
+                        && view.quota_last_refresh.elapsed() >= Duration::from_secs(quota_interval)
+                    {
+                        view.refresh_agent_quotas(false, None, cx);
+                    }
+                    let favorites_refresh_secs = if view.git_history_open { 5 } else { 15 };
+                    if view.git_favorites_last_refresh.elapsed()
+                        >= Duration::from_secs(favorites_refresh_secs)
+                    {
+                        view.refresh_shared_git_favorites(cx);
+                    }
+                    if view.native_settings.editor_autosave_enabled {
+                        let debounce = view.settings_extra_values
+                            .get("editor.autosaveDelaySeconds")
+                            .and_then(serde_json::Value::as_u64)
+                            .unwrap_or(1);
                         for editor in [view.editor.clone(), view.secondary_editor.clone()].into_iter().flatten() {
-                            editor.update(cx, |editor, cx| editor.autosave_if_idle(cx));
+                            editor.update(cx, |editor, cx| editor.autosave_if_idle(debounce, cx));
                         }
                     }
                     if view.native_settings.auto_git_fetch_enabled
@@ -7444,9 +8790,13 @@ impl Workbench {
                         }
                         TerminalCreateTick::None => {}
                     }
-                    if view.terminal_tick % 10 == 1 {
+                    if alera_gpui_desktop::terminal::agent_presence_refresh_due(
+                        view.terminal_tick,
+                        &view.terminals.sessions,
+                    ) {
                         view.refresh_terminals(cx);
                     }
+                    view.flush_agent_notification_delivery(cx);
                 })
                 .is_err()
             {
@@ -7460,6 +8810,19 @@ impl Workbench {
 impl Render for Workbench {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_mixed_tabs(cx);
+        if let Some(notice) = self.agent_toast_activation.take() {
+            // Toast clicks arrive on a WinRT callback thread. Resolve them
+            // on GPUI's actual Window context, after layout is available;
+            // verify Host session identity again before focusing anything.
+            let owner = cx.entity().downgrade();
+            window.defer(cx, move |window, cx| {
+                if let Some(workbench) = owner.upgrade() {
+                    workbench.update(cx, |view, cx| {
+                        view.activate_agent_notice(notice, window, cx);
+                    });
+                }
+            });
+        }
         if self.settings_section.is_some() && !self.settings_kit_dialog_open {
             // MCP open_settings has no Window parameter. Defer Kit overlay
             // creation until after the Workbench render to avoid re-entering
@@ -7482,6 +8845,17 @@ impl Render for Workbench {
             });
         }
         let terminal_font_size = self.native_settings.terminal_font_size as f32;
+        let terminal_font_family = self
+            .settings_extra_values
+            .get("terminal.fontFamily")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("JetBrains Mono")
+            .to_owned();
+        let terminal_line_height = self
+            .settings_extra_values
+            .get("terminal.lineHeight")
+            .and_then(serde_json::Value::as_f64)
+            .unwrap_or(1.3) as f32;
         let mixed_tabs = self.mixed_tabs.entries().to_vec();
         let git_original_tabs = self.git_original_tabs.entries().to_vec();
         let active_git_original = if self.git_original_active {
@@ -7490,10 +8864,49 @@ impl Render for Workbench {
             None
         };
         let git_original_is_active = active_git_original.is_some();
-        let mixed_active = self.mixed_tabs.active().cloned();
-        let mixed_secondary_tab_ids = self.mixed_panes.tabs_in(PaneSlot::Secondary).to_vec();
         let mixed_secondary_active = self.mixed_panes.active_in(PaneSlot::Secondary).cloned();
+        let mixed_primary_active = self.mixed_panes.active_in(PaneSlot::Primary).cloned();
         let mixed_has_secondary = self.mixed_panes.has_secondary();
+        // Classic shows one independent mixed Tab strip per visible pane.
+        // The old single shared strip remains the unsplit fallback only.
+        let mixed_primary_tabs = if mixed_has_secondary {
+            self.mixed_panes
+                .visible_tabs_in(PaneSlot::Primary, &mixed_tabs)
+        } else {
+            mixed_tabs.clone()
+        };
+        let mixed_secondary_tabs = self
+            .mixed_panes
+            .visible_tabs_in(PaneSlot::Secondary, &mixed_tabs);
+        let pinned_ids = self.mixed_tabs.pinned().to_vec();
+        let (primary_pinned_tabs, primary_regular_tabs) =
+            self.mixed_tabs.partition_pins(mixed_primary_tabs);
+        let (secondary_pinned_tabs, secondary_regular_tabs) =
+            self.mixed_tabs.partition_pins(mixed_secondary_tabs);
+        let primary_two_rows =
+            self.native_settings.editor_two_row_tabs && !primary_pinned_tabs.is_empty();
+        let secondary_two_rows =
+            self.native_settings.editor_two_row_tabs && !secondary_pinned_tabs.is_empty();
+        // Classic only creates a second row when that pane has pinned tabs.
+        // In one-row mode keep the pins ahead of the regular scrolling tabs.
+        let mixed_primary_tabs = if primary_two_rows {
+            primary_regular_tabs
+        } else {
+            primary_pinned_tabs
+                .iter()
+                .cloned()
+                .chain(primary_regular_tabs)
+                .collect()
+        };
+        let mixed_secondary_tabs = if secondary_two_rows {
+            secondary_regular_tabs
+        } else {
+            secondary_pinned_tabs
+                .iter()
+                .cloned()
+                .chain(secondary_regular_tabs)
+                .collect()
+        };
         let mixed_split_horizontal = self.mixed_panes.axis() == PaneAxis::Horizontal;
         let mixed_secondary_identity = self.mixed_panes.active_in(PaneSlot::Secondary).cloned();
         let mixed_secondary_host = mixed_secondary_identity.as_ref().and_then(|id| match id {
@@ -7542,12 +8955,6 @@ impl Render for Workbench {
             Some((label, preview))
         });
         let mixed_drag_generation = self.workspace_generation;
-        let folder_name = self
-            .model
-            .directory()
-            .file_name()
-            .map(|name| name.to_string_lossy().to_string())
-            .unwrap_or_else(|| self.model.directory().display().to_string());
         let filename = self
             .model
             .selected_path()
@@ -7654,7 +9061,6 @@ impl Render for Workbench {
         } else {
             None
         };
-        let secondary_editor_live = secondary_native_editor.is_some();
         let editor_dirty = toolbar_editor
             .as_ref()
             .is_some_and(|editor| editor.read(cx).document().is_dirty());
@@ -7673,6 +9079,9 @@ impl Render for Workbench {
         let status = self.model.status().to_owned();
         let branch = self.model.branch().to_owned();
         let show_recent_workspaces = self.show_recent_workspaces;
+        let sidebar_search_input = self.sidebar_search_input.clone();
+        let sidebar_search_query = self.sidebar_search_input.read(cx).query().trim().to_owned();
+        let sidebar_search_active = !sidebar_search_query.is_empty();
         let picking_workspace = self.picking_workspace;
         let workspace_root = self.model.root().to_path_buf();
         let recent_workspaces: Vec<_> = self
@@ -7687,14 +9096,34 @@ impl Render for Workbench {
             .project_tree_groups
             .iter()
             .take(45)
-            .cloned()
             .enumerate()
+            .filter(|(_, group)| {
+                project_group_matches_search(
+                    group,
+                    self.runtime_catalog.as_ref(),
+                    &sidebar_search_query,
+                )
+            })
             .map(|(index, group)| {
-                let collapsed = self.collapsed_project_roots.contains(&group.root);
-                (index, group, collapsed)
+                // Searching temporarily expands matching descendants without
+                // modifying the user's persisted collapse preference.
+                let collapsed =
+                    !sidebar_search_active && self.collapsed_project_roots.contains(&group.root);
+                (index, group.clone(), collapsed)
             })
             .collect();
+        let sidebar_search_empty = sidebar_search_active && project_tree_rows.is_empty();
         let project_tree_loading = self.project_tree_loading;
+        let runtime_catalog = self.runtime_catalog.clone();
+        let runtime_catalog_error = self.runtime_catalog_error.clone();
+        let sidebar_pending_action = self.sidebar_pending_action.clone();
+        let sidebar_rename_input = self.sidebar_rename_input.clone();
+        let sidebar_create_input = self.sidebar_create_input.clone();
+        let selected_sidebar_parent = self.sidebar_selected_parent.clone();
+        let sidebar_project_remove_id = self
+            .sidebar_project_remove_pending
+            .as_ref()
+            .map(|(id, _)| id.clone());
         let worktree_rows: Vec<_> = self
             .worktrees
             .iter()
@@ -7706,6 +9135,8 @@ impl Render for Workbench {
         let worktree_loading = self.worktree_loading;
         let worktree_busy = self.worktree_busy;
         let worktree_create_input = self.worktree_create_input.clone();
+        let worktree_create_root = self.worktree_create_root.clone();
+        let worktree_create_from_existing = self.worktree_create_from_existing;
         let worktree_delete_pending = self.worktree_delete_pending.clone();
         let runtime_status = self.runtime_status.clone();
         let runtime_loading = self.runtime_loading;
@@ -7830,11 +9261,12 @@ impl Render for Workbench {
         // visual anchor moves, without altering Host PTY geometry.
         let primary_ime_anchor = primary_terminal
             .and_then(|tab| {
-                terminal_ime_anchor_px(
+                terminal_ime_anchor_with_line_height(
                     tab.screen.cursor(),
                     primary_width,
                     primary_height,
                     terminal_font_size,
+                    terminal_line_height,
                 )
             })
             .unwrap_or((12.0, 8.0));
@@ -7843,11 +9275,12 @@ impl Render for Workbench {
             .and_then(|target| self.terminals.index_for_context(target))
             .and_then(|index| self.terminals.tabs.get(index))
             .and_then(|tab| {
-                terminal_ime_anchor_px(
+                terminal_ime_anchor_with_line_height(
                     tab.screen.cursor(),
                     primary_width,
                     (primary_height - TAB_STRIP_HEIGHT).max(24.0),
                     terminal_font_size,
+                    terminal_line_height,
                 )
             })
             .unwrap_or((12.0, 8.0));
@@ -7867,9 +9300,12 @@ impl Render for Workbench {
                         } else {
                             1.0
                         };
-                    if let Some((cols, rows)) =
-                        estimate_terminal_viewport(width, height, terminal_font_size)
-                    {
+                    if let Some((cols, rows)) = estimate_terminal_viewport_with_line_height(
+                        width,
+                        height,
+                        terminal_font_size,
+                        terminal_line_height,
+                    ) {
                         proposed_viewports.push(TerminalViewportProposal {
                             target: target.clone(),
                             cols,
@@ -7892,9 +9328,12 @@ impl Render for Workbench {
                         let height = primary_height
                             / if terminal_split_horizontal { 1.0 } else { 2.0 }
                             - 28.0;
-                        if let Some((cols, rows)) =
-                            estimate_terminal_viewport(width, height, terminal_font_size)
-                        {
+                        if let Some((cols, rows)) = estimate_terminal_viewport_with_line_height(
+                            width,
+                            height,
+                            terminal_font_size,
+                            terminal_line_height,
+                        ) {
                             proposed_viewports.push(TerminalViewportProposal {
                                 target,
                                 cols,
@@ -7919,9 +9358,12 @@ impl Render for Workbench {
                         let width = content_width / if split_width { 2.0 } else { 1.0 };
                         let height = content_height / if split_height { 2.0 } else { 1.0 }
                             - TAB_STRIP_HEIGHT;
-                        if let Some((cols, rows)) =
-                            estimate_terminal_viewport(width, height, terminal_font_size)
-                        {
+                        if let Some((cols, rows)) = estimate_terminal_viewport_with_line_height(
+                            width,
+                            height,
+                            terminal_font_size,
+                            terminal_line_height,
+                        ) {
                             proposed_viewports.push(TerminalViewportProposal {
                                 target: target.clone(),
                                 cols,
@@ -8256,6 +9698,19 @@ impl Render for Workbench {
                 "Select a changed file to preview its patch".to_string()
             }
         });
+        let git_diff_expand_available = native_action_dialog_ui::can_expand_read_only_diff(
+            self.git_diff.as_deref(),
+            self.git_diff_loading,
+        );
+        let git_file_page = self.git_file_diff_paging.as_ref().map(|page| {
+            (
+                page.previous_starts.len() + 1,
+                !page.previous_starts.is_empty() && !self.git_diff_loading,
+                page.next_line.is_some()
+                    && page.previous_starts.len() < 31
+                    && !self.git_diff_loading,
+            )
+        });
 
         div()
             .size_full()
@@ -8266,6 +9721,17 @@ impl Render for Workbench {
             .on_action(cx.listener(Self::explorer_cut_action))
             .on_action(cx.listener(Self::explorer_paste_action))
             .on_action(cx.listener(Self::explorer_select_all_action))
+            .on_action(cx.listener(Self::explorer_rename_action))
+            .on_action(cx.listener(Self::explorer_delete_action))
+            .on_action(cx.listener(Self::explorer_refresh_action))
+            .on_action(cx.listener(Self::explorer_up_action))
+            .on_action(cx.listener(Self::explorer_down_action))
+            .on_action(cx.listener(Self::explorer_first_action))
+            .on_action(cx.listener(Self::explorer_last_action))
+            .on_action(cx.listener(Self::explorer_open_action))
+            .on_action(cx.listener(Self::explorer_preview_action))
+            .on_action(cx.listener(Self::explorer_new_file_action))
+            .on_action(cx.listener(Self::explorer_new_folder_action))
             .flex()
             .flex_col()
             .bg(rgb(BG))
@@ -8284,7 +9750,7 @@ impl Render for Workbench {
                         div()
                             .text_xs()
                             .text_color(rgb(MUTED))
-                            .child("NATIVE PREVIEW"),
+                            .child("Native"),
                     )
                     .child(div().flex_1())
                     .child(div()
@@ -8397,12 +9863,6 @@ impl Render for Workbench {
                                                         this.begin_explorer_action(ExplorerAction::NewFolder, window, cx);
                                                     })),
                                             )
-                                            .child(
-                                                icon_button("explorer-save-all", UiIcon::Save, "Save all editor files", false)
-                                                    .on_click(cx.listener(|this, _, _, cx| {
-                                                        this.save_all_editors(cx);
-                                                    })),
-                                            )
                                             .child({
                                                 let owner = cx.entity().downgrade();
                                                 let ignored = self.explorer_visibility.show_ignored;
@@ -8444,21 +9904,26 @@ impl Render for Workbench {
                                                                 }),
                                                             );
                                                         }
-                                                        menu
+                                                        let save_owner = owner.clone();
+                                                        menu = menu.item(PopupMenuItem::new("Save all editor files")
+                                                            .on_click(move |_, _, cx| {
+                                                                let _ = save_owner.update(cx, |view, cx| view.save_all_editors(cx));
+                                                            }));
+                                                        let collapse_owner = owner.clone();
+                                                        menu.item(PopupMenuItem::new("Collapse all folders")
+                                                            .on_click(move |_, _, cx| {
+                                                                let _ = collapse_owner.update(cx, |view, cx| {
+                                                                    if let Some(tree) = &mut view.tree {
+                                                                        if let Err(error) = tree.collapse_all() {
+                                                                            view.model.set_status(format!("Collapse All failed: {error}"));
+                                                                        }
+                                                                    }
+                                                                    view.tree_mode = true;
+                                                                    cx.notify();
+                                                                });
+                                                            }))
                                                     })
                                             })
-                                            .child(
-                                                icon_button("explorer-collapse-all", UiIcon::CollapseAll, "Collapse all folders", false)
-                                                    .on_click(cx.listener(|this, _, _window, cx| {
-                                                        if let Some(tree) = &mut this.tree {
-                                                            if let Err(error) = tree.collapse_all() {
-                                                                this.model.set_status(format!("Collapse All failed: {error}"));
-                                                            }
-                                                        }
-                                                        this.tree_mode = true;
-                                                        cx.notify();
-                                                    })),
-                                            )
                                             .child(
                                                 icon_button("explorer-refresh", UiIcon::Refresh, "Refresh Explorer", false)
                                                     .on_click(cx.listener(|this, _, _, cx| {
@@ -8549,6 +10014,7 @@ impl Render for Workbench {
                                     .flex_1()
                                     .min_h_0()
                                     .id("explorer-scroll")
+                                    .track_scroll(&self.explorer_scroll)
                                     .on_drop(cx.listener(|this, paths: &gpui::ExternalPaths, _, cx| {
                                         this.import_explorer_drop(paths.paths().to_vec(), None, cx);
                                     }))
@@ -9829,11 +11295,92 @@ impl Render for Workbench {
                             )
                             .child(
                                 div()
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .gap_2()
+                                    .child(div().text_xs().text_color(rgb(MUTED)).child("Patch preview · read-only"))
+                                    .child(if git_diff_expand_available {
+                                        div()
+                                            .id("git-diff-expand")
+                                            .cursor_pointer()
+                                            .text_xs()
+                                            .text_color(rgb(TEXT))
+                                            .child("Expand diff")
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.open_kit_git_diff_dialog(window, cx);
+                                            }))
+                                            .into_any_element()
+                                    } else {
+                                        div().text_xs().text_color(rgb(MUTED))
+                                            .child("Expand diff").into_any_element()
+                                    }),
+                            )
+                            .child(if let Some((page, can_previous, can_next)) = git_file_page {
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(rgb(MUTED))
+                                            .child(format!("Page {page} · live Git · 32 KiB/page")),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .gap_2()
+                                            .child(if can_previous {
+                                                div()
+                                                    .id("git-diff-previous-page")
+                                                    .cursor_pointer()
+                                                    .text_xs()
+                                                    .text_color(rgb(TEXT))
+                                                    .child("Previous")
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.change_git_file_diff_page(false, cx);
+                                                    }))
+                                                    .into_any_element()
+                                            } else {
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(rgb(MUTED))
+                                                    .child("Previous")
+                                                    .into_any_element()
+                                            })
+                                            .child(if can_next {
+                                                div()
+                                                    .id("git-diff-next-page")
+                                                    .cursor_pointer()
+                                                    .text_xs()
+                                                    .text_color(rgb(TEXT))
+                                                    .child("Next")
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.change_git_file_diff_page(true, cx);
+                                                    }))
+                                                    .into_any_element()
+                                            } else {
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(rgb(MUTED))
+                                                    .child("Next")
+                                                    .into_any_element()
+                                            }),
+                                    )
+                                    .into_any_element()
+                            } else {
+                                div().into_any_element()
+                            })
+                            .child(
+                                div()
                                     .id("git-diff-scroll")
                                     .max_h(px(170.0))
                                     .overflow_y_scroll()
                                     .text_xs()
-                                    .font_family("JetBrains Mono")
+                                    .font_family(terminal_font_family.clone())
                                     .text_color(rgb(MUTED))
                                     .child(git_diff),
                             ),
@@ -9845,6 +11392,33 @@ impl Render for Workbench {
                             .min_w_0()
                             .flex()
                             .flex_col()
+                            .child(
+                                div()
+                                    .id("mixed-primary-pinned-tab-strip")
+                                    .when(primary_two_rows, |row| {
+                                        row.h(px(TAB_STRIP_HEIGHT))
+                                            .min_w_0()
+                                            .flex()
+                                            .items_center()
+                                            .overflow_x_scroll()
+                                            .pl_2()
+                                            .bg(rgb(TOOLBAR))
+                                            .border_b_1()
+                                            .border_color(rgb(BORDER))
+                                            .children(primary_pinned_tabs.into_iter().enumerate().map(|(index, tab)| {
+                                                let selected = mixed_primary_active.as_ref() == Some(&tab.identity);
+                                                Self::render_mixed_tab_chip(
+                                                    index + 512,
+                                                    tab,
+                                                    PaneSlot::Primary,
+                                                    selected,
+                                                    true,
+                                                    mixed_drag_generation,
+                                                    cx,
+                                                )
+                                            }))
+                                    }),
+                            )
                             .child(
                                 div()
                                     .id("mixed-workbench-tab-strip")
@@ -9867,87 +11441,14 @@ impl Render for Workbench {
                                             .items_center()
                                             .overflow_x_scroll()
                                             .pl_2()
-                                            .children(mixed_tabs.into_iter().enumerate().map(|(index, tab)| {
-                                                let identity = tab.identity;
-                                                let in_secondary = mixed_secondary_tab_ids.contains(&identity);
+                                            .children(mixed_primary_tabs.into_iter().enumerate().map(|(index, tab)| {
                                                 let selected = !showing_explorer_preview
-                                                    && (mixed_active.as_ref() == Some(&identity)
-                                                        || mixed_secondary_active.as_ref() == Some(&identity));
-                                                let icon_kind = match tab.kind {
-                                                    WorkbenchTabKind::Terminal | WorkbenchTabKind::Agent => UiIcon::Terminal,
-                                                    WorkbenchTabKind::Editor => UiIcon::File,
-                                                };
-                                                let title = tab.title.clone();
-                                                let for_click = identity.clone();
-                                                let for_middle = identity.clone();
-                                                let for_right = identity.clone();
-                                                let for_close = identity.clone();
-                                                let for_drop = identity.clone();
-                                                let drag_identity = identity.clone();
-                                                let drag_caption = title.clone();
-                                                div()
-                                                    .id(("mixed-tab", index))
-                                                    .h(px(32.0))
-                                                    .mr_2()
-                                                    .px_1()
-                                                    .flex()
-                                                    .items_center()
-                                                    .rounded_md()
-                                                    .border_1()
-                                                    .border_color(rgb(if selected { BORDER_ACTIVE } else { BORDER }))
-                                                    .bg(rgb(if selected { ELEVATED } else { TOOLBAR }))
-                                                    .child(
-                                                        div()
-                                                            .id(("mixed-tab-focus", index))
-                                                            .min_w_0()
-                                                            .max_w(px(210.0))
-                                                            .flex()
-                                                            .items_center()
-                                                            .gap_1()
-                                                            .px_1()
-                                                            .cursor_pointer()
-                                                            .text_color(rgb(if selected { TEXT } else { MUTED }))
-                                                            .child(icon(icon_kind, 12.0, if selected { TEXT } else { MUTED }))
-                                                            .child(
-                                                                div()
-                                                                    .min_w_0()
-                                                                    .max_w(px(if tab.kind == WorkbenchTabKind::Terminal { 92.0 } else { 180.0 }))
-                                                                    .truncate()
-                                                                    .text_sm()
-                                                                    .child(title),
-                                                            )
-                                                            .when(tab.dirty, |entry| entry.child(div().text_xs().child("●")))
-                                                            .when(!tab.running, |entry| entry.child(div().text_xs().text_color(rgb(MUTED)).child("○")))
-                                                            .when(in_secondary, |entry| entry.child(div().text_xs().text_color(rgb(MUTED)).child("②")))
-                                                            .on_click(cx.listener(move |this, _, window, cx| {
-                                                                this.focus_mixed_tab(&for_click, window, cx);
-                                                            }))
-                                                            .on_mouse_up(gpui::MouseButton::Middle, cx.listener(move |this, _, _, cx| {
-                                                                this.close_mixed_tab(&for_middle, cx);
-                                                            }))
-                                                            .on_drag(MixedTabDrag {
-                                                                identity: drag_identity,
-                                                                workspace_generation: mixed_drag_generation,
-                                                            }, move |_, _, _, cx| {
-                                                                cx.new(|_| TerminalTabDragPreview { label: drag_caption.clone() })
-                                                            })
-                                                            .on_drop(cx.listener(move |this, drag: &MixedTabDrag, _, cx| {
-                                                                this.reorder_mixed_tab(drag, &for_drop, cx);
-                                                            }))
-                                                            .context_menu(Self::kit_mixed_tab_context_menu(
-                                                                cx.entity().downgrade(),
-                                                                for_right,
-                                                                in_secondary,
-                                                            )),
-                                                    )
-                                                    .child(
-                                                        icon_button(("mixed-tab-close", index), UiIcon::Close, "Close tab", false)
-                                                            .w(px(22.0))
-                                                            .h(px(22.0))
-                                                            .on_click(cx.listener(move |this, _, _, cx| {
-                                                                this.close_mixed_tab(&for_close, cx);
-                                                            })),
-                                                    )
+                                                    && mixed_primary_active.as_ref() == Some(&tab.identity);
+                                                let pinned = pinned_ids.contains(&tab.identity);
+                                                Self::render_mixed_tab_chip(
+                                                    index, tab, PaneSlot::Primary, selected, pinned,
+                                                    mixed_drag_generation, cx,
+                                                )
                                             }))
                                             .children(git_original_tabs.into_iter().enumerate().map(|(index, tab)| {
                                                 let id = tab.instance;
@@ -10052,16 +11553,25 @@ impl Render for Workbench {
                                                 let running = self.terminals.sessions.iter()
                                                     .filter(|session| session.running)
                                                     .map(|session| (
-                                                        session.handle.clone(),
+                                                        session.clone(),
                                                         format!("{} · {}", session.label(), session.workspace_id),
                                                     ))
                                                     .collect::<Vec<_>>();
-                                                icon_button("mixed-new-tab", UiIcon::Add, "New Tab", terminal_creating)
+                                                let target = PaneAttachGuard::capture(
+                                                    self.workspace_generation,
+                                                    PaneSlot::Primary,
+                                                    &self.mixed_panes,
+                                                );
+                                                let profiles = self.agent_profiles.clone();
+                                                icon_button("mixed-new-tab", UiIcon::Add, "New Tab", terminal_creating
+                                                    && self.terminal_create_pane.as_ref().is_some_and(|pending| pending.target.pane() == PaneSlot::Primary))
                                                     .w(px(28.0))
                                                     .h(px(28.0))
                                                     .dropdown_menu(Self::kit_new_tab_menu(
                                                         owner,
+                                                        target,
                                                         running,
+                                                        profiles,
                                                         terminal_create_busy,
                                                         terminal_create_timed_out,
                                                     ))
@@ -10069,6 +11579,7 @@ impl Render for Workbench {
                                                         if *open {
                                                             let _ = refresh_owner.update(cx, |view, cx| {
                                                                 view.refresh_terminals(cx);
+                                                                view.refresh_agent_profiles(cx);
                                                             });
                                                         }
                                                     })
@@ -10081,7 +11592,7 @@ impl Render for Workbench {
                                                     .h(px(TAB_STRIP_HEIGHT - 1.0))
                                                     .on_click(cx.listener(|this, event: &gpui::ClickEvent, _, cx| {
                                                         if event.click_count() == 2 {
-                                                            this.new_editor(cx);
+                                                            this.new_editor_in_pane(PaneSlot::Primary, cx);
                                                         }
                                                     })),
                                             ),
@@ -10090,8 +11601,8 @@ impl Render for Workbench {
                                         icon_button("mixed-pane-actions", UiIcon::More, "Pane actions", false)
                                             .dropdown_menu(Self::kit_pane_actions_menu(
                                                 cx.entity().downgrade(),
-                                                mixed_active.clone(),
-                                                mixed_active.as_ref().is_some_and(|id| mixed_secondary_tab_ids.contains(id)),
+                                                mixed_primary_active.clone(),
+                                                false,
                                                 mixed_has_secondary,
                                             )),
                                     ),
@@ -10227,7 +11738,7 @@ impl Render for Workbench {
                                         .overflow_y_scroll()
                                         .p_4()
                                         .text_sm()
-                                        .font_family("JetBrains Mono")
+                                        .font_family(terminal_font_family.clone())
                                         .child(content)
                                         .into_any_element()
                                 },
@@ -10291,7 +11802,7 @@ impl Render for Workbench {
                                             .overflow_y_scroll()
                                             .px_3()
                                             .py_2()
-                                            .font_family("JetBrains Mono")
+                                            .font_family(terminal_font_family.clone())
                                             .text_size(px(terminal_font_size))
                                             .whitespace_nowrap()
                                             .child(div()
@@ -10307,9 +11818,14 @@ impl Render for Workbench {
                                                     div()
                                                         .id(("terminal-colored-row", row_index))
                                                         .whitespace_nowrap()
-                                                        .line_height(px(terminal_font_size * 1.3))
+                                                        .line_height(px(terminal_font_size * terminal_line_height))
                                                         .bg(rgb(if selected { ACTIVE } else { BG }))
-                                                        .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |this, _, _, cx| {
+                                                        .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |this, _, window, cx| {
+                                                            // Text rows consume the pointer event; explicitly
+                                                            // restore the Terminal IME sink, not the old Explorer.
+                                                            this.focus_primary_mixed_terminal(cx);
+                                                            let focus = this.terminal_input.read(cx).focus_handle(cx);
+                                                            window.focus(&focus, cx);
                                                             this.begin_terminal_line_selection(row_index, cx);
                                                         }))
                                                         .on_mouse_move(cx.listener(move |this, _, _, cx| {
@@ -10367,7 +11883,7 @@ impl Render for Workbench {
                                             .overflow_y_scroll()
                                             .px_3()
                                             .py_2()
-                                            .font_family("JetBrains Mono")
+                                            .font_family(terminal_font_family.clone())
                                             .text_size(px(terminal_font_size))
                                             .child(terminal_input)
                                             .child(if terminal_output.is_empty() {
@@ -10424,7 +11940,7 @@ impl Render for Workbench {
                                                         .overflow_y_scroll()
                                                         .px_3()
                                                         .py_2()
-                                                        .font_family("JetBrains Mono")
+                                                        .font_family(terminal_font_family.clone())
                                                         .text_size(px(terminal_font_size))
                                                         .child(output))
                                                     .into_any_element()
@@ -10456,7 +11972,7 @@ impl Render for Workbench {
                                     .into_any_element()
                             }),
                                     )
-                                    .child(if let Some((label, preview)) = mixed_secondary_preview {
+                                    .child(if let Some((_, preview)) = mixed_secondary_preview {
                                         div()
                                             .id("mixed-secondary-pane")
                                             .flex_1()
@@ -10468,22 +11984,58 @@ impl Render for Workbench {
                                             .border_color(rgb(BORDER))
                                             .child(
                                                 div()
+                                                    .id("mixed-secondary-pinned-tab-strip")
+                                                    .when(secondary_two_rows, |row| {
+                                                        row.h(px(TAB_STRIP_HEIGHT))
+                                                            .min_w_0()
+                                                            .flex()
+                                                            .items_center()
+                                                            .overflow_x_scroll()
+                                                            .pl_2()
+                                                            .bg(rgb(TOOLBAR))
+                                                            .border_b_1()
+                                                            .border_color(rgb(BORDER))
+                                                            .children(secondary_pinned_tabs.into_iter().enumerate().map(|(index, tab)| {
+                                                                let selected = mixed_secondary_active.as_ref() == Some(&tab.identity);
+                                                                Self::render_mixed_tab_chip(
+                                                                    index + 512,
+                                                                    tab,
+                                                                    PaneSlot::Secondary,
+                                                                    selected,
+                                                                    true,
+                                                                    mixed_drag_generation,
+                                                                    cx,
+                                                                )
+                                                            }))
+                                                    }),
+                                            )
+                                            .child(
+                                                div()
                                                     .id("mixed-secondary-toolbar")
                                                     .h(px(TAB_STRIP_HEIGHT))
                                                     .px_2()
                                                     .flex()
                                                     .items_center()
-                                                    .gap_3()
-                                                    .bg(rgb(PANEL))
+                                                    .gap_1()
+                                                    .bg(rgb(TOOLBAR))
+                                                    .border_b_1()
+                                                    .border_color(rgb(BORDER))
                                                     .child(
                                                         div()
+                                                            .id("mixed-secondary-tabs-scroll")
                                                             .flex_1()
                                                             .min_w_0()
-                                                            .text_sm()
-                                                            .child(format!(
-                                                                "Second · {label} · {}",
-                                                                if secondary_editor_live { "Editor" } else { "Preview" }
-                                                            ))
+                                                            .flex()
+                                                            .items_center()
+                                                            .overflow_x_scroll()
+                                                            .children(mixed_secondary_tabs.into_iter().enumerate().map(|(index, tab)| {
+                                                                let selected = mixed_secondary_active.as_ref() == Some(&tab.identity);
+                                                                let pinned = pinned_ids.contains(&tab.identity);
+                                                                Self::render_mixed_tab_chip(
+                                                                    index, tab, PaneSlot::Secondary, selected, pinned,
+                                                                    mixed_drag_generation, cx,
+                                                                )
+                                                            }))
                                                             .on_drop(cx.listener(|this, drag: &MixedTabDrag, window, cx| {
                                                                 if drag.workspace_generation == this.workspace_generation
                                                                     && this.mixed_tab_is_current(&drag.identity, cx)
@@ -10494,27 +12046,51 @@ impl Render for Workbench {
                                                                 }
                                                             })),
                                                     )
+                                                    .child({
+                                                        let owner = cx.entity().downgrade();
+                                                        let refresh_owner = owner.clone();
+                                                        let running = self.terminals.sessions.iter()
+                                                            .filter(|session| session.running)
+                                                            .map(|session| (
+                                                                session.clone(),
+                                                                format!("{} · {}", session.label(), session.workspace_id),
+                                                            ))
+                                                            .collect::<Vec<_>>();
+                                                        let target = PaneAttachGuard::capture(
+                                                            self.workspace_generation,
+                                                            PaneSlot::Secondary,
+                                                            &self.mixed_panes,
+                                                        );
+                                                        let profiles = self.agent_profiles.clone();
+                                                        icon_button("mixed-secondary-new-tab", UiIcon::Add, "New Tab in second pane", terminal_creating
+                                                            && self.terminal_create_pane.as_ref().is_some_and(|pending| pending.target.pane() == PaneSlot::Secondary))
+                                                            .w(px(28.0))
+                                                            .h(px(28.0))
+                                                            .dropdown_menu(Self::kit_new_tab_menu(
+                                                                owner,
+                                                                target,
+                                                                running,
+                                                                profiles,
+                                                                terminal_create_busy,
+                                                                terminal_create_timed_out,
+                                                            ))
+                                                            .on_open_change(move |open, _, cx| {
+                                                                if *open {
+                                                                    let _ = refresh_owner.update(cx, |view, cx| {
+                                                                        view.refresh_terminals(cx);
+                                                                        view.refresh_agent_profiles(cx);
+                                                                    });
+                                                                }
+                                                            })
+                                                    })
                                                     .child(
-                                                        div()
-                                                            .id("mixed-split-axis")
-                                                            .cursor_pointer()
-                                                            .text_xs()
-                                                            .child(if mixed_split_horizontal { "Stack" } else { "Side by side" })
-                                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                                this.mixed_panes.toggle_axis();
-                                                                this.save_mixed_pane_layout(cx);
-                                                                cx.notify();
-                                                            })),
-                                                    )
-                                                    .child(
-                                                        div()
-                                                            .id("mixed-split-close")
-                                                            .cursor_pointer()
-                                                            .text_xs()
-                                                            .child("Unsplit")
-                                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                                this.unsplit_mixed_panes(cx);
-                                                            })),
+                                                        icon_button("mixed-secondary-pane-actions", UiIcon::More, "Second pane actions", false)
+                                                            .dropdown_menu(Self::kit_pane_actions_menu(
+                                                                cx.entity().downgrade(),
+                                                                mixed_secondary_active.clone(),
+                                                                true,
+                                                                mixed_has_secondary,
+                                                            )),
                                                     ),
                                             )
                                             .child(if let Some(editor) = secondary_native_editor {
@@ -10579,7 +12155,7 @@ impl Render for Workbench {
                                                     .overflow_x_scroll()
                                                     .overflow_y_scroll()
                                                     .p_3()
-                                                    .font_family("JetBrains Mono")
+                                                    .font_family(terminal_font_family.clone())
                                                     .text_size(px(terminal_font_size))
                                                     .child(div()
                                                         .absolute()
@@ -10598,7 +12174,7 @@ impl Render for Workbench {
                                                                 div()
                                                                     .id(("mixed-secondary-colored-row", index))
                                                                     .whitespace_nowrap()
-                                                                    .line_height(px(terminal_font_size * 1.3))
+                                                                    .line_height(px(terminal_font_size * terminal_line_height))
                                                                     .child(
                                                                         gpui::StyledText::new(row.text)
                                                                             .with_highlights(row.spans.into_iter().map(|span| {
@@ -10659,7 +12235,7 @@ impl Render for Workbench {
                                             .id("projects-toggle")
                                             .cursor_pointer()
                                             .font_weight(gpui::FontWeight::BOLD)
-                                            .child(if show_recent_workspaces { "Projects ▾" } else { "Projects ▸" })
+                                            .child(if show_recent_workspaces { "Recent ▾" } else { "Recent ▸" })
                                             .on_click(cx.listener(|this, _, _, cx| {
                                                 this.show_recent_workspaces = !this.show_recent_workspaces;
                                                 cx.notify();
@@ -10674,9 +12250,8 @@ impl Render for Workbench {
                             )
                             .child(
                                 div()
-                                    .text_xs()
-                                    .text_color(rgb(MUTED))
-                                    .child(format!("Active workspace · {folder_name}")),
+                                    .id("projects-sidebar-search")
+                                    .child(sidebar_search_input),
                             )
                             .child(
                                 div()
@@ -10713,6 +12288,103 @@ impl Render for Workbench {
                                                         }))),
                                             ),
                                     )
+                                    .child(if let Some(error) = runtime_catalog_error {
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .justify_between()
+                                            .gap_2()
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(rgb(MUTED))
+                                                    .child("Classic unavailable"),
+                                            )
+                                            .child(
+                                                div()
+                                                    .flex()
+                                                    .items_center()
+                                                    .gap_2()
+                                                    .child(
+                                                        div()
+                                                            .id("project-catalog-details")
+                                                            .cursor_pointer()
+                                                            .text_xs()
+                                                            .text_color(rgb(MUTED))
+                                                            .child("Details")
+                                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                                this.model.set_status(format!(
+                                                                    "Classic catalog query failed: {error}"
+                                                                ));
+                                                                cx.notify();
+                                                            })),
+                                                    )
+                                                    .child(
+                                                        icon_button(
+                                                            "project-catalog-inline-retry",
+                                                            UiIcon::Refresh,
+                                                            "Retry Classic catalog synchronization",
+                                                            project_tree_loading,
+                                                        )
+                                                        .on_click(cx.listener(|this, _, _, cx| {
+                                                            this.refresh_project_tree(cx);
+                                                        })),
+                                                    ),
+                                            )
+                                            .into_any_element()
+                                    } else {
+                                        div().h(px(0.0)).into_any_element()
+                                    })
+                                    .child(if let Some(input) = sidebar_rename_input {
+                                        div().flex().flex_col().gap_1().p_2()
+                                            .child(div().text_xs().text_color(rgb(MUTED)).child("Rename Classic project / Workspace"))
+                                            .child(input)
+                                            .child(div().flex().gap_3()
+                                                .child(div().id("sidebar-rename-confirm").cursor_pointer().text_sm()
+                                                    .child("Save display name")
+                                                    .on_click(cx.listener(|this, _, _, cx| this.submit_sidebar_rename(cx))))
+                                                .child(div().id("sidebar-rename-cancel").cursor_pointer().text_sm()
+                                                    .child("Cancel")
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.sidebar_rename_target = None;
+                                                        this.sidebar_rename_input = None;
+                                                        cx.notify();
+                                                    }))))
+                                            .into_any_element()
+                                    } else {
+                                        div().h(px(0.0)).into_any_element()
+                                    })
+                                    .child(if let Some(input) = sidebar_create_input {
+                                        div().flex().flex_col().gap_1().p_2()
+                                            .child(div().text_xs().text_color(rgb(MUTED)).child("New Classic tag / workspace section"))
+                                            .child(input)
+                                            .child(div().flex().gap_3()
+                                                .child(div().id("sidebar-create-confirm").cursor_pointer().text_sm()
+                                                    .child("Create")
+                                                    .on_click(cx.listener(|this, _, _, cx| this.submit_sidebar_create(cx))))
+                                                .child(div().id("sidebar-create-cancel").cursor_pointer().text_sm()
+                                                    .child("Cancel")
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.sidebar_create_target = None;
+                                                        this.sidebar_create_input = None;
+                                                        cx.notify();
+                                                    }))))
+                                            .into_any_element()
+                                    } else {
+                                        div().h(px(0.0)).into_any_element()
+                                    })
+                                    .child(if sidebar_search_empty {
+                                        div()
+                                            .id("project-search-empty")
+                                            .px_2()
+                                            .py_3()
+                                            .text_sm()
+                                            .text_color(rgb(MUTED))
+                                            .child("No matching projects or worktrees")
+                                            .into_any_element()
+                                    } else {
+                                        div().h(px(0.0)).into_any_element()
+                                    })
                                     .child(
                                         div()
                                             .id("project-tree-scroll")
@@ -10724,7 +12396,24 @@ impl Render for Workbench {
                                                 let fold_root = group.root.clone();
                                                 let current = group.is_active;
                                                 let pinned = group.is_saved;
-                                                let title = group.label;
+                                                let menu_project_id = runtime_catalog.as_ref()
+                                                    .and_then(|catalog| catalog.projects.iter().find(|project| project.root == group.root))
+                                                    .map(|project| project.id.clone());
+                                                let project_remove_armed = menu_project_id.as_deref()
+                                                    == sidebar_project_remove_id.as_deref();
+                                                let project_context_root = group.root.clone();
+                                                let worktree_project_root = group.root.clone();
+                                                let title = runtime_catalog.as_ref()
+                                                    .and_then(|catalog| catalog.projects.iter().find(|project| project.root == group.root))
+                                                    .map(|project| project.name.clone())
+                                                    .unwrap_or_else(|| group.label.clone());
+                                                let show_all_worktrees = project_title_matches_search(
+                                                    &group, runtime_catalog.as_ref(), &sidebar_search_query,
+                                                );
+                                                let rows = order_worktree_rows(
+                                                    &sidebar_workspaces_for_group(&group, runtime_catalog.as_ref()),
+                                                    runtime_catalog.as_ref(),
+                                                );
                                                 let error = group.error;
                                                 div()
                                                     .id(("project-tree-group", index))
@@ -10764,18 +12453,52 @@ impl Render for Workbench {
                                                                     .child(format!("{}{}", if pinned { "★ " } else { "" }, title))
                                                                     .on_click(cx.listener(move |this, _, _, cx| {
                                                                         this.switch_workspace(root.clone(), cx);
-                                                                    })),
+                                                                    }))
+                                                                    .context_menu(Self::sidebar_project_context_menu(
+                                                                        cx.entity().downgrade(), project_context_root, pinned,
+                                                                        menu_project_id,
+                                                                        project_remove_armed,
+                                                                    )),
                                                             ),
                                                     )
-                                                    .children(group.worktrees.into_iter().take(if collapsed { 0 } else { 14 }).enumerate().map(|(child_index, entry)| {
+                                                    .children(rows.into_iter()
+                                                        .filter(|row| !sidebar_search_active || show_all_worktrees
+                                                            || worktree_matches_search(&row.entry, runtime_catalog.as_ref(), &sidebar_search_query))
+                                                        .take(if collapsed { 0 } else { 96 })
+                                                        .enumerate().map(|(child_index, row)| {
+                                                        let entry = row.entry;
+                                                        let section_header = row.section_header;
+                                                        let depth = row.depth;
                                                         let target = entry.path.clone();
-                                                        let active = workspace_root.starts_with(&target);
-                                                        let label = entry.branch.unwrap_or_else(|| {
+                                                        let active = workspace_root == target;
+                                                        let menu_root = worktree_project_root.clone();
+                                                        let menu_path = target.clone();
+                                                        let menu_catalog = runtime_catalog.clone();
+                                                        let menu_confirmation = sidebar_pending_action.clone();
+                                                        let menu_selected_parent = selected_sidebar_parent.clone();
+                                                        let metadata = runtime_catalog.as_ref().and_then(|catalog|
+                                                            catalog.workspaces.iter().find(|workspace| workspace.path == target)
+                                                        );
+                                                        let label = metadata.map(|workspace| {
+                                                            let mut text = workspace.name.clone();
+                                                            if workspace.is_pinned { text.push_str(" ★"); }
+                                                            if workspace.is_archived { text.push_str(" (archived)"); }
+                                                            if !workspace.tag_names.is_empty() { text.push_str(&format!(" [{}]", workspace.tag_names.join(", "))); }
+                                                            text
+                                                        }).unwrap_or_else(|| entry.branch.unwrap_or_else(|| {
                                                             if entry.detached { "Detached HEAD".into() } else { "Unnamed".into() }
-                                                        });
+                                                        }));
                                                         div()
-                                                            .id(("project-tree-worktree", index * 16 + child_index))
-                                                            .pl_4()
+                                                            .id(("project-tree-worktree-container", index * 128 + child_index))
+                                                            .flex().flex_col()
+                                                            .child(if let Some(section) = section_header {
+                                                                div().pl_3().pt_1().text_xs()
+                                                                    .text_color(rgb(MUTED))
+                                                                    .child(section).into_any_element()
+                                                            } else { div().h(px(0.0)).into_any_element() })
+                                                            .child(div()
+                                                            .id(("project-tree-worktree", index * 128 + child_index))
+                                                            .pl(px(16.0 + depth.min(8) as f32 * 14.0))
                                                             .py_1()
                                                             .bg(rgb(if active { ACTIVE } else { PANEL }))
                                                             .hover(|style| style.bg(rgb(ACTIVE)))
@@ -10785,12 +12508,17 @@ impl Render for Workbench {
                                                             .child(format!(
                                                                 "{} {} {}",
                                                                 if active { "●" } else { "○" },
-                                                                if entry.is_primary { "main:" } else { "worktree:" },
+                                                                if depth > 0 { "↳" } else if entry.is_primary { "main:" } else { "worktree:" },
                                                                 label
                                                             ))
                                                             .on_click(cx.listener(move |this, _, _, cx| {
                                                                 this.switch_workspace(target.clone(), cx);
                                                             }))
+                                                            .context_menu(Self::sidebar_workspace_context_menu(
+                                                                cx.entity().downgrade(), menu_root, menu_path,
+                                                                metadata.cloned(), menu_catalog, menu_confirmation,
+                                                                menu_selected_parent, active,
+                                                            )))
                                                     }))
                                                     .child(if let Some(error) = error {
                                                         div().text_xs().text_color(rgb(MUTED))
@@ -10948,14 +12676,32 @@ impl Render for Workbench {
                                     .flex()
                                     .flex_col()
                                     .gap_1()
+                                    .child(div().text_xs().text_color(rgb(MUTED))
+                                        .child(format!("Project: {}", worktree_create_root.as_deref()
+                                            .unwrap_or(workspace_root.as_path()).display())))
                                     .child(input)
+                                    .child(
+                                        div().id("worktree-create-branch-mode")
+                                            .cursor_pointer().text_xs().text_color(rgb(MUTED))
+                                            .child(if worktree_create_from_existing {
+                                                "Use existing local branch · change"
+                                            } else {
+                                                "Create new local branch · change"
+                                            })
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.worktree_create_from_existing = !this.worktree_create_from_existing;
+                                                cx.notify();
+                                            }))
+                                    )
                                     .child(
                                         div()
                                             .id("worktree-create-confirm")
                                             .cursor_pointer()
                                             .text_sm()
                                             .text_color(rgb(TEXT))
-                                            .child(if worktree_busy { "Creating…" } else { "Create branch + worktree" })
+                                            .child(if worktree_busy { "Creating…" } else if worktree_create_from_existing {
+                                                "Checkout existing branch into Worktree"
+                                            } else { "Create branch + Worktree" })
                                             .on_click(cx.listener(|this, _, _, cx| {
                                                 this.create_worktree(cx);
                                             })),
@@ -11162,6 +12908,7 @@ impl Render for Workbench {
                                         .child("Dismiss tracking")
                                         .on_click(cx.listener(|this, _, _, cx| {
                                             this.agent_pending_tab = None;
+                                            this.agent_launch_pane = None;
                                             this.agent_status = "Agent still belongs to Host; use Attach existing to find it".into();
                                             cx.notify();
                                         }))
@@ -11241,7 +12988,15 @@ impl Render for Workbench {
                     .bg(rgb(TOOLBAR))
                     .text_sm()
                     .text_color(rgb(MUTED))
-                    .child(status)
+                    .child(
+                        div()
+                            .id("native-runtime-status")
+                            .max_w(px(320.0))
+                            .min_w_0()
+                            .overflow_hidden()
+                            .child(status),
+                    )
+                    .child(self.render_native_quota_status(cx))
                     .child(self.render_kit_branch_dropdown(
                         "status-branch-picker",
                         format!("{} · {}", branch, NATIVE_APP_NAME),
@@ -11324,19 +13079,6 @@ fn main() {
         .as_ref()
         .and_then(|store| store.saved_projects().ok())
         .unwrap_or_default();
-    let initial_git_favorites = match session_store
-        .as_ref()
-        .map(|store| store.load_git_favorites(model.root()))
-    {
-        Some(Ok(saved)) => saved,
-        Some(Err(error)) => {
-            model.set_status(format!(
-                "Native Git favorites could not be restored: {error}"
-            ));
-            Vec::new()
-        }
-        None => Vec::new(),
-    };
     let native_settings_store = session_store
         .as_ref()
         .map(|store| NativeSettingsStore::new(store.state_dir()));
@@ -11391,6 +13133,19 @@ fn main() {
                 KeyBinding::new("cmd-v", ExplorerPaste, Some("AleraGpuiExplorer")),
                 KeyBinding::new("ctrl-a", ExplorerSelectAll, Some("AleraGpuiExplorer")),
                 KeyBinding::new("cmd-a", ExplorerSelectAll, Some("AleraGpuiExplorer")),
+                KeyBinding::new("f2", ExplorerRename, Some("AleraGpuiExplorer")),
+                KeyBinding::new("delete", ExplorerDelete, Some("AleraGpuiExplorer")),
+                KeyBinding::new("f5", ExplorerRefresh, Some("AleraGpuiExplorer")),
+                KeyBinding::new("up", ExplorerUp, Some("AleraGpuiExplorer")),
+                KeyBinding::new("down", ExplorerDown, Some("AleraGpuiExplorer")),
+                KeyBinding::new("home", ExplorerFirst, Some("AleraGpuiExplorer")),
+                KeyBinding::new("end", ExplorerLast, Some("AleraGpuiExplorer")),
+                KeyBinding::new("enter", ExplorerOpen, Some("AleraGpuiExplorer")),
+                KeyBinding::new("space", ExplorerPreview, Some("AleraGpuiExplorer")),
+                KeyBinding::new("ctrl-n", ExplorerNewFile, Some("AleraGpuiExplorer")),
+                KeyBinding::new("cmd-n", ExplorerNewFile, Some("AleraGpuiExplorer")),
+                KeyBinding::new("ctrl-shift-n", ExplorerNewFolder, Some("AleraGpuiExplorer")),
+                KeyBinding::new("cmd-shift-n", ExplorerNewFolder, Some("AleraGpuiExplorer")),
                 KeyBinding::new("ctrl-shift-f", ToggleContentSearch, None),
                 KeyBinding::new("cmd-shift-f", ToggleContentSearch, None),
             ]);
@@ -11476,6 +13231,23 @@ fn main() {
                             cx.notify();
                         })
                         .detach();
+                        let sidebar_search_input = cx.new(|cx| {
+                            QuickOpenInput::with_placeholder("Search projects / worktrees…", cx)
+                        });
+                        cx.observe(&sidebar_search_input, |_, _, cx| cx.notify())
+                            .detach();
+                        let settings_menu_search =
+                            cx.new(|cx| QuickOpenInput::with_placeholder("Search settings", cx));
+                        cx.observe(&settings_menu_search, |_, _, cx| cx.notify())
+                            .detach();
+                        let settings_exclusion_input = cx.new(|cx| {
+                            QuickOpenInput::with_placeholder(
+                                "Add directory name (e.g. generated)",
+                                cx,
+                            )
+                        });
+                        cx.observe(&settings_exclusion_input, |_, _, cx| cx.notify())
+                            .detach();
                         let mut workbench = Workbench {
                             tree: WorkspaceTree::new_with_options(model.root(), initial_visibility)
                                 .ok(),
@@ -11485,6 +13257,7 @@ fn main() {
                             explorer_multi_selection: ExplorerMultiSelection::new(model.root()),
                             explorer_preview_active: false,
                             explorer_keyboard_focus: cx.focus_handle(),
+                            explorer_scroll: ScrollHandle::new(),
                             explorer_clipboard: None,
                             explorer_drop_busy: false,
                             explorer_drop_request: 0,
@@ -11508,15 +13281,27 @@ fn main() {
                             recent_workspaces,
                             saved_projects,
                             project_tree_groups: Vec::new(),
+                            runtime_catalog: None,
+                            runtime_catalog_error: None,
+                            sidebar_pending_action: None,
+                            sidebar_rename_target: None,
+                            sidebar_rename_input: None,
+                            sidebar_selected_parent: None,
+                            sidebar_project_remove_pending: None,
+                            sidebar_create_target: None,
+                            sidebar_create_input: None,
                             project_tree_loading: false,
                             project_tree_request: 0,
                             collapsed_project_roots: HashSet::new(),
-                            show_recent_workspaces: true,
+                            show_recent_workspaces: false,
+                            sidebar_search_input,
                             worktrees: Vec::new(),
                             worktree_error: None,
                             worktree_loading: false,
                             worktree_busy: false,
                             worktree_create_input: None,
+                            worktree_create_root: None,
+                            worktree_create_from_existing: false,
                             worktree_delete_pending: None,
                             picking_workspace: false,
                             quick_open: None,
@@ -11546,9 +13331,13 @@ fn main() {
                             git_history_open: false,
                             git_graph_ref_tab: GitGraphRefTab::Local,
                             git_history_options: GitHistoryOptions {
-                                favorites: initial_git_favorites,
                                 ..Default::default()
                             },
+                            git_favorites_busy: false,
+                            git_favorites_request: 0,
+                            git_favorites_last_refresh: Instant::now()
+                                .checked_sub(Duration::from_secs(20))
+                                .unwrap_or_else(Instant::now),
                             git_history_loading: false,
                             git_history_watch_pending: false,
                             git_history_error: None,
@@ -11621,9 +13410,15 @@ fn main() {
                             git_branch_compare_loading: false,
                             git_diff_loading: false,
                             git_diff_request: 0,
+                            git_file_diff_paging: None,
                             workspace_generation: 0,
                             editor_epoch: 0,
                             mixed_tabs: WorkbenchTabs::for_workspace(0),
+                            host_pin_snapshots: HashMap::new(),
+                            host_pins_loading: false,
+                            host_pins_busy: false,
+                            host_pins_request: 0,
+                            host_pins_error: None,
                             mixed_panes: WorkbenchPaneLayout::default(),
                             mixed_layout_restore: None,
                             mixed_layout_read_only: false,
@@ -11631,6 +13426,28 @@ fn main() {
                             runtime_bridge,
                             runtime_status,
                             runtime_loading: false,
+                            quota_snapshots: Vec::new(),
+                            quota_loading: false,
+                            quota_error: None,
+                            quota_last_refresh: Instant::now()
+                                .checked_sub(Duration::from_secs(
+                                    alera_gpui_desktop::agent_quota::REFRESH_INTERVAL_SECS,
+                                ))
+                                .unwrap_or_else(Instant::now),
+                            quota_request: 0,
+                            quota_enabled_order: None,
+                            // Test-only: show a *live Host* overview on launch
+                            // when the Windows remote mouse cannot reach the
+                            // small status-bar target. No effect in release.
+                            quota_popover_open: cfg!(all(
+                                feature = "quota-visual-fixture",
+                                debug_assertions
+                            )) && std::env::var(
+                                "ALERA_GPUI_QUOTA_LIVE_PREVIEW_OPEN",
+                            )
+                            .as_deref()
+                                == Ok("1"),
+                            quota_popover_account: None,
                             mcp_ui_bridge: None,
                             mcp_ui_window_id: NativeMcpUiBridge::new_window_id(),
                             mcp_ui_status: "Waiting for existing Runtime Host".into(),
@@ -11645,9 +13462,30 @@ fn main() {
                             native_settings_store,
                             native_settings,
                             native_settings_error,
+                            history_sync_snapshot: None,
+                            history_sync_loading: false,
+                            history_sync_busy: false,
+                            history_sync_request: 0,
+                            history_sync_status: String::new(),
+                            history_sync_edit: None,
+                            history_sync_input: cx.new(|cx| {
+                                QuickOpenInput::with_placeholder("Group (empty = independent)", cx)
+                            }),
                             settings_section: None,
                             settings_modal_focus: cx.focus_handle(),
                             settings_kit_dialog_open: false,
+                            settings_menu_locale: UiLocale::English,
+                            settings_menu_language: "system".into(),
+                            settings_extra_values: serde_json::Map::new(),
+                            settings_shared_busy: false,
+                            settings_native_profile_migrated: false,
+                            settings_shared_request: 0,
+                            settings_shared_last_refresh: Instant::now()
+                                .checked_sub(Duration::from_secs(10))
+                                .unwrap_or_else(Instant::now),
+                            settings_shared_error: None,
+                            settings_menu_search,
+                            settings_exclusion_input,
                             last_auto_git_fetch: Instant::now(),
                             agent_profiles: Vec::new(),
                             agent_profiles_loading: false,
@@ -11659,6 +13497,7 @@ fn main() {
                             agent_launch_busy: false,
                             agent_launch_request: 0,
                             agent_pending_tab: None,
+                            agent_launch_pane: None,
                             agent_status: "Select an Agent Profile and enter a task".into(),
                             terminals: TerminalDock::for_workspace(0),
                             terminal_panes: TerminalPaneLayout::default(),
@@ -11672,8 +13511,23 @@ fn main() {
                             terminal_auto_resize: TerminalAutoResizeGate::default(),
                             terminal_line_selection: None,
                             terminal_create_flow: TerminalCreateFlow::default(),
+                            terminal_create_pane: None,
                             terminal_layout_restore: None,
                             terminal_list_loading: false,
+                            agent_presence_event_generation: 0,
+                            agent_notification_delivery: AgentNotificationDelivery::new(),
+                            agent_notification_clock: Instant::now(),
+                            agent_hook_switches: None,
+                            agent_hook_write_loading: false,
+                            agent_hook_ui_status: String::new(),
+                            agent_hook_switches_loading: false,
+                            agent_hook_switches_request: 0,
+                            agent_hook_switches_last_refresh: Instant::now()
+                                .checked_sub(Duration::from_secs(30))
+                                .unwrap_or_else(Instant::now),
+                            #[cfg(windows)]
+                            agent_windows_toast: WindowsAgentToastPresenter::new(),
+                            agent_toast_activation: None,
                             terminal_read_loading: None,
                             terminal_split_read_loading: false,
                             terminal_poll: TerminalPollGate::default(),
@@ -11687,9 +13541,42 @@ fn main() {
                         workbench.load_terminal_layout();
                         workbench.load_mixed_pane_layout();
                         workbench.restore_file_tabs_from_pane_layout(cx);
+                        workbench.refresh_shared_desktop_settings(cx);
+                        workbench.refresh_agent_quotas(false, None, cx);
                         workbench
                     });
                     view.update(cx, |view, cx| {
+                        // Each GPUI input surface shares one Windows HWND; a
+                        // logical focus switch does not emit WM_KILLFOCUS.
+                        for input in [
+                            view.terminal_input.clone(),
+                            view.secondary_terminal_input.clone(),
+                        ] {
+                            let focus = input.read(cx).focus_handle(cx);
+                            cx.on_blur(&focus, window, |view, _, cx| {
+                                let result = win_ime::cancel_focused_composition();
+                                if std::env::var_os("ALERA_GPUI_TSF_TRACE").is_some() {
+                                    eprintln!("Alera GPUI TSF: blur cancel={result:?}");
+                                }
+                                view.clear_terminal_text_inputs(cx);
+                            })
+                            .detach();
+                        }
+                        // Explorer shares the same Windows HWND as both Terminal
+                        // text sinks, so switching focus does not generate
+                        // WM_KILLFOCUS. Cancel its OS composition on GPUI blur
+                        // and remove only unfinished search preedit text.
+                        let explorer_focus = view.explorer_filter_input.read(cx).focus_handle(cx);
+                        cx.on_blur(&explorer_focus, window, |view, _, cx| {
+                            let result = win_ime::cancel_focused_composition();
+                            view.explorer_filter_input.update(cx, |input, cx| {
+                                input.discard_marked_preedit(cx);
+                            });
+                            if std::env::var_os("ALERA_GPUI_TSF_TRACE").is_some() {
+                                eprintln!("Alera GPUI TSF: explorer blur cancel={result:?}");
+                            }
+                        })
+                        .detach();
                         view.start_terminal_polling(cx);
                         // Restore saved Host tab previews immediately after
                         // Native window startup, rather than waiting for the
@@ -11700,6 +13587,7 @@ fn main() {
                         view.refresh_worktrees(cx);
                         view.start_git_watch(cx);
                         view.refresh_git(cx);
+                        view.refresh_shared_git_favorites(cx);
                         view.refresh_agent_profiles(cx);
                         view.connect_mcp_ui_bridge(cx);
                     });

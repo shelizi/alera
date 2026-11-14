@@ -31,6 +31,10 @@ pub async fn run_terminal_host_server(
     let history = TerminalHostHistoryRepository::open(&runtime_dir).await?;
     let runtime_store = RuntimeStore::open(&runtime_dir).await?;
     runtime_store.retire_removed_features().await?;
+    let history_sync_ticker = crate::agent_history_sync::spawn(
+        runtime_store.clone(),
+        runtime_dir.join("agent-history-snapshots"),
+    );
     // Best effort: an unnormalized root still works for most callers, while a
     // host that refuses to start takes every terminal down with it.
     if let Err(error) = runtime_store.normalize_verbatim_root_paths().await {
@@ -187,6 +191,8 @@ pub async fn run_terminal_host_server(
     }
     automation_ticker.abort();
     let _ = automation_ticker.await;
+    history_sync_ticker.abort();
+    let _ = history_sync_ticker.await;
     if let Some(shutdown_signal) = shutdown_signal {
         shutdown_signal.abort();
     }

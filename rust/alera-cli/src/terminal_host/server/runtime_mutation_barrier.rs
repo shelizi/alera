@@ -12,6 +12,7 @@ mod tests {
     fn blocks_runtime_store_writers_and_session_spawners_but_not_reads() {
         for writer in [
             "tab.upsert",
+            "tab.pin.cas",
             "createOrAttach",
             "terminal.pulse.configure",
             "codex.turn.start",

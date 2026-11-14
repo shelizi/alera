@@ -8,7 +8,7 @@ import 'package:alera/src/features/agent_status/infra/agent_hook_endpoint_file.d
 import 'package:alera/src/features/agent_status/infra/codex_transcript_status_watcher.dart';
 import 'package:alera/src/rust/api/agent_hooks.dart' as rust_hooks;
 import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
+import 'package:alera/src/shared/infra/storage/alera_support_directory.dart';
 
 typedef ApplicationSupportDirectoryResolver = Future<Directory> Function();
 typedef AgentHookEnabledPredicate = bool Function(AgentType agentType);
@@ -31,7 +31,7 @@ class AgentHookReceiver._(
   }) {
     return AgentHookReceiver._(
       statusSink,
-      applicationSupportDirectory ?? getApplicationSupportDirectory,
+      applicationSupportDirectory ?? aleraApplicationSupportDirectory,
       token ?? createAgentHookToken(),
       isAgentEnabled ?? ((_) => true),
       codexTranscriptStatusWatcher,

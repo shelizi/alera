@@ -2,6 +2,8 @@
 
 Date: 2026-11-08. Branch: `integrate/gpui-p0p1p2-20261108`.
 
+**2026-11-10 Windows GUI 複測與待改善工作單：** [GPUI Native UI/UX 改善計畫](gpui-native-ui-ux-improvement-plan-20261110.md)。該文件區分實機 PASS／FAIL、Host 離線 BLOCKED 與尚未執行項目，不代表目前已通過驗收。
+
 The **original Flutter desktop edition is the interaction specification**.
 GPUI may use different layout/rendering primitives and colors, but may not
 invent a second user workflow merely because implementing it is easier.
@@ -66,10 +68,134 @@ instead of the stale legacy `center_view` flag after session restore.
   interpret a Rust compile or a synthetic Unicode typing attempt as a
   successful real Windows IME test.
 
-**Remaining parity:** Native's global mixed strip does not yet render
-an independent tab strip inside each split pane; pinned-tab grouping and
-Classic's opt-in two-row pinned layout remain unimplemented. Do not
-confuse either with the now-removed redundant mode/preview header.
+### Per-pane mixed Tab strip follow-up (2026-11-09)
+
+- In split mode, each pane now renders **its own 44px mixed Tab strip**.
+  Tabs appear only in their owning pane; in unsplit mode the original
+  single mixed strip remains. The secondary pane no longer substitutes
+  a text-only `Second · ...` header or another Terminal-only navigation bar.
+- One shared chip presenter preserves Classic's click, middle-click, drag,
+  context menu, title, dirty/running and explicit close affordances. Each
+  pane owns its independent active identity, and its Kit overflow contains
+  pane/split controls instead of persistent `Stack` and `Unsplit` text.
+- Same-pane drag and right-click Move Left/Right change **that pane's** order;
+  right-click Close Others/Close to Right can only target that pane. A
+  cross-pane drag uses the existing identity-checked transfer: real Editor
+  buffer/undo/draft ownership moves, but Host PTYs remain Host-owned.
+  An already-open context menu cannot mutate a tab moved to another pane.
+- The primary + menu and blank-strip double-click create files in the
+  primary pane. The Kit pane overflow exposes New File in this pane,
+  including an independent secondary Editor created beside a Host tab.
+  The first secondary Editor receives a new editor epoch, not a reused ID.
+- The pane projection and scoped context candidates are covered by
+  model regressions, and Native type-checks pass. This is **not** a
+  claim of pointer-level Windows GUI usability acceptance.
+
+### Pane-scoped New Tab/Host attach follow-up (2026-11-09)
+
+- **Both pane strips** now expose the same GPUI Kit `+` menu with New
+  File, New Terminal, and Attach running Host session. The second pane no
+  longer relies on the first pane's `+` or only its overflow menu.
+- A New/Attach action carries the pane's workspace generation and (for
+  a split) one original tab identity. A stale menu or a delayed Host create
+  result may not silently target a switched workspace or a closed/recreated
+  secondary pane. Existing Host PTYs are **never terminated** as fallback.
+- New Terminal is one explicit Host create request followed by the
+  existing authenticated list confirmation. A pending request remembers
+  its origin pane; retry re-lists without another PTY create. Cancel clears
+  only Native waiting state. If the destination disappeared, Host session
+  remains available for manual Attach.
+- Attach checks the saved menu session against the latest live list using
+  **handle, Host workspace ID, Host tab ID and running state**; a recycled
+  handle alone cannot hijack a preview. Placement then updates the actual
+  pane membership/active identity. Menu clicks focus the corresponding
+  Terminal input surface.
+- The generation/anchor guard and exact Host identity match have
+  independent Rust unit regressions. These tests and compilation do not
+  replace real Windows mouse, keyboard, modal and Host acceptance.
+
+### Tab pinning / optional two-row layout follow-up (2026-11-09)
+
+- Each real Terminal, Agent and Editor Tab now supports Pin Tab / Unpin Tab
+  in the same GPUI Kit right-click menu, with a pinned Codicon marker.
+  Pin metadata follows current exact workspace/Host/Editor identity and
+  survives tab title/status refresh. Closed/recycled Host tabs are not
+  silently re-pinned under a reused handle.
+- Each pane visually groups its pinned tabs before regular tabs. The
+  Two-row tabs switch now uses Rust Core's `editor.twoRowTabs` local
+  desktop setting with Host-authenticated field-level compare-and-set
+  and readback; only panes with at least one pinned tab get
+  a separate 44px first row, matching Classic's default single-row rule.
+- Close Others and Close to Right skip pinned tabs in the *clicked pane*;
+  explicitly closing a pinned tab still uses the ordinary, safe underlying
+  Editor/Host preview close action.
+- File-backed Editor pins persist in a backward-compatible optional
+  `pinned_editors` field in the existing V1 layout. Only validated keys
+  already represented in the pane layout may restore; no Host handles
+  are written to that Editor-only snapshot.
+- Both `+` menus now also list available, Host-validated Agent Profiles
+  (display name and Agent type only). Selecting an Agent opens the existing
+  Profile task composer and remembers the pane; it does **not** launch an
+  Agent until the user submits a task. When Runtime Host confirms the
+  exact Agent workspace/tab identity, Native attaches the session only
+  to its surviving original pane. Closing/recreating that pane instead
+  leaves the Host Agent alive for explicit Attach.
+
+### Shared Host Terminal / Agent pins (integration branch, pending live acceptance)
+
+- Rust Core now owns an atomic `tab.pin.cas` mutation. The Host checks the
+  exact Workspace, Tab ID, timestamp revision, previous pin value and
+  Terminal session identity in the same SQLite write transaction. It changes
+  only `pinned` and, when newly pinned, clears the old `preview` flag.
+  Generic Tab upserts preserve the latest Host pin rather than replaying a
+  stale Classic snapshot.
+- Classic RuntimeWorkbenchRepository uses this CAS instead of full Tab
+  upsert for Pin/Unpin. Local Drift/fake repositories retain their prior
+  implementation. The Host broadcasts scoped `workspaceTabsChanged`.
+- Native resolves its current root from the authenticated Host catalog,
+  reads only a minimal `tab.pin.list` projection and validates Host
+  Workspace/Tab/PTY identity. The right-click action waits for verified Host
+  readback before updating the chip, and rejects workspace switches,
+  closed/recycled sessions, stale revisions and unsupported older Hosts.
+  No secret Agent command or PTY receipt is exposed by the CLI projection.
+- Native also loads Host pin metadata for exact registered workspace IDs of
+  manually attached Terminal/Agent tabs in other Workspaces; it never trusts
+  an unknown workspace ID from a local preview. The background refresh is
+  bounded to 24 distinct registered owners and rechecks live Tab/PTY identity
+  before reflecting the pin in the mixed strip.
+- The asynchronous refresh records exactly which Host Tab targets and
+  registered Workspace owners it queried. A Tab attached while that read is
+  running is not painted as unpinned from the outdated snapshot; Native
+  immediately schedules a catch-up Host read. Explicit Attach also requests
+  fresh pin metadata without starting a Host or PTY.
+- The Native CLI bridge must dispatch response schemas by command: `pin-list`
+  returns a minimal **array**, `pin-set` returns one minimal **object**,
+  while ordinary Settings requests still return `values`. Previously both
+  valid pin replies failed the generic Settings response validator, leaving
+  Host pin UI unavailable even when the CAS succeeded. Format dispatch and
+  strict identity/secret-free parsing are covered by Native regressions.
+- File-backed Native Editor pins remain Native layout-owned, because
+  Native Editor buffers are not the same Host-backed Editor Tab records
+  used by Classic. They must not be conflated by file path alone.
+
+**Remaining parity:** Host/Agent pin sync requires compatible rebuilt
+Runtime Host and CLI binaries and a real Windows Classic/GPUI acceptance
+pass; the production Host is unchanged. Real disposable Host + Classic-equivalent
+RPC + Native CLI pin-list/pin-set/restart validation is available via
+`python desktop_gpui/tests/test_host_tab_pin_rpc.py --cli <branch-alera.exe>`;
+it uses a private runtime and never launches a PTY or a GUI, so it is not
+a substitute for the visual Windows acceptance pass. The two-row *preference*
+is already a reviewed shared Rust Core scalar.
+Classic seeds its old local value only when absent and uses field-scoped CAS;
+GPUI migrates a previously persisted Native JSON value only if the old
+file exists, then reads/writes through the same Host owner. An offline or
+older Host/CLI fails closed rather than claiming the two-row change saved.
+This requires deploying compatible CLI/Host binaries together; the current
+integration branch does not update the running production Host.
+Classic detects installed Agent CLIs directly; GPUI currently lists
+Host Agent Profiles and asks for a task rather than reproducing every
+Classic Agent selection shortcut. Real Windows pane-tab pointer,
+IME and layout restoration acceptance remain outstanding.
 
 ## Explorer baseline and implemented slice
 

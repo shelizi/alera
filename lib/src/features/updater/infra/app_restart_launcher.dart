@@ -3,7 +3,7 @@ import 'dart:io';
 
 import 'package:alera/src/shared/infra/process/process_runner.dart';
 import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
+import 'package:alera/src/shared/infra/storage/alera_support_directory.dart';
 
 typedef AppRestartDirectory = Future<Directory> Function();
 typedef AleraAppExit = FutureOr<void> Function();
@@ -166,7 +166,7 @@ if (Test-Path -LiteralPath $AleraPath -PathType Leaf) {
 ''';
 
 Future<Directory> _defaultRestartDirectory() async {
-  final support = await getApplicationSupportDirectory();
+  final support = await aleraApplicationSupportDirectory();
   return Directory(p.join(support.path, 'app-restart'));
 }
 

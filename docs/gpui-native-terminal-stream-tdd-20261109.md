@@ -235,3 +235,70 @@ CLI `terminal_stream::tests` 私有 recover 指令白名單 **2/2 PASS**，確�
 `python desktop_gpui/tests/terminal_stream_isolated_smoke.py D:/c/t/debug/alera.exe --native-app D:/c/t/debug/alera-gpui-desktop.exe --native-host-restart --native-split-gate --native-real-tui-pager "C:/Program Files/Git/usr/bin/less.exe" --native-real-tui-target both --native-real-tui-rounds 12 --hold-seconds 3`
 
 **尚未關 Gate**：Windows TSF 注音「未完成組字」在左右窗格與 Explorer 切換的真實候選窗取消／遲到 Commit 檢查仍缺完整 OS 證據；Classic／Native Release 同場輸入至像素 p50/p95、實際高頻全螢幕編輯器超長時間壓測也尚未完成。這次只修改測試工具／文件，`supported=false`；不改 Classic 或正式 Host、不合併 main、不推送、不發布。保留原始未追蹤 `.gpui-smoke-20261108/`。
+
+## 2026-11-09：Windows TSF 繁中實機焦點切換結果（未關 Gate）
+
+原 Windows 設定中有繁體中文注音輸入法。在隔離 Native GUI、獨立 Runtime／兩個原 Host PTY（每輪皆使用新建的臨時目錄）實測：
+
+- **Terminal 左右切換取消：部分通過。** 左側實際輸入 `S U 3`（`ㄋㄧˇ`），可看見 Windows 注音「你／妳」候選清單；候選未完成時點選右側，清單消失，兩個原 Host cursor 不變（左 2295、右 214683），未見 preedit 流入錯誤 PTY。
+- **右側原生候選及正式 Commit：部分通過。** 右側切回注音中文模式後，也能叫出真實「你」候選字；Enter 正式提交後，右側 Host cursor 增加 3 bytes（214656→214659），左側仍 2295 不變。右側 `cmd.exe` 的回顯增量解碼出替代字元與 `A`（不是可讀的「你」），**只能認證路由與輸出活動，無法認證完整 Unicode 正確性**；另需 UTF-8 Shell／PowerShell 實測。
+- **Terminal → Explorer filter：RED，可重現。** 正在 Terminal `ㄋㄧˇ` 候選時直接點右側 `Filter files…`，舊候選字視窗**沒有取消，仍停在 Terminal caret 旁**；接著在 Explorer 打字會改變搜尋文字／候選內容，但舊候選視窗 anchor 未移到 Explorer。兩個 Host 沒有出現誤送的中文，但視覺／焦點行為不符合 Classic 預期。
+- 嘗試①在 `explorer-classic-filter` 父層 mouse down 呼叫 `clear_terminal_text_inputs`，Windows 重建 Debug Native、Rust 325/325、`cargo check --all-targets` 均通過，**OS 實測仍 RED**。
+- 嘗試②改用 GPUI `cx.on_blur` 監控原兩個 Terminal `TextInput` FocusHandle，並在 blur 清除 composition，`cargo check --all-targets` 與 Windows rebuild 通過，**OS 候選視窗仍殘留**；修正兩版已全部撤回，沒有把未完成修復提交。
+- 第二次隔離測試的 Windows Temp stderr log 一度遭 `WinError 32` 檔案鎖定，測試結束非 PASS；下一輪獨立 Runtime 標準 Smoke 恢復 **11/11 PASS**。未修改 Classic 或正式 Host。
+
+**下一步技術修復範圍**：查清 GPUI Windows 平台的 TSF／IME composition cancel、focused input handler 更換與 caret bounds 刷新契約；需要由 Windows 原生 IME 取消／重定錨，而不是只清 `QuickOpenInput.marked`。修正完成後應以真實候選字視窗實測「Primary → Secondary → Explorer → Terminal」、「取消／正式 Commit／Escape」、「焦點之外延遲 Commit 不污染任何 Host」、中文 UTF-8、以及 Native／Classic 同場比較。不要以 Rust unit tests、ASCII 或 Host cursor 一致性代替 OS TSF 驗收。
+
+**效能 Gate 未關**：目前整合工作樹只找到 Native Debug exe，未找到 Classic Windows Release 或 Native Release exe，故不能用之前的 Native Debug ~92ms p50 與 Classic Release 做不公平比較。待同機同解析度／工作負載、兩個 Release 版本與同一輸入至像素量測方法才建立 p50/p95 基準。
+
+本輪保留 `supported=false`，不合併 main、不推送、不發布。原 `.gpui-smoke-20261108/` 不修改、不提交。
+
+## 2026-11-09：Windows IMM 組字取消修復實機初驗（RED → GREEN）
+
+核心根因：GPUI 0.2.2 Windows 的 `WM_IME_STARTCOMPOSITION` 會呼叫 `ImmSetCompositionWindow`／`ImmSetCandidateWindow`，但平台的 `update_ime_position()` 為空操作；同一 HWND 內由 Terminal 切到 Explorer 沒有 Windows 視窗失焦訊息。先前僅清 `QuickOpenInput.marked`，OS 候選字仍未取消。
+
+此輪在每個 Terminal `TextInput` FocusHandle 的 GPUI `on_blur` 上執行 Windows `ImmNotifyIME(NI_COMPOSITIONSTR, CPS_CANCEL)`，然後呼叫 `NI_CLOSECANDIDATE`，再清本地臨時文字。原生操作僅限目前 UI 執行緒的 foreground 根視窗、由 `GetFocus` 取得的 HWND 和它的 `HIMC`；沒有向 PTY 寫入文字，不碰其他程序視窗。僅在明確開啟 `ALERA_GPUI_TSF_TRACE` 時記錄取消結果。
+
+隔離 Windows Debug GPUI 實機：Terminal 以繁中注音 `S U 3` 確實顯示「你」候選窗；滑鼠點 Explorer `Filter files…` 後，舊候選窗立即消失；在 Explorer 繼續輸入，新候選窗出現在 Explorer 搜尋框旁，不再遺留 Terminal caret 旁。Native stderr 記錄 `Alera GPUI TSF: blur cancel=Cancelled`。OS 視覺重現案例從 RED 轉 GREEN。另 Native 獨立 Runtime Smoke 結束 `exit_code=0`，既有 Rust Library 325/325 及合併後 `cargo check --all-targets --locked` 通過，獨立 Windows helper 1/1 通過。
+
+來源提交：設定／i18n 同步變更先落在 `edef09ff8`（包含 `main.rs` 的 TSF 呼叫處）；獨立 IMM 輔助模組隨 `7e978ad16` 提交，未把其他修改混入。注意這是**核心候選窗取消與位置重定錨初驗**，不是完整 TSF 結案：仍須多次 Primary／Secondary／Explorer 循環、正式中文 Commit/UTF-8 Shell、失焦遲到 Commit 安全性及高頻操作重測。Classic／Native Release 同場 p50/p95 效能比較尚缺 Release binaries。正式支援仍 `supported=false`，不合併 main、不推送、不發布，原未追蹤 Smoke 目錄保留。
+
+## 2026-11-09: delayed Windows IME callback guard (follow-up)
+
+The Native Terminal IME sink now rejects replace_text_in_range / replace_and_mark_text_in_range callbacks when its GPUI FocusHandle is no longer focused. This is in addition to Workbench's authenticated pane/Host identity check and its observer-time focus gate. Search fields retain their normal text-input behavior. Trace-only diagnostics record rejected callbacks when ALERA_GPUI_TSF_TRACE is set. Scope: desktop_gpui/src/quick_open_ui.rs only; no Classic or production Host changes.
+
+Validation on Windows: new quick_open_ui::tests::terminal_rejects_delayed_ime_after_blur_but_explorer_is_unchanged 1/1 PASS; cargo test --manifest-path desktop_gpui/Cargo.toml --locked --lib 332/332 PASS; cargo check --manifest-path desktop_gpui/Cargo.toml --all-targets --locked PASS. The automated regression validates focus decision logic, not a real delayed OS IME callback. Real repeated Primary/Secondary/Explorer candidate cycles, Unicode commit with UTF-8 PowerShell, and Classic/Native Release p50/p95 remain unverified. Preserve supported=false, no main merge, no push, no release. Preserve .gpui-smoke-20261108/.
+
+## 2026-11-09：Windows Unicode / PowerShell 隔離端到端 Gate
+
+新增 opt-in `--unicode-shell-gate`，重用 `desktop_gpui/tests/terminal_stream_isolated_smoke.py` 的一次性 Host profile 與兩個獨立 PTY；先在 Windows CMD 執行 `chcp 65001`，再啟動隔離 PowerShell 並設定 InputEncoding / OutputEncoding 為 UTF-8。正式中文輸入使用「你，繁體中文注音測試🐱」(34 UTF-8 bytes)，由 PTY 內的 PowerShell 計算輸入文字的 UTF-8 Base64，避免把單純的 command echo 誤判為正確輸入；輸出方向則只透過 ASCII Base64 指令，要求 PTY 真正回傳 UTF-8 中文和 Emoji。另核對第二個 PTY 的 Host output cursor 在此期間不變，確保沒有跨 PTY 污染。
+
+第一輪使用較舊 `D:/c/cli/debug/alera.exe` 時，原始基準測試與新 Unicode 測試都在 CLI stream IPC 初始化結束（RED），沒有進入 UTF-8 測項；改用現有的 `D:/c/cli/debug/deps/alera.exe` 後，隔離 Host / CLI 版本 11/11 PASS。再加入隔離 Native Debug GUI `D:/c/t/debug/alera-gpui-desktop.exe`，得到 12/12 PASS，包含 Unicode roundtrip 34 bytes、第二 PTY 未污染、超過 64 KiB stream 與視窗存活。Python AST parse 與 `git diff --check` 通過。
+
+驗證邊界：此測試證明 CLI / Host / ConPTY / PowerShell 的文字編碼鏈路，不代表透過 Windows 注音候選窗進行 GPUI 鍵盤輸入已有完整驗收。仍待真實 Primary → Secondary → Explorer 多次候選窗切換、正式注音 Commit 在 Native UI 端路由、失焦後 OS 延遲 Commit，以及 Classic / Native Release 同場 p50/p95。保持 `supported=false`，不合併 main、不推送、不發布，不修改 Classic / 正式 Host，保留 `.gpui-smoke-20261108/`。
+
+## 2026-11-09：實體注音焦點驗收第三輪與診斷補強
+
+使用隔離 Native Debug 視窗、一次性 Host profile 及兩個獨立 PTY，啟用 `ALERA_GPUI_TSF_TRACE`。畫面上確實出現 Windows 繁中注音 `S U 3` 的「你」候選清單；離開候選後清單消失，但 Explorer 輸入、第二 Terminal Tab 的焦點切換及真實中文 Commit 均未取得可確認證據。桌面輸入橋接器後來報告座標換算後 `SetPhysicalCursorPos failed with Win32 error 0`，故該次 GUI 點擊不可靠，**不得**聲稱跨欄位/跨窗格 Gate 通過，也不能據此判定 UI 有回歸缺陷。
+
+隔離 Smoke 完整結束 `12/12 PASS`，包含先前新增的 PowerShell UTF-8 CJK/Emoji 34-byte 回合與第二 PTY 隔離；這個結果只能涵蓋 Host/CLI/ConPTY 的 UTF-8 與 Native 視窗存活，不能代表 GPUI 真實 IME Commit 正確。為定位焦點轉移問題，在 `quick_open_ui.rs` 補上需明確啟用 trace 才輸出的 `commit/preedit` 事件、terminal/focused 布林值、字元數與輸入 click 的聚焦前狀態，不記錄實際文字。Native bin 專項測試 `5/5 PASS` 且 Debug build PASS，尚待使用可用的桌面橋接器重測並檢視 trace。Classic/Native Release p50/p95 仍未完成；`supported=false` 不變。
+## 2026-11-09：Windows 輸入桌面可用性預檢（第四輪）
+
+跨 Terminal / Explorer 的注音候選窗與正式 Commit 仍未達可採信的自動化實機覆蓋；前輪桌面橋接器曾回報 `SetPhysicalCursorPos failed`。本輪以 Windows Win32 原生 API 在相同位置直接呼叫 `SetCursorPos`、`SetPhysicalCursorPos`，兩者都回報失敗（偵錯時 GetLastError 曾為 203，預檢自身回報 0；錯誤碼不穩定，不臆測底層原因）。顯示器可截圖、`GetCursorPos` 可讀，不等於有能力輸入滑鼠。
+
+為避免日後再次把 UI 自動化未實際作用誤判為成功，隔離腳本 `desktop_gpui/tests/terminal_stream_isolated_smoke.py` 新增 opt-in `--require-interactive-desktop`。必須同時提供 `--native-app`；在**建立任何隔離 Runtime Host 之前**，對邏輯與實體座標各做一次「取得目前游標座標 → 將游標設回相同座標 → 核對沒有位移」。不點擊、不輸入文字、不操作正式 Host。預檢失敗則 argparse 以 code 2 停止並輸出 `Windows IME UI acceptance BLOCKED`，避免被誤判為測試成功；預檢成功只代表可進行 GUI 操作，**不代表**注音焦點與 Commit Gate 已驗收。
+
+新增兩項純測試（含同座標不位移、物理 API 失敗、邏輯 API 失敗、非 Windows 拒絕）：`python -m unittest discover -s desktop_gpui/tests -p test_terminal_load_probes.py -v` **17/17 PASS**。實際工作階段預檢如預期回報 `SetCursorPos failed (win32=0)` 並在 Host 啟動前退出，屬預檢成功攔截、**不是**注音功能測試 PASS。未開啟該 opt-in 的既有隔離 Host/CLI/Native UTF-8 Smoke 再次 **12/12 PASS**，包括 CJK/Emoji 34 bytes 與第二 PTY 未污染；因此沒有回歸一般串流。後續需先恢復可用的 Windows 互動桌面，再執行 Primary → Secondary → Explorer 多輪注音、晚到 Commit 防污染、真正 UTF-8 文字 Commit 及 Release 同機 p50/p95。
+
+保持 `supported=false`，不合併 main、不推送、不發布；保留 `.gpui-smoke-20261108/`，不碰 Classic 或正式 Host。
+
+### 輸入桌面與 Session 診斷補充
+
+同一工具執行程序的 Windows Session 為 1，系統回報 active console Session 也為 1；`GetThreadDesktop` 與 `OpenInputDesktop` 讀到的桌面名稱均為 `Default`。以唯讀開啟查詢驗證 `WinSta0` 的 `WINSTA_WRITEATTRIBUTES`、`WINSTA_READATTRIBUTES`，以及目前輸入桌面的 `DESKTOP_READOBJECTS`、`DESKTOP_WRITEOBJECTS`、`DESKTOP_SWITCHDESKTOP` 均可取得控制代碼。這排除明顯的錯誤 Session / 桌面名稱及簡單的控制代碼開啟權限問題，但**不能證明桌面可接受游標移動**：同一 Session 下的 `SetCursorPos` 與 `SetPhysicalCursorPos` 仍失敗。Win32 `GetLastError` 可能為前次呼叫殘值，不據此推定根因。不繞過桌面輸入限制；真正 IME 候選窗跨窗格與晚到 Commit 仍列未驗收，`supported=false`。
+## 2026-11-09：Explorer → Terminal 注音候選窗跨欄位焦點修正（第五輪）
+
+在 3840×2160 / 200% DPI Windows 真實桌面以 `--require-interactive-desktop` 通過原生座標 API 預檢，使用隔離 Native Debug GUI + 一次性 Host / 雙 PTY，重新重現 Explorer 有正在組字之 Windows 注音候選窗，但點 Terminal 文字列或 Tab 後候選仍停留 Explorer 的問題。先前同一隔離視窗可成功將注音候選窗定位到 Explorer 搜尋框；但 Terminal 文字列點擊時舊組字仍可能殘留。
+
+修正在 `desktop_gpui/src/quick_open_ui.rs` 對 **所有**輸入欄位（不只 Terminal）拒絕失焦後遲到的 `replace_text_in_range` / `replace_and_mark_text_in_range`。新增 `discard_marked_preedit` 僅移除 Explorer 的未完成組字標記範圍，保留已正式提交的搜尋文字，並對非法 Unicode byte 邊界安全拒絕。Native `main.rs` 的 Explorer FocusHandle 於 GPUI `on_blur` 透過 `win_ime::cancel_focused_composition` 取消 OS 舊候選窗，同時清理標記組字；Terminal 文字列滑鼠 Down 顯式恢復 Primary Terminal TextInput 焦點，避免子列消耗滑鼠事件時仍停在 Explorer。Trace 不記錄輸入內容。
+
+原生 bin 專項 Rust 回歸測試 `6/6 PASS`，其中新測試驗證 Explorer/Terminal 失焦 callback 拒絕與保留原搜尋 Unicode；Windows Debug `cargo build` 通過，`git diff --check` 通過。使用重新編譯 Native 視窗再次進行真實操作：Explorer 中輸入候選 → 點回第一個 Terminal 並輸入注音，候選出現在 Terminal caret；再點回 Explorer，Terminal 舊候選消失；點第二個 Terminal Tab，注音候選移到第二 Terminal 內容處。**這僅通過候選窗定位/取消的實機初驗**，不代表正式中文 Commit 已經被核對到正確的 Host PTY。按 Enter 後候選視覺消失，但尚未取得 Host commit byte-level 證據，延遲 Commit 多輪壓力測試、真正雙窗格（不是兩個 Tab）與 Classic/Native Release p50/p95 仍待驗收。仍維持 `supported=false`，不合併 main、不推送、不發布；正式 Host 和 Classic 未改動。

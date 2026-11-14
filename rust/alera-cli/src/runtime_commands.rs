@@ -92,6 +92,14 @@ pub(crate) async fn run_runtime_command(command: RuntimeCommand) -> i32 {
         RuntimeAction::Agents(agents) => {
             run_runtime_agents_command(&command.runtime, command.output.json, agents.action).await
         }
+        RuntimeAction::HistorySync(request) => {
+            crate::runtime_history_sync_cli::run(
+                &command.runtime,
+                command.output.json,
+                request.action,
+            )
+            .await
+        }
     }
 }
 

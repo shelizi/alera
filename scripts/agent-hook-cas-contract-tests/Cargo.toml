@@ -1,0 +1,12 @@
+[package]
+name = "alera-agent-hook-cas-contract-tests"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# Deliberately independent from the massive CLI workspace. The tests below
+# compile the very same CAS source module that the real CLI imports.
+[workspace]
+
+[dependencies]
+serde_json = "=1.0.151"

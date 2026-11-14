@@ -654,6 +654,10 @@ fn terminal_list_and_read_do_not_write_files_or_accept_stale_replies() {
             tab_id: "tab-old".into(),
             running: true,
             agent_type: Some("codex".into()),
+            agent_state: None,
+            interrupted: false,
+            agent_state_started_at: None,
+            agent_updated_at: None,
         }],
     );
     assert!(dock.open("term-1"));
@@ -670,6 +674,10 @@ fn terminal_list_and_read_do_not_write_files_or_accept_stale_replies() {
             tab_id: "tab-other".into(),
             running: true,
             agent_type: None,
+            agent_state: None,
+            interrupted: false,
+            agent_state_started_at: None,
+            agent_updated_at: None,
         }],
     );
     assert!(!stale_list);

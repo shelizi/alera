@@ -4,7 +4,7 @@ import 'dart:io';
 
 import 'package:ghostty_vte_flutter/ghostty_vte_flutter.dart';
 import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
+import 'package:alera/src/shared/infra/storage/alera_support_directory.dart';
 
 part 'terminal_shell_zsh_startup.dart';
 part 'terminal_shell_startup_templates.dart';
@@ -23,7 +23,7 @@ final class AleraTerminalShellStartupPreparer({
 }) implements TerminalShellStartupPreparer {
   this
     : _applicationSupportDirectory =
-          applicationSupportDirectory ?? getApplicationSupportDirectory;
+          applicationSupportDirectory ?? aleraApplicationSupportDirectory;
 
   final TerminalShellStartupDirectoryResolver _applicationSupportDirectory;
 

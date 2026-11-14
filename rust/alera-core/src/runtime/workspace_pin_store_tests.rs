@@ -104,6 +104,22 @@ async fn workspace_archive_roundtrip_persists_timestamp() {
 }
 
 #[tokio::test]
+async fn direct_archive_toggle_keeps_tags_pinning_and_branch() {
+    let (_dir, store) = store().await;
+    store.upsert_project(project("p")).await.unwrap();
+    store.upsert_workspace(workspace("w", "p")).await.unwrap();
+    store.set_workspace_pinned("w", true).await.unwrap();
+    let archived = store.set_workspace_archived("w", true).await.unwrap();
+    assert!(archived.archived_at.is_some());
+    assert!(archived.is_pinned);
+    assert_eq!(archived.branch.as_deref(), Some("main"));
+    let restored = store.set_workspace_archived("w", false).await.unwrap();
+    assert!(restored.archived_at.is_none());
+    assert!(restored.is_pinned);
+    assert!(store.set_workspace_archived("missing", true).await.is_err());
+}
+
+#[tokio::test]
 async fn workspace_pin_column_is_added_to_legacy_runtime_databases() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join(RUNTIME_DATABASE_FILE_NAME);

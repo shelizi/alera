@@ -29,7 +29,7 @@ use super::workspace_artifact_requests::{
 };
 use super::workspace_relation_requests::WorkspaceRelationRequestHandler;
 use super::workspace_requests::WorkspaceRequestHandler;
-use super::workspace_tab_requests::WorkspaceTabStoreHandler;
+use super::workspace_tab_requests::{TabPinCasRequest, WorkspaceTabStoreHandler};
 use super::{ClientKind, ServerActor, ServerCommand};
 
 use self::idempotency_receipts::{
@@ -38,6 +38,36 @@ use self::idempotency_receipts::{
 };
 
 pub(super) mod idempotency_receipts;
+
+fn shared_desktop_settings_error(error: anyhow::Error) -> HostError {
+    if error
+        .to_string()
+        .contains("desktop_settings_revision_conflict")
+    {
+        HostError::conflict(
+            "desktop_settings_revision_conflict",
+            "Shared desktop settings changed elsewhere. Refresh and retry.",
+            json!({}),
+        )
+    } else {
+        HostError::state(error.to_string())
+    }
+}
+fn git_favorites_error(error: anyhow::Error) -> HostError {
+    if error
+        .to_string()
+        .contains("git_favorites_revision_conflict")
+    {
+        HostError::conflict(
+            "git_favorites_revision_conflict",
+            "Git favorites changed in another Alera desktop. Refresh and retry.",
+            json!({}),
+        )
+    } else {
+        HostError::state(error.to_string())
+    }
+}
+
 mod runtime_settings;
 mod runtime_settings_store;
 mod runtime_settings_validation;
@@ -671,6 +701,177 @@ impl ServerActor {
                 self.require_auth(client_id)?;
                 self.runtime_settings_snapshot().await
             }
+            "desktopSettings.get" => {
+                self.require_auth(client_id)?;
+                self.runtime_store
+                    .desktop_shared_settings_snapshot()
+                    .await
+                    .map_err(|error| HostError::state(error.to_string()))
+            }
+            "desktopSettings.seedLocal" => {
+                self.require_auth(client_id)?;
+                let result = self
+                    .runtime_store
+                    .desktop_shared_seed_local(&payload["values"])
+                    .await
+                    .map_err(|error| HostError::state(error.to_string()))?;
+                // Idempotent migration runs on each Classic settings reload.
+                // Broadcasting here would cause an infinite reload/seed loop.
+                Ok(result)
+            }
+            "desktopSettings.seedExplorer" => {
+                self.require_auth(client_id)?;
+                let hidden = payload
+                    .get("showHidden")
+                    .and_then(Value::as_bool)
+                    .ok_or_else(|| HostError::state("Missing Native showHidden bool"))?;
+                let ignored = payload
+                    .get("showIgnored")
+                    .and_then(Value::as_bool)
+                    .ok_or_else(|| HostError::state("Missing Native showIgnored bool"))?;
+                let result = self
+                    .runtime_store
+                    .desktop_shared_seed_local(&json!({
+                        "explorer.showHiddenFiles": hidden,
+                        "explorer.showIgnoredFiles": ignored,
+                    }))
+                    .await
+                    .map_err(|error| HostError::state(error.to_string()))?;
+                self.broadcast_authenticated(event("runtimeSettingsChanged", json!({})));
+                Ok(result)
+            }
+            "desktopSettings.seedNativeProfile" => {
+                self.require_auth(client_id)?;
+                let profile = payload
+                    .get("profileId")
+                    .ok_or_else(|| HostError::state("Missing Native profile migration value"))?;
+                if !profile.is_null() && !profile.is_string() {
+                    return Err(HostError::state("Invalid Native profile migration value"));
+                }
+                let result = self
+                    .runtime_store
+                    .desktop_shared_seed_native_default_profile(profile.as_str())
+                    .await
+                    .map_err(|error| HostError::state(error.to_string()))?;
+                self.broadcast_authenticated(event("runtimeSettingsChanged", json!({})));
+                Ok(result)
+            }
+            "desktopSettings.compareAndSetBatch" => {
+                self.require_auth(client_id)?;
+                let changes: Vec<alera_core::runtime::DesktopSettingChange> =
+                    serde_json::from_value(payload["changes"].clone())
+                        .map_err(|_| HostError::state("Invalid shared settings batch"))?;
+                let result = self
+                    .runtime_store
+                    .desktop_shared_compare_and_set_batch(&changes)
+                    .await
+                    .map_err(shared_desktop_settings_error)?;
+                self.broadcast_authenticated(event("runtimeSettingsChanged", json!({})));
+                Ok(result)
+            }
+            "desktopSettings.compareAndSet" => {
+                self.require_auth(client_id)?;
+                let path = payload["path"]
+                    .as_str()
+                    .ok_or_else(|| HostError::state("Missing desktop setting path"))?;
+                let expected = payload
+                    .get("expectedValue")
+                    .ok_or_else(|| HostError::state("Missing desktop expectedValue"))?;
+                let next = payload
+                    .get("value")
+                    .ok_or_else(|| HostError::state("Missing desktop setting value"))?;
+                let result = self
+                    .runtime_store
+                    .desktop_shared_compare_and_set(path, expected, next)
+                    .await
+                    .map_err(shared_desktop_settings_error)?;
+                self.broadcast_authenticated(event("runtimeSettingsChanged", json!({})));
+                Ok(result)
+            }
+            "gitFavorites.get" => {
+                self.require_auth(client_id)?;
+                self.runtime_store
+                    .git_favorites_snapshot()
+                    .await
+                    .map_err(git_favorites_error)
+            }
+            "gitFavorites.forWorkspace" => {
+                self.require_auth(client_id)?;
+                let root = payload["rootPath"]
+                    .as_str()
+                    .ok_or_else(|| HostError::state("Missing registered workspace path"))?;
+                self.runtime_store
+                    .git_favorites_for_workspace(root)
+                    .await
+                    .map_err(git_favorites_error)
+            }
+            "gitFavorites.seedClassic" => {
+                self.require_auth(client_id)?;
+                let result = self
+                    .runtime_store
+                    .git_favorites_seed_classic(&payload["scopes"])
+                    .await
+                    .map_err(git_favorites_error)?;
+                if result["changed"] == true {
+                    self.broadcast_authenticated(event("gitFavoritesChanged", json!({})));
+                }
+                Ok(result)
+            }
+            "gitFavorites.seedNative" => {
+                self.require_auth(client_id)?;
+                let root = payload["rootPath"]
+                    .as_str()
+                    .ok_or_else(|| HostError::state("Missing registered workspace path"))?;
+                let branches: Vec<String> = serde_json::from_value(payload["branches"].clone())
+                    .map_err(|_| HostError::state("Invalid Native Git favorites branches"))?;
+                let result = self
+                    .runtime_store
+                    .git_favorites_seed_native(root, &branches)
+                    .await
+                    .map_err(git_favorites_error)?;
+                if result["changed"] == true {
+                    self.broadcast_authenticated(event("gitFavoritesChanged", json!({})));
+                }
+                Ok(result)
+            }
+            "gitFavorites.compareAndSet" => {
+                self.require_auth(client_id)?;
+                let scope = payload["scopeKey"]
+                    .as_str()
+                    .ok_or_else(|| HostError::state("Missing Git favorites repository identity"))?;
+                let expected: Vec<String> = serde_json::from_value(payload["expected"].clone())
+                    .map_err(|_| HostError::state("Invalid prior Git favorites"))?;
+                let next: Vec<String> = serde_json::from_value(payload["value"].clone())
+                    .map_err(|_| HostError::state("Invalid next Git favorites"))?;
+                let result = self
+                    .runtime_store
+                    .git_favorites_compare_and_set(scope, &expected, &next)
+                    .await
+                    .map_err(git_favorites_error)?;
+                if result["changed"] == true {
+                    self.broadcast_authenticated(event("gitFavoritesChanged", json!({})));
+                }
+                Ok(result)
+            }
+            "gitFavorites.casForWorkspace" => {
+                self.require_auth(client_id)?;
+                let root = payload["rootPath"]
+                    .as_str()
+                    .ok_or_else(|| HostError::state("Missing registered workspace path"))?;
+                let expected: Vec<String> = serde_json::from_value(payload["expected"].clone())
+                    .map_err(|_| HostError::state("Invalid prior Git favorites"))?;
+                let next: Vec<String> = serde_json::from_value(payload["value"].clone())
+                    .map_err(|_| HostError::state("Invalid next Git favorites"))?;
+                let result = self
+                    .runtime_store
+                    .git_favorites_cas_for_workspace(root, &expected, &next)
+                    .await
+                    .map_err(git_favorites_error)?;
+                if result["changed"] == true {
+                    self.broadcast_authenticated(event("gitFavoritesChanged", json!({})));
+                }
+                Ok(result)
+            }
             "mobile.runtimeSettings.get" => {
                 self.require_auth(client_id)?;
                 self.runtime_settings_snapshot().await
@@ -755,6 +956,7 @@ impl ServerActor {
             | "workspace.upsert"
             | "workspace.rename"
             | "workspace.setPinned"
+            | "workspace.setArchived"
             | "workspaceCascade.preview" => {
                 self.require_auth(client_id)?;
                 let outcome = WorkspaceRequestHandler::new(&self.runtime_store)
@@ -787,6 +989,30 @@ impl ServerActor {
                     .await?
                     .and_then(|tab| self.workspace_tab_for_client(client_id, tab));
                 Ok(json!(tab))
+            }
+            "tab.pin.list" => {
+                self.require_auth(client_id)?;
+                self.require_request_allowed(client_id, request_type)?;
+                let workspace_id = require_string_key(payload, "workspaceId")?;
+                WorkspaceTabStoreHandler::new(&self.runtime_store)
+                    .list_pins(&workspace_id)
+                    .await
+            }
+            "tab.pin.cas" => {
+                self.require_auth(client_id)?;
+                self.require_request_allowed(client_id, request_type)?;
+                // Require an explicit session guard, including null for
+                // non-Terminal tabs.
+                if payload.get("expectedTerminalSessionId").is_none() {
+                    return Err(HostError::state("Missing Tab session identity guard"));
+                }
+                let request: TabPinCasRequest = parse_payload(payload)?;
+                let workspace_id = request.workspace_id.clone();
+                let tab = WorkspaceTabStoreHandler::new(&self.runtime_store)
+                    .set_pin(request)
+                    .await?;
+                self.broadcast_workspace_tabs_changed(Some(&workspace_id));
+                Ok(json!(self.workspace_tab_for_client(client_id, tab)))
             }
             "tab.upsert" => {
                 self.require_auth(client_id)?;

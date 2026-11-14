@@ -144,6 +144,57 @@ extension AgentQuotaProviderIdMapperExtension on AgentQuotaProviderId {
   }
 }
 
+class AgentHistorySyncModeMapper extends EnumMapper<AgentHistorySyncMode> {
+  AgentHistorySyncModeMapper._();
+
+  static AgentHistorySyncModeMapper? _instance;
+  static AgentHistorySyncModeMapper ensureInitialized() {
+    if (_instance == null) {
+      MapperContainer.globals.use(_instance = AgentHistorySyncModeMapper._());
+    }
+    return _instance!;
+  }
+
+  static AgentHistorySyncMode fromValue(dynamic value) {
+    ensureInitialized();
+    return MapperContainer.globals.fromValue(value);
+  }
+
+  @override
+  AgentHistorySyncMode decode(dynamic value) {
+    switch (value) {
+      case r'all':
+        return AgentHistorySyncMode.all;
+      case r'separate':
+        return AgentHistorySyncMode.separate;
+      case r'groups':
+        return AgentHistorySyncMode.groups;
+      default:
+        throw MapperException.unknownEnumValue(value);
+    }
+  }
+
+  @override
+  dynamic encode(AgentHistorySyncMode self) {
+    switch (self) {
+      case AgentHistorySyncMode.all:
+        return r'all';
+      case AgentHistorySyncMode.separate:
+        return r'separate';
+      case AgentHistorySyncMode.groups:
+        return r'groups';
+    }
+  }
+}
+
+extension AgentHistorySyncModeMapperExtension on AgentHistorySyncMode {
+  String toValue() {
+    AgentHistorySyncModeMapper.ensureInitialized();
+    return MapperContainer.globals.toValue<AgentHistorySyncMode>(this)
+        as String;
+  }
+}
+
 class TerminalCursorShapeMapper extends EnumMapper<TerminalCursorShape> {
   TerminalCursorShapeMapper._();
 
@@ -1267,6 +1318,7 @@ class AgentQuotaHostSettingsMapper
       AgentQuotaProviderIdMapper.ensureInitialized();
       ClaudeQuotaProfileSettingsMapper.ensureInitialized();
       CodexQuotaProfileSettingsMapper.ensureInitialized();
+      AgentHistorySyncSettingsMapper.ensureInitialized();
       AgentQuotaEnvironmentSettingsMapper.ensureInitialized();
     }
     return _instance!;
@@ -1351,6 +1403,15 @@ class AgentQuotaHostSettingsMapper
         opt: true,
         def: 'default',
       );
+  static AgentHistorySyncSettings _$historySync(AgentQuotaHostSettings v) =>
+      v.historySync;
+  static const Field<AgentQuotaHostSettings, AgentHistorySyncSettings>
+  _f$historySync = Field(
+    'historySync',
+    _$historySync,
+    opt: true,
+    def: AgentHistorySyncSettings.defaults,
+  );
   static AgentQuotaEnvironmentSettings _$environment(
     AgentQuotaHostSettings v,
   ) => v.environment;
@@ -1382,6 +1443,7 @@ class AgentQuotaHostSettingsMapper
     #selectedClaudeProfile: _f$selectedClaudeProfile,
     #codexProfiles: _f$codexProfiles,
     #selectedCodexProfile: _f$selectedCodexProfile,
+    #historySync: _f$historySync,
     #environment: _f$environment,
     #unpinnedQuotaKeys: _f$unpinnedQuotaKeys,
   };
@@ -1396,6 +1458,7 @@ class AgentQuotaHostSettingsMapper
       selectedClaudeProfile: data.dec(_f$selectedClaudeProfile),
       codexProfiles: data.dec(_f$codexProfiles),
       selectedCodexProfile: data.dec(_f$selectedCodexProfile),
+      historySync: data.dec(_f$historySync),
       environment: data.dec(_f$environment),
       unpinnedQuotaKeys: data.dec(_f$unpinnedQuotaKeys),
     );
@@ -1497,6 +1560,12 @@ abstract class AgentQuotaHostSettingsCopyWith<
     >
   >
   get codexProfiles;
+  AgentHistorySyncSettingsCopyWith<
+    $R,
+    AgentHistorySyncSettings,
+    AgentHistorySyncSettings
+  >
+  get historySync;
   AgentQuotaEnvironmentSettingsCopyWith<
     $R,
     AgentQuotaEnvironmentSettings,
@@ -1514,6 +1583,7 @@ abstract class AgentQuotaHostSettingsCopyWith<
     String? selectedClaudeProfile,
     List<CodexQuotaProfileSettings>? codexProfiles,
     String? selectedCodexProfile,
+    AgentHistorySyncSettings? historySync,
     AgentQuotaEnvironmentSettings? environment,
     List<String>? unpinnedQuotaKeys,
   });
@@ -1573,6 +1643,14 @@ class _AgentQuotaHostSettingsCopyWithImpl<$R, $Out>
     (v) => call(codexProfiles: v),
   );
   @override
+  AgentHistorySyncSettingsCopyWith<
+    $R,
+    AgentHistorySyncSettings,
+    AgentHistorySyncSettings
+  >
+  get historySync =>
+      $value.historySync.copyWith.$chain((v) => call(historySync: v));
+  @override
   AgentQuotaEnvironmentSettingsCopyWith<
     $R,
     AgentQuotaEnvironmentSettings,
@@ -1597,6 +1675,7 @@ class _AgentQuotaHostSettingsCopyWithImpl<$R, $Out>
     String? selectedClaudeProfile,
     List<CodexQuotaProfileSettings>? codexProfiles,
     String? selectedCodexProfile,
+    AgentHistorySyncSettings? historySync,
     AgentQuotaEnvironmentSettings? environment,
     List<String>? unpinnedQuotaKeys,
   }) => $apply(
@@ -1614,6 +1693,7 @@ class _AgentQuotaHostSettingsCopyWithImpl<$R, $Out>
       if (codexProfiles != null) #codexProfiles: codexProfiles,
       if (selectedCodexProfile != null)
         #selectedCodexProfile: selectedCodexProfile,
+      if (historySync != null) #historySync: historySync,
       if (environment != null) #environment: environment,
       if (unpinnedQuotaKeys != null) #unpinnedQuotaKeys: unpinnedQuotaKeys,
     }),
@@ -1643,6 +1723,7 @@ class _AgentQuotaHostSettingsCopyWithImpl<$R, $Out>
       #selectedCodexProfile,
       or: $value.selectedCodexProfile,
     ),
+    historySync: data.get(#historySync, or: $value.historySync),
     environment: data.get(#environment, or: $value.environment),
     unpinnedQuotaKeys: data.get(
       #unpinnedQuotaKeys,
@@ -1990,6 +2071,164 @@ class _CodexQuotaProfileSettingsCopyWithImpl<$R, $Out>
   CodexQuotaProfileSettingsCopyWith<$R2, CodexQuotaProfileSettings, $Out2>
   $chain<$R2, $Out2>(Then<$Out2, $R2> t) =>
       _CodexQuotaProfileSettingsCopyWithImpl<$R2, $Out2>($value, $cast, t);
+}
+
+class AgentHistorySyncSettingsMapper
+    extends ClassMapperBase<AgentHistorySyncSettings> {
+  AgentHistorySyncSettingsMapper._();
+
+  static AgentHistorySyncSettingsMapper? _instance;
+  static AgentHistorySyncSettingsMapper ensureInitialized() {
+    if (_instance == null) {
+      MapperContainer.globals.use(
+        _instance = AgentHistorySyncSettingsMapper._(),
+      );
+      AgentHistorySyncModeMapper.ensureInitialized();
+    }
+    return _instance!;
+  }
+
+  @override
+  final String id = 'AgentHistorySyncSettings';
+
+  static AgentHistorySyncMode _$mode(AgentHistorySyncSettings v) => v.mode;
+  static const Field<AgentHistorySyncSettings, AgentHistorySyncMode> _f$mode =
+      Field('mode', _$mode, opt: true, def: AgentHistorySyncMode.separate);
+  static Map<String, String> _$accountGroups(AgentHistorySyncSettings v) =>
+      v.accountGroups;
+  static const Field<AgentHistorySyncSettings, Map<String, String>>
+  _f$accountGroups = Field(
+    'accountGroups',
+    _$accountGroups,
+    opt: true,
+    def: const <String, String>{},
+  );
+
+  @override
+  final MappableFields<AgentHistorySyncSettings> fields = const {
+    #mode: _f$mode,
+    #accountGroups: _f$accountGroups,
+  };
+
+  static AgentHistorySyncSettings _instantiate(DecodingData data) {
+    return AgentHistorySyncSettings(
+      mode: data.dec(_f$mode),
+      accountGroups: data.dec(_f$accountGroups),
+    );
+  }
+
+  @override
+  final Function instantiate = _instantiate;
+
+  static AgentHistorySyncSettings fromMap(Map<String, dynamic> map) {
+    return ensureInitialized().decodeMap<AgentHistorySyncSettings>(map);
+  }
+
+  static AgentHistorySyncSettings fromJson(String json) {
+    return ensureInitialized().decodeJson<AgentHistorySyncSettings>(json);
+  }
+}
+
+mixin AgentHistorySyncSettingsMappable {
+  String toJson() {
+    return AgentHistorySyncSettingsMapper.ensureInitialized()
+        .encodeJson<AgentHistorySyncSettings>(this as AgentHistorySyncSettings);
+  }
+
+  Map<String, dynamic> toMap() {
+    return AgentHistorySyncSettingsMapper.ensureInitialized()
+        .encodeMap<AgentHistorySyncSettings>(this as AgentHistorySyncSettings);
+  }
+
+  AgentHistorySyncSettingsCopyWith<
+    AgentHistorySyncSettings,
+    AgentHistorySyncSettings,
+    AgentHistorySyncSettings
+  >
+  get copyWith =>
+      _AgentHistorySyncSettingsCopyWithImpl<
+        AgentHistorySyncSettings,
+        AgentHistorySyncSettings
+      >(this as AgentHistorySyncSettings, $identity, $identity);
+  @override
+  String toString() {
+    return AgentHistorySyncSettingsMapper.ensureInitialized().stringifyValue(
+      this as AgentHistorySyncSettings,
+    );
+  }
+
+  @override
+  bool operator ==(Object other) {
+    return AgentHistorySyncSettingsMapper.ensureInitialized().equalsValue(
+      this as AgentHistorySyncSettings,
+      other,
+    );
+  }
+
+  @override
+  int get hashCode {
+    return AgentHistorySyncSettingsMapper.ensureInitialized().hashValue(
+      this as AgentHistorySyncSettings,
+    );
+  }
+}
+
+extension AgentHistorySyncSettingsValueCopy<$R, $Out>
+    on ObjectCopyWith<$R, AgentHistorySyncSettings, $Out> {
+  AgentHistorySyncSettingsCopyWith<$R, AgentHistorySyncSettings, $Out>
+  get $asAgentHistorySyncSettings => $base.as(
+    (v, t, t2) => _AgentHistorySyncSettingsCopyWithImpl<$R, $Out>(v, t, t2),
+  );
+}
+
+abstract class AgentHistorySyncSettingsCopyWith<
+  $R,
+  $In extends AgentHistorySyncSettings,
+  $Out
+>
+    implements ClassCopyWith<$R, $In, $Out> {
+  MapCopyWith<$R, String, String, ObjectCopyWith<$R, String, String>>
+  get accountGroups;
+  $R call({AgentHistorySyncMode? mode, Map<String, String>? accountGroups});
+  AgentHistorySyncSettingsCopyWith<$R2, $In, $Out2> $chain<$R2, $Out2>(
+    Then<$Out2, $R2> t,
+  );
+}
+
+class _AgentHistorySyncSettingsCopyWithImpl<$R, $Out>
+    extends ClassCopyWithBase<$R, AgentHistorySyncSettings, $Out>
+    implements
+        AgentHistorySyncSettingsCopyWith<$R, AgentHistorySyncSettings, $Out> {
+  _AgentHistorySyncSettingsCopyWithImpl(super.value, super.then, super.then2);
+
+  @override
+  late final ClassMapperBase<AgentHistorySyncSettings> $mapper =
+      AgentHistorySyncSettingsMapper.ensureInitialized();
+  @override
+  MapCopyWith<$R, String, String, ObjectCopyWith<$R, String, String>>
+  get accountGroups => MapCopyWith(
+    $value.accountGroups,
+    (v, t) => ObjectCopyWith(v, $identity, t),
+    (v) => call(accountGroups: v),
+  );
+  @override
+  $R call({AgentHistorySyncMode? mode, Map<String, String>? accountGroups}) =>
+      $apply(
+        FieldCopyWithData({
+          if (mode != null) #mode: mode,
+          if (accountGroups != null) #accountGroups: accountGroups,
+        }),
+      );
+  @override
+  AgentHistorySyncSettings $make(CopyWithData data) => AgentHistorySyncSettings(
+    mode: data.get(#mode, or: $value.mode),
+    accountGroups: data.get(#accountGroups, or: $value.accountGroups),
+  );
+
+  @override
+  AgentHistorySyncSettingsCopyWith<$R2, AgentHistorySyncSettings, $Out2>
+  $chain<$R2, $Out2>(Then<$Out2, $R2> t) =>
+      _AgentHistorySyncSettingsCopyWithImpl<$R2, $Out2>($value, $cast, t);
 }
 
 class AgentQuotaEnvironmentSettingsMapper

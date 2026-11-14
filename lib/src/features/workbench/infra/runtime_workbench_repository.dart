@@ -23,7 +23,8 @@ class RuntimeWorkbenchRepository(
         WorkbenchRepository,
         WorkbenchScopedTabRemovalRepository,
         WorkbenchObservedTabRemovalRepository,
-        WorkbenchViewBoundTabRemovalRepository {
+        WorkbenchViewBoundTabRemovalRepository,
+        WorkbenchTabPinRepository {
   this : _coalescer = coalescer ?? RuntimeChangeCoalescer();
 
   @override
@@ -163,6 +164,25 @@ class RuntimeWorkbenchRepository(
     );
     return _tabFromJson(_asMap(payload)) ??
         (throw StateError('Workspace tab upsert returned a retired tab kind.'));
+  }
+
+  @override
+  Future<WorkspaceTabRecord> compareAndSetWorkspaceTabPinned(
+    WorkspaceTabRecord observed,
+    bool pinned,
+  ) async {
+    await _ensureReady();
+    final payload = await _client.runtimeRequest('tab.pin.cas', {
+      'workspaceId': observed.workspaceId,
+      'id': observed.id,
+      'expectedUpdatedAt': observed.updatedAt.toUtc().toIso8601String(),
+      'expectedPinned': observed.isPinned,
+      'pinned': pinned,
+      'expectedTerminalSessionId':
+          observed.payload[workspaceTabTerminalSessionIdPayloadKey],
+    });
+    return _tabFromJson(_asMap(payload)) ??
+        (throw StateError('Host pin CAS returned an invalid tab'));
   }
 
   @override

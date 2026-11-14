@@ -2,8 +2,9 @@ part of 'alera_settings.dart';
 
 // Ownership: the per-host quota fields the runtime host needs are pushed as
 // `agentQuotas` in `runtimeSettings.update` (runtime operational), while
-// Selected account ids and `unpinnedQuotaKeys` stay local-only preferences and
-// are merged back from the local repository on every load.
+// Selected account ids stay Classic-local UI preferences. Per-account
+// `unpinnedQuotaKeys` is migrated once to Rust desktop shared settings and
+// read back for both Classic and GPUI; older Hosts keep the local fallback.
 
 /// Canonicalizes quota provider ids until the agent descriptor registry is
 /// available through FRB on the Dart side.
@@ -121,6 +122,44 @@ class const AgentQuotaEnvironmentSettings({
       );
 }
 
+/// History synchronization only shares native history within one provider.
+/// Credentials and running-session state are never included.
+@MappableEnum()
+enum AgentHistorySyncMode { all, separate, groups }
+
+@MappableClass()
+class const AgentHistorySyncSettings({
+  this.mode = AgentHistorySyncMode.separate,
+  this.accountGroups = const <String, String>{},
+}) with AgentHistorySyncSettingsMappable {
+  final AgentHistorySyncMode mode;
+
+  /// Group names are scoped by provider; keys are `provider:accountId`.
+  /// An unassigned account stays separate when mode == groups.
+  final Map<String, String> accountGroups;
+
+  static const AgentHistorySyncSettings defaults = AgentHistorySyncSettings();
+
+  bool shouldSync(String provider, String sourceAccount, String targetAccount) {
+    if (sourceAccount == targetAccount ||
+        !const <String>{'codex', 'claude', 'agy'}.contains(provider)) {
+      return false;
+    }
+    return switch (mode) {
+      AgentHistorySyncMode.all => true,
+      AgentHistorySyncMode.separate => false,
+      AgentHistorySyncMode.groups =>
+        (accountGroups['$provider:$sourceAccount']?.trim().isNotEmpty ??
+                false) &&
+            accountGroups['$provider:$sourceAccount']?.trim() ==
+                accountGroups['$provider:$targetAccount']?.trim(),
+    };
+  }
+
+  factory fromJson(Map<String, Object?> json) =>
+      AgentHistorySyncSettingsMapper.fromMap(Map<String, dynamic>.from(json));
+}
+
 @MappableClass()
 class const AgentQuotaHostSettings({
   this.enabledProviders = AgentQuotaProviderId.values,
@@ -131,6 +170,7 @@ class const AgentQuotaHostSettings({
   this.selectedClaudeProfile = 'default',
   this.codexProfiles = const <CodexQuotaProfileSettings>[],
   this.selectedCodexProfile = 'default',
+  this.historySync = AgentHistorySyncSettings.defaults,
   this.environment = AgentQuotaEnvironmentSettings.defaults,
   this.unpinnedQuotaKeys = const <String>[],
 }) with AgentQuotaHostSettingsMappable {
@@ -143,6 +183,7 @@ class const AgentQuotaHostSettings({
   final String selectedClaudeProfile;
   final List<CodexQuotaProfileSettings> codexProfiles;
   final String selectedCodexProfile;
+  final AgentHistorySyncSettings historySync;
   final AgentQuotaEnvironmentSettings environment;
 
   /// Quotas hidden from the status bar (still visible in the overview panel).

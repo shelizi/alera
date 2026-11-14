@@ -79,7 +79,11 @@ void main() {
       expect(seed['general'], isNot(contains('workspaceDirectory')));
       expect(seed['agents'], isNot(contains('quotas')));
       await repository.save(result);
-      expect(client.payloads['configuration.settings.update'], hasLength(1));
+      expect(
+        client.payloads['configuration.settings.update'],
+        isNull,
+        reason: 'No-op Classic saves must not replay stale portable settings over GPUI',
+      );
     },
   );
   test(
@@ -440,13 +444,348 @@ void main() {
       expect(actual.keyboard.overrides.keys.map((id) => id.name), [
         'openSettings',
       ]);
-      await repository.save(actual);
+      await repository.save(
+        actual.copyWith(terminal: actual.terminal.copyWith(fontSize: 21)),
+      );
       final saved = client.payloads['configuration.settings.update']!.single;
       expect(saved['supportedKeyboardActionIds'], contains('openSettings'));
       expect(
         saved['supportedKeyboardActionIds'],
         isNot(contains('futureAction')),
       );
+    },
+  );
+  test('Classic reads and CAS-writes GPUI portable theme, terminal and Agent preferences without stale section overwrite', () async {
+    final legacy = _MemorySettingsRepository();
+    final host = _RecordingRuntimeHostClient()..configurationSupported = true;
+    host.responses['desktopSettings.seedLocal'] = {
+      'values': {
+        'terminal.fontFamily': 'Cascadia Code',
+        'terminal.lineHeight': 1.6,
+        'terminal.cursorShape': 'bar',
+        'terminal.cursorBlink': true,
+        'terminal.themeName': 'Dracula',
+        'terminal.backgroundOpacity': 0.8,
+        'terminal.tuiScrollSensitivity': 2,
+        'terminal.clipboardOnSelect': true,
+        'editor.themeName': 'Tokyo Night Dark',
+        'editor.autosaveDelaySeconds': 7,
+        'editor.quickOpenExcludedDirectories': <String>[
+          'node_modules',
+          'generated',
+        ],
+        'general.showTrayIcon': false,
+        'general.showDockBadge': false,
+        'general.showTrayBadge': true,
+        'agents.agentStatusNotificationsEnabled': true,
+        'agents.agentStatusFinishedNotificationsEnabled': true,
+        'agents.showTabTitlesInSidebar': true,
+      },
+    };
+    host.responses['runtimeSettings.get'] = {
+      'workspaceDirectory': '/shared-workspaces',
+    };
+    final repo = RuntimeSettingsRepository(
+      client: host,
+      legacyRepository: legacy,
+    );
+    final loaded = await repo.load();
+    expect(loaded.terminal.fontFamily, 'Cascadia Code');
+    expect(loaded.terminal.lineHeight, 1.6);
+    expect(loaded.terminal.cursorShape, TerminalCursorShape.bar);
+    expect(loaded.terminal.backgroundOpacity, 0.8);
+    expect(loaded.terminal.clipboardOnSelect, isTrue);
+    expect(loaded.editor.themeName, 'Tokyo Night Dark');
+    expect(loaded.editor.autosaveDelaySeconds, 7);
+    expect(loaded.editor.quickOpenExcludedDirectories, [
+      'node_modules',
+      'generated',
+    ]);
+    expect(loaded.general.showTrayIcon, isFalse);
+    expect(loaded.agents.showTabTitlesInSidebar, isTrue);
+    await repo.compareAndSetSharedDesktopChanges(
+      loaded,
+      loaded.copyWith(
+        editor: loaded.editor.copyWith(
+          quickOpenExcludedDirectories: [
+            ...loaded.editor.quickOpenExcludedDirectories,
+          ],
+        ),
+      ),
+    );
+    expect(
+      host.payloads['desktopSettings.compareAndSetBatch'],
+      isNull,
+      reason:
+          'Structurally identical List values must not generate spurious CAS',
+    );
+    final changed = loaded.copyWith(
+      terminal: loaded.terminal.copyWith(lineHeight: 2.0),
+      editor: loaded.editor.copyWith(
+        autosaveDelaySeconds: 10,
+        quickOpenExcludedDirectories: ['node_modules', 'vendor'],
+      ),
+    );
+    await repo.compareAndSetSharedDesktopChanges(loaded, changed);
+    expect(host.payloads['desktopSettings.compareAndSetBatch'], [
+      {
+        'changes': [
+          {'path': 'terminal.lineHeight', 'expectedValue': 1.6, 'value': 2.0},
+          {
+            'path': 'editor.autosaveDelaySeconds',
+            'expectedValue': 7,
+            'value': 10,
+          },
+          {
+            'path': 'editor.quickOpenExcludedDirectories',
+            'expectedValue': ['node_modules', 'generated'],
+            'value': ['node_modules', 'vendor'],
+          },
+        ],
+      },
+    ]);
+    await repo.save(changed);
+    expect(
+      host.payloads['configuration.settings.update'],
+      isNull,
+      reason: 'Classic must not replay whole portable sections after GPUI CAS writes',
+    );
+    expect(host.payloads['runtimeSettings.update'], isNull);
+  });
+
+  test('Classic imports Drift only once and uses Rust CAS without rewriting GPUI portable values', () async {
+    final legacy = _MemorySettingsRepository();
+    legacy.settings = AleraSettings.defaults.copyWith(
+      general: AleraSettings.defaults.general.copyWith(
+        language: AppLanguage.traditionalChinese,
+        autoGitFetchEnabled: false,
+        autoGitFetchIntervalMinutes: 12,
+      ),
+    );
+    final host = _RecordingRuntimeHostClient()..configurationSupported = true;
+    host.responses['desktopSettings.seedLocal'] = {
+      'values': {
+        'general.language': 'japanese',
+        'general.autoGitFetchEnabled': true,
+        'general.autoGitFetchIntervalMinutes': 8,
+        'terminal.fontSize': 20.0,
+        'editor.autosaveEnabled': true,
+        'editor.tabSize': 2,
+        'general.confirmProjectRemoval': false,
+        'general.confirmWorkspaceRemoval': true,
+        'general.autoArchiveWorkspacesAfterDays': 7,
+        'agents.defaultAgentProfileId': 'prof_alpha',
+      },
+    };
+    host.responses['runtimeSettings.get'] = {
+      'workspaceDirectory': '/native-and-classic',
+    };
+    final repo = RuntimeSettingsRepository(
+      client: host,
+      legacyRepository: legacy,
+    );
+    final loaded = await repo.load();
+    expect(loaded.general.language, AppLanguage.japanese);
+    expect(loaded.general.autoGitFetchEnabled, true);
+    expect(loaded.general.autoGitFetchIntervalMinutes, 8);
+    expect(loaded.terminal.fontSize, 20);
+    expect(loaded.editor.autosaveEnabled, true);
+    expect(loaded.editor.tabSize, 2);
+    expect(loaded.general.confirmProjectRemoval, false);
+    expect(loaded.general.autoArchiveWorkspacesAfterDays, 7);
+    expect(loaded.agents.defaultAgentProfileId, 'prof_alpha');
+    final seeded =
+        host.payloads['desktopSettings.seedLocal']!.single['values']! as Map;
+    expect(seeded['general.language'], 'traditionalChinese');
+    expect(seeded['editor.twoRowTabs'], isFalse);
+
+    final edited = loaded.copyWith(
+      general: loaded.general.copyWith(
+        language: AppLanguage.english,
+        confirmProjectRemoval: true,
+      ),
+      terminal: loaded.terminal.copyWith(fontSize: 22),
+      agents: loaded.agents.copyWith(defaultAgentProfileId: null),
+    );
+    await repo.compareAndSetSharedDesktopChanges(loaded, edited);
+    expect(host.payloads['desktopSettings.compareAndSetBatch'], [
+      {
+        'changes': [
+          {
+            'path': 'general.language',
+            'expectedValue': 'japanese',
+            'value': 'english',
+          },
+          {'path': 'terminal.fontSize', 'expectedValue': 20.0, 'value': 22.0},
+          {
+            'path': 'general.confirmProjectRemoval',
+            'expectedValue': false,
+            'value': true,
+          },
+          {
+            'path': 'agents.defaultAgentProfileId',
+            'expectedValue': 'prof_alpha',
+            'value': null,
+          },
+        ],
+      },
+    ]);
+    await repo.save(edited);
+    expect(
+      host.payloads['configuration.settings.update'],
+      isNull,
+      reason:
+          'All shared portable fields are CAS-owned by the Rust Runtime Host',
+    );
+    expect(
+      host.payloads['runtimeSettings.update'],
+      isNull,
+      reason: 'Shared safety and profile settings are already CAS-owned by the Rust Runtime Host',
+    );
+  });
+
+  test('Classic quota pin preferences migrate to Rust and use account-scoped CAS', () async {
+    final legacy = _MemorySettingsRepository();
+    legacy.settings = AleraSettings.defaults.copyWith(
+      agents: AleraSettings.defaults.agents.copyWith(
+        quotas: AgentQuotaSettings.defaults.withHost(
+          'local',
+          const AgentQuotaHostSettings(
+            selectedClaudeProfile: 'work',
+            unpinnedQuotaKeys: <String>['claude:work'],
+          ),
+        ),
+      ),
+    );
+    final host = _RecordingRuntimeHostClient();
+    host.responses['desktopSettings.seedLocal'] = {
+      'values': {
+        'agents.quotaUnpinnedKeys': <String>['agy'],
+      },
+    };
+    host.responses['runtimeSettings.get'] = {
+      'workspaceDirectory': '/quota-preferences',
+    };
+    final repo = RuntimeSettingsRepository(
+      client: host,
+      legacyRepository: legacy,
+    );
+    final loaded = await repo.load();
+    expect(loaded.agents.quotas.forHost('local').selectedClaudeProfile, 'work');
+    expect(
+      loaded.agents.quotas.forHost('local').unpinnedQuotaKeys,
+      ['agy'],
+      reason:
+          'Previously saved Rust quota pins win over a late Classic local seed',
+    );
+    final seeds = host.payloads['desktopSettings.seedLocal']!;
+    expect(seeds, hasLength(2));
+    expect(seeds.last['values'], {
+      'agents.quotaUnpinnedKeys': ['claude:work'],
+    });
+    final next = loaded.copyWith(
+      agents: loaded.agents.copyWith(
+        quotas: loaded.agents.quotas.withHost(
+          'local',
+          loaded.agents.quotas
+              .forHost('local')
+              .copyWith(unpinnedQuotaKeys: ['agy', 'codex']),
+        ),
+      ),
+    );
+    await repo.compareAndSetSharedDesktopChanges(loaded, next);
+    expect(host.payloads['desktopSettings.compareAndSetBatch'], [
+      {
+        'changes': [
+          {
+            'path': 'agents.quotaUnpinnedKeys',
+            'expectedValue': ['agy'],
+            'value': ['agy', 'codex'],
+          },
+        ],
+      },
+    ]);
+  });
+
+  test('older Host keeps Classic quota pin preference as local-only', () async {
+    final legacy = _MemorySettingsRepository();
+    final host = _RecordingRuntimeHostClient();
+    host.responses['desktopSettings.seedLocal'] = {
+      'values': {'editor.twoRowTabs': false},
+    };
+    host.responses['runtimeSettings.get'] = {
+      'workspaceDirectory': '/older-runtime-host',
+    };
+    final repository = RuntimeSettingsRepository(
+      client: host,
+      legacyRepository: legacy,
+    );
+    final loaded = await repository.load();
+    expect(host.payloads['desktopSettings.seedLocal'], hasLength(1),
+        reason: 'Old Host must not see unknown quota pin migration keys');
+    final changed = loaded.copyWith(
+      agents: loaded.agents.copyWith(
+        quotas: loaded.agents.quotas.withHost(
+          'local',
+          loaded.agents.quotas.forHost('local').copyWith(
+            unpinnedQuotaKeys: ['agy'],
+          ),
+        ),
+      ),
+    );
+    await repository.compareAndSetSharedDesktopChanges(loaded, changed);
+    expect(host.payloads['desktopSettings.compareAndSetBatch'], isNull);
+    await repository.save(changed);
+    expect(legacy.settings.agents.quotas.forHost('local').unpinnedQuotaKeys,
+        ['agy']);
+  });
+
+  test(
+    'Two-row Tab preference migrates locally and uses the shared Host CAS',
+    () async {
+      final legacy = _MemorySettingsRepository()
+        ..settings = AleraSettings.defaults.copyWith(
+          editor: AleraSettings.defaults.editor.copyWith(twoRowTabs: true),
+        );
+      final host = _RecordingRuntimeHostClient()..configurationSupported = true;
+      host.responses['desktopSettings.seedLocal'] = {
+        'values': {'editor.twoRowTabs': false},
+      };
+      host.responses['runtimeSettings.get'] = {
+        'workspaceDirectory': '/tab-settings',
+      };
+      final repo = RuntimeSettingsRepository(
+        client: host,
+        legacyRepository: legacy,
+      );
+      final loaded = await repo.load();
+      expect(
+        loaded.editor.twoRowTabs,
+        isFalse,
+        reason: 'An existing Host value wins over an old Classic local value',
+      );
+      final seed =
+          host.payloads['desktopSettings.seedLocal']!.single['values']! as Map;
+      expect(seed['editor.twoRowTabs'], isTrue);
+
+      final changed = loaded.copyWith(
+        editor: loaded.editor.copyWith(twoRowTabs: true),
+      );
+      await repo.compareAndSetSharedDesktopChanges(loaded, changed);
+      expect(host.payloads['desktopSettings.compareAndSetBatch'], [
+        {
+          'changes': [
+            {
+              'path': 'editor.twoRowTabs',
+              'expectedValue': false,
+              'value': true,
+            },
+          ],
+        },
+      ]);
+      await repo.save(changed);
+      expect(host.payloads['configuration.settings.update'], isNull);
+      expect(host.payloads['runtimeSettings.update'], isNull);
     },
   );
 }
@@ -472,6 +811,9 @@ final class _RecordingRuntimeHostClient
     Duration? timeout,
   ]) async {
     payloads.putIfAbsent(type, () => <Map<String, Object?>>[]).add(payload);
+    if (type == 'desktopSettings.seedLocal' && !responses.containsKey(type)) {
+      throw StateError('Older Host: shared desktop settings not supported');
+    }
     if (type == 'configuration.settings.update' && failConfigurationUpdate) {
       throw StateError('Runtime unavailable');
     }

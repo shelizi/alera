@@ -3,7 +3,7 @@ import 'dart:io';
 
 import 'package:code_forge/code_forge.dart';
 import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
+import 'package:alera/src/shared/infra/storage/alera_support_directory.dart';
 
 import '../../../shared/infra/files/path_identity.dart';
 import '../../../shared/infra/process/command_path_probe.dart';
@@ -125,7 +125,7 @@ final class CodeForgeLanguageServerRuntime
     transportFactory:
         transportFactory ??
         (spec) => _startCodeForgeTransport(spec, processStarter),
-    supportDirectory: supportDirectory ?? getApplicationSupportDirectory,
+    supportDirectory: supportDirectory ?? aleraApplicationSupportDirectory,
     managedInstaller:
         managedInstaller ??
         ManagedLanguageServerInstaller(

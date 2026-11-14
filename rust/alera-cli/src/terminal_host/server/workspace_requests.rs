@@ -66,6 +66,24 @@ impl<'a> WorkspaceRequestHandler<'a> {
                     Some(project_id),
                 )
             }
+            "workspace.setArchived" => {
+                let id = require_string_key(payload, "id")?;
+                let archived = payload
+                    .get("archived")
+                    .and_then(Value::as_bool)
+                    .ok_or_else(|| HostError::format("archived is required."))?;
+                let workspace = self
+                    .runtime_store
+                    .set_workspace_archived(&id, archived)
+                    .await
+                    .map_err(|error| HostError::state(error.to_string()))?;
+                let project_id = workspace.project_id.clone();
+                (
+                    serde_json::to_value(workspace)
+                        .map_err(|error| HostError::state(error.to_string()))?,
+                    Some(project_id),
+                )
+            }
             "workspace.setPinned" => {
                 let id = require_string_key(payload, "id")?;
                 let is_pinned = payload

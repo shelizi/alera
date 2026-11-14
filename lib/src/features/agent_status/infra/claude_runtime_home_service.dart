@@ -9,7 +9,7 @@ import 'package:alera/src/shared/infra/process/rust_process_runner.dart';
 import 'package:crypto/crypto.dart';
 import 'package:meta/meta.dart';
 import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
+import 'package:alera/src/shared/infra/storage/alera_support_directory.dart';
 
 part 'claude_runtime_resources.dart';
 part 'claude_runtime_hooks.dart';
@@ -68,7 +68,7 @@ final class ClaudeRuntimeHomeService({
     : _environment = environment ?? Platform.environment,
       _homeDirectory = homeDirectory ?? _resolveHome(environment),
       _applicationSupportDirectory =
-          applicationSupportDirectory ?? getApplicationSupportDirectory,
+          applicationSupportDirectory ?? aleraApplicationSupportDirectory,
       _platform =
           platform ??
           (Platform.isWindows

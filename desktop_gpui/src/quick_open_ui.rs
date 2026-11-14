@@ -14,6 +14,27 @@ use std::ops::Range;
 use std::time::Instant;
 use unicode_segmentation::UnicodeSegmentation;
 
+// A late Windows IME event must never enter *any* previously focused input.
+// Terminal and Explorer share a native HWND; OS focus alone cannot distinguish them.
+fn accepts_native_text_event(has_focus: bool) -> bool {
+    has_focus
+}
+
+/// Drop only the provisional marked text when an Explorer input loses focus.
+/// Previously committed query content must survive a Terminal focus switch.
+fn remove_marked_preedit(text: &mut String, marked: Option<Range<usize>>) -> Option<usize> {
+    let range = marked?;
+    if range.start > range.end
+        || range.end > text.len()
+        || !text.is_char_boundary(range.start)
+        || !text.is_char_boundary(range.end)
+    {
+        return None;
+    }
+    text.replace_range(range.clone(), "");
+    Some(range.start)
+}
+
 actions!(
     alera_gpui_quick_open,
     [QueryBackspace, QuerySelectAll, QueryPaste]
@@ -32,7 +53,7 @@ pub fn bind_quick_open_keys(cx: &mut App) {
 pub struct QuickOpenInput {
     focus: FocusHandle,
     text: String,
-    placeholder: &'static str,
+    placeholder: String,
     terminal_mode: bool,
     selection: Range<usize>,
     marked: Option<Range<usize>>,
@@ -45,11 +66,11 @@ impl QuickOpenInput {
         Self::with_placeholder("Type to filter files…", cx)
     }
 
-    pub fn with_placeholder(placeholder: &'static str, cx: &mut Context<Self>) -> Self {
+    pub fn with_placeholder(placeholder: impl Into<String>, cx: &mut Context<Self>) -> Self {
         Self {
             focus: cx.focus_handle(),
             text: String::new(),
-            placeholder,
+            placeholder: placeholder.into(),
             terminal_mode: false,
             selection: 0..0,
             marked: None,
@@ -66,6 +87,12 @@ impl QuickOpenInput {
 
     pub fn query(&self) -> &str {
         &self.text
+    }
+
+    /// Change a localized hint without changing the user's search query.
+    pub fn set_placeholder(&mut self, value: impl Into<String>, cx: &mut Context<Self>) {
+        self.placeholder = value.into();
+        cx.notify();
     }
 
     pub fn composing(&self) -> bool {
@@ -98,6 +125,16 @@ impl QuickOpenInput {
         // duplicate marker from the previous Host session.
         self.terminal_commit_gate = TerminalTextCommitGate::default();
         cx.notify();
+    }
+
+    /// Cancel an uncommitted Windows IME preedit without erasing the user's
+    /// previously committed Explorer search query.
+    pub fn discard_marked_preedit(&mut self, cx: &mut Context<Self>) {
+        let marked = self.marked.take();
+        if let Some(cursor) = remove_marked_preedit(&mut self.text, marked) {
+            self.selection = cursor..cursor;
+            cx.notify();
+        }
     }
 
     /// Select a known local branch from the Git Graph without synthesizing
@@ -235,9 +272,25 @@ impl EntityInputHandler for QuickOpenInput {
         &mut self,
         range: Option<Range<usize>>,
         text: &str,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let focused = self.focus.is_focused(window);
+        if std::env::var_os("ALERA_GPUI_TSF_TRACE").is_some() {
+            // Never print user input, only focus/length metadata.
+            eprintln!(
+                "Alera GPUI TSF: input event=commit terminal={} focused={} chars={}",
+                self.terminal_mode,
+                focused,
+                text.chars().count()
+            );
+        }
+        if !accepts_native_text_event(focused) {
+            if std::env::var_os("ALERA_GPUI_TSF_TRACE").is_some() {
+                eprintln!("Alera GPUI TSF: drop unfocused Terminal text commit");
+            }
+            return;
+        }
         self.replace(range, text, false, cx);
     }
 
@@ -246,9 +299,24 @@ impl EntityInputHandler for QuickOpenInput {
         range: Option<Range<usize>>,
         text: &str,
         _: Option<Range<usize>>,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let focused = self.focus.is_focused(window);
+        if std::env::var_os("ALERA_GPUI_TSF_TRACE").is_some() {
+            eprintln!(
+                "Alera GPUI TSF: input event=preedit terminal={} focused={} chars={}",
+                self.terminal_mode,
+                focused,
+                text.chars().count()
+            );
+        }
+        if !accepts_native_text_event(focused) {
+            if std::env::var_os("ALERA_GPUI_TSF_TRACE").is_some() {
+                eprintln!("Alera GPUI TSF: drop unfocused Terminal preedit");
+            }
+            return;
+        }
         self.replace(range, text, true, cx);
     }
 
@@ -359,6 +427,13 @@ impl Render for QuickOpenInput {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, window, cx| {
+                    if std::env::var_os("ALERA_GPUI_TSF_TRACE").is_some() {
+                        eprintln!(
+                            "Alera GPUI TSF: input click terminal={} focused_before={}",
+                            this.terminal_mode,
+                            this.focus.is_focused(window)
+                        );
+                    }
                     window.focus(&this.focus, cx);
                 }),
             )
@@ -375,5 +450,31 @@ impl Render for QuickOpenInput {
             })
             .child(QuickOpenCapture { input: cx.entity() })
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{accepts_native_text_event, remove_marked_preedit};
+
+    #[test]
+    fn both_terminal_and_explorer_reject_delayed_ime_events_after_blur() {
+        assert!(accepts_native_text_event(true));
+        assert!(!accepts_native_text_event(false));
+    }
+
+    #[test]
+    fn blur_discards_only_uncommitted_zhuyin_without_erasing_committed_query() {
+        let mut query = "已搜尋ㄇ檔案".to_owned();
+        let start = "已搜尋".len();
+        assert_eq!(
+            remove_marked_preedit(&mut query, Some(start..start + "ㄇ".len())),
+            Some(start)
+        );
+        assert_eq!(query, "已搜尋檔案");
+        assert_eq!(remove_marked_preedit(&mut query, None), None);
+        assert_eq!(query, "已搜尋檔案");
+        assert_eq!(remove_marked_preedit(&mut query, Some(0..1)), None);
+        assert_eq!(query, "已搜尋檔案");
     }
 }
