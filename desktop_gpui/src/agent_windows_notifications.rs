@@ -93,6 +93,7 @@ mod windows_toast {
     use std::collections::VecDeque;
     use std::path::PathBuf;
     use std::sync::mpsc::{self, Receiver, Sender};
+    use std::time::{Duration, Instant};
     use windows::core::{IInspectable, HSTRING};
     use windows::Data::Xml::Dom::XmlDocument;
     use windows::Foundation::TypedEventHandler;
@@ -108,6 +109,7 @@ mod windows_toast {
         failure_tx: Sender<String>,
         failure_rx: Receiver<String>,
         activation_store: Option<NativeToastActivationStore>,
+        cold_start_fallback_after: Option<Instant>,
         activation_tokens: VecDeque<(String, AgentNotice)>,
         live_toasts: VecDeque<ToastNotification>,
     }
@@ -116,7 +118,19 @@ mod windows_toast {
         pub fn new() -> Self {
             let state_dir = crate::session::PreviewSessionStore::platform_default()
                 .map(|store| store.state_dir().to_path_buf());
-            Self::with_state_dir(state_dir)
+            let mut presenter = Self::with_state_dir(state_dir);
+            // Only a Windows LocalServer32 cold launch can use the unique
+            // pending-notice fallback. First give normal COM a chance to
+            // deliver the exact launch token; ordinary app starts never guess.
+            let launched_from_toast = std::env::args_os().skip(1).any(|arg| {
+                arg.to_string_lossy()
+                    .eq_ignore_ascii_case("-ToastActivated")
+            });
+            if launched_from_toast {
+                presenter.cold_start_fallback_after =
+                    Instant::now().checked_add(Duration::from_secs(4));
+            }
+            presenter
         }
 
         pub fn with_state_dir(state_dir: Option<PathBuf>) -> Self {
@@ -128,6 +142,7 @@ mod windows_toast {
                 failure_tx,
                 failure_rx,
                 activation_store: state_dir.map(NativeToastActivationStore::new),
+                cold_start_fallback_after: None,
                 activation_tokens: VecDeque::new(),
                 live_toasts: VecDeque::new(),
             }
@@ -264,6 +279,28 @@ mod windows_toast {
                         .activation_tokens
                         .remove(index)
                         .map(|(_, notice)| notice);
+                }
+            }
+            if self
+                .cold_start_fallback_after
+                .is_some_and(|deadline| Instant::now() >= deadline)
+            {
+                self.cold_start_fallback_after = None;
+                if let Some(store) = &self.activation_store {
+                    match store.take_unique_pending_notice() {
+                        Ok(Some(notice)) => {
+                            eprintln!("Alera Native: recovered a unique cold-start Windows toast");
+                            return Some(notice);
+                        }
+                        Ok(None) => {
+                            eprintln!(
+                                "Alera Native: no unique pending toast; not guessing Agent tab"
+                            );
+                        }
+                        Err(error) => {
+                            eprintln!("Alera Native: cold-start toast recovery failed: {error}");
+                        }
+                    }
                 }
             }
             None

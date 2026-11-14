@@ -242,6 +242,38 @@ impl NativeToastActivationStore {
         }
     }
 
+    /// Windows may start the LocalServer32 executable without delivering the
+    /// toast's COM Activate payload. Only a cold-start explicitly marked as a
+    /// toast launch may use this conservative fallback: exactly one pending
+    /// Native token must exist. Never guess when multiple notices are pending.
+    /// The DPAPI record still needs to pass expiry and typed-identity checks.
+    pub fn take_unique_pending_notice(&self) -> io::Result<Option<AgentNotice>> {
+        let entries = match fs::read_dir(&self.state_dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        let mut selected: Option<String> = None;
+        for entry in entries {
+            let entry = entry?;
+            let path = entry.path();
+            if !path.extension().is_some_and(|ext| ext == "dpapi") {
+                continue;
+            }
+            let Some(stem) = path.file_stem().and_then(|name| name.to_str()) else {
+                return Ok(None);
+            };
+            let token = format!("{TOKEN_PREFIX}{stem}");
+            if !valid_token(&token) || selected.replace(token).is_some() {
+                return Ok(None);
+            }
+        }
+        match selected {
+            Some(token) => self.take_notice(&token),
+            None => Ok(None),
+        }
+    }
+
     pub fn contains(&self, token: &str) -> io::Result<bool> {
         Ok(self.token_path(token)?.is_file())
     }
@@ -540,6 +572,36 @@ mod tests {
                 .expect("expiry check"),
             None
         );
+    }
+
+    #[test]
+    fn h03_unique_cold_start_toast_recovers_single_notice_and_refuses_ambiguity() {
+        let temp = tempfile::tempdir().expect("isolated Native activation state");
+        let store = NativeToastActivationStore::new(temp.path());
+        assert_eq!(store.take_unique_pending_notice().unwrap(), None);
+        let notice = AgentNotice {
+            session_id: "host-h03-fallback".into(),
+            workspace_id: "workspace-h03-fallback".into(),
+            tab_id: "tab-h03-fallback".into(),
+            agent_type: "codex".into(),
+            state: AgentActivityState::Waiting,
+        };
+        let first = new_token().expect("random token");
+        store.store_notice(&first, &notice).expect("DPAPI persist");
+        assert_eq!(
+            store.take_unique_pending_notice().unwrap(),
+            Some(notice.clone())
+        );
+        assert!(!store.contains(&first).unwrap());
+        assert_eq!(store.take_unique_pending_notice().unwrap(), None);
+
+        let second = new_token().expect("another token");
+        let third = new_token().expect("another token");
+        store.store_notice(&second, &notice).unwrap();
+        store.store_notice(&third, &notice).unwrap();
+        assert_eq!(store.take_unique_pending_notice().unwrap(), None);
+        assert!(store.contains(&second).unwrap());
+        assert!(store.contains(&third).unwrap());
     }
 
     /// Child-process endpoint for the cross-process COM roundtrip test.

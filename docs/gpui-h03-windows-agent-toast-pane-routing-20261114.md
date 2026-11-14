@@ -73,6 +73,17 @@ Rust Windows 專項 h03_com_（COM callback、錯 App ID 拒絕、ClassFactory�
 - **真 Windows Action Center 點擊 1/1 PASS（選擇式 Smoke）**：以新版真 `alera-gpui-desktop.exe` 註冊 Native 專用 `LocalServer32` 與開始選單捷徑；Cargo Runner **不註冊 COM Factory**。發送合成 Waiting Agent Toast 後，通知中心 History `Ok(8)`、在 Windows 桌面實際點擊，真正 Native LocalServer 程序取用 DPAPI 一次性 Token，測試 **1 PASS／0 FAIL**；桌面截圖亦確認新的 Alera Native GPUI 視窗載入既有工作區。隨後正常關閉測試視窗，Native 專用 HKCU COM 登錄及 Start Menu 捷徑 **Uninstall PASS／Check missing PASS**，Classic 未動。
 - **驗收邊界**：合成通知只證明 **Action Center → COM → 新 Native 程序 → Token → GUI 開啟**；真 Agent Waiting／Done 經 Host 再驗證並聚焦到指定 Pane／跨 Workspace 仍待真 Host GUI 正向驗收。Classic／Native 的正式獨佔通知 owner 尚未實作，正式版 Native 仍禁重複發送，`supported=false`，不合併主線／Push／部署。
 
+## 第五階段：通知點擊冷啟動的間歇性缺口（2026-11-14）
+
+在已完成的真實 Action Center 點擊 PASS（Commit `9af721603`）之後，同一 Windows 環境再次出現**點擊確實啟動 Native GUI，但 60 秒未取用 DPAPI Token**的結果（合成通知 OS 點擊 Smoke **0/1 FAIL**）。因此單次成功不能視為此路徑穩定結案。該次測試的 Native-only HKCU COM／捷徑已在 `finally` 還原，並關閉該次測試啟動的 Native 程序。
+
+為完成日常**單一 Agent 提醒**的冷啟動功能，保留精確 COM Token 回呼為第一優先；僅當 Windows 透過固定 `-ToastActivated` 參數啟動**新 Native 程序**、在等待 COM 回呼四秒後仍未收到 Token，才檢查 Native 專用 DPAPI 儲存區。若**恰好只有一個**格式正確的待處理 Token，才一次性解密、檢查到期與 Host 身分並交回既有 Workspace／Pane 導航；有兩個以上則完全不猜測。一般啟動／普通 Workspace 參數沒有這條回退路徑；不能擴張為 Native 正式 Toast owner。
+
+- Windows H03 Library 專項 **10 PASS／0 FAIL／1 預設 ignored**，新增 `h03_unique_cold_start_toast_recovers_single_notice_and_refuses_ambiguity` 驗證一則可還原、零則／多則拒絕、Token 一次性消耗。
+- Native GUI EXE 已增量 `cargo build --offline --locked --bin alera-gpui-desktop -j 4` **PASS**，Cargo fmt 與 Git diff check **PASS**。
+- 第二次 OS 點擊重驗時，Windows 測試 Toast 已成功投遞，但遠端桌面同時有其他操作、點擊工具發生 `CURSOR_POSITION_MISMATCH`，無法可靠點到通知；等待 60 秒後測試 **0/1 FAIL（未完成點擊，不能用來判斷回退功能有效或失效）**。Native-only 註冊與捷徑自動卸載 **PASS**。不得把新的冷啟動回退冒稱 OS Click PASS。
+- 仍待一般真 Host GUI 正向驗收：Agent Waiting／Done → 單一 Toast → Native → 已認證 Host Session → Workspace／Pane 聚焦；以及 Classic／Native 共享 Host 的獨佔通知 owner。維持 `supported=false`、不合 `main`、不 Push／部署。
+
 ## 完成邊界與下一步
 
 - 已驗證：Agent 通知的核心冷卻、狀態聚合、失效防護；本輪新增雙 Pane 精確路由與 Stale Host 身分拒絕。
