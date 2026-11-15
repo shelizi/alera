@@ -95,6 +95,23 @@ pub fn matching_host_tab_handle<'a>(
         .map(|session| session.handle.as_str())
 }
 
+/// A fresh MCP editor tab may be created only when the path has no existing
+/// live writable buffer. Classic allows duplicate views of one file, but Native
+/// currently owns each writable buffer exactly once across both panes; avoid
+/// silently treating a reused tab as successful `openMode=new`.
+/// Returns true only when a brand-new file-backed editor tab is required.
+pub fn native_mcp_file_open_requires_new(
+    mode: &str,
+    file_already_open: bool,
+) -> Result<bool, &'static str> {
+    match (mode, file_already_open) {
+        ("reuse", _) => Ok(false),
+        ("new", false) => Ok(true),
+        ("new", true) => Err("ui_not_ready"),
+        _ => Err("ui_not_ready"),
+    }
+}
+
 pub struct NativeMcpUiBridge {
     child: Child,
     stdin: ChildStdin,
@@ -282,6 +299,47 @@ impl Drop for NativeMcpUiBridge {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mcp_open_new_creates_only_a_fresh_file_tab_never_reuses_existing() {
+        assert_eq!(native_mcp_file_open_requires_new("reuse", false), Ok(false));
+        assert_eq!(native_mcp_file_open_requires_new("reuse", true), Ok(false));
+        assert_eq!(native_mcp_file_open_requires_new("new", false), Ok(true));
+        assert_eq!(
+            native_mcp_file_open_requires_new("new", true),
+            Err("ui_not_ready")
+        );
+        for invalid in ["", "new-window", "NEW", "split", "../new"] {
+            assert_eq!(
+                native_mcp_file_open_requires_new(invalid, false),
+                Err("ui_not_ready")
+            );
+        }
+
+        let workspace = tempfile::tempdir().unwrap();
+        let root = workspace.path();
+        let existing = root.join("already-open.rs");
+        let other = root.join("new-tab.rs");
+        std::fs::write(&existing, "let dirty = true;").unwrap();
+        std::fs::write(&other, "let new_file = true;").unwrap();
+        let mut tabs = crate::editor_tabs::EditorTabs::new(None);
+        tabs.open_file(root, &existing).unwrap();
+        tabs.document_mut()
+            .unwrap()
+            .replace(None, "\nunsaved")
+            .unwrap();
+        let old_instance = tabs.tab_instance_at(tabs.active_index().unwrap()).unwrap();
+        assert!(native_mcp_file_open_requires_new("new", true).is_err());
+        assert!(native_mcp_file_open_requires_new("new", false).unwrap());
+        tabs.open_file(root, &other).unwrap();
+        assert_eq!(tabs.tab_labels().len(), 2);
+        assert_ne!(
+            tabs.tab_instance_at(tabs.active_index().unwrap()),
+            Some(old_instance)
+        );
+        tabs.activate(tabs.index_for_instance(old_instance).unwrap());
+        assert!(tabs.document().unwrap().is_dirty());
+    }
 
     #[test]
     fn native_mcp_ui_events_are_window_bound_and_bounded() {

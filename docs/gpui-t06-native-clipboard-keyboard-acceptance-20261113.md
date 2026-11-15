@@ -1,0 +1,71 @@
+# Alera GPUI T06：Windows Terminal 剪貼簿、鍵盤與雙 Pane 正向驗收（2026-11-13）
+
+起始 HEAD `086cc62d5`，工作分支 `integrate/gpui-central-diff-into-main-20261112`。本輪從已切換 Alacritty Terminal Core 的 GPUI 繼續 T06。修改僅限 GPUI Native Terminal 輸入事件、Pane Copy 及 TDD；**Classic Flutter、正式 Host／PTY 不改**。
+
+## 實際修正
+
+- 統一 `terminal_clipboard_shortcut`：**Ctrl+Shift+C → 複製目前 Pane**、**Ctrl+V／Ctrl+Shift+V → 貼上到目前 Pane**；普通 **Ctrl+C 仍傳送 PTY Ctrl-C**，不是 GUI 複製。
+- 貼上使用 `terminal_clipboard_payload` 保持 Host 原本 **4 KiB** 單次寫入上限，拒絕空字串／NUL；由 Alacritty 的 `TermMode::BRACKETED_PASTE` 判斷 TUI 是否需使用 `ESC[200~…ESC[201~`。由現有非起動式 Host input queue／已觀測 Stream 發送，不新增命令列或 PTY。
+- `copy_terminal_text_for_pane` 依照 **PaneSlot 和完整 Host tab context** 選擇資料來源；右側 Pane 的 Ctrl+Shift+C 和 GPUI Kit Context Menu Copy 不再固定複製主 Pane。已選取的 VT rows 保留原有 Host identity／輸出游標 stale 防護。
+- 右側 VT rows 新增滑鼠選取、高亮與選取完成回呼；單一 `TerminalLineSelection` 繼續綁定精確 Host 身分，並將合法 rows 上限由 100 調整為與目前 preview 相同的 **200**。不對任何 Host PTY 發出選取或複製相關控制序列。
+- 主窗格 VT／Transcript 兩個按鍵入口共用 `send_terminal_key_for_pane`，消除 Ctrl+Shift+C 的重複特殊處理；清除已停用的舊主窗格 copy wrapper。
+
+## TDD 與 Windows 編譯
+
+| 檢查 | 結果 |
+| --- | --- |
+| TDD RED | 新 `native_terminal_clipboard_shortcuts_and_bracketed_paste_are_safe` 在 helper 尚未建立時出現 E0432／E0425 編譯失敗；新增 helper 後 GREEN |
+| TDD 新案例 | shortcut Ctrl+Shift+C、Ctrl+V、Ctrl+Shift+V、Ctrl+C 不被攔截、Alt／Platform 排除、bracketed paste 與超長／NUL 保護 PASS；新增 200-row Host snapshot selection 回歸 PASS |
+| GPUI Library | `cargo test --offline --locked --lib -- --skip git_history::tests::explicit_full_history_search_finds_old_subject_and_message_body_beyond_page_limit`：**522 PASS、0 FAIL、1 FILTERED**。被排除的既有 Git History 長測本輪未執行，不得宣稱 523/523 |
+| Native Binary | `cargo test --offline --locked --bin alera-gpui-desktop`：**31 PASS、0 FAIL** |
+| Windows EXE | `cargo build --offline --locked --bin alera-gpui-desktop`：**PASS**，清理 unused wrapper 後重新編譯，未回報 warning |
+| 格式 | `cargo fmt --all -- --check`、`git diff --check`：PASS |
+
+## 隔離 Windows GUI 與 Host 正向驗收
+
+- GUI state：`desktop_gpui/target/smoke-t06-keyboard-state-20261113`；Host Runtime：`desktop_gpui/target/smoke-t06-keyboard-runtime-20261113`；Workspace：既有 protected `.gpui-center-diff-smoke`。與 Classic／正式 Host 完全隔離。
+- GPUI `+ → New Terminal` 新建主窗格 `cmd.exe`，使用 GUI 文字與 Enter 真實執行 `echo t06_keyboard_ready`。
+- 儲存原本的純文字剪貼簿內容到 **Windows DPAPI CurrentUser 加密的短暫測試備份**，先後測試 `Ctrl+V` 與 `Ctrl+Shift+V`：Windows CMD 真實回應 `T06_CTRL_V_MARKER`、`T06_CTRL_SHIFT_V_MARKER`；最後以 DPAPI 還原原文並移除加密備份，不留下原始剪貼簿測試檔。
+- 建立第二個 `cmd.exe`，右鍵 `Move to second pane`。右 Pane GUI 輸入 `echo T06_SECONDARY_COPY_ONLY`，`Ctrl+Shift+C` 後讀取 OS clipboard：**包含右側標記、沒有任何左側 CTRL_V／CTRL_SHIFT_V 標記**。切回左側並執行 `echo T06_PRIMARY_COPIED_OK`，左側 `Ctrl+Shift+C` 後 clipboard **有左側標記且沒有右側標記**。兩側複製對象正確。
+- GUI 直接輸入並執行 `echo 繁體輸入測試`，畫面及 Host read 都正確含 `繁體輸入測試`；證實**提交後的 Unicode 文字**路徑可用，但此步不是注音候選字視窗測試。
+- 在主 Terminal 文字行嘗試普通 `Ctrl+C` 後，再執行 `echo T06_CTRL_C_STILL_ALIVE`：Host 讀回正確，PTY 仍 running，Ctrl+C 沒有被 Copy shortcut 攔截。
+- 主 Host handle：`071f357a-2da4-4e6a-abd4-9618dfb40729`；副 Host handle：`2033e4fb-396b-4083-8eca-69d9b76e8d45`。CLI `terminal --no-start list/read` 確認兩個 running Session，左側輸出含 CTRL_V／SHIFT_V／Unicode／CTRL_C 存活標記、沒有右側標記；右側只有右側標記，不混流。
+- **注音候選字尚未通過**：Windows keyboard HKL 回報 `04040404`（繁中台灣鍵盤）；注音按鍵模擬 `su3` 未出現可確認的候選窗，文字進入 CMD 為 ASCII。不能判斷是 IME 當時處於英文模式、桌面輸入模擬方式還是 GPUI TSF 的組字介面，因此不可把它當作 Microsoft Bopomofo 實際選字 PASS，也尚不能斷言是產品故障；下一階段需在實際中文 IME 候選視窗與 commit 的端到端流程驗收。
+- GUI 僅正常關閉本次 PID `40432`，只停專用 Host Runtime（停止前兩個 PTY）；受保護巢狀 fixture 原狀 `M center-diff-smoke.txt`、`?? center-diff-source-switch-untracked.txt`，`target/` 未提交／清理。
+
+## 後續與範圍
+
+- **已通過：T06 常用鍵盤 Ctrl+C、Ctrl+V、Ctrl+Shift+V、Ctrl+Shift+C、雙 Pane Copy 與 Unicode 直接提交。**
+- **NOW 仍是 T06**：真正 Windows 注音 IME 候選視窗及選字確認；副 Pane 滑鼠多列拖選在此輪有程式／純測試但尚未獨立 GUI 拖選驗收，不宣稱完成。若正常情境查到確實缺口，再修正。
+- `supported=false` 不變；未合 `main`、Push、部署或 Release。
+## 2026-11-13 延續：注音標記期間的 KeyDown 防誤送
+
+- 共用 `TerminalKeyDispatch` 對主、副 Pane 的 KeyDown 分流：只要對應的 `QuickOpenInput::composing()` 為真，注音聲母／韻母的 ASCII KeyDown、空白／Enter／Backspace 候選控制，以及 Ctrl+Shift+C／V 都不進 Host PTY／剪貼簿，保留原生 TSF TextInput 組字及提交。離開 marked composition 後，恢復原本 Ctrl+C 的 PTY 中斷與複製／貼上快捷鍵。已有非 ASCII 的 TextInput commit 路徑不變。
+- TDD 先新增 `native_ime_preedit_blocks_raw_pty_keys_and_clipboard_shortcuts`：修正前編譯因缺少分流型別／函式 RED（E0432／E0425），補齊主副 Pane 共用路由後 GREEN（1/1）。
+- Windows 本機程式回歸：Rust Library **523 PASS／0 FAIL／1 FILTERED**（沿用排除既有 Git History 長測）；Native Binary **31/31 PASS**、`cargo build --offline --locked --bin alera-gpui-desktop` PASS、`cargo fmt --all -- --check`、`git diff --check` PASS。
+- **不宣稱 Windows 注音候選 GUI PASS。** 本輪桌面已有其他前景程式，未搶佔鍵盤焦點或切換 Windows 使用者輸入法；本輪僅保證「收到 marked preedit 之後」不向 PTY 洩漏候選按鍵，不代表第一個注音鍵已正確啟動 TSF，也不代表候選視窗、選字提交一定正常。上輪 Unicode 字元直接輸入 PASS 是獨立驗收，不替代本項。
+- 下一個 T06 真實流程：確認 Microsoft Bopomofo 為**中文模式**、從 Terminal 主 Pane 輸入注音並觀察候選清單及選字後 Host 讀回；重做副 Pane；檢查 Enter、Backspace、Escape、Ctrl+C 以及切 Pane／失焦期間不會將未提交組字誤送其他 Host。副 Pane 多列滑鼠拖選仍需 GUI 實測。
+- 僅改 GPUI Native 的 `main.rs`、`terminal.rs` 與本驗收／追蹤文件；Classic、正式 Host／PTY 未更動；`supported=false`，未合 main、Push、部署或 Release。
+
+## 2026-11-13 Windows 真正 Microsoft Bopomofo T06 正向結案
+
+工作樹：`integrate/gpui-central-diff-into-main-20261112`，起始 HEAD `736f7dbd1`。本輪在 GPUI Native 增加查詢式 Windows IMM 模式判斷：僅在前景 GPUI 窗口的 IME **已開啟且 conversion mode 為 NATIVE** 時，將尚未有 marked preedit 的首個可列印 ASCII 交給 TSF；不切換系統輸入法、不控制其他視窗、未知模式沿用 PTY 鍵盤輸入。已標記的組字則繼續使用上一輪 `TerminalKeyDispatch` 防誤送。注意：不將外部對 IMM 相容層的觀測視為 Microsoft 注音全部行為的證明，實際驗收以下述 GUI＋Host 獨立讀回為準。
+
+### TDD／Windows 編譯
+
+- 先新增 `active_windows_native_ime_routes_first_phonetic_key_to_text_input`，修改前因 `terminal_key_dispatch` 缺第八參數出現 E0061（TDD RED）；新增首鍵路由後 GREEN。另新增 `win_ime::tests::native_mode_only_uses_confirmed_open_conversion` 驗證中文 NATIVE、英數、IME 關閉、未知狀態與 NOCONVERSION。
+- `cargo test --offline --locked --lib -- --skip git_history::tests::explicit_full_history_search_finds_old_subject_and_message_body_beyond_page_limit`：**524 PASS／0 FAIL／1 FILTERED**。既有 Git History 長測未執行，不能算 525/525。
+- `cargo test --offline --locked --bin alera-gpui-desktop`：**32/32 PASS**；`cargo build --offline --locked --bin alera-gpui-desktop`：**PASS**；`cargo fmt --all -- --check`、`git diff --check`：**PASS**。
+
+### 隔離 Windows GUI 與 Host 實證
+
+- 新測試 profile：`desktop_gpui/target/smoke-t06-native-ime-runtime-20261113-0220`；UI State：`desktop_gpui/target/smoke-t06-native-ime-state-20261113-0220`；唯一登錄的專案為既有受保護 fixture `.gpui-center-diff-smoke`。起始 Host `running=false`；GUI PID **23632** 移到第二螢幕，從 `+ → New Terminal` 建立真實 Windows `cmd.exe`。基本 `echo T06_IME_BASELINE_OK` GUI／Host 正確回應。
+- Windows GPUI 前景鍵盤 HKL **0x04040404**（台灣繁中）；**用真實鍵盤事件** `S → U → 3` 而非提交預先構造的 Unicode 字串：主 Pane 出現 Microsoft 注音候選視窗（含 A.你），Enter 選字後，CLI `terminal --no-start read` 從 Host 讀到 **「你」**，並未讀到原始 `su3`。再 `Ctrl+C` 後輸入 `echo T06_PRIMARY_STILL_OK` 正常回應，證明 PTY 仍可操作。
+- GUI 再用 `+ → New Terminal` 建立第二個 Host Session，右鍵 `Move to second pane`。副 Pane 同樣送 `S,U,3` 看到候選；以 **方向鍵 Down＋Enter** 取第二候選 **「擬」**，副 Host CLI 讀回含「擬」而不含 `su3`。主 Host handle `0833296e-d0ec-4e4b-8b50-6462e79381a8`，副 Host handle `e9ce8ac1-89e9-423e-968b-92bf4cf63a15`，兩者均 running 且輸出分離。
+- 副 Pane 執行無副作用的 `echo T06_DRAG_A & echo T06_DRAG_B & echo T06_DRAG_C`，實際滑鼠跨列拖曳，三列在 Native VT 視圖同時高亮，**副 Pane 多列拖選 GUI PASS**。本輪沒有再寫入／讀取使用者 OS 剪貼簿；前輪已獨立通過雙 Pane Ctrl+Shift+C。
+- 副 Pane 再開一次 `S,U,3` 候選但**不選字**，改點主 Pane。候選窗消失，TSF 紀錄 `blur cancel=Cancelled`，副 Host 從 `cursor=1501` 增量 read 回 **0 bytes**、`nextCursor=1501`，未將未提交注音送到 PTY 或另一 Pane。
+- Sanitized TSF debug 只記錄事件類型、焦點與字元數，這次累計 `preedit=20`、`commit=102`、`blur=4`，沒有輸出使用者輸入內容。GUI 已以 Alt+F4 關閉 PID 23632；**只停止指定隔離 Host**，停止後 `running=false`、`host=null`。受保護 fixture 原狀 `M center-diff-smoke.txt`、`?? center-diff-source-switch-untracked.txt`；沒有清理已存在的 `target/` 資料。
+
+### 結論
+
+**T06 Terminal 正常流程 DONE**：一般鍵盤／剪貼簿、主副窗格原生注音候選／選字及跨窗格失焦取消、VT 多列滑鼠拖選皆取得 Windows 實機與 Host 證據。U03 仍另追 Editor／Explorer 輸入法與焦點，不把 Terminal 通過誤稱全 GPUI 支援完成。**NOW T07**；`supported=false` 不變；未合 `main`、Push、部署或發版。

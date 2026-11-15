@@ -4,7 +4,7 @@
 use crate::runtime_bridge::RuntimeCliBridge;
 use crate::session::TerminalLayout;
 use crate::terminal_output_budget::TerminalParseBudget;
-use crate::vt_screen::VtScreen;
+use crate::vt_screen::{VtScreen, DEFAULT_SCROLLBACK_LINES};
 use serde_json::Value;
 use std::collections::VecDeque;
 use std::ffi::OsString;
@@ -187,7 +187,8 @@ impl CreatedHostTerminal {
     /// A Host creation reply is not sufficient to attach to a PTY: the next
     /// authenticated session list must corroborate all three identities.
     pub fn matches_live_session(&self, session: &TerminalSession) -> bool {
-        session.handle == self.handle
+        session.running
+            && session.handle == self.handle
             && session.workspace_id == self.workspace_id
             && session.tab_id == self.tab_id
     }
@@ -274,6 +275,20 @@ impl RuntimeCliBridge {
         let args = create_terminal_verb(workspace_id)?;
         let response = self.terminal_json(&args)?;
         parse_created_terminal(&response, workspace_id)
+    }
+
+    /// Host-owned direct launch of a canonical installed Agent. Unlike
+    /// `tab create`, the authenticated terminal request has no offline-store
+    /// fallback. The response is still corroborated by the session list.
+    pub fn create_agent_terminal(
+        &self,
+        workspace_id: &str,
+        agent_id: &str,
+        executable: &str,
+    ) -> io::Result<CreatedHostTerminal> {
+        let args = create_agent_terminal_verb(workspace_id, agent_id, executable)?;
+        let response = self.terminal_json(&args)?;
+        parse_created_agent_terminal(&response, workspace_id, agent_id, executable)
     }
 
     /// Request only explicit dimensions for an already known Host terminal.
@@ -372,6 +387,45 @@ pub fn encode_terminal_key(
     Some(sequence.to_owned())
 }
 
+/// Windows Terminal clipboard shortcuts. Ordinary Ctrl+C must continue to
+/// reach the PTY as SIGINT, while Ctrl+Shift+C copies from the focused pane.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TerminalClipboardShortcut {
+    Copy,
+    Paste,
+}
+
+pub fn terminal_clipboard_shortcut(
+    key: &str,
+    control: bool,
+    shift: bool,
+    alt: bool,
+    platform: bool,
+) -> Option<TerminalClipboardShortcut> {
+    if !control || alt || platform {
+        return None;
+    }
+    match (key.to_ascii_lowercase().as_str(), shift) {
+        ("c", true) => Some(TerminalClipboardShortcut::Copy),
+        ("v", _) => Some(TerminalClipboardShortcut::Paste),
+        _ => None,
+    }
+}
+
+/// Respect Alacritty's live BRACKETED_PASTE mode, keep PTY clipboard input
+/// bounded by the existing 4 KiB Host write limit, and reject NUL bytes.
+pub fn terminal_clipboard_payload(text: &str, bracketed: bool) -> Option<String> {
+    if text.is_empty() || text.contains('\0') {
+        return None;
+    }
+    let payload = if bracketed {
+        format!("\x1b[200~{text}\x1b[201~")
+    } else {
+        text.to_owned()
+    };
+    (payload.len() <= 4096).then_some(payload)
+}
+
 /// IME owns Unicode commits. Ordinary ASCII keys must use KeyDown because
 /// GPUI/Windows may not send EntityInputHandler events for plain typing.
 pub fn is_text_input_keystroke(
@@ -386,6 +440,50 @@ pub fn is_text_input_keystroke(
     }
     key_char.is_some_and(|text| text.chars().any(|ch| !ch.is_ascii() && !ch.is_control()))
         || (key.chars().count() == 1 && key.chars().any(|ch| !ch.is_ascii()))
+}
+
+/// One routing decision shared by both Terminal panes. While native IME
+/// text is marked, candidate navigation, phonetic ASCII and even shortcuts
+/// must not reach the Host PTY. Native Unicode commits take the input handler.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TerminalKeyDispatch {
+    Composing,
+    NativeText,
+    Clipboard(TerminalClipboardShortcut),
+    Pty,
+}
+
+pub fn terminal_key_dispatch(
+    key: &str,
+    key_char: Option<&str>,
+    control: bool,
+    shift: bool,
+    alt: bool,
+    platform: bool,
+    composing: bool,
+    native_ime_mode: bool,
+) -> TerminalKeyDispatch {
+    if composing {
+        TerminalKeyDispatch::Composing
+    } else if let Some(shortcut) = terminal_clipboard_shortcut(key, control, shift, alt, platform) {
+        TerminalKeyDispatch::Clipboard(shortcut)
+    } else if is_text_input_keystroke(key, key_char, control, alt, platform) {
+        TerminalKeyDispatch::NativeText
+    } else if native_ime_mode
+        && !control
+        && !alt
+        && !platform
+        && (key.eq_ignore_ascii_case("space")
+            || (key.len() == 1 && key.as_bytes()[0].is_ascii_graphic())
+            || key_char.is_some_and(|text| {
+                !text.is_empty() && text.chars().all(|ch| ch.is_ascii_graphic() || ch == ' ')
+            }))
+    {
+        // A CJK IME can consume ASCII before TSF emits its first marked preedit.
+        TerminalKeyDispatch::NativeText
+    } else {
+        TerminalKeyDispatch::Pty
+    }
 }
 
 /// Only suppresses recently forwarded KeyDown ASCII. Paste, unicode
@@ -544,6 +642,47 @@ pub fn create_terminal_verb(workspace_id: &str) -> io::Result<Vec<OsString>> {
     Ok(vec![
         OsString::from("create"),
         OsString::from(format!("--workspace-id={workspace_id}")),
+    ])
+}
+
+/// Never accept generic commands from menu text. The Host derives the
+/// launch command from the common descriptor registry and checks overrides.
+pub fn create_agent_terminal_verb(
+    workspace_id: &str,
+    agent_id: &str,
+    executable: &str,
+) -> io::Result<Vec<OsString>> {
+    if !valid_host_id(workspace_id) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Invalid Host workspace",
+        ));
+    }
+    if !alera_core::agent_descriptor::agent_descriptor(agent_id)
+        .is_some_and(|descriptor| descriptor.id == agent_id)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Unknown Agent type",
+        ));
+    }
+    let path = Path::new(executable);
+    if executable.is_empty()
+        || executable.len() > 1024
+        || executable.chars().any(|ch| ch.is_control())
+        || !path.is_absolute()
+        || !path.is_file()
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Invalid Agent executable",
+        ));
+    }
+    Ok(vec![
+        OsString::from("create-agent"),
+        OsString::from(format!("--workspace-id={workspace_id}")),
+        OsString::from(format!("--agent-id={agent_id}")),
+        OsString::from(format!("--executable-path={executable}")),
     ])
 }
 
@@ -736,6 +875,61 @@ pub fn select_registered_host_workspace(
     })
 }
 
+/// Resolve a notification's exact authenticated Host workspace ID to a
+/// canonical existing directory. A duplicate ID is ambiguous even when two
+/// entries point at the same folder. Never guess from a repo name.
+pub fn resolve_registered_host_workspace_path(
+    workspace_id: &str,
+    registered: &[RegisteredHostWorkspace],
+) -> io::Result<PathBuf> {
+    if !valid_host_id(workspace_id) {
+        return Err(invalid("Invalid Agent notification Host workspace ID"));
+    }
+    let mut matched = registered.iter().filter(|entry| entry.id == workspace_id);
+    let first = matched.next().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            "Agent workspace is not registered with Host",
+        )
+    })?;
+    if matched.next().is_some() || !first.path.is_absolute() {
+        return Err(invalid("Ambiguous or relative Agent workspace path"));
+    }
+    let canonical = dunce::canonicalize(&first.path)?;
+    if !canonical.is_dir() {
+        return Err(invalid("Agent workspace directory is not available"));
+    }
+    Ok(canonical)
+}
+
+#[cfg(test)]
+mod h03_workspace_notice_tests {
+    use super::*;
+
+    #[test]
+    fn notification_workspace_routing_requires_exact_unique_host_id_and_existing_directory() {
+        let temp = tempfile::tempdir().expect("temp workspace");
+        let root = dunce::canonicalize(temp.path()).expect("canonical workspace");
+        let registered = vec![RegisteredHostWorkspace {
+            id: "h03-workspace".to_owned(),
+            path: root.clone(),
+        }];
+        assert_eq!(
+            resolve_registered_host_workspace_path("h03-workspace", &registered).unwrap(),
+            root
+        );
+        assert!(resolve_registered_host_workspace_path("other-workspace", &registered).is_err());
+        let mut ambiguous = registered.clone();
+        ambiguous.push(registered[0].clone());
+        assert!(resolve_registered_host_workspace_path("h03-workspace", &ambiguous).is_err());
+        let relative = vec![RegisteredHostWorkspace {
+            id: "h03-workspace".to_owned(),
+            path: PathBuf::from("relative"),
+        }];
+        assert!(resolve_registered_host_workspace_path("h03-workspace", &relative).is_err());
+    }
+}
+
 /// Parse the real Host `terminal create` reply:
 /// `{tab:{id,workspaceId,payload:{terminalSessionId}},attachment:{sessionId}}`.
 /// Older Hosts may also include attachment.workspaceId/tabId instead of the
@@ -817,6 +1011,64 @@ pub fn parse_created_terminal(
         handle: handle.to_string(),
         workspace_id: expected_workspace_id.to_string(),
         tab_id: tab_id.to_string(),
+    })
+}
+
+/// A direct-Agent Host create reply must corroborate the exact requested
+/// adapter and executable in its persisted tab payload, in addition to its
+/// workspace/tab/session identity. A running PTY without Hook presence may
+/// attach only after this stronger verification succeeds.
+pub fn parse_created_agent_terminal(
+    value: &Value,
+    expected_workspace_id: &str,
+    expected_agent_id: &str,
+    expected_executable: &str,
+) -> io::Result<CreatedHostTerminal> {
+    let created = parse_created_terminal(value, expected_workspace_id)?;
+    let tab = value
+        .get("tab")
+        .ok_or_else(|| invalid("Agent create response has no tab"))?;
+    let payload = tab
+        .get("payload")
+        .ok_or_else(|| invalid("Agent create response has no payload"))?;
+    let exact_agent = payload.get("agentType").and_then(Value::as_str) == Some(expected_agent_id);
+    let exact_executable = payload
+        .pointer("/initialManagedAgentLaunch/executable")
+        .and_then(Value::as_str)
+        == Some(expected_executable);
+    let no_unrequested_arguments = payload
+        .pointer("/initialManagedAgentLaunch/arguments")
+        .and_then(Value::as_array)
+        .is_some_and(Vec::is_empty);
+    let host_spawn_requested = payload.get("spawnOnCreate").and_then(Value::as_bool) == Some(true);
+    if !exact_agent || !exact_executable || !no_unrequested_arguments || !host_spawn_requested {
+        return Err(invalid(
+            "Host Agent tab does not match the requested adapter and executable",
+        ));
+    }
+    Ok(created)
+}
+
+/// Separate proven PTY readiness from the Agent Hook identity. A direct
+/// Agent's exact Host persisted tab was already authenticated before this
+/// function is called; a missing Hook must not leave the workbench showing
+/// an endless 'Agent starting' state.
+pub fn direct_agent_ready_feedback(
+    session: &TerminalSession,
+    expected_agent: &str,
+) -> Option<&'static str> {
+    if !session.running
+        || session
+            .agent_type
+            .as_deref()
+            .is_some_and(|reported| reported != expected_agent)
+    {
+        return None;
+    }
+    Some(if session.agent_type.is_some() {
+        "Host PTY ready; Agent Hook recognized"
+    } else {
+        "Host PTY ready; Agent Hook not yet detected"
     })
 }
 
@@ -1052,7 +1304,9 @@ pub fn estimate_terminal_viewport_with_line_height(
     if columns < 20.0 || lines < 5.0 {
         return None;
     }
-    Some((columns.min(240.0) as u16, lines.min(100.0) as u16))
+    // Match the Host resize verb's supported 512x200 geometry. A 240-col
+    // emulator cap otherwise letterboxes wide displays even after PTY resize.
+    Some((columns.min(512.0) as u16, lines.min(200.0) as u16))
 }
 
 /// Position the tiny Windows IME input capture near the actual VT cursor,
@@ -1199,7 +1453,7 @@ impl TerminalLineSelection {
         row: usize,
     ) -> Option<Self> {
         if rows.is_empty()
-            || rows.len() > 100
+            || rows.len() > 200
             || row >= rows.len()
             || rows.iter().any(|text| text.len() > 4096)
         {
@@ -1275,7 +1529,7 @@ impl TerminalTab {
         self.generation
     }
 
-    fn new(session: &TerminalSession, generation: u64) -> Self {
+    fn new(session: &TerminalSession, generation: u64, scrollback_lines: usize) -> Self {
         Self {
             handle: session.handle.clone(),
             tab_id: session.tab_id.clone(),
@@ -1287,7 +1541,7 @@ impl TerminalTab {
             running: session.running,
             output: String::new(),
             next_cursor: None,
-            screen: VtScreen::default(),
+            screen: VtScreen::with_scrollback(24, 80, scrollback_lines),
             parse_budget: TerminalParseBudget::default(),
             generation,
             decoder: TextDecoder::default(),
@@ -1389,6 +1643,9 @@ enum TerminalCreatePhase {
     Creating {
         request_id: u64,
     },
+    OutcomeUnknown {
+        request_id: u64,
+    },
     Awaiting {
         created: CreatedHostTerminal,
         ticks: u8,
@@ -1413,6 +1670,24 @@ impl TerminalCreateFlow {
 
     pub fn is_creating(&self) -> bool {
         matches!(self.phase, TerminalCreatePhase::Creating { .. })
+    }
+
+    pub fn is_outcome_unknown(&self) -> bool {
+        matches!(self.phase, TerminalCreatePhase::OutcomeUnknown { .. })
+    }
+
+    /// Rehydrate a create that was already submitted when the GUI exited.
+    /// No Host identity was proven, so recovery only permits listing and
+    /// explicit acknowledgement, never another create or auto-attach.
+    pub fn restore_outcome_unknown(&mut self) -> bool {
+        if self.is_active() {
+            return false;
+        }
+        self.next_request_id = self.next_request_id.wrapping_add(1).max(1);
+        self.phase = TerminalCreatePhase::OutcomeUnknown {
+            request_id: self.next_request_id,
+        };
+        true
     }
 
     pub fn is_waiting(&self) -> bool {
@@ -1445,6 +1720,18 @@ impl TerminalCreateFlow {
         true
     }
 
+    /// A lost CLI reply cannot prove that the Host did not already create a PTY.
+    /// Keep the request blocked until the user reviews existing sessions and
+    /// explicitly dismisses the uncertain result.
+    pub fn mark_request_outcome_unknown(&mut self, request_id: u64) -> bool {
+        if !matches!(self.phase, TerminalCreatePhase::Creating { request_id: active } if active == request_id)
+        {
+            return false;
+        }
+        self.phase = TerminalCreatePhase::OutcomeUnknown { request_id };
+        true
+    }
+
     pub fn fail_request(&mut self, request_id: u64) -> bool {
         if !matches!(self.phase, TerminalCreatePhase::Creating { request_id: active } if active == request_id)
         {
@@ -1460,13 +1747,52 @@ impl TerminalCreateFlow {
         &mut self,
         sessions: &[TerminalSession],
     ) -> Option<CreatedHostTerminal> {
+        self.confirm_sessions_with_agent(sessions, None)
+    }
+
+    /// Call only after parse_created_agent_terminal corroborates the Host's
+    /// persisted Agent type and executable. Hook presence can arrive later.
+    /// A running PTY with the exact Host identity and no Hook report is safe
+    /// to show, but a stopped session or conflicting Hook type is not.
+    pub fn confirm_sessions_with_host_verified_agent(
+        &mut self,
+        sessions: &[TerminalSession],
+        expected_agent: &str,
+    ) -> Option<CreatedHostTerminal> {
         let TerminalCreatePhase::Awaiting { created, .. } = &self.phase else {
             return None;
         };
-        if !sessions
-            .iter()
-            .any(|session| created.matches_live_session(session))
-        {
+        if !sessions.iter().any(|session| {
+            created.matches_live_session(session)
+                && session.running
+                && session
+                    .agent_type
+                    .as_deref()
+                    .is_none_or(|reported| reported == expected_agent)
+        }) {
+            return None;
+        }
+        let confirmed = created.clone();
+        self.phase = TerminalCreatePhase::Idle;
+        Some(confirmed)
+    }
+
+    /// Strict Hook-confirmed adapter matching for callers that have not
+    /// verified a direct Agent create response. Ordinary terminals unchanged.
+    pub fn confirm_sessions_with_agent(
+        &mut self,
+        sessions: &[TerminalSession],
+        expected_agent: Option<&str>,
+    ) -> Option<CreatedHostTerminal> {
+        let TerminalCreatePhase::Awaiting { created, .. } = &self.phase else {
+            return None;
+        };
+        if !sessions.iter().any(|session| {
+            created.matches_live_session(session)
+                && expected_agent.is_none_or(|agent| {
+                    session.running && session.agent_type.as_deref() == Some(agent)
+                })
+        }) {
             return None;
         }
         let confirmed = created.clone();
@@ -1663,7 +1989,7 @@ impl TerminalPollGate {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct TerminalDock {
     pub sessions: Vec<TerminalSession>,
     pub tabs: Vec<TerminalTab>,
@@ -1673,6 +1999,23 @@ pub struct TerminalDock {
     session_list_stale: bool,
     next_generation: u64,
     workspace_generation: u64,
+    scrollback_lines: usize,
+}
+
+impl Default for TerminalDock {
+    fn default() -> Self {
+        Self {
+            sessions: Vec::new(),
+            tabs: Vec::new(),
+            active_tab: None,
+            status: String::new(),
+            view_mode: TerminalViewMode::default(),
+            session_list_stale: false,
+            next_generation: 0,
+            workspace_generation: 0,
+            scrollback_lines: DEFAULT_SCROLLBACK_LINES,
+        }
+    }
 }
 
 impl TerminalDock {
@@ -1681,6 +2024,24 @@ impl TerminalDock {
             workspace_generation: generation,
             ..Self::default()
         }
+    }
+
+    /// Native-only visible VT scrollback cap; Host byte retention is separate.
+    /// Apply a new selection to all live screen emulators without destroying
+    /// output or changing Host session/PTY identity.
+    pub fn set_scrollback_lines(&mut self, lines: usize) {
+        let lines = lines.clamp(
+            crate::vt_screen::MIN_SCROLLBACK_LINES,
+            crate::vt_screen::MAX_SCROLLBACK_LINES,
+        );
+        self.scrollback_lines = lines;
+        for tab in &mut self.tabs {
+            tab.screen.set_scrollback_lines(lines);
+        }
+    }
+
+    pub fn scrollback_lines(&self) -> usize {
+        self.scrollback_lines
     }
 
     pub fn workspace_generation(&self) -> u64 {
@@ -1746,7 +2107,7 @@ impl TerminalDock {
         tab.output.clear();
         // Use the original PTY dimensions before replaying absolute cursor
         // moves/hard wraps. This changes only local VT preview geometry.
-        tab.screen = VtScreen::new(rows, cols);
+        tab.screen = VtScreen::with_scrollback(rows, cols, tab.screen.scrollback_lines());
         tab.decoder = TextDecoder::default();
         tab.stream_utf8_pending.clear();
         tab.parse_budget = TerminalParseBudget::default();
@@ -1785,6 +2146,31 @@ impl TerminalDock {
             .next_cursor
             .map(|cursor| cursor.saturating_add(bytes.len() as u64));
         tab.stream_attached = true;
+        true
+    }
+
+    /// Keep the local visible VT grid in sync after the Host accepts a
+    /// normal viewport resize. Never change an unrelated or recycled tab.
+    /// This does not create or resize a Host PTY; the Host request ran first.
+    pub fn apply_host_accepted_viewport(
+        &mut self,
+        target: &TerminalTabContextTarget,
+        cols: u16,
+        rows: u16,
+    ) -> bool {
+        if !self.context_target_is_live(target) {
+            return false;
+        }
+        let Some(index) = self.index_for_context(target) else {
+            return false;
+        };
+        let Some(tab) = self.tabs.get_mut(index) else {
+            return false;
+        };
+        if !tab.running {
+            return false;
+        }
+        tab.screen.set_preview_size(rows, cols);
         true
     }
 
@@ -1931,7 +2317,18 @@ impl TerminalDock {
                 }
                 continue;
             }
-            if change.agent_type.as_ref() != session.agent_type.as_ref() || change.state.is_none() {
+            // The Host may list a running PTY before its first Agent Hook.
+            // A redacted, authenticated delta with the same session/workspace/
+            // tab identity may identify it without creating or moving a PTY.
+            // Never replace a previously confirmed adapter with another one.
+            if change.state.is_none()
+                || change.agent_type.is_none()
+                || session
+                    .agent_type
+                    .as_ref()
+                    .zip(change.agent_type.as_ref())
+                    .is_some_and(|(known, incoming)| known != incoming)
+            {
                 continue;
             }
             let Some(incoming_time) = agent_host_utc_time_key(&change.updated_at) else {
@@ -1947,10 +2344,14 @@ impl TerminalDock {
             }
             let next_interrupted =
                 change.state == Some(AgentActivityState::Done) && change.interrupted;
-            if session.agent_state != change.state
+            if session.agent_type.is_none()
+                || session.agent_state != change.state
                 || session.interrupted != next_interrupted
                 || session.agent_updated_at.as_deref() != Some(change.updated_at.as_str())
             {
+                if session.agent_type.is_none() {
+                    session.agent_type = change.agent_type.clone();
+                }
                 session.agent_state = change.state;
                 session.interrupted = next_interrupted;
                 session.agent_state_started_at = Some(change.state_started_at.clone());
@@ -2012,7 +2413,8 @@ impl TerminalDock {
                 // Explicitly selecting a new session with a reused handle
                 // must not silently attach an old transcript.
                 self.next_generation = self.next_generation.wrapping_add(1);
-                self.tabs[index] = TerminalTab::new(session, self.next_generation);
+                self.tabs[index] =
+                    TerminalTab::new(session, self.next_generation, self.scrollback_lines);
             }
             self.active_tab = Some(index);
             return true;
@@ -2022,8 +2424,11 @@ impl TerminalDock {
             return false;
         }
         self.next_generation = self.next_generation.wrapping_add(1);
-        self.tabs
-            .push(TerminalTab::new(session, self.next_generation));
+        self.tabs.push(TerminalTab::new(
+            session,
+            self.next_generation,
+            self.scrollback_lines,
+        ));
         self.active_tab = Some(self.tabs.len() - 1);
         true
     }
@@ -2279,7 +2684,7 @@ mod tests {
         );
         assert_eq!(
             estimate_terminal_viewport(50_000.0, 50_000.0, 13.0),
-            Some((240, 100))
+            Some((512, 200))
         );
         let smaller = estimate_terminal_viewport(800.0, 480.0, 13.0).unwrap();
         let larger = estimate_terminal_viewport(1200.0, 780.0, 13.0).unwrap();
@@ -2311,6 +2716,29 @@ mod tests {
             estimate_terminal_viewport_with_line_height(1200.0, 600.0, 13.0, 1.3),
             estimate_terminal_viewport(1200.0, 600.0, 13.0)
         );
+    }
+
+    #[test]
+    fn wide_viewport_estimation_does_not_letterbox_at_240_columns() {
+        let (cols, rows) = estimate_terminal_viewport_with_line_height(3030.0, 920.0, 14.0, 1.3)
+            .expect("large Windows viewport");
+        assert!(cols > 240, "Host supports more than 240 columns: {cols}");
+        assert!(cols <= 512);
+        assert!(rows >= 40);
+    }
+
+    #[test]
+    fn host_accepted_resize_expands_only_the_matching_live_preview() {
+        let mut dock = TerminalDock::for_workspace(5);
+        assert!(dock.apply_session_list(5, vec![session("pty-1")]));
+        assert!(dock.open("pty-1"));
+        let current = dock.context_target_at(0).unwrap();
+        let mut stale = current.clone();
+        stale.tab_id = "different-tab".to_owned();
+        assert!(!dock.apply_host_accepted_viewport(&stale, 320, 64));
+        assert_eq!(dock.active().unwrap().screen.dimensions(), (24, 80));
+        assert!(dock.apply_host_accepted_viewport(&current, 320, 64));
+        assert_eq!(dock.active().unwrap().screen.dimensions(), (64, 320));
     }
 
     #[test]
@@ -2461,6 +2889,27 @@ mod tests {
     }
 
     #[test]
+    fn vt_selection_supports_full_200_row_native_pane_without_crossing_snapshot_bounds() {
+        let target = TerminalTabContextTarget {
+            handle: "pty-large".into(),
+            workspace_id: "ws".into(),
+            tab_id: "tab".into(),
+            generation: 1,
+            workspace_generation: 2,
+        };
+        let rows = (0..200).map(|i| format!("row{i}")).collect::<Vec<_>>();
+        let mut selection =
+            TerminalLineSelection::begin(target.clone(), Some(8), rows.clone(), 149)
+                .expect("full-height Terminal pane row selection");
+        assert!(selection.extend(151));
+        assert_eq!(selection.selected_text(), "row149\nrow150\nrow151");
+        assert!(selection.is_current(&target, Some(8)));
+        assert!(
+            TerminalLineSelection::begin(target, Some(8), vec!["x".into(); 201], 150).is_none()
+        );
+    }
+
+    #[test]
     fn bounded_resize_verb_never_starts_host_and_rejects_unsafe_geometry() {
         use crate::runtime_bridge::terminal_cli_arguments;
         let args = resize_terminal_verb("term-1", 120, 36).unwrap();
@@ -2472,6 +2921,135 @@ mod tests {
             assert!(resize_terminal_verb("term-1", dims.0, dims.1).is_err());
         }
         assert!(resize_terminal_verb("bad\nhandle", 80, 24).is_err());
+    }
+
+    #[test]
+    fn native_terminal_clipboard_shortcuts_and_bracketed_paste_are_safe() {
+        use super::TerminalClipboardShortcut::{Copy, Paste};
+        assert_eq!(
+            terminal_clipboard_shortcut("c", true, true, false, false),
+            Some(Copy)
+        );
+        assert_eq!(
+            terminal_clipboard_shortcut("V", true, true, false, false),
+            Some(Paste)
+        );
+        assert_eq!(
+            terminal_clipboard_shortcut("v", true, false, false, false),
+            Some(Paste)
+        );
+        assert_eq!(
+            terminal_clipboard_shortcut("c", true, false, false, false),
+            None
+        );
+        assert_eq!(
+            terminal_clipboard_shortcut("v", true, true, true, false),
+            None
+        );
+        assert_eq!(
+            terminal_clipboard_shortcut("v", true, true, false, true),
+            None
+        );
+        assert_eq!(
+            terminal_clipboard_payload("echo 中文", false),
+            Some("echo 中文".to_owned())
+        );
+        assert_eq!(
+            terminal_clipboard_payload("one\ntwo", true),
+            Some("\x1b[200~one\ntwo\x1b[201~".to_owned())
+        );
+        assert!(terminal_clipboard_payload("", false).is_none());
+        assert!(terminal_clipboard_payload("bad\0payload", false).is_none());
+        assert!(terminal_clipboard_payload(&"x".repeat(4096), true).is_none());
+    }
+
+    #[test]
+    fn native_ime_preedit_blocks_raw_pty_keys_and_clipboard_shortcuts() {
+        use TerminalClipboardShortcut::{Copy, Paste};
+        use TerminalKeyDispatch::{Clipboard, Composing, NativeText, Pty};
+
+        // Phonetic ASCII and candidate-navigation keys belong to the IME.
+        for (key, key_char, ctrl, shift) in [
+            ("s", Some("s"), false, false),
+            ("space", Some(" "), false, false),
+            ("backspace", None, false, false),
+            ("enter", None, false, false),
+            ("c", Some("c"), true, true),
+            ("v", Some("v"), true, true),
+            ("c", Some("c"), true, false),
+        ] {
+            assert_eq!(
+                terminal_key_dispatch(key, key_char, ctrl, shift, false, false, true, false),
+                Composing,
+                "{key} must stay with native IME until it commits"
+            );
+        }
+
+        // After commit, Host keys and clipboard shortcuts are restored.
+        assert_eq!(
+            terminal_key_dispatch("s", Some("s"), false, false, false, false, false, false),
+            Pty
+        );
+        assert_eq!(
+            terminal_key_dispatch("enter", None, false, false, false, false, false, false),
+            Pty
+        );
+        assert_eq!(
+            terminal_key_dispatch("c", None, true, true, false, false, false, false),
+            Clipboard(Copy)
+        );
+        assert_eq!(
+            terminal_key_dispatch("v", None, true, true, false, false, false, false),
+            Clipboard(Paste)
+        );
+        assert_eq!(
+            terminal_key_dispatch("c", None, true, false, false, false, false, false),
+            Pty
+        );
+        assert_eq!(
+            terminal_key_dispatch("中", Some("中"), false, false, false, false, false, false),
+            NativeText
+        );
+    }
+
+    #[test]
+    fn active_windows_native_ime_routes_first_phonetic_key_to_text_input() {
+        use TerminalClipboardShortcut::Copy;
+        use TerminalKeyDispatch::{Clipboard, NativeText, Pty};
+
+        // IME may consume the first phonetic key before GPUI receives a
+        // marked-text callback. Do not leak that ASCII key into the PTY.
+        assert_eq!(
+            terminal_key_dispatch("s", Some("s"), false, false, false, false, false, true),
+            NativeText
+        );
+        assert_eq!(
+            terminal_key_dispatch("space", Some(" "), false, false, false, false, false, true),
+            NativeText
+        );
+        // Chinese keyboard present but English/alphanumeric mode selected.
+        assert_eq!(
+            terminal_key_dispatch("s", Some("s"), false, false, false, false, false, false),
+            Pty
+        );
+        // Non-printable keys and Ctrl+C remain valid PTY controls unless
+        // a native marked composition is actively in progress.
+        assert_eq!(
+            terminal_key_dispatch("enter", None, false, false, false, false, false, true),
+            Pty
+        );
+        assert_eq!(
+            terminal_key_dispatch("c", None, true, false, false, false, false, true),
+            Pty
+        );
+        assert_eq!(
+            terminal_key_dispatch("c", None, true, true, false, false, false, true),
+            Clipboard(Copy)
+        );
+        assert_eq!(
+            terminal_key_dispatch("s", Some("s"), false, false, true, false, false, true),
+            Pty
+        );
     }
 
     #[test]
@@ -2633,7 +3211,7 @@ mod tests {
     fn native_parse_budget_restarts_after_host_cursor_reset_or_truncation() {
         let s = session("pty-1");
         let started = Instant::now();
-        let mut rewind_tab = TerminalTab::new(&s, 1);
+        let mut rewind_tab = TerminalTab::new(&s, 1, DEFAULT_SCROLLBACK_LINES);
         rewind_tab
             .parse_budget
             .observe(started, 16 * 1024, Duration::from_millis(1));
@@ -2642,7 +3220,7 @@ mod tests {
         assert!(rewind_tab.apply(chunk("pty-1", 0, 10, "reset")));
         assert_eq!(rewind_tab.parse_budget.max_read_bytes(), 16 * 1024);
 
-        let mut truncated_tab = TerminalTab::new(&s, 2);
+        let mut truncated_tab = TerminalTab::new(&s, 2, DEFAULT_SCROLLBACK_LINES);
         truncated_tab
             .parse_budget
             .observe(started, 16 * 1024, Duration::from_millis(1));
@@ -2764,6 +3342,40 @@ mod tests {
         assert_eq!(dock.active().unwrap().output, "host\n");
     }
 
+    #[test]
+    fn native_scrollback_setting_applies_to_live_and_replayed_host_tabs() {
+        let mut dock = TerminalDock::for_workspace(13);
+        assert_eq!(dock.scrollback_lines(), DEFAULT_SCROLLBACK_LINES);
+        dock.set_scrollback_lines(2_000);
+        dock.update_sessions(vec![session("pty-1")]);
+        assert!(dock.open("pty-1"));
+        let tab = dock.active().unwrap();
+        assert_eq!(tab.screen.scrollback_lines(), 2_000);
+        let identity = dock.context_target_at(0).unwrap();
+        dock.tabs[0].screen.feed("original");
+        dock.set_scrollback_lines(300);
+        assert_eq!(dock.tabs[0].screen.scrollback_lines(), 300);
+        assert!(dock.tabs[0].screen.contents().contains("original"));
+        assert!(dock.apply_stream_snapshot(
+            &identity.handle,
+            &identity.workspace_id,
+            &identity.tab_id,
+            3,
+            24,
+            80,
+            b"new",
+        ));
+        assert_eq!(dock.tabs[0].screen.scrollback_lines(), 300);
+        dock.update_sessions(vec![session("pty-1"), session("pty-2")]);
+        assert!(dock.open("pty-2"));
+        assert_eq!(dock.active().unwrap().screen.scrollback_lines(), 300);
+        // A different Workspace receives the saved Native cap from Workbench,
+        // not from stale tabs in the previous workspace.
+        let mut next = TerminalDock::for_workspace(14);
+        next.set_scrollback_lines(300);
+        assert_eq!(next.scrollback_lines(), 300);
+    }
+
     fn session(handle: &str) -> TerminalSession {
         TerminalSession {
             handle: handle.into(),
@@ -2787,6 +3399,135 @@ mod tests {
             running: true,
             text: text.into(),
         }
+    }
+
+    #[test]
+    fn direct_agent_launch_uses_only_canonical_adapter_with_verified_executable() {
+        let current_exe = std::env::current_exe().unwrap();
+        let exe = current_exe.to_string_lossy().into_owned();
+        let args = create_agent_terminal_verb("ws-123", "codex", &exe).unwrap();
+        assert_eq!(args[0], "create-agent");
+        assert_eq!(args[1], "--workspace-id=ws-123");
+        assert_eq!(args[2], "--agent-id=codex");
+        assert_eq!(
+            args[3].to_str(),
+            Some(format!("--executable-path={exe}").as_str())
+        );
+        assert!(create_agent_terminal_verb("../bad", "codex", &exe).is_err());
+        assert!(create_agent_terminal_verb("ws-123", "unknown", &exe).is_err());
+        assert!(create_agent_terminal_verb("ws-123", "claude", "./relative.exe").is_err());
+        assert!(create_agent_terminal_verb("ws-123", "claude", "C:/missing.exe").is_err());
+    }
+
+    #[test]
+    fn direct_agent_reply_must_bind_host_tab_type_and_executable_before_session_attach() {
+        let exe = std::env::current_exe().unwrap();
+        let exe = exe.to_string_lossy().into_owned();
+        let response = serde_json::json!({
+            "tab": {
+                "id": "tab-pty-1",
+                "workspaceId": "workspace-1",
+                "kind": "terminal",
+                "payload": {
+                    "terminalSessionId": "pty-1",
+                    "agentType": "codex",
+                    "spawnOnCreate": true,
+                    "initialManagedAgentLaunch": {"executable": exe, "arguments":[]}
+                }
+            },
+            "attachment": {"sessionId": "pty-1", "workspaceId":"workspace-1", "tabId":"tab-pty-1"}
+        });
+        let expected =
+            parse_created_agent_terminal(&response, "workspace-1", "codex", &exe).unwrap();
+        assert_eq!(expected.handle, "pty-1");
+        assert_eq!(expected.tab_id, "tab-pty-1");
+        for wrong in ["claude", "unknown-agent"] {
+            assert!(parse_created_agent_terminal(&response, "workspace-1", wrong, &exe).is_err());
+        }
+        let mut swapped = response.clone();
+        swapped["tab"]["payload"]["initialManagedAgentLaunch"]["executable"] =
+            serde_json::json!("C:/wrong-agent.exe");
+        assert!(parse_created_agent_terminal(&swapped, "workspace-1", "codex", &exe).is_err());
+        swapped = response.clone();
+        swapped["tab"]["payload"]["agentType"] = serde_json::Value::Null;
+        assert!(parse_created_agent_terminal(&swapped, "workspace-1", "codex", &exe).is_err());
+        swapped = response.clone();
+        swapped["attachment"]["sessionId"] = serde_json::json!("other-pty");
+        assert!(parse_created_agent_terminal(&swapped, "workspace-1", "codex", &exe).is_err());
+    }
+
+    #[test]
+    fn direct_agent_hook_delay_can_confirm_running_pty_only_after_verified_reply() {
+        let mut flow = TerminalCreateFlow::default();
+        let request = flow.start_request().unwrap();
+        let mut sess = session("pty-no-hook");
+        sess.agent_type = None;
+        let created = CreatedHostTerminal {
+            handle: sess.handle.clone(),
+            workspace_id: sess.workspace_id.clone(),
+            tab_id: sess.tab_id.clone(),
+        };
+        assert!(flow.finish_request(request, created.clone()));
+        assert_eq!(
+            flow.confirm_sessions_with_host_verified_agent(&[sess.clone()], "codex"),
+            Some(created.clone()),
+            "A Host-verified Agent PTY must not block on delayed Hook presence",
+        );
+        let mut stopped = sess.clone();
+        stopped.running = false;
+        let mut flow = TerminalCreateFlow::default();
+        let request = flow.start_request().unwrap();
+        assert!(flow.finish_request(request, created.clone()));
+        assert!(flow
+            .confirm_sessions_with_host_verified_agent(&[stopped], "codex")
+            .is_none());
+        let mut mismatch = sess;
+        mismatch.agent_type = Some("claude".into());
+        assert!(flow
+            .confirm_sessions_with_host_verified_agent(&[mismatch], "codex")
+            .is_none());
+        assert!(flow.is_waiting());
+    }
+
+    #[test]
+    fn direct_agent_status_separates_live_host_pty_from_hook_identity() {
+        let mut session = session("pty-feedback");
+        session.agent_type = None;
+        assert_eq!(
+            direct_agent_ready_feedback(&session, "codex"),
+            Some("Host PTY ready; Agent Hook not yet detected"),
+            "A real interactive PTY must not be mislabeled 'Agent starting' forever"
+        );
+        session.agent_type = Some("codex".into());
+        assert_eq!(
+            direct_agent_ready_feedback(&session, "codex"),
+            Some("Host PTY ready; Agent Hook recognized")
+        );
+        session.agent_type = Some("claude".into());
+        assert!(direct_agent_ready_feedback(&session, "codex").is_none());
+        session.running = false;
+        assert!(direct_agent_ready_feedback(&session, "claude").is_none());
+    }
+
+    #[test]
+    fn direct_agent_confirmation_requires_correct_running_agent_not_only_same_host_tab() {
+        let mut flow = TerminalCreateFlow::default();
+        let request = flow.start_request().unwrap();
+        let sess = session("pty-1");
+        let created = CreatedHostTerminal {
+            handle: sess.handle.clone(),
+            workspace_id: sess.workspace_id.clone(),
+            tab_id: sess.tab_id.clone(),
+        };
+        assert!(flow.finish_request(request, created.clone()));
+        assert!(flow
+            .confirm_sessions_with_agent(&[sess.clone()], Some("claude"))
+            .is_none());
+        assert!(flow.is_waiting());
+        assert_eq!(
+            flow.confirm_sessions_with_agent(&[sess], Some("codex")),
+            Some(created)
+        );
     }
 
     #[test]
@@ -3140,6 +3881,69 @@ mod tests {
     }
 
     #[test]
+    fn h01_late_authenticated_hook_identifies_exact_running_session_without_waiting_for_inventory()
+    {
+        let mut dock = TerminalDock::for_workspace(17);
+        let initial = json!({"items":[
+            {"handle":"pty-late","workspaceId":"ws-1","tabId":"tab-A","running":true},
+            {"handle":"pty-other","workspaceId":"ws-1","tabId":"tab-B","running":true,
+                "agentType":"claude","agentState":"working","stateStartedAt":"2026-11-13T13:00:00Z","updatedAt":"2026-11-13T13:00:00Z"}
+        ]});
+        assert!(dock.apply_session_list(17, parse_terminal_list(&initial).unwrap()));
+        assert!(dock.open("pty-late"));
+        assert_eq!(dock.sessions[0].agent_type, None);
+        let change = AgentPresenceChange {
+            session_id: "pty-late".into(),
+            workspace_id: "ws-1".into(),
+            tab_id: "tab-A".into(),
+            agent_type: Some("codex".into()),
+            state: Some(AgentActivityState::Waiting),
+            state_started_at: "2026-11-13T13:00:01Z".into(),
+            updated_at: "2026-11-13T13:00:02Z".into(),
+            interrupted: false,
+            removed: false,
+        };
+        assert!(dock.apply_agent_presence_changes(&[change.clone()]));
+        assert_eq!(dock.sessions[0].agent_type.as_deref(), Some("codex"));
+        assert_eq!(
+            dock.sessions[0].agent_state,
+            Some(AgentActivityState::Waiting)
+        );
+        assert_eq!(
+            dock.sessions[1].agent_state,
+            Some(AgentActivityState::Working)
+        );
+        assert_eq!(dock.active_tab, Some(0));
+        assert_eq!(dock.tabs.len(), 1);
+
+        let mut wrong_tab = change.clone();
+        wrong_tab.tab_id = "tab-B".into();
+        wrong_tab.state = Some(AgentActivityState::Blocked);
+        assert!(!dock.apply_agent_presence_changes(&[wrong_tab]));
+        let mut wrong_adapter = change.clone();
+        wrong_adapter.agent_type = Some("claude".into());
+        wrong_adapter.state = Some(AgentActivityState::Done);
+        assert!(!dock.apply_agent_presence_changes(&[wrong_adapter]));
+        assert_eq!(
+            dock.sessions[0].agent_state,
+            Some(AgentActivityState::Waiting)
+        );
+
+        for (moment, state) in [
+            ("2026-11-13T13:00:03Z", AgentActivityState::Blocked),
+            ("2026-11-13T13:00:04Z", AgentActivityState::Done),
+            ("2026-11-13T13:00:05Z", AgentActivityState::Working),
+        ] {
+            let mut next = change.clone();
+            next.state = Some(state);
+            next.updated_at = moment.into();
+            next.state_started_at = moment.into();
+            assert!(dock.apply_agent_presence_changes(&[next]));
+            assert_eq!(dock.sessions[0].agent_state, Some(state));
+            assert_eq!(dock.active_tab, Some(0));
+        }
+    }
+    #[test]
     fn host_presence_delta_rejects_stale_events_and_old_inventory_snapshots() {
         let mut dock = TerminalDock::for_workspace(7);
         let newer = "2026-11-11T07:00:02+00:00";
@@ -3335,6 +4139,35 @@ mod tests {
     }
 
     #[test]
+    fn terminal_create_cannot_confirm_a_host_session_that_exited_before_attach() {
+        let mut flow = TerminalCreateFlow::default();
+        let request = flow.start_request().unwrap();
+        let created = CreatedHostTerminal {
+            handle: "term-1".into(),
+            workspace_id: "workspace-1".into(),
+            tab_id: "tab-term-1".into(),
+        };
+        assert!(flow.finish_request(request, created.clone()));
+
+        let mut exited = session("term-1");
+        exited.running = false;
+        exited.agent_type = None;
+        assert!(
+            !created.matches_live_session(&exited),
+            "a matching Host identity is not proof that its PTY is still running"
+        );
+        assert!(
+            flow.confirm_sessions(&[exited]).is_none(),
+            "an exited PTY must never become a successfully attached Terminal"
+        );
+        assert!(flow.is_waiting(), "keep the existing confirmation request");
+        assert!(
+            flow.start_request().is_none(),
+            "do not spawn a second PTY while the first Host result is unresolved"
+        );
+    }
+
+    #[test]
     fn terminal_create_rpc_failure_resets_state_but_rejects_stale_failures() {
         let mut flow = TerminalCreateFlow::default();
         let first = flow.start_request().unwrap();
@@ -3352,6 +4185,47 @@ mod tests {
         assert!(flow.is_creating());
         assert!(flow.fail_request(second));
         assert!(!flow.is_active());
+    }
+
+    #[test]
+    fn recovered_create_outcome_never_reissues_a_host_create() {
+        let mut flow = TerminalCreateFlow::default();
+        assert!(flow.restore_outcome_unknown());
+        assert!(flow.is_outcome_unknown());
+        assert!(flow.start_request().is_none());
+        assert_eq!(flow.tick(), TerminalCreateTick::None);
+        assert!(!flow.retry_confirmation());
+        assert!(flow.confirm_sessions(&[session("term-1")]).is_none());
+        assert!(!flow.restore_outcome_unknown());
+        assert!(flow.cancel());
+        assert!(flow.start_request().is_some());
+    }
+
+    #[test]
+    fn ambiguous_terminal_creation_requires_manual_reconciliation_before_another_create() {
+        let mut flow = TerminalCreateFlow::default();
+        let request = flow.start_request().unwrap();
+        assert!(flow.mark_request_outcome_unknown(request));
+        assert!(flow.is_outcome_unknown());
+        assert!(flow.is_active());
+        assert!(
+            flow.start_request().is_none(),
+            "no blind duplicate Host create RPC"
+        );
+        assert!(!flow.mark_request_outcome_unknown(request));
+        assert!(
+            !flow.retry_confirmation(),
+            "no unverified Host IDs to retry"
+        );
+        assert!(flow.confirm_sessions(&[session("term-1")]).is_none());
+        assert!(
+            flow.cancel(),
+            "user deliberately dismisses after inspecting Host"
+        );
+        let next = flow.start_request().unwrap();
+        assert_ne!(next, request);
+        assert!(!flow.mark_request_outcome_unknown(request));
+        assert!(flow.is_creating());
     }
 
     #[test]

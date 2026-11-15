@@ -20,6 +20,74 @@ fn accepts_native_text_event(has_focus: bool) -> bool {
     has_focus
 }
 
+/// Enter accepts an actual Quick Open result only after IME candidate
+/// composition has finished. During zhuyin/other IME preedit, Enter belongs
+/// to the native candidate picker and must not navigate away from the query.
+pub(super) fn quick_open_enter_accepts_match(key: &str, composing: bool, has_match: bool) -> bool {
+    has_match
+        && !composing
+        && (key.eq_ignore_ascii_case("enter") || key.eq_ignore_ascii_case("return"))
+}
+
+/// Quick Open keyboard navigation targets the *current* result set.
+/// IME candidate selection owns Up/Down while a composition is active, and
+/// there is no synthetic selection when no files match the query.
+pub(super) fn quick_open_move_selection(
+    key: &str,
+    composing: bool,
+    selected: usize,
+    count: usize,
+) -> Option<usize> {
+    if composing || count == 0 {
+        return None;
+    }
+    match key.to_ascii_lowercase().as_str() {
+        "up" => Some(selected.min(count - 1).saturating_sub(1)),
+        "down" => Some(selected.saturating_add(1).min(count - 1)),
+        _ => None,
+    }
+}
+
+/// Windows IME owns Backspace while a candidate is being composed.
+/// Otherwise remove one Unicode grapheme or the selected range. Never slice
+/// through a stale/invalid UTF-8 selection from a previous focus owner.
+fn query_backspace_range(
+    text: &str,
+    selection: Range<usize>,
+    composing: bool,
+) -> Option<Range<usize>> {
+    if composing
+        || selection.start > selection.end
+        || selection.end > text.len()
+        || !text.is_char_boundary(selection.start)
+        || !text.is_char_boundary(selection.end)
+    {
+        return None;
+    }
+    if !selection.is_empty() {
+        return Some(selection);
+    }
+    let left = text[..selection.start]
+        .grapheme_indices(true)
+        .last()
+        .map(|(i, _)| i)
+        .unwrap_or(0);
+    Some(left..selection.start)
+}
+
+/// Only dismiss Quick Open after the active Native Editor owns the exact
+/// requested disk file. A failed open must not silently close the dialog
+/// while leaving some unrelated dirty buffer focused.
+pub(super) fn quick_open_target_is_active(
+    requested: &std::path::Path,
+    active: Option<&std::path::Path>,
+) -> bool {
+    let Ok(target) = dunce::canonicalize(requested) else {
+        return false;
+    };
+    active == Some(target.as_path())
+}
+
 /// Drop only the provisional marked text when an Explorer input loses focus.
 /// Previously committed query content must survive a Terminal focus switch.
 fn remove_marked_preedit(text: &mut String, marked: Option<Range<usize>>) -> Option<usize> {
@@ -35,9 +103,20 @@ fn remove_marked_preedit(text: &mut String, marked: Option<Range<usize>>) -> Opt
     Some(range.start)
 }
 
+/// The Profile Prompt is the only QuickOpenInput mode that preserves lines.
+fn normalize_input_text(raw: &str, multiline: bool) -> String {
+    if multiline {
+        raw.replace("\r\n", "\n")
+            .replace('\r', "\n")
+            .replace('\0', "")
+    } else {
+        raw.replace(['\r', '\n', '\0'], " ")
+    }
+}
+
 actions!(
     alera_gpui_quick_open,
-    [QueryBackspace, QuerySelectAll, QueryPaste]
+    [QueryBackspace, QuerySelectAll, QueryPaste, QueryNewline]
 );
 
 pub fn bind_quick_open_keys(cx: &mut App) {
@@ -47,6 +126,16 @@ pub fn bind_quick_open_keys(cx: &mut App) {
         KeyBinding::new("cmd-a", QuerySelectAll, Some("AleraGpuiQuickOpen")),
         KeyBinding::new("ctrl-v", QueryPaste, Some("AleraGpuiQuickOpen")),
         KeyBinding::new("cmd-v", QueryPaste, Some("AleraGpuiQuickOpen")),
+        KeyBinding::new(
+            "backspace",
+            QueryBackspace,
+            Some("AleraGpuiProfileMultiline"),
+        ),
+        KeyBinding::new("ctrl-a", QuerySelectAll, Some("AleraGpuiProfileMultiline")),
+        KeyBinding::new("cmd-a", QuerySelectAll, Some("AleraGpuiProfileMultiline")),
+        KeyBinding::new("ctrl-v", QueryPaste, Some("AleraGpuiProfileMultiline")),
+        KeyBinding::new("cmd-v", QueryPaste, Some("AleraGpuiProfileMultiline")),
+        KeyBinding::new("enter", QueryNewline, Some("AleraGpuiProfileMultiline")),
     ]);
 }
 
@@ -55,6 +144,8 @@ pub struct QuickOpenInput {
     text: String,
     placeholder: String,
     terminal_mode: bool,
+    multiline_mode: bool,
+    max_input_bytes: usize,
     selection: Range<usize>,
     marked: Option<Range<usize>>,
     terminal_committed: VecDeque<String>,
@@ -72,6 +163,8 @@ impl QuickOpenInput {
             text: String::new(),
             placeholder: placeholder.into(),
             terminal_mode: false,
+            multiline_mode: false,
+            max_input_bytes: 512,
             selection: 0..0,
             marked: None,
             terminal_committed: VecDeque::new(),
@@ -82,6 +175,25 @@ impl QuickOpenInput {
     pub fn terminal(cx: &mut Context<Self>) -> Self {
         let mut input = Self::with_placeholder("Command for selected Host session…", cx);
         input.terminal_mode = true;
+        input.max_input_bytes = 4096;
+        input
+    }
+
+    /// Editable single-line Host Profile command; unlike file search it
+    /// supports the validated 4 KiB Host command limit.
+    pub fn profile_command(cx: &mut Context<Self>) -> Self {
+        let mut input = Self::with_placeholder("Host Command (4 KiB max)…", cx);
+        input.max_input_bytes = 4096;
+        input
+    }
+
+    /// Host-owned Custom Prompt requires real newlines, not Quick Open query
+    /// filtering. This mode is opt-in and does not alter search or Terminal.
+    pub fn profile_multiline(cx: &mut Context<Self>) -> Self {
+        let mut input =
+            Self::with_placeholder("Custom Prompt (up to 8 KiB, Enter for newline)…", cx);
+        input.multiline_mode = true;
+        input.max_input_bytes = 8192;
         input
     }
 
@@ -140,10 +252,17 @@ impl QuickOpenInput {
     /// Select a known local branch from the Git Graph without synthesizing
     /// keyboard/IME events. A user edit still follows the ordinary handler.
     pub fn set_query(&mut self, value: &str, cx: &mut Context<Self>) -> bool {
-        if value.len() > 512 || value.contains(['\r', '\n', '\0']) {
+        if value.len() > self.max_input_bytes
+            || value.contains('\0')
+            || (!self.multiline_mode && value.contains(['\r', '\n']))
+        {
             return false;
         }
-        self.text = value.to_owned();
+        self.text = if self.multiline_mode {
+            value.replace("\r\n", "\n").replace('\r', "\n")
+        } else {
+            value.to_owned()
+        };
         self.selection = self.text.len()..self.text.len();
         self.marked = None;
         cx.notify();
@@ -170,8 +289,8 @@ impl QuickOpenInput {
         {
             return;
         }
-        let text = raw.replace(['\r', '\n', '\0'], " ");
-        let max_length = if self.terminal_mode { 4096 } else { 512 };
+        let text = normalize_input_text(raw, self.multiline_mode);
+        let max_length = self.max_input_bytes;
         if self.text.len() - (range.end - range.start) + text.len() > max_length {
             return;
         }
@@ -198,26 +317,35 @@ impl QuickOpenInput {
     }
 
     fn backspace(&mut self, _: &QueryBackspace, _: &mut Window, cx: &mut Context<Self>) {
-        let range = if self.selection.is_empty() {
-            let left = self.text[..self.selection.start]
-                .grapheme_indices(true)
-                .last()
-                .map(|(i, _)| i)
-                .unwrap_or(0);
-            left..self.selection.start
-        } else {
-            self.selection.clone()
+        let Some(range) =
+            query_backspace_range(&self.text, self.selection.clone(), self.marked.is_some())
+        else {
+            return;
         };
         self.selection = range;
         self.replace(None, "", false, cx);
     }
 
+    fn newline(&mut self, _: &QueryNewline, _: &mut Window, cx: &mut Context<Self>) {
+        // Enter confirms an active IME candidate; only insert a newline
+        // after the marked composition has been committed.
+        if self.multiline_mode && self.marked.is_none() {
+            self.replace(None, "\n", false, cx);
+        }
+    }
+
     fn select_all(&mut self, _: &QuerySelectAll, _: &mut Window, cx: &mut Context<Self>) {
+        if self.marked.is_some() {
+            return;
+        }
         self.selection = 0..self.text.len();
         cx.notify();
     }
 
     fn paste(&mut self, _: &QueryPaste, _: &mut Window, cx: &mut Context<Self>) {
+        if self.marked.is_some() {
+            return;
+        }
         if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
             self.replace(None, &text, false, cx);
         }
@@ -419,8 +547,13 @@ impl Render for QuickOpenInput {
         }
         div()
             .id("quick-open-query")
-            .key_context("AleraGpuiQuickOpen")
+            .key_context(if self.multiline_mode {
+                "AleraGpuiProfileMultiline"
+            } else {
+                "AleraGpuiQuickOpen"
+            })
             .track_focus(&self.focus)
+            .on_action(cx.listener(Self::newline))
             .on_action(cx.listener(Self::backspace))
             .on_action(cx.listener(Self::select_all))
             .on_action(cx.listener(Self::paste))
@@ -443,10 +576,15 @@ impl Render for QuickOpenInput {
             .px_2()
             .py_1()
             .text_sm()
+            .when(self.multiline_mode, |input| input.min_h(px(108.0)))
             .child(if self.text.is_empty() {
                 self.placeholder.to_string()
             } else {
-                format!("⌕ {}", self.text)
+                if self.multiline_mode {
+                    self.text.clone()
+                } else {
+                    format!("⌕ {}", self.text)
+                }
             })
             .child(QuickOpenCapture { input: cx.entity() })
             .into_any_element()
@@ -455,7 +593,95 @@ impl Render for QuickOpenInput {
 
 #[cfg(test)]
 mod tests {
-    use super::{accepts_native_text_event, remove_marked_preedit};
+    use super::{
+        accepts_native_text_event, normalize_input_text, query_backspace_range,
+        quick_open_enter_accepts_match, quick_open_move_selection, quick_open_target_is_active,
+        remove_marked_preedit,
+    };
+
+    #[test]
+    fn profile_multiline_preserves_newlines_without_changing_search_or_terminal() {
+        assert_eq!(
+            normalize_input_text("one\r\ntwo\nthree", true),
+            "one\ntwo\nthree"
+        );
+        assert_eq!(
+            normalize_input_text("one\r\ntwo\nthree", false),
+            "one  two three"
+        );
+        assert_eq!(normalize_input_text("中\0文\n第二行", true), "中文\n第二行");
+    }
+
+    #[test]
+    fn e04_quick_open_arrows_select_bounded_matches_without_stealing_ime_keys() {
+        assert_eq!(quick_open_move_selection("down", false, 0, 3), Some(1));
+        assert_eq!(quick_open_move_selection("down", false, 1, 3), Some(2));
+        assert_eq!(quick_open_move_selection("down", false, 2, 3), Some(2));
+        assert_eq!(quick_open_move_selection("up", false, 2, 3), Some(1));
+        assert_eq!(quick_open_move_selection("up", false, 0, 3), Some(0));
+        assert_eq!(
+            quick_open_move_selection("DOWN", false, usize::MAX, 3),
+            Some(2)
+        );
+        assert_eq!(
+            quick_open_move_selection("up", false, usize::MAX, 3),
+            Some(1)
+        );
+        assert_eq!(quick_open_move_selection("down", true, 0, 3), None);
+        assert_eq!(quick_open_move_selection("up", true, 1, 3), None);
+        assert_eq!(quick_open_move_selection("down", false, 0, 0), None);
+        assert_eq!(quick_open_move_selection("enter", false, 0, 3), None);
+    }
+
+    #[test]
+    fn e01_quick_open_dialog_only_closes_for_the_actual_target_editor() {
+        let workspace = tempfile::tempdir().unwrap();
+        let first = workspace.path().join("first.txt");
+        let second = workspace.path().join("second.txt");
+        std::fs::write(&first, "first").unwrap();
+        std::fs::write(&second, "second").unwrap();
+        assert!(!quick_open_target_is_active(&first, None));
+        assert!(!quick_open_target_is_active(&first, Some(second.as_path())));
+        assert!(quick_open_target_is_active(
+            &first,
+            Some(dunce::canonicalize(&first).unwrap().as_path()),
+        ));
+    }
+
+    #[test]
+    fn u03_search_backspace_defers_to_ime_during_zhuyin_composition() {
+        let committed = "已搜尋";
+        let marked = "ㄇ";
+        let text = format!("{committed}{marked}");
+        let caret = text.len();
+        assert_eq!(query_backspace_range(&text, caret..caret, true), None);
+        assert_eq!(
+            query_backspace_range(&text, committed.len()..caret, true),
+            None
+        );
+        // Once the OS commits text, Backspace removes exactly one grapheme.
+        let completed = "已搜尋🌏";
+        let caret = completed.len();
+        assert_eq!(
+            query_backspace_range(completed, caret..caret, false),
+            Some("已搜尋".len()..caret)
+        );
+        assert_eq!(
+            query_backspace_range(completed, 0..caret, false),
+            Some(0..caret)
+        );
+        assert_eq!(query_backspace_range(completed, 1..1, false), None);
+    }
+
+    #[test]
+    fn e01_quick_open_enter_ignores_ime_candidate_confirmation() {
+        assert!(!quick_open_enter_accepts_match("enter", true, true));
+        assert!(!quick_open_enter_accepts_match("return", true, true));
+        assert!(!quick_open_enter_accepts_match("enter", false, false));
+        assert!(!quick_open_enter_accepts_match("escape", false, true));
+        assert!(quick_open_enter_accepts_match("Enter", false, true));
+        assert!(quick_open_enter_accepts_match("return", false, true));
+    }
 
     #[test]
     fn both_terminal_and_explorer_reject_delayed_ime_events_after_blur() {

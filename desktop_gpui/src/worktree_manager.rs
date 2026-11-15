@@ -643,6 +643,57 @@ mod tests {
     }
 
     #[test]
+    fn g06_create_remove_separate_worktree_keeps_dirty_primary_files_and_index() {
+        let (_dir, manager) = initialized_repo();
+        let root = manager.root().to_path_buf();
+        let repo = Repository::open(&root).unwrap();
+        let initial_head = repo.head().unwrap().target().unwrap();
+        let current_branch = repo.head().unwrap().shorthand().unwrap().to_owned();
+        let baseline_index = repo.index().unwrap().write_tree().unwrap();
+        fs::write(root.join("README"), "local editor disk changes").unwrap();
+        fs::write(root.join("my-untracked.txt"), "private WIP").unwrap();
+
+        let created = manager
+            .create_at_commit("g06/independent", &initial_head.to_string())
+            .unwrap();
+        assert_eq!(
+            fs::read_to_string(created.join("README")).unwrap(),
+            "initial"
+        );
+        assert_eq!(
+            fs::read_to_string(root.join("README")).unwrap(),
+            "local editor disk changes"
+        );
+        assert_eq!(
+            fs::read_to_string(root.join("my-untracked.txt")).unwrap(),
+            "private WIP"
+        );
+        assert_eq!(repo.head().unwrap().target(), Some(initial_head));
+        assert_eq!(repo.head().unwrap().shorthand().unwrap(), current_branch);
+        assert_eq!(repo.index().unwrap().write_tree().unwrap(), baseline_index);
+        assert!(manager.list().unwrap().iter().any(|entry| {
+            entry.path == created && entry.branch.as_deref() == Some("g06/independent")
+        }));
+
+        // Removal is allowed only for the clean, inactive managed checkout;
+        // the current (dirty) primary worktree and its Editor WIP are untouched.
+        assert!(manager.remove(&created, false).is_err());
+        assert_eq!(manager.preflight_remove(&created).unwrap(), created);
+        manager.remove(&created, true).unwrap();
+        assert!(!created.exists());
+        assert!(repo.find_reference("refs/heads/g06/independent").is_ok());
+        assert_eq!(repo.head().unwrap().target(), Some(initial_head));
+        assert_eq!(repo.index().unwrap().write_tree().unwrap(), baseline_index);
+        assert_eq!(
+            fs::read_to_string(root.join("README")).unwrap(),
+            "local editor disk changes"
+        );
+        assert_eq!(
+            fs::read_to_string(root.join("my-untracked.txt")).unwrap(),
+            "private WIP"
+        );
+    }
+    #[test]
     fn lists_creates_and_removes_only_clean_managed_worktrees() {
         let (_dir, manager) = initialized_repo();
         let initial = manager.list().unwrap();

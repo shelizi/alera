@@ -166,6 +166,7 @@ impl ServerActor {
 #[cfg(test)]
 mod fault_isolation_tests {
     use super::*;
+    use crate::terminal_host::orchestration::agent_presence::AgentPresenceState;
     use crate::terminal_host::server::actor_test_harness::test_actor;
     use crate::terminal_host::session::PtyEvent;
 
@@ -188,6 +189,15 @@ mod fault_isolation_tests {
         )
         .await;
 
+        actor
+            .agent_presence
+            .update("broken", "codex".into(), AgentPresenceState::Done);
+        actor
+            .agent_presence
+            .update("healthy", "claude".into(), AgentPresenceState::Done);
+        assert!(actor.agent_presence.is_injection_ready("broken"));
+        assert!(actor.agent_presence.is_injection_ready("healthy"));
+
         // A broken reader and a failed shell are local to the original PTY.
         actor
             .handle_pty_event("broken".to_string(), PtyEvent::Error("pipe closed".into()))
@@ -197,6 +207,12 @@ mod fault_isolation_tests {
             .await;
         assert!(!actor.sessions["broken"].running());
         assert!(actor.sessions["healthy"].running());
+        assert!(actor.agent_presence.get("broken").is_none());
+        assert!(!actor.agent_presence.is_injection_ready("broken"));
+        assert_eq!(
+            actor.agent_presence.get("healthy").map(|entry| entry.state),
+            Some(AgentPresenceState::Done)
+        );
 
         // The unaffected session can still receive output in the same Host.
         actor

@@ -43,6 +43,8 @@ try {
     New-Item -ItemType Directory -Force -Path $package | Out-Null
     Copy-Item -LiteralPath $nativePath -Destination (Join-Path $package 'AleraNative.exe') -ErrorAction Stop
     Copy-Item -LiteralPath $cliPath -Destination (Join-Path $package 'alera.exe') -ErrorAction Stop
+    $nativeToastShortcutTool = Join-Path $PSScriptRoot 'install_alera_native_toast_shortcut.ps1'
+    Copy-Item -LiteralPath $nativeToastShortcutTool -Destination (Join-Path $package 'install_alera_native_toast_shortcut.ps1') -ErrorAction Stop
     @{
         product = 'Alera Native'
         appId = 'dev.leynier.alera.native'
@@ -67,8 +69,17 @@ Host-owned PTYs. Do not type into the same PTY in both apps simultaneously.
 Native-only UI sessions and scratch drafts use separate state. Older GPUI
 previews may reuse Alera/gpui-preview to avoid hiding unsaved drafts.
 
+Windows Toast prereq for this unpackaged Native preview (manual opt-in):
+  powershell -NoProfile -File .\install_alera_native_toast_shortcut.ps1 -Mode Check
+  powershell -NoProfile -File .\install_alera_native_toast_shortcut.ps1 -Mode Install -NativeExe (Resolve-Path .\AleraNative.exe).Path
+  powershell -NoProfile -File .\install_alera_native_toast_shortcut.ps1 -Mode Uninstall
+This opt-in tool registers ONLY the per-user Alera Native Preview shortcut
+with Native's separate AppUserModelID and never modifies Alera Classic.
+It does not enable GPUI production Agent notification ownership or guarantee
+Windows will show Toasts; real WinRT display/click remains an H03 acceptance gate.
+
 This ZIP is an opt-in preview, not a Classic update or production release.
-It does not register an installer or install any automatic updater.
+The ZIP does not auto-run any installer, shortcut registration, or updater.
 '@ | Set-Content -LiteralPath (Join-Path $package 'README.txt') -Encoding utf8
     Compress-Archive -LiteralPath $package -DestinationPath $zip -CompressionLevel Optimal -ErrorAction Stop
     $hash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()

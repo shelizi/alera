@@ -47,6 +47,8 @@ fn update_args() -> AgentProfileUpdateArgs {
         clear_description: false,
         quota_group: None,
         clear_quota_group: false,
+        edit_content_stdin: false,
+        edit_managed_selection_stdin: false,
         confirm_reduced_protections: false,
     }
 }

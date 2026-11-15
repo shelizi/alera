@@ -31,7 +31,7 @@ MCP window ID** action. A copied window ID is a selector, **not** a token.
 | --- | --- | --- |
 | `focus_workspace` | Select existing registered workspace path | Canonical root equals Host target |
 | `reveal_file` | Expand Explorer ancestors and select file | Real in-workspace file is visible in tree |
-| `open_file` | Reuse existing or open file-backed NativeEditor | Correct editor file active; optional line/caret navigation verified |
+| `open_file` | Built-in NativeEditor opens/reuses scoped file and moves caret; explicit `zed`/`vscode` launches a selected installed external editor | Native Editor file/line active, or an explicitly chosen editor process spawned; no false success for missing external editors |
 | `select_tab` | Focus existing authenticated Host Terminal tab | Selected Host handle maps to requested workspace+tab ID |
 | `focus_agent` | Focus existing authenticated Host Agent tab | Requested workspace, tab ID, Agent type **and Agent session handle** match |
 | `open_git_graph` | Show Native Git Graph with local/remote branches, favorites-only, selected ref, optional Workspace-relative file and Git root scope | Requested bounded history is loaded in the visible panel **before** success; invalid or escaping paths are refused |
@@ -41,8 +41,22 @@ MCP window ID** action. A copied window ID is a selector, **not** a token.
 | `update_setting` | Compare `expectedValue`, atomically persist a writable scalar, read it back and update the Native UI owner | Applied only with readback; stale expected values or invalid/corrupt data fail closed |
 | `open_settings` | Show the actual GPUI Native Settings panel: Application, Terminal, Editor, Agents, or Agent Profiles | Visible requested section and Native settings read must succeed; Host inventories refresh asynchronously |
 
-Unsupported external editors and `openMode=new` return
-`applied=false`, never a made-up success. Native workbench's existing dirty
+**2026-11-14 Classic parity update:** Native now accepts Host-authorized
+`editor=zed` or `editor=vscode` with 1-based line/column, and uses the same
+Zed `path:line:column` or VS Code `--goto path:line:column` convention
+as Classic. It launches only an explicitly installed selected editor;
+unavailable editors fail without an implicit fallback.
+
+For the built-in editor, `openMode=new` can create a real new file-backed
+Tab **when that file is not already open** in either GPUI pane. If that file
+already has a writable tab, Native rejects `new` with `applied=false`,
+rather than duplicating an independent writable buffer or falsely claiming
+a newly created tab. Unlike Classic, Native still lacks a safely shared
+same-file multi-view buffer. `openMode=reuse` focuses the existing buffer.
+These paths currently have unit and Native compile evidence, not a positive
+end-to-end GUI/Host acceptance run.
+
+Native workbench's existing dirty
 buffer guards can refuse cross-workspace switching. All file targets are
 canonicalized again and required to remain within the target workspace;
 Host authorization alone is not sufficient to open a symlink outside it.

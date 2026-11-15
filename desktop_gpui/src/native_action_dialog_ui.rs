@@ -5,6 +5,23 @@
 use super::*;
 use native_components::action_button;
 
+/// Keep filename and directory independently readable in narrow Quick Open
+/// dialogs. The full relative path remains available in the row tooltip.
+fn quick_open_display_parts(path: &Path, workspace: &Path) -> (String, String, String) {
+    let relative = path.strip_prefix(workspace).unwrap_or(path);
+    let full = relative.display().to_string();
+    let filename = relative
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| full.clone());
+    let parent = relative
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .map(|parent| parent.display().to_string())
+        .unwrap_or_default();
+    (filename, parent, full)
+}
+
 /// The expanded viewport only displays an already-fetched read-only patch.
 pub(super) fn can_expand_read_only_diff(patch: Option<&str>, loading: bool) -> bool {
     !loading && patch.is_some_and(|text| !text.trim().is_empty())
@@ -52,7 +69,7 @@ fn summarize_git_patch(patch: &str) -> GitPatchSummary {
     summary
 }
 
-fn git_patch_line_color(line: &str) -> u32 {
+pub(super) fn git_patch_line_color(line: &str) -> u32 {
     if line.starts_with("@@ ") || line.starts_with("@@@ ") {
         0x83b7ed
     } else if line.starts_with('+') && !line.starts_with("+++") {
@@ -74,11 +91,11 @@ fn git_patch_line_color(line: &str) -> u32 {
 /// page may begin inside a hunk: until its first valid @@ header, leave both
 /// coordinates blank rather than inventing the previous page's line numbers.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct GitDiffDisplayRow<'a> {
-    text: &'a str,
-    old: Option<usize>,
-    new: Option<usize>,
-    hunk: Option<(usize, usize)>,
+pub(super) struct GitDiffDisplayRow<'a> {
+    pub(super) text: &'a str,
+    pub(super) old: Option<usize>,
+    pub(super) new: Option<usize>,
+    pub(super) hunk: Option<(usize, usize)>,
 }
 
 fn parse_unified_hunk_header(line: &str) -> Option<(usize, usize)> {
@@ -99,12 +116,12 @@ fn parse_unified_hunk_header(line: &str) -> Option<(usize, usize)> {
     Some((parse_start(old, '-')?, parse_start(new, '+')?))
 }
 
-fn visible_git_diff_rows(patch: &str) -> Vec<GitDiffDisplayRow<'_>> {
+pub(super) fn parse_git_diff_rows(patch: &str, limit: usize) -> Vec<GitDiffDisplayRow<'_>> {
     let mut old = None;
     let mut new = None;
     patch
         .lines()
-        .take(MAX_COLORED_PATCH_LINES)
+        .take(limit)
         .map(|line| {
             if let Some((from, to)) = parse_unified_hunk_header(line) {
                 old = Some(from);
@@ -148,6 +165,10 @@ fn visible_git_diff_rows(patch: &str) -> Vec<GitDiffDisplayRow<'_>> {
         .collect()
 }
 
+fn visible_git_diff_rows(patch: &str) -> Vec<GitDiffDisplayRow<'_>> {
+    parse_git_diff_rows(patch, MAX_COLORED_PATCH_LINES)
+}
+
 fn visible_git_hunk_targets(rows: &[GitDiffDisplayRow<'_>]) -> Vec<(usize, usize, usize)> {
     rows.iter()
         .enumerate()
@@ -160,20 +181,23 @@ fn visible_git_hunk_targets(rows: &[GitDiffDisplayRow<'_>]) -> Vec<(usize, usize
 /// new source ticket, even when the path happens to be the same spelling.
 /// Workspace switching also invalidates the dialog's file source.
 #[derive(Clone)]
-struct GitDialogFileSource {
-    workspace_generation: u64,
-    source_ticket: u64,
-    relative: PathBuf,
+pub(super) struct GitDialogFileSource {
+    pub(super) workspace_generation: u64,
+    pub(super) source_ticket: u64,
+    pub(super) relative: PathBuf,
+    pub(super) area: Option<GitChangeArea>,
 }
 
-fn git_dialog_file_source_matches(
+pub(super) fn git_dialog_file_source_matches(
     current_generation: u64,
     current: Option<&GitFileDiffPaging>,
     expected: &GitDialogFileSource,
 ) -> bool {
     current_generation == expected.workspace_generation
         && current.is_some_and(|paging| {
-            paging.source_ticket == expected.source_ticket && paging.relative == expected.relative
+            paging.source_ticket == expected.source_ticket
+                && paging.relative == expected.relative
+                && paging.area == expected.area
         })
 }
 
@@ -197,6 +221,7 @@ impl Workbench {
                 workspace_generation: self.workspace_generation,
                 source_ticket: paging.source_ticket,
                 relative: paging.relative.clone(),
+                area: paging.area,
             });
         let owner = cx.entity().downgrade();
         let patch_scroll = ScrollHandle::new();
@@ -564,6 +589,7 @@ impl Workbench {
         cx: &mut Context<Self>,
     ) -> Option<gpui::AnyElement> {
         let input = self.quick_open.clone()?;
+        let input_for_enter = input.clone();
         if self.settings_section.is_some() || self.explorer_action.is_some() {
             return None;
         }
@@ -588,8 +614,9 @@ impl Workbench {
             .as_ref()
             .map(|index| index.search_with_exclusions(input.read(cx).query(), 18, &excluded))
             .unwrap_or_default();
-        let first_match = matches.first().cloned();
         let count = matches.len();
+        let selected_index = self.quick_open_selected_index.min(count.saturating_sub(1));
+        let selected_match = matches.get(selected_index).cloned();
         let total = self
             .file_index
             .as_ref()
@@ -614,35 +641,83 @@ impl Workbench {
             .child(
                 div()
                     .id("native-quick-open-results")
+                    .track_scroll(&self.quick_open_results_scroll)
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()
                     .children(matches.into_iter().enumerate().map(|(index, path)| {
-                        let label = path
-                            .strip_prefix(&workspace)
-                            .unwrap_or(&path)
-                            .display()
-                            .to_string();
-                        native_components::menu_item(
-                            ("native-quick-open-result", index),
-                            label,
-                            index == 0,
-                            false,
-                        )
-                        .on_click(cx.listener(
-                            move |view, _, window, cx| {
+                        let (filename, parent, full_path) =
+                            quick_open_display_parts(&path, &workspace);
+                        div()
+                            .id(("native-quick-open-result", index))
+                            .w_full()
+                            .min_w_0()
+                            .h(px(28.0))
+                            .px_2()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .cursor_pointer()
+                            .rounded_sm()
+                            .hover(|style| style.bg(rgb(ACTIVE)))
+                            .text_sm()
+                            .text_color(rgb(TEXT))
+                            .tooltip(move |window, cx| {
+                                gpui_kit::component::tooltip::Tooltip::new(full_path.clone())
+                                    .build(window, cx)
+                            })
+                            .child(div().w(px(16.0)).child(if index == selected_index {
+                                "✓"
+                            } else {
+                                ""
+                            }))
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .flex_1()
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(div().min_w_0().flex_1().truncate().child(filename))
+                                    .when(!parent.is_empty(), |row| {
+                                        row.child(
+                                            div()
+                                                .min_w_0()
+                                                .max_w(px(220.0))
+                                                .truncate()
+                                                .text_xs()
+                                                .text_color(rgb(MUTED))
+                                                .child(parent),
+                                        )
+                                    }),
+                            )
+                            .on_click(cx.listener(move |view, _, window, cx| {
                                 view.choose_quick_open_path(&path, window, cx);
-                            },
-                        ))
+                            }))
                     })),
             );
         let content = content.on_key_down(cx.listener(
             move |view, event: &gpui::KeyDownEvent, window, cx| {
                 let key = event.keystroke.key.as_str();
-                if (key.eq_ignore_ascii_case("enter") || key.eq_ignore_ascii_case("return"))
-                    && first_match.is_some()
-                {
-                    if let Some(path) = &first_match {
+                let composing = input_for_enter.read(cx).composing();
+                if let Some(next) = crate::quick_open_ui::quick_open_move_selection(
+                    key,
+                    composing,
+                    view.quick_open_selected_index,
+                    count,
+                ) {
+                    view.quick_open_selected_index = next;
+                    view.quick_open_results_scroll.scroll_to_item(next);
+                    cx.notify();
+                    cx.stop_propagation();
+                    return;
+                }
+                if crate::quick_open_ui::quick_open_enter_accepts_match(
+                    key,
+                    composing,
+                    selected_match.is_some(),
+                ) {
+                    if let Some(path) = &selected_match {
                         view.choose_quick_open_path(path, window, cx);
                     }
                     cx.stop_propagation();
@@ -655,6 +730,20 @@ impl Workbench {
     fn choose_quick_open_path(&mut self, path: &Path, window: &mut Window, cx: &mut Context<Self>) {
         if self.model.open_path(path) {
             self.open_editor(cx);
+            let opened_correct_file = self.focused_editor().is_some_and(|editor| {
+                crate::quick_open_ui::quick_open_target_is_active(
+                    path,
+                    editor.read(cx).document().path(),
+                )
+            });
+            if !opened_correct_file {
+                // Keep the dialog open. A failed Native Editor open must not
+                // pretend that the requested file was actually activated.
+                self.model
+                    .set_status("Quick Open could not activate this file; check the editor status");
+                cx.notify();
+                return;
+            }
             self.quick_open = None;
             self.persist_session();
             window.close_dialog(cx);
@@ -758,9 +847,31 @@ impl Workbench {
 mod git_preview_tests {
     use super::{
         can_expand_read_only_diff, expanded_git_diff_size, git_dialog_file_source_matches,
-        git_patch_line_color, parse_unified_hunk_header, summarize_git_patch,
-        visible_git_diff_rows, visible_git_hunk_targets, GitDialogFileSource, GitFileDiffPaging,
+        git_patch_line_color, parse_unified_hunk_header, quick_open_display_parts,
+        summarize_git_patch, visible_git_diff_rows, visible_git_hunk_targets, GitDialogFileSource,
+        GitFileDiffPaging,
     };
+    use alera_gpui_desktop::git_inspect::GitChangeArea;
+    use std::path::Path;
+
+    #[test]
+    fn u02_quick_open_labels_keep_filename_and_avoid_duplicate_directory() {
+        let workspace = Path::new("repo");
+        let file = Path::new("repo/src/deeply/nested/README.md");
+        let (filename, parent, full) = quick_open_display_parts(file, workspace);
+        assert_eq!(filename, "README.md");
+        assert_eq!(parent, Path::new("src/deeply/nested").display().to_string());
+        assert_eq!(
+            full,
+            Path::new("src/deeply/nested/README.md")
+                .display()
+                .to_string()
+        );
+        let (root_filename, root_parent, _) =
+            quick_open_display_parts(Path::new("repo/Cargo.toml"), workspace);
+        assert_eq!(root_filename, "Cargo.toml");
+        assert!(root_parent.is_empty());
+    }
 
     #[test]
     fn expanded_git_preview_requires_loaded_nonempty_snapshot() {
@@ -819,9 +930,11 @@ mod git_preview_tests {
             workspace_generation: 42,
             source_ticket: 7,
             relative: "src/dirty.rs".into(),
+            area: Some(GitChangeArea::Changes),
         };
         let mut paging = GitFileDiffPaging {
             relative: "src/dirty.rs".into(),
+            area: Some(GitChangeArea::Changes),
             source_ticket: 7,
             start_line: 0,
             next_line: Some(750),
@@ -858,6 +971,26 @@ mod git_preview_tests {
         ));
     }
 
+    #[test]
+    fn g02_diff_source_refuses_same_file_with_different_staged_area() {
+        let expected = GitDialogFileSource {
+            workspace_generation: 5,
+            source_ticket: 9,
+            relative: "same.txt".into(),
+            area: Some(GitChangeArea::Staged),
+        };
+        let mut paging = GitFileDiffPaging {
+            relative: "same.txt".into(),
+            area: Some(GitChangeArea::Staged),
+            source_ticket: 9,
+            start_line: 0,
+            next_line: None,
+            previous_starts: Vec::new(),
+        };
+        assert!(git_dialog_file_source_matches(5, Some(&paging), &expected));
+        paging.area = Some(GitChangeArea::Changes);
+        assert!(!git_dialog_file_source_matches(5, Some(&paging), &expected));
+    }
     #[test]
     fn git_diff_gutter_tracks_old_and_new_line_numbers_through_multiple_hunks() {
         let patch = concat!(

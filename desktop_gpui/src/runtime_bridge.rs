@@ -29,6 +29,84 @@ pub fn terminal_cli_arguments(runtime_dir: &Path, args: &[OsString]) -> Vec<OsSt
     command
 }
 
+/// Origin of the *effective* Runtime Host project configuration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HostProjectConfigOrigin {
+    UiOverride,
+    RepoFile,
+    None,
+}
+
+impl HostProjectConfigOrigin {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::UiOverride => "UI override",
+            Self::RepoFile => "Repository alera.toml",
+            Self::None => "Defaults (no repo file)",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct HostProjectSettingsDocument {
+    pub config: Value,
+    pub origin: HostProjectConfigOrigin,
+    pub repo_config_error: bool,
+}
+
+fn parse_host_project_settings_document(
+    response: &Value,
+    project_id: &str,
+) -> io::Result<HostProjectSettingsDocument> {
+    if response.get("kind").and_then(Value::as_str) != Some("projectConfig")
+        || response.get("projectId").and_then(Value::as_str) != Some(project_id)
+    {
+        return Err(io::Error::new(
+            ErrorKind::InvalidData,
+            "Effective project config response mismatched",
+        ));
+    }
+    let origin = match response.get("origin").and_then(Value::as_str) {
+        Some("uiOverride") => HostProjectConfigOrigin::UiOverride,
+        Some("repoFile") => HostProjectConfigOrigin::RepoFile,
+        Some("none") => HostProjectConfigOrigin::None,
+        _ => {
+            return Err(io::Error::new(
+                ErrorKind::InvalidData,
+                "Unknown effective ProjectConfig source",
+            ))
+        }
+    };
+    let repo_config_error = match response.get("error") {
+        None | Some(Value::Null) => false,
+        Some(Value::String(s)) => !s.is_empty(),
+        _ => {
+            return Err(io::Error::new(
+                ErrorKind::InvalidData,
+                "Invalid ProjectConfig error field",
+            ))
+        }
+    };
+    if repo_config_error && origin != HostProjectConfigOrigin::RepoFile {
+        return Err(io::Error::new(
+            ErrorKind::InvalidData,
+            "Unexpected ProjectConfig source error",
+        ));
+    }
+    let config = response
+        .get("config")
+        .filter(|config| config.is_object())
+        .cloned()
+        .ok_or_else(|| {
+            io::Error::new(ErrorKind::InvalidData, "Effective project config missing")
+        })?;
+    Ok(HostProjectSettingsDocument {
+        config,
+        origin,
+        repo_config_error,
+    })
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectRemovalPreview {
     pub workspace_count: u64,
@@ -198,6 +276,76 @@ impl RuntimeCliBridge {
         Ok(result)
     }
 
+    /// Retrieve the existing Host's read-only daily usage projection. The
+    /// CLI resolves configured accounts inside the Host and strips raw
+    /// transcript/model/account details before Native receives the summary.
+    pub fn agent_usage_summary(&self, days: u8) -> io::Result<Value> {
+        if days != 7 && days != 30 {
+            return Err(io::Error::new(
+                ErrorKind::InvalidInput,
+                "Usage period must be 7 or 30 days",
+            ));
+        }
+        if !self.runtime_dir.join("host.json").is_file()
+            && !self.runtime_dir.join("runtime-host.json").is_file()
+        {
+            return Err(io::Error::new(
+                ErrorKind::NotConnected,
+                "Classic Runtime Host is not running",
+            ));
+        }
+        let mut child = windowless_command(&self.executable)
+            .arg("quota")
+            .arg("--no-start")
+            .arg("--json")
+            .arg("--runtime-dir")
+            .arg(&self.runtime_dir)
+            .arg("usage")
+            .arg("--days")
+            .arg(days.to_string())
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| io::Error::other("Usage CLI stdout missing"))?;
+        let reader = thread::spawn(move || -> io::Result<Vec<u8>> {
+            let mut bytes = Vec::new();
+            stdout
+                .take(MAX_QUOTA_RESPONSE_BYTES + 1)
+                .read_to_end(&mut bytes)?;
+            Ok(bytes)
+        });
+        let status = match wait_with_timeout(&mut child, Duration::from_secs(105)) {
+            Ok(status) => status,
+            Err(error) => {
+                let _ = reader.join();
+                return Err(error);
+            }
+        };
+        let bytes = reader
+            .join()
+            .map_err(|_| io::Error::other("Usage CLI reader panicked"))??;
+        if !status.success() {
+            return Err(io::Error::other(
+                "Usage unavailable: existing Runtime Host/CLI is offline or incompatible",
+            ));
+        }
+        if bytes.len() as u64 > MAX_QUOTA_RESPONSE_BYTES {
+            return Err(io::Error::new(
+                ErrorKind::InvalidData,
+                "Usage response exceeds 512 KiB",
+            ));
+        }
+        let result: Value = serde_json::from_slice(&bytes)
+            .map_err(|error| io::Error::new(ErrorKind::InvalidData, error))?;
+        crate::agent_quota::parse_agent_usage_summary(&result)
+            .map_err(|reason| io::Error::new(ErrorKind::InvalidData, reason))?;
+        Ok(result)
+    }
+
     /// Return only the Host-configured enabled provider order. No environment
     /// keys, credentials, profile command lines or other Host fields.
     pub fn agent_quota_enabled_order(&self) -> io::Result<Vec<String>> {
@@ -309,13 +457,14 @@ impl RuntimeCliBridge {
             // no stdin payload; both still require --no-start below.
             (Some("workspaces"), false) => args.len() == 1,
             (Some("create"), false) => is_create_terminal_args(args),
+            (Some("create-agent"), false) => is_create_agent_terminal_args(args),
             (Some("resize"), false) => is_resize_terminal_args(args),
             _ => false,
         };
         if !allowed {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
-                "GPUI supports terminal list/read/workspaces/create/explicit write only",
+                "GPUI supports fixed terminal list/read/workspaces/create/create-agent/explicit write only",
             ));
         }
         if !self.runtime_dir.join("host.json").is_file()
@@ -576,7 +725,7 @@ impl RuntimeCliBridge {
                 "Unknown shared Settings path",
             ));
         }
-        self.desktop_settings_command(&[
+        let snapshot = self.desktop_settings_command(&[
             OsString::from("set"),
             OsString::from("--path"),
             OsString::from(path),
@@ -584,7 +733,9 @@ impl RuntimeCliBridge {
             OsString::from(expected.to_string()),
             OsString::from("--value"),
             OsString::from(next.to_string()),
-        ])
+        ])?;
+        validate_desktop_settings_cas_readback(path, next, &snapshot)?;
+        Ok(snapshot)
     }
 
     fn desktop_settings_command(&self, args: &[OsString]) -> io::Result<Value> {
@@ -1248,8 +1399,12 @@ impl RuntimeCliBridge {
         Ok(())
     }
 
-    /// Fetch Classic's entire project config for a first-class shared editor.
-    pub fn read_project_settings(&self, project_id: &str) -> io::Result<Value> {
+    /// Fetch the complete effective ProjectConfig and exact source using the
+    /// existing Host resolver. Unlike config-show, this includes repo files.
+    pub fn read_project_settings_document(
+        &self,
+        project_id: &str,
+    ) -> io::Result<HostProjectSettingsDocument> {
         validate_catalog_identifier(project_id)?;
         let mut command = windowless_command(&self.executable);
         command
@@ -1257,7 +1412,7 @@ impl RuntimeCliBridge {
             .arg("--json")
             .arg("--runtime-dir")
             .arg(&self.runtime_dir)
-            .arg("config-show")
+            .arg("config-effective")
             .arg("--id")
             .arg(project_id)
             .stdin(Stdio::null())
@@ -1295,19 +1450,37 @@ impl RuntimeCliBridge {
         }
         let response: Value = serde_json::from_slice(&bytes)
             .map_err(|error| io::Error::new(ErrorKind::InvalidData, error))?;
-        if response.get("kind").and_then(Value::as_str) != Some("projectConfig")
-            || response.get("projectId").and_then(Value::as_str) != Some(project_id)
-        {
-            return Err(io::Error::new(
-                ErrorKind::InvalidData,
-                "Project config response mismatched",
+        parse_host_project_settings_document(&response, project_id)
+    }
+
+    pub fn read_project_settings(&self, project_id: &str) -> io::Result<Value> {
+        self.read_project_settings_document(project_id)
+            .map(|document| document.config)
+    }
+
+    /// Explicitly remove only the Host UI override; never modify alera.toml.
+    /// No implicit Host start or direct RuntimeStore/SQLite access in Native.
+    pub fn clear_project_settings_override(&self, project_id: &str) -> io::Result<()> {
+        validate_catalog_identifier(project_id)?;
+        let mut command = windowless_command(&self.executable);
+        command
+            .arg("project")
+            .arg("--json")
+            .arg("--runtime-dir")
+            .arg(&self.runtime_dir)
+            .arg("config-clear")
+            .arg("--id")
+            .arg(project_id)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let mut child = command.spawn()?;
+        if !wait_with_timeout(&mut child, PROBE_TIMEOUT)?.success() {
+            return Err(io::Error::other(
+                "Host refused ProjectConfig override removal or CLI is outdated",
             ));
         }
-        response
-            .get("config")
-            .cloned()
-            .filter(Value::is_object)
-            .ok_or_else(|| io::Error::new(ErrorKind::InvalidData, "Project config JSON missing"))
+        Ok(())
     }
 
     pub fn write_project_settings(&self, project_id: &str, json: &str) -> io::Result<()> {
@@ -1328,6 +1501,9 @@ impl RuntimeCliBridge {
         }
         // The Alera CLI validates against the complete ProjectConfig type.
         // Avoid enabling RuntimeStore/SQLx in the standalone GPUI binary.
+        // Use its explicit stdin sentinel rather than passing the entire
+        // ProjectConfig in argv: worktree setup commands and prompt text may
+        // contain secrets. Older CLI versions refuse this mode safely.
         let mut command = windowless_command(&self.executable);
         command
             .arg("project")
@@ -1338,13 +1514,25 @@ impl RuntimeCliBridge {
             .arg("--id")
             .arg(project_id)
             .arg("--config-json")
-            .arg(json)
-            .stdin(Stdio::null())
+            .arg("-")
+            .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
         let mut child = command.spawn()?;
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| io::Error::other("Project config stdin pipe missing"))?;
+        if let Err(error) = stdin.write_all(json.as_bytes()) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(error);
+        }
+        drop(stdin); // Required: signal end of input before CLI validates.
         if !wait_with_timeout(&mut child, PROBE_TIMEOUT)?.success() {
-            return Err(io::Error::other("Classic project config update refused"));
+            return Err(io::Error::other(
+                "Classic project config update refused or CLI lacks stdin support",
+            ));
         }
         Ok(())
     }
@@ -1515,6 +1703,37 @@ fn is_create_terminal_args(args: &[OsString]) -> bool {
         && args[1]
             .to_str()
             .is_some_and(|arg| arg.len() > FLAG.len() && arg.starts_with(FLAG))
+}
+
+fn is_create_agent_terminal_args(args: &[OsString]) -> bool {
+    if args.len() != 4 {
+        return false;
+    }
+    let workspace = args[1]
+        .to_str()
+        .and_then(|s| s.strip_prefix("--workspace-id="));
+    let agent = args[2].to_str().and_then(|s| s.strip_prefix("--agent-id="));
+    let executable = args[3]
+        .to_str()
+        .and_then(|s| s.strip_prefix("--executable-path="));
+    let valid_id = workspace.is_some_and(|id| {
+        !id.is_empty()
+            && id.len() <= 256
+            && id.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':')
+            })
+    });
+    valid_id
+        && agent.is_some_and(|id| {
+            alera_core::agent_descriptor::agent_descriptor(id).is_some_and(|desc| desc.id == id)
+        })
+        && executable.is_some_and(|value| {
+            !value.is_empty()
+                && value.len() <= 1024
+                && !value.chars().any(|c| c.is_control())
+                && Path::new(value).is_absolute()
+                && Path::new(value).is_file()
+        })
 }
 
 fn is_resize_terminal_args(args: &[OsString]) -> bool {
@@ -1732,6 +1951,34 @@ fn validate_agent_hook_cas_readback(
     Ok(after)
 }
 
+/// The CLI may exit successfully while returning a stale/malformed Host
+/// snapshot. Only acknowledge a Settings edit after the specific field reads
+/// back as the requested value; do not confuse the two Client windows.
+fn validate_desktop_settings_cas_readback(
+    path: &str,
+    next: &Value,
+    snapshot: &Value,
+) -> io::Result<()> {
+    let readback = snapshot.get("values").and_then(|values| values.get(path));
+    let matches_requested = readback.is_some_and(|readback| {
+        if path == "terminal.fontSize" {
+            readback
+                .as_f64()
+                .zip(next.as_f64())
+                .is_some_and(|(a, b)| a == b)
+        } else {
+            readback == next
+        }
+    });
+    if !matches_requested {
+        return Err(io::Error::new(
+            ErrorKind::InvalidData,
+            "Shared settings Host CAS readback did not match requested value",
+        ));
+    }
+    Ok(())
+}
+
 fn validate_desktop_settings_response(verb: Option<&str>, response: &Value) -> io::Result<()> {
     let valid = match verb {
         Some("agent-hooks-get") => parse_agent_hook_settings_snapshot(response).is_ok(),
@@ -1756,6 +2003,91 @@ fn validate_desktop_settings_response(verb: Option<&str>, response: &Value) -> i
 mod tests {
     use super::*;
 
+    #[test]
+    fn effective_project_config_source_is_strict_and_does_not_expose_repo_parse_errors() {
+        let override_doc = serde_json::json!({
+            "kind": "projectConfig", "projectId": "p-1",
+            "origin": "uiOverride", "error": null,
+            "config": {"worktree": {"setup": ["export SECRET=hidden"]}},
+        });
+        let parsed = parse_host_project_settings_document(&override_doc, "p-1").unwrap();
+        assert_eq!(parsed.origin, HostProjectConfigOrigin::UiOverride);
+        assert_eq!(parsed.origin.label(), "UI override");
+        assert!(!parsed.repo_config_error);
+        assert_eq!(
+            parsed.config["worktree"]["setup"][0],
+            "export SECRET=hidden"
+        );
+        assert!(parse_host_project_settings_document(&override_doc, "p-2").is_err());
+        let repo = serde_json::json!({
+            "kind": "projectConfig", "projectId": "p-1",
+            "origin": "repoFile", "error": "private parser error with path",
+            "config": {},
+        });
+        let parsed = parse_host_project_settings_document(&repo, "p-1").unwrap();
+        assert_eq!(parsed.origin, HostProjectConfigOrigin::RepoFile);
+        assert!(parsed.repo_config_error);
+        assert!(parse_host_project_settings_document(
+            &serde_json::json!({
+                "kind": "projectConfig", "projectId": "p-1", "origin": "other",
+                "error": null, "config": {},
+            }),
+            "p-1"
+        )
+        .is_err());
+        assert!(parse_host_project_settings_document(
+            &serde_json::json!({
+                "kind": "projectConfig", "projectId": "p-1", "origin": "none",
+                "error": null, "config": "not-an-object",
+            }),
+            "p-1"
+        )
+        .is_err());
+        assert!(parse_host_project_settings_document(
+            &serde_json::json!({
+                "kind": "projectConfig", "projectId": "p-1", "origin": "uiOverride",
+                "error": "wrong origin error", "config": {},
+            }),
+            "p-1"
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn s03_shared_settings_cas_rejects_mismatched_or_missing_host_readback() {
+        let correct = serde_json::json!({"values":{"editor.tabSize":8}});
+        assert!(validate_desktop_settings_cas_readback(
+            "editor.tabSize",
+            &serde_json::json!(8),
+            &correct
+        )
+        .is_ok());
+        let stale = serde_json::json!({"values":{"editor.tabSize":7}});
+        assert!(validate_desktop_settings_cas_readback(
+            "editor.tabSize",
+            &serde_json::json!(8),
+            &stale
+        )
+        .is_err());
+        assert!(validate_desktop_settings_cas_readback(
+            "editor.tabSize",
+            &serde_json::json!(8),
+            &serde_json::json!({"values":{}})
+        )
+        .is_err());
+        assert!(validate_desktop_settings_cas_readback(
+            "terminal.fontSize",
+            &serde_json::json!(13.0),
+            &serde_json::json!({"values":{"terminal.fontSize":13}})
+        )
+        .is_ok());
+        assert!(validate_desktop_settings_cas_readback(
+            "general.language",
+            &serde_json::json!("english"),
+            &serde_json::json!({"values":{"general.language":"system"}})
+        )
+        .is_err());
+    }
     #[test]
     fn discovers_classic_host_before_stale_standalone_cli_runtime() {
         let root = tempfile::tempdir().unwrap();
@@ -1921,6 +2253,21 @@ mod tests {
                 io::ErrorKind::InvalidData
             );
         }
+    }
+
+    #[test]
+    fn u05_usage_bridge_rejects_unsupported_period_without_starting_host() {
+        let runtime = tempfile::tempdir().unwrap();
+        let bridge = RuntimeCliBridge::new(runtime.path().join("missing"), runtime.path());
+        assert_eq!(
+            bridge.agent_usage_summary(1).unwrap_err().kind(),
+            ErrorKind::InvalidInput
+        );
+        assert_eq!(
+            bridge.agent_usage_summary(7).unwrap_err().kind(),
+            ErrorKind::NotConnected
+        );
+        assert!(!runtime.path().join("runtime-host.json").exists());
     }
 
     #[test]

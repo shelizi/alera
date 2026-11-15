@@ -15,6 +15,7 @@ CATALOG = PACKAGE / "src" / "settings_menu_catalog.rs"
 OUTPUT = PACKAGE / "locales" / "ui.yml"
 OVERRIDES = PACKAGE / "locales" / "settings_overrides.json"
 LOCALIZATIONS = ROOT / "lib" / "src" / "app" / "localization"
+CATALOG_UI_SOURCE = PACKAGE / "src" / "native_settings_catalog_ui.rs"
 
 STRING = r'"((?:\\.|[^"\\])*)"'
 DART_ENTRY = re.compile(r"'((?:\\.|[^'\\])*)'\s*:\s*'((?:\\.|[^'\\])*)'", re.S)
@@ -35,6 +36,9 @@ def catalog_strings() -> list[str]:
         keys.add(rust_string(m.group(1)))
     for m in re.finditer(r'row!\(\s*' + STRING + r'\s*,\s*' + STRING, text, re.S):
         keys.update([rust_string(m.group(1)), rust_string(m.group(2))])
+    ui_text = CATALOG_UI_SOURCE.read_text(encoding="utf-8")
+    for m in re.finditer(r'\btr\(\s*(?:locale|self\.settings_menu_locale)\s*,\s*' + STRING, ui_text):
+        keys.add(rust_string(m.group(1)))
     keys.update((
         "Settings", "Preferences", "Resources", "Search settings",
         "No matching settings.", "Select…", "Open",
@@ -47,6 +51,8 @@ def catalog_strings() -> list[str]:
         "Host Agent Profiles",
         "Managed",
         "Command",
+        "Enabled", "Disabled", "days (0 disables)",
+        "change via language selector", "edit in Classic",
     ))
     if len(keys) < 100:
         raise RuntimeError(f"Catalog extraction unexpectedly small: {len(keys)}")

@@ -20,11 +20,14 @@ impl GitOriginalTab {
         format!(
             "{} · {} · immutable Git blob {}",
             self.snapshot.relative.display(),
-            match self.snapshot.area {
-                GitChangeArea::Staged => "HEAD before staging",
-                GitChangeArea::Changes => "Index before working changes",
-                _ => "Unknown revision",
-            },
+            self.snapshot
+                .revision_label
+                .as_deref()
+                .unwrap_or(match self.snapshot.area {
+                    GitChangeArea::Staged => "HEAD before staging",
+                    GitChangeArea::Changes => "Index before working changes",
+                    _ => "Unknown revision",
+                }),
             self.snapshot.blob_oid
         )
     }
@@ -65,6 +68,7 @@ impl GitOriginalTabs {
             tab.snapshot.relative == snapshot.relative
                 && tab.snapshot.area == snapshot.area
                 && tab.snapshot.blob_oid == snapshot.blob_oid
+                && tab.snapshot.revision_label == snapshot.revision_label
         }) {
             self.active = Some(existing.instance);
             return Ok(existing.instance);
@@ -127,6 +131,7 @@ mod tests {
             area,
             blob_oid: oid.to_owned(),
             content: "immutable snapshot".into(),
+            revision_label: None,
         }
     }
     #[test]
@@ -153,6 +158,21 @@ mod tests {
         assert!(!tabs.activate(id));
         tabs.reset();
         assert!(tabs.active().is_none());
+    }
+    #[test]
+    fn g04_merge_base_tab_is_distinct_from_head_original_with_same_blob() {
+        let mut tabs = GitOriginalTabs::default();
+        let mut base = snapshot(GitChangeArea::Staged, &"c".repeat(40));
+        base.revision_label = Some("MERGE BASE abcdef12".into());
+        let base_id = tabs.open(base.clone()).unwrap();
+        assert!(tabs.active().unwrap().title().contains("MERGE BASE"));
+        assert!(tabs.active().unwrap().description().contains("MERGE BASE"));
+        assert_eq!(tabs.open(base).unwrap(), base_id);
+        let head_id = tabs
+            .open(snapshot(GitChangeArea::Staged, &"c".repeat(40)))
+            .unwrap();
+        assert_ne!(head_id, base_id);
+        assert_eq!(tabs.entries().len(), 2);
     }
     #[test]
     fn rejects_nonoriginal_invalid_ids_and_bounded_overflow() {

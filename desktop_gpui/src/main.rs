@@ -2,6 +2,7 @@
 mod editor_ui;
 mod native_action_dialog_ui;
 mod native_agent_quota_ui;
+mod native_center_git_diff_ui;
 mod native_components;
 mod native_git_favorites_ui;
 mod native_history_sync_ui;
@@ -25,12 +26,13 @@ use alera_core::git::{
     prepare_staged_commit_prompt, verify_staged_commit_prompt, GitStagedCommitPrompt,
 };
 use alera_gpui_desktop::agent_profiles::{
-    matching_agent_handle, AgentProfileRow, LaunchedAgentTab,
+    matching_agent_handle, AgentProfileContentFields, AgentProfileManagedSelectionFields,
+    AgentProfileRemovalImpact, AgentProfileRow, LaunchedAgentTab,
 };
-use alera_gpui_desktop::agent_quota::QuotaSnapshot;
+use alera_gpui_desktop::agent_quota::{AgentUsageSummary, QuotaSnapshot};
 use alera_gpui_desktop::agent_status_notifications::{
-    enabled_notice_sessions, validated_notice_target, AgentNotice, AgentNotificationDelivery,
-    AgentNotificationPolicy,
+    enabled_notice_sessions, validated_notice_pane_target, validated_notice_target, AgentNotice,
+    AgentNotificationDelivery, AgentNotificationPolicy,
 };
 #[cfg(windows)]
 use alera_gpui_desktop::agent_windows_notifications::WindowsAgentToastPresenter;
@@ -41,7 +43,8 @@ use alera_gpui_desktop::editor_tabs::{EditorTabs, SaveAllReport, MAX_EDITOR_TABS
 use alera_gpui_desktop::explorer_drag::ExplorerDragBatch;
 use alera_gpui_desktop::explorer_git_badges::{ExplorerGitBadge, ExplorerGitBadges};
 use alera_gpui_desktop::explorer_ops::{
-    ExplorerClipboardBatch, ExplorerClipboardMode, ExplorerDeleteBatch, ExplorerFiles,
+    affects_open_editor_path, ExplorerClipboardBatch, ExplorerClipboardMode, ExplorerDeleteBatch,
+    ExplorerFiles,
 };
 use alera_gpui_desktop::explorer_selection::{ExplorerMultiSelection, ExplorerNavigation};
 use alera_gpui_desktop::explorer_visibility::ExplorerVisibilityOptions;
@@ -52,8 +55,8 @@ use alera_gpui_desktop::git_actions::{
     GitUntrackedTrashCandidate,
 };
 use alera_gpui_desktop::git_branch_compare::{
-    compare_branch_files, diff_compared_file, original_compared_file, BranchFileComparison,
-    CompareDirection,
+    compare_branch_files, diff_compared_file, open_compared_original_snapshot,
+    original_compared_file, BranchFileComparison, CompareDirection,
 };
 use alera_gpui_desktop::git_graph_layout::{layout_git_graph, GraphCommit};
 use alera_gpui_desktop::git_graph_search::{GitGraphRefTab, GitGraphSearch};
@@ -61,11 +64,11 @@ use alera_gpui_desktop::git_history::{
     compare_git_refs, preview_commit, GitHistoryOptions, GitHistorySnapshot, HISTORY_PAGE_STEP,
     MAX_HISTORY_PAGE,
 };
-use alera_gpui_desktop::git_inspect::read_file_diff_page;
 use alera_gpui_desktop::git_inspect::{
     read_file_diff, read_file_diff_for_area, read_git_original_for_area, GitChangeArea,
     GitRefreshGate, GitSnapshot,
 };
+use alera_gpui_desktop::git_inspect::{read_file_diff_page, read_file_diff_page_for_area};
 use alera_gpui_desktop::git_original_tabs::GitOriginalTabs;
 use alera_gpui_desktop::git_sidebar_layout::{
     layout_git_sidebar, section_keys, FolderKey, GitSidebarEntry, GitSidebarGroupMode,
@@ -78,31 +81,41 @@ use alera_gpui_desktop::history_sync_bridge::{
 use alera_gpui_desktop::host_tab_pins::{
     host_pin_owner_coverage, host_pin_query_workspaces, HostPinOwnerCoverage, HostTabPinSnapshot,
 };
+use alera_gpui_desktop::local_agent_detection::{
+    classify_agent_profile_launch_failure, detect_installed_agent_clis, InstalledAgentCli,
+};
+use alera_gpui_desktop::managed_choice_discovery::{
+    discover_choices, discovery_arguments, ManagedChoiceKind,
+};
 use alera_gpui_desktop::mcp_ui_bridge::{
-    matching_host_tab_handle, NativeMcpUiBridge, NativeMcpUiCommand, NativeMcpUiEvent,
+    matching_host_tab_handle, native_mcp_file_open_requires_new, NativeMcpUiBridge,
+    NativeMcpUiCommand, NativeMcpUiEvent,
 };
 use alera_gpui_desktop::mcp_workspace_creation::HostManagedWorkspaceRequest;
 use alera_gpui_desktop::model::WorkbenchModel;
 use alera_gpui_desktop::native_i18n::UiLocale;
 use alera_gpui_desktop::native_modal::NativeModalSize;
 use alera_gpui_desktop::native_settings::{NativeSettings, NativeSettingsStore};
-use alera_gpui_desktop::project_search::{ContentMatch, ProjectSearch};
 use alera_gpui_desktop::project_tree::{
     collect_project_tree_with_registered, project_group_matches_search,
     project_title_matches_search, sidebar_workspaces_for_group, worktree_matches_search,
     ProjectTreeGroup,
 };
 use alera_gpui_desktop::runtime_bridge::{
-    AgentHookSettingsSnapshot, ProjectRemovalPreview, RuntimeCliBridge,
+    AgentHookSettingsSnapshot, HostProjectConfigOrigin, ProjectRemovalPreview, RuntimeCliBridge,
 };
 use alera_gpui_desktop::runtime_catalog::RuntimeCatalog;
-use alera_gpui_desktop::session::{PreviewSessionStore, TerminalLayout, TerminalLayoutTab};
+use alera_gpui_desktop::session::{
+    PendingHostCreate, PreviewSessionStore, TerminalLayout, TerminalLayoutTab,
+};
 use alera_gpui_desktop::terminal::{
     encode_terminal_key, estimate_terminal_viewport_with_line_height, raw_key_reply_may_drain,
-    select_registered_host_workspace, terminal_ime_anchor_with_line_height, AgentActivityState,
-    TerminalAutoResizeGate, TerminalCreateFlow, TerminalCreateTick, TerminalDock,
-    TerminalLineSelection, TerminalPollCadence, TerminalPollGate, TerminalSession,
-    TerminalTabContextTarget, TerminalViewMode, TerminalViewportProposal, HOST_SESSION_LIST_SCOPE,
+    resolve_registered_host_workspace_path, select_registered_host_workspace,
+    terminal_clipboard_payload, terminal_ime_anchor_with_line_height, terminal_key_dispatch,
+    AgentActivityState, TerminalAutoResizeGate, TerminalClipboardShortcut, TerminalCreateFlow,
+    TerminalCreateTick, TerminalDock, TerminalKeyDispatch, TerminalLineSelection,
+    TerminalPollCadence, TerminalPollGate, TerminalSession, TerminalTabContextTarget,
+    TerminalViewMode, TerminalViewportProposal, HOST_SESSION_LIST_SCOPE,
 };
 use alera_gpui_desktop::terminal_panes::{TerminalPaneLayout, TerminalSplitDirection};
 use alera_gpui_desktop::terminal_stream_bridge::{
@@ -113,25 +126,30 @@ use alera_gpui_desktop::visual_tokens::{
     ELEVATED, MUTED, PANEL, PROJECTS_SIDEBAR_WIDTH, RIGHT_SIDEBAR_WIDTH, SECTION_HEADER_HEIGHT,
     STATUS_BAR_HEIGHT, TAB_STRIP_HEIGHT, TEXT, TOOLBAR, TOP_BAR_HEIGHT,
 };
-use alera_gpui_desktop::vt_screen::StyledRow;
+use alera_gpui_desktop::vt_screen::{StyledRow, TERMINAL_DEFAULT_BG};
 use alera_gpui_desktop::workbench_layout_store::{
-    SavedWorkbenchAxis, SavedWorkbenchLayoutV1, SavedWorkbenchPane, WORKBENCH_LAYOUT_VERSION,
+    scratch_layout_key, SavedWorkbenchAxis, SavedWorkbenchHostTab, SavedWorkbenchLayoutV1,
+    SavedWorkbenchPane, SCRATCH_EDITOR_KEY_PREFIX, WORKBENCH_LAYOUT_VERSION,
 };
 use alera_gpui_desktop::workbench_panes::{
-    PaneAttachGuard, PaneAxis, PaneSlot, WorkbenchPaneLayout,
+    shared_pinned_tab_row, PaneAttachGuard, PaneAxis, PaneSlot, WorkbenchPaneLayout,
 };
 use alera_gpui_desktop::workbench_tabs::{
     WorkbenchTab, WorkbenchTabIdentity, WorkbenchTabKind, WorkbenchTabs,
 };
 use alera_gpui_desktop::workspace_sidebar_order::order_worktree_rows;
 use alera_gpui_desktop::workspace_tree::WorkspaceTree;
+use alera_gpui_desktop::worktree_content_search::{
+    search_worktree_contents, worktree_hit_requires_switch, WorktreeContentMatch,
+    WorktreeContentScope,
+};
 use alera_gpui_desktop::worktree_manager::{
     matching_branch_worktree, WorktreeEntry, WorktreeManager,
 };
 use editor_ui::{bind_editor_keys, NativeEditor};
 use gpui::{
     actions, div, prelude::*, px, rgb, size, App, Bounds, Context, Entity, Focusable, KeyBinding,
-    PathPromptOptions, ScrollHandle, Window, WindowBounds, WindowOptions,
+    PathPromptOptions, ScrollHandle, UniformListScrollHandle, Window, WindowBounds, WindowOptions,
 };
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenuItem};
@@ -253,6 +271,101 @@ enum GitUiAction {
     PullFfOnly,
     PushUpstream,
     MergeWithChoices(GitConflictPlan, Vec<(String, GitConflictChoice)>),
+}
+
+#[cfg(test)]
+mod g01_source_control_action_tests {
+    use super::GitUiAction;
+    use std::path::PathBuf;
+
+    #[test]
+    fn stage_and_unstage_are_index_only_but_discard_checkout_and_merge_are_not() {
+        assert!(GitUiAction::Stage(PathBuf::from("a.txt")).is_index_only());
+        assert!(GitUiAction::Unstage(PathBuf::from("a.txt")).is_index_only());
+        assert!(GitUiAction::StageMany(vec![PathBuf::from("a.txt")]).is_index_only());
+        assert!(GitUiAction::UnstageMany(vec![PathBuf::from("a.txt")]).is_index_only());
+        assert!(!GitUiAction::DiscardTracked(vec![PathBuf::from("a.txt")]).is_index_only());
+        assert!(!GitUiAction::SwitchBranch("feature".into()).is_index_only());
+        assert!(!GitUiAction::MergeWithoutConflicts("feature".into()).is_index_only());
+        assert!(!GitUiAction::Commit("message".into()).is_index_only());
+    }
+}
+#[cfg(test)]
+mod g05_branch_remote_ui_tests {
+    use super::GitUiAction;
+
+    #[test]
+    fn selected_branch_remote_actions_do_not_require_saved_editor_buffers() {
+        assert!(GitUiAction::Fetch.is_worktree_independent());
+        assert!(GitUiAction::PullSelected("topic".into()).is_worktree_independent());
+        assert!(GitUiAction::PushSelected("topic".into()).is_worktree_independent());
+        assert!(GitUiAction::PushUpstream.is_worktree_independent());
+        assert!(GitUiAction::Stage("a.txt".into()).is_worktree_independent());
+        assert!(GitUiAction::Unstage("a.txt".into()).is_worktree_independent());
+        assert!(!GitUiAction::MergeWithoutConflicts("topic".into()).is_worktree_independent());
+        assert!(!GitUiAction::SwitchBranch("topic".into()).is_worktree_independent());
+        assert!(!GitUiAction::PullFfOnly.is_worktree_independent());
+        assert!(!GitUiAction::StashSave.is_worktree_independent());
+    }
+}
+#[test]
+fn g06_create_commit_worktree_may_proceed_with_unsaved_editor_but_merge_cannot() {
+    let creation = GitUiAction::CreateWorktreeAtCommit("a".repeat(40), "feat/g06-checkout".into());
+    assert!(creation.is_worktree_independent());
+    assert!(!GitUiAction::SwitchBranch("feat/g06-checkout".into()).is_worktree_independent());
+    assert!(
+        !GitUiAction::MergeWithoutConflicts("feat/g06-checkout".into()).is_worktree_independent()
+    );
+}
+impl GitUiAction {
+    /// Index-only Git actions may proceed with a dirty Native Editor.
+    /// They stage saved disk bytes, never the unsaved editor buffer.
+    fn is_index_only(&self) -> bool {
+        matches!(
+            self,
+            Self::Stage(_) | Self::Unstage(_) | Self::StageMany(_) | Self::UnstageMany(_)
+        )
+    }
+
+    /// These actions leave the currently checked-out Workspace/Editor alone:
+    /// Fetch updates remote refs, selected Pull changes an inactive branch,
+    /// Push transfers committed objects, and commit-based Worktree creation
+    /// checks out into an entirely separate managed directory.
+    fn is_worktree_independent(&self) -> bool {
+        self.is_index_only()
+            || matches!(
+                self,
+                Self::Fetch
+                    | Self::PullSelected(_)
+                    | Self::PushSelected(_)
+                    | Self::PushUpstream
+                    | Self::CreateWorktreeAtCommit(_, _)
+            )
+    }
+}
+
+/// Clear only a successfully submitted Commit or Amend message; keep edits
+/// typed while the background Git operation was running.
+fn should_clear_git_commit_input(submitted: Option<&str>, current: &str) -> bool {
+    submitted.is_some_and(|message| current.trim() == message)
+}
+
+#[cfg(test)]
+mod g03_commit_input_tests {
+    use super::should_clear_git_commit_input;
+
+    #[test]
+    fn commit_success_clears_only_the_unmodified_submitted_message() {
+        assert!(should_clear_git_commit_input(
+            Some("create project"),
+            " create project "
+        ));
+        assert!(!should_clear_git_commit_input(
+            Some("create project"),
+            "new pending message"
+        ));
+        assert!(!should_clear_git_commit_input(None, "create project"));
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -429,6 +542,7 @@ struct ExplorerContextMenu {
 struct PendingTerminalPane {
     request_id: u64,
     target: PaneAttachGuard,
+    expected_agent_id: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -442,12 +556,22 @@ enum RightSidebarView {
 #[derive(Clone)]
 struct GitFileDiffPaging {
     relative: PathBuf,
-    /// Stable for this file selection, even as each page request increments
+    area: Option<GitChangeArea>,
+    /// Stable for this exact file AND status area, even as each request increments
     /// git_diff_request. Re-selecting the same filename gets a fresh identity.
     source_ticket: u64,
     start_line: usize,
     next_line: Option<usize>,
     previous_starts: Vec<usize>,
+}
+
+/// Editable Worktree copy row owned by the explicit Project Settings form.
+/// Input contents remain private to this entity and are dropped on Cancel,
+/// confirmed Save or Workspace switch, never shown in Settings search results.
+struct ProjectCopyRowInputs {
+    from: Entity<QuickOpenInput>,
+    to: Entity<QuickOpenInput>,
+    overwrite: bool,
 }
 
 struct Workbench {
@@ -488,6 +612,25 @@ struct Workbench {
     project_tree_groups: Vec<ProjectTreeGroup>,
     runtime_catalog: Option<RuntimeCatalog>,
     runtime_catalog_error: Option<String>,
+    project_settings_project_id: Option<String>,
+    /// Explicit Settings-only selection; never changes the active workspace.
+    project_settings_selected_project_id: Option<String>,
+    project_settings_rows: Vec<(String, String)>,
+    project_settings_loading: bool,
+    project_settings_error: Option<String>,
+    project_settings_request: u64,
+    project_settings_config: Option<serde_json::Value>,
+    project_settings_source: Option<HostProjectConfigOrigin>,
+    project_settings_repo_error: bool,
+    project_settings_use_repo_confirmed: bool,
+    project_settings_editing: bool,
+    project_settings_draft_provider: Option<String>,
+    project_settings_prompt_input: Entity<QuickOpenInput>,
+    project_settings_copy_inputs: Vec<ProjectCopyRowInputs>,
+    project_settings_setup_inputs: Vec<Entity<QuickOpenInput>>,
+    project_settings_save_busy: bool,
+    project_settings_save_status: String,
+    project_settings_mutation_request: u64,
     sidebar_pending_action: Option<String>,
     sidebar_rename_target: Option<(String, String)>,
     sidebar_rename_input: Option<Entity<QuickOpenInput>>,
@@ -510,13 +653,19 @@ struct Workbench {
     worktree_delete_pending: Option<PathBuf>,
     picking_workspace: bool,
     quick_open: Option<Entity<QuickOpenInput>>,
+    quick_open_selected_index: usize,
+    quick_open_selection_query: String,
+    quick_open_results_scroll: ScrollHandle,
     explorer_filter_input: Entity<QuickOpenInput>,
     file_index: Option<Arc<WorkspaceFileIndex>>,
     file_index_loading: bool,
     file_index_request: u64,
     content_query: Option<Entity<QuickOpenInput>>,
+    content_search_scope: WorktreeContentScope,
+    content_worktrees_searched: usize,
+    content_worktrees_skipped: usize,
     content_loading: bool,
-    content_matches: Vec<ContentMatch>,
+    content_matches: Vec<WorktreeContentMatch>,
     content_truncated: bool,
     content_error: Option<String>,
     content_searched_query: String,
@@ -605,6 +754,14 @@ struct Workbench {
     git_diff_loading: bool,
     git_diff_request: u64,
     git_file_diff_paging: Option<GitFileDiffPaging>,
+    /// A temporary, read-only center projection; never owns or replaces an
+    /// Editor buffer, mixed tab or Host Terminal session.
+    center_git_diff_source: Option<native_action_dialog_ui::GitDialogFileSource>,
+    center_git_diff_scroll: UniformListScrollHandle,
+    center_git_diff_hunk: Option<usize>,
+    /// Parsed once on each bounded Git page response, shared with visible
+    /// virtual-list renders while Terminal/Host UI events keep arriving.
+    center_git_diff_rows: Arc<Vec<native_center_git_diff_ui::CenterGitDiffRow>>,
     workspace_generation: u64,
     editor_epoch: u64,
     mixed_tabs: WorkbenchTabs,
@@ -628,6 +785,12 @@ struct Workbench {
     quota_enabled_order: Option<Vec<String>>,
     quota_popover_open: bool,
     quota_popover_account: Option<String>,
+    quota_usage_open: bool,
+    quota_usage_days: u8,
+    quota_usage_loading: bool,
+    quota_usage_error: Option<String>,
+    quota_usage_summary: Option<AgentUsageSummary>,
+    quota_usage_request: u64,
     mcp_ui_bridge: Option<NativeMcpUiBridge>,
     mcp_ui_window_id: String,
     mcp_ui_status: String,
@@ -642,6 +805,8 @@ struct Workbench {
     native_settings_store: Option<NativeSettingsStore>,
     native_settings: NativeSettings,
     native_settings_error: Option<String>,
+    native_scrollback_busy: bool,
+    native_scrollback_status: String,
     history_sync_snapshot: Option<HistorySyncSnapshot>,
     history_sync_loading: bool,
     history_sync_busy: bool,
@@ -668,13 +833,46 @@ struct Workbench {
     settings_shared_last_refresh: Instant,
     settings_shared_error: Option<String>,
     settings_menu_search: Entity<QuickOpenInput>,
+    settings_shortcut_search: Entity<QuickOpenInput>,
     settings_exclusion_input: Entity<QuickOpenInput>,
     last_auto_git_fetch: Instant,
     agent_profiles: Vec<AgentProfileRow>,
+    /// Local CLI availability is separate from the Host Agent Profile catalog.
+    installed_agent_clis: Vec<InstalledAgentCli>,
+    installed_agent_clis_loading: bool,
+    installed_agent_clis_request: u64,
     agent_profiles_loading: bool,
     agent_profiles_request: u64,
     agent_selected_profile: Option<String>,
+    agent_profile_name_input: Entity<QuickOpenInput>,
+    agent_profile_description_input: Entity<QuickOpenInput>,
+    agent_profile_quota_group_input: Entity<QuickOpenInput>,
+    /// Loaded Host identity/revision; no routing values in shared settings.
+    agent_profile_routing_loaded: Option<(String, i64)>,
+    /// Temporary edit-only values; never persisted in shared desktop settings.
+    agent_profile_content_loaded: Option<AgentProfileContentFields>,
+    /// Transient Host-owned Model/Persona selection; no other Managed config.
+    agent_profile_managed_loaded: Option<AgentProfileManagedSelectionFields>,
+    agent_profile_model_input: Entity<QuickOpenInput>,
+    agent_profile_persona_input: Entity<QuickOpenInput>,
+    agent_profile_discovered_models: Vec<String>,
+    agent_profile_discovered_personas: Vec<String>,
+    agent_profile_discovery_busy: bool,
+    agent_profile_discovery_request: u64,
+    agent_profile_discovery_status: String,
+    agent_profile_command_input: Entity<QuickOpenInput>,
+    agent_profile_custom_prompt_input: Entity<QuickOpenInput>,
+    agent_profile_new_adapter: String,
+    agent_profile_mutation_busy: bool,
+    agent_profile_mutation_request: u64,
+    agent_profile_mutation_status: String,
+    agent_profile_removal_preview: Option<AgentProfileRemovalImpact>,
     agent_prompt_input: Entity<QuickOpenInput>,
+    agent_override_selected_id: Option<String>,
+    agent_override_input: Entity<QuickOpenInput>,
+    agent_override_busy: bool,
+    agent_override_request: u64,
+    agent_override_status: String,
     agent_launch_busy: bool,
     agent_launch_request: u64,
     agent_pending_tab: Option<LaunchedAgentTab>,
@@ -694,6 +892,8 @@ struct Workbench {
     terminal_auto_resize: TerminalAutoResizeGate,
     terminal_line_selection: Option<TerminalLineSelection>,
     terminal_create_flow: TerminalCreateFlow,
+    terminal_create_journal: Option<PendingHostCreate>,
+    terminal_create_inventory_verified: bool,
     terminal_create_pane: Option<PendingTerminalPane>,
     terminal_layout_restore: Option<TerminalLayout>,
     terminal_list_loading: bool,
@@ -715,6 +915,7 @@ struct Workbench {
     #[cfg(windows)]
     agent_windows_toast: WindowsAgentToastPresenter,
     agent_toast_activation: Option<AgentNotice>,
+    agent_toast_activation_retries: u8,
     terminal_read_loading: Option<String>,
     terminal_split_read_loading: bool,
     terminal_poll: TerminalPollGate,
@@ -767,6 +968,18 @@ impl Workbench {
         false
     }
 
+    /// A user-selected primary Editor/Explorer tab replaces the transient
+    /// center Git projection. The read-only Original tab and dirty documents
+    /// retain ownership of their data; secondary tabs keep the primary view.
+    fn release_primary_center_overlays(&mut self, pane: PaneSlot) {
+        native_center_git_diff_ui::release_primary_center_overlays_for_navigation(
+            pane,
+            &mut self.center_git_diff_source,
+            &mut self.center_git_diff_hunk,
+            &mut self.git_original_active,
+        );
+    }
+
     fn click_explorer_file(
         &mut self,
         path: &Path,
@@ -792,10 +1005,12 @@ impl Workbench {
             // A file already owned by a live editor buffer is reused, never
             // shadowed by a second read-only preview chip for the same path.
             self.focus_editor_instance(pane, instance, cx);
+            self.release_primary_center_overlays(pane);
             self.explorer_preview_active = false;
             self.model
                 .set_status("Focused existing editor buffer; no duplicate opened");
         } else if self.model.preview_path(path) {
+            self.release_primary_center_overlays(PaneSlot::Primary);
             self.explorer_preview_active = true;
             self.center_view = CenterView::Editor;
             window.focus(&self.explorer_keyboard_focus, cx);
@@ -918,12 +1133,15 @@ impl Workbench {
     }
 
     fn paste_explorer_clipboard(&mut self, cx: &mut Context<Self>) {
-        if self.editor_dirty(cx) {
-            self.model
-                .set_status("Save unsaved editor changes before Explorer Paste");
-            cx.notify();
-            return;
-        }
+        // Do not block ordinary Copy because an unrelated Editor is dirty.
+        // Cut is checked against the exact open files at paste time, so an
+        // existing Editor tab cannot silently keep a stale moved path.
+        let open_paths: Vec<PathBuf> = self
+            .all_editor_files_and_active(cx)
+            .0
+            .into_iter()
+            .map(|(_, path)| path)
+            .collect();
         let Some(clipboard) = self.explorer_clipboard.as_mut() else {
             self.model
                 .set_status("Explorer clipboard is empty; Copy or Cut a file first");
@@ -942,8 +1160,8 @@ impl Workbench {
                 }
             })
             .unwrap_or_else(|| root.clone());
-        let result =
-            ExplorerFiles::new(&root).and_then(|files| clipboard.paste_into(&files, &folder));
+        let result = ExplorerFiles::new(&root)
+            .and_then(|files| clipboard.paste_into_with_open_files(&files, &folder, &open_paths));
         let consumed = clipboard.consumed();
         if consumed {
             self.explorer_clipboard = None;
@@ -1406,24 +1624,26 @@ impl Workbench {
             .map(|input| input.read(cx).query().trim().to_owned())
             .unwrap_or_default();
 
-        if matches!(
-            action,
-            ExplorerAction::Rename
-                | ExplorerAction::Move
-                | ExplorerAction::Copy
-                | ExplorerAction::Duplicate
-                | ExplorerAction::Delete
-        ) && self
-            .editor
-            .as_ref()
-            .is_some_and(|editor| editor.read(cx).switch_allowed().is_err())
-        {
-            self.model
-                .set_status("Save or discard editor changes before file operations");
-            cx.notify();
-            return;
-        }
         let source = selected.unwrap_or_else(|| self.model.directory().to_path_buf());
+        // Copy/Duplicate only read saved disk bytes, so an unrelated dirty
+        // Editor must not block them. Rename/Move instead refuse *only* when
+        // the selected source (including a directory ancestor) is still held
+        // by a live primary or secondary Editor tab.
+        if matches!(action, ExplorerAction::Rename | ExplorerAction::Move) {
+            let open_paths: Vec<PathBuf> = self
+                .all_editor_files_and_active(cx)
+                .0
+                .into_iter()
+                .map(|(_, path)| path)
+                .collect();
+            if affects_open_editor_path(&source, &open_paths) {
+                self.model.set_status(
+                    "Close Editor tabs for the selected file or folder before Rename/Move",
+                );
+                cx.notify();
+                return;
+            }
+        }
         let parent = if source.is_dir() {
             source.clone()
         } else {
@@ -3097,6 +3317,60 @@ impl Workbench {
         cx.notify();
     }
 
+    /// Open the exact merge-base file in an immutable Git Original tab.
+    /// A changed comparison or Workspace cannot install an obsolete result.
+    fn open_git_compared_original_tab(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(comparison) = self.git_branch_comparison.clone() else {
+            self.model
+                .set_status("Select a Git branch comparison first");
+            cx.notify();
+            return;
+        };
+        let root = self.model.root().to_path_buf();
+        let generation = self.workspace_generation;
+        self.git_original_request = self.git_original_request.wrapping_add(1);
+        let request = self.git_original_request;
+        cx.spawn(async move |view, cx| {
+            let result = cx.background_spawn(async move {
+                open_compared_original_snapshot(&root, &comparison, index)
+                    .map(|snapshot| (comparison, snapshot))
+            }).await;
+            view.update(cx, |view, cx| {
+                if view.workspace_generation != generation || view.git_original_request != request {
+                    return;
+                }
+                let result = result.and_then(|(comparison, snapshot)| {
+                    let current = view.git_branch_comparison.as_ref().ok_or_else(|| {
+                        "Git comparison changed; select a file again".to_owned()
+                    })?;
+                    if current.selected_branch != comparison.selected_branch
+                        || current.merge_base_oid != comparison.merge_base_oid
+                        || current.target_oid != comparison.target_oid
+                        || current.direction != comparison.direction
+                    {
+                        return Err("Git comparison changed; select a file again".into());
+                    }
+                    view.git_original_tabs.open(snapshot)
+                });
+                match result {
+                    Ok(_) => {
+                        view.git_original_active = true;
+                        view.explorer_preview_active = false;
+                        view.center_view = CenterView::Editor;
+                        view.model.set_status(
+                            "Opened immutable merge-base Git original tab; editing and saving are disabled",
+                        );
+                    }
+                    Err(error) => {
+                        view.model.set_status(format!("Cannot open compared original: {error}"));
+                    }
+                }
+                cx.notify();
+            }).ok();
+        }).detach();
+        cx.notify();
+    }
+
     fn preview_git_compared_file(&mut self, index: usize, original: bool, cx: &mut Context<Self>) {
         let Some(comparison) = self.git_branch_comparison.clone() else {
             return;
@@ -3140,6 +3414,9 @@ impl Workbench {
         self.git_diff_request = self.git_diff_request.wrapping_add(1);
         let ticket = self.git_diff_request;
         self.git_file_diff_paging = None;
+        self.center_git_diff_source = None;
+        self.center_git_diff_hunk = None;
+        self.center_git_diff_rows = Arc::new(Vec::new());
         self.git_diff = None;
         self.git_diff_loading = true;
         cx.spawn(async move |view, cx| {
@@ -3183,7 +3460,15 @@ impl Workbench {
                 return;
             }
         }
-        if self.editor_dirty(cx) {
+        let unsaved_editors = self.editor_dirty(cx);
+        let index_only = action.is_index_only();
+        let worktree_independent = action.is_worktree_independent();
+        let submitted_commit_message = match &action {
+            GitUiAction::Commit(message) => Some(message.clone()),
+            GitUiAction::Amend(preview) => Some(preview.replacement_message.clone()),
+            _ => None,
+        };
+        if unsaved_editors && !worktree_independent {
             self.git_action_status = "Save unsaved editor buffers before changing Git".into();
             cx.notify();
             return;
@@ -3302,7 +3587,23 @@ impl Workbench {
                 view.git_sensitive_armed = None;
                 match result {
                     Ok(message) => {
-                        view.git_action_status = message;
+                        view.git_action_status = if index_only && unsaved_editors {
+                            format!(
+                                "{message}. Only saved disk bytes changed in Git; unsaved Editor text was not staged."
+                            )
+                        } else if worktree_independent && unsaved_editors {
+                            format!(
+                                "{message}. Unsaved Editor text and working files remain untouched."
+                            )
+                        } else {
+                            message
+                        };
+                        if should_clear_git_commit_input(
+                            submitted_commit_message.as_deref(),
+                            view.git_commit_input.read(cx).query(),
+                        ) {
+                            view.git_commit_input.update(cx, |input, cx| input.clear(cx));
+                        }
                         view.git_branch_delete_armed = None;
                         view.git_amend_preview = None;
                         view.git_commit_ref_target = None;
@@ -3628,8 +3929,13 @@ impl Workbench {
                 view.git_amend_loading = false;
                 match result {
                     Ok(plan) => {
+                        let impact = if plan.staged_changes {
+                            "including the current staged file contents"
+                        } else {
+                            "message only (staged tree unchanged)"
+                        };
                         view.git_action_status = format!(
-                            "Amend warning: replace local HEAD {} with message '{}'. Click Amend again to confirm. Never force-push automatically.",
+                            "Amend warning: replace local HEAD {} ({impact}) with message '{}'. Click Amend again to confirm. Never force-push automatically.",
                             &plan.head_oid[..8], plan.replacement_message);
                         view.git_amend_preview = Some(plan);
                     }
@@ -3905,8 +4211,8 @@ impl Workbench {
     ) {
         // A general Git preview can use the independently bounded patch
         // pager; exact Staged/Changes/Original previews retain their area.
-        if area.is_none() && !original {
-            self.preview_git_change_paged(relative, cx);
+        if native_center_git_diff_ui::uses_paged_git_preview(area, original) {
+            self.preview_git_change_paged(relative, area, cx);
             return;
         }
         self.git_file_diff_paging = None;
@@ -3944,11 +4250,19 @@ impl Workbench {
         cx.notify();
     }
 
-    fn preview_git_change_paged(&mut self, relative: PathBuf, cx: &mut Context<Self>) {
+    fn preview_git_change_paged(
+        &mut self,
+        relative: PathBuf,
+        area: Option<GitChangeArea>,
+        cx: &mut Context<Self>,
+    ) {
         // A new click is a new dialog source even if it chooses the same file.
         // Paging preserves its source ticket, but re-selection invalidates it.
+        self.center_git_diff_source = None;
+        self.center_git_diff_hunk = None;
+        self.center_git_diff_rows = Arc::new(Vec::new());
         self.git_file_diff_paging = None;
-        self.load_git_file_diff_page(relative, 0, Vec::new(), cx);
+        self.load_git_file_diff_page(relative, area, 0, Vec::new(), cx);
     }
 
     fn change_git_file_diff_page(&mut self, forward: bool, cx: &mut Context<Self>) {
@@ -3973,12 +4287,14 @@ impl Workbench {
             previous_start
         };
         let relative = state.relative.clone();
-        self.load_git_file_diff_page(relative, next_start, previous, cx);
+        let area = state.area;
+        self.load_git_file_diff_page(relative, area, next_start, previous, cx);
     }
 
     fn load_git_file_diff_page(
         &mut self,
         relative: PathBuf,
+        area: Option<GitChangeArea>,
         start_line: usize,
         previous_starts: Vec<usize>,
         cx: &mut Context<Self>,
@@ -3987,14 +4303,20 @@ impl Workbench {
         let ticket = self.git_diff_request;
         let generation = self.workspace_generation;
         let root = self.model.root().to_path_buf();
+        if self.center_git_diff_is_current() {
+            self.center_git_diff_hunk = None;
+            self.center_git_diff_scroll
+                .scroll_to_item(0, gpui::ScrollStrategy::Top);
+        }
         let source_ticket = self
             .git_file_diff_paging
             .as_ref()
-            .filter(|current| current.relative == relative)
+            .filter(|current| current.relative == relative && current.area == area)
             .map(|current| current.source_ticket)
             .unwrap_or(ticket);
         self.git_file_diff_paging = Some(GitFileDiffPaging {
             relative: relative.clone(),
+            area,
             source_ticket,
             start_line,
             next_line: None,
@@ -4004,7 +4326,14 @@ impl Workbench {
         self.git_diff_loading = true;
         cx.spawn(async move |view, cx| {
             let result = cx
-                .background_spawn(async move { read_file_diff_page(&root, &relative, start_line) })
+                .background_spawn(async move {
+                    match area {
+                        Some(area) => {
+                            read_file_diff_page_for_area(&root, &relative, area, start_line)
+                        }
+                        None => read_file_diff_page(&root, &relative, start_line),
+                    }
+                })
                 .await;
             view.update(cx, |view, cx| {
                 if view.workspace_generation != generation || view.git_diff_request != ticket {
@@ -4013,12 +4342,15 @@ impl Workbench {
                 view.git_diff_loading = false;
                 match result {
                     Ok(page) => {
+                        view.center_git_diff_rows =
+                            Arc::new(native_center_git_diff_ui::center_git_diff_rows(&page.text));
                         if let Some(paging) = view.git_file_diff_paging.as_mut() {
                             paging.next_line = page.next_line;
                         }
                         view.git_diff = Some(page.text);
                     }
                     Err(error) => {
+                        view.center_git_diff_rows = Arc::new(Vec::new());
                         view.git_file_diff_paging = None;
                         view.git_diff = Some(format!("Diff unavailable: {error}"));
                     }
@@ -4392,7 +4724,20 @@ impl Workbench {
             window.close_dialog(cx);
         }
         let input = cx.new(QuickOpenInput::new);
-        cx.observe(&input, |_, _, cx| cx.notify()).detach();
+        self.quick_open_selected_index = 0;
+        self.quick_open_selection_query.clear();
+        self.quick_open_results_scroll.scroll_to_item(0);
+        let observed = input.clone();
+        cx.observe(&input, move |view, _, cx| {
+            let query = observed.read(cx).query().to_owned();
+            if view.quick_open_selection_query != query {
+                view.quick_open_selection_query = query;
+                view.quick_open_selected_index = 0;
+                view.quick_open_results_scroll.scroll_to_item(0);
+            }
+            cx.notify();
+        })
+        .detach();
         window.focus(&input.read(cx).focus_handle(cx), cx);
         self.quick_open = Some(input);
         self.ensure_file_index(cx);
@@ -4475,6 +4820,8 @@ impl Workbench {
         self.content_matches.clear();
         self.content_truncated = false;
         self.content_error = None;
+        self.content_worktrees_searched = 0;
+        self.content_worktrees_skipped = 0;
         self.content_searched_query = query.clone();
         if query.is_empty() {
             self.content_loading = false;
@@ -4484,14 +4831,14 @@ impl Workbench {
         }
         let generation = self.workspace_generation;
         let root = self.model.root().to_path_buf();
+        let scope = self.content_search_scope;
         self.content_loading = true;
         cx.spawn(async move |view, cx| {
-            // Directory walking, decoding and matching are strictly off the
-            // GPUI UI thread. ProjectSearch never writes workspace files.
+            // Git worktree discovery, directory walking, decoding and content
+            // matching all run off the GPUI UI thread. Results retain the
+            // owning checkout so same-relative-path hits never get swapped.
             let result = cx
-                .background_spawn(async move {
-                    ProjectSearch::new(&root).and_then(|search| search.search(&query))
-                })
+                .background_spawn(async move { search_worktree_contents(&root, &query, scope) })
                 .await;
             view.update(cx, |view, cx| {
                 if view.workspace_generation != generation || view.content_request != ticket {
@@ -4502,6 +4849,8 @@ impl Workbench {
                     Ok(results) => {
                         view.content_matches = results.matches;
                         view.content_truncated = results.truncated;
+                        view.content_worktrees_searched = results.searched_worktrees;
+                        view.content_worktrees_skipped = results.skipped_worktrees;
                         view.content_error = None;
                     }
                     Err(error) => {
@@ -4520,24 +4869,55 @@ impl Workbench {
 
     fn open_content_search_hit(
         &mut self,
-        path: &std::path::Path,
-        line: usize,
-        column: usize,
+        hit: &WorktreeContentMatch,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.model.open_path(path) {
-            self.model
-                .set_status("Search result is unavailable; rerun search");
+        // A UI event can arrive after a new search has replaced the results.
+        // Never switch worktrees or open a stale result from an old snapshot.
+        if !self.content_matches.iter().any(|item| item == hit) {
+            self.model.set_status("Search result changed; rerun search");
+            cx.notify();
+            return;
+        }
+        let path = match hit.checked_path() {
+            Ok(path) => path,
+            Err(error) => {
+                self.model.set_status(format!(
+                    "Search result is unavailable: {error}; rerun search"
+                ));
+                cx.notify();
+                return;
+            }
+        };
+        let owner = hit.root.clone();
+        let line = hit.hit.line;
+        let column = hit.hit.column;
+        if worktree_hit_requires_switch(self.model.root(), hit) {
+            // Keep the existing dirty-buffer, running Host and Git safety
+            // gates. Do not fabricate a success if workspace switch refused.
+            self.switch_workspace(owner.clone(), cx);
+            if self.model.root() != owner {
+                cx.notify();
+                return;
+            }
+        }
+        if !self.model.open_path(&path) {
+            self.model.set_status(
+                "Search result belongs to this worktree but could not be opened; rerun search",
+            );
             cx.notify();
             return;
         }
         self.open_editor(cx);
         let Some(editor) = self.focused_editor() else {
+            self.model
+                .set_status("Search result could not activate a Native Editor");
+            cx.notify();
             return;
         };
         match editor.update(cx, |editor, cx| {
-            editor.navigate_to_content_hit(path, line, column, cx)
+            editor.navigate_to_content_hit(&path, line, column, cx)
         }) {
             Ok(()) => window.focus(&editor.read(cx).focus_handle(cx), cx),
             Err(error) => self.model.set_status(format!(
@@ -4595,6 +4975,7 @@ impl Workbench {
         // If a pane already owns it, focus that exact existing document.
         if let Some((pane, instance)) = self.editor_instance_for_path(&path, cx) {
             self.focus_editor_instance(pane, instance, cx);
+            self.release_primary_center_overlays(pane);
             // The editable buffer is the single canonical tab for this
             // path; release any read-only preview chip that would duplicate it.
             self.model.release_path(&path);
@@ -4611,6 +4992,7 @@ impl Workbench {
                     self.install_editor(tabs, cx);
                     self.model.release_path(&path);
                     self.center_view = CenterView::Editor;
+                    self.release_primary_center_overlays(PaneSlot::Primary);
                 }
                 Err(error) => self.model.set_status(format!(
                     "Cannot edit {}: {error}. Recovery draft kept for investigation when one exists.",
@@ -4629,6 +5011,7 @@ impl Workbench {
                 self.model.set_status(effect.status());
                 self.model.release_path(&path);
                 self.center_view = CenterView::Editor;
+                self.release_primary_center_overlays(self.mixed_panes.focused_pane());
             }
             Err(error) => self.model.set_status(format!(
                 "Cannot edit {}: {error}. Recovery draft kept for investigation when one exists.",
@@ -4715,6 +5098,7 @@ impl Workbench {
         }
         self.explorer_preview_active = false;
         let root = self.model.root().to_path_buf();
+        let mut opened = false;
         if self.editor_for_pane(pane).is_none() {
             let mut tabs = EditorTabs::new(self.draft_store());
             match tabs.open_scratch(&root) {
@@ -4725,6 +5109,7 @@ impl Workbench {
                         PaneSlot::Secondary => self.install_secondary_editor(tabs, cx),
                     }
                     self.center_view = CenterView::Editor;
+                    opened = true;
                 }
                 Err(error) => self
                     .model
@@ -4736,11 +5121,15 @@ impl Workbench {
                 Ok(effect) => {
                     self.model.set_status(effect.status());
                     self.center_view = CenterView::Editor;
+                    opened = true;
                 }
                 Err(error) => self
                     .model
                     .set_status(format!("Cannot create an editor: {error}")),
             }
+        }
+        if opened {
+            self.release_primary_center_overlays(pane);
         }
         self.mixed_panes.focus_pane(pane);
         self.sync_mixed_tabs(cx);
@@ -5021,14 +5410,14 @@ impl Workbench {
             return;
         }
         self.worktree_delete_pending = None;
-        if self
-            .editor
-            .as_ref()
-            .is_some_and(|editor| editor.read(cx).switch_allowed().is_err())
-            || self.model.root().starts_with(&target)
-        {
+        // Removal affects only the selected, inactive managed checkout.
+        // The Git WorktreeManager independently refuses a dirty TARGET,
+        // primary/active worktree, locked checkout or unmanaged path.
+        // Dirty buffers in this unrelated current Workspace are not a
+        // reason to refuse removal of a clean, inactive worktree.
+        if self.model.root().starts_with(&target) {
             self.model
-                .set_status("Cannot remove active Worktree or leave unsaved editor changes");
+                .set_status("Cannot remove the active Worktree; switch Workspace first");
             cx.notify();
             return;
         }
@@ -5157,6 +5546,9 @@ impl Workbench {
         self.file_index_loading = false;
         self.file_index_request = self.file_index_request.wrapping_add(1);
         self.content_query = None;
+        self.content_search_scope = WorktreeContentScope::Current;
+        self.content_worktrees_searched = 0;
+        self.content_worktrees_skipped = 0;
         self.content_loading = false;
         self.content_matches.clear();
         self.content_error = None;
@@ -5258,6 +5650,9 @@ impl Workbench {
         self.git_diff_loading = false;
         self.git_diff_request = self.git_diff_request.wrapping_add(1);
         self.git_file_diff_paging = None;
+        self.center_git_diff_source = None;
+        self.center_git_diff_hunk = None;
+        self.center_git_diff_rows = Arc::new(Vec::new());
         // Agent profiles are Host-owned, but selection and an in-flight
         // launch response must never attach to a different GPUI workspace.
         self.agent_profiles_request = self.agent_profiles_request.wrapping_add(1);
@@ -5273,6 +5668,28 @@ impl Workbench {
         self.mcp_host_workspaces_loading = false;
         self.mcp_host_workspaces_request = self.mcp_host_workspaces_request.wrapping_add(1);
         self.workspace_generation = self.workspace_generation.wrapping_add(1);
+        self.project_settings_request = self.project_settings_request.wrapping_add(1);
+        self.project_settings_mutation_request =
+            self.project_settings_mutation_request.wrapping_add(1);
+        self.project_settings_project_id = None;
+        self.project_settings_config = None;
+        self.project_settings_selected_project_id = None;
+
+        self.project_settings_rows.clear();
+        self.project_settings_source = None;
+        self.project_settings_repo_error = false;
+        self.project_settings_use_repo_confirmed = false;
+
+        self.project_settings_editing = false;
+        self.project_settings_loading = false;
+        self.project_settings_save_busy = false;
+        self.project_settings_save_status.clear();
+        self.project_settings_error = None;
+        self.project_settings_draft_provider = None;
+        self.project_settings_copy_inputs.clear();
+        self.project_settings_setup_inputs.clear();
+        self.project_settings_prompt_input
+            .update(cx, |input, cx| input.clear(cx));
         self.host_pin_snapshots.clear();
         self.host_pins_loading = false;
         self.host_pins_busy = false;
@@ -5291,11 +5708,14 @@ impl Workbench {
         // them on workspace changes to prevent cross-project output leakage.
         // Existing Host sessions remain alive and under Host ownership.
         self.terminals = TerminalDock::for_workspace(self.workspace_generation);
+        self.terminals
+            .set_scrollback_lines(self.native_settings.terminal_scrollback_lines as usize);
         self.terminal_auto_resize.clear();
         self.terminal_line_selection = None;
         self.terminal_panes.reset();
         self.terminal_create_flow.cancel();
         self.terminal_create_pane = None;
+        self.restore_host_create_journal();
         self.load_terminal_layout();
         self.terminal_key_queue.clear();
         self.terminal_key_queue_target = None;
@@ -5470,6 +5890,8 @@ impl Workbench {
             self.last_auto_git_fetch = Instant::now();
         }
         let tab_size = settings.editor_tab_size;
+        self.terminals
+            .set_scrollback_lines(settings.terminal_scrollback_lines as usize);
         self.native_settings = settings;
         self.native_settings_error = None;
         for editor in [self.editor.clone(), self.secondary_editor.clone()]
@@ -5484,73 +5906,11 @@ impl Workbench {
     /// The Host authenticates the Agent and allowlists the path. Native
     /// independently rechecks its live Workspace registration and store,
     /// and acknowledges shared scalar settings only after Rust Host readback.
+    /// Shared settings have one owner: Rust Runtime Host. The historical
+    /// Native JSON store is migration-only and must never answer MCP get or
+    /// update requests, including read-only safety and extended preferences.
     fn apply_native_mcp_setting(&mut self, command: &NativeMcpUiCommand, cx: &mut Context<Self>) {
-        if command
-            .arguments
-            .get("path")
-            .and_then(serde_json::Value::as_str)
-            .is_some_and(NativeSettings::writable)
-        {
-            self.apply_shared_mcp_setting(command.clone(), cx);
-            return;
-        }
-        let result: Result<(NativeSettings, serde_json::Value), &'static str> = (|| {
-            let authorized = self.mcp_host_workspaces.iter().any(|workspace| {
-                workspace.id == command.workspace_id
-                    && dunce::canonicalize(&workspace.path).is_ok_and(|path| path.is_dir())
-            });
-            if !authorized {
-                return Err("workspace_missing");
-            }
-            let path = command
-                .arguments
-                .get("path")
-                .and_then(|value| value.as_str())
-                .ok_or("ui_operation_failed")?;
-            let store = self.native_settings_store.as_ref().ok_or("ui_not_ready")?;
-            let settings = if command.action == "get_setting" {
-                store.read().map_err(|_| "ui_operation_failed")?
-            } else {
-                let expected = command
-                    .arguments
-                    .get("expectedValue")
-                    .ok_or("ui_operation_failed")?;
-                let value = command
-                    .arguments
-                    .get("value")
-                    .ok_or("ui_operation_failed")?;
-                store
-                    .compare_and_set(path, expected, value)
-                    .map_err(|_| "ui_operation_failed")?
-            };
-            let readback = settings.get(path).ok_or("ui_operation_failed")?;
-            Ok((settings, readback))
-        })();
-        match result {
-            Ok((settings, readback)) => {
-                self.install_native_settings(settings, cx);
-                if let Some(bridge) = self.mcp_ui_bridge.as_mut() {
-                    if bridge
-                        .complete_setting(&command.request_id, &readback)
-                        .is_err()
-                    {
-                        self.mcp_ui_status =
-                            "MCP: Native setting applied, but Host receipt failed".into();
-                    } else {
-                        self.mcp_ui_status =
-                            format!("MCP: Native {} readback confirmed", command.action);
-                    }
-                }
-            }
-            Err(code) => {
-                self.mcp_ui_status =
-                    "MCP: Native setting not changed or readback unavailable".into();
-                if let Some(bridge) = self.mcp_ui_bridge.as_mut() {
-                    let _ = bridge.complete(&command.request_id, false, None, Some(code));
-                }
-            }
-        }
-        cx.notify();
+        self.apply_shared_mcp_setting(command.clone(), cx);
     }
 
     fn change_native_setting(
@@ -5643,17 +6003,17 @@ impl Workbench {
                     cx.notify();
                     return Ok(None);
                 }
-                // Native cannot honor Flutter's multiple-buffer 'new' mode
-                // or external editor settings yet. Fail rather than falsely
-                // acknowledging an unperformed operation.
-                if args.get("openMode").and_then(|mode| mode.as_str()) == Some("new")
-                    || args
-                        .get("editor")
-                        .and_then(|editor| editor.as_str())
-                        .is_some_and(|editor| editor != "alera")
-                {
-                    return Err("ui_not_ready");
-                }
+                // Reuse the Host's already-authorized external-editor choice,
+                // but independently enforce the workspace boundary and line/
+                // column arguments before acknowledging a process spawn.
+                let mode = args
+                    .get("openMode")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("reuse");
+                let editor_choice = args
+                    .get("editor")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("alera");
                 let line = args
                     .get("line")
                     .map(|value| value.as_u64().ok_or("invalid_path"))
@@ -5665,6 +6025,59 @@ impl Workbench {
                 if column.is_some() && line.is_none() {
                     return Err("invalid_path");
                 }
+                if !matches!(mode, "reuse" | "new") || (editor_choice != "alera" && mode != "reuse")
+                {
+                    return Err("ui_not_ready");
+                }
+                if matches!(editor_choice, "zed" | "vscode") {
+                    match alera_gpui_desktop::git_external_open::launch_mcp_external_editor(
+                        self.model.root(),
+                        relative_path,
+                        editor_choice,
+                        line,
+                        column,
+                    ) {
+                        Ok(()) => {
+                            self.model.set_status(format!(
+                                "MCP: opened {} in {}",
+                                relative_path.display(),
+                                if editor_choice == "zed" {
+                                    "Zed"
+                                } else {
+                                    "VS Code"
+                                },
+                            ));
+                            cx.notify();
+                            return Ok(None);
+                        }
+                        Err(error) => {
+                            self.model
+                                .set_status(format!("MCP external editor unavailable: {error}"));
+                            cx.notify();
+                            return Err("ui_not_ready");
+                        }
+                    }
+                }
+                if editor_choice != "alera" {
+                    return Err("ui_not_ready");
+                }
+                let already_open = self.editor_instance_for_path(&target_file, cx).is_some();
+                // "new" is a real new file-backed Tab when this path has no
+                // editor. Reopening an already-editable path as another
+                // mutable buffer is not safe in Native's two-pane document
+                // ownership model; reject rather than fake a new Tab.
+                let requires_new = match native_mcp_file_open_requires_new(mode, already_open) {
+                    Ok(create) => create,
+                    Err(code) => {
+                        if mode == "new" && already_open {
+                            self.model.set_status(
+                                "This file already has a writable Editor tab. Native cannot create a second independent writable buffer; use openMode=reuse.",
+                            );
+                            cx.notify();
+                        }
+                        return Err(code);
+                    }
+                };
                 if !self.model.open_path(&target_file) {
                     return Err("file_missing");
                 }
@@ -5674,6 +6087,7 @@ impl Workbench {
                 };
                 if editor.read(cx).document().path() != Some(target_file.as_path())
                     || self.center_view != CenterView::Editor
+                    || (requires_new && self.editor_instance_for_path(&target_file, cx).is_none())
                 {
                     return Err("not_visible");
                 }
@@ -6123,10 +6537,45 @@ impl Workbench {
         }
     }
 
+    /// Classic's New Tab menu lists installed Agent CLIs from PATH without
+    /// needing a Host connection. Keep this slow scan off the UI thread.
+    /// Inventory is machine-wide. Request IDs reject stale scan results.
+    fn refresh_installed_agent_clis(&mut self, cx: &mut Context<Self>) {
+        if self.installed_agent_clis_loading {
+            return;
+        }
+        self.installed_agent_clis_loading = true;
+        self.installed_agent_clis_request = self.installed_agent_clis_request.wrapping_add(1);
+        let request = self.installed_agent_clis_request;
+        let paths = self
+            .native_settings
+            .agent_executable_paths
+            .clone()
+            .into_iter()
+            .collect::<HashMap<_, _>>();
+        cx.spawn(async move |view, cx| {
+            let found = cx
+                .background_spawn(async move { detect_installed_agent_clis(&paths) })
+                .await;
+            view.update(cx, |view, cx| {
+                if view.installed_agent_clis_request != request {
+                    return;
+                }
+                view.installed_agent_clis_loading = false;
+                view.installed_agent_clis = found;
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
     fn refresh_agent_profiles(&mut self, cx: &mut Context<Self>) {
         if self.agent_profiles_loading {
             return;
         }
+        self.agent_profile_removal_preview = None;
         if self.runtime_bridge.is_none() {
             self.runtime_bridge = RuntimeCliBridge::discover().ok();
         }
@@ -6168,10 +6617,94 @@ impl Workbench {
                                 .or_else(|| profiles.first().map(|profile| profile.id.clone()));
                         }
                         view.agent_profiles = profiles;
+                        let routing_is_current =
+                            view.agent_profile_routing_loaded.as_ref().is_some_and(
+                                |(id, revision)| {
+                                    view.agent_selected_profile.as_deref() == Some(id.as_str())
+                                        && view.agent_profiles.iter().any(|row| {
+                                            row.id == *id && row.revision == Some(*revision)
+                                        })
+                                },
+                            );
+                        if !routing_is_current {
+                            view.agent_profile_routing_loaded = None;
+                            view.agent_profile_description_input
+                                .update(cx, |input, cx| input.clear(cx));
+                            view.agent_profile_quota_group_input
+                                .update(cx, |input, cx| input.clear(cx));
+                            if view.settings_section.as_deref() == Some("agentProfiles")
+                                && !view.agent_profile_mutation_busy
+                            {
+                                view.load_selected_agent_profile_routing(cx);
+                            }
+                        }
+                        let content_is_current = view
+                            .agent_profile_content_loaded
+                            .as_ref()
+                            .is_some_and(|fields| {
+                                view.agent_selected_profile.as_deref() == Some(fields.id.as_str())
+                                    && view.agent_profiles.iter().any(|row| {
+                                        row.id == fields.id
+                                            && row.revision == Some(fields.revision)
+                                            && row.managed == fields.managed
+                                    })
+                            });
+                        let managed_is_current = view
+                            .agent_profile_managed_loaded
+                            .as_ref()
+                            .is_some_and(|fields| {
+                                view.agent_selected_profile.as_deref() == Some(fields.id.as_str())
+                                    && view.agent_profiles.iter().any(|row| {
+                                        row.id == fields.id
+                                            && row.revision == Some(fields.revision)
+                                            && row.managed
+                                    })
+                            });
+                        if !managed_is_current {
+                            view.agent_profile_discovery_request =
+                                view.agent_profile_discovery_request.wrapping_add(1);
+                            view.agent_profile_discovery_busy = false;
+                            view.agent_profile_discovered_models.clear();
+                            view.agent_profile_discovered_personas.clear();
+                            view.agent_profile_discovery_status.clear();
+                            view.agent_profile_managed_loaded = None;
+                            view.agent_profile_model_input
+                                .update(cx, |input, cx| input.clear(cx));
+                            view.agent_profile_persona_input
+                                .update(cx, |input, cx| input.clear(cx));
+                        }
+                        if !content_is_current {
+                            view.agent_profile_content_loaded = None;
+                            view.agent_profile_command_input
+                                .update(cx, |input, cx| input.clear(cx));
+                            view.agent_profile_custom_prompt_input
+                                .update(cx, |input, cx| input.clear(cx));
+                        }
                     }
                     Err(error) => {
                         view.agent_profiles.clear();
                         view.agent_selected_profile = None;
+                        view.agent_profile_routing_loaded = None;
+                        view.agent_profile_content_loaded = None;
+                        view.agent_profile_managed_loaded = None;
+                        view.agent_profile_discovery_request =
+                            view.agent_profile_discovery_request.wrapping_add(1);
+                        view.agent_profile_discovery_busy = false;
+                        view.agent_profile_discovered_models.clear();
+                        view.agent_profile_discovered_personas.clear();
+                        view.agent_profile_discovery_status.clear();
+                        view.agent_profile_model_input
+                            .update(cx, |input, cx| input.clear(cx));
+                        view.agent_profile_persona_input
+                            .update(cx, |input, cx| input.clear(cx));
+                        view.agent_profile_command_input
+                            .update(cx, |input, cx| input.clear(cx));
+                        view.agent_profile_custom_prompt_input
+                            .update(cx, |input, cx| input.clear(cx));
+                        view.agent_profile_description_input
+                            .update(cx, |input, cx| input.clear(cx));
+                        view.agent_profile_quota_group_input
+                            .update(cx, |input, cx| input.clear(cx));
                         view.agent_status = format!("Agent Profiles unavailable: {error}");
                     }
                 }
@@ -6183,8 +6716,33 @@ impl Workbench {
         cx.notify();
     }
 
-    /// The + menu selects a real Host Agent Profile and opens the existing
-    /// task composer; it never launches an Agent before a task is submitted.
+    /// Classic's installed Agent menu starts a Host-owned PTY for the chosen
+    /// adapter immediately. Configured Host Profiles remain a distinct entry.
+    fn prepare_detected_agent_in_pane(
+        &mut self,
+        agent_id: &str,
+        target: &PaneAttachGuard,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !target.still_valid(self.workspace_generation, &self.mixed_panes) {
+            self.model.set_status("Pane changed; reopen New Agent");
+            cx.notify();
+            return;
+        }
+        if !self
+            .installed_agent_clis
+            .iter()
+            .any(|agent| agent.id == agent_id)
+        {
+            self.model
+                .set_status("Agent availability changed; rescan installed Agents");
+            cx.notify();
+            return;
+        }
+        self.create_host_agent_in_pane(target.clone(), agent_id.to_owned(), cx);
+    }
+
     fn prepare_agent_in_pane(
         &mut self,
         profile_id: &str,
@@ -6275,8 +6833,7 @@ impl Workbench {
         cx.notify();
         cx.spawn(async move |view, cx| {
             let result = cx.background_spawn(async move {
-                let registered = bridge.list_registered_workspaces()?;
-                let workspace_id = select_registered_host_workspace(&root, &registered)?;
+                let workspace_id = bridge.ensure_host_workspace_for_explicit_profile_launch(&root)?;
                 bridge.launch_agent_profile(&profile_id, &workspace_id, &prompt)
             }).await;
             view.update(cx, |view, cx| {
@@ -6293,8 +6850,9 @@ impl Workbench {
                     }
                     Err(error) => {
                         view.agent_launch_pane = None;
+                        let guidance = classify_agent_profile_launch_failure(&error).guidance();
                         view.agent_status = format!(
-                            "Agent launch not confirmed: {error}. Check Attach existing before retrying; the Host might have created the tab"
+                            "Agent launch not confirmed: {guidance} Check Attach existing before retrying; the Host might have created the tab."
                         );
                         view.refresh_terminals(cx);
                     }
@@ -6304,7 +6862,82 @@ impl Workbench {
         }).detach();
     }
 
+    /// Read-only GUI recovery: an unconfirmed Host create survives application
+    /// restart and workspace switching. Never infer "not created" from a
+    /// missing CLI reply or use a saved marker to auto-attach a session.
+    fn restore_host_create_journal(&mut self) {
+        self.terminal_create_journal = None;
+        self.terminal_create_inventory_verified = false;
+        let Some(store) = self.session_store.as_ref() else {
+            return;
+        };
+        match store.pending_host_create(self.model.root()) {
+            Ok(Some(record)) => {
+                if self.terminal_create_flow.restore_outcome_unknown() {
+                    self.terminal_create_journal = Some(record);
+                    self.terminals.status =
+                        "Previous Host create unresolved; inspect existing sessions before acknowledging (no new PTY)"
+                            .into();
+                    self.model
+                        .set_status("Host create interrupted; inspect + → Attach existing");
+                }
+            }
+            Err(error) => {
+                self.terminal_create_flow.restore_outcome_unknown();
+                self.terminals.status = format!(
+                    "Host create recovery record unavailable: {error}. Do not retry; preserve the file"
+                );
+                self.model
+                    .set_status("Host create recovery blocked; inspect local journal");
+            }
+            Ok(None) => {}
+        }
+    }
+
+    /// A validated exact Host session proves the create completed. Only then
+    /// retire the matching persistent marker; a failed retire blocks retries.
+    fn resolve_confirmed_host_create_journal(&mut self) {
+        let Some(record) = self.terminal_create_journal.as_ref() else {
+            return;
+        };
+        let Some(store) = self.session_store.as_ref() else {
+            self.terminal_create_flow.restore_outcome_unknown();
+            self.terminals.status =
+                "Host create journal store unavailable; manual recovery required".into();
+            return;
+        };
+        match store.resolve_host_create(self.model.root(), record) {
+            Ok(()) => {
+                self.terminal_create_journal = None;
+                self.terminal_create_inventory_verified = false;
+            }
+            Err(error) => {
+                self.terminal_create_flow.restore_outcome_unknown();
+                self.terminals.status =
+                    format!("Host created a PTY but recovery marker could not be cleared: {error}");
+            }
+        }
+    }
+
     fn create_host_terminal_in_pane(&mut self, target: PaneAttachGuard, cx: &mut Context<Self>) {
+        self.create_host_terminal_targeted(target, None, cx);
+    }
+
+    fn create_host_agent_in_pane(
+        &mut self,
+        target: PaneAttachGuard,
+        agent_id: String,
+        cx: &mut Context<Self>,
+    ) {
+        self.create_host_terminal_targeted(target, Some(agent_id), cx);
+    }
+
+    fn create_host_terminal_targeted(
+        &mut self,
+        target: PaneAttachGuard,
+        agent_id: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
         if !target.still_valid(self.workspace_generation, &self.mixed_panes) {
             self.terminals.status = "Workbench pane changed; reopen the New Tab menu".into();
             cx.notify();
@@ -6321,18 +6954,75 @@ impl Workbench {
             self.runtime_bridge = RuntimeCliBridge::discover().ok();
         }
         let Some(bridge) = self.runtime_bridge.clone() else {
+            // A Diff or Editor can hide the terminal-only status panel. The
+            // primary status bar must still explain why explicit New Terminal
+            // could not create a tab; never start a Host during smoke tests.
             self.terminals.status = "Alera CLI missing; cannot create Host terminal".into();
+            self.model.set_status(if agent_id.is_some() {
+                "New Agent unavailable: Alera CLI not found"
+            } else {
+                "New Terminal unavailable: Alera CLI not found"
+            });
             cx.notify();
             return;
         };
         let root = self.model.root().to_path_buf();
+        let agent_executable = agent_id.as_deref().and_then(|id| {
+            self.installed_agent_clis
+                .iter()
+                .find(|agent| agent.id == id)
+                .map(|agent| agent.executable_path.to_string_lossy().into_owned())
+        });
+        if agent_id.is_some() && agent_executable.is_none() {
+            self.model
+                .set_status("Installed Agent executable is no longer available; rescan");
+            cx.notify();
+            return;
+        }
+        let is_agent = agent_id.is_some();
         let generation = self.workspace_generation;
+        // Commit a per-workspace, create_new + fsync journal BEFORE any
+        // potentially side-effecting Host startup/create RPC. Even if this
+        // window crashes or a second GPUI window races, no blind retry.
+        let Some(store) = self.session_store.as_ref() else {
+            self.terminals.status =
+                "Cannot create Host PTY without durable Native recovery storage".into();
+            self.model
+                .set_status("Host create refused: persistent recovery storage unavailable");
+            cx.notify();
+            return;
+        };
+        let journal = match store.reserve_host_create(&root, agent_id.as_deref()) {
+            Ok(record) => record,
+            Err(error) => {
+                self.restore_host_create_journal();
+                self.terminals.status = format!(
+                    "Host create blocked by recovery journal: {error}. Check + → Attach existing; no new PTY issued"
+                );
+                self.model
+                    .set_status("Unresolved Host create: inspect existing sessions before retry");
+                self.refresh_terminals(cx);
+                cx.notify();
+                return;
+            }
+        };
+
         let Some(request_id) = self.terminal_create_flow.start_request() else {
             return;
         };
-        self.terminal_create_pane = Some(PendingTerminalPane { request_id, target });
-        self.terminals.status =
-            "Checking registered Host workspaces before creating terminal…".into();
+        self.terminal_create_journal = Some(journal);
+        self.terminal_create_inventory_verified = false;
+        self.terminal_create_pane = Some(PendingTerminalPane {
+            request_id,
+            target,
+            expected_agent_id: agent_id.clone(),
+        });
+        self.terminals.status = if is_agent {
+            "Checking registered Host workspace before launching Agent…"
+        } else {
+            "Checking registered Host workspaces before creating terminal…"
+        }
+        .into();
         cx.notify();
         cx.spawn(async move |view, cx| {
             let result = cx
@@ -6340,7 +7030,15 @@ impl Workbench {
                     // Explicit New Terminal may start the existing CLI Host
                     // and register this *already existing* checkout. Passive
                     // refresh/read/write still never start a Host or PTY.
-                    bridge.create_terminal_for_workspace(&root)
+                    if let Some(agent_id) = agent_id {
+                        bridge.create_agent_terminal_for_workspace(
+                            &root,
+                            &agent_id,
+                            agent_executable.as_deref().expect("checked installed executable before creating Host Agent"),
+                        )
+                    } else {
+                        bridge.create_terminal_for_workspace(&root)
+                    }
                 })
                 .await;
             view.update(cx, |view, cx| {
@@ -6358,30 +7056,45 @@ impl Workbench {
                             return;
                         }
                         view.center_view = CenterView::Terminal;
-                        view.terminals.status =
+                        view.terminals.status = if is_agent {
+                            "Host Agent started; confirming session identity (30s limit)…"
+                        } else {
                             "Host terminal created; confirming session identity (30s limit)…"
-                                .into();
+                        }.into();
+                        if is_agent {
+                            view.model.set_status("Agent starting; confirming Host session identity");
+                        }
                         view.refresh_terminals(cx);
                     }
                     Err(error) => {
-                        if !view.terminal_create_flow.fail_request(request_id) {
-                            return;
-                        }
-                        if view.terminal_create_pane.as_ref().is_some_and(|pending| {
+                        // The pending pane intent must belong to this exact
+                        // request, not a stale callback after pane reuse.
+                        if !view.terminal_create_pane.as_ref().is_some_and(|pending| {
                             pending.request_id == request_id
                         }) {
-                            view.terminal_create_pane = None;
+                            return;
+                        }
+
+                        if !view.terminal_create_flow.mark_request_outcome_unknown(request_id) {
+                            return;
                         }
                         view.terminals.status = if error.kind() == std::io::ErrorKind::InvalidData {
                             // The Host RPC may already have created a PTY,
                             // even when the CLI reply failed validation.
                             // Never encourage a second create as a retry.
                             format!(
-                                "Host terminal reply could not be verified: {error}. A session may already exist; use Attach existing before retrying New Terminal."
+                                "Host reply unverified: {error}. Inspect Attach running Host session, then dismiss the pending request before another New Terminal."
                             )
                         } else {
-                            format!("Cannot create Host terminal: {error}")
+                            format!("Host create outcome unknown: {error}. Inspect existing sessions, then dismiss the pending request before another PTY.")
                         };
+                        if is_agent {
+                            view.model.set_status(
+                                "Agent outcome unknown; inspect Host sessions before dismissing request",
+                            );
+                        }
+                        // Re-list existing Host sessions, never create a second PTY.
+                        view.refresh_terminals(cx);
                     }
                 }
                 cx.notify();
@@ -6400,12 +7113,48 @@ impl Workbench {
     }
 
     fn cancel_host_terminal_confirmation(&mut self, cx: &mut Context<Self>) {
-        if self.terminal_create_flow.cancel() {
-            self.terminal_create_pane = None;
-            // An RPC in flight can still create a Host terminal. Dismiss
-            // only the local expectation; never issue a Host kill request.
+        if !self.terminal_create_flow.is_active() {
+            return;
+        }
+        if self.terminal_create_flow.is_creating() {
             self.terminals.status =
-                "Stopped waiting. Host terminal may exist; use Attach existing to find it".into();
+                "Host create still in progress; wait for its result, do not create a duplicate"
+                    .into();
+            cx.notify();
+            return;
+        }
+        if !self.terminal_create_inventory_verified {
+            self.terminals.status =
+                "Cannot dismiss until a fresh authenticated Host session list succeeds".into();
+            self.refresh_terminals(cx);
+            cx.notify();
+            return;
+        }
+        let (Some(store), Some(record)) = (
+            self.session_store.as_ref(),
+            self.terminal_create_journal.as_ref(),
+        ) else {
+            self.terminals.status =
+                "Recovery record unavailable; preserve it and inspect manually".into();
+            cx.notify();
+            return;
+        };
+        if let Err(error) = store.resolve_host_create(self.model.root(), record) {
+            self.terminals.status =
+                format!("Cannot clear recovery record: {error}; no new PTY allowed");
+            cx.notify();
+            return;
+        }
+
+        if self.terminal_create_flow.cancel() {
+            self.terminal_create_journal = None;
+            self.terminal_create_inventory_verified = false;
+            self.terminal_create_pane = None;
+            // Authenticated Host inventory was checked; acknowledgement
+            // retires only the UI marker and never stops a Host PTY.
+            self.terminals.status =
+                "Acknowledged after Host inventory; existing PTYs remain available via Attach"
+                    .into();
             cx.notify();
         }
     }
@@ -6426,6 +7175,12 @@ impl Workbench {
         self.terminal_list_loading = true;
         let generation = self.workspace_generation;
         let presence_generation = self.agent_presence_event_generation;
+        // A list begun BEFORE the Host create reply (still Creating) cannot
+        // verify the eventual result, even if its callback arrives later.
+        // Bind this read to the exact outstanding marker, not a newer one.
+        let create_journal_at_listing = (!self.terminal_create_flow.is_creating())
+            .then(|| self.terminal_create_journal.clone())
+            .flatten();
         self.terminals.status = "Listing existing Host sessions…".into();
         cx.notify();
         cx.spawn(async move |view, cx| {
@@ -6448,6 +7203,14 @@ impl Workbench {
                         let was_disconnected = view.terminals.session_list_is_stale()
                             || view.terminals.sessions.is_empty();
                         if view.terminals.apply_session_list(generation, sessions) {
+                            // Only an authenticated post-request inventory can
+                            // authorize the user's explicit unknown-create acknowledgement.
+                            if create_journal_at_listing.as_ref().is_some_and(|journal| {
+                                view.terminal_create_flow.is_active()
+                                    && view.terminal_create_journal.as_ref() == Some(journal)
+                            }) {
+                                view.terminal_create_inventory_verified = true;
+                            }
                             if was_disconnected && !view.terminals.sessions.is_empty() {
                                 view.terminal_poll.reset();
                                 view.agent_notification_delivery.on_host_reconnected();
@@ -6460,10 +7223,26 @@ impl Workbench {
                             view.observe_agent_notification_status();
                             view.restore_terminal_layout_from_host(cx);
                             view.refresh_host_tab_pins(cx);
-                            if let Some(created) = view
-                                .terminal_create_flow
-                                .confirm_sessions(&view.terminals.sessions)
-                            {
+                            // Direct Agent PTYs may start before Hooks report
+                            // presence. Their typed Host create reply was
+                            // corroborated before entering Awaiting, so only
+                            // the exact live triple is needed; conflicting
+                            // Hook agent types still fail closed. Plain
+                            // terminals retain the original identity gate.
+                            let direct_agent = view.terminal_create_pane.as_ref()
+                                .and_then(|pending| pending.expected_agent_id.as_deref());
+                            let confirmed = if let Some(agent_id) = direct_agent {
+                                view.terminal_create_flow.confirm_sessions_with_host_verified_agent(
+                                    &view.terminals.sessions,
+                                    agent_id,
+                                )
+                            } else {
+                                view.terminal_create_flow.confirm_sessions(
+                                    &view.terminals.sessions,
+                                )
+                            };
+                            if let Some(created) = confirmed {
+                                view.resolve_confirmed_host_create_journal();
                                 // Never redirect a delayed Host create result to
                                 // whichever pane currently has global focus.
                                 // Only the exact authenticated Host triple may
@@ -6481,6 +7260,20 @@ impl Workbench {
                                     ).is_none() {
                                         view.terminals.status =
                                             "Host terminal created but Native attach was refused; use + → Attach existing".into();
+                                    } else if let Some(agent_id) = pending.expected_agent_id.as_deref() {
+                                        // Host PTY input can be ready before
+                                        // the provider Hook reports an Agent.
+                                        // Update the stale "Agent starting"
+                                        // banner only after verified attachment
+                                        // to the original pane succeeded.
+                                        if let Some(feedback) =
+                                            alera_gpui_desktop::terminal::direct_agent_ready_feedback(
+                                                &session,
+                                                agent_id,
+                                            )
+                                        {
+                                            view.model.set_status(feedback);
+                                        }
                                     }
                                 } else {
                                     view.terminals.status =
@@ -6489,10 +7282,17 @@ impl Workbench {
                             }
                             // Launch reply contains a Host workspace+tab id,
                             // not a trustworthy PTY handle. Resolve through
-                            // a fresh authenticated session list, and require
-                            // this to be an Agent session before opening.
+                            // a fresh authenticated session list and check
+                            // the selected Profile adapter. Hook status can
+                            // remain absent until after provider sign-in.
                             let found_agent = view.agent_pending_tab.as_ref()
-                                .and_then(|pending| matching_agent_handle(pending, &view.terminals.sessions))
+                                .and_then(|pending| {
+                                    view.agent_profiles.iter()
+                                        .find(|profile| profile.id == pending.profile_id)
+                                        .and_then(|profile| matching_agent_handle(
+                                            pending, &view.terminals.sessions, &profile.agent_type,
+                                        ))
+                                })
                                 .and_then(|handle| view.terminals.sessions.iter()
                                     .find(|session| session.handle == handle && session.running)
                                     .cloned());
@@ -6504,8 +7304,16 @@ impl Workbench {
                                     if view.attach_live_terminal_to_pane(&session, &target, cx).is_some() {
                                         view.agent_pending_tab = None;
                                         view.agent_launch_pane = None;
-                                        view.agent_status =
-                                            "Agent Host tab confirmed in original pane".into();
+                                        view.agent_status = if session.agent_type.is_some() {
+                                            "Host Agent Profile PTY attached; Hook recognized. Provider sign-in not verified."
+                                        } else {
+                                            "Host Agent Profile PTY attached; Hook not detected. Check Terminal for sign-in instructions."
+                                        }.into();
+                                        // A running shell/PTY or Hook status is
+                                        // not proof of provider authentication.
+                                        view.model.set_status(
+                                            "Agent Profile terminal ready; provider sign-in not verified"
+                                        );
                                     } else {
                                         view.agent_status =
                                             "Agent exists, but preview could not attach; close another tab and Refresh, or use + → Attach existing".into();
@@ -6698,9 +7506,16 @@ impl Workbench {
                     return;
                 }
                 view.terminals.status = match result {
-                    Ok(()) => format!(
-                        "Requested {cols}×{rows}; Host may defer while a mobile client holds viewport control"
-                    ),
+                    Ok(()) => {
+                        if let Some(target) = view
+                            .terminals
+                            .active_tab
+                            .and_then(|index| view.terminals.context_target_at(index))
+                        {
+                            view.terminals.apply_host_accepted_viewport(&target, cols, rows);
+                        }
+                        format!("Requested {cols}×{rows}; Host may defer while a mobile client holds viewport control")
+                    }
                     Err(error) => format!("Host Resize refused: {error}"),
                 };
                 cx.notify();
@@ -6740,11 +7555,21 @@ impl Workbench {
                     {
                         return;
                     }
-                    if let Err(error) = result {
-                        view.terminals.status = format!(
-                            "Auto Resize {cols}×{rows} refused (no repeated retries until size changes): {error}"
-                        );
-                        cx.notify();
+                    match result {
+                        Ok(()) => {
+                            // The Host accepted the resize. Expand the local
+                            // VT grid as well; otherwise a 24x80 preview keeps
+                            // letterboxing in a much larger GPUI pane.
+                            if view.terminals.apply_host_accepted_viewport(&target, cols, rows) {
+                                cx.notify();
+                            }
+                        }
+                        Err(error) => {
+                            view.terminals.status = format!(
+                                "Auto Resize {cols}×{rows} refused (no repeated retries until size changes): {error}"
+                            );
+                            cx.notify();
+                        }
                     }
                 }).ok();
             }).detach();
@@ -6753,17 +7578,32 @@ impl Workbench {
 
     /// Mouse selection is a bounded snapshot of primary VT screen rows;
     /// never forwards mouse/selection gestures to the running Host PTY.
-    fn begin_terminal_line_selection(&mut self, row: usize, cx: &mut Context<Self>) {
-        let index = if self.mixed_panes.has_secondary() {
-            self.mixed_panes
-                .active_in(PaneSlot::Primary)
-                .and_then(|id| match id {
-                    WorkbenchTabIdentity::Host(target) => self.terminals.index_for_context(target),
-                    _ => None,
-                })
-        } else {
+    /// A mixed split owns one terminal surface per Pane; never choose the
+    /// globally focused TerminalDock tab for a copy/selection in the other Pane.
+    fn terminal_index_in_pane(&self, pane: PaneSlot) -> Option<usize> {
+        if self.mixed_panes.has_secondary() {
+            self.mixed_panes.active_in(pane).and_then(|id| match id {
+                WorkbenchTabIdentity::Host(target) => self.terminals.index_for_context(target),
+                _ => None,
+            })
+        } else if pane == PaneSlot::Primary {
             self.terminals.active_tab
-        };
+        } else {
+            None
+        }
+    }
+
+    fn begin_terminal_line_selection(&mut self, row: usize, cx: &mut Context<Self>) {
+        self.begin_terminal_line_selection_for_pane(PaneSlot::Primary, row, cx);
+    }
+
+    fn begin_terminal_line_selection_for_pane(
+        &mut self,
+        pane: PaneSlot,
+        row: usize,
+        cx: &mut Context<Self>,
+    ) {
+        let index = self.terminal_index_in_pane(pane);
         let Some((target, tab)) = index.and_then(|i| {
             self.terminals
                 .context_target_at(i)
@@ -6813,30 +7653,45 @@ impl Workbench {
                 .and_then(serde_json::Value::as_bool)
                 == Some(true)
             {
-                self.copy_primary_terminal_text(true, cx);
+                // The selection can belong to either split Pane. Use the
+                // exact Host identity/cursor instead of copying primary by default.
+                let pane = self.terminal_line_selection.as_ref().and_then(|selection| {
+                    [PaneSlot::Primary, PaneSlot::Secondary]
+                        .into_iter()
+                        .find(|pane| {
+                            self.terminal_index_in_pane(*pane)
+                                .and_then(|i| {
+                                    self.terminals
+                                        .context_target_at(i)
+                                        .zip(self.terminals.tabs.get(i))
+                                })
+                                .is_some_and(|(target, tab)| {
+                                    selection.is_current(&target, tab.next_cursor)
+                                })
+                        })
+                });
+                if let Some(pane) = pane {
+                    self.copy_terminal_text_for_pane(pane, true, cx);
+                }
             } else {
                 cx.notify();
             }
         }
     }
 
-    fn copy_primary_terminal_text(&mut self, selected_only: bool, cx: &mut Context<Self>) {
-        let index = if self.mixed_panes.has_secondary() {
-            self.mixed_panes
-                .active_in(PaneSlot::Primary)
-                .and_then(|id| match id {
-                    WorkbenchTabIdentity::Host(target) => self.terminals.index_for_context(target),
-                    _ => None,
-                })
-        } else {
-            self.terminals.active_tab
-        };
+    fn copy_terminal_text_for_pane(
+        &mut self,
+        pane: PaneSlot,
+        selected_only: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let index = self.terminal_index_in_pane(pane);
         let Some((target, tab)) = index.and_then(|i| {
             self.terminals
                 .context_target_at(i)
                 .zip(self.terminals.tabs.get(i))
         }) else {
-            self.terminals.status = "No visible primary Host terminal to copy".into();
+            self.terminals.status = "No visible Host terminal in this Pane to copy".into();
             cx.notify();
             return;
         };
@@ -7019,6 +7874,40 @@ impl Workbench {
     /// Do not let both native pane surfaces forward keys via the shared
     /// TerminalDock active index. The clicked/focused pane must still own
     /// the exact authenticated Host tab at dispatch time.
+    /// The Native VT owns the scrollback viewport; a full-screen TUI on
+    /// Alacritty's alternate screen keeps receiving its own PageUp/PageDown.
+    fn scroll_native_terminal_page(
+        &mut self,
+        pane: PaneSlot,
+        toward_older: bool,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.terminals.view_mode != TerminalViewMode::Screen {
+            return false;
+        }
+        let Some(index) = self.terminal_index_in_pane(pane) else {
+            return false;
+        };
+        let Some(tab) = self.terminals.tabs.get_mut(index) else {
+            return false;
+        };
+        if tab.screen.alternate_screen() {
+            return false;
+        }
+        let changed = tab.screen.scroll_history_page(toward_older);
+        let offset = tab.screen.scrollback_offset();
+        if changed {
+            self.terminals.status = if offset == 0 {
+                "Terminal returned to live output".to_owned()
+            } else {
+                format!("Terminal viewing history: {offset} lines above live output")
+            };
+            self.terminal_line_selection = None;
+            cx.notify();
+        }
+        true
+    }
+
     fn send_terminal_key_for_pane(
         &mut self,
         pane: PaneSlot,
@@ -7037,25 +7926,59 @@ impl Workbench {
         } else if pane != PaneSlot::Primary {
             return false;
         }
-        if event.keystroke.modifiers.control
-            && !event.keystroke.modifiers.shift
-            && event.keystroke.key.eq_ignore_ascii_case("v")
+        // The focused Native IME sink owns provisional Zhuyin text.
+        // Both panes must block raw PTY keys and clipboard shortcuts while
+        // candidate selection is composing; committed text comes through TSF.
+        let composing = match pane {
+            PaneSlot::Primary => self.terminal_input.read(cx).composing(),
+            PaneSlot::Secondary => self.secondary_terminal_input.read(cx).composing(),
+        };
+        if !composing
+            && !win_ime::focused_native_text_mode()
+            && event.keystroke.modifiers.shift
+            && !event.keystroke.modifiers.control
+            && !event.keystroke.modifiers.alt
+            && !event.keystroke.modifiers.platform
+            && matches!(event.keystroke.key.as_str(), "pageup" | "pagedown")
+            && self.scroll_native_terminal_page(pane, event.keystroke.key == "pageup", cx)
         {
-            if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-                return self.enqueue_terminal_text_for_pane(pane, text, cx);
-            }
             return true;
         }
-        // KeyDown and the native IME/TextInput commit are two paths to the
-        // same Host. This must apply to BOTH panes, not just primary.
-        if alera_gpui_desktop::terminal::is_text_input_keystroke(
+        match terminal_key_dispatch(
             &event.keystroke.key,
             event.keystroke.key_char.as_deref(),
             event.keystroke.modifiers.control,
+            event.keystroke.modifiers.shift,
             event.keystroke.modifiers.alt,
             event.keystroke.modifiers.platform,
+            composing,
+            win_ime::focused_native_text_mode(),
         ) {
-            return false;
+            TerminalKeyDispatch::Composing => return true,
+            TerminalKeyDispatch::NativeText => return false,
+            TerminalKeyDispatch::Clipboard(TerminalClipboardShortcut::Copy) => {
+                self.copy_terminal_text_for_pane(pane, false, cx);
+                return true;
+            }
+            TerminalKeyDispatch::Clipboard(TerminalClipboardShortcut::Paste) => {
+                if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
+                    // Respect the active Alacritty TUI's bracketed paste mode.
+                    let bracketed = self
+                        .terminals
+                        .active()
+                        .is_some_and(|tab| tab.screen.bracketed_paste());
+                    if let Some(payload) = terminal_clipboard_payload(&text, bracketed) {
+                        self.enqueue_terminal_text_for_pane(pane, payload, cx);
+                    } else {
+                        self.terminals.status =
+                            "Clipboard text empty, NUL-containing or exceeds 4 KiB Host limit"
+                                .into();
+                        cx.notify();
+                    }
+                }
+                return true;
+            }
+            TerminalKeyDispatch::Pty => {}
         }
         self.send_terminal_key(pane, event, cx)
     }
@@ -7256,9 +8179,9 @@ impl Workbench {
                 .all(|component| matches!(component, Component::Normal(_)))
     }
 
-    /// Only existing, file-backed editor tabs have a cross-launch identity.
-    /// Keep their keys workspace-relative and treat saved strings as inert;
-    /// unsaved drafts are recovered separately by EditorDraftStore.
+    /// File-backed tabs use checked workspace-relative paths. Unsaved scratch
+    /// tabs use a bounded opaque EditorDraftStore recovery ID; the layout
+    /// contains no raw scratch text or Host/PTy identity.
     fn editor_layout_keys(&self, cx: &Context<Self>) -> Vec<(WorkbenchTabIdentity, String)> {
         let mut keys = Vec::new();
         for pane in [PaneSlot::Primary, PaneSlot::Secondary] {
@@ -7274,6 +8197,17 @@ impl Workbench {
                                 instance,
                             },
                             relative.to_string_lossy().into_owned(),
+                        ));
+                    }
+                }
+                for (instance, scratch_id) in editor.read(cx).scratch_tab_instances() {
+                    if let Some(key) = scratch_layout_key(&scratch_id) {
+                        keys.push((
+                            WorkbenchTabIdentity::Editor {
+                                editor_epoch: self.editor_epoch,
+                                instance,
+                            },
+                            key,
                         ));
                     }
                 }
@@ -7310,7 +8244,9 @@ impl Workbench {
     }
 
     fn save_mixed_pane_layout(&mut self, cx: &Context<Self>) {
-        if self.mixed_layout_read_only {
+        // Do not overwrite saved Host/Editor pane assignments before the
+        // first authenticated Host inventory restores their previews.
+        if self.mixed_layout_read_only || self.mixed_layout_restore.is_some() {
             return;
         }
         let Some(store) = self.session_store.as_ref() else {
@@ -7330,6 +8266,21 @@ impl Workbench {
                 .tabs_in(slot)
                 .iter()
                 .filter_map(&key_for)
+                .collect::<Vec<_>>()
+        };
+        let host_for = |id: &WorkbenchTabIdentity| match id {
+            WorkbenchTabIdentity::Host(target) => Some(SavedWorkbenchHostTab::new(
+                target.handle.clone(),
+                target.workspace_id(),
+                target.tab_id(),
+            )),
+            _ => None,
+        };
+        let host_keys = |slot: PaneSlot| {
+            self.mixed_panes
+                .tabs_in(slot)
+                .iter()
+                .filter_map(&host_for)
                 .collect::<Vec<_>>()
         };
         let saved = SavedWorkbenchLayoutV1 {
@@ -7361,6 +8312,22 @@ impl Workbench {
                 .iter()
                 .filter_map(&key_for)
                 .collect(),
+            pinned_hosts: self
+                .mixed_tabs
+                .pinned()
+                .iter()
+                .filter_map(&host_for)
+                .collect(),
+            primary_hosts: host_keys(PaneSlot::Primary),
+            secondary_hosts: host_keys(PaneSlot::Secondary),
+            primary_active_host: self
+                .mixed_panes
+                .active_in(PaneSlot::Primary)
+                .and_then(&host_for),
+            secondary_active_host: self
+                .mixed_panes
+                .active_in(PaneSlot::Secondary)
+                .and_then(&host_for),
         };
         if let Err(error) = saved.save_to_path(&path) {
             eprintln!("Alera GPUI: could not save mixed pane layout: {error}");
@@ -7385,6 +8352,12 @@ impl Workbench {
             .chain(saved.secondary_editors.iter())
             .take(MAX_EDITOR_TABS)
         {
+            // Scratch draft documents were independently recovered by
+            // EditorDraftStore. Their opaque layout keys are never paths
+            // and must not trigger filesystem reads or duplicate buffers.
+            if key.starts_with(SCRATCH_EDITOR_KEY_PREFIX) {
+                continue;
+            }
             let relative = Path::new(key);
             if !Self::valid_editor_layout_key(relative) {
                 eprintln!("Alera GPUI: refused unsafe persisted editor path");
@@ -7447,6 +8420,15 @@ impl Workbench {
         let Some(saved) = self.mixed_layout_restore.take() else {
             return;
         };
+        // The first render happens before the asynchronous authenticated Host
+        // list. Wait for TerminalLayout to restore its preview identities;
+        // otherwise this one-shot layout would discard secondary Host slots.
+        if self.terminal_layout_restore.is_some()
+            && (!saved.primary_hosts.is_empty() || !saved.secondary_hosts.is_empty())
+        {
+            self.mixed_layout_restore = Some(saved);
+            return;
+        }
         let keys = self.editor_layout_keys(cx);
         if keys.is_empty()
             && (!saved.primary_editors.is_empty() || !saved.secondary_editors.is_empty())
@@ -7459,11 +8441,82 @@ impl Workbench {
                 self.transfer_editor_to_pane(id, PaneSlot::Secondary, cx);
             }
         }
-        // Rehydrate only file-backed Editor pins after actual NativeEditor
-        // sessions have been installed/transferred. Host IDs never restore.
+        // Host hints can only reposition already-open tabs verified against
+        // the current authenticated Host inventory. They cannot attach or
+        // spawn terminals, nor can a recycled handle claim the old pane.
+        if !self.terminals.session_list_is_stale() {
+            self.mixed_panes.restore_live_host_positions(
+                &saved.primary_hosts,
+                &saved.secondary_hosts,
+                &self.terminals.sessions,
+            );
+        }
+        // Scratch drafts are discovered before file-backed Editors. Reorder
+        // both the visible strip and the native Ctrl+Tab sequence only after
+        // transferring the actual document owners to their saved panes.
+        for (slot, saved_keys) in [
+            (PaneSlot::Primary, &saved.primary_editors),
+            (PaneSlot::Secondary, &saved.secondary_editors),
+        ] {
+            let desired = saved_keys
+                .iter()
+                .filter_map(|wanted| {
+                    keys.iter()
+                        .find(|(_, key)| key == wanted)
+                        .map(|(id, _)| id.clone())
+                })
+                .collect::<Vec<_>>();
+            self.mixed_panes.restore_editor_order(slot, &desired);
+            let instances = desired
+                .iter()
+                .filter_map(|id| match id {
+                    WorkbenchTabIdentity::Editor { instance, .. } => Some(*instance),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            if let Some(owner) = self.editor_for_pane(slot) {
+                owner.update(cx, |editor, cx| {
+                    editor.restore_tab_order_by_instances(&instances, cx);
+                });
+            }
+        }
+        // Restore Editor pins only for tabs that actually exist in the
+        // recovered NativeEditor instances.
         for (id, key) in &keys {
             if saved.pinned_editors.contains(key) {
                 self.mixed_tabs.set_pinned(id, true);
+            }
+        }
+        // A Host pin is only a display preference. Validate all three
+        // identities against the currently authenticated and running Host
+        // inventory before pinning an already-visible preview; never use a
+        // saved hint to create or attach a PTY.
+        if !self.terminals.session_list_is_stale() {
+            for hint in &saved.pinned_hosts {
+                let verified = self.terminals.sessions.iter().any(|session| {
+                    session.running
+                        && session.handle == hint.handle
+                        && session.workspace_id == hint.workspace_id
+                        && session.tab_id == hint.tab_id
+                });
+                if !verified {
+                    continue;
+                }
+                let existing = self
+                    .mixed_panes
+                    .tabs_in(PaneSlot::Primary)
+                    .iter()
+                    .chain(self.mixed_panes.tabs_in(PaneSlot::Secondary).iter())
+                    .find(|id| {
+                        matches!(id, WorkbenchTabIdentity::Host(target)
+                            if target.handle == hint.handle
+                            && target.workspace_id() == hint.workspace_id
+                            && target.tab_id() == hint.tab_id)
+                    })
+                    .cloned();
+                if let Some(id) = existing {
+                    self.mixed_tabs.set_pinned(&id, true);
+                }
             }
         }
         for wanted in [
@@ -7486,11 +8539,38 @@ impl Workbench {
         }
         if !saved.split_enabled {
             self.unsplit_mixed_panes(cx);
-        } else if saved.focused_pane == SavedWorkbenchPane::Primary {
-            self.mixed_panes.focus_pane(PaneSlot::Primary);
         } else {
-            self.mixed_panes.focus_pane(PaneSlot::Secondary);
+            // Restore each pane's active Host (when it is still authenticated)
+            // before the saved focused pane. No Host is created or attached.
+            for (slot, wanted) in [
+                (PaneSlot::Primary, saved.primary_active_host.as_ref()),
+                (PaneSlot::Secondary, saved.secondary_active_host.as_ref()),
+            ] {
+                if let Some(wanted) = wanted {
+                    if let Some(identity) = self
+                        .mixed_panes
+                        .tabs_in(slot)
+                        .iter()
+                        .find(|id| {
+                            matches!(id, WorkbenchTabIdentity::Host(target)
+                            if target.handle == wanted.handle
+                            && target.workspace_id() == wanted.workspace_id
+                            && target.tab_id() == wanted.tab_id
+                            && self.terminals.context_target_is_live(target))
+                        })
+                        .cloned()
+                    {
+                        self.mixed_panes.activate(&identity);
+                    }
+                }
+            }
+            if saved.focused_pane == SavedWorkbenchPane::Primary {
+                self.mixed_panes.focus_pane(PaneSlot::Primary);
+            } else {
+                self.mixed_panes.focus_pane(PaneSlot::Secondary);
+            }
         }
+        self.save_mixed_pane_layout(cx);
     }
 
     /// Both Classic workbench panes use this same chip behavior. Only
@@ -7515,6 +8595,8 @@ impl Workbench {
         } else {
             ("mixed-tab", "mixed-tab-focus", "mixed-tab-close")
         };
+        let stopped_label = tab.stopped_label();
+        let agent_tooltip = tab.agent_status_tooltip();
         let identity = tab.identity;
         let icon_kind = match tab.kind {
             WorkbenchTabKind::Terminal | WorkbenchTabKind::Agent => UiIcon::Terminal,
@@ -7537,6 +8619,7 @@ impl Workbench {
             })
             .unwrap_or("");
         let title = tab.title;
+        let tab_tooltip_title = title.clone();
         let for_click = identity.clone();
         let for_middle = identity.clone();
         let for_right = identity.clone();
@@ -7557,6 +8640,13 @@ impl Workbench {
             .child(
                 div()
                     .id((focus_id, index))
+                    .when(agent_tooltip.is_some(), |chip| {
+                        let text = agent_tooltip.clone().unwrap_or_default();
+                        chip.tooltip(move |window, cx| {
+                            gpui_kit::component::tooltip::Tooltip::new(text.clone())
+                                .build(window, cx)
+                        })
+                    })
                     .min_w_0()
                     .max_w(px(210.0))
                     .flex()
@@ -7568,6 +8658,7 @@ impl Workbench {
                     .child(icon(icon_kind, 12.0, if selected { TEXT } else { MUTED }))
                     .child(
                         div()
+                            .id(("mixed-tab-title", index))
                             .min_w_0()
                             .max_w(px(if tab.kind == WorkbenchTabKind::Terminal {
                                 92.0
@@ -7576,6 +8667,12 @@ impl Workbench {
                             }))
                             .truncate()
                             .text_sm()
+                            .tooltip(move |window, cx| {
+                                gpui_kit::component::tooltip::Tooltip::new(
+                                    tab_tooltip_title.clone(),
+                                )
+                                .build(window, cx)
+                            })
                             .child(title),
                     )
                     .when(tab.dirty, |entry| entry.child(div().text_xs().child("●")))
@@ -7590,8 +8687,13 @@ impl Workbench {
                         )
                     })
                     .when(pinned, |entry| entry.child(icon(UiIcon::Pin, 12.0, MUTED)))
-                    .when(!tab.running, |entry| {
-                        entry.child(div().text_xs().text_color(rgb(MUTED)).child("○"))
+                    .when(stopped_label.is_some(), |entry| {
+                        entry.child(
+                            div()
+                                .text_xs()
+                                .text_color(rgb(MUTED))
+                                .child(stopped_label.unwrap_or("")),
+                        )
                     })
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.focus_mixed_tab(&for_click, window, cx);
@@ -7613,8 +8715,8 @@ impl Workbench {
                             })
                         },
                     )
-                    .on_drop(cx.listener(move |this, drag: &MixedTabDrag, _, cx| {
-                        this.reorder_mixed_tab(drag, &for_drop, cx);
+                    .on_drop(cx.listener(move |this, drag: &MixedTabDrag, window, cx| {
+                        this.reorder_mixed_tab(drag, &for_drop, window, cx);
                     }))
                     .context_menu(Self::kit_mixed_tab_context_menu(
                         cx.entity().downgrade(),
@@ -7873,6 +8975,13 @@ impl Workbench {
             cx.notify();
             return;
         }
+        // The temporary read-only Diff only covers the primary viewport.
+        // Selecting a primary Editor/Terminal tab restores it immediately,
+        // while interactions with the secondary pane can continue alongside.
+        if self.mixed_panes.tabs_in(PaneSlot::Primary).contains(id) {
+            self.center_git_diff_source = None;
+            self.center_git_diff_hunk = None;
+        }
         self.mixed_tab_context = None;
         self.explorer_preview_active = false;
         self.git_original_active = false;
@@ -7994,6 +9103,7 @@ impl Workbench {
         &mut self,
         drag: &MixedTabDrag,
         target: &WorkbenchTabIdentity,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if drag.workspace_generation != self.workspace_generation
@@ -8024,7 +9134,19 @@ impl Workbench {
         let pane_reordered = self.mixed_panes.reorder_within(&drag.identity, target);
         let global_reordered = self.mixed_tabs.move_to(&drag.identity, target);
         if pane_reordered || global_reordered || !source_in_destination {
-            self.save_mixed_pane_layout(cx);
+            // Pane membership alone does not change TerminalDock.active_tab.
+            // If a Host Agent is dragged across panes, synchronize the real
+            // TUI output/input owner immediately, just like clicking its tab.
+            // Otherwise the old Terminal can remain on screen under the
+            // moved Agent chip until the next manual focus change.
+            let dropped_focus = self
+                .mixed_panes
+                .post_cross_pane_drop_focus(&drag.identity, !source_in_destination);
+            if let Some(identity) = dropped_focus {
+                self.focus_mixed_tab(&identity, window, cx);
+            } else {
+                self.save_mixed_pane_layout(cx);
+            }
             if !source_in_destination {
                 self.refresh_terminal_split_output(cx);
             }
@@ -8401,9 +9523,17 @@ impl Workbench {
                 cx.notify();
             }
         }
+        // Toast.Show() can succeed before Windows reports an asynchronous
+        // delivery error. Never silently present that as a delivered notice.
+        #[cfg(windows)]
+        if let Some(error) = self.agent_windows_toast.take_failure() {
+            self.agent_status = format!("Windows Agent notice failed: {error}");
+            cx.notify();
+        }
         #[cfg(windows)]
         if let Some(clicked) = self.agent_windows_toast.take_activation() {
             self.agent_toast_activation = Some(clicked);
+            self.agent_toast_activation_retries = 0;
             cx.notify();
         }
     }
@@ -8417,19 +9547,86 @@ impl Workbench {
         // Clicking a WinRT notification never gives the Host permission to
         // start/terminate a PTY. Cross-workspace changes must use the normal
         // confirmed selection path; fail closed until it is implemented.
-        if self.terminals.session_list_is_stale()
-            || validated_notice_target(&notice, &self.terminals.sessions).is_none()
-        {
-            self.terminals.status = "Agent notice is stale; refresh Host sessions".into();
+        // The COM-launched Native process starts with no Host inventory.
+        // An empty list is not proof the clicked session has gone away.
+        // Wait for the authenticated async read, counting actual attempts,
+        // not GPUI render frames (which can complete before the CLI read).
+        if self.terminal_list_loading {
+            self.agent_toast_activation = Some(notice);
+            return;
+        }
+        if self.terminals.session_list_is_stale() || self.terminals.sessions.is_empty() {
+            if self.agent_toast_activation_retries < 3 {
+                self.agent_toast_activation_retries += 1;
+                self.agent_toast_activation = Some(notice);
+                self.refresh_terminals(cx);
+            } else {
+                self.terminals.status =
+                    "Cannot verify Agent notice: Host session list is unavailable".into();
+                cx.notify();
+            }
+            return;
+        }
+        if validated_notice_target(&notice, &self.terminals.sessions).is_none() {
+            self.terminals.status = "Agent notice is stale; Host session no longer exists".into();
             cx.notify();
             return;
         }
         let current_workspace =
             select_registered_host_workspace(self.model.root(), &self.mcp_host_workspaces).ok();
         if current_workspace.as_deref() != Some(notice.workspace_id.as_str()) {
-            self.terminals.status =
-                "Agent is in another workspace; open it before attaching the notice".into();
-            cx.notify();
+            // An OS toast click is an explicit request to navigate to the
+            // Agent. Use the exact authenticated Host workspace ID, never
+            // guess from the repo name or toast payload, and reuse the normal
+            // draft-safe workspace switch.
+            if self.mcp_host_workspaces_loading {
+                self.agent_toast_activation = Some(notice);
+                return;
+            }
+            match resolve_registered_host_workspace_path(
+                &notice.workspace_id,
+                &self.mcp_host_workspaces,
+            ) {
+                Ok(target_root) => {
+                    if self.model.root() != target_root.as_path() {
+                        self.switch_workspace(target_root.clone(), cx);
+                        if self.model.root() != target_root.as_path() {
+                            self.terminals.status =
+                                "Agent notice cannot switch workspace; save your draft first"
+                                    .into();
+                            cx.notify();
+                            return;
+                        }
+                    }
+                    // The new workspace reads Host sessions and restores pane
+                    // layout asynchronously. Focus only after those are fresh.
+                    self.agent_toast_activation = Some(notice);
+                    self.agent_toast_activation_retries = 0;
+                    cx.notify();
+                }
+                Err(_)
+                    if self.mcp_host_workspaces.is_empty()
+                        && self.agent_toast_activation_retries < 3 =>
+                {
+                    if self.runtime_bridge.is_none() {
+                        self.runtime_bridge = RuntimeCliBridge::discover().ok();
+                    }
+                    if self.runtime_bridge.is_some() {
+                        self.agent_toast_activation_retries += 1;
+                        self.agent_toast_activation = Some(notice);
+                        self.refresh_mcp_host_workspaces(cx);
+                    } else {
+                        self.terminals.status =
+                            "Cannot navigate Agent notice: Alera Host CLI unavailable".into();
+                        cx.notify();
+                    }
+                }
+                Err(error) => {
+                    self.terminals.status =
+                        format!("Cannot navigate Agent notice to registered workspace: {error}");
+                    cx.notify();
+                }
+            }
             return;
         }
         if !self.terminals.tabs.iter().any(|tab| {
@@ -8442,16 +9639,14 @@ impl Workbench {
             self.select_terminal(notice.session_id.clone(), cx);
             self.sync_mixed_tabs(cx);
         }
-        let target = self.mixed_tabs.entries().iter().find_map(|tab| {
-            let WorkbenchTabIdentity::Host(host) = &tab.identity else {
-                return None;
-            };
-            (host.handle == notice.session_id
-                && host.workspace_id() == notice.workspace_id
-                && host.tab_id() == notice.tab_id)
-                .then(|| tab.identity.clone())
-        });
-        if let Some(id) = target {
+        let target = validated_notice_pane_target(
+            &notice,
+            &self.terminals.sessions,
+            &self.mixed_tabs,
+            &self.mixed_panes,
+        );
+        if let Some((id, _pane)) = target {
+            self.agent_toast_activation_retries = 0;
             self.focus_mixed_tab(&id, window, cx);
         } else {
             self.terminals.status = "Agent Host tab is no longer available".into();
@@ -8720,20 +9915,36 @@ impl Workbench {
             }
         })
         .detach();
+        // Auto-resize gets its own single per-Workbench debounce poll. Don't
+        // make users see the old 80x24 VT grid until the unrelated 1.5s
+        // housekeeping timer fires (a common normal new-Tab UX gap).
+        cx.spawn(async move |view, cx| loop {
+            cx.background_executor()
+                .timer(Duration::from_millis(400))
+                .await;
+            if view
+                .update(cx, |view, cx| view.flush_auto_terminal_resizes(cx))
+                .is_err()
+            {
+                break;
+            }
+        })
+        .detach();
         // Housekeeping retains its existing 1.5s interval and is independent
-        // of the fast output reader. Never spawn a timer per tab.
+        // of Terminal resize and the fast output reader.
         cx.spawn(async move |view, cx| loop {
             cx.background_executor().timer(Duration::from_millis(1500)).await;
             if view
                 .update(cx, |view, cx| {
                     view.terminal_tick = view.terminal_tick.wrapping_add(1);
-                    view.flush_auto_terminal_resizes(cx);
                     view.poll_native_mcp_commands(cx);
                     // Classic and GPUI may remain open simultaneously.
                     // Poll a narrow six-field Host snapshot off the UI
                     // thread: fast while Settings is open, bounded otherwise.
                     let settings_refresh_secs =
-                        if view.settings_section.is_some() { 3 } else { 15 };
+                        alera_gpui_desktop::agent_quota::shared_quota_pin_poll_seconds(
+                            view.settings_section.is_some(), view.quota_popover_open,
+                        );
                     if view.settings_shared_last_refresh.elapsed()
                         >= Duration::from_secs(settings_refresh_secs)
                     {
@@ -8893,6 +10104,8 @@ impl Render for Workbench {
             self.native_settings.editor_two_row_tabs && !primary_pinned_tabs.is_empty();
         let secondary_two_rows =
             self.native_settings.editor_two_row_tabs && !secondary_pinned_tabs.is_empty();
+        let shared_pinned_row =
+            shared_pinned_tab_row(primary_two_rows, secondary_two_rows, mixed_has_secondary);
         // Classic only creates a second row when that pane has pinned tabs.
         // In one-row mode keep the pins ahead of the regular scrolling tabs.
         let mixed_primary_tabs = if primary_two_rows {
@@ -9175,6 +10388,7 @@ impl Render for Workbench {
             })
             .collect();
         let terminal_create_busy = self.terminal_create_flow.is_active();
+        let terminal_create_unknown = self.terminal_create_flow.is_outcome_unknown();
         let terminal_create_timed_out = self.terminal_create_flow.is_timed_out();
         let terminal_creating = self.terminal_create_flow.is_creating();
         // The primary pane renders its own Host identity, even when the
@@ -9240,6 +10454,25 @@ impl Render for Workbench {
             })
             .map(|selection| {
                 (0..terminal_screen_rows.len())
+                    .map(|row| selection.includes_row(row))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let terminal_secondary_selected_rows = mixed_secondary_host
+            .as_ref()
+            .and_then(|target| {
+                self.terminals
+                    .index_for_context(target)
+                    .and_then(|index| self.terminals.tabs.get(index))
+                    .and_then(|tab| {
+                        self.terminal_line_selection
+                            .as_ref()
+                            .filter(|selection| selection.is_current(target, tab.next_cursor))
+                    })
+            })
+            .map(|selection| {
+                let count = mixed_secondary_vt_rows.as_ref().map(Vec::len).unwrap_or(0);
+                (0..count)
                     .map(|row| selection.includes_row(row))
                     .collect::<Vec<_>>()
             })
@@ -9385,6 +10618,9 @@ impl Render for Workbench {
         let index_loading = self.file_index_loading;
         let content_query = self.content_query.clone();
         let content_loading = self.content_loading;
+        let content_search_all = self.content_search_scope == WorktreeContentScope::AllWorktrees;
+        let content_worktrees_searched = self.content_worktrees_searched;
+        let content_worktrees_skipped = self.content_worktrees_skipped;
         let content_results_total = self.content_matches.len();
         let content_results: Vec<_> = self
             .content_matches
@@ -9394,17 +10630,27 @@ impl Render for Workbench {
             .enumerate()
             .collect();
         let content_status = if content_loading {
-            "Searching workspace text…".to_string()
+            if content_search_all {
+                "Searching registered Git worktrees…".to_string()
+            } else {
+                "Searching current workspace text…".to_string()
+            }
         } else if let Some(error) = &self.content_error {
             error.clone()
         } else if self.content_searched_query.is_empty() {
             "Enter text and click Search".to_string()
         } else {
             format!(
-                "{} match(es){}{}",
+                "{} match(es) · {} worktree(s){}{}{}",
                 content_results_total,
+                content_worktrees_searched,
                 if self.content_truncated {
                     " · partial results"
+                } else {
+                    ""
+                },
+                if content_worktrees_skipped > 0 {
+                    " · some worktrees skipped"
                 } else {
                     ""
                 },
@@ -9717,6 +10963,10 @@ impl Render for Workbench {
                     && !self.git_diff_loading,
             )
         });
+        let show_center_git_diff = native_center_git_diff_ui::should_show_center_git_diff_view(
+            git_original_is_active,
+            self.center_git_diff_is_current(),
+        );
 
         div()
             .size_full()
@@ -9973,10 +11223,48 @@ impl Render for Workbench {
                                                 .items_center()
                                                 .gap_1()
                                                 .child(div().flex_1().min_w_0().child(input))
-                                                .child(icon_button("content-search-run", UiIcon::Search, "Search project file contents", content_loading)
+                                                .child(icon_button("content-search-run", UiIcon::Search, "Search selected content scope", content_loading)
                                                     .on_click(cx.listener(|this, _, _, cx| {
                                                         this.search_project_contents(cx);
                                                     }))))
+                                            .child(
+                                                div()
+                                                    .flex()
+                                                    .items_center()
+                                                    .gap_1()
+                                                    .child(
+                                                        div()
+                                                            .id("content-scope-current")
+                                                            .cursor_pointer()
+                                                            .px_2()
+                                                            .py_1()
+                                                            .text_xs()
+                                                            .bg(rgb(if content_search_all { PANEL } else { ACTIVE }))
+                                                            .child("Current worktree")
+                                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                                if this.content_search_scope != WorktreeContentScope::Current {
+                                                                    this.content_search_scope = WorktreeContentScope::Current;
+                                                                    this.search_project_contents(cx);
+                                                                }
+                                                            })),
+                                                    )
+                                                    .child(
+                                                        div()
+                                                            .id("content-scope-all-worktrees")
+                                                            .cursor_pointer()
+                                                            .px_2()
+                                                            .py_1()
+                                                            .text_xs()
+                                                            .bg(rgb(if content_search_all { ACTIVE } else { PANEL }))
+                                                            .child("All Git worktrees")
+                                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                                if this.content_search_scope != WorktreeContentScope::AllWorktrees {
+                                                                    this.content_search_scope = WorktreeContentScope::AllWorktrees;
+                                                                    this.search_project_contents(cx);
+                                                                }
+                                                            })),
+                                                    ),
+                                            )
                                             .child(
                                                 div()
                                                     .text_xs()
@@ -9989,25 +11277,30 @@ impl Render for Workbench {
                                                     .max_h(px(230.0))
                                                     .overflow_y_scroll()
                                                     .children(content_results.into_iter().map(|(i, hit)| {
-                                                        let path = workspace_root.join(&hit.path);
                                                         let label = format!(
                                                             "{}:{}:{}  {}",
-                                                            hit.path.display(),
-                                                            hit.line,
-                                                            hit.column,
-                                                            hit.snippet
+                                                            hit.hit.path.display(),
+                                                            hit.hit.line,
+                                                            hit.hit.column,
+                                                            hit.hit.snippet
                                                         );
+                                                        let owner_label = hit.label();
                                                         div()
                                                             .id(("content-search-result", i))
                                                             .cursor_pointer()
                                                             .py_1()
-                                                            .text_xs()
+                                                            .min_w_0()
                                                             .hover(|style| style.bg(rgb(ACTIVE)))
-                                                            .child(label)
+                                                            .child(
+                                                                div()
+                                                                    .min_w_0()
+                                                                    .flex()
+                                                                    .flex_col()
+                                                                    .child(div().min_w_0().text_xs().child(label))
+                                                                    .child(div().min_w_0().text_xs().text_color(rgb(MUTED)).child(owner_label)),
+                                                            )
                                                             .on_click(cx.listener(move |this, _, window, cx| {
-                                                                this.open_content_search_hit(
-                                                                    &path, hit.line, hit.column, window, cx,
-                                                                );
+                                                                this.open_content_search_hit(&hit, window, cx);
                                                             }))
                                                     })),
                                             )
@@ -10055,10 +11348,21 @@ impl Render for Workbench {
                                             let selected = explorer_multi_selection.contains(&path);
                                             let row_icon = explorer_file_icon(&label, hit.is_directory, false);
                                             let status_badge = explorer_git_badges.get(&path);
+                                            let full_relative = relative.display().to_string();
+                                            let parent_label = relative
+                                                .parent()
+                                                .filter(|p| !p.as_os_str().is_empty())
+                                                .map(|p| p.display().to_string())
+                                                .unwrap_or_default();
                                             div()
                                                 .id(("explorer-filter-result", i))
                                                 .px_2()
-                                                .py_1()
+                                                .h(px(28.0))
+                                                .min_w_0()
+                                                .tooltip(move |window, cx| {
+                                                    gpui_kit::component::tooltip::Tooltip::new(full_relative.clone())
+                                                        .build(window, cx)
+                                                })
                                                 .flex()
                                                 .items_center()
                                                 .gap_2()
@@ -10066,10 +11370,12 @@ impl Render for Workbench {
                                                 .bg(rgb(if selected { ACTIVE } else { PANEL }))
                                                 .hover(|style| style.bg(rgb(ACTIVE)))
                                                 .child(icon(row_icon, 15.0, if selected { TEXT } else { MUTED }))
-                                                .child(div().min_w_0().flex_1().flex().flex_col()
-                                                    .child(div().text_sm().child(label))
-                                                    .child(div().text_xs().text_color(rgb(MUTED))
-                                                        .child(relative.display().to_string())))
+                                                .child(div().min_w_0().flex_1().flex().items_center().gap_2()
+                                                    .child(div().min_w_0().flex_1().truncate().text_sm().child(label))
+                                                    .when(!parent_label.is_empty(), |row| {
+                                                        row.child(div().min_w_0().max_w(px(180.0)).truncate()
+                                                            .text_xs().text_color(rgb(MUTED)).child(parent_label))
+                                                    }))
                                                 .child(explorer_status_badge(status_badge))
                                                 .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
                                                     this.explorer_context_menu = None;
@@ -10144,7 +11450,7 @@ impl Render for Workbench {
                                                 .id(("explorer-tree-row", i))
                                                 .pl(px(8.0 + item.depth as f32 * 16.0))
                                                 .pr_2()
-                                                .h(px(32.0))
+                                                .h(px(28.0))
                                                 .flex()
                                                 .items_center()
                                                 .gap_1()
@@ -10176,7 +11482,7 @@ impl Render for Workbench {
                                                     div().w(px(20.0)).into_any_element()
                                                 })
                                                 .child(icon(row_icon, 15.0, if selected { TEXT } else { MUTED }))
-                                                .child(div().flex_1().min_w_0().overflow_hidden().text_sm().child(row_label))
+                                                .child(div().flex_1().min_w_0().truncate().text_sm().child(row_label))
                                                 .child(explorer_status_badge(status_badge))
                                                 .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
                                                     this.explorer_context_menu = None;
@@ -10249,7 +11555,7 @@ impl Render for Workbench {
                                                 .id(i)
                                                 .pl_2()
                                                 .pr_2()
-                                                .h(px(32.0))
+                                                .h(px(28.0))
                                                 .flex()
                                                 .items_center()
                                                 .gap_2()
@@ -10257,7 +11563,7 @@ impl Render for Workbench {
                                                 .bg(rgb(if selected { ACTIVE } else { PANEL }))
                                                 .hover(|style| style.bg(rgb(ACTIVE)))
                                                 .child(icon(row_icon, 15.0, if selected { TEXT } else { MUTED }))
-                                                .child(div().flex_1().min_w_0().overflow_hidden().text_sm().child(item.name))
+                                                .child(div().flex_1().min_w_0().truncate().text_sm().child(item.name))
                                                 .child(explorer_status_badge(status_badge))
                                                 .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
                                                     this.explorer_context_menu = None;
@@ -10757,9 +12063,9 @@ impl Render for Workbench {
                                                                 this.preview_git_compared_file(index, false, cx);
                                                             })))
                                                         .child(icon_button(("git-compare-original", index), UiIcon::Open,
-                                                            "View original at merge-base (read-only)", false)
+                                                            "Open merge-base original as a read-only Git tab", false)
                                                             .on_click(cx.listener(move |this, _, _, cx| {
-                                                                this.preview_git_compared_file(index, true, cx);
+                                                                this.open_git_compared_original_tab(index, cx);
                                                             })))
                                                 }))))
                                     })
@@ -11320,6 +12626,20 @@ impl Render for Workbench {
                                     } else {
                                         div().text_xs().text_color(rgb(MUTED))
                                             .child("Expand diff").into_any_element()
+                                    })
+                                    .child(if git_diff_expand_available && git_file_page.is_some() {
+                                        div()
+                                            .id("git-diff-open-center")
+                                            .cursor_pointer()
+                                            .text_xs()
+                                            .text_color(rgb(TEXT))
+                                            .child("Center")
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.open_center_git_diff(cx);
+                                            }))
+                                            .into_any_element()
+                                    } else {
+                                        div().into_any_element()
                                     }),
                             )
                             .child(if let Some((page, can_previous, can_next)) = git_file_page {
@@ -11398,10 +12718,24 @@ impl Render for Workbench {
                             .min_w_0()
                             .flex()
                             .flex_col()
+                            // One header layout owns both split Pane Tab bars.  The secondary
+                            // pane no longer starts a whole Tab-row below the primary.
+                            .child(
+                                div()
+                                    .id("mixed-pane-aligned-headers")
+                                    .flex()
+                                    .min_w_0()
+                                    .child(
+                                        div()
+                                            .id("mixed-primary-header-column")
+                                            .flex_1()
+                                            .min_w_0()
+                                            .flex()
+                                            .flex_col()
                             .child(
                                 div()
                                     .id("mixed-primary-pinned-tab-strip")
-                                    .when(primary_two_rows, |row| {
+                                    .when(shared_pinned_row, |row| {
                                         row.h(px(TAB_STRIP_HEIGHT))
                                             .min_w_0()
                                             .flex()
@@ -11411,7 +12745,7 @@ impl Render for Workbench {
                                             .bg(rgb(TOOLBAR))
                                             .border_b_1()
                                             .border_color(rgb(BORDER))
-                                            .children(primary_pinned_tabs.into_iter().enumerate().map(|(index, tab)| {
+                                            .children((if primary_two_rows { primary_pinned_tabs } else { Vec::new() }).into_iter().enumerate().map(|(index, tab)| {
                                                 let selected = mixed_primary_active.as_ref() == Some(&tab.identity);
                                                 Self::render_mixed_tab_chip(
                                                     index + 512,
@@ -11523,7 +12857,7 @@ impl Render for Workbench {
                                                             )
                                                             .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
                                                                 this.model.activate_tab(index);
-                                                                this.git_original_active = false;
+                                                                this.release_primary_center_overlays(PaneSlot::Primary);
                                                                 if event.click_count() >= 2 && transient {
                                                                     if let Some(path) = this.model.selected_path().map(PathBuf::from) {
                                                                         this.click_explorer_file(&path, true, window, cx);
@@ -11569,6 +12903,8 @@ impl Render for Workbench {
                                                     &self.mixed_panes,
                                                 );
                                                 let profiles = self.agent_profiles.clone();
+                                                let installed = self.installed_agent_clis.clone();
+                                                let installed_loading = self.installed_agent_clis_loading;
                                                 icon_button("mixed-new-tab", UiIcon::Add, "New Tab", terminal_creating
                                                     && self.terminal_create_pane.as_ref().is_some_and(|pending| pending.target.pane() == PaneSlot::Primary))
                                                     .w(px(28.0))
@@ -11578,14 +12914,18 @@ impl Render for Workbench {
                                                         target,
                                                         running,
                                                         profiles,
+                                                        installed,
+                                                        installed_loading,
                                                         terminal_create_busy,
                                                         terminal_create_timed_out,
+                                                        terminal_create_unknown,
                                                     ))
                                                     .on_open_change(move |open, _, cx| {
                                                         if *open {
                                                             let _ = refresh_owner.update(cx, |view, cx| {
                                                                 view.refresh_terminals(cx);
                                                                 view.refresh_agent_profiles(cx);
+                                                                view.refresh_installed_agent_clis(cx);
                                                             });
                                                         }
                                                     })
@@ -11604,6 +12944,24 @@ impl Render for Workbench {
                                             ),
                                     )
                                     .child(
+                                        icon_button("native-terminal-history-up-primary", UiIcon::ChevronUp,
+                                            "Scroll terminal history up one page (Shift+PageUp)", false)
+                                            .when(!terminal_is_vt || !mixed_primary_active.as_ref().is_some_and(|id|
+                                                matches!(id, WorkbenchTabIdentity::Host(_))), |button| button.hidden())
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.scroll_native_terminal_page(PaneSlot::Primary, true, cx);
+                                            })),
+                                    )
+                                    .child(
+                                        icon_button("native-terminal-history-down-primary", UiIcon::ChevronDown,
+                                            "Scroll terminal history down one page (Shift+PageDown)", false)
+                                            .when(!terminal_is_vt || !mixed_primary_active.as_ref().is_some_and(|id|
+                                                matches!(id, WorkbenchTabIdentity::Host(_))), |button| button.hidden())
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.scroll_native_terminal_page(PaneSlot::Primary, false, cx);
+                                            })),
+                                    )
+                                    .child(
                                         icon_button("mixed-pane-actions", UiIcon::More, "Pane actions", false)
                                             .dropdown_menu(Self::kit_pane_actions_menu(
                                                 cx.entity().downgrade(),
@@ -11612,6 +12970,154 @@ impl Render for Workbench {
                                                 mixed_has_secondary,
                                             )),
                                     ),
+                            )
+                                    )
+                                    .child(if mixed_has_secondary && mixed_split_horizontal {
+                                        div()
+                                            .id("mixed-secondary-header-column")
+                                            .flex_1()
+                                            .min_w_0()
+                                            .flex()
+                                            .flex_col()
+                                            .border_l_1()
+                                            .border_color(rgb(BORDER))
+                                            .child(
+                                                div()
+                                                    .id("mixed-secondary-pinned-tab-strip")
+                                                    .when(shared_pinned_row, |row| {
+                                                        row.h(px(TAB_STRIP_HEIGHT))
+                                                            .min_w_0()
+                                                            .flex()
+                                                            .items_center()
+                                                            .overflow_x_scroll()
+                                                            .pl_2()
+                                                            .bg(rgb(TOOLBAR))
+                                                            .border_b_1()
+                                                            .border_color(rgb(BORDER))
+                                                            .children((if secondary_two_rows { secondary_pinned_tabs.clone() } else { Vec::new() }).into_iter().enumerate().map(|(index, tab)| {
+                                                                let selected = mixed_secondary_active.as_ref() == Some(&tab.identity);
+                                                                Self::render_mixed_tab_chip(
+                                                                    index + 512,
+                                                                    tab,
+                                                                    PaneSlot::Secondary,
+                                                                    selected,
+                                                                    true,
+                                                                    mixed_drag_generation,
+                                                                    cx,
+                                                                )
+                                                            }))
+                                                    }),
+                                            )
+                                            .child(
+                                                div()
+                                                    .id("mixed-secondary-toolbar")
+                                                    .h(px(TAB_STRIP_HEIGHT))
+                                                    .px_2()
+                                                    .flex()
+                                                    .items_center()
+                                                    .gap_1()
+                                                    .bg(rgb(TOOLBAR))
+                                                    .border_b_1()
+                                                    .border_color(rgb(BORDER))
+                                                    .child(
+                                                        div()
+                                                            .id("mixed-secondary-tabs-scroll")
+                                                            .flex_1()
+                                                            .min_w_0()
+                                                            .flex()
+                                                            .items_center()
+                                                            .overflow_x_scroll()
+                                                            .children(mixed_secondary_tabs.clone().into_iter().enumerate().map(|(index, tab)| {
+                                                                let selected = mixed_secondary_active.as_ref() == Some(&tab.identity);
+                                                                let pinned = pinned_ids.contains(&tab.identity);
+                                                                Self::render_mixed_tab_chip(
+                                                                    index, tab, PaneSlot::Secondary, selected, pinned,
+                                                                    mixed_drag_generation, cx,
+                                                                )
+                                                            }))
+                                                            .on_drop(cx.listener(|this, drag: &MixedTabDrag, window, cx| {
+                                                                if drag.workspace_generation == this.workspace_generation
+                                                                    && this.mixed_tab_is_current(&drag.identity, cx)
+                                                                    && this.transfer_editor_to_pane(&drag.identity, PaneSlot::Secondary, cx)
+                                                                {
+                                                                    this.focus_mixed_tab(&drag.identity, window, cx);
+                                                                    this.refresh_terminal_split_output(cx);
+                                                                }
+                                                            })),
+                                                    )
+                                                    .child({
+                                                        let owner = cx.entity().downgrade();
+                                                        let refresh_owner = owner.clone();
+                                                        let running = self.terminals.sessions.iter()
+                                                            .filter(|session| session.running)
+                                                            .map(|session| (
+                                                                session.clone(),
+                                                                format!("{} · {}", session.label(), session.workspace_id),
+                                                            ))
+                                                            .collect::<Vec<_>>();
+                                                        let target = PaneAttachGuard::capture(
+                                                            self.workspace_generation,
+                                                            PaneSlot::Secondary,
+                                                            &self.mixed_panes,
+                                                        );
+                                                        let profiles = self.agent_profiles.clone();
+                                                        let installed = self.installed_agent_clis.clone();
+                                                        let installed_loading = self.installed_agent_clis_loading;
+                                                        icon_button("mixed-secondary-new-tab", UiIcon::Add, "New Tab in second pane", terminal_creating
+                                                            && self.terminal_create_pane.as_ref().is_some_and(|pending| pending.target.pane() == PaneSlot::Secondary))
+                                                            .w(px(28.0))
+                                                            .h(px(28.0))
+                                                            .dropdown_menu(Self::kit_new_tab_menu(
+                                                                owner,
+                                                                target,
+                                                                running,
+                                                                profiles,
+                                                                installed,
+                                                                installed_loading,
+                                                                terminal_create_busy,
+                                                                terminal_create_timed_out,
+                                                                terminal_create_unknown,
+                                                            ))
+                                                            .on_open_change(move |open, _, cx| {
+                                                                if *open {
+                                                                    let _ = refresh_owner.update(cx, |view, cx| {
+                                                                        view.refresh_terminals(cx);
+                                                                        view.refresh_agent_profiles(cx);
+                                                                        view.refresh_installed_agent_clis(cx);
+                                                                    });
+                                                                }
+                                                            })
+                                                    })
+                                                    .child(
+                                                        icon_button("native-terminal-history-up-secondary", UiIcon::ChevronUp,
+                                                            "Scroll second-pane terminal history up (Shift+PageUp)", false)
+                                                            .when(!terminal_is_vt || mixed_secondary_host.is_none(), |button| button.hidden())
+                                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                                this.scroll_native_terminal_page(PaneSlot::Secondary, true, cx);
+                                                            })),
+                                                    )
+                                                    .child(
+                                                        icon_button("native-terminal-history-down-secondary", UiIcon::ChevronDown,
+                                                            "Scroll second-pane terminal history down (Shift+PageDown)", false)
+                                                            .when(!terminal_is_vt || mixed_secondary_host.is_none(), |button| button.hidden())
+                                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                                this.scroll_native_terminal_page(PaneSlot::Secondary, false, cx);
+                                                            })),
+                                                    )
+                                                    .child(
+                                                        icon_button("mixed-secondary-pane-actions", UiIcon::More, "Second pane actions", false)
+                                                            .dropdown_menu(Self::kit_pane_actions_menu(
+                                                                cx.entity().downgrade(),
+                                                                mixed_secondary_active.clone(),
+                                                                true,
+                                                                mixed_has_secondary,
+                                                            )),
+                                                    ),
+                                            )
+                                            .into_any_element()
+                                    } else {
+                                        div().h(px(0.0)).into_any_element()
+                                    }),
                             )
                             .child(
                                 div()
@@ -11623,7 +13129,7 @@ impl Render for Workbench {
                                     .justify_between()
                                     .text_sm()
                                     .text_color(rgb(MUTED))
-                                    .when(!show_editor_toolbar, |panel| panel.hidden())
+                                    .when(!show_editor_toolbar || show_center_git_diff, |panel| panel.hidden())
                                     .child(
                                         div()
                                             .flex_1()
@@ -11721,6 +13227,8 @@ impl Render for Workbench {
                                             .text_color(rgb(TEXT))
                                             .child(original.snapshot.content))
                                         .into_any_element()
+                                } else if show_center_git_diff {
+                                    self.render_center_git_diff(cx)
                                 } else if let Some(editor) = editor.clone().filter(|_| !showing_explorer_preview) {
                                     div()
                                         .flex_1()
@@ -11755,7 +13263,7 @@ impl Render for Workbench {
                                     .min_h_0()
                                     .flex()
                                     .flex_col()
-                                    .when(center_is_editor, |panel| panel.hidden())
+                                    .when(native_center_git_diff_ui::should_hide_underlying_terminal(center_is_editor, show_center_git_diff), |panel| panel.hidden())
                                     .border_t_1()
                                     .border_color(rgb(BORDER))
                                     .bg(rgb(BG))
@@ -11770,6 +13278,8 @@ impl Render for Workbench {
                                         div()
                                             .id("terminal-colored-grid")
                                             .relative()
+                                            .min_w_0()
+                                            .bg(rgb(TERMINAL_DEFAULT_BG))
                                             .key_context("AleraGpuiTerminalRaw")
                                             .track_focus(&terminal_keyboard_focus)
                                             .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, window, cx| {
@@ -11792,13 +13302,7 @@ impl Render for Workbench {
                                                 this.finish_terminal_line_selection(cx);
                                             }))
                                             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
-                                                if event.keystroke.modifiers.control
-                                                    && event.keystroke.modifiers.shift
-                                                    && event.keystroke.key.eq_ignore_ascii_case("c")
-                                                {
-                                                    this.copy_primary_terminal_text(false, cx);
-                                                    cx.stop_propagation();
-                                                } else if this.send_terminal_key_for_pane(PaneSlot::Primary, event, cx) {
+                                                if this.send_terminal_key_for_pane(PaneSlot::Primary, event, cx) {
                                                     cx.stop_propagation();
                                                 }
                                             }))
@@ -11825,7 +13329,7 @@ impl Render for Workbench {
                                                         .id(("terminal-colored-row", row_index))
                                                         .whitespace_nowrap()
                                                         .line_height(px(terminal_font_size * terminal_line_height))
-                                                        .bg(rgb(if selected { ACTIVE } else { BG }))
+                                                        .bg(rgb(if selected { ACTIVE } else { TERMINAL_DEFAULT_BG }))
                                                         .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |this, _, window, cx| {
                                                             // Text rows consume the pointer event; explicitly
                                                             // restore the Terminal IME sink, not the old Explorer.
@@ -11863,6 +13367,7 @@ impl Render for Workbench {
                                     } else {
                                         div()
                                             .id("terminal-output-scroll")
+                                            .bg(rgb(TERMINAL_DEFAULT_BG))
                                             .key_context("AleraGpuiTerminalRaw")
                                             .track_focus(&terminal_keyboard_focus)
                                             .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, window, cx| {
@@ -11874,13 +13379,7 @@ impl Render for Workbench {
                                                 window.focus(&focus, cx);
                                             }))
                                             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
-                                                if event.keystroke.modifiers.control
-                                                    && event.keystroke.modifiers.shift
-                                                    && event.keystroke.key.eq_ignore_ascii_case("c")
-                                                {
-                                                    this.copy_primary_terminal_text(false, cx);
-                                                    cx.stop_propagation();
-                                                } else if this.send_terminal_key_for_pane(PaneSlot::Primary, event, cx) {
+                                                if this.send_terminal_key_for_pane(PaneSlot::Primary, event, cx) {
                                                     cx.stop_propagation();
                                                 }
                                             }))
@@ -11959,7 +13458,7 @@ impl Render for Workbench {
                                 div()
                                     .flex_1()
                                     .min_h_0()
-                                    .when(center_is_editor, |panel| panel.hidden())
+                                    .when(native_center_git_diff_ui::should_hide_underlying_terminal(center_is_editor, show_center_git_diff), |panel| panel.hidden())
                                     .p_4()
                                     .text_sm()
                                     .text_color(rgb(MUTED))
@@ -11988,9 +13487,20 @@ impl Render for Workbench {
                                             .flex_col()
                                             .border_l_1()
                                             .border_color(rgb(BORDER))
+                                            // Stacked panes keep their own header; horizontal
+                                            // panes share the aligned header above this split.
+                                            .child(if mixed_split_horizontal {
+                                                div().h(px(0.0)).into_any_element()
+                                            } else {
+                                                div()
+                                                    .id("mixed-secondary-stacked-header")
+                                                    .flex()
+                                                    .flex_col()
+                                                    .min_w_0()
                                             .child(
                                                 div()
                                                     .id("mixed-secondary-pinned-tab-strip")
+
                                                     .when(secondary_two_rows, |row| {
                                                         row.h(px(TAB_STRIP_HEIGHT))
                                                             .min_w_0()
@@ -12018,6 +13528,7 @@ impl Render for Workbench {
                                             .child(
                                                 div()
                                                     .id("mixed-secondary-toolbar")
+
                                                     .h(px(TAB_STRIP_HEIGHT))
                                                     .px_2()
                                                     .flex()
@@ -12068,6 +13579,8 @@ impl Render for Workbench {
                                                             &self.mixed_panes,
                                                         );
                                                         let profiles = self.agent_profiles.clone();
+                                                        let installed = self.installed_agent_clis.clone();
+                                                        let installed_loading = self.installed_agent_clis_loading;
                                                         icon_button("mixed-secondary-new-tab", UiIcon::Add, "New Tab in second pane", terminal_creating
                                                             && self.terminal_create_pane.as_ref().is_some_and(|pending| pending.target.pane() == PaneSlot::Secondary))
                                                             .w(px(28.0))
@@ -12077,18 +13590,38 @@ impl Render for Workbench {
                                                                 target,
                                                                 running,
                                                                 profiles,
+                                                                installed,
+                                                                installed_loading,
                                                                 terminal_create_busy,
                                                                 terminal_create_timed_out,
+                                                                terminal_create_unknown,
                                                             ))
                                                             .on_open_change(move |open, _, cx| {
                                                                 if *open {
                                                                     let _ = refresh_owner.update(cx, |view, cx| {
                                                                         view.refresh_terminals(cx);
                                                                         view.refresh_agent_profiles(cx);
+                                                                        view.refresh_installed_agent_clis(cx);
                                                                     });
                                                                 }
                                                             })
                                                     })
+                                                    .child(
+                                                        icon_button("native-terminal-history-up-secondary", UiIcon::ChevronUp,
+                                                            "Scroll second-pane terminal history up (Shift+PageUp)", false)
+                                                            .when(!terminal_is_vt || mixed_secondary_host.is_none(), |button| button.hidden())
+                                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                                this.scroll_native_terminal_page(PaneSlot::Secondary, true, cx);
+                                                            })),
+                                                    )
+                                                    .child(
+                                                        icon_button("native-terminal-history-down-secondary", UiIcon::ChevronDown,
+                                                            "Scroll second-pane terminal history down (Shift+PageDown)", false)
+                                                            .when(!terminal_is_vt || mixed_secondary_host.is_none(), |button| button.hidden())
+                                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                                this.scroll_native_terminal_page(PaneSlot::Secondary, false, cx);
+                                                            })),
+                                                    )
                                                     .child(
                                                         icon_button("mixed-secondary-pane-actions", UiIcon::More, "Second pane actions", false)
                                                             .dropdown_menu(Self::kit_pane_actions_menu(
@@ -12099,6 +13632,8 @@ impl Render for Workbench {
                                                             )),
                                                     ),
                                             )
+                                                    .into_any_element()
+                                            })
                                             .child(if let Some(editor) = secondary_native_editor {
                                                 div()
                                                     .id("mixed-secondary-editor")
@@ -12119,6 +13654,8 @@ impl Render for Workbench {
                                                     .relative()
                                                     .flex_1()
                                                     .min_h_0()
+                                                    .min_w_0()
+                                                    .bg(rgb(TERMINAL_DEFAULT_BG))
                                                     .key_context("AleraGpuiTerminalRaw")
                                                     .track_focus(&secondary_terminal_keyboard_focus)
                                                     .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |this, _, window, cx| {
@@ -12177,10 +13714,33 @@ impl Render for Workbench {
                                                             .flex_col()
                                                             .whitespace_nowrap()
                                                             .children(rows.into_iter().enumerate().map(|(index, row)| {
+                                                                let selected = terminal_secondary_selected_rows.get(index).copied().unwrap_or(false);
                                                                 div()
                                                                     .id(("mixed-secondary-colored-row", index))
                                                                     .whitespace_nowrap()
                                                                     .line_height(px(terminal_font_size * terminal_line_height))
+                                                                    .bg(rgb(if selected { ACTIVE } else { TERMINAL_DEFAULT_BG }))
+                                                                    .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |this, _, window, cx| {
+                                                                        if let Some(WorkbenchTabIdentity::Host(target)) =
+                                                                            this.mixed_panes.active_in(PaneSlot::Secondary).cloned()
+                                                                        {
+                                                                            if this.terminals.context_target_is_live(&target) {
+                                                                                if let Some(tab_index) = this.terminals.index_for_context(&target) {
+                                                                                    this.mixed_panes.focus_pane(PaneSlot::Secondary);
+                                                                                    this.terminals.activate(tab_index);
+                                                                                    this.center_view = CenterView::Terminal;
+                                                                                    window.focus(&this.secondary_terminal_input.read(cx).focus_handle(cx), cx);
+                                                                                    this.begin_terminal_line_selection_for_pane(PaneSlot::Secondary, index, cx);
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                    }))
+                                                                    .on_mouse_move(cx.listener(move |this, _, _, cx| {
+                                                                        this.extend_terminal_line_selection(index, cx);
+                                                                    }))
+                                                                    .on_mouse_up(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
+                                                                        this.finish_terminal_line_selection(cx);
+                                                                    }))
                                                                     .child(
                                                                         gpui::StyledText::new(row.text)
                                                                             .with_highlights(row.spans.into_iter().map(|span| {
@@ -12189,7 +13749,7 @@ impl Render for Workbench {
                                                                                     span.range,
                                                                                     gpui::HighlightStyle {
                                                                                         color: Some(rgb(style.fg).into()),
-                                                                                        background_color: Some(rgb(style.bg).into()),
+                                                                                        background_color: Some(rgb(if selected { ACTIVE } else { style.bg }).into()),
                                                                                         font_weight: style.bold.then_some(gpui::FontWeight::BOLD),
                                                                                         font_style: style.italic.then_some(gpui::FontStyle::Italic),
                                                                                         underline: style.underline.then_some(gpui::UnderlineStyle {
@@ -13035,9 +14595,36 @@ fn install_native_windows_app_identity() {
 fn main() {
     #[cfg(windows)]
     install_native_windows_app_identity();
+    // Only this process registers its ephemeral class factory. Persistent
+    // registry/Start Menu registration remains an explicit Native-only action.
+    #[cfg(windows)]
+    let _native_toast_com =
+        match alera_gpui_desktop::native_toast_activation::NativeToastComRegistration::register() {
+            Ok(registration) => Some(registration),
+            Err(error) => {
+                eprintln!("Alera Native: Windows toast COM activation unavailable: {error}");
+                None
+            }
+        };
     let session_store = PreviewSessionStore::platform_default();
-    let root = std::env::args_os()
-        .nth(1)
+    // Windows COM LocalServer32 may launch with -Embedding instead of a
+    // workspace argument. It must not be opened as a relative project path.
+    let launch_arguments = std::env::args_os().skip(1).collect::<Vec<_>>();
+    let toast_activated_launch = launch_arguments.iter().any(|argument| {
+        let arg = argument.to_string_lossy();
+        arg.eq_ignore_ascii_case("-ToastActivated")
+    });
+    if toast_activated_launch {
+        eprintln!("Alera Native: started for Windows Action Center toast activation");
+    }
+    let root = launch_arguments
+        .into_iter()
+        .find(|argument| {
+            let arg = argument.to_string_lossy();
+            !arg.eq_ignore_ascii_case("-Embedding")
+                && !arg.eq_ignore_ascii_case("/Embedding")
+                && !arg.eq_ignore_ascii_case("-ToastActivated")
+        })
         .map(std::path::PathBuf::from)
         .or_else(|| {
             session_store.as_ref().and_then(|store| {
@@ -13046,6 +14633,13 @@ fn main() {
                     None
                 })
             })
+        })
+        .or_else(|| {
+            if toast_activated_launch {
+                std::env::var_os("USERPROFILE").map(std::path::PathBuf::from)
+            } else {
+                None
+            }
         })
         .unwrap_or_else(|| std::env::current_dir().expect("current working directory"));
     let mut model = match WorkbenchModel::new(root) {
@@ -13102,6 +14696,8 @@ fn main() {
         show_ignored: native_settings.explorer_show_ignored,
         show_hidden: native_settings.explorer_show_hidden,
     };
+
+    let initial_native_scrollback_lines = native_settings.terminal_scrollback_lines as usize;
 
     gpui_kit::application()
         .with_assets(gpui_kit::assets::Assets)
@@ -13246,6 +14842,11 @@ fn main() {
                             cx.new(|cx| QuickOpenInput::with_placeholder("Search settings", cx));
                         cx.observe(&settings_menu_search, |_, _, cx| cx.notify())
                             .detach();
+                        let settings_shortcut_search = cx.new(|cx| {
+                            QuickOpenInput::with_placeholder("Search shortcut or key…", cx)
+                        });
+                        cx.observe(&settings_shortcut_search, |_, _, cx| cx.notify())
+                            .detach();
                         let settings_exclusion_input = cx.new(|cx| {
                             QuickOpenInput::with_placeholder(
                                 "Add directory name (e.g. generated)",
@@ -13289,6 +14890,24 @@ fn main() {
                             project_tree_groups: Vec::new(),
                             runtime_catalog: None,
                             runtime_catalog_error: None,
+                            project_settings_project_id: None,
+                            project_settings_selected_project_id: None,
+                            project_settings_rows: Vec::new(),
+                            project_settings_loading: false,
+                            project_settings_error: None,
+                            project_settings_request: 0,
+                            project_settings_config: None,
+                            project_settings_source: None,
+                            project_settings_repo_error: false,
+                            project_settings_use_repo_confirmed: false,
+                            project_settings_editing: false,
+                            project_settings_draft_provider: None,
+                            project_settings_prompt_input: cx.new(|cx| QuickOpenInput::profile_multiline(cx)),
+                            project_settings_copy_inputs: Vec::new(),
+                            project_settings_setup_inputs: Vec::new(),
+                            project_settings_save_busy: false,
+                            project_settings_save_status: String::new(),
+                            project_settings_mutation_request: 0,
                             sidebar_pending_action: None,
                             sidebar_rename_target: None,
                             sidebar_rename_input: None,
@@ -13311,11 +14930,17 @@ fn main() {
                             worktree_delete_pending: None,
                             picking_workspace: false,
                             quick_open: None,
+                            quick_open_selected_index: 0,
+                            quick_open_selection_query: String::new(),
+                            quick_open_results_scroll: ScrollHandle::new(),
                             explorer_filter_input,
                             file_index: None,
                             file_index_loading: false,
                             file_index_request: 0,
                             content_query: None,
+                            content_search_scope: WorktreeContentScope::Current,
+                            content_worktrees_searched: 0,
+                            content_worktrees_skipped: 0,
                             content_loading: false,
                             content_matches: Vec::new(),
                             content_truncated: false,
@@ -13417,6 +15042,10 @@ fn main() {
                             git_diff_loading: false,
                             git_diff_request: 0,
                             git_file_diff_paging: None,
+                            center_git_diff_source: None,
+                            center_git_diff_scroll: UniformListScrollHandle::new(),
+                            center_git_diff_hunk: None,
+                            center_git_diff_rows: Arc::new(Vec::new()),
                             workspace_generation: 0,
                             editor_epoch: 0,
                             mixed_tabs: WorkbenchTabs::for_workspace(0),
@@ -13454,6 +15083,12 @@ fn main() {
                             .as_deref()
                                 == Ok("1"),
                             quota_popover_account: None,
+                            quota_usage_open: false,
+                            quota_usage_days: 7,
+                            quota_usage_loading: false,
+                            quota_usage_error: None,
+                            quota_usage_summary: None,
+                            quota_usage_request: 0,
                             mcp_ui_bridge: None,
                             mcp_ui_window_id: NativeMcpUiBridge::new_window_id(),
                             mcp_ui_status: "Waiting for existing Runtime Host".into(),
@@ -13468,6 +15103,8 @@ fn main() {
                             native_settings_store,
                             native_settings,
                             native_settings_error,
+                            native_scrollback_busy: false,
+                            native_scrollback_status: String::new(),
                             history_sync_snapshot: None,
                             history_sync_loading: false,
                             history_sync_busy: false,
@@ -13503,21 +15140,73 @@ fn main() {
                                 .unwrap_or_else(Instant::now),
                             settings_shared_error: None,
                             settings_menu_search,
+                            settings_shortcut_search,
                             settings_exclusion_input,
                             last_auto_git_fetch: Instant::now(),
                             agent_profiles: Vec::new(),
+                            installed_agent_clis: Vec::new(),
+                            installed_agent_clis_loading: false,
+                            installed_agent_clis_request: 0,
                             agent_profiles_loading: false,
                             agent_profiles_request: 0,
                             agent_selected_profile: None,
+                            agent_profile_name_input: cx.new(|cx| {
+                                QuickOpenInput::with_placeholder("New Profile name / Rename selected Profile…", cx)
+                            }),
+                            agent_profile_description_input: cx.new(|cx| {
+                                QuickOpenInput::with_placeholder("Description (empty clears)", cx)
+                            }),
+                            agent_profile_quota_group_input: cx.new(|cx| {
+                                QuickOpenInput::with_placeholder("Quota Group (empty clears)", cx)
+                            }),
+                            agent_profile_routing_loaded: None,
+                            agent_profile_content_loaded: None,
+                            agent_profile_managed_loaded: None,
+                            agent_profile_model_input: cx.new(|cx| {
+                                QuickOpenInput::with_placeholder("Exact Model ID (empty = default)…", cx)
+                            }),
+                            agent_profile_persona_input: cx.new(|cx| {
+                                QuickOpenInput::with_placeholder("Exact Persona / Agent name (empty = default)…", cx)
+                            }),
+                            agent_profile_discovered_models: Vec::new(),
+                            agent_profile_discovered_personas: Vec::new(),
+                            agent_profile_discovery_busy: false,
+                            agent_profile_discovery_request: 0,
+                            agent_profile_discovery_status: String::new(),
+                            agent_profile_command_input: cx.new(|cx| {
+                                QuickOpenInput::profile_command(cx)
+                            }),
+                            agent_profile_custom_prompt_input: cx.new(|cx| {
+                                QuickOpenInput::profile_multiline(cx)
+                            }),
+                            agent_profile_new_adapter: "codex".into(),
+                            agent_profile_mutation_busy: false,
+                            agent_profile_mutation_request: 0,
+                            agent_profile_mutation_status: "Create a standard command profile, or rename the selected Host profile".into(),
+                            agent_profile_removal_preview: None,
                             agent_prompt_input: cx.new(|cx| {
                                 QuickOpenInput::with_placeholder("Task for selected Agent…", cx)
                             }),
+                            agent_override_selected_id: Some("codex".into()),
+                            agent_override_input: cx.new(|cx| {
+                                QuickOpenInput::with_placeholder(
+                                    "Absolute Agent executable path…",
+                                    cx,
+                                )
+                            }),
+                            agent_override_busy: false,
+                            agent_override_request: 0,
+                            agent_override_status: String::new(),
                             agent_launch_busy: false,
                             agent_launch_request: 0,
                             agent_pending_tab: None,
                             agent_launch_pane: None,
                             agent_status: "Select an Agent Profile and enter a task".into(),
-                            terminals: TerminalDock::for_workspace(0),
+                            terminals: {
+                                let mut dock = TerminalDock::for_workspace(0);
+                                dock.set_scrollback_lines(initial_native_scrollback_lines);
+                                dock
+                            },
                             terminal_panes: TerminalPaneLayout::default(),
                             terminal_input,
                             secondary_terminal_input,
@@ -13529,6 +15218,8 @@ fn main() {
                             terminal_auto_resize: TerminalAutoResizeGate::default(),
                             terminal_line_selection: None,
                             terminal_create_flow: TerminalCreateFlow::default(),
+                            terminal_create_journal: None,
+                            terminal_create_inventory_verified: false,
                             terminal_create_pane: None,
                             terminal_layout_restore: None,
                             terminal_list_loading: false,
@@ -13546,6 +15237,7 @@ fn main() {
                             #[cfg(windows)]
                             agent_windows_toast: WindowsAgentToastPresenter::new(),
                             agent_toast_activation: None,
+                            agent_toast_activation_retries: 0,
                             terminal_read_loading: None,
                             terminal_split_read_loading: false,
                             terminal_poll: TerminalPollGate::default(),
@@ -13559,6 +15251,7 @@ fn main() {
                         workbench.load_terminal_layout();
                         workbench.load_mixed_pane_layout();
                         workbench.restore_file_tabs_from_pane_layout(cx);
+                        workbench.restore_host_create_journal();
                         workbench.refresh_shared_desktop_settings(cx);
                         workbench.refresh_agent_quotas(false, None, cx);
                         workbench
@@ -13607,6 +15300,7 @@ fn main() {
                         view.refresh_git(cx);
                         view.refresh_shared_git_favorites(cx);
                         view.refresh_agent_profiles(cx);
+                        view.refresh_installed_agent_clis(cx);
                         view.connect_mcp_ui_bridge(cx);
                     });
                     view

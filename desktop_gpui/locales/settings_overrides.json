@@ -1,4 +1,124 @@
 {
+  "Also notify when an agent reports completion.": {
+    "zh-TW": "Agent 完成工作時也發送通知。",
+    "zh-CN": "Agent 完成任务时也发送通知。",
+    "ja": "Agent の作業完了時にも通知します。"
+  },
+  "History Sync": {
+    "zh-TW": "歷史紀錄同步",
+    "zh-CN": "历史记录同步",
+    "ja": "履歴同期"
+  },
+  "Notify when an agent needs attention.": {
+    "zh-TW": "Agent 需要處理時發送通知。",
+    "zh-CN": "Agent 需要处理时发送通知。",
+    "ja": "Agent の対応が必要なときに通知します。"
+  },
+  "Share Agent conversation history across account groups through Runtime Host.": {
+    "zh-TW": "透過 Runtime Host 在不同帳號群組間共享 Agent 對話紀錄。",
+    "zh-CN": "通过 Runtime Host 在不同账号组之间共享 Agent 对话记录。",
+    "ja": "Runtime Host を介してアカウントグループ間で Agent の会話履歴を共有します。"
+  },
+  "Show agent review count on the tray icon.": {
+    "zh-TW": "在系統匣圖示顯示待檢閱的 Agent 數量。",
+    "zh-CN": "在系统托盘图标显示待审核的 Agent 数量。",
+    "ja": "トレイアイコンにレビュー待ちの Agent 数を表示します。"
+  },
+  "Not available in GPUI yet": {
+    "zh-TW": "GPUI 尚未提供",
+    "zh-CN": "GPUI 暂未提供",
+    "ja": "GPUI ではまだ利用できません"
+  },
+  "Loading Rust Host settings": {
+    "zh-TW": "正在讀取 Rust Host 設定",
+    "zh-CN": "正在读取 Rust Host 设置",
+    "ja": "Rust Host の設定を読み込み中"
+  },
+  "Rust Host settings unavailable": {
+    "zh-TW": "無法取得 Rust Host 設定",
+    "zh-CN": "无法获取 Rust Host 设置",
+    "ja": "Rust Host の設定を取得できません"
+  },
+  "Open Quota Overview": {
+    "zh-TW": "開啟額度總覽",
+    "zh-CN": "打开额度总览",
+    "ja": "利用枠の概要を開く"
+  },
+  "Manage Projects": {
+    "zh-TW": "管理專案",
+    "zh-CN": "管理项目",
+    "ja": "プロジェクト管理"
+  },
+  "Editable": {
+    "zh-TW": "可編輯設定",
+    "zh-CN": "可编辑设置",
+    "ja": "編集可能"
+  },
+  "Read-only": {
+    "zh-TW": "唯讀",
+    "zh-CN": "只读",
+    "ja": "読み取り専用"
+  },
+  "Not available": {
+    "zh-TW": "尚未提供",
+    "zh-CN": "暂不可用",
+    "ja": "未対応"
+  },
+  "Enabled": {
+    "zh-TW": "已啟用",
+    "zh-CN": "已启用",
+    "ja": "有効"
+  },
+  "Disabled": {
+    "zh-TW": "已停用",
+    "zh-CN": "已停用",
+    "ja": "無効"
+  },
+  "Rust Host": {
+    "zh-TW": "Rust Host",
+    "zh-CN": "Rust Host",
+    "ja": "Rust Host"
+  },
+  "days (0 disables)": {
+    "zh-TW": "天（0 表示停用）",
+    "zh-CN": "天（0 表示停用）",
+    "ja": "日（0 で無効）"
+  },
+  "change via language selector": {
+    "zh-TW": "請透過語言選擇器修改",
+    "zh-CN": "请通过语言选择器修改",
+    "ja": "言語選択で変更"
+  },
+  "edit in Classic": {
+    "zh-TW": "請在 Classic 中修改",
+    "zh-CN": "请在 Classic 中修改",
+    "ja": "Classic で変更"
+  },
+  "Open the existing native project and worktree manager.": {
+    "zh-TW": "開啟現有的原生專案與 Worktree 管理介面。",
+    "zh-CN": "打开现有的原生项目与 Worktree 管理界面。",
+    "ja": "既存のネイティブプロジェクトと Worktree 管理画面を開きます。"
+  },
+  "Open the existing provider/account quota overview and refresh from Runtime Host.": {
+    "zh-TW": "開啟現有供應商／帳號額度總覽，並從 Runtime Host 重新整理。",
+    "zh-CN": "打开现有服务商／账号额度总览，并从 Runtime Host 刷新。",
+    "ja": "既存のプロバイダー／アカウント利用枠を開き、Runtime Host から更新します。"
+  },
+  "Ctrl+P excludes matching directory names regardless of Git ignored visibility. Explorer search is unchanged.": {
+    "zh-TW": "Ctrl+P 會排除相符的資料夾名稱，不受 Git 忽略檔案顯示設定影響；檔案總管搜尋不變。",
+    "zh-CN": "Ctrl+P 会排除匹配的文件夹名称，不受 Git 忽略文件显示设置影响；文件管理器搜索不变。",
+    "ja": "Ctrl+P では Git の無視ファイル表示設定にかかわらず一致するフォルダーを除外します。エクスプローラー検索は変わりません。"
+  },
+  "Add": {
+    "zh-TW": "新增",
+    "zh-CN": "添加",
+    "ja": "追加"
+  },
+  "Restore Defaults": {
+    "zh-TW": "恢復預設值",
+    "zh-CN": "恢复默认值",
+    "ja": "既定値に戻す"
+  },
   "Connected Native Controls": {
     "zh-TW": "已連接的 Native 設定",
     "zh-CN": "已连接的 Native 设置",

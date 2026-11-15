@@ -559,7 +559,7 @@ mod tests {
 
     #[test]
     fn group_sync_requires_two_matching_memberships() {
-        let (_, accounts) = fixture();
+        let (_dir, accounts) = fixture();
         let mut policy = RuntimeAgentHistorySyncSettings {
             mode: RuntimeAgentHistorySyncMode::Groups,
             account_groups: BTreeMap::from([
@@ -582,7 +582,7 @@ mod tests {
 
     #[test]
     fn conflicting_destination_is_never_overwritten_or_removed() {
-        let (_, accounts) = fixture();
+        let (_dir, accounts) = fixture();
         let target = accounts[1].history_root.join("2026/11/first.jsonl");
         fs::create_dir_all(target.parent().unwrap()).unwrap();
         fs::write(&target, "other-account history").unwrap();
@@ -594,7 +594,7 @@ mod tests {
 
     #[test]
     fn later_messages_are_reported_as_stale_and_never_overwrite_a_native_copy() {
-        let (_, accounts) = fixture();
+        let (_dir, accounts) = fixture();
         let policy = sharing_all();
         assert_eq!(
             mirror_accounts(&policy, &accounts, Duration::ZERO).copied,

@@ -1,12 +1,25 @@
-//! Bounded VT100/ANSI screen state for the GPUI frontend.
+//! Bounded Alacritty Terminal ANSI/VT state for GPUI.
 //!
-//! This uses the maintained vt100 parser for terminal control sequences,
-//! rather than interpreting TUI cursor/erase codes as plain text. Host-owned
-//! PTY dimensions are NOT changed by resizing this local preview.
-use std::num::NonZeroU16;
+//! The native GPUI frontend renders the mature alacritty_terminal grid through
+//! the existing StyledRow boundary. Classic Flutter, Host/PTY ownership, and
+//! authenticated Session management are deliberately left unchanged. The
+//! preview cannot create, attach, resize or control the Host by itself.
+
 use std::ops::Range;
 
-const MAX_SCROLLBACK_LINES: usize = 240;
+use alacritty_terminal::event::VoidListener;
+use alacritty_terminal::grid::{Dimensions, Scroll};
+use alacritty_terminal::index::{Column, Line};
+use alacritty_terminal::term::cell::{Cell, Flags};
+use alacritty_terminal::term::color::Colors;
+use alacritty_terminal::term::{Config, Osc52, Term, TermMode};
+use alacritty_terminal::vte::ansi::{Color, NamedColor, Processor, Rgb};
+
+/// Match Classic's default; the Native preference remains local, and Host PTY
+/// retention in bytes is separately controlled by the Runtime Host.
+pub const DEFAULT_SCROLLBACK_LINES: usize = 10_000;
+pub const MIN_SCROLLBACK_LINES: usize = 100;
+pub const MAX_SCROLLBACK_LINES: usize = 200_000;
 const DEFAULT_ROWS: u16 = 24;
 const DEFAULT_COLS: u16 = 80;
 const MAX_RESIZE_CSI_BYTES: usize = 32;
@@ -72,18 +85,45 @@ fn indexed_rgb(index: u8) -> u32 {
     }
 }
 
-fn color_rgb(color: vt100::Color, default: u32) -> u32 {
+fn rgb_value(rgb: Rgb) -> u32 {
+    (u32::from(rgb.r) << 16) | (u32::from(rgb.g) << 8) | u32::from(rgb.b)
+}
+
+fn color_rgb(color: Color, colors: &Colors, default: u32) -> u32 {
     match color {
-        vt100::Color::Default => default,
-        vt100::Color::Idx(index) => indexed_rgb(index),
-        vt100::Color::Rgb(r, g, b) => (u32::from(r) << 16) | (u32::from(g) << 8) | u32::from(b),
+        Color::Spec(rgb) => rgb_value(rgb),
+        Color::Indexed(index) => colors[usize::from(index)]
+            .map(rgb_value)
+            .unwrap_or_else(|| indexed_rgb(index)),
+        Color::Named(named) => {
+            if let Some(value) = colors[named] {
+                return rgb_value(value);
+            }
+            match named {
+                NamedColor::Foreground
+                | NamedColor::BrightForeground
+                | NamedColor::DimForeground => TERMINAL_DEFAULT_FG,
+                NamedColor::Background => TERMINAL_DEFAULT_BG,
+                NamedColor::Cursor => CURSOR_BACKGROUND,
+                _ => {
+                    let index = named as usize;
+                    if index < 16 {
+                        indexed_rgb(index as u8)
+                    } else if (259..=266).contains(&index) {
+                        indexed_rgb((index - 259) as u8)
+                    } else {
+                        default
+                    }
+                }
+            }
+        }
     }
 }
 
-fn cell_style(cell: &vt100::Cell, cursor: bool) -> CellStyle {
-    let mut fg = color_rgb(cell.fgcolor(), TERMINAL_DEFAULT_FG);
-    let mut bg = color_rgb(cell.bgcolor(), TERMINAL_DEFAULT_BG);
-    if cell.inverse() {
+fn cell_style(cell: &Cell, colors: &Colors, cursor: bool) -> CellStyle {
+    let mut fg = color_rgb(cell.fg, colors, TERMINAL_DEFAULT_FG);
+    let mut bg = color_rgb(cell.bg, colors, TERMINAL_DEFAULT_BG);
+    if cell.flags.contains(Flags::INVERSE) {
         std::mem::swap(&mut fg, &mut bg);
     }
     if cursor {
@@ -93,16 +133,16 @@ fn cell_style(cell: &vt100::Cell, cursor: bool) -> CellStyle {
     CellStyle {
         fg,
         bg,
-        bold: cell.bold(),
-        italic: cell.italic(),
-        underline: cell.underline(),
+        bold: cell.flags.contains(Flags::BOLD),
+        italic: cell.flags.contains(Flags::ITALIC),
+        underline: cell.flags.intersects(Flags::ALL_UNDERLINES),
         cursor,
     }
 }
 
 /// Tracks only the bounded ConPTY/xterm window resize report
 /// CSI 8;rows;cols t across incremental Host reads. Other control sequences
-/// stay the responsibility of the vt100 parser; this probe never consumes or
+/// stay the responsibility of the Alacritty parser; this probe never consumes or
 /// rewrites them and cannot trigger a Host resize.
 #[derive(Default)]
 struct ConptyResizeProbe {
@@ -163,16 +203,40 @@ fn parse_resize_number(bytes: &[u8]) -> Option<u16> {
         .filter(|value| *value > 0)
 }
 
+#[derive(Debug, Clone, Copy)]
+struct PreviewDimensions {
+    rows: usize,
+    cols: usize,
+}
+
+impl Dimensions for PreviewDimensions {
+    fn total_lines(&self) -> usize {
+        self.rows
+    }
+    fn screen_lines(&self) -> usize {
+        self.rows
+    }
+    fn columns(&self) -> usize {
+        self.cols
+    }
+}
+
+/// GPUI-compatible screen facade over the Alacritty grid and VTE processor.
+///
+/// This layer materializes visible RGB spans but never owns or starts PTYs.
 pub struct VtScreen {
-    parser: vt100::Parser,
+    terminal: Term<VoidListener>,
+    processor: Processor,
     rows: u16,
     cols: u16,
+    scrollback_lines: usize,
     resize_probe: ConptyResizeProbe,
 }
 
 impl std::fmt::Debug for VtScreen {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("VtScreen")
+            .field("backend", &"alacritty_terminal")
             .field("rows", &self.rows)
             .field("cols", &self.cols)
             .finish_non_exhaustive()
@@ -187,17 +251,30 @@ impl Default for VtScreen {
 
 impl VtScreen {
     pub fn new(rows: u16, cols: u16) -> Self {
-        let rows = rows.clamp(5, 100);
-        let cols = cols.clamp(20, 240);
-        let parser = vt100::Parser::new(
-            NonZeroU16::new(rows).expect("clamped rows"),
-            NonZeroU16::new(cols).expect("clamped cols"),
-            MAX_SCROLLBACK_LINES,
-        );
+        Self::with_scrollback(rows, cols, DEFAULT_SCROLLBACK_LINES)
+    }
+
+    pub fn with_scrollback(rows: u16, cols: u16, scrollback_lines: usize) -> Self {
+        let scrollback_lines = scrollback_lines.clamp(MIN_SCROLLBACK_LINES, MAX_SCROLLBACK_LINES);
+        let rows = rows.clamp(5, 200);
+        let cols = cols.clamp(20, 512);
+        let config = Config {
+            scrolling_history: scrollback_lines,
+            // A Host transcript must never trigger a GPUI clipboard read/write.
+            osc52: Osc52::Disabled,
+            ..Config::default()
+        };
+        let dims = PreviewDimensions {
+            rows: usize::from(rows),
+            cols: usize::from(cols),
+        };
+        let terminal = Term::new(config, &dims, VoidListener);
         Self {
-            parser,
+            terminal,
+            processor: Processor::new(),
             rows,
             cols,
+            scrollback_lines,
             resize_probe: ConptyResizeProbe::default(),
         }
     }
@@ -207,54 +284,119 @@ impl VtScreen {
         let mut start = 0;
         for (offset, byte) in bytes.iter().copied().enumerate() {
             if let Some((rows, cols)) = self.resize_probe.observe(byte) {
-                // Process the CSI itself at the old size, then adjust the
-                // bounded local preview BEFORE the following Host redraw.
-                // This also works when CSI starts in a previous read.
-                self.parser.process(&bytes[start..=offset]);
+                // Parse ConPTY's resize notification at the old size, then
+                // adjust the local grid before processing the following redraw.
+                // Incremental reads may split the CSI across several chunks.
+                self.processor
+                    .advance(&mut self.terminal, &bytes[start..=offset]);
                 self.set_preview_size(rows, cols);
                 start = offset + 1;
             }
         }
-        self.parser.process(&bytes[start..]);
+        self.processor.advance(&mut self.terminal, &bytes[start..]);
     }
 
     pub fn reset(&mut self) {
-        *self = Self::new(self.rows, self.cols);
+        *self = Self::with_scrollback(self.rows, self.cols, self.scrollback_lines);
     }
 
-    /// A visible screen snapshot (not a full terminal transcript). Escape
-    /// commands, hyperlinks, clipboard OSC52 and control bytes are not
-    /// forwarded into UI text, only rendered into local terminal state.
+    pub fn scrollback_lines(&self) -> usize {
+        self.scrollback_lines
+    }
+
+    /// Update the Alacritty ring in place. This applies to existing sessions
+    /// without dropping their screen, dirty input, active PTY or ANSI state.
+    pub fn set_scrollback_lines(&mut self, lines: usize) {
+        let lines = lines.clamp(MIN_SCROLLBACK_LINES, MAX_SCROLLBACK_LINES);
+        if lines == self.scrollback_lines {
+            return;
+        }
+        self.scrollback_lines = lines;
+        self.terminal.set_options(Config {
+            scrolling_history: lines,
+            osc52: Osc52::Disabled,
+            ..Config::default()
+        });
+    }
+
+    pub fn scrollback_offset(&self) -> usize {
+        self.terminal.grid().display_offset()
+    }
+
+    pub fn scrollback_available(&self) -> usize {
+        self.terminal.grid().history_size()
+    }
+
+    /// Scroll only the standard terminal buffer, never a full-screen TUI's
+    /// alternate screen. Returning false lets the normal PTY key path work.
+    pub fn scroll_history_page(&mut self, toward_older: bool) -> bool {
+        if self.alternate_screen() {
+            return false;
+        }
+        let before = self.scrollback_offset();
+        self.terminal.scroll_display(if toward_older {
+            Scroll::PageUp
+        } else {
+            Scroll::PageDown
+        });
+        self.scrollback_offset() != before
+    }
+
+    pub fn scroll_to_live(&mut self) -> bool {
+        if self.alternate_screen() {
+            return false;
+        }
+        let before = self.scrollback_offset();
+        self.terminal.scroll_display(Scroll::Bottom);
+        self.scrollback_offset() != before
+    }
+
+    /// Visible text snapshot only. Escape and OSC control sequences cannot
+    /// become text; OSC52 is disabled at the engine configuration boundary.
     pub fn contents(&self) -> String {
-        self.parser.screen().contents()
+        let rows = self.styled_rows();
+        let mut lines: Vec<&str> = rows
+            .iter()
+            .map(|row| row.text.trim_end_matches(' '))
+            .collect();
+        while lines.last().is_some_and(|row| row.is_empty()) {
+            lines.pop();
+        }
+        lines.join("\n")
     }
 
-    /// The exact visible grid, grouped into contiguous styled text runs.
-    /// O(rows * cols), capped at 100 x 240, independent of scrollback size.
-    /// A CJK/emoji wide character occupies one text run with double-width
-    /// font layout; its trailing VT continuation cell is not duplicated.
+    /// Materialize the Alacritty visible grid as GPUI styled UTF-8 spans.
+    /// Skip wide continuation cells, retaining any combining marks in the
+    /// leading cell. Row/span work is bounded by the local 200 x 512 preview.
     pub fn styled_rows(&self) -> Vec<StyledRow> {
-        let screen = self.parser.screen();
-        let (cursor_row, cursor_col) = screen.cursor_position();
-        let show_cursor = !screen.hide_cursor();
+        let grid = self.terminal.grid();
+        let colors = self.terminal.colors();
+        let cursor = grid.cursor.point;
+        let offset = self.terminal.grid().display_offset() as i32;
+        let show_cursor = offset == 0 && self.terminal.mode().contains(TermMode::SHOW_CURSOR);
         (0..self.rows)
             .map(|row| {
                 let mut text = String::with_capacity(usize::from(self.cols) * 2);
                 let mut spans: Vec<StyleSpan> = Vec::new();
                 for col in 0..self.cols {
-                    let cell = screen.cell(row, col);
-                    if cell.is_some_and(vt100::Cell::is_wide_continuation) {
+                    let cell = &grid[Line(i32::from(row) - offset)][Column(usize::from(col))];
+                    if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
                         continue;
                     }
                     let is_cursor = show_cursor
-                        && row == cursor_row
-                        && (col == cursor_col
-                            || (col + 1 == cursor_col && cell.is_some_and(vt100::Cell::is_wide)));
-                    let style = cell.map_or_else(CellStyle::default, |c| cell_style(c, is_cursor));
+                        && cursor.line.0 == i32::from(row)
+                        && (cursor.column.0 == usize::from(col)
+                            || (cursor.column.0 == usize::from(col) + 1
+                                && cell.flags.contains(Flags::WIDE_CHAR)));
+                    let style = cell_style(cell, colors, is_cursor);
                     let start = text.len();
-                    match cell {
-                        Some(c) if c.has_contents() => text.push_str(c.contents()),
-                        _ => text.push(' '),
+                    if cell.flags.contains(Flags::HIDDEN) {
+                        text.push(' ');
+                    } else {
+                        text.push(cell.c);
+                        if let Some(zerowidth) = cell.zerowidth() {
+                            text.extend(zerowidth.iter().copied());
+                        }
                     }
                     let end = text.len();
                     if let Some(last) = spans.last_mut() {
@@ -274,11 +416,20 @@ impl VtScreen {
     }
 
     pub fn cursor(&self) -> (u16, u16) {
-        self.parser.screen().cursor_position()
+        let point = self.terminal.grid().cursor.point;
+        (point.line.0.max(0) as u16, point.column.0 as u16)
     }
 
     pub fn alternate_screen(&self) -> bool {
-        self.parser.screen().alternate_screen()
+        self.terminal.mode().contains(TermMode::ALT_SCREEN)
+    }
+
+    pub fn bracketed_paste(&self) -> bool {
+        self.terminal.mode().contains(TermMode::BRACKETED_PASTE)
+    }
+
+    pub fn application_cursor_keys(&self) -> bool {
+        self.terminal.mode().contains(TermMode::APP_CURSOR)
     }
 
     pub fn dimensions(&self) -> (u16, u16) {
@@ -287,13 +438,13 @@ impl VtScreen {
 
     /// Local preview size only. Never assert to Host that it was resized.
     pub fn set_preview_size(&mut self, rows: u16, cols: u16) {
-        let rows = rows.clamp(5, 100);
-        let cols = cols.clamp(20, 240);
+        let rows = rows.clamp(5, 200);
+        let cols = cols.clamp(20, 512);
         if self.rows != rows || self.cols != cols {
-            self.parser.set_size(
-                NonZeroU16::new(rows).expect("clamped rows"),
-                NonZeroU16::new(cols).expect("clamped cols"),
-            );
+            self.terminal.resize(PreviewDimensions {
+                rows: usize::from(rows),
+                cols: usize::from(cols),
+            });
             self.rows = rows;
             self.cols = cols;
         }
@@ -304,12 +455,66 @@ impl VtScreen {
 mod tests {
     use super::*;
 
+    #[test]
+    fn scrollback_lines_are_real_bounded_history_not_just_a_ui_preference() {
+        let mut screen = VtScreen::with_scrollback(5, 20, 100);
+        assert_eq!(screen.scrollback_lines(), 100);
+        for i in 0..140 {
+            screen.feed(&format!("line{i:03}\r\n"));
+        }
+        assert_eq!(screen.scrollback_available(), 100);
+        assert_eq!(screen.scrollback_offset(), 0);
+        let live = screen.contents();
+        assert!(live.contains("line139"));
+        assert!(screen.scroll_history_page(true));
+        assert!(screen.scrollback_offset() > 0);
+        assert_ne!(
+            screen.contents(),
+            live,
+            "rendering must follow Alacritty display offset"
+        );
+        assert!(screen.scroll_to_live());
+        assert_eq!(screen.contents(), live);
+        screen.set_scrollback_lines(200);
+        assert_eq!(screen.scrollback_lines(), 200);
+        screen.feed("after-change\r\n");
+        assert!(screen.contents().contains("after-change"));
+        screen.reset();
+        assert_eq!(
+            screen.scrollback_lines(),
+            200,
+            "Host replay/reset must preserve chosen cap"
+        );
+    }
+
+    #[test]
+    fn alternate_screen_does_not_hijack_full_screen_tui_scrollback_keys() {
+        let mut screen = VtScreen::with_scrollback(5, 20, 100);
+        screen.feed("\u{1b}[?1049hfull screen TUI");
+        assert!(screen.alternate_screen());
+        assert!(!screen.scroll_history_page(true));
+        assert_eq!(screen.scrollback_offset(), 0);
+    }
+
     fn style_at(row: &StyledRow, byte: usize) -> CellStyle {
         row.spans
             .iter()
             .find(|span| span.range.contains(&byte))
             .expect("each displayed character must have a style")
             .style
+    }
+
+    #[test]
+    fn terminal_mode_switches_are_backed_by_live_alacritty_state() {
+        let mut screen = VtScreen::default();
+        assert!(!screen.bracketed_paste());
+        assert!(!screen.application_cursor_keys());
+        screen.feed("\x1b[?2004h\x1b[?1h");
+        assert!(screen.bracketed_paste());
+        assert!(screen.application_cursor_keys());
+        screen.feed("\x1b[?2004l\x1b[?1l");
+        assert!(!screen.bracketed_paste());
+        assert!(!screen.application_cursor_keys());
     }
 
     #[test]
@@ -371,12 +576,22 @@ mod tests {
     }
 
     #[test]
+    fn wide_terminal_preview_uses_the_host_supported_512_column_limit() {
+        let mut screen = VtScreen::new(120, 350);
+        assert_eq!(screen.dimensions(), (120, 350));
+        assert_eq!(screen.styled_rows().len(), 120);
+        screen.set_preview_size(160, 384);
+        assert_eq!(screen.dimensions(), (160, 384));
+        assert_eq!(screen.styled_rows()[0].text.chars().count(), 384);
+    }
+
+    #[test]
     fn terminal_rows_are_bounded_and_osc_clipboard_does_not_leak() {
         let mut screen = VtScreen::new(u16::MAX, u16::MAX);
         screen.feed("visible\x1b]52;c;dG9rZW4=\x07\x1b[32mOK");
         let rows = screen.styled_rows();
-        assert_eq!(rows.len(), 100);
-        assert!(rows.iter().all(|row| row.spans.len() <= 240));
+        assert_eq!(rows.len(), 200);
+        assert!(rows.iter().all(|row| row.spans.len() <= 512));
         assert!(rows[0].text.starts_with("visibleOK"));
         assert!(!rows[0].text.contains("dG9rZW4"));
     }
@@ -432,7 +647,7 @@ mod tests {
     #[test]
     fn preview_dimension_limits_and_reset_are_bounded() {
         let mut screen = VtScreen::new(0, u16::MAX);
-        assert_eq!(screen.dimensions(), (5, 240));
+        assert_eq!(screen.dimensions(), (5, 512));
         screen.set_preview_size(40, 120);
         assert_eq!(screen.dimensions(), (40, 120));
         screen.feed("hello");
@@ -475,7 +690,7 @@ mod tests {
         screen.feed("\x1b[8;99999;99999t");
         assert_eq!(screen.dimensions(), (24, 80));
         screen.feed("\x1b[8;120;512t");
-        assert_eq!(screen.dimensions(), (100, 240));
+        assert_eq!(screen.dimensions(), (120, 512));
         screen.feed("\x1b[8;24;80t");
         assert_eq!(screen.dimensions(), (24, 80));
     }

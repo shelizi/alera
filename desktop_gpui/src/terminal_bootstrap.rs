@@ -1,8 +1,8 @@
-//! Explicit New Terminal workflow for Alera Native.
+//! Explicit Host Terminal / Agent launch workspace registration for Alera Native.
 //!
 //! Passive startup, polling, reads and writes still use the no-start CLI
-//! bridge. Only the user's New Terminal action may start the existing Alera
-//! Runtime Host and register the selected *existing* checkout. Registration
+//! bridge. Only explicit New Terminal, New Agent or Agent Profile Launch may
+//! start Host and register the selected *existing* checkout. Registration
 //! changes the Host inventory, not Git branches, files or worktrees.
 
 use alera_core::child_process::windowless_command;
@@ -30,15 +30,41 @@ impl RuntimeCliBridge {
     /// existing checkout of one unique Runtime project. No Git worktree
     /// creation or deletion is permitted by this path.
     pub fn create_terminal_for_workspace(&self, root: &Path) -> io::Result<CreatedHostTerminal> {
+        let workspace_id = self.ensure_host_workspace_for_explicit_terminal(root)?;
+        self.create_terminal(&workspace_id)
+    }
+
+    /// Explicit New Agent action shares Host start/registered-checkout guards.
+    pub fn create_agent_terminal_for_workspace(
+        &self,
+        root: &Path,
+        agent_id: &str,
+        executable: &str,
+    ) -> io::Result<CreatedHostTerminal> {
+        let workspace_id = self.ensure_host_workspace_for_explicit_terminal(root)?;
+        self.create_agent_terminal(&workspace_id, agent_id, executable)
+    }
+
+    /// An explicit Host Agent Profile launch needs an authenticated, registered
+    /// workspace even when the user has not opened a Terminal yet. Reuse the
+    /// exact existing-project registration guard; do not create a spare PTY.
+    pub fn ensure_host_workspace_for_explicit_profile_launch(
+        &self,
+        root: &Path,
+    ) -> io::Result<String> {
+        self.ensure_host_workspace_for_explicit_terminal(root)
+    }
+
+    fn ensure_host_workspace_for_explicit_terminal(&self, root: &Path) -> io::Result<String> {
         let active = dunce::canonicalize(root)?;
         if active != root || !active.is_dir() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                "New Terminal requires a canonical existing workspace",
+                "Host launch requires a canonical existing workspace",
             ));
         }
         if self.probe()? == RuntimeStatus::Stopped {
-            // An explicit New Terminal action is the only Host start gate.
+            // Only a user-requested Host launch may reach this start gate.
             let (_, runtime) = self.agent_cli_paths();
             let args = vec![
                 OsString::from("runtime"),
@@ -57,7 +83,7 @@ impl RuntimeCliBridge {
             }
             Err(error) => return Err(error),
         };
-        self.create_terminal(&workspace_id)
+        Ok(workspace_id)
     }
 
     /// Explicit runtime start can detach a persistent Host that retains the
@@ -289,6 +315,18 @@ fn invalid(message: &'static str) -> io::Error {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn explicit_profile_launch_rejects_a_missing_checkout_without_host_start() {
+        let root = tempfile::tempdir().unwrap();
+        let runtime = root.path().join("runtime");
+        let bridge = RuntimeCliBridge::new("missing-alera-cli", &runtime);
+        let result = bridge.ensure_host_workspace_for_explicit_profile_launch(
+            &root.path().join("missing-project"),
+        );
+        assert!(result.is_err());
+        assert!(!runtime.exists());
+    }
 
     #[test]
     fn current_checkout_only_matches_exact_registered_project() {

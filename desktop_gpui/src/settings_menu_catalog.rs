@@ -263,6 +263,7 @@ pub fn shared_setting_row_path(section: &str, title: &str) -> Option<&'static st
         ("application", "Show Tray Icon") => "general.showTrayIcon",
         ("application", "Show Dock Badge") => "general.showDockBadge",
         ("application", "Show Tray Badge") => "general.showTrayBadge",
+        ("editor", "Two-row tabs") => "editor.twoRowTabs",
         ("terminal", "Font Family") => "terminal.fontFamily",
         ("terminal", "Font Size") => "terminal.fontSize",
         ("terminal", "Line Height") => "terminal.lineHeight",
@@ -290,6 +291,51 @@ pub fn shared_setting_row_path(section: &str, title: &str) -> Option<&'static st
 mod shared_row_tests {
     use super::*;
     #[test]
+    fn s01_every_visible_classic_row_has_one_grounded_capability() {
+        let mut totals = SettingsSupportCounts::default();
+        for section in SECTIONS {
+            let current = settings_support_counts(section);
+            assert_eq!(
+                current.total(),
+                section
+                    .groups
+                    .iter()
+                    .map(|group| group.rows.len())
+                    .sum::<usize>(),
+                "S01 classification must cover every visible row in {}",
+                section.id
+            );
+            totals.editable += current.editable;
+            totals.actions += current.actions;
+            totals.read_only += current.read_only;
+            totals.unavailable += current.unavailable;
+        }
+        assert_eq!(SECTIONS.len(), 16);
+        assert!(
+            totals.editable >= 20,
+            "Host-backed controls unexpectedly missing"
+        );
+        assert_eq!(
+            totals.actions, 4,
+            "only real Native actions may be clickable"
+        );
+        assert_eq!(
+            totals.read_only, 3,
+            "safety rows must not gain write controls"
+        );
+        assert!(totals.unavailable > 0, "Classic-only rows must be honest");
+        assert_eq!(
+            settings_support_counts(section("editor").unwrap()).editable,
+            6,
+            "Two-row tabs and five existing editor controls must be wired"
+        );
+        assert_eq!(
+            settings_support_counts(section("quotas").unwrap()).actions,
+            1,
+            "Provider Quotas must open the working overview"
+        );
+    }
+    #[test]
     fn all_connected_rows_resolve_to_the_one_rust_core_allowlist() {
         for section in SECTIONS {
             for group in section.groups {
@@ -304,14 +350,193 @@ mod shared_row_tests {
             }
         }
         assert_eq!(
+            settings_support_counts(section("keyboard").unwrap()).actions,
+            1
+        );
+        assert_eq!(
+            settings_support_counts(section("agentProfiles").unwrap()).actions,
+            1
+        );
+        assert_eq!(
+            settings_row_support("keyboard", "Reset Keyboard Shortcuts"),
+            SettingsRowSupport::Unavailable,
+            "Reset cannot claim capability until overrides exist"
+        );
+        assert_eq!(
+            shared_setting_row_path("editor", "Two-row tabs"),
+            Some("editor.twoRowTabs"),
+            "Classic Editor tab layout must write the Host-backed shared setting"
+        );
+        assert_eq!(
+            settings_row_support("quotas", "Provider Quotas"),
+            SettingsRowSupport::OperationalAction
+        );
+        assert_eq!(
+            settings_operational_action("quotas", "Provider Quotas"),
+            Some(SettingsOperationalAction::OpenQuotaOverview)
+        );
+        assert_eq!(
+            settings_operational_action("projects", "Projects"),
+            Some(SettingsOperationalAction::ManageProjects)
+        );
+        assert_eq!(
+            settings_row_support("application", "Confirm Project Removal"),
+            SettingsRowSupport::ReadOnly
+        );
+        assert_eq!(
+            settings_row_support("application", "Confirm Workspace Removal"),
+            SettingsRowSupport::ReadOnly
+        );
+        assert_eq!(
+            settings_row_support("application", "Auto-Archive After Inactivity"),
+            SettingsRowSupport::ReadOnly
+        );
+        assert_eq!(
+            settings_operational_action("terminal", "Scrollback Lines"),
+            Some(SettingsOperationalAction::ConfigureNativeScrollback)
+        );
+        assert_eq!(
+            settings_row_support("account", "Mobile Push"),
+            SettingsRowSupport::Unavailable
+        );
+        assert_eq!(
+            settings_row_support("editor", "Two-row tabs"),
+            SettingsRowSupport::Editable
+        );
+        assert_eq!(
             shared_setting_row_path("terminal", "Cursor Shape"),
             Some("terminal.cursorShape")
         );
+        for section in SECTIONS {
+            let counts = settings_support_counts(section);
+            let all_rows: usize = section.groups.iter().map(|group| group.rows.len()).sum();
+            assert_eq!(
+                counts.total(),
+                all_rows,
+                "incomplete capability audit in {}",
+                section.id
+            );
+            for group in section.groups {
+                for row in group.rows {
+                    let status = settings_row_support(section.id, row.title);
+                    if let SettingsRowSupport::Editable = status {
+                        assert!(
+                            shared_setting_row_path(section.id, row.title)
+                                .is_some_and(alera_core::desktop_settings_contract::cli_writable)
+                                || matches!(
+                                    (section.id, row.title),
+                                    ("application", "App Language")
+                                        | ("agents", "Codex Hooks")
+                                        | ("agents", "Claude Code Hooks")
+                                ),
+                            "Catalog row is marked editable with no authorized handler: {} / {}",
+                            section.id,
+                            row.title,
+                        );
+                    }
+                }
+            }
+        }
         assert_eq!(
             shared_setting_row_path("aiDictation", "Test AI Dictation"),
             None
         );
     }
+}
+
+/// S01 capability audit, separate from dynamic Runtime Host availability.
+/// Host-backed rows still require the authoritative snapshot before editing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingsRowSupport {
+    Editable,
+    OperationalAction,
+    ReadOnly,
+    Unavailable,
+}
+
+pub fn settings_row_support(section: &str, title: &str) -> SettingsRowSupport {
+    if shared_setting_row_path(section, title).is_some()
+        || matches!(
+            (section, title),
+            ("application", "App Language")
+                | ("agents", "Codex Hooks")
+                | ("agents", "Claude Code Hooks")
+        )
+    {
+        return SettingsRowSupport::Editable;
+    }
+    if settings_operational_action(section, title).is_some() {
+        return SettingsRowSupport::OperationalAction;
+    }
+    match (section, title) {
+        ("application", "Confirm Project Removal")
+        | ("application", "Confirm Workspace Removal")
+        | ("application", "Auto-Archive After Inactivity") => SettingsRowSupport::ReadOnly,
+        _ => SettingsRowSupport::Unavailable,
+    }
+}
+
+/// Only actions with actual Native UI handlers may claim operational support.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingsOperationalAction {
+    ManageProjects,
+    ViewHostProjectSettings,
+    OpenQuotaOverview,
+    SearchNativeKeyboardShortcuts,
+    RefreshHostAgentProfiles,
+    ConfigureNativeScrollback,
+}
+
+pub fn settings_operational_action(
+    section: &str,
+    title: &str,
+) -> Option<SettingsOperationalAction> {
+    match (section, title) {
+        ("projects", "Projects") => Some(SettingsOperationalAction::ManageProjects),
+        ("projects", "Project Settings") => {
+            Some(SettingsOperationalAction::ViewHostProjectSettings)
+        }
+        ("quotas", "Provider Quotas") => Some(SettingsOperationalAction::OpenQuotaOverview),
+        ("keyboard", "Search shortcuts") => {
+            Some(SettingsOperationalAction::SearchNativeKeyboardShortcuts)
+        }
+        ("agentProfiles", "Agent Profiles") => {
+            Some(SettingsOperationalAction::RefreshHostAgentProfiles)
+        }
+        ("terminal", "Scrollback Lines") => {
+            Some(SettingsOperationalAction::ConfigureNativeScrollback)
+        }
+        _ => None,
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct SettingsSupportCounts {
+    pub editable: usize,
+    pub actions: usize,
+    pub read_only: usize,
+    pub unavailable: usize,
+}
+
+impl SettingsSupportCounts {
+    pub fn total(self) -> usize {
+        self.editable + self.actions + self.read_only + self.unavailable
+    }
+}
+
+pub fn settings_support_counts(section: &SettingsSection) -> SettingsSupportCounts {
+    let mut counts = SettingsSupportCounts::default();
+    for group in section.groups {
+        for row in group.rows {
+            match settings_row_support(section.id, row.title) {
+                SettingsRowSupport::Editable => counts.editable += 1,
+                SettingsRowSupport::OperationalAction => counts.actions += 1,
+                SettingsRowSupport::ReadOnly => counts.read_only += 1,
+                SettingsRowSupport::Unavailable => counts.unavailable += 1,
+            }
+        }
+    }
+    counts
 }
 
 /// Only five sections existed as connected Native controls before parity.

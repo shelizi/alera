@@ -27,6 +27,8 @@ pub enum AgentProfileAction {
     Create(AgentProfileCreateArgs),
     /// Patch an existing agent profile.
     Update(AgentProfileUpdateArgs),
+    /// Clone a Host-owned profile with a new name and source revision check.
+    Clone(AgentProfileCloneArgs),
     /// Preview references that affect removal.
     #[command(name = "removal-impact")]
     RemovalImpact(AgentProfileRevisionSelectorArgs),
@@ -83,6 +85,21 @@ pub struct AgentProfileRemoveArgs {
     /// Confirm destructive removal after the runtime checks references.
     #[arg(long, required = true)]
     pub confirm: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct AgentProfileCloneArgs {
+    #[command(flatten)]
+    pub selector: AgentProfileSelectorArgs,
+    /// Require the exact Host revision the user observed.
+    #[arg(long = "expected-revision")]
+    pub expected_revision: i64,
+    /// Unique name for the copy.
+    #[arg(long)]
+    pub name: String,
+    /// Copying risky Managed configuration requires explicit confirmation.
+    #[arg(long = "confirm-reduced-protections")]
+    pub confirm_reduced_protections: bool,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -181,6 +198,33 @@ pub struct AgentProfileUpdateArgs {
     pub quota_group: Option<String>,
     #[arg(long = "clear-quota-group")]
     pub clear_quota_group: bool,
+    /// Read a bounded JSON Command/Custom Prompt edit from standard input
+    /// instead of argv. Requires --expected-revision.
+    #[arg(
+        long = "edit-content-stdin",
+        conflicts_with_all = [
+            "command",
+            "custom_prompt",
+            "clear_custom_prompt",
+            "managed_config_stdin"
+        ],
+        requires = "expected_revision"
+    )]
+    pub edit_content_stdin: bool,
+    /// Patch only Managed model/persona from a bounded JSON object on stdin.
+    /// The CLI merges into the live Host-managed config and preserves other
+    /// keys, revision and reduced-protection confirmation semantics.
+    #[arg(
+        long = "edit-managed-selection-stdin",
+        requires = "expected_revision",
+        conflicts_with_all = [
+            "edit_content_stdin", "managed_config", "managed_config_file",
+            "managed_config_stdin", "agent_type", "launch_mode", "command",
+            "custom_prompt", "clear_custom_prompt", "name", "description",
+            "clear_description", "quota_group", "clear_quota_group"
+        ]
+    )]
+    pub edit_managed_selection_stdin: bool,
     /// Confirm newly enabled settings that reduce agent protections.
     #[arg(long = "confirm-reduced-protections")]
     pub confirm_reduced_protections: bool,

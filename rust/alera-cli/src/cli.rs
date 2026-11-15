@@ -147,6 +147,9 @@ pub enum TerminalAction {
     Workspaces,
     /// Create a new Runtime Host terminal in an existing Workspace.
     Create(TerminalCreateArgs),
+    /// Explicitly launch an installed Agent inside a Host-owned terminal Tab.
+    /// No saved Agent Profile is required; requires --no-start.
+    CreateAgent(TerminalCreateAgentArgs),
     /// Resize an existing Host terminal without claiming mobile driver lease.
     Resize(TerminalResizeArgs),
     /// List live terminal sessions.
@@ -170,6 +173,17 @@ pub struct TerminalCreateArgs {
     /// Host Workspace ID only; a filesystem path is not accepted.
     #[arg(long = "workspace-id")]
     pub workspace_id: String,
+}
+
+#[derive(Debug, Args)]
+pub struct TerminalCreateAgentArgs {
+    #[arg(long = "workspace-id")]
+    pub workspace_id: String,
+    #[arg(long = "agent-id")]
+    pub agent_id: String,
+    /// Executable path selected by Native's local Agent detector (not shell text).
+    #[arg(long = "executable-path")]
+    pub executable_path: String,
 }
 
 #[derive(Debug, Args)]
@@ -375,6 +389,12 @@ pub enum AgentQuotaAction {
         provider: Option<String>,
         #[arg(long, requires = "provider")]
         account_id: Option<String>,
+    },
+    /// Read a bounded, aggregated Host-owned usage summary; never starts Host.
+    Usage {
+        /// Only the last 7 or 30 days, including today.
+        #[arg(long, default_value_t = 7)]
+        days: u8,
     },
     /// Return a secret-free projection of Host quota provider ordering.
     Config,
@@ -652,6 +672,10 @@ pub enum ProjectAction {
     Rename(ProjectRenameArgs),
     /// Read existing shared project settings, or defaults if not configured.
     ConfigShow(IdArgs),
+    /// Read effective config plus its actual source (UI override, alera.toml or defaults).
+    ConfigEffective(IdArgs),
+    /// Delete only the Host UI override; fall back to alera.toml or defaults.
+    ConfigClear(IdArgs),
     /// Replace the shared project settings with validated JSON.
     ConfigSet(ProjectConfigSetArgs),
     /// Preview Classic Host project removal impact before confirmation.
@@ -664,7 +688,8 @@ pub enum ProjectAction {
 pub struct ProjectConfigSetArgs {
     #[arg(long)]
     pub id: String,
-    #[arg(long = "config-json")]
+    /// JSON text, or "-" to read a bounded JSON document securely from stdin.
+    #[arg(long = "config-json", allow_hyphen_values = true)]
     pub config_json: String,
 }
 

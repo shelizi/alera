@@ -42,6 +42,7 @@ mod orchestration_command_summaries;
 mod orchestration_commands;
 mod orchestration_delegate;
 mod orchestration_terminal_commands;
+mod project_config_input;
 mod project_config_toml;
 mod project_management;
 #[cfg(windows)]
@@ -189,6 +190,7 @@ async fn run_terminal_command(command: TerminalCommand) -> i32 {
         &command.action,
         TerminalAction::Workspaces
             | TerminalAction::Create(_)
+            | TerminalAction::CreateAgent(_)
             | TerminalAction::Resize(_)
             | TerminalAction::Stream
     ) && !command.no_start
@@ -254,6 +256,39 @@ async fn run_terminal_command(command: TerminalCommand) -> i32 {
             )),
             Err(error) => print_error(error),
         },
+        TerminalAction::CreateAgent(args) => {
+            let tab = match tab_record_factory::agent_tab_from_args(args) {
+                Ok(tab) => tab,
+                Err(message) => {
+                    eprintln!("{message}");
+                    return USAGE_EXIT_CODE;
+                }
+            };
+            // No Store fallback and no auto-Host-start: an authenticated
+            // existing Host must own the resulting PTY, just as Classic does.
+            match client.request_value("tab.upsert", &json!(tab)).await {
+                Ok(value) => {
+                    if value["id"].as_str() != Some(tab.id.as_str())
+                        || value["workspaceId"].as_str() != Some(tab.workspace_id.as_str())
+                        || value["kind"].as_str() != Some("terminal")
+                    {
+                        return print_error(anyhow::anyhow!(
+                            "Host created an Agent tab with a mismatched identity; inspect Host before retrying"
+                        ));
+                    }
+                    print_value(&json!({
+                        "tab": value,
+                        "attachment": {
+                            "sessionId": tab.id,
+                            "workspaceId": tab.workspace_id,
+                            "tabId": tab.id,
+                        },
+                    }), command.output.json, "Host-owned Agent terminal created");
+                    0
+                }
+                Err(error) => print_error(error),
+            }
+        }
         TerminalAction::Create(args) => {
             let id = args.workspace_id;
             if id.is_empty()
@@ -459,12 +494,65 @@ async fn run_project_command(command: ProjectCommand) -> i32 {
                 Err(error) => return print_error(error),
             }
         }
-        ProjectAction::ConfigSet(args) => {
-            if args.config_json.len() > 32 * 1024 {
-                return print_error("Project config JSON exceeds 32 KiB.");
+        ProjectAction::ConfigEffective(IdArgs { id }) => {
+            let store = match open_store(&runtime).await {
+                Ok(store) => store,
+                Err(error) => return print_error(error),
+            };
+            match project_management::effective_project_config(&store, &id).await {
+                Ok(effective) => print_value(
+                    &json!({
+                        "kind": "projectConfig",
+                        "projectId": id,
+                        "origin": effective.origin,
+                        "config": effective.config,
+                        "error": effective.error,
+                    }),
+                    json_output,
+                    "effective project settings listed",
+                ),
+                Err(error) => return print_error(error),
             }
+        }
+        ProjectAction::ConfigClear(IdArgs { id }) => {
+            let store = match open_store(&runtime).await {
+                Ok(store) => store,
+                Err(error) => return print_error(error),
+            };
+            match store.find_project(&id).await {
+                Ok(Some(_)) => {}
+                Ok(None) => return print_error(format!("Project not found: {id}")),
+                Err(error) => return print_error(error),
+            }
+            let payload = json!({"projectId": id});
+            let fallback_id = id.clone();
+            match runtime_host_or_store_unit(
+                &runtime,
+                "projectConfig.remove",
+                &payload,
+                |store| async move { store.remove_project_config(&fallback_id).await },
+            ).await {
+                Ok(()) => print_value(
+                    &json!({"kind": "projectConfigCleared", "projectId": id}),
+                    json_output,
+                    "project settings override cleared",
+                ),
+                Err(error) => return print_error(error),
+            }
+        }
+        ProjectAction::ConfigSet(args) => {
+            // Native uses --config-json - and pipes the full JSON through
+            // stdin: setup commands and prompts never appear in process argv.
+            // The legacy inline JSON spelling stays compatible with Classic.
+            let config_json = match project_config_input::decode_project_config_json(
+                &args.config_json,
+                std::io::stdin().lock(),
+            ) {
+                Ok(config) => config,
+                Err(error) => return print_error(format!("Invalid project config input: {error}")),
+            };
             let config: alera_core::runtime::ProjectConfig =
-                match serde_json::from_str(&args.config_json) {
+                match serde_json::from_str(&config_json) {
                     Ok(config) => config,
                     Err(error) => return print_error(format!("Invalid project config: {error}")),
                 };

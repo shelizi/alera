@@ -3,7 +3,17 @@
 use serde::Deserialize;
 use serde_json::Value;
 
-pub const REFRESH_INTERVAL_SECS: u64 = 15 * 60;
+pub const REFRESH_INTERVAL_SECS: u64 = 5 * 60;
+/// Keep Classic/GPUI quota pin visibility in sync while its popover is open.
+/// Avoid the more frequent Host settings polling when neither UI is visible.
+pub const fn shared_quota_pin_poll_seconds(settings_open: bool, quota_popover_open: bool) -> u64 {
+    if settings_open || quota_popover_open {
+        3
+    } else {
+        15
+    }
+}
+
 const MAX_SNAPSHOTS: usize = 128;
 
 const PROVIDERS: &[(&str, &str)] = &[
@@ -80,10 +90,55 @@ fn default_account() -> String {
 #[derive(Debug, Clone, PartialEq)]
 pub struct QuotaReading {
     pub label: String,
+    pub full_label: String,
     pub value: String,
     pub remaining_percent: Option<f64>,
     pub reset: Option<String>,
     pub order: i32,
+}
+
+/// Classic's quota hover card uses the Host's Unix-millisecond reset time
+/// in preference to an optional provider-supplied description. Format a
+/// compact relative duration rather than silently dropping the reset ETA.
+fn quota_reset_text(
+    resets_at: Option<i64>,
+    description: Option<&str>,
+    now_millis: i64,
+) -> Option<String> {
+    if let Some(resets_at) = resets_at {
+        let millis = resets_at.saturating_sub(now_millis);
+        if millis <= 0 {
+            return Some("Resets in <1m".to_owned());
+        }
+        let minutes = millis.saturating_add(59_999) / 60_000;
+        let days = minutes / 1_440;
+        let hours = (minutes % 1_440) / 60;
+        let minutes = minutes % 60;
+        let mut parts = Vec::with_capacity(3);
+        if days > 0 {
+            parts.push(format!("{days}d"));
+        }
+        if hours > 0 {
+            parts.push(format!("{hours}h"));
+        }
+        if minutes > 0 || parts.is_empty() {
+            parts.push(format!("{minutes}m"));
+        }
+        return Some(format!("Resets in {}", parts.join(" ")));
+    }
+    description
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+}
+
+fn unix_time_millis() -> i64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .and_then(|duration| i64::try_from(duration.as_millis()).ok())
+        .unwrap_or_default()
 }
 
 impl QuotaSnapshot {
@@ -131,6 +186,7 @@ impl QuotaSnapshot {
 
     pub fn readings(&self) -> Vec<QuotaReading> {
         let mut readings = Vec::new();
+        let now_millis = unix_time_millis();
         for metric in self.windows.iter().chain(self.buckets.iter()) {
             let remaining = metric
                 .used_percent
@@ -138,11 +194,16 @@ impl QuotaSnapshot {
                 .map(|v| (100.0 - v).clamp(0.0, 100.0));
             readings.push(QuotaReading {
                 label: short_label(&self.provider, &metric.label),
+                full_label: metric.label.clone(),
                 value: remaining
                     .map(|v| format!("{}%", v.round() as u32))
                     .unwrap_or_else(|| "-".into()),
                 remaining_percent: remaining,
-                reset: metric.reset_description.clone(),
+                reset: quota_reset_text(
+                    metric.resets_at,
+                    metric.reset_description.as_deref(),
+                    now_millis,
+                ),
                 order: reading_order(&self.provider, &metric.label),
             });
         }
@@ -160,15 +221,48 @@ impl QuotaSnapshot {
             };
             readings.push(QuotaReading {
                 label: short_label(&self.provider, &amount.label),
+                full_label: amount.label.clone(),
                 value,
                 remaining_percent: None,
-                reset: amount.reset_description.clone(),
+                reset: quota_reset_text(
+                    amount.resets_at,
+                    amount.reset_description.as_deref(),
+                    now_millis,
+                ),
                 order: 30,
             });
         }
         readings.sort_by_key(|reading| reading.order);
         readings
     }
+}
+
+/// Classic shows the provider icon, not its full name, in the status row.
+/// Only account aliases disambiguate multi-account or OpenCode entries.
+pub fn status_bar_account_label(snapshot: &QuotaSnapshot, all: &[QuotaSnapshot]) -> Option<String> {
+    if snapshot.provider == "opencode" {
+        return Some(
+            if snapshot.account_id == "go" {
+                "Go"
+            } else {
+                "Zen"
+            }
+            .to_owned(),
+        );
+    }
+    let peers = all
+        .iter()
+        .filter(|row| row.provider == snapshot.provider)
+        .count();
+    if snapshot.account_id == "default" || snapshot.account_id.is_empty() {
+        return (peers > 1).then(|| "Default".to_owned());
+    }
+    let alias = snapshot.display_name.trim();
+    Some(if alias.is_empty() {
+        snapshot.account_id.clone()
+    } else {
+        alias.to_owned()
+    })
 }
 
 /// Classic status-bar visibility follows the shared per-account pin list
@@ -303,6 +397,85 @@ pub fn parse_quota_snapshots(payload: &Value) -> Result<Vec<QuotaSnapshot>, &'st
     Ok(result)
 }
 
+/// An account-scoped refresh must update exactly the requested account.
+/// Some Host/provider adapters return an empty set (or another account)
+/// without a transport error. Treat that as failure so the old percentage
+/// becomes stale instead of being misreported as freshly checked.
+pub fn scoped_quota_refresh(
+    fresh: Vec<QuotaSnapshot>,
+    account: Option<(&str, &str)>,
+) -> Result<Vec<QuotaSnapshot>, &'static str> {
+    let Some((provider, account_id)) = account else {
+        return Ok(fresh);
+    };
+    let matched = fresh
+        .into_iter()
+        .filter(|snapshot| snapshot.provider == provider && snapshot.account_id == account_id)
+        .collect::<Vec<_>>();
+    if matched.is_empty() {
+        return Err("Host quota refresh did not return the requested account");
+    }
+    Ok(matched)
+}
+
+/// Read-only, Host-aggregated usage projection for the Native quota popover.
+/// No raw transcript, credential, account identifier or model metadata is kept.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentUsageRow {
+    pub provider: String,
+    pub tokens: u64,
+    pub cost_usd: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentUsageDay {
+    pub day: String,
+    pub tokens: u64,
+    pub cost_usd: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentUsageSummary {
+    pub since_day: String,
+    pub until_day: String,
+    pub total_tokens: u64,
+    pub cost_usd: f64,
+    pub unpriced_records: u64,
+    pub incomplete_sources: bool,
+    pub providers: Vec<AgentUsageRow>,
+    pub days: Vec<AgentUsageDay>,
+}
+
+pub fn parse_agent_usage_summary(payload: &Value) -> Result<AgentUsageSummary, &'static str> {
+    let summary: AgentUsageSummary =
+        serde_json::from_value(payload.clone()).map_err(|_| "Invalid Host usage summary")?;
+    if summary.since_day.len() != 10
+        || summary.until_day.len() != 10
+        || summary.providers.len() > 3
+        || summary.days.len() > 30
+        || !summary.cost_usd.is_finite()
+        || summary.cost_usd < 0.0
+        || summary.providers.iter().any(|row| {
+            !matches!(row.provider.as_str(), "claude" | "codex" | "grok")
+                || !row.cost_usd.is_finite()
+                || row.cost_usd < 0.0
+        })
+        || summary.days.iter().any(|row| {
+            row.day.len() != 10
+                || row.day < summary.since_day
+                || row.day > summary.until_day
+                || !row.cost_usd.is_finite()
+                || row.cost_usd < 0.0
+        })
+    {
+        return Err("Host usage summary exceeds limits or has invalid values");
+    }
+    Ok(summary)
+}
+
 /// Keep the last successful quota if a provider fails during a full refresh;
 /// partial refreshes replace only the targeted provider/account.
 pub fn merge_quota_snapshots(
@@ -333,10 +506,160 @@ pub fn merge_quota_snapshots(
     next
 }
 
+/// A failed account-scoped refresh only invalidates that one account's
+/// last readings; an all-provider refresh failure invalidates every row.
+/// This matches Classic and keeps unrelated healthy quota chips current.
+pub fn mark_failed_quota_refresh(snapshots: &mut [QuotaSnapshot], account: Option<(&str, &str)>) {
+    for snapshot in snapshots {
+        let affected = account.is_none_or(|(provider, account_id)| {
+            snapshot.provider == provider && snapshot.account_id == account_id
+        });
+        if affected && snapshot.status == "ok" {
+            snapshot.status = "stale".to_owned();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn u05_classic_reset_countdown_uses_host_timestamp_and_fallback_description() {
+        let now = 1_800_000_000_000_i64;
+        assert_eq!(
+            quota_reset_text(Some(now + 30_000), None, now).as_deref(),
+            Some("Resets in 1m")
+        );
+        assert_eq!(
+            quota_reset_text(Some(now + 3_600_000), None, now).as_deref(),
+            Some("Resets in 1h")
+        );
+        assert_eq!(
+            quota_reset_text(Some(now + 90_060_000), Some("wrong fallback"), now).as_deref(),
+            Some("Resets in 1d 1h 1m")
+        );
+        assert_eq!(
+            quota_reset_text(Some(now - 100), None, now).as_deref(),
+            Some("Resets in <1m")
+        );
+        assert_eq!(
+            quota_reset_text(None, Some("  resets tomorrow  "), now).as_deref(),
+            Some("resets tomorrow")
+        );
+        assert_eq!(quota_reset_text(None, Some("   "), now), None);
+        assert_eq!(quota_reset_text(None, None, now), None);
+        let values = parse_quota_snapshots(&json!({"snapshots":[{
+            "provider":"claude","status":"ok",
+            "windows":[{"label":"weekly","usedPercent":30,"resetsAt":1_900_000_000_000_i64}]
+        }]}))
+        .unwrap();
+        assert!(values[0].readings()[0]
+            .reset
+            .as_ref()
+            .is_some_and(|text| text.starts_with("Resets in ")));
+    }
+
+    #[test]
+    fn u05_usage_summary_is_bounded_and_cannot_inject_provider_metadata() {
+        let sample = json!({
+            "sinceDay":"2026-11-08","untilDay":"2026-11-14",
+            "totalTokens":111,"costUsd":1.25,"unpricedRecords":1,
+            "incompleteSources":false,
+            "providers":[{"provider":"claude","tokens":111,"costUsd":1.25}],
+            "days":[{"day":"2026-11-14","tokens":111,"costUsd":1.25}]
+        });
+        let parsed = parse_agent_usage_summary(&sample).unwrap();
+        assert_eq!(parsed.total_tokens, 111);
+        assert_eq!(parsed.providers[0].provider, "claude");
+        let mut invalid = sample.clone();
+        invalid["providers"][0]["provider"] = json!("private");
+        assert!(parse_agent_usage_summary(&invalid).is_err());
+        invalid = sample.clone();
+        invalid["costUsd"] = json!(-1.0);
+        assert!(parse_agent_usage_summary(&invalid).is_err());
+        invalid = sample;
+        invalid["days"][0]["day"] = json!("2099-01-01");
+        assert!(parse_agent_usage_summary(&invalid).is_err());
+    }
+
+    #[test]
+    fn u05_account_scoped_refresh_rejects_missing_result_and_ignores_other_accounts() {
+        let rows = parse_quota_snapshots(&json!({"snapshots": [
+            {"provider":"claude","accountId":"default","status":"ok","windows":[{"label":"5h","usedPercent":20}]},
+            {"provider":"claude","accountId":"work","status":"ok","windows":[{"label":"5h","usedPercent":40}]},
+            {"provider":"codex","accountId":"default","status":"ok","windows":[{"label":"week","usedPercent":30}]}
+        ]})).unwrap();
+        let matching = scoped_quota_refresh(rows.clone(), Some(("claude", "work"))).unwrap();
+        assert_eq!(matching.len(), 1);
+        assert_eq!(matching[0].key(), "claude:work");
+        assert_eq!(
+            scoped_quota_refresh(rows.clone(), Some(("claude", "missing"))).unwrap_err(),
+            "Host quota refresh did not return the requested account"
+        );
+        assert_eq!(
+            scoped_quota_refresh(Vec::new(), Some(("claude", "work"))).unwrap_err(),
+            "Host quota refresh did not return the requested account"
+        );
+        assert_eq!(scoped_quota_refresh(rows.clone(), None).unwrap(), rows);
+    }
+
+    #[test]
+    fn failing_one_account_refresh_does_not_stale_unrelated_provider_readings() {
+        let fixtures = json!({"snapshots":[
+            {"provider":"claude","accountId":"default","status":"ok","windows":[{"label":"5h","usedPercent":20}]},
+            {"provider":"claude","accountId":"work","status":"ok","windows":[{"label":"5h","usedPercent":40}]},
+            {"provider":"codex","accountId":"default","status":"ok","windows":[{"label":"week","usedPercent":30}]}
+        ]});
+        let mut rows = parse_quota_snapshots(&fixtures).unwrap();
+        mark_failed_quota_refresh(&mut rows, Some(("claude", "work")));
+        assert_eq!(
+            rows.iter().map(|r| r.status.as_str()).collect::<Vec<_>>(),
+            vec!["ok", "stale", "ok"]
+        );
+        assert_eq!(rows[1].readings()[0].value, "60%");
+        mark_failed_quota_refresh(&mut rows, Some(("claude", "missing")));
+        assert_eq!(rows[0].status, "ok");
+        assert_eq!(rows[2].status, "ok");
+        mark_failed_quota_refresh(&mut rows, None);
+        assert!(rows.iter().all(|r| r.status == "stale"));
+    }
+
+    #[test]
+    fn quota_popover_prioritizes_shared_classic_pin_sync_without_fast_idle_polling() {
+        assert_eq!(shared_quota_pin_poll_seconds(false, false), 15);
+        assert_eq!(shared_quota_pin_poll_seconds(true, false), 3);
+        assert_eq!(shared_quota_pin_poll_seconds(false, true), 3);
+        assert_eq!(shared_quota_pin_poll_seconds(true, true), 3);
+    }
+
+    #[test]
+    fn classic_status_bar_refreshes_five_minutes_and_uses_compact_account_labels() {
+        assert_eq!(REFRESH_INTERVAL_SECS, 5 * 60);
+        let snapshots = parse_quota_snapshots(&json!({"snapshots": [
+            {"provider":"claude","accountId":"default","status":"ok"},
+            {"provider":"claude","accountId":"work","displayName":"Work","status":"ok"},
+            {"provider":"codex","accountId":"default","status":"ok"},
+            {"provider":"agy","accountId":"default","status":"ok"},
+            {"provider":"opencode","accountId":"go","status":"ok"}
+        ]}))
+        .unwrap();
+        assert_eq!(
+            status_bar_account_label(&snapshots[0], &snapshots),
+            Some("Default".into())
+        );
+        assert_eq!(
+            status_bar_account_label(&snapshots[1], &snapshots),
+            Some("Work".into())
+        );
+        assert_eq!(status_bar_account_label(&snapshots[2], &snapshots), None);
+        assert_eq!(status_bar_account_label(&snapshots[3], &snapshots), None);
+        assert_eq!(
+            status_bar_account_label(&snapshots[4], &snapshots),
+            Some("Go".into())
+        );
+    }
 
     #[test]
     fn visual_fixture_covers_ten_provider_logos_multiple_accounts_and_agy_five_metrics() {

@@ -2,6 +2,8 @@
 //! No OS callbacks or second Hook receiver: consume Host-confirmed presence only.
 
 use crate::terminal::{AgentActivityState, TerminalSession};
+use crate::workbench_panes::{PaneSlot, WorkbenchPaneLayout};
+use crate::workbench_tabs::{WorkbenchTabIdentity, WorkbenchTabKind, WorkbenchTabs};
 use std::collections::{HashMap, HashSet};
 
 /// Match Classic's per-session/state throttle and burst batching policy.
@@ -265,6 +267,36 @@ pub fn validated_notice_target<'a>(
     })
 }
 
+/// Resolve a clicked Toast to the exact already-open Agent preview and pane.
+/// This is a read-only projection: only the UI caller may focus the returned
+/// identity after the Host validates the complete session/workspace/tab tuple.
+/// Never infer the pane from whatever Terminal happens to be active.
+pub fn validated_notice_pane_target(
+    notice: &AgentNotice,
+    sessions: &[TerminalSession],
+    tabs: &WorkbenchTabs,
+    panes: &WorkbenchPaneLayout,
+) -> Option<(WorkbenchTabIdentity, PaneSlot)> {
+    validated_notice_target(notice, sessions)?;
+    for pane in [PaneSlot::Primary, PaneSlot::Secondary] {
+        for identity in panes.tabs_in(pane) {
+            let WorkbenchTabIdentity::Host(target) = identity else {
+                continue;
+            };
+            if target.handle == notice.session_id
+                && target.workspace_id() == notice.workspace_id
+                && target.tab_id() == notice.tab_id
+                && tabs.entries().iter().any(|tab| {
+                    &tab.identity == identity && tab.kind == WorkbenchTabKind::Agent && tab.running
+                })
+            {
+                return Some((identity.clone(), pane));
+            }
+        }
+    }
+    None
+}
+
 /// Pure H5 delivery boundary. Keeps Classic-like transition history even
 /// while notifications are disabled or owned by Classic; pending batches
 /// are discarded on revocation, Agent recovery or Host identity change.
@@ -344,7 +376,11 @@ impl AgentNotificationDelivery {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::terminal::{AgentActivityState, TerminalSession};
+    use crate::terminal::{AgentActivityState, TerminalDock, TerminalSession};
+    use crate::workbench_panes::{PaneSlot, WorkbenchPaneLayout};
+    use crate::workbench_tabs::{
+        WorkbenchTab, WorkbenchTabIdentity, WorkbenchTabKind, WorkbenchTabs,
+    };
 
     fn session(handle: &str, tab: &str, state: Option<AgentActivityState>) -> TerminalSession {
         TerminalSession {
@@ -358,6 +394,98 @@ mod tests {
             agent_state_started_at: None,
             agent_updated_at: None,
         }
+    }
+
+    fn notice_tabs(sessions: &[TerminalSession]) -> (WorkbenchTabs, WorkbenchPaneLayout) {
+        let mut dock = TerminalDock::for_workspace(7);
+        dock.update_sessions(sessions.to_vec());
+        let mut observed = Vec::new();
+        for session in sessions {
+            assert!(dock.open(&session.handle));
+            let index = dock.active_tab.unwrap();
+            observed.push(WorkbenchTab {
+                identity: WorkbenchTabIdentity::Host(dock.context_target_at(index).unwrap()),
+                kind: WorkbenchTabKind::Agent,
+                title: session.agent_type.clone().unwrap_or_default(),
+                dirty: false,
+                running: session.running,
+                agent_state: session.agent_state,
+                interrupted: session.interrupted,
+            });
+        }
+        let mut tabs = WorkbenchTabs::for_workspace(7);
+        let ids = observed
+            .iter()
+            .map(|tab| tab.identity.clone())
+            .collect::<Vec<_>>();
+        tabs.reconcile(7, observed, ids.first().cloned());
+        let mut panes = WorkbenchPaneLayout::new();
+        panes.reconcile(&ids);
+        (tabs, panes)
+    }
+
+    #[test]
+    fn h03_toast_click_routes_to_exact_secondary_agent_without_changing_other_pane() {
+        let primary = session("host-a", "tab-a", Some(AgentActivityState::Working));
+        let secondary = session("host-b", "tab-b", Some(AgentActivityState::Waiting));
+        let sessions = vec![primary, secondary.clone()];
+        let (tabs, mut panes) = notice_tabs(&sessions);
+        let secondary_id = tabs.entries()[1].identity.clone();
+        let primary_id = tabs.entries()[0].identity.clone();
+        assert!(panes.split_with(&secondary_id));
+        assert!(panes.activate(&primary_id));
+        let before = panes.clone();
+        let notice = AgentNotice {
+            session_id: secondary.handle,
+            workspace_id: secondary.workspace_id,
+            tab_id: secondary.tab_id,
+            agent_type: "codex".into(),
+            state: AgentActivityState::Waiting,
+        };
+        assert_eq!(
+            validated_notice_pane_target(&notice, &sessions, &tabs, &panes),
+            Some((secondary_id, PaneSlot::Secondary))
+        );
+        assert_eq!(panes, before, "lookup never changes pane or Host PTY");
+        assert_eq!(panes.active_in(PaneSlot::Primary), Some(&primary_id));
+    }
+
+    #[test]
+    fn h03_toast_click_rejects_recycled_host_and_nonagent_preview() {
+        let live = session("host-a", "tab-a", Some(AgentActivityState::Done));
+        let (mut tabs, panes) = notice_tabs(&[live.clone()]);
+        let notice = AgentNotice {
+            session_id: live.handle.clone(),
+            workspace_id: live.workspace_id.clone(),
+            tab_id: live.tab_id.clone(),
+            agent_type: "codex".into(),
+            state: AgentActivityState::Waiting,
+        };
+        assert!(validated_notice_pane_target(&notice, &[live.clone()], &tabs, &panes).is_some());
+        for stale in [
+            TerminalSession {
+                tab_id: "recycled".into(),
+                ..live.clone()
+            },
+            TerminalSession {
+                workspace_id: "another".into(),
+                ..live.clone()
+            },
+            TerminalSession {
+                agent_type: Some("claude".into()),
+                ..live.clone()
+            },
+            TerminalSession {
+                running: false,
+                ..live.clone()
+            },
+        ] {
+            assert!(validated_notice_pane_target(&notice, &[stale], &tabs, &panes).is_none());
+        }
+        let mut nonagent = tabs.entries().to_vec();
+        nonagent[0].kind = WorkbenchTabKind::Terminal;
+        tabs.reconcile(7, nonagent, None);
+        assert!(validated_notice_pane_target(&notice, &[live], &tabs, &panes).is_none());
     }
 
     #[test]

@@ -214,6 +214,18 @@ fn has_managed_config_input(args: &ManagedConfigInputArgs) -> bool {
     args.managed_config.is_some() || args.managed_config_file.is_some() || args.managed_config_stdin
 }
 
+/// Clone all Host-owned launch fields in the CLI process, never the GUI.
+/// Command/custom prompt/Managed options are not passed through argv.
+pub(crate) fn draft_for_clone(source: &AgentProfile, raw_name: &str) -> Result<AgentProfileDraft> {
+    let name = required_trimmed(raw_name, "name")?;
+    if name.len() > 256 || name.chars().any(char::is_control) {
+        bail!("clone name must be at most 256 bytes without control characters");
+    }
+    let mut copy = draft_from_profile(source);
+    copy.name = name;
+    Ok(copy)
+}
+
 fn draft_from_profile(profile: &AgentProfile) -> AgentProfileDraft {
     AgentProfileDraft {
         name: profile.name.clone(),

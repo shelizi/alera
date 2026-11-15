@@ -61,6 +61,117 @@ This is an **experimental, independent Rust UI frontend**, not a replacement of 
 
 **Step-by-step engineering execution plan:** [GPUI detailed execution and acceptance plan](../docs/gpui-desktop-detailed-execution-plan-20261107.md). This is the current ordered task checklist (G0–G6), with commands, test cases, source touchpoints, stop conditions, dependencies and release gates. Do not treat it as evidence that the planned GUI/IME work has been completed.
 
+## Native application icon (Windows)
+
+The Native Windows executable now embeds **the exact same icon** as Alera
+Classic: `windows/runner/resources/app_icon.ico` (Classic's `IDI_APP_ICON=101`).
+`desktop_gpui/native_app_icon.rc` references that existing tracked asset;
+the Windows build script compiles it into the Native EXE using the already
+locked `embed-resource` dependency. Do not replace it with the default
+GPUI/Rust icon or a re-drawn copy. Icon appearance is shared, but Native's
+AppUserModelID, shortcut grouping, application data and lifecycle remain
+separate from Classic.
+
+When changing the Classic icon, rebuild Native to refresh its embedded icon.
+After a rebuilt `AleraNative.exe` replaces an older preview, Windows Explorer
+may cache the prior icon; restart the application and refresh the relevant
+shortcut/taskbar pin before attributing a stale graphic to the binary.
+macOS app-bundle icon packaging remains a separate distribution concern.
+
+## Host-backed Project Settings editing (S07/S08)
+
+**Settings → Projects → Project Settings** reads the selected registered
+ProjectConfig from the existing Runtime Host (default: the active Workspace's project). The safe summary
+counts Worktree copy/setup rules and reports whether a prompt is configured,
+without expanding command text, paths or project instructions. Choose
+**Edit Project Settings** to explicitly open the Native editor for **Git
+Hosting Provider** (Auto-detect, GitHub, GitLab, Azure DevOps), **New
+Workspace → Prompt Append**, **Worktree Copy Rules** (From/To/Overwrite,
+Add/Remove) and **Worktree Setup Commands** (multiline, Add/Remove).
+Choose **Save to Host** or **Cancel**; there is no autosave and a new
+Workspace clears the old edit state. Editing these setup commands does *not*
+execute them immediately; they are used by later Worktree creation/setup.
+
+The Host's `config-set` operation replaces the *whole* configuration.
+Native preserves the exact Worktree copy/setup rules if untouched and
+updates only explicitly edited fields. Copy paths must be relative to the
+project, cannot traverse outside it, and are limited to 512 bytes each.
+Commands are limited to 4 KiB each; each rule list is limited to 64 entries,
+with a total Host config limit of 32 KiB. Unchanged shell command whitespace
+and paths are preserved; empty setup-command rows are skipped on Save.
+Native rejects unknown future schema keys and compares against a new Host
+read before writing. It reports success only
+after a subsequent Host readback matches the intended values. Because the
+existing Host API lacks atomic ProjectConfig compare-and-set, a concurrent
+Classic edit in the narrow interval between preflight and write is still a
+known limitation; the form does **not** claim full cross-client CAS.
+
+The complete config can contain sensitive Worktree Setup commands, copied
+paths or project instructions. To keep it out of OS process arguments,
+the updated `alera.exe` CLI accepts `project config-set --config-json -`
+with a bounded UTF-8 document over **stdin**; Native uses this transport
+exclusively and refuses to fall back to the old argv form if the installed
+CLI is outdated. Build/update the Native-bundled Rust CLI together with the
+Native frontend before using Save. No CLI/Host changes are applied to a
+shipping Classic install automatically.
+
+**Effective source and Use Repo File (S09):** The Native editor now uses
+the same effective ProjectConfig resolver as the Runtime Host and explicitly
+labels its source: **UI override**, **Repository alera.toml**, or **Defaults**.
+`config-effective` is an additive CLI command; it does not change Classic's
+legacy `config-show` semantics. When an override exists, **Use Repo File**
+opens a second confirmation. Confirming removes *only* that project's Host UI
+override via the existing `projectConfig.remove` action. The repo file is
+never modified. The effective config is read back before success is reported.
+If no repo file exists, the Host uses defaults; if `alera.toml` is invalid,
+the form displays a warning without echoing parser text or its contents.
+
+Both **Save to Host** and **Use Repo File** compare the current effective
+config *and its origin* with what was loaded, and reject mismatched snapshots.
+The Host still lacks atomic cross-client compare-and-set, so a concurrent
+Classic update between the preflight read and mutation remains possible.
+Older CLI sidecars without `config-effective/config-clear` fail explicitly;
+package the matching updated CLI with Native. The real Windows GPUI/Host
+round trip remains a release gate.
+
+**Cross-project selection (S10):** Settings → Projects now shows a
+bounded, scrollable list of *all* registered Runtime Host projects.
+Choosing one changes only the Project Settings target; the Workbench's
+active Workspace, Terminal tabs, Editor buffers and Git branch do not
+switch. The first selection follows the active Workspace's registered
+project (or the first registered project if that Workspace is not
+registered). Each row includes the registered project name and path to
+distinguish duplicates. All source reads, edits, Save to Host and
+Use Repo File actions use the selected Project ID.
+
+Switching settings projects is blocked while an edit draft exists or a
+Host write is in progress. Explicit Save or Cancel unlocks selection.
+A completed project switch clears the previous project's preview and
+disarms any pending override-removal confirmation; stale async Host
+read responses cannot populate a different project's form. When the
+active Workspace itself changes, the Settings selection resets.
+Deleted/unknown project IDs never become Host mutation targets.
+
+## Native terminal scrollback (Windows / macOS / Linux)
+
+**Settings → Terminal → Advanced → Scrollback Lines** now changes the *real*
+Alacritty VT history ring in Native. Default **10,000 lines** (Classic's
+first-run default); valid **100–200,000 lines**. Use the presets or 100-line
+fine adjustment. Changes are CAS-saved in the independent
+`native-settings-v1.json` and immediately applied to all open terminals,
+including both split panes, without stopping their Host PTY sessions.
+New/replaced tabs, workspace switching, Host stream snapshots and screen resets
+reuse the selected cap.
+
+Use **Shift+PageUp / Shift+PageDown** or the up/down history toolbar icons in
+either terminal pane to browse and return to live output. Full-screen
+alternate-screen TUIs keep their normal shortcuts. This feature does not
+change the Host's **byte-based** scrollback retention or overwrite Classic's
+Flutter preferences; history older than the Host's retained data cannot be
+restored into a newly attached Native screen. Mouse-wheel scrollback is not
+yet wired to this viewport. Rust model tests and Native Windows binary checks
+pass; interactive GUI acceptance remains pending.
+
 ## Run
 
 Use the Rust 1.98 toolchain and platform graphics development tools; for Windows, native GPUI builds may additionally require the Windows SDK `fxc.exe` shader compiler.

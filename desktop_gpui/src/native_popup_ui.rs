@@ -21,8 +21,11 @@ impl Workbench {
         target: Option<PaneAttachGuard>,
         running: Vec<(TerminalSession, String)>,
         profiles: Vec<AgentProfileRow>,
+        installed: Vec<InstalledAgentCli>,
+        installed_loading: bool,
         terminal_create_busy: bool,
         terminal_create_timed_out: bool,
+        terminal_create_unknown: bool,
     ) -> impl Fn(
         gpui_kit::component::menu::PopupMenu,
         &mut Window,
@@ -54,8 +57,39 @@ impl Workbench {
                     });
                 }),
             );
+            // Classic lists installed local Agent CLIs, not just Host Agent
+            // Profiles. Inventory is read-only and works without any Host.
+            menu = menu.separator().label("Installed Agent CLIs");
+            if installed.is_empty() {
+                menu = menu.label(if installed_loading {
+                    "Detecting installed Agent CLIs…"
+                } else {
+                    "No installed Agent CLIs detected"
+                });
+            }
+            for agent in installed.iter().cloned() {
+                let agent_owner = owner.clone();
+                let agent_target = target.clone();
+                let agent_id = agent.id.clone();
+                let label = agent.new_tab_menu_label().to_owned();
+                menu = menu.item(PopupMenuItem::new(label).on_click(move |_, window, cx| {
+                    let _ = agent_owner.update(cx, |view, cx| {
+                        view.prepare_detected_agent_in_pane(&agent_id, &agent_target, window, cx);
+                    });
+                }));
+            }
+            let refresh_owner = owner.clone();
+            menu = menu.item(
+                PopupMenuItem::new("Rescan installed agents (reopen menu)").on_click(
+                    move |_, _, cx| {
+                        let _ = refresh_owner.update(cx, |view, cx| {
+                            view.refresh_installed_agent_clis(cx);
+                        });
+                    },
+                ),
+            );
             if !profiles.is_empty() {
-                menu = menu.separator();
+                menu = menu.separator().label("Host Agent Profiles");
             }
             for profile in profiles.iter().cloned() {
                 let owner = owner.clone();
@@ -86,6 +120,11 @@ impl Workbench {
                             });
                         },
                     ),
+                );
+            }
+            if terminal_create_unknown {
+                menu = menu.separator().label(
+                    "Host create result unknown · inspect running sessions before dismissing",
                 );
             }
             if terminal_create_busy {
@@ -174,7 +213,7 @@ impl Workbench {
                     move |_, _, cx| {
                         let _ = copy_owner.update(cx, |view, cx| {
                             if view.kit_menu_host_is_active(&copy_target) {
-                                view.copy_primary_terminal_text(false, cx);
+                                view.copy_terminal_text_for_pane(pane, false, cx);
                             }
                         });
                     },
@@ -185,7 +224,7 @@ impl Workbench {
                     move |_, _, cx| {
                         let _ = selected_owner.update(cx, |view, cx| {
                             if view.kit_menu_host_is_active(&selected_target) {
-                                view.copy_primary_terminal_text(true, cx);
+                                view.copy_terminal_text_for_pane(pane, true, cx);
                             }
                         });
                     },

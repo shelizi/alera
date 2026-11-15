@@ -15,6 +15,177 @@ pub struct AgentProfileRow {
     pub name: String,
     pub agent_type: String,
     pub managed: bool,
+    /// Host revision for optimistic edits; never a command or credential.
+    pub revision: Option<i64>,
+}
+
+/// Only routing metadata is available to Native's editor; the Host retains
+/// command lines, Managed config, prompts, environment and credentials.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentProfileRoutingFields {
+    pub id: String,
+    pub revision: i64,
+    pub description: String,
+    pub quota_group: String,
+}
+
+pub fn validate_profile_routing_fields(
+    description: &str,
+    quota_group: &str,
+) -> io::Result<(String, String)> {
+    let description = description.trim();
+    let quota_group = quota_group.trim();
+    if description.len() > 4096
+        || quota_group.len() > 256
+        || description.chars().any(char::is_control)
+        || quota_group.chars().any(char::is_control)
+    {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput,
+            "Routing fields must be single-line (Description <=4096 bytes, Quota Group <=256 bytes)"));
+    }
+    Ok((description.to_owned(), quota_group.to_owned()))
+}
+
+/// Project just non-secret routing fields from a complete transient Host
+/// response, discarding commands, prompts and Managed configuration.
+pub fn parse_profile_routing_fields(value: &Value) -> io::Result<AgentProfileRoutingFields> {
+    let id = value
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|id| safe_runtime_id(id, 128))
+        .ok_or_else(|| invalid("Host Routing Profile ID is invalid"))?;
+    let revision = value
+        .get("revision")
+        .and_then(Value::as_i64)
+        .filter(|n| *n >= 0)
+        .ok_or_else(|| invalid("Host Routing Profile revision is invalid"))?;
+    let description = match value.get("description") {
+        None | Some(Value::Null) => "",
+        Some(Value::String(text)) => text.as_str(),
+        _ => return Err(invalid("Host Routing Description is invalid")),
+    };
+    let quota_group = match value.get("quotaGroup") {
+        None | Some(Value::Null) => "",
+        Some(Value::String(text)) => text.as_str(),
+        _ => return Err(invalid("Host Routing Quota Group is invalid")),
+    };
+    let (description, quota_group) = validate_profile_routing_fields(description, quota_group)?;
+    Ok(AgentProfileRoutingFields {
+        id: id.to_owned(),
+        revision,
+        description,
+        quota_group,
+    })
+}
+
+/// Temporary, user-requested edit projection. Never persist, log, or include
+/// the Host's Managed options/credentials in this editor model.
+#[derive(Clone, PartialEq, Eq)]
+pub struct AgentProfileContentFields {
+    pub id: String,
+    pub revision: i64,
+    pub managed: bool,
+    pub command: String,
+    pub custom_prompt: String,
+}
+
+pub fn parse_profile_content_fields(value: &Value) -> io::Result<AgentProfileContentFields> {
+    let id = value
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|id| safe_runtime_id(id, 128))
+        .ok_or_else(|| invalid("Host Agent Profile content ID is invalid"))?;
+    let revision = value
+        .get("revision")
+        .and_then(Value::as_i64)
+        .filter(|revision| *revision >= 0)
+        .ok_or_else(|| invalid("Host Agent Profile content revision is invalid"))?;
+    let mode = value
+        .get("launchMode")
+        .and_then(Value::as_str)
+        .filter(|mode| matches!(*mode, "command" | "managed"))
+        .ok_or_else(|| invalid("Host Agent Profile launch mode is invalid"))?;
+    let command = value
+        .get("command")
+        .and_then(Value::as_str)
+        .ok_or_else(|| invalid("Host Agent Profile Command is unavailable"))?;
+    let prompt = value
+        .get("customPrompt")
+        .and_then(Value::as_str)
+        .ok_or_else(|| invalid("Host Agent Profile Custom Prompt is unavailable"))?;
+    if command.len() > 4096
+        || command.contains(['\r', '\n', '\0'])
+        || prompt.len() > 8192
+        || prompt.contains('\0')
+    {
+        return Err(invalid(
+            "Host Agent Profile content is invalid or exceeds editor limits",
+        ));
+    }
+    Ok(AgentProfileContentFields {
+        id: id.to_owned(),
+        revision,
+        managed: mode == "managed",
+        command: command.to_owned(),
+        custom_prompt: prompt.replace("\r\n", "\n").replace('\r', "\n"),
+    })
+}
+
+/// Only the display-safe Managed selection fields are projected from a
+/// transient Host Show result. All other managedConfig fields remain Host-owned
+/// and are never copied to GPUI or its persisted desktop settings.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentProfileManagedSelectionFields {
+    pub id: String,
+    pub revision: i64,
+    pub model: String,
+    /// Classic's "Persona" is stored under managedConfig.agent.
+    pub persona: String,
+}
+
+pub fn validate_managed_selection_text(raw: &str) -> io::Result<String> {
+    let value = raw.trim();
+    if value.is_empty() || value.len() > 256 || value.chars().any(char::is_control) {
+        return Err(invalid(
+            "Managed Model/Persona must be a nonempty single-line ID (up to 256 bytes)",
+        ));
+    }
+    Ok(value.to_owned())
+}
+
+pub fn parse_profile_managed_selection_fields(
+    value: &Value,
+) -> io::Result<AgentProfileManagedSelectionFields> {
+    let id = value
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|id| safe_runtime_id(id, 128))
+        .ok_or_else(|| invalid("Host Managed Profile ID is invalid"))?;
+    let revision = value
+        .get("revision")
+        .and_then(Value::as_i64)
+        .filter(|revision| *revision >= 0)
+        .ok_or_else(|| invalid("Host Managed Profile revision is invalid"))?;
+    if value.get("launchMode").and_then(Value::as_str) != Some("managed") {
+        return Err(invalid("Model/Persona editing requires a Managed Profile"));
+    }
+    let config = value
+        .get("managedConfig")
+        .and_then(Value::as_object)
+        .ok_or_else(|| invalid("Host Managed Profile config is unavailable"))?;
+    let field = |key: &str| -> io::Result<String> {
+        match config.get(key) {
+            None | Some(Value::Null) => Ok(String::new()),
+            Some(Value::String(text)) => validate_managed_selection_text(text),
+            _ => Err(invalid("Host Managed selection field has invalid type")),
+        }
+    };
+    Ok(AgentProfileManagedSelectionFields {
+        id: id.to_owned(),
+        revision,
+        model: field("model")?,
+        persona: field("agent")?,
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -30,6 +201,170 @@ pub fn safe_runtime_id(value: &str, max_len: usize) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':'))
+}
+
+pub fn validate_profile_name(name: &str) -> io::Result<String> {
+    let name = name.trim();
+    if name.is_empty() || name.len() > MAX_NAME_BYTES || name.chars().any(|c| c.is_control()) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Profile name must be 1–256 bytes without control characters",
+        ));
+    }
+    Ok(name.to_owned())
+}
+
+/// Suggest Classic-style Copy/Copy 2 names without retaining Host credentials.
+/// Shorten only at UTF-8 code point boundaries to keep names <=256 bytes.
+pub fn suggest_clone_name(
+    source: &AgentProfileRow,
+    existing: &[AgentProfileRow],
+) -> io::Result<String> {
+    for sequence in 1..=existing.len().saturating_add(2) {
+        let suffix = if sequence == 1 {
+            " Copy".to_owned()
+        } else {
+            format!(" Copy {sequence}")
+        };
+        let budget = MAX_NAME_BYTES.saturating_sub(suffix.len());
+        let mut prefix = String::new();
+        for ch in source.name.trim().chars() {
+            if prefix.len() + ch.len_utf8() > budget {
+                break;
+            }
+            prefix.push(ch);
+        }
+        let candidate = validate_profile_name(&format!("{prefix}{suffix}"))?;
+        if !existing
+            .iter()
+            .any(|item| item.name.trim().eq_ignore_ascii_case(&candidate))
+        {
+            return Ok(candidate);
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "No unique Agent Profile clone name",
+    ))
+}
+
+/// Only secret-free reference counts and Host identity are retained in GPUI.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentProfileRemovalImpact {
+    pub profile_id: String,
+    pub revision: i64,
+    pub is_default: bool,
+    pub has_automation_policy: bool,
+    pub automation_count: usize,
+    pub tab_count: usize,
+    pub execution_policy_count: usize,
+    pub blocking_reference_count: usize,
+}
+
+impl AgentProfileRemovalImpact {
+    pub fn has_blocking_references(&self) -> bool {
+        self.blocking_reference_count > 0
+            || self.automation_count > 0
+            || self.tab_count > 0
+            || self.execution_policy_count > 0
+    }
+
+    pub fn removal_message(&self, name: &str) -> String {
+        if self.has_blocking_references() {
+            return format!(
+                "{name} is referenced by {} automation(s), {} tab(s), {} execution policy run(s). Remove these references before deleting.",
+                self.automation_count, self.tab_count, self.execution_policy_count,
+            );
+        }
+        let default_note = if self.is_default {
+            " The shared default will be cleared."
+        } else {
+            ""
+        };
+        let policy_note = if self.has_automation_policy {
+            " Its automation policy will be cleared."
+        } else {
+            ""
+        };
+        format!("{name} has no blocking references. Deletion cannot be undone.{default_note}{policy_note}")
+    }
+}
+
+/// A missing or mismatched Host impact field must never enable deletion.
+pub fn parse_profile_removal_impact(
+    value: &Value,
+    expected_id: &str,
+    expected_revision: i64,
+) -> io::Result<AgentProfileRemovalImpact> {
+    if !safe_runtime_id(expected_id, 128) || expected_revision < 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Invalid Profile removal target",
+        ));
+    }
+    let flag = |field: &str| {
+        value
+            .get(field)
+            .and_then(Value::as_bool)
+            .ok_or_else(|| invalid("Host removal impact omitted required boolean"))
+    };
+    let count = |field: &str| {
+        value
+            .get(field)
+            .and_then(Value::as_u64)
+            .and_then(|n| usize::try_from(n).ok())
+            .ok_or_else(|| invalid("Host removal impact omitted required count"))
+    };
+    if value.get("profileId").and_then(Value::as_str) != Some(expected_id)
+        || value.get("revision").and_then(Value::as_i64) != Some(expected_revision)
+        || !flag("exists")?
+    {
+        return Err(invalid("Host removal impact identity or revision changed"));
+    }
+    let list = |field: &str| {
+        value
+            .get(field)
+            .and_then(Value::as_array)
+            .ok_or_else(|| invalid("Host removal impact omitted references"))
+    };
+    let automations = list("automationIds")?;
+    let executions = list("executionPolicyRunIds")?;
+    let tabs = list("tabs")?;
+    if automations.len() > 4096
+        || executions.len() > 4096
+        || tabs.len() > 4096
+        || automations
+            .iter()
+            .chain(executions.iter())
+            .any(|v| v.as_str().is_none_or(|id| !safe_runtime_id(id, 256)))
+        || tabs.iter().any(|tab| {
+            tab.get("workspaceId")
+                .and_then(Value::as_str)
+                .is_none_or(|id| !safe_runtime_id(id, 256))
+                || tab
+                    .get("tabId")
+                    .and_then(Value::as_str)
+                    .is_none_or(|id| !safe_runtime_id(id, 256))
+        })
+    {
+        return Err(invalid("Host removal impact has invalid references"));
+    }
+    let blocking_reference_count = count("blockingReferenceCount")?;
+    if blocking_reference_count < automations.len() + executions.len() + tabs.len()
+        || count("referenceCount")? < blocking_reference_count
+    {
+        return Err(invalid("Host removal impact reference counts conflict"));
+    }
+    Ok(AgentProfileRemovalImpact {
+        profile_id: expected_id.to_owned(),
+        revision: expected_revision,
+        is_default: flag("isDefault")?,
+        has_automation_policy: flag("hasAutomationPolicy")?,
+        automation_count: automations.len(),
+        tab_count: tabs.len(),
+        execution_policy_count: executions.len(),
+        blocking_reference_count,
+    })
 }
 
 fn invalid(message: &str) -> io::Error {
@@ -62,6 +397,15 @@ pub fn parse_profile_catalog(value: &Value) -> io::Result<Vec<AgentProfileRow>> 
             .get("launchMode")
             .and_then(Value::as_str)
             .unwrap_or("command");
+        let revision = match item.get("revision") {
+            None => None,
+            Some(value) => Some(
+                value
+                    .as_i64()
+                    .filter(|n| *n >= 0)
+                    .ok_or_else(|| invalid("Agent Profile has an invalid Host revision"))?,
+            ),
+        };
         if !safe_runtime_id(id, 128)
             || name.is_empty()
             || name.len() > MAX_NAME_BYTES
@@ -84,6 +428,7 @@ pub fn parse_profile_catalog(value: &Value) -> io::Result<Vec<AgentProfileRow>> 
             name: name.to_owned(),
             agent_type: agent_type.to_owned(),
             managed: launch_mode == "managed",
+            revision,
         });
     }
     Ok(result)
@@ -123,21 +468,30 @@ pub fn parse_launched_agent(
     })
 }
 
-/// Only an authenticated Host session matching both identifiers and an
-/// Agent type can fulfill a Native launch confirmation.
+/// Use the authenticated Profile launch's exact Host tab to attach a live PTY.
+/// Hooks are optional; PTY readiness never proves provider authentication.
 pub fn matching_agent_handle<'a>(
     pending: &LaunchedAgentTab,
     sessions: &'a [TerminalSession],
+    expected_agent_type: &str,
 ) -> Option<&'a str> {
+    if expected_agent_type.is_empty() {
+        return None;
+    }
+    let exact_live_tab = |session: &&TerminalSession| {
+        session.running
+            && session.workspace_id == pending.workspace_id
+            && session.tab_id == pending.tab_id
+    };
     sessions
         .iter()
-        .find(|session| {
-            session.workspace_id == pending.workspace_id
-                && session.tab_id == pending.tab_id
-                && session
-                    .agent_type
-                    .as_deref()
-                    .is_some_and(|name| !name.is_empty())
+        .filter(exact_live_tab)
+        .find(|session| session.agent_type.as_deref() == Some(expected_agent_type))
+        .or_else(|| {
+            sessions
+                .iter()
+                .filter(exact_live_tab)
+                .find(|session| session.agent_type.is_none())
         })
         .map(|session| session.handle.as_str())
 }
@@ -146,6 +500,158 @@ pub fn matching_agent_handle<'a>(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn managed_selection_projection_only_keeps_model_and_persona() {
+        let row = json!({
+            "id":"profile_m","revision":8,"launchMode":"managed",
+            "agentType":"claude","managedConfig":{
+                "model":"claude-sonnet","agent":"reviewer",
+                "permissionMode":"manual",
+                "apiKey":"SECRET_DO_NOT_COPY",
+                "customOptions":{"token":"SECRET_TOO"}
+            },
+            "customPrompt":"SECRET_PROMPT","command":"SECRET_COMMAND"
+        });
+        let fields = parse_profile_managed_selection_fields(&row).unwrap();
+        assert_eq!(fields.id, "profile_m");
+        assert_eq!(fields.revision, 8);
+        assert_eq!(fields.model, "claude-sonnet");
+        assert_eq!(fields.persona, "reviewer");
+        assert!(!format!("{fields:?}").contains("SECRET"));
+        for invalid_row in [
+            json!({"id":"profile_m","revision":8,"launchMode":"command","managedConfig":{}}),
+            json!({"id":"../p","revision":8,"launchMode":"managed","managedConfig":{}}),
+            json!({"id":"profile_m","revision":-1,"launchMode":"managed","managedConfig":{}}),
+            json!({"id":"profile_m","revision":8,"launchMode":"managed","managedConfig":{"model":2}}),
+            json!({"id":"profile_m","revision":8,"launchMode":"managed","managedConfig":{"agent":"bad\nline"}}),
+            json!({"id":"profile_m","revision":8,"launchMode":"managed","managedConfig":{"model":"x".repeat(257)}}),
+        ] {
+            assert!(parse_profile_managed_selection_fields(&invalid_row).is_err());
+        }
+        let empty =
+            json!({"id":"profile_m","revision":8,"launchMode":"managed","managedConfig":{}});
+        assert_eq!(
+            parse_profile_managed_selection_fields(&empty)
+                .unwrap()
+                .model,
+            ""
+        );
+        assert_eq!(
+            parse_profile_managed_selection_fields(&empty)
+                .unwrap()
+                .persona,
+            ""
+        );
+    }
+
+    #[test]
+    fn command_prompt_content_projection_preserves_multiline_without_managed_secrets() {
+        let value = json!({
+            "id":"prof_abc","revision":7,"launchMode":"command",
+            "command":"codex --session review","customPrompt":"第一行\nSecond line",
+            "managedConfig":{"token":"MUST_NOT_COPY"},
+        });
+        let fields = parse_profile_content_fields(&value).unwrap();
+        assert_eq!(fields.id, "prof_abc");
+        assert_eq!(fields.revision, 7);
+        assert!(!fields.managed);
+        assert_eq!(fields.command, "codex --session review");
+        assert_eq!(fields.custom_prompt, "第一行\nSecond line");
+        let crlf = json!({"id":"prof_abc","revision":8,"launchMode":"managed",
+            "command":"","customPrompt":"A\r\nB\rC"});
+        let content = parse_profile_content_fields(&crlf).unwrap();
+        assert!(content.managed);
+        assert_eq!(content.custom_prompt, "A\nB\nC");
+        for raw in [
+            json!({"id":"../escape","revision":7,"launchMode":"command","command":"codex","customPrompt":""}),
+            json!({"id":"prof_abc","revision":-1,"launchMode":"command","command":"codex","customPrompt":""}),
+            json!({"id":"prof_abc","revision":7,"launchMode":"invalid","command":"codex","customPrompt":""}),
+            json!({"id":"prof_abc","revision":7,"launchMode":"command","command":"codex\nbad","customPrompt":""}),
+            json!({"id":"prof_abc","revision":7,"launchMode":"command","command":"codex","customPrompt":"bad\0prompt"}),
+            json!({"id":"prof_abc","revision":7,"launchMode":"command","command":"codex","customPrompt": 5}),
+            json!({"id":"prof_abc","revision":7,"launchMode":"command","command":"codex","customPrompt":"x".repeat(8193)}),
+        ] {
+            assert!(parse_profile_content_fields(&raw).is_err());
+        }
+    }
+
+    #[test]
+    fn routing_fields_are_host_owned_secret_free_projection() {
+        let source = json!({
+            "id":"prof_abc", "revision":3, "description":"Routing QA",
+            "quotaGroup":"team-a", "command":"SECRET_COMMAND",
+            "customPrompt":"SECRET_PROMPT",
+            "managedConfig":{"token":"SECRET_MANAGED"}
+        });
+        let routing = parse_profile_routing_fields(&source).unwrap();
+        assert_eq!(routing.id, "prof_abc");
+        assert_eq!(routing.revision, 3);
+        assert_eq!(routing.description, "Routing QA");
+        assert_eq!(routing.quota_group, "team-a");
+        let debug = format!("{routing:?}");
+        for forbidden in ["SECRET_COMMAND", "SECRET_PROMPT", "SECRET_MANAGED"] {
+            assert!(!debug.contains(forbidden));
+        }
+        assert!(parse_profile_routing_fields(&json!({
+            "id":"prof_abc","revision":-1,"description":"x"
+        }))
+        .is_err());
+        let (description, group) = validate_profile_routing_fields(" Routing ", " Team ").unwrap();
+        assert_eq!((description.as_str(), group.as_str()), ("Routing", "Team"));
+        assert!(validate_profile_routing_fields("bad\nline", "group").is_err());
+    }
+
+    #[test]
+    fn clone_name_is_unique_and_respects_utf8_byte_limit() {
+        let row = |name: String| AgentProfileRow {
+            id: name.clone(),
+            name,
+            agent_type: "codex".into(),
+            managed: false,
+            revision: Some(0),
+        };
+        let existing = vec![
+            row("Review".into()),
+            row("Review Copy".into()),
+            row("Review Copy 2".into()),
+        ];
+        assert_eq!(
+            suggest_clone_name(&existing[0], &existing).unwrap(),
+            "Review Copy 3"
+        );
+        let long = row("界".repeat(85));
+        let suggestion = suggest_clone_name(&long, &[long.clone()]).unwrap();
+        assert!(suggestion.ends_with(" Copy"));
+        assert!(suggestion.len() <= 256);
+        assert!(std::str::from_utf8(suggestion.as_bytes()).is_ok());
+    }
+
+    #[test]
+    fn profile_removal_preview_is_revision_guarded_and_fails_closed_on_references() {
+        let safe = json!({
+            "profileId": "prof_1", "exists": true, "revision": 2,
+            "isDefault": false, "hasAutomationPolicy": false,
+            "automationIds": [], "executionPolicyRunIds": [], "tabs": [],
+            "referenceCount": 0, "blockingReferenceCount": 0
+        });
+        let preview = parse_profile_removal_impact(&safe, "prof_1", 2).unwrap();
+        assert!(!preview.has_blocking_references());
+        assert!(parse_profile_removal_impact(&safe, "prof_2", 2).is_err());
+        assert!(parse_profile_removal_impact(&safe, "prof_1", 3).is_err());
+        let blocked = json!({
+            "profileId": "prof_1", "exists": true, "revision": 2,
+            "isDefault": true, "hasAutomationPolicy": false,
+            "automationIds": ["auto_1"], "executionPolicyRunIds": [],
+            "tabs": [{"workspaceId":"ws_1","tabId":"tab_1"}],
+            "referenceCount": 3, "blockingReferenceCount": 2
+        });
+        let preview = parse_profile_removal_impact(&blocked, "prof_1", 2).unwrap();
+        assert!(preview.has_blocking_references());
+        assert!(preview.removal_message("Review").contains("automation"));
+        assert!(preview.removal_message("Review").contains("tab"));
+        assert!(parse_profile_removal_impact(&json!({"profileId":"prof_1"}), "prof_1", 2).is_err());
+    }
 
     #[test]
     fn attached_agent_must_match_the_registered_host_workspace_and_tab() {
@@ -190,10 +696,77 @@ mod tests {
             },
         ];
         assert_eq!(
-            matching_agent_handle(&pending, &sessions),
+            matching_agent_handle(&pending, &sessions, "codex"),
             Some("correct_agent")
         );
-        assert!(matching_agent_handle(&pending, &sessions[..2]).is_none());
+        assert_eq!(
+            matching_agent_handle(&pending, &sessions[..2], "codex"),
+            Some("plain_terminal")
+        );
+    }
+
+    #[test]
+    fn profile_launch_attaches_authenticated_host_tab_without_optional_hook() {
+        let pending = LaunchedAgentTab {
+            workspace_id: "ws_ok".into(),
+            profile_id: "profile_1".into(),
+            tab_id: "tab_unique".into(),
+        };
+        let session = TerminalSession {
+            handle: "pty_running".into(),
+            workspace_id: "ws_ok".into(),
+            tab_id: "tab_unique".into(),
+            agent_type: None,
+            running: true,
+            agent_state: None,
+            interrupted: false,
+            agent_state_started_at: None,
+            agent_updated_at: None,
+        };
+        assert_eq!(
+            matching_agent_handle(&pending, &[session.clone()], "codex"),
+            Some("pty_running"),
+            "Host Profile tab must attach without waiting for optional Hook"
+        );
+        let mut stopped = session.clone();
+        stopped.running = false;
+        assert!(matching_agent_handle(&pending, &[stopped], "codex").is_none());
+        let mut wrong_hook = session.clone();
+        wrong_hook.agent_type = Some("claude".into());
+        assert!(matching_agent_handle(&pending, &[wrong_hook], "codex").is_none());
+        let mut wrong_tab = session;
+        wrong_tab.tab_id = "tab_other".into();
+        assert!(matching_agent_handle(&pending, &[wrong_tab], "codex").is_none());
+    }
+
+    #[test]
+    fn editable_profile_catalog_carries_revision_but_never_commands() {
+        let rows = parse_profile_catalog(&serde_json::json!({"items":[{
+            "id":"profile_1","name":"Review","agentType":"codex",
+            "launchMode":"command","revision":4,
+            "command":"SECRET_COMMAND","managedConfig":{"secret":"VERY_SECRET"}
+        }]}))
+        .unwrap();
+        assert_eq!(rows[0].revision, Some(4));
+        assert!(!format!("{rows:?}").contains("SECRET"));
+        assert!(validate_profile_name("  Review Runner  ").is_ok());
+        assert!(validate_profile_name("   ").is_err());
+        assert!(validate_profile_name("line\nfeed").is_err());
+        assert!(validate_profile_name(&"x".repeat(257)).is_err());
+        let missing = parse_profile_catalog(&serde_json::json!({"items":[{
+            "id":"profile_2","name":"Legacy","agentType":"claude"
+        }]}))
+        .unwrap();
+        assert_eq!(missing[0].revision, None);
+        let first = parse_profile_catalog(&json!({"items":[{
+            "id":"profile_3","name":"First","agentType":"claude","revision":0
+        }]}))
+        .unwrap();
+        assert_eq!(first[0].revision, Some(0), "Host starts revisions at zero");
+        assert!(parse_profile_catalog(&json!({"items":[{
+            "id":"profile_4","name":"Invalid","agentType":"claude","revision":-1
+        }]}))
+        .is_err());
     }
 
     #[test]

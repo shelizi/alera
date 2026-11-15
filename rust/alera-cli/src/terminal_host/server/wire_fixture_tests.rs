@@ -329,7 +329,24 @@ async fn tab_upsert_round_trip_matches_shared_fixtures() {
 
     let (response, events) = exchange(&mut actor, 1, &request, &mut receiver).await;
 
-    assert_eq!(response, wire_fixture("response.tab.upsert.desktop.json"));
+    // A real tab.upsert updates its timestamp. The shared wire fixture
+    // intentionally carries the original fixed timestamp, so verify the
+    // update is parseable and newer, then compare every other wire field
+    // without masking an unrelated contract regression.
+    let mut expected = wire_fixture("response.tab.upsert.desktop.json");
+    let original: DateTime<Utc> = expected["payload"]["updatedAt"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let updated: DateTime<Utc> = response["payload"]["updatedAt"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert!(updated > original, "tab.upsert must advance updatedAt");
+    expected["payload"]["updatedAt"] = response["payload"]["updatedAt"].clone();
+    assert_eq!(response, expected);
     assert_eq!(
         events,
         vec![wire_fixture("event.workspace_tabs_changed.json")]

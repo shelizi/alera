@@ -31,13 +31,19 @@ pub mod git_sidebar_layout;
 pub mod git_watch;
 pub mod history_sync_bridge;
 pub mod host_tab_pins;
+pub mod local_agent_detection;
+pub mod managed_choice_discovery;
 pub mod mcp_ui_bridge;
 pub mod mcp_workspace_creation;
 pub mod model;
 pub mod native_i18n;
 pub mod native_modal;
 pub mod native_settings;
+pub mod native_shortcut_catalog;
+#[cfg(windows)]
+pub mod native_toast_activation;
 pub mod project_search;
+pub mod project_settings_preview;
 pub mod project_tree;
 pub mod runtime_bridge;
 pub mod runtime_catalog;
@@ -56,6 +62,7 @@ pub mod workbench_panes;
 pub mod workbench_tabs;
 pub mod workspace_sidebar_order;
 pub mod workspace_tree;
+pub mod worktree_content_search;
 pub mod worktree_manager;
 
 #[cfg(test)]

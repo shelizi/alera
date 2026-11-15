@@ -6,6 +6,50 @@ use crate::cli::{
 use crate::cli_orchestration::{OrchestrationAction, OrchestrationCommand};
 
 #[test]
+fn project_config_effective_and_clear_are_explicit_subcommands() {
+    for (verb, expected_clear) in [("config-effective", false), ("config-clear", true)] {
+        let parsed =
+            Cli::try_parse_from(["alera", "project", "--json", verb, "--id", "test-project"])
+                .expect("project source command must parse");
+        match parsed.command {
+            Command::Project(crate::cli::ProjectCommand {
+                action: crate::cli::ProjectAction::ConfigEffective(IdArgs { id }),
+                ..
+            }) if !expected_clear => assert_eq!(id, "test-project"),
+            Command::Project(crate::cli::ProjectCommand {
+                action: crate::cli::ProjectAction::ConfigClear(IdArgs { id }),
+                ..
+            }) if expected_clear => assert_eq!(id, "test-project"),
+            other => panic!("incorrect config command: {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn project_config_set_accepts_stdin_sentinel_without_secret_commandline() {
+    let parsed = Cli::try_parse_from([
+        "alera",
+        "project",
+        "--json",
+        "config-set",
+        "--id",
+        "proj-1",
+        "--config-json",
+        "-",
+    ])
+    .expect("bounded stdin marker is a valid ProjectConfig arg");
+    assert!(matches!(
+        parsed.command,
+        Command::Project(crate::cli::ProjectCommand {
+            action: crate::cli::ProjectAction::ConfigSet(
+                crate::cli::ProjectConfigSetArgs { config_json, id }
+            ),
+            ..
+        }) if config_json == "-" && id == "proj-1"
+    ));
+}
+
+#[test]
 fn terminal_stream_is_explicit_no_start_native_ipc_only() {
     let parsed = Cli::try_parse_from(["alera", "terminal", "--no-start", "--json", "stream"])
         .expect("stream command");
@@ -92,6 +136,47 @@ fn terminal_workspaces_and_create_parse_only_explicit_host_id() {
         other => panic!("unexpected CLI parse: {other:?}"),
     }
     assert!(Cli::try_parse_from(["alera", "terminal", "--no-start", "create"]).is_err());
+}
+
+#[test]
+fn terminal_create_agent_requires_explicit_bounded_host_and_installed_agent_identity() {
+    let parsed = Cli::try_parse_from([
+        "alera",
+        "terminal",
+        "--no-start",
+        "--json",
+        "create-agent",
+        "--workspace-id",
+        "workspace-1",
+        "--agent-id",
+        "codex",
+        "--executable-path",
+        "C:/Agents/codex.exe",
+    ])
+    .unwrap();
+    match parsed.command {
+        Command::Terminal(crate::cli::TerminalCommand {
+            no_start: true,
+            action: crate::cli::TerminalAction::CreateAgent(args),
+            ..
+        }) => {
+            assert_eq!(args.workspace_id, "workspace-1");
+            assert_eq!(args.agent_id, "codex");
+            assert_eq!(args.executable_path, "C:/Agents/codex.exe");
+        }
+        other => panic!("unexpected Native create-agent CLI: {other:?}"),
+    }
+    assert!(Cli::try_parse_from([
+        "alera",
+        "terminal",
+        "--no-start",
+        "create-agent",
+        "--workspace-id",
+        "workspace-1",
+        "--agent-id",
+        "codex",
+    ])
+    .is_err());
 }
 
 #[test]

@@ -473,6 +473,9 @@ pub struct GitOriginalSnapshot {
     pub area: GitChangeArea,
     pub blob_oid: String,
     pub content: String,
+    /// Optional immutable commit-tree source (e.g. a Git Graph merge base).
+    /// None retains the normal HEAD or Index labels.
+    pub revision_label: Option<String>,
 }
 
 impl GitOriginalSnapshot {
@@ -482,11 +485,11 @@ impl GitOriginalSnapshot {
             .file_name()
             .unwrap_or_default()
             .to_string_lossy();
-        let revision = match self.area {
+        let revision = self.revision_label.as_deref().unwrap_or(match self.area {
             GitChangeArea::Staged => "HEAD",
             GitChangeArea::Changes => "INDEX",
             GitChangeArea::Untracked | GitChangeArea::Conflicts => "invalid",
-        };
+        });
         format!("{filename} · {revision} · {}", &self.blob_oid[..8])
     }
 }
@@ -568,6 +571,7 @@ pub fn read_git_original_snapshot(
         area,
         blob_oid: id.to_string(),
         content,
+        revision_label: None,
     })
 }
 
@@ -629,6 +633,80 @@ pub fn read_file_diff_page(
     })
 }
 
+/// Render exactly the selected Source Control area, never choosing a
+/// different staged/working patch for a file with both kinds of changes.
+/// This supports the same central Hunk pager for Staged and Changes rows.
+pub fn read_file_diff_page_for_area(
+    workspace: &Path,
+    relative: &Path,
+    area: GitChangeArea,
+    start_line: usize,
+) -> Result<GitPatchPage, String> {
+    use git2::Status;
+    if !safe_relative(relative) {
+        return Err("Unsafe Git path".into());
+    }
+    if start_line >= MAX_PAGED_DIFF_LINES {
+        return Err("Git diff paging safety limit reached".into());
+    }
+    if area == GitChangeArea::Conflicts {
+        return Err("Resolve the Git conflict before opening a file diff".into());
+    }
+    let repo = git2::Repository::discover(workspace).map_err(|error| error.to_string())?;
+    let status = repo
+        .status_file(relative)
+        .map_err(|error| error.to_string())?;
+    let valid = match area {
+        GitChangeArea::Staged => status.intersects(
+            Status::INDEX_NEW
+                | Status::INDEX_MODIFIED
+                | Status::INDEX_DELETED
+                | Status::INDEX_RENAMED
+                | Status::INDEX_TYPECHANGE,
+        ),
+        GitChangeArea::Changes => status.intersects(
+            Status::WT_MODIFIED | Status::WT_DELETED | Status::WT_RENAMED | Status::WT_TYPECHANGE,
+        ),
+        GitChangeArea::Untracked => status.contains(Status::WT_NEW),
+        GitChangeArea::Conflicts => false,
+    };
+    if !valid || status.contains(Status::CONFLICTED) {
+        return Err("Git change area is stale; refresh Source Control".into());
+    }
+    if area == GitChangeArea::Untracked {
+        if start_line != 0 {
+            return Err("Untracked preview is one page; refresh the selected file".into());
+        }
+        let mut text = read_file_diff_for_area(workspace, relative, area)?;
+        let mut clipped = false;
+        if text.len() > MAX_PATCH_BYTES {
+            text.truncate(text.floor_char_boundary(MAX_PATCH_BYTES));
+            text.push_str("\n… diff preview truncated");
+            clipped = true;
+        }
+        return Ok(GitPatchPage {
+            text,
+            start_line,
+            next_line: None,
+            clipped_long_line: clipped,
+        });
+    }
+    let mut opts = git2::DiffOptions::new();
+    opts.pathspec(relative).context_lines(3);
+    let patch = match area {
+        GitChangeArea::Staged => {
+            let tree = repo.head().ok().and_then(|head| head.peel_to_tree().ok());
+            repo.diff_tree_to_index(tree.as_ref(), None, Some(&mut opts))
+        }
+        GitChangeArea::Changes => repo.diff_index_to_workdir(None, Some(&mut opts)),
+        GitChangeArea::Untracked | GitChangeArea::Conflicts => unreachable!(),
+    }
+    .map_err(|error| error.to_string())?;
+    if patch.deltas().len() == 0 {
+        return Err("Selected Git patch changed; refresh Source Control".into());
+    }
+    render_git_diff_page(&patch, start_line)
+}
 fn render_git_diff_page(diff: &git2::Diff<'_>, start_line: usize) -> Result<GitPatchPage, String> {
     let mut text = String::new();
     let mut seen = 0usize;
@@ -898,6 +976,59 @@ mod tests {
         );
     }
 
+    #[test]
+    fn g02_exact_staged_and_worktree_pages_never_mix_for_one_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(temp.path()).unwrap();
+        repo.config()
+            .unwrap()
+            .set_bool("core.autocrlf", false)
+            .unwrap();
+        let relative = Path::new("dual.txt");
+        let path = temp.path().join(relative);
+        fs::write(&path, "head line\n").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(relative).unwrap();
+        let sig = git2::Signature::now("Diff QA", "qa@example.invalid").unwrap();
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "base", &tree, &[])
+            .unwrap();
+        drop(tree);
+        fs::write(&path, "index line\n").unwrap();
+        index.add_path(relative).unwrap();
+        index.write().unwrap();
+        drop(index);
+        fs::write(&path, "worktree line\n").unwrap();
+        let original_head = repo.head().unwrap().target();
+        let index_blob = repo.index().unwrap().get_path(relative, 0).unwrap().id;
+        let staged =
+            read_file_diff_page_for_area(temp.path(), relative, GitChangeArea::Staged, 0).unwrap();
+        let working =
+            read_file_diff_page_for_area(temp.path(), relative, GitChangeArea::Changes, 0).unwrap();
+        assert!(staged.text.contains("+index line"), "{staged:?}");
+        assert!(!staged.text.contains("worktree line"), "{staged:?}");
+        assert!(working.text.contains("+worktree line"), "{working:?}");
+        assert!(!working.text.contains("+index line"), "{working:?}");
+        assert_eq!(staged.next_line, None);
+        assert_eq!(working.next_line, None);
+        assert!(
+            read_file_diff_page_for_area(temp.path(), relative, GitChangeArea::Untracked, 0)
+                .is_err()
+        );
+        assert!(read_file_diff_page_for_area(
+            temp.path(),
+            Path::new("../dual.txt"),
+            GitChangeArea::Staged,
+            0
+        )
+        .is_err());
+        assert_eq!(repo.head().unwrap().target(), original_head);
+        assert_eq!(
+            repo.index().unwrap().get_path(relative, 0).unwrap().id,
+            index_blob
+        );
+        assert_eq!(fs::read_to_string(path).unwrap(), "worktree line\n");
+    }
     #[test]
     fn area_aware_preview_rejects_stale_status_and_unsafe_paths() {
         let temp = tempfile::tempdir().unwrap();

@@ -188,15 +188,18 @@ pub async fn run(command: DesktopSettingsCommand) -> i32 {
             }
             let expected: Value = match serde_json::from_str(&expected) {
                 Ok(v) => v,
-                Err(_) => return print_error("expected must be valid JSON scalar"),
+                Err(_) => return print_error("expected must be valid JSON"),
             };
             let value: Value = match serde_json::from_str(&value) {
                 Ok(v) => v,
-                Err(_) => return print_error("value must be valid JSON scalar"),
+                Err(_) => return print_error("value must be valid JSON"),
             };
-            if expected.is_array() || expected.is_object() || value.is_array() || value.is_object()
+            // Classic quota pins are the sole reviewed array-valued CLI
+            // setting. Validate both old and new CAS values.
+            if !alera_core::desktop_settings_contract::cli_set_value_allowed(&path, &expected)
+                || !alera_core::desktop_settings_contract::cli_set_value_allowed(&path, &value)
             {
-                return print_error("Only JSON scalars are accepted");
+                return print_error("Only JSON scalars or validated quota pin arrays are accepted");
             }
             (
                 "desktopSettings.compareAndSet",

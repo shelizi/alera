@@ -243,6 +243,22 @@ impl EditorTabs {
             .collect()
     }
 
+    /// Stable recovery identity of an unsaved tab, paired with its current
+    /// in-process instance. A file-backed tab cannot also enter this list.
+    pub fn scratch_tab_instances(&self) -> Vec<(u64, String)> {
+        self.tabs
+            .iter()
+            .zip(self.tab_instances.iter().copied())
+            .filter_map(|(session, instance)| {
+                let doc = session.document()?;
+                if doc.path().is_some() {
+                    return None;
+                }
+                doc.scratch_id().map(|id| (instance, id.to_owned()))
+            })
+            .collect()
+    }
+
     pub fn has_draft_store(&self) -> bool {
         self.drafts.is_some()
     }
@@ -386,6 +402,25 @@ impl EditorTabs {
         true
     }
 
+    /// Rehydrate native Ctrl+Tab order without reopening a document.
+    /// move_tab carries each EditorSession, undo stack and active identity.
+    pub fn restore_order_by_instances(&mut self, desired: &[u64]) -> bool {
+        let mut seen = Vec::new();
+        let mut next_index = 0;
+        let mut changed = false;
+        for instance in desired {
+            if seen.contains(instance) {
+                continue;
+            }
+            let Some(current_index) = self.index_for_instance(*instance) else {
+                continue;
+            };
+            seen.push(*instance);
+            changed |= self.move_tab(current_index, next_index);
+            next_index += 1;
+        }
+        changed
+    }
     pub fn save(&mut self) -> SaveCommit {
         match self.active_session_mut() {
             Some(session) => session.save(),
@@ -753,6 +788,61 @@ mod tests {
         );
     }
 
+    #[test]
+    fn scratch_pane_identity_survives_draft_recovery_without_using_runtime_tab_number() {
+        let root = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let store = EditorDraftStore::new(state.path());
+        let mut first = EditorTabs::new(Some(store.clone()));
+        first.open_scratch(root.path()).unwrap();
+        first
+            .document_mut()
+            .unwrap()
+            .replace(None, "pane sentinel")
+            .unwrap();
+        first.persist_draft().unwrap();
+        let before = first.scratch_tab_instances();
+        assert_eq!(before.len(), 1);
+        assert_eq!(before[0].1.len(), 56);
+        drop(first);
+
+        let mut recovered = EditorTabs::new(Some(store));
+        assert_eq!(recovered.restore_scratch_drafts(root.path()).unwrap(), 1);
+        let after = recovered.scratch_tab_instances();
+        assert_eq!(after.len(), 1);
+        assert_eq!(before[0].1, after[0].1);
+        assert_ne!(before[0].0, after[0].0);
+        assert_eq!(recovered.document().unwrap().content(), "pane sentinel");
+    }
+
+    #[test]
+    fn restored_native_editor_order_preserves_active_buffer_and_undo() {
+        let root = tempfile::tempdir().unwrap();
+        let mut tabs = EditorTabs::new(None);
+        for content in ["scratch-A", "scratch-B", "scratch-C"] {
+            tabs.open_scratch(root.path()).unwrap();
+            tabs.document_mut().unwrap().replace(None, content).unwrap();
+        }
+        let first = tabs.tab_instance_at(0).unwrap();
+        let middle = tabs.tab_instance_at(1).unwrap();
+        let last = tabs.tab_instance_at(2).unwrap();
+        tabs.activate(1);
+        assert!(tabs.restore_order_by_instances(&[last, first, middle, 999_999]));
+        assert_eq!(
+            (0..3)
+                .map(|n| tabs.tab_instance_at(n).unwrap())
+                .collect::<Vec<_>>(),
+            [last, first, middle],
+        );
+        assert_eq!(
+            tabs.tab_instance_at(tabs.active_index().unwrap()),
+            Some(middle)
+        );
+        assert_eq!(tabs.document().unwrap().content(), "scratch-B");
+        assert!(tabs.document_mut().unwrap().undo());
+        assert_eq!(tabs.document().unwrap().content(), "");
+        assert!(!tabs.restore_order_by_instances(&[last, first, middle]));
+    }
     #[test]
     fn scratch_restart_is_independent_idempotent_and_workspace_scoped() {
         let workspace = tempfile::tempdir().unwrap();
@@ -1512,6 +1602,105 @@ mod tests {
         assert_eq!(target.tab_labels().len(), 2);
         assert_eq!(target.active_index(), Some(1));
         assert_eq!(target.document().unwrap().path(), Some(file_b.as_path()));
+    }
+
+    #[test]
+    fn e01_preview_promote_and_quick_open_reopen_keep_one_dirty_buffer() {
+        use crate::model::WorkbenchModel;
+
+        let workspace = tempfile::tempdir().unwrap();
+        let mut model = WorkbenchModel::new(workspace.path()).unwrap();
+        let root = model.root().to_path_buf();
+        let file = root.join("notes.txt");
+        fs::write(&file, "first\nsecond\n").unwrap();
+
+        // Single-click Explorer preview: one replaceable read-only tab.
+        assert!(model.preview_path(&file));
+        assert_eq!(model.tabs().len(), 1);
+        assert!(model.active_document().unwrap().transient);
+
+        // Double-click promote: the preview chip pins, the editable workbench
+        // takes canonical ownership and the read-only chip is released.
+        assert!(model.open_path(&file));
+        assert!(!model.active_document().unwrap().transient);
+        let mut tabs = EditorTabs::new(None);
+        assert!(matches!(
+            tabs.open_file(&root, &file).unwrap(),
+            OpenEffect::Opened { recovered: false }
+        ));
+        assert!(model.release_path(&file));
+        assert!(model.tabs().is_empty());
+
+        // Dirty buffer and Undo live in the single editable session.
+        tabs.document_mut()
+            .unwrap()
+            .replace(None, "edited")
+            .unwrap();
+        assert!(tabs.document().unwrap().is_dirty());
+        assert!(tabs.document_mut().unwrap().undo());
+        assert!(!tabs.document().unwrap().is_dirty());
+        tabs.document_mut()
+            .unwrap()
+            .replace(None, "edited")
+            .unwrap();
+        assert!(tabs.document().unwrap().is_dirty());
+
+        // Ctrl+P reopening the SAME file must not mint a second editable tab.
+        // The quick-open path pins a preview chip first; the editor focus
+        // path then releases it, exactly like the Explorer promote flow.
+        assert!(model.open_path(&file));
+        assert!(matches!(
+            tabs.open_file(&root, &file).unwrap(),
+            OpenEffect::Focused | OpenEffect::AlreadyOpen
+        ));
+        assert_eq!(tabs.tab_labels().len(), 1);
+        assert_eq!(tabs.document().unwrap().content(), "first\nsecond\nedited");
+        assert!(tabs.document().unwrap().is_dirty());
+        assert!(model.release_path(&file));
+        assert!(model.tabs().is_empty());
+        assert_eq!(tabs.document().unwrap().path(), Some(file.as_path()));
+    }
+
+    #[test]
+    fn e01_same_basename_files_in_different_worktrees_stay_distinct() {
+        // Two worktrees can hold the same relative file name. Canonical
+        // root+path identity keeps them as separate editable documents.
+        let worktree_a = tempfile::tempdir().unwrap();
+        let worktree_b = tempfile::tempdir().unwrap();
+        fs::create_dir_all(worktree_a.path().join("src")).unwrap();
+        fs::create_dir_all(worktree_b.path().join("src")).unwrap();
+        let file_a = worktree_a.path().join("src").join("main.rs");
+        let file_b = worktree_b.path().join("src").join("main.rs");
+        fs::write(&file_a, "fn a() {}").unwrap();
+        fs::write(&file_b, "fn b() {}").unwrap();
+
+        let mut tabs = EditorTabs::new(None);
+        tabs.open_file(worktree_a.path(), &file_a).unwrap();
+        tabs.open_file(worktree_b.path(), &file_b).unwrap();
+        assert_eq!(tabs.tab_labels().len(), 2);
+        let first = tabs.tab_instance_at(0).unwrap();
+        let second = tabs.tab_instance_at(1).unwrap();
+        assert_ne!(first, second);
+
+        // Reopening either worktree's file focuses its own buffer and never
+        // collapses the two same-basename documents into one tab.
+        assert!(matches!(
+            tabs.open_file(worktree_a.path(), &file_a).unwrap(),
+            OpenEffect::Focused | OpenEffect::AlreadyOpen
+        ));
+        assert_eq!(tabs.tab_labels().len(), 2);
+        assert!(!tabs.document().unwrap().is_dirty());
+        assert_eq!(tabs.document().unwrap().content(), "fn a() {}");
+        assert!(matches!(
+            tabs.open_file(worktree_b.path(), &file_b).unwrap(),
+            OpenEffect::Focused | OpenEffect::AlreadyOpen
+        ));
+        assert_eq!(tabs.tab_labels().len(), 2);
+        assert_eq!(tabs.document().unwrap().content(), "fn b() {}");
+        assert_eq!(
+            tabs.document().unwrap().root(),
+            dunce::canonicalize(worktree_b.path()).unwrap().as_path()
+        );
     }
 
     #[test]

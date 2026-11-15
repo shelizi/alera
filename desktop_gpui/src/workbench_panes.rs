@@ -9,8 +9,20 @@
 //! Host PTY or editor buffer, and closing the secondary pane returns every
 //! tab to the primary pane.
 
-use crate::terminal::TerminalTabContextTarget;
+use crate::terminal::{TerminalSession, TerminalTabContextTarget};
+use crate::workbench_layout_store::SavedWorkbenchHostTab;
 use crate::workbench_tabs::{WorkbenchTab, WorkbenchTabIdentity};
+
+/// In a split, both tab headers reserve the same pinned row so that the
+/// actual tab-strip baseline remains aligned even if just one pane has pins.
+/// For a single pane, only the primary pane can add this extra row.
+pub fn shared_pinned_tab_row(
+    primary_two_rows: bool,
+    secondary_two_rows: bool,
+    has_secondary: bool,
+) -> bool {
+    primary_two_rows || (has_secondary && secondary_two_rows)
+}
 
 /// Which of the two workbench panes a tab strip belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -127,6 +139,66 @@ impl WorkbenchPaneLayout {
         }
     }
 
+    /// Reposition *only* already-open Host previews whose complete opaque
+    /// triple also matches an authenticated, still-running Host session.
+    /// This never opens/attaches/creates a Host PTY. Returned count is moves.
+    pub fn restore_live_host_positions(
+        &mut self,
+        primary: &[SavedWorkbenchHostTab],
+        secondary: &[SavedWorkbenchHostTab],
+        live: &[TerminalSession],
+    ) -> usize {
+        let mut moved = 0;
+        for (saved, destination) in [
+            (primary, PaneSlot::Primary),
+            (secondary, PaneSlot::Secondary),
+        ] {
+            for hint in saved {
+                let verified = live.iter().any(|session| {
+                    session.running
+                        && session.handle == hint.handle
+                        && session.workspace_id == hint.workspace_id
+                        && session.tab_id == hint.tab_id
+                });
+                if !verified {
+                    continue;
+                }
+                let identity = self
+                    .primary
+                    .iter()
+                    .chain(self.secondary.iter())
+                    .find(|id| {
+                        matches!(id, WorkbenchTabIdentity::Host(target)
+                        if target.handle == hint.handle
+                        && target.workspace_id() == hint.workspace_id
+                        && target.tab_id() == hint.tab_id)
+                    })
+                    .cloned();
+                if let Some(identity) = identity {
+                    if self.move_to(&identity, destination) {
+                        moved += 1;
+                    }
+                }
+            }
+        }
+        moved
+    }
+
+    /// A cross-pane drop should activate only the identity that actually
+    /// became active in the destination. Same-pane sorting must preserve
+    /// the user's current selection; stale or closed sources get no focus.
+    pub fn post_cross_pane_drop_focus(
+        &self,
+        moved: &WorkbenchTabIdentity,
+        crossed_panes: bool,
+    ) -> Option<WorkbenchTabIdentity> {
+        crossed_panes
+            .then(|| self.active_in(self.focused))
+            .flatten()
+            .filter(|active| *active == moved)
+            .cloned()
+    }
+
     /// Split `id` off into the secondary pane, creating the split when needed.
     /// Equivalent to [`Self::move_to`] with [`PaneSlot::Secondary`]: the tab
     /// keeps its single identity — a Host PTY or editor buffer is never
@@ -222,6 +294,41 @@ impl WorkbenchPaneLayout {
             .collect()
     }
 
+    /// Rehydrate the saved Editor subsequence without moving Host previews
+    /// or changing focus. Scratch recovery precedes file tab restoration,
+    /// so its discovery order is not necessarily the user's strip order.
+    pub fn restore_editor_order(
+        &mut self,
+        slot: PaneSlot,
+        desired: &[WorkbenchTabIdentity],
+    ) -> bool {
+        let tabs = match slot {
+            PaneSlot::Primary => &mut self.primary,
+            PaneSlot::Secondary => &mut self.secondary,
+        };
+        let before = tabs.clone();
+        let available = tabs
+            .iter()
+            .filter(|id| matches!(id, WorkbenchTabIdentity::Editor { .. }))
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut ordered = Vec::with_capacity(available.len());
+        for id in desired.iter().chain(available.iter()) {
+            if matches!(id, WorkbenchTabIdentity::Editor { .. })
+                && available.contains(id)
+                && !ordered.contains(id)
+            {
+                ordered.push(id.clone());
+            }
+        }
+        let mut next = ordered.into_iter();
+        for tab in tabs.iter_mut() {
+            if matches!(tab, WorkbenchTabIdentity::Editor { .. }) {
+                *tab = next.next().expect("editor count unchanged");
+            }
+        }
+        *tabs != before
+    }
     /// A same-pane drag reorders labels without transferring a Host PTY or
     /// Editor buffer. Cross-pane moves must use the guarded owner transfer.
     pub fn reorder_within(
@@ -476,6 +583,104 @@ mod tests {
     }
 
     #[test]
+    fn restored_host_pane_positions_require_running_exact_three_part_identity() {
+        let left = host("left");
+        let right = host("right");
+        let mut panes = WorkbenchPaneLayout::new();
+        panes.reconcile(&[left.clone(), right.clone()]);
+        let saved_right = SavedWorkbenchHostTab::new("right", "ws", "tab-right");
+        let saved_left = SavedWorkbenchHostTab::new("left", "ws", "tab-left");
+        let live = vec![
+            TerminalSession {
+                handle: "left".into(),
+                workspace_id: "ws".into(),
+                tab_id: "tab-left".into(),
+                running: true,
+                agent_type: None,
+                agent_state: None,
+                interrupted: false,
+                agent_state_started_at: None,
+                agent_updated_at: None,
+            },
+            TerminalSession {
+                handle: "right".into(),
+                workspace_id: "ws".into(),
+                tab_id: "tab-right".into(),
+                running: true,
+                agent_type: None,
+                agent_state: None,
+                interrupted: false,
+                agent_state_started_at: None,
+                agent_updated_at: None,
+            },
+        ];
+        assert_eq!(
+            panes.restore_live_host_positions(&[saved_left], &[saved_right.clone()], &live),
+            1
+        );
+        assert_eq!(panes.tabs_in(PaneSlot::Primary), &[left.clone()]);
+        assert_eq!(panes.tabs_in(PaneSlot::Secondary), &[right.clone()]);
+        assert_unique(&panes);
+
+        let mut recycled = WorkbenchPaneLayout::new();
+        recycled.reconcile(&[left, right.clone()]);
+        let mut replaced = live.clone();
+        replaced[1].tab_id = "recycled-tab".into();
+        assert_eq!(
+            recycled.restore_live_host_positions(&[], &[saved_right.clone()], &replaced),
+            0
+        );
+        assert!(!recycled.has_secondary());
+        replaced[1].tab_id = "tab-right".into();
+        replaced[1].running = false;
+        assert_eq!(
+            recycled.restore_live_host_positions(&[], &[saved_right], &replaced),
+            0
+        );
+        assert!(!recycled.has_secondary());
+    }
+
+    #[test]
+    fn split_tab_headers_share_one_row_even_when_only_one_side_is_pinned() {
+        assert!(!shared_pinned_tab_row(false, false, true));
+        assert!(shared_pinned_tab_row(true, false, true));
+        assert!(shared_pinned_tab_row(false, true, true));
+        assert!(shared_pinned_tab_row(true, true, true));
+        assert!(!shared_pinned_tab_row(false, true, false));
+    }
+
+    #[test]
+    fn cross_pane_host_drop_requests_focus_only_for_moved_live_identity() {
+        let agent = host("claude-session");
+        let terminal = host("cmd-session");
+        let mut panes = WorkbenchPaneLayout::new();
+        panes.reconcile(&[agent.clone(), terminal.clone()]);
+        assert_eq!(panes.post_cross_pane_drop_focus(&agent, false), None);
+        assert!(panes.move_to(&terminal, PaneSlot::Secondary));
+        assert_eq!(
+            panes.post_cross_pane_drop_focus(&terminal, true),
+            Some(terminal.clone())
+        );
+        assert_eq!(
+            panes.post_cross_pane_drop_focus(&agent, true),
+            None,
+            "the old primary Host must not steal the moved tab focus"
+        );
+        assert!(panes.move_to(&agent, PaneSlot::Secondary));
+        assert_eq!(
+            panes.post_cross_pane_drop_focus(&agent, true),
+            Some(agent.clone())
+        );
+        panes.reconcile(&[terminal.clone()]);
+        assert_eq!(
+            panes.post_cross_pane_drop_focus(&agent, true),
+            None,
+            "a closed Host preview cannot receive focus"
+        );
+        assert_eq!(panes.post_cross_pane_drop_focus(&terminal, false), None);
+    }
+
+    #[test]
     fn per_pane_projection_and_reorder_keep_active_editor_and_unique_tabs() {
         use crate::workbench_tabs::{WorkbenchTab, WorkbenchTabKind};
         let a = editor(5, 1);
@@ -533,6 +738,52 @@ mod tests {
         );
     }
 
+    #[test]
+    fn restored_editor_order_handles_scratch_files_and_preserves_host_slots() {
+        let scratch_b = editor(7, 11);
+        let scratch_a = editor(7, 12);
+        let file_b = editor(7, 13);
+        let file_a = editor(7, 14);
+        let new_file = editor(7, 15);
+        let terminal = host("retained-terminal");
+        let mut panes = WorkbenchPaneLayout::new();
+        // Startup recovery observes scratch drafts before file-backed tabs.
+        panes.reconcile(&[
+            scratch_b.clone(),
+            terminal.clone(),
+            scratch_a.clone(),
+            file_b.clone(),
+            file_a.clone(),
+            new_file.clone(),
+        ]);
+        panes.move_to(&file_b, PaneSlot::Secondary);
+        panes.move_to(&file_a, PaneSlot::Secondary);
+        panes.activate(&scratch_b);
+        let old_active = panes.active_in(PaneSlot::Primary).cloned();
+        let stale = editor(3, 999);
+        assert!(panes.restore_editor_order(
+            PaneSlot::Primary,
+            &[
+                scratch_a.clone(),
+                stale,
+                scratch_b.clone(),
+                scratch_a.clone()
+            ],
+        ));
+        assert!(panes.restore_editor_order(
+            PaneSlot::Secondary,
+            &[file_a.clone(), file_b.clone(), scratch_a.clone()],
+        ));
+        expect(
+            &panes,
+            PaneSlot::Primary,
+            &[scratch_a.clone(), terminal, scratch_b.clone(), new_file],
+        );
+        expect(&panes, PaneSlot::Secondary, &[file_a, file_b]);
+        assert_eq!(panes.active_in(PaneSlot::Primary), old_active.as_ref());
+        assert!(!panes.restore_editor_order(PaneSlot::Primary, &[scratch_a, scratch_b]));
+        assert_unique(&panes);
+    }
     #[test]
     fn close_others_and_right_skip_pins_and_other_pane() {
         let first = editor(6, 1);

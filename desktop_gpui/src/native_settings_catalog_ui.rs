@@ -5,7 +5,8 @@
 use super::*;
 use alera_gpui_desktop::native_i18n::{tr, UiLocale};
 use alera_gpui_desktop::settings_menu_catalog::{
-    shared_setting_row_path, PreviewRow, SettingsSection,
+    settings_operational_action, settings_support_counts, shared_setting_row_path, PreviewRow,
+    SettingsOperationalAction, SettingsSection, SettingsSupportCounts,
 };
 use gpui_kit::component::switch::Switch;
 
@@ -78,6 +79,21 @@ fn render_unavailable_row(
         .into_any_element()
 }
 
+/// All counts remain numeric; labels reflect the persisted Host language.
+fn settings_support_summary(locale: UiLocale, counts: SettingsSupportCounts) -> String {
+    format!(
+        "{}: {} · {}: {} · {}: {} · {}: {}",
+        tr(locale, "Editable"),
+        counts.editable,
+        tr(locale, "Actions"),
+        counts.actions,
+        tr(locale, "Read-only"),
+        counts.read_only,
+        tr(locale, "Not available"),
+        counts.unavailable,
+    )
+}
+
 impl Workbench {
     fn shared_catalog_state(&self) -> CatalogHostState {
         catalog_host_state(
@@ -126,6 +142,649 @@ impl Workbench {
             .into_any_element()
     }
 
+    /// Worktree rules are shown only after the user explicitly chooses Edit.
+    /// The generic Settings search/summary never shows copied paths or setup
+    /// shell commands, which may contain project-local secrets.
+    fn render_host_project_worktree_editor(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let copies = self.project_settings_copy_inputs.len();
+        let setups = self.project_settings_setup_inputs.len();
+        div()
+            .id("host-project-worktree-editor")
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(rgb(TEXT))
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .child(format!("Worktree Copy Rules ({copies})")),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(MUTED))
+                    .child("Relative paths only. From is required; empty To uses From. Overwrite controls replacing an existing destination."),
+            )
+            .children(self.project_settings_copy_inputs.iter().enumerate().map(|(index, rule)| {
+                div()
+                    .id(("project-copy-rule-editor", index))
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .p_2()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(rgb(BORDER))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(rgb(TEXT))
+                            .child(format!("Copy rule {}", index + 1)),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_wrap()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w(px(110.0))
+                                    .flex()
+                                    .flex_col()
+                                    .gap_1()
+                                    .child(div().text_xs().text_color(rgb(MUTED)).child("From"))
+                                    .child(
+                                        div()
+                                            .p_2()
+                                            .border_1()
+                                            .rounded_md()
+                                            .border_color(rgb(BORDER))
+                                            .bg(rgb(TOOLBAR))
+                                            .child(rule.from.clone()),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w(px(110.0))
+                                    .flex()
+                                    .flex_col()
+                                    .gap_1()
+                                    .child(div().text_xs().text_color(rgb(MUTED)).child("To (optional)"))
+                                    .child(
+                                        div()
+                                            .p_2()
+                                            .border_1()
+                                            .rounded_md()
+                                            .border_color(rgb(BORDER))
+                                            .bg(rgb(TOOLBAR))
+                                            .child(rule.to.clone()),
+                                    ),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                native_components::action_button(
+                                    format!("project-copy-overwrite-{index}"),
+                                    if rule.overwrite { "Overwrite: ON" } else { "Overwrite: OFF" },
+                                    rule.overwrite,
+                                    false,
+                                ).on_click(cx.listener(move |view, _, _, cx| {
+                                    view.toggle_host_project_copy_overwrite(index, cx);
+                                })),
+                            )
+                            .child(
+                                native_components::action_button(
+                                    format!("project-copy-remove-{index}"),
+                                    "Remove rule",
+                                    false,
+                                    true,
+                                ).on_click(cx.listener(move |view, _, _, cx| {
+                                    view.remove_host_project_copy_rule(index, cx);
+                                })),
+                            ),
+                    )
+            }))
+            .child(
+                native_components::action_button(
+                    "project-copy-rule-add", "+ Add Copy Rule", false, false,
+                ).on_click(cx.listener(|view, _, _, cx| {
+                    view.add_host_project_copy_rule(cx);
+                })),
+            )
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(rgb(TEXT))
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .child(format!("Worktree Setup Commands ({setups})")),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(MUTED))
+                    .child("Commands run only during later worktree setup; editing these does not execute anything now. Empty commands are omitted when saving."),
+            )
+            .children(self.project_settings_setup_inputs.iter().enumerate().map(|(index, command)| {
+                div()
+                    .id(("project-setup-command-editor", index))
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .p_2()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(rgb(BORDER))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(rgb(TEXT))
+                            .child(format!("Setup command {}", index + 1)),
+                    )
+                    .child(
+                        div()
+                            .min_h(px(55.0))
+                            .p_2()
+                            .rounded_md()
+                            .border_1()
+                            .border_color(rgb(BORDER))
+                            .bg(rgb(TOOLBAR))
+                            .child(command.clone()),
+                    )
+                    .child(
+                        native_components::action_button(
+                            format!("project-setup-remove-{index}"),
+                            "Remove command",
+                            false,
+                            true,
+                        ).on_click(cx.listener(move |view, _, _, cx| {
+                            view.remove_host_project_setup_command(index, cx);
+                        })),
+                    )
+            }))
+            .child(
+                native_components::action_button(
+                    "project-setup-command-add", "+ Add Setup Command", false, false,
+                ).on_click(cx.listener(|view, _, _, cx| {
+                    view.add_host_project_setup_command(cx);
+                })),
+            )
+            .into_any_element()
+    }
+
+    /// Only the effective, registered Host ProjectConfig is summarized here.
+    /// Worktree setup commands and prompt bodies are counted, not displayed,
+    /// because a search preview must not reveal potential secret values.
+    fn render_host_project_settings(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let project_id = self.runtime_catalog.as_ref().and_then(|catalog| {
+            alera_gpui_desktop::project_settings_preview::selected_project_for_settings(
+                catalog,
+                self.model.root(),
+                self.project_settings_selected_project_id.as_deref(),
+            )
+        });
+        let project = self.runtime_catalog.as_ref().and_then(|catalog| {
+            catalog
+                .projects
+                .iter()
+                .find(|project| Some(project.id.as_str()) == project_id)
+        });
+        let project_name = project
+            .map(|project| project.name.clone())
+            .unwrap_or_else(|| "No registered Host projects".to_owned());
+        let project_choices = self
+            .runtime_catalog
+            .as_ref()
+            .map(|catalog| {
+                catalog
+                    .projects
+                    .iter()
+                    .map(|p| (p.id.clone(), p.name.clone(), p.root.display().to_string()))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let loaded = project_id.is_some()
+            && self.project_settings_project_id.as_deref() == project_id
+            && !self.project_settings_loading
+            && self.project_settings_error.is_none();
+        let rows = if loaded {
+            self.project_settings_rows.clone()
+        } else {
+            Vec::new()
+        };
+        let editing = self.project_settings_editing;
+        let busy = self.project_settings_save_busy;
+        let config_source = self.project_settings_source;
+        let repo_config_error = self.project_settings_repo_error;
+        let confirm_repo_fallback = self.project_settings_use_repo_confirmed;
+        let save_status = self.project_settings_save_status.clone();
+        let draft_provider = self.project_settings_draft_provider.clone();
+        let status = if self.project_settings_loading {
+            "Loading Host ProjectConfig…".to_owned()
+        } else if let Some(error) = self.project_settings_error.as_deref() {
+            error.to_owned()
+        } else if loaded {
+            "Runtime Host effective configuration · paths, setup commands and prompt text remain hidden until you choose Edit."
+                .to_owned()
+        } else {
+            "Refresh to inspect this registered project's actual configuration.".to_owned()
+        };
+        div()
+            .p_3()
+            .bg(rgb(PANEL))
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_3()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .text_color(rgb(TEXT))
+                                    .child("Project Settings"),
+                            )
+                            .child(div().text_xs().text_color(rgb(MUTED)).child(project_name)),
+                    )
+                    .child(
+                        native_components::action_button(
+                            "native-settings-host-project-config-refresh",
+                            if self.project_settings_loading { "Loading…" } else if editing || busy {
+                                "Finish editing first"
+                            } else if project.is_none() {
+                                "Refresh Projects"
+                            } else {
+                                "Refresh Config"
+                            },
+                            false,
+                            false,
+                        )
+                        .on_click(cx.listener(|view, _, _, cx| {
+                            if view.project_settings_loading || view.project_settings_save_busy || view.project_settings_editing {
+                                view.project_settings_save_status = "Save or Cancel the current draft before refreshing".into();
+                                cx.notify();
+                                return;
+                            }
+                            if view.runtime_catalog.as_ref().and_then(|catalog| {
+                                alera_gpui_desktop::project_settings_preview::selected_project_for_settings(
+                                    catalog,
+                                    view.model.root(),
+                                    view.project_settings_selected_project_id.as_deref(),
+                                )
+                            }).is_none() {
+                                view.refresh_project_tree(cx);
+                            } else {
+                                view.refresh_host_project_settings(cx);
+                            }
+                        })),
+                    ),
+            )
+            .child(div().text_xs().text_color(rgb(MUTED)).child(status))
+            .when(!project_choices.is_empty(), |panel| {
+                panel.child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .text_color(rgb(TEXT))
+                                .child("Registered Projects"),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(rgb(MUTED))
+                                .child("Choose a project's settings without switching your active Workspace. Save or Cancel an open draft first."),
+                        )
+                        .child(
+                            div()
+                                .id("host-project-settings-project-list")
+                                .max_h(px(190.0))
+                                .overflow_y_scroll()
+                                .flex()
+                                .flex_col()
+                                .gap_1()
+                                .children(
+                                    project_choices.into_iter().enumerate().map(|(index, (id, name, root))| {
+                                        let selected = Some(id.as_str()) == project_id;
+                                        div()
+                                            .id(("host-project-settings-choice", index))
+                                            .cursor_pointer()
+                                            .flex()
+                                            .flex_col()
+                                            .gap_1()
+                                            .p_2()
+                                            .rounded_md()
+                                            .border_1()
+                                            .border_color(rgb(if selected { BORDER_ACTIVE } else { BORDER }))
+                                            .bg(rgb(if selected { ACTIVE } else { TOOLBAR }))
+                                            .child(
+                                                div()
+                                                    .text_sm()
+                                                    .text_color(rgb(TEXT))
+                                                    .child(if selected { format!("✓ {name}") } else { name }),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(rgb(MUTED))
+                                                    .child(root),
+                                            )
+                                            .on_click(cx.listener(move |view, _, _, cx| {
+                                                view.select_host_project_settings_project(&id, cx);
+                                            }))
+                                    })
+                                ),
+                        ),
+                )
+            })
+            .when(loaded, |panel| {
+                panel.child(
+                    div().flex().items_center().justify_between().gap_2()
+                        .p_2().rounded_md().border_1().border_color(rgb(BORDER))
+                        .child(div().text_xs().text_color(rgb(TEXT)).child("Effective config source"))
+                        .child(div().text_xs().text_color(rgb(MUTED))
+                            .child(config_source.map(HostProjectConfigOrigin::label).unwrap_or("Unknown"))),
+                )
+            })
+            .when(loaded && repo_config_error, |panel| {
+                panel.child(div().text_xs().text_color(rgb(MUTED))
+                    .child("Repository alera.toml is invalid; Host reported defaults. Fix that file before relying on repository setup."))
+            })
+            .children(rows.into_iter().enumerate().map(|(i, (name, value))| {
+                div()
+                    .id(("native-host-project-config-row", i))
+                    .flex()
+                    .justify_between()
+                    .gap_3()
+                    .p_2()
+                    .border_b_1()
+                    .border_color(rgb(BORDER))
+                    .child(div().text_xs().text_color(rgb(TEXT)).child(name))
+                    .child(div().text_xs().text_color(rgb(MUTED)).child(value))
+            }))
+            .when(loaded
+                && config_source == Some(HostProjectConfigOrigin::UiOverride)
+                && !editing && !busy, |panel| {
+                panel.child(
+                    div().flex().flex_col().gap_2()
+                        .child(div().text_xs().text_color(rgb(MUTED))
+                            .child("Use Repo File removes only the Host UI override. A valid alera.toml takes effect; without one, defaults apply."))
+                        .child(
+                            div().flex().flex_wrap().gap_2()
+                                .child(
+                                    native_components::action_button(
+                                        "host-project-config-use-repo",
+                                        if confirm_repo_fallback {
+                                            "Confirm Remove UI Override"
+                                        } else {
+                                            "Use Repo File"
+                                        },
+                                        false,
+                                        confirm_repo_fallback,
+                                    ).on_click(cx.listener(|view, _, _, cx| {
+                                        view.use_repo_file_for_project_settings(cx);
+                                    })),
+                                )
+                                .when(confirm_repo_fallback, |row| {
+                                    row.child(
+                                        native_components::action_button(
+                                            "host-project-config-use-repo-cancel",
+                                            "Keep UI Override",
+                                            false, false,
+                                        ).on_click(cx.listener(|view, _, _, cx| {
+                                            view.cancel_use_repo_file_confirmation(cx);
+                                        })),
+                                    )
+                                }),
+                        ),
+                )
+            })
+            .when(loaded && !editing && !busy, |panel| {
+                panel.child(
+                    native_components::action_button(
+                        "host-project-config-edit",
+                        "Edit Project Settings",
+                        false,
+                        false,
+                    ).on_click(cx.listener(|view, _, _, cx| {
+                        view.begin_host_project_settings_edit(cx);
+                    })),
+                )
+            })
+            .when(loaded && editing && !busy, |panel| {
+                let choices: [(&'static str, Option<&'static str>); 4] = [
+                    ("Auto-detect", None),
+                    ("GitHub", Some("github")),
+                    ("GitLab", Some("gitlab")),
+                    ("Azure DevOps", Some("azureDevops")),
+                ];
+                panel.child(
+                    div()
+                        .id("host-project-config-edit-form")
+                        .flex()
+                        .flex_col()
+                        .gap_3()
+                        .p_2()
+                        .rounded_md()
+                        .border_1()
+                        .border_color(rgb(BORDER))
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(rgb(TEXT))
+                                .child("Git Hosting Provider"),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .flex_wrap()
+                                .gap_2()
+                                .children(choices.into_iter().enumerate().map(|(index, (label, choice))| {
+                                    let selected = draft_provider.as_deref() == choice;
+                                    div()
+                                        .id(("host-project-config-provider", index))
+                                        .cursor_pointer()
+                                        .px_2()
+                                        .py_1()
+                                        .rounded_md()
+                                        .border_1()
+                                        .border_color(rgb(BORDER))
+                                        .bg(rgb(if selected { ACTIVE } else { TOOLBAR }))
+                                        .text_xs()
+                                        .text_color(rgb(if selected { TEXT } else { MUTED }))
+                                        .child(label)
+                                        .on_click(cx.listener(move |view, _, _, cx| {
+                                            if !view.project_settings_save_busy && view.project_settings_editing {
+                                                view.project_settings_draft_provider = choice.map(str::to_owned);
+                                                cx.notify();
+                                            }
+                                        }))
+                                })),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(rgb(MUTED))
+                                .child(format!(
+                                    "Selected: {}",
+                                    draft_provider.as_deref().unwrap_or("Auto-detect"),
+                                )),
+                        )
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(rgb(TEXT))
+                                .child("New Workspace · Prompt Append"),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(rgb(MUTED))
+                                .child("Project instructions are revealed only in Edit mode. Worktree Copy Rules and Setup Commands can be edited below; Save updates the Host config only after a version check."),
+                        )
+                        .child(
+                            div()
+                                .id("host-project-config-prompt-input")
+                                .rounded_md()
+                                .min_h(px(110.0))
+                                .p_2()
+                                .border_1()
+                                .border_color(rgb(BORDER))
+                                .bg(rgb(TOOLBAR))
+                                .child(self.project_settings_prompt_input.clone()),
+                        )
+                        .child(self.render_host_project_worktree_editor(cx))
+                        .child(
+                            div()
+                                .flex()
+                                .gap_2()
+                                .child(
+                                    native_components::action_button(
+                                        "host-project-config-save",
+                                        if busy { "Saving…" } else { "Save to Host" },
+                                        busy,
+                                        false,
+                                    )
+                                    .on_click(cx.listener(|view, _, _, cx| {
+                                        view.save_host_project_settings_edit(cx);
+                                    })),
+                                )
+                                .child(
+                                    native_components::action_button(
+                                        "host-project-config-cancel",
+                                        "Cancel",
+                                        busy,
+                                        false,
+                                    )
+                                    .on_click(cx.listener(|view, _, _, cx| {
+                                        view.cancel_host_project_settings_edit(cx);
+                                    })),
+                                ),
+                        ),
+                )
+            })
+            .when(busy, |panel| {
+                panel.child(div().p_2().text_xs().text_color(rgb(MUTED))
+                    .child("Saving to Host; editing is locked until readback completes…"))
+            })
+            .when(!save_status.is_empty(), |panel| {
+                panel.child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(MUTED))
+                        .child(save_status),
+                )
+            })
+            .into_any_element()
+    }
+
+    fn render_native_scrollback_setting(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let current = self.native_settings.terminal_scrollback_lines;
+        let busy = self.native_scrollback_busy;
+        const OPTIONS: [u64; 9] = [
+            100, 500, 1_000, 5_000, 10_000, 20_000, 50_000, 100_000, 200_000,
+        ];
+        let status = if self.native_scrollback_status.is_empty() {
+            "Shift+PageUp / Shift+PageDown scrolls the Native VT history. Full-screen TUIs keep their own keys."
+        } else {
+            &self.native_scrollback_status
+        };
+        div()
+            .rounded_lg()
+            .bg(rgb(PANEL))
+            .p_3()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                div()
+                    .text_sm()
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .text_color(rgb(TEXT))
+                    .child(format!("Scrollback Lines · {current}")),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(MUTED))
+                    .child("Native Alacritty history retained per terminal. Classic's setting is independent; the Host byte buffer can impose a shorter restore window."),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .gap_2()
+                    .children(OPTIONS.into_iter().enumerate().map(|(index, next)| {
+                        div()
+                            .id(("native-scrollback-choice", index))
+                            .cursor_pointer()
+                            .px_3()
+                            .py_2()
+                            .rounded_md()
+                            .border_1()
+                            .border_color(rgb(BORDER))
+                            .bg(rgb(if current == next { ACTIVE } else { TOOLBAR }))
+                            .text_xs()
+                            .text_color(rgb(if current == next { TEXT } else { MUTED }))
+                            .child(format!("{next}"))
+                            .on_click(cx.listener(move |view, _, _, cx| {
+                                if !view.native_scrollback_busy {
+                                    view.change_native_scrollback_lines(next, cx);
+                                }
+                            }))
+                    })),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        native_components::action_button(
+                            "native-scrollback-minus-100", "-100", busy || current <= 100, false
+                        ).on_click(cx.listener(|view, _, _, cx| {
+                            let next = view.native_settings.terminal_scrollback_lines.saturating_sub(100).max(100);
+                            view.change_native_scrollback_lines(next, cx);
+                        })),
+                    )
+                    .child(
+                        native_components::action_button(
+                            "native-scrollback-plus-100", "+100", busy || current >= 200_000, false
+                        ).on_click(cx.listener(|view, _, _, cx| {
+                            let next = (view.native_settings.terminal_scrollback_lines + 100).min(200_000);
+                            view.change_native_scrollback_lines(next, cx);
+                        })),
+                    )
+                    .child(div().text_xs().text_color(rgb(MUTED))
+                        .child("Fine adjustment · 100 lines per step")),
+            )
+            .child(div().text_xs().text_color(rgb(MUTED)).child(if busy {
+                "Saving setting and updating open terminal screens…".to_owned()
+            } else {
+                status.to_owned()
+            }))
+            .into_any_element()
+    }
+
     fn render_project_management_setting(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         div()
             .p_3()
@@ -143,23 +802,180 @@ impl Workbench {
                             .text_sm()
                             .child(tr(self.settings_menu_locale, "Projects")),
                     )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(rgb(MUTED))
-                            .child("Open the existing native project and worktree manager."),
-                    ),
+                    .child(div().text_xs().text_color(rgb(MUTED)).child(tr(
+                        self.settings_menu_locale,
+                        "Open the existing native project and worktree manager.",
+                    ))),
             )
             .child(
                 native_components::action_button(
                     "native-settings-open-projects",
-                    "Manage Projects",
+                    tr(self.settings_menu_locale, "Manage Projects"),
                     false,
                     false,
                 )
                 .on_click(cx.listener(|view, _, window, cx| {
                     view.show_project_management = true;
                     view.dismiss_native_settings(window, cx);
+                })),
+            )
+            .into_any_element()
+    }
+
+    /// The Quotas section already has a real Host-backed provider overview
+    /// in the status bar. Do not leave its Settings entry as a fake action.
+    fn render_provider_quotas_setting(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        div()
+            .p_3()
+            .bg(rgb(PANEL))
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap_3()
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(div().text_sm().child(tr(self.settings_menu_locale, "Provider Quotas")))
+                    .child(div().text_xs().text_color(rgb(MUTED)).child(
+                        tr(self.settings_menu_locale, "Open the existing provider/account quota overview and refresh from Runtime Host."),
+                    )),
+            )
+            .child(
+                native_components::action_button(
+                    "native-settings-provider-quotas",
+                    tr(self.settings_menu_locale, "Open Quota Overview"),
+                    false,
+                    false,
+                )
+                .on_click(cx.listener(|view, _, window, cx| {
+                    view.dismiss_native_settings(window, cx);
+                    view.quota_popover_account = None;
+                    view.quota_usage_open = false;
+                    view.quota_popover_open = true;
+                    view.refresh_agent_quotas(true, None, cx);
+                    cx.notify();
+                })),
+            )
+            .into_any_element()
+    }
+
+    /// Search registered GPUI shortcuts by command, context, or physical key.
+    /// This is a discovery view; Classic's editable override/reset store is
+    /// not implemented in Native and is deliberately not exposed here.
+    fn render_keyboard_shortcut_search(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let query = self.settings_shortcut_search.read(cx).query().to_owned();
+        let matches = alera_gpui_desktop::native_shortcut_catalog::search_native_shortcuts(&query);
+        let count = matches.len();
+        div()
+            .p_3()
+            .bg(rgb(PANEL))
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                div()
+                    .text_sm()
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .text_color(rgb(TEXT))
+                    .child("Search GPUI shortcuts"),
+            )
+            .child(
+                div()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(rgb(BORDER))
+                    .bg(rgb(TOOLBAR))
+                    .p_2()
+                    .child(self.settings_shortcut_search.clone()),
+            )
+            .child(div().text_xs().text_color(rgb(MUTED)).child(format!(
+                "{count} common registered shortcuts · {}",
+                if cfg!(target_os = "macos") {
+                    "macOS"
+                } else {
+                    "Windows / Linux"
+                }
+            )))
+            .child(div().text_xs().text_color(rgb(MUTED)).child(
+                "Search is read-only. Native shortcut overrides and reset are not available yet.",
+            ))
+            .when(count == 0, |list| {
+                list.child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(MUTED))
+                        .child("No shortcuts match"),
+                )
+            })
+            .children(matches.into_iter().enumerate().map(|(i, shortcut)| {
+                let binding = if cfg!(target_os = "macos") {
+                    shortcut.mac
+                } else {
+                    shortcut.windows
+                };
+                div()
+                    .id(("native-shortcut-row", i))
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_2()
+                    .p_2()
+                    .rounded_sm()
+                    .border_b_1()
+                    .border_color(rgb(BORDER))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(div().text_sm().text_color(rgb(TEXT)).child(shortcut.action))
+                            .child(div().text_xs().text_color(rgb(MUTED)).child(shortcut.scope)),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .text_color(rgb(TEXT))
+                            .child(binding),
+                    )
+            }))
+            .into_any_element()
+    }
+
+    /// The Host Agent Profiles manager already renders below the catalog.
+    /// Replace the misleading 'not available' preview with an operational
+    /// refresh action; never duplicate profile editing or credential handling.
+    fn render_host_agent_profiles_setting(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        div()
+            .p_3()
+            .bg(rgb(PANEL))
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap_3()
+            .child(
+                div().flex().flex_col().gap_1()
+                    .child(div().text_sm().text_color(rgb(TEXT)).child("Host Agent Profiles"))
+                    .child(
+                        div().text_xs().text_color(rgb(MUTED))
+                            .child("Create, edit, select, and remove Host profiles using the connected manager below."),
+                    ),
+            )
+            .child(
+                native_components::action_button(
+                    "native-settings-profiles-refresh",
+                    if self.agent_profiles_loading { "Loading…" } else { "Refresh Profiles" },
+                    false,
+                    false,
+                )
+                .on_click(cx.listener(|view, _, _, cx| {
+                    if !view.agent_profiles_loading {
+                        view.refresh_agent_profiles(cx);
+                    }
                 })),
             )
             .into_any_element()
@@ -185,7 +1001,7 @@ impl Workbench {
             .gap_3()
             .child(div().text_sm().child(tr(self.settings_menu_locale, "Excluded Directories")))
             .child(div().text_xs().text_color(rgb(MUTED)).child(
-                "Ctrl+P excludes matching directory names regardless of Git ignored visibility. Explorer search is unchanged.",
+                tr(self.settings_menu_locale, "Ctrl+P excludes matching directory names regardless of Git ignored visibility. Explorer search is unchanged."),
             ))
             .child(
                 div().flex().flex_wrap().gap_2()
@@ -217,7 +1033,7 @@ impl Workbench {
                         .border_color(rgb(BORDER)).bg(rgb(TOOLBAR)).p_2()
                         .child(self.settings_exclusion_input.clone()))
                     .child(native_components::action_button(
-                        "quick-open-exclusion-add", "Add", false, false
+                        "quick-open-exclusion-add", tr(self.settings_menu_locale, "Add"), false, false
                     ).on_click(cx.listener(|view, _, _, cx| {
                         let name = view.settings_exclusion_input.read(cx).query().trim().to_owned();
                         if !alera_core::desktop_settings_contract::valid_excluded_directory_name(&name) {
@@ -243,7 +1059,7 @@ impl Workbench {
                         view.change_shared_desktop_setting(PATH, serde_json::json!(next), cx);
                     })))
                     .child(native_components::action_button(
-                        "quick-open-exclusion-reset", "Restore Defaults", false, false,
+                        "quick-open-exclusion-reset", tr(self.settings_menu_locale, "Restore Defaults"), false, false,
                     ).on_click(cx.listener(|view, _, _, cx| {
                         view.change_shared_desktop_setting(
                             PATH,
@@ -288,15 +1104,15 @@ impl Workbench {
             _ => None,
         }?;
         let status = match source {
-            serde_json::Value::Bool(enabled) => {
-                if enabled {
-                    "Enabled".to_owned()
-                } else {
-                    "Disabled".to_owned()
-                }
-            }
+            serde_json::Value::Bool(enabled) => tr(
+                self.settings_menu_locale,
+                if enabled { "Enabled" } else { "Disabled" },
+            ),
             serde_json::Value::Number(days) if row.title == "Auto-Archive After Inactivity" => {
-                format!("{days} days (0 disables)")
+                format!(
+                    "{days} {}",
+                    tr(self.settings_menu_locale, "days (0 disables)")
+                )
             }
             serde_json::Value::String(language) => language,
             value => value.to_string(),
@@ -314,12 +1130,16 @@ impl Workbench {
                         .child(tr(self.settings_menu_locale, row.title)),
                 )
                 .child(div().text_xs().text_color(rgb(MUTED)).child(format!(
-                    "Rust Host: {status} · {}",
-                    if row.title == "App Language" {
-                        "change via language selector"
-                    } else {
-                        "edit in Classic"
-                    }
+                    "{}: {status} · {}",
+                    tr(self.settings_menu_locale, "Rust Host"),
+                    tr(
+                        self.settings_menu_locale,
+                        if row.title == "App Language" {
+                            "change via language selector"
+                        } else {
+                            "edit in Classic"
+                        }
+                    )
                 )))
                 .into_any_element(),
         )
@@ -473,8 +1293,26 @@ impl Workbench {
         row_index: usize,
         cx: &mut Context<Self>,
     ) -> Option<gpui::AnyElement> {
-        if section == "projects" && row.title == "Projects" {
-            return Some(self.render_project_management_setting(cx));
+        match settings_operational_action(section, row.title) {
+            Some(SettingsOperationalAction::ManageProjects) => {
+                return Some(self.render_project_management_setting(cx));
+            }
+            Some(SettingsOperationalAction::ViewHostProjectSettings) => {
+                return Some(self.render_host_project_settings(cx));
+            }
+            Some(SettingsOperationalAction::OpenQuotaOverview) => {
+                return Some(self.render_provider_quotas_setting(cx));
+            }
+            Some(SettingsOperationalAction::SearchNativeKeyboardShortcuts) => {
+                return Some(self.render_keyboard_shortcut_search(cx));
+            }
+            Some(SettingsOperationalAction::RefreshHostAgentProfiles) => {
+                return Some(self.render_host_agent_profiles_setting(cx));
+            }
+            Some(SettingsOperationalAction::ConfigureNativeScrollback) => {
+                return Some(self.render_native_scrollback_setting(cx));
+            }
+            None => {}
         }
         if section == "agents" {
             match row.title {
@@ -530,11 +1368,20 @@ impl Workbench {
         locale: UiLocale,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
+        let support = settings_support_counts(selected);
         div()
             .id("native-settings-catalog-groups")
             .flex()
             .flex_col()
             .gap_3()
+            .child(
+                div()
+                    .px_4()
+                    .py_2()
+                    .text_xs()
+                    .text_color(rgb(MUTED))
+                    .child(settings_support_summary(locale, support)),
+            )
             .children(
                 selected
                     .groups
@@ -634,7 +1481,27 @@ impl Workbench {
 
 #[cfg(test)]
 mod tests {
-    use super::{catalog_host_state, CatalogHostState};
+    use super::{catalog_host_state, settings_support_summary, CatalogHostState};
+    use alera_gpui_desktop::native_i18n::UiLocale;
+    use alera_gpui_desktop::settings_menu_catalog::SettingsSupportCounts;
+
+    #[test]
+    fn s04_settings_capability_summary_follows_host_locale() {
+        let counts = SettingsSupportCounts {
+            editable: 6,
+            actions: 2,
+            read_only: 3,
+            unavailable: 9,
+        };
+        assert_eq!(
+            settings_support_summary(UiLocale::English, counts),
+            "Editable: 6 · Actions: 2 · Read-only: 3 · Not available: 9"
+        );
+        assert_eq!(
+            settings_support_summary(UiLocale::TraditionalChinese, counts),
+            "可編輯設定: 6 · 操作: 2 · 唯讀: 3 · 尚未提供: 9"
+        );
+    }
 
     #[test]
     fn installed_snapshot_is_not_writable_when_runtime_host_disconnects() {

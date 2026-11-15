@@ -126,6 +126,25 @@ mod tests {
     }
 
     #[test]
+    fn s04_shared_settings_operational_labels_have_real_translations() {
+        let examples = [
+            ("Not available in GPUI yet", "GPUI 尚未提供"),
+            ("Loading Rust Host settings", "正在讀取 Rust Host 設定"),
+            ("Rust Host settings unavailable", "無法取得 Rust Host 設定"),
+            ("Open Quota Overview", "開啟額度總覽"),
+            ("Manage Projects", "管理專案"),
+            ("Editable", "可編輯設定"),
+            ("Read-only", "唯讀"),
+            ("Not available", "尚未提供"),
+            ("Enabled", "已啟用"),
+            ("Disabled", "已停用"),
+        ];
+        for (source, zh) in examples {
+            assert_eq!(tr(UiLocale::TraditionalChinese, source), zh, "{source}");
+            assert_eq!(tr(UiLocale::English, source), source, "{source}");
+        }
+    }
+    #[test]
     fn locale_variants_and_unknown_sources_fall_back_safely() {
         assert_eq!(
             UiLocale::from_preference("traditionalChinese"),
