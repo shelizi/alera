@@ -123,7 +123,9 @@ use alera_gpui_desktop::terminal_stream_bridge::{
 };
 use alera_gpui_desktop::visual_tokens::{
     ACTIVE, AGENT_BLOCKED, AGENT_DONE, AGENT_WAITING, AGENT_WORKING, BG, BORDER, BORDER_ACTIVE,
-    ELEVATED, MUTED, PANEL, PROJECTS_SIDEBAR_WIDTH, RIGHT_SIDEBAR_WIDTH, SECTION_HEADER_HEIGHT,
+    clamp_context_sidebar_width, clamp_projects_sidebar_width, ELEVATED, MUTED, PANEL,
+    PROJECTS_COLLAPSED_WIDTH, PROJECTS_SIDEBAR_WIDTH, RESIZE_CHROME, RIGHT_SIDEBAR_WIDTH,
+    SECTION_HEADER_HEIGHT, SIDEBAR_RESIZE_HANDLE_WIDTH,
     STATUS_BAR_HEIGHT, TAB_STRIP_HEIGHT, TEXT, TOOLBAR, TOP_BAR_HEIGHT,
 };
 use alera_gpui_desktop::vt_screen::{StyledRow, TERMINAL_DEFAULT_BG};
@@ -563,6 +565,19 @@ enum RightSidebarView {
     Git,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SidebarResizeSide {
+    Projects,
+    Context,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct SidebarResizeDrag {
+    side: SidebarResizeSide,
+    start_x: f32,
+    start_width: f32,
+}
+
 /// File-patch-only navigation. History/branch compare previews must never
 /// inherit a file's paging cursor, and pages are replaced, not concatenated.
 #[derive(Clone)]
@@ -590,6 +605,11 @@ struct Workbench {
     model: WorkbenchModel,
     center_view: CenterView,
     right_sidebar_view: RightSidebarView,
+    projects_sidebar_collapsed: bool,
+    projects_sidebar_width: f32,
+    right_sidebar_visible: bool,
+    right_sidebar_width: f32,
+    sidebar_resize_drag: Option<SidebarResizeDrag>,
     explorer_context_menu: Option<ExplorerContextMenu>,
     show_project_management: bool,
     runtime_details_open: bool,
@@ -10485,9 +10505,18 @@ impl Render for Workbench {
         // lifecycle poll coalesces stable changes before the Host RPC.
         // No resizing from inside GPUI's paint/layout phase.
         let viewport = window.viewport_size();
+        let projects_width = if self.projects_sidebar_collapsed {
+            PROJECTS_COLLAPSED_WIDTH
+        } else {
+            self.projects_sidebar_width
+        };
+        let context_width = if self.right_sidebar_visible {
+            self.right_sidebar_width
+        } else {
+            PROJECTS_COLLAPSED_WIDTH
+        };
         let content_width =
-            (f32::from(viewport.width) - PROJECTS_SIDEBAR_WIDTH - RIGHT_SIDEBAR_WIDTH - 14.0)
-                .max(0.0);
+            (f32::from(viewport.width) - projects_width - context_width - RESIZE_CHROME).max(0.0);
         let content_height = (f32::from(viewport.height)
             - TOP_BAR_HEIGHT
             - STATUS_BAR_HEIGHT
@@ -10974,6 +11003,45 @@ impl Render for Workbench {
         div()
             .size_full()
             .relative()
+            .on_mouse_move(cx.listener(|this, event: &gpui::MouseMoveEvent, window, cx| {
+                let Some(drag) = this.sidebar_resize_drag else { return; };
+                if event.pressed_button != Some(gpui::MouseButton::Left) {
+                    this.sidebar_resize_drag = None;
+                    cx.notify();
+                    return;
+                }
+                let delta = f32::from(event.position.x) - drag.start_x;
+                let viewport = f32::from(window.viewport_size().width);
+                match drag.side {
+                    SidebarResizeSide::Projects => {
+                        let context = if this.right_sidebar_visible {
+                            this.right_sidebar_width
+                        } else {
+                            PROJECTS_COLLAPSED_WIDTH
+                        };
+                        this.projects_sidebar_width = clamp_projects_sidebar_width(
+                            drag.start_width + delta, viewport, context,
+                        );
+                    }
+                    SidebarResizeSide::Context => {
+                        let projects = if this.projects_sidebar_collapsed {
+                            PROJECTS_COLLAPSED_WIDTH
+                        } else {
+                            this.projects_sidebar_width
+                        };
+                        this.right_sidebar_width = clamp_context_sidebar_width(
+                            drag.start_width - delta, viewport, projects,
+                        );
+                    }
+                }
+                cx.notify();
+            }))
+            .on_mouse_up(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
+                if this.sidebar_resize_drag.take().is_some() { cx.notify(); }
+            }))
+            .on_mouse_up_out(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
+                if this.sidebar_resize_drag.take().is_some() { cx.notify(); }
+            }))
             .on_action(cx.listener(Self::toggle_file_search_action))
             .on_action(cx.listener(Self::toggle_content_search_action))
             .on_action(cx.listener(Self::explorer_copy_action))
@@ -11044,7 +11112,8 @@ impl Render for Workbench {
                     .child(
                         div()
                             .id("native-right-sidebar-scroll")
-                            .w(px(RIGHT_SIDEBAR_WIDTH))
+                            .when(!self.right_sidebar_visible, |panel| panel.hidden())
+                            .w(px(self.right_sidebar_width))
                             .flex()
                             .flex_col()
                             .bg(rgb(PANEL))
@@ -11079,7 +11148,13 @@ impl Render for Workbench {
                                         view.right_sidebar_view = RightSidebarView::Git;
                                         cx.notify();
                                     })))
-                                    .child(div().flex_1()),
+                                    .child(div().flex_1())
+                                    .child(icon_button(
+                                        "right-sidebar-collapse", UiIcon::ChevronsRight, "Collapse panel", false,
+                                    ).on_click(cx.listener(|this, _, _, cx| {
+                                        this.right_sidebar_visible = false;
+                                        cx.notify();
+                                    }))),
                             )
                             .child(
                                 div()
@@ -12722,6 +12797,57 @@ impl Render for Workbench {
                     )
                     .child(
                         div()
+                            .id("right-sidebar-rail")
+                            .when(self.right_sidebar_visible, |rail| rail.hidden())
+                            .w(px(PROJECTS_COLLAPSED_WIDTH))
+                            .flex()
+                            .flex_col()
+                            .items_center()
+                            .bg(rgb(PANEL))
+                            .border_l_1()
+                            .border_color(rgb(BORDER))
+                            .child(div().h(px(8.0)))
+                            .child(icon_button("right-rail-explorer", UiIcon::Files, "Explorer", false)
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.right_sidebar_view = RightSidebarView::Explorer;
+                                    this.right_sidebar_visible = true;
+                                    cx.notify();
+                                })))
+                            .child(icon_button("right-rail-git", UiIcon::Branch, "Source Control", false)
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.right_sidebar_view = RightSidebarView::Git;
+                                    this.explorer_context_menu = None;
+                                    this.right_sidebar_visible = true;
+                                    cx.notify();
+                                })))
+                            .child(div().flex_1())
+                            .child(icon_button("right-rail-expand", UiIcon::ChevronsLeft, "Expand panel", false)
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.right_sidebar_visible = true;
+                                    cx.notify();
+                                }))),
+                    )
+                    .child(
+                        div()
+                            .id("right-sidebar-resize-handle")
+                            .when(!self.right_sidebar_visible, |handle| handle.hidden())
+                            .w(px(SIDEBAR_RESIZE_HANDLE_WIDTH))
+                            .h_full()
+                            .bg(rgb(BORDER))
+                            .cursor(gpui::CursorStyle::ResizeLeftRight)
+                            .hover(|style| style.bg(rgb(BORDER_ACTIVE)))
+                            .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, event: &gpui::MouseDownEvent, _, cx| {
+                                this.sidebar_resize_drag = Some(SidebarResizeDrag {
+                                    side: SidebarResizeSide::Context,
+                                    start_x: f32::from(event.position.x),
+                                    start_width: this.right_sidebar_width,
+                                });
+                                cx.stop_propagation();
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        div()
                             .flex_1()
                             .min_w_0()
                             .flex()
@@ -13789,17 +13915,64 @@ impl Render for Workbench {
                     )
                     .child(
                         div()
-                            .w(px(PROJECTS_SIDEBAR_WIDTH))
+                            .id("projects-sidebar-resize-handle")
+                            .when(self.projects_sidebar_collapsed, |handle| handle.hidden())
+                            .w(px(SIDEBAR_RESIZE_HANDLE_WIDTH))
+                            .h_full()
+                            .bg(rgb(BORDER))
+                            .cursor(gpui::CursorStyle::ResizeLeftRight)
+                            .hover(|style| style.bg(rgb(BORDER_ACTIVE)))
+                            .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, event: &gpui::MouseDownEvent, _, cx| {
+                                this.sidebar_resize_drag = Some(SidebarResizeDrag {
+                                    side: SidebarResizeSide::Projects,
+                                    start_x: f32::from(event.position.x),
+                                    start_width: this.projects_sidebar_width,
+                                });
+                                cx.stop_propagation();
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        div()
+                            .when(self.projects_sidebar_collapsed, |panel| panel.hidden())
+                            .w(px(self.projects_sidebar_width))
                             .flex()
                             .flex_col()
                             .bg(rgb(PANEL))
                             .border_r_1()
                             .border_color(rgb(BORDER))
                             .px_2()
-                            .gap_2()
+                            .gap_1()
+                            // Classic sidebar: brand header, search, then actions.
                             .child(
                                 div()
+                                    .id("projects-brand-header")
                                     .h(px(SECTION_HEADER_HEIGHT))
+                                    .px_1()
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .border_b_1()
+                                    .border_color(rgb(BORDER))
+                                    .child(gpui::img(classic_brand_logo()).w(px(16.0)).h(px(16.0)))
+                                    .child(div().text_sm().font_weight(gpui::FontWeight::SEMIBOLD).child("Alera"))
+                                    .child(div().flex_1())
+                                    .child(icon_button(
+                                        "projects-sidebar-collapse", UiIcon::PanelLeft, "Collapse Sidebar", false,
+                                    ).on_click(cx.listener(|this, _, _, cx| {
+                                        this.projects_sidebar_collapsed = true;
+                                        cx.notify();
+                                    }))),
+                            )
+                            .child(
+                                div()
+                                    .id("projects-sidebar-search")
+                                    .child(sidebar_search_input),
+                            )
+                            .child(
+                                div()
+                                    .id("projects-sidebar-actions")
+                                    .h(px(36.0))
                                     .px_1()
                                     .flex()
                                     .items_center()
@@ -13811,7 +13984,7 @@ impl Render for Workbench {
                                             .items_center()
                                             .gap_1()
                                             .cursor_pointer()
-                                            .font_weight(gpui::FontWeight::BOLD)
+                                            .font_weight(gpui::FontWeight::SEMIBOLD)
                                             .child(icon(if show_recent_workspaces { UiIcon::ChevronDown } else { UiIcon::ChevronRight }, 12.0, MUTED))
                                             .child("Recent")
                                             .on_click(cx.listener(|this, _, _, cx| {
@@ -13820,16 +13993,11 @@ impl Render for Workbench {
                                             })),
                                     )
                                     .child(
-                                        icon_button("projects-open-folder", UiIcon::Open, "Open a project folder…", picking_workspace)
+                                        icon_button("projects-open-folder", UiIcon::NewFolder, "Open a project folder…", picking_workspace)
                                             .on_click(cx.listener(|this, _, _, cx| {
                                                 this.pick_workspace(cx);
                                             })),
                                     ),
-                            )
-                            .child(
-                                div()
-                                    .id("projects-sidebar-search")
-                                    .child(sidebar_search_input),
                             )
                             .child(
                                 div()
@@ -14554,6 +14722,35 @@ impl Render for Workbench {
                                     })),
                             )
                             )
+                    )
+                    .child(
+                        div()
+                            .id("projects-sidebar-rail")
+                            .when(!self.projects_sidebar_collapsed, |rail| rail.hidden())
+                            .w(px(PROJECTS_COLLAPSED_WIDTH))
+                            .flex()
+                            .flex_col()
+                            .items_center()
+                            .bg(rgb(PANEL))
+                            .border_r_1()
+                            .border_color(rgb(BORDER))
+                            .child(
+                                div()
+                                    .h(px(SECTION_HEADER_HEIGHT))
+                                    .flex()
+                                    .items_center()
+                                    .child(icon_button(
+                                        "projects-sidebar-expand", UiIcon::PanelLeft, "Expand Sidebar", false,
+                                    ).on_click(cx.listener(|this, _, _, cx| {
+                                        this.projects_sidebar_collapsed = false;
+                                        cx.notify();
+                                    }))),
+                            )
+                            .child(icon_button(
+                                "projects-sidebar-rail-open", UiIcon::NewFolder, "Open project folder", false,
+                            ).on_click(cx.listener(|this, _, _, cx| {
+                                this.pick_workspace(cx);
+                            }))),
                     ),
             )
             .child(
@@ -14889,6 +15086,11 @@ fn main() {
                             model,
                             center_view: CenterView::Terminal,
                             right_sidebar_view: RightSidebarView::Explorer,
+                            projects_sidebar_collapsed: false,
+                            projects_sidebar_width: PROJECTS_SIDEBAR_WIDTH,
+                            right_sidebar_visible: true,
+                            right_sidebar_width: RIGHT_SIDEBAR_WIDTH,
+                            sidebar_resize_drag: None,
                             explorer_context_menu: None,
                             show_project_management: false,
                             runtime_details_open: false,

@@ -7,7 +7,7 @@ use alera_gpui_desktop::visual_tokens::{MUTED, TEXT};
 use gpui::{div, px, rgb, Div, ElementId, ParentElement, Styled};
 use gpui_kit::assets::IconName as LucideIcon;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::Icon;
+use gpui_kit::component::{Icon, Sizable as _};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UiIcon {
@@ -34,6 +34,10 @@ pub enum UiIcon {
     Delete,
     More,
     Settings,
+    PanelLeft,
+    PanelRight,
+    ChevronsRight,
+    ChevronsLeft,
     Close,
     Pin,
     Terminal,
@@ -79,6 +83,8 @@ impl UiIcon {
             Self::Delete => '\u{ea81}',
             Self::More => '\u{ea7c}',
             Self::Settings => '\u{eb52}',
+            Self::PanelLeft | Self::PanelRight | Self::ChevronsRight => '\u{eab6}',
+            Self::ChevronsLeft => '\u{eab5}',
             Self::Close => '\u{ea76}',
             Self::Pin => '\u{eb2b}',
             Self::Terminal => '\u{ea85}',
@@ -136,7 +142,7 @@ fn lucide_name(kind: UiIcon) -> Option<LucideIcon> {
         UiIcon::Folder => LucideIcon::Folder,
         UiIcon::FolderOpen | UiIcon::Open => LucideIcon::FolderOpen,
         UiIcon::Files => LucideIcon::Files,
-        UiIcon::File => LucideIcon::File,
+        UiIcon::File => LucideIcon::FileText,
         UiIcon::ChevronUp => LucideIcon::ChevronUp,
         UiIcon::ChevronDown => LucideIcon::ChevronDown,
         UiIcon::ChevronRight => LucideIcon::ChevronRight,
@@ -147,6 +153,10 @@ fn lucide_name(kind: UiIcon) -> Option<LucideIcon> {
         UiIcon::Delete => LucideIcon::Trash2,
         UiIcon::More => LucideIcon::Ellipsis,
         UiIcon::Settings => LucideIcon::Settings,
+        UiIcon::PanelLeft => LucideIcon::PanelLeft,
+        UiIcon::PanelRight => LucideIcon::PanelRight,
+        UiIcon::ChevronsRight => LucideIcon::ChevronsRight,
+        UiIcon::ChevronsLeft => LucideIcon::ChevronsLeft,
         UiIcon::Close => LucideIcon::X,
         UiIcon::Pin => LucideIcon::Pin,
         UiIcon::Terminal => LucideIcon::Terminal,
