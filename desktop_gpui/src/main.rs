@@ -153,7 +153,6 @@ use gpui::{
 };
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenuItem};
-use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::IconName;
 use gpui_kit::component::WindowExt as _;
 use native_components::{icon, icon_button, UiIcon};
@@ -163,8 +162,21 @@ use std::borrow::Cow;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
+
+/// Share the exact 16px Classic brand mark across native re-renders without
+/// allocating or decoding the bundled PNG anew on every workbench update.
+fn classic_brand_logo() -> Arc<gpui::Image> {
+    static LOGO: OnceLock<Arc<gpui::Image>> = OnceLock::new();
+    LOGO.get_or_init(|| {
+        Arc::new(gpui::Image::from_bytes(
+            gpui::ImageFormat::Png,
+            include_bytes!("../../assets/logo/alera-logo-white.png").to_vec(),
+        ))
+    })
+    .clone()
+}
 
 actions!(
     alera_gpui_workbench,
@@ -8600,7 +8612,7 @@ impl Workbench {
         let identity = tab.identity;
         let icon_kind = match tab.kind {
             WorkbenchTabKind::Terminal | WorkbenchTabKind::Agent => UiIcon::Terminal,
-            WorkbenchTabKind::Editor => UiIcon::File,
+            WorkbenchTabKind::Editor => explorer_file_icon(&tab.title, false, false),
         };
         let status_color = tab.agent_state.map(|state| match state {
             AgentActivityState::Working => AGENT_WORKING,
@@ -8608,16 +8620,6 @@ impl Workbench {
             AgentActivityState::Blocked => AGENT_BLOCKED,
             AgentActivityState::Done => AGENT_DONE,
         });
-        let status_text = tab
-            .agent_state
-            .map(|state| {
-                if state == AgentActivityState::Done && tab.interrupted {
-                    "interrupted"
-                } else {
-                    state.label()
-                }
-            })
-            .unwrap_or("");
         let title = tab.title;
         let tab_tooltip_title = title.clone();
         let for_click = identity.clone();
@@ -8677,13 +8679,14 @@ impl Workbench {
                     )
                     .when(tab.dirty, |entry| entry.child(div().text_xs().child("●")))
                     .when(status_color.is_some(), |entry| {
+                        // Classic AgentStatusDot is a compact 7px status dot;
+                        // its full state remains available via the tab tooltip.
                         entry.child(
                             div()
-                                .max_w(px(78.0))
-                                .truncate()
-                                .text_xs()
-                                .text_color(rgb(status_color.unwrap_or(MUTED)))
-                                .child(format!("● {status_text}")),
+                                .w(px(7.0))
+                                .h(px(7.0))
+                                .rounded_full()
+                                .bg(rgb(status_color.unwrap_or(MUTED))),
                         )
                     })
                     .when(pinned, |entry| entry.child(icon(UiIcon::Pin, 12.0, MUTED)))
@@ -11001,7 +11004,14 @@ impl Render for Workbench {
                     .flex()
                     .items_center()
                     .gap_3()
-                    .child(div().font_weight(gpui::FontWeight::BOLD).child("Alera"))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(gpui::img(classic_brand_logo()).w(px(16.0)).h(px(16.0)))
+                            .child(div().font_weight(gpui::FontWeight::BOLD).child("Alera")),
+                    )
                     .child(
                         div()
                             .text_xs()
@@ -11043,35 +11053,33 @@ impl Render for Workbench {
                             .child(
                                 div()
                                     .id("right-sidebar-view-switch")
-                                    .h(px(38.0))
+                                    // Use the same 44px header baseline as Classic.
+                                    .h(px(SECTION_HEADER_HEIGHT))
                                     .px_2()
                                     .flex()
                                     .items_center()
-                                    .gap_2()
+                                    .gap(px(6.0))
+                                    .bg(rgb(PANEL))
                                     .border_b_1()
                                     .border_color(rgb(BORDER))
-                                    .child(
-                                        TabBar::new("right-sidebar-view-tabs")
-                                            .segmented()
-                                            .selected_index(
-                                                if self.right_sidebar_view == RightSidebarView::Explorer {
-                                                    0
-                                                } else {
-                                                    1
-                                                },
-                                            )
-                                            .child(Tab::new().label("Explorer").prefix(icon(UiIcon::Folder, 15.0, TEXT)))
-                                            .child(Tab::new().label("Git").prefix(icon(UiIcon::Branch, 15.0, TEXT)))
-                                            .on_click(cx.listener(|view, index, _, cx| {
-                                                view.right_sidebar_view = if *index == 0 {
-                                                    RightSidebarView::Explorer
-                                                } else {
-                                                    view.explorer_context_menu = None;
-                                                    RightSidebarView::Git
-                                                };
-                                                cx.notify();
-                                            })),
-                                    ),
+                                    // Classic uses compact, tooltip-backed icon tabs,
+                                    // not a large segmented Explorer/Git text control.
+                                    .child(icon_button(
+                                        "right-sidebar-explorer", UiIcon::Files, "Explorer",
+                                        self.right_sidebar_view == RightSidebarView::Explorer,
+                                    ).on_click(cx.listener(|view, _, _, cx| {
+                                        view.right_sidebar_view = RightSidebarView::Explorer;
+                                        cx.notify();
+                                    })))
+                                    .child(icon_button(
+                                        "right-sidebar-git", UiIcon::Branch, "Source Control",
+                                        self.right_sidebar_view == RightSidebarView::Git,
+                                    ).on_click(cx.listener(|view, _, _, cx| {
+                                        view.explorer_context_menu = None;
+                                        view.right_sidebar_view = RightSidebarView::Git;
+                                        cx.notify();
+                                    })))
+                                    .child(div().flex_1()),
                             )
                             .child(
                                 div()
@@ -11650,7 +11658,7 @@ impl Render for Workbench {
                                                 .on_click(cx.listener(|this, _, _, cx| {
                                                     this.toggle_git_history(cx);
                                                 })))
-                                            .child(icon_button("git-refresh", UiIcon::Refresh, "Refresh Git status", false)
+                                            .child(icon_button("git-refresh", UiIcon::GitRefresh, "Refresh Git status", false)
                                                 .on_click(cx.listener(|this, _, _, cx| {
                                                     this.refresh_git(cx);
                                                     if this.git_history_open { this.refresh_git_history(cx); }
@@ -12462,7 +12470,7 @@ impl Render for Workbench {
                                 .child(icon_button("git-sidebar-collapse-all", UiIcon::CollapseAll,
                                     "Collapse or expand all Git change groups", false)
                                     .on_click(cx.listener(|this, _, _, cx| this.toggle_git_sidebar_collapse_all(cx))))
-                                .child(icon_button("git-sidebar-refresh", UiIcon::Refresh,
+                                .child(icon_button("git-sidebar-refresh", UiIcon::GitRefresh,
                                     "Refresh Git status", false)
                                     .on_click(cx.listener(|this, _, _, cx| this.refresh_git(cx)))))
                             .child(git_filter_input)
@@ -12486,7 +12494,7 @@ impl Render for Workbench {
                                             }))
                                     ))
                                     .when(!git_discard_paths.is_empty(), |bar| bar.child(
-                                        icon_button("git-discard-selected", if git_discard_confirm { UiIcon::Check } else { UiIcon::Delete },
+                                        icon_button("git-discard-selected", if git_discard_confirm { UiIcon::Check } else { UiIcon::GitDiscard },
                                             if git_discard_confirm { "Confirm Discard selected unstaged tracked files" } else { "Discard selected unstaged tracked changes (confirm)" },
                                             git_discard_confirm)
                                             .on_click(cx.listener(move |this, _, _, cx| {
@@ -12823,6 +12831,7 @@ impl Render for Workbench {
                                             // second line beneath live tabs.
                                             .children(tabs.into_iter().map(|(index, title, transient)| {
                                                 let selected = showing_explorer_preview && active_tab == Some(index);
+                                                let file_icon = explorer_file_icon(&title, false, false);
                                                 div()
                                                     .id(("file-preview-tab", index))
                                                     .h(px(32.0))
@@ -12845,7 +12854,7 @@ impl Render for Workbench {
                                                             .px_1()
                                                             .cursor_pointer()
                                                             .text_color(rgb(if selected { TEXT } else { MUTED }))
-                                                            .child(icon(UiIcon::File, 12.0, if selected { TEXT } else { MUTED }))
+                                                            .child(icon(file_icon, 12.0, if selected { TEXT } else { MUTED }))
                                                             .child(
                                                                 div()
                                                                     .min_w_0()
@@ -13787,7 +13796,6 @@ impl Render for Workbench {
                             .border_r_1()
                             .border_color(rgb(BORDER))
                             .px_2()
-                            .py_1()
                             .gap_2()
                             .child(
                                 div()
@@ -13799,9 +13807,13 @@ impl Render for Workbench {
                                     .child(
                                         div()
                                             .id("projects-toggle")
+                                            .flex()
+                                            .items_center()
+                                            .gap_1()
                                             .cursor_pointer()
                                             .font_weight(gpui::FontWeight::BOLD)
-                                            .child(if show_recent_workspaces { "Recent ▾" } else { "Recent ▸" })
+                                            .child(icon(if show_recent_workspaces { UiIcon::ChevronDown } else { UiIcon::ChevronRight }, 12.0, MUTED))
+                                            .child("Recent")
                                             .on_click(cx.listener(|this, _, _, cx| {
                                                 this.show_recent_workspaces = !this.show_recent_workspaces;
                                                 cx.notify();
@@ -14700,7 +14712,8 @@ fn main() {
     let initial_native_scrollback_lines = native_settings.terminal_scrollback_lines as usize;
 
     gpui_kit::application()
-        .with_assets(gpui_kit::assets::Assets)
+        // Match Classic's Lucide action set in addition to Codicon Git glyphs.
+        .with_assets(gpui_kit::assets::AllAssets)
         .run(move |cx: &mut App| {
             gpui_kit::init(cx);
             // Kit initializes its global palette in Light mode. Alera Native

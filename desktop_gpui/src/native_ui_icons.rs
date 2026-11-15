@@ -1,10 +1,13 @@
 //! Compact, tooltip-backed toolbar controls for the experimental GPUI UI.
 //!
-//! Use Alera's existing VS Code Codicon font instead of hard-coded emoji or
-//! one-off icon substitutes. Flutter Classic already bundles this font and
-//! assigns these same glyphs to version-control operations.
+//! Mirror Classic's semantic split: Lucide for ordinary UI controls and
+//! VS Code Codicons for source-control actions and file-type fallbacks.
+//! Keep this mapping centralized instead of inventing glyphs per toolbar.
+use alera_gpui_desktop::visual_tokens::{MUTED, TEXT};
 use gpui::{div, px, rgb, Div, ElementId, ParentElement, Styled};
+use gpui_kit::assets::IconName as LucideIcon;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::Icon;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UiIcon {
@@ -13,6 +16,7 @@ pub enum UiIcon {
     NewFolder,
     Folder,
     FolderOpen,
+    Files,
     File,
     FileCode,
     FileMedia,
@@ -37,6 +41,8 @@ pub enum UiIcon {
     Branch,
     GitStage,
     GitUnstage,
+    GitDiscard,
+    GitRefresh,
     GitCommit,
     GitFetch,
     GitPull,
@@ -56,7 +62,7 @@ impl UiIcon {
             Self::NewFolder => '\u{ea80}',
             Self::Folder => '\u{ea83}',
             Self::FolderOpen => '\u{eaf7}',
-            Self::File => '\u{ec5e}',
+            Self::File | Self::Files => '\u{ec5e}',
             Self::FileCode => '\u{eae9}',
             Self::FileMedia => '\u{eaea}',
             Self::FilePdf => '\u{eaeb}',
@@ -79,6 +85,8 @@ impl UiIcon {
             Self::Graph => '\u{eb03}',
             Self::Branch => '\u{ec8e}',
             Self::GitUnstage => '\u{eb3b}',
+            Self::GitDiscard => '\u{eae2}',
+            Self::GitRefresh => '\u{eb37}',
             Self::GitCommit | Self::Check => '\u{eab2}',
             Self::GitFetch => '\u{ecb2}',
             Self::GitPull => '\u{eb40}',
@@ -119,12 +127,74 @@ pub fn explorer_file_icon(name: &str, is_directory: bool, expanded: bool) -> UiI
     }
 }
 
+/// Classic's ordinary buttons use Lucide while Git actions use Codicons.
+fn lucide_name(kind: UiIcon) -> Option<LucideIcon> {
+    Some(match kind {
+        UiIcon::Add => LucideIcon::Plus,
+        UiIcon::NewFile => LucideIcon::FilePlus,
+        UiIcon::NewFolder => LucideIcon::FolderPlus,
+        UiIcon::Folder => LucideIcon::Folder,
+        UiIcon::FolderOpen | UiIcon::Open => LucideIcon::FolderOpen,
+        UiIcon::Files => LucideIcon::Files,
+        UiIcon::File => LucideIcon::File,
+        UiIcon::ChevronUp => LucideIcon::ChevronUp,
+        UiIcon::ChevronDown => LucideIcon::ChevronDown,
+        UiIcon::ChevronRight => LucideIcon::ChevronRight,
+        UiIcon::Refresh => LucideIcon::RefreshCw,
+        UiIcon::CollapseAll => LucideIcon::ChevronsDownUp,
+        UiIcon::Search => LucideIcon::Search,
+        UiIcon::Edit => LucideIcon::Pencil,
+        UiIcon::Delete => LucideIcon::Trash2,
+        UiIcon::More => LucideIcon::Ellipsis,
+        UiIcon::Settings => LucideIcon::Settings,
+        UiIcon::Close => LucideIcon::X,
+        UiIcon::Pin => LucideIcon::Pin,
+        UiIcon::Terminal => LucideIcon::Terminal,
+        UiIcon::Graph => LucideIcon::GitGraph,
+        UiIcon::Branch => LucideIcon::GitBranch,
+        UiIcon::GitMerge => LucideIcon::GitMerge,
+        UiIcon::History => LucideIcon::History,
+        UiIcon::Save => LucideIcon::Save,
+        UiIcon::Check => LucideIcon::Check,
+        // Keep Classic Codicons for source control, and the differentiated
+        // Codicon file-type glyphs until Material SVG icons are integrated.
+        UiIcon::FileCode
+        | UiIcon::FileMedia
+        | UiIcon::FilePdf
+        | UiIcon::FileZip
+        | UiIcon::FileBinary
+        | UiIcon::GitStage
+        | UiIcon::GitUnstage
+        | UiIcon::GitDiscard
+        | UiIcon::GitRefresh
+        | UiIcon::GitCommit
+        | UiIcon::GitFetch
+        | UiIcon::GitPull
+        | UiIcon::GitPush
+        | UiIcon::SaveAs => return None,
+    })
+}
+
 pub fn icon(icon: UiIcon, size_px: f32, color: u32) -> Div {
-    div()
-        .font_family("codicon")
-        .text_size(px(size_px))
-        .text_color(rgb(color))
-        .child(icon.glyph().to_string())
+    let frame = div()
+        .w(px(size_px))
+        .h(px(size_px))
+        .flex()
+        .items_center()
+        .justify_center();
+    if let Some(name) = lucide_name(icon) {
+        frame.child(
+            Icon::new(name)
+                .with_size(px(size_px))
+                .text_color(rgb(color)),
+        )
+    } else {
+        frame
+            .font_family("codicon")
+            .text_size(px(size_px))
+            .text_color(rgb(color))
+            .child(icon.glyph().to_string())
+    }
 }
 
 /// GPUI Kit owns the button, hover, focus, and tooltip semantics. Keep
@@ -141,14 +211,77 @@ pub fn icon_button(
         .w(px(30.0))
         .h(px(30.0))
         .p_0()
-        .child(icon(
-            icon_kind,
-            16.0,
-            if active { 0xf4f6fa } else { 0xc6cbd4 },
-        ));
+        .child(icon(icon_kind, 16.0, if active { TEXT } else { MUTED }));
     if active {
         button.secondary()
     } else {
         button.ghost()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const CLASSIC_CODICONS: &str =
+        include_str!("../../lib/src/design_system/icons/alera_codicons.dart");
+    const CLASSIC_BUTTON: &str =
+        include_str!("../../lib/src/design_system/buttons/alera_icon_button.dart");
+    const CLASSIC_ICONS: &str = include_str!("../../lib/src/design_system/icons/alera_icons.dart");
+
+    #[test]
+    fn git_action_codicons_match_classic_semantic_registry() {
+        for (name, icon) in [
+            ("add", UiIcon::GitStage),
+            ("remove", UiIcon::GitUnstage),
+            ("discard", UiIcon::GitDiscard),
+            ("check", UiIcon::GitCommit),
+            ("gitFetch", UiIcon::GitFetch),
+            ("repoPull", UiIcon::GitPull),
+            ("repoPush", UiIcon::GitPush),
+        ] {
+            let expected = format!(
+                "static const IconData {name} = IconData(0x{:x}, fontFamily: _family);",
+                icon.glyph() as u32,
+            );
+            assert!(
+                CLASSIC_CODICONS.contains(&expected),
+                "Classic icon drift: {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn common_action_icons_match_classic_lucide_registry() {
+        for (classic_name, classic_variant, native) in [
+            ("add", "plus", UiIcon::Add),
+            ("newFile", "filePlus", UiIcon::NewFile),
+            ("newFolder", "folderPlus", UiIcon::NewFolder),
+            ("copyFiles", "files", UiIcon::Files),
+            ("refresh", "refreshCw", UiIcon::Refresh),
+            ("search", "search", UiIcon::Search),
+            ("delete", "trash2", UiIcon::Delete),
+            ("gitBranch", "gitBranch", UiIcon::Branch),
+            ("gitGraph", "gitGraph", UiIcon::Graph),
+        ] {
+            assert!(
+                CLASSIC_ICONS.contains(&format!(
+                    "static const IconData {classic_name} = LucideIcons.{classic_variant};"
+                )),
+                "Classic Lucide mapping drift: {classic_name}",
+            );
+            assert!(
+                lucide_name(native).is_some(),
+                "Missing Lucide: {classic_name}"
+            );
+        }
+        assert_eq!(lucide_name(UiIcon::GitStage), None);
+        assert_eq!(lucide_name(UiIcon::GitDiscard), None);
+    }
+
+    #[test]
+    fn toolbar_button_size_matches_classic() {
+        assert!(CLASSIC_BUTTON.contains("defaultIconSize = 16;"));
+        assert!(CLASSIC_BUTTON.contains("defaultMinSize = 30;"));
     }
 }
