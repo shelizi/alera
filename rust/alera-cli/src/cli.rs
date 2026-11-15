@@ -624,6 +624,10 @@ pub enum ProjectAction {
     Rename(ProjectRenameArgs),
     /// Read existing shared project settings, or defaults if not configured.
     ConfigShow(IdArgs),
+    /// Read effective config plus its actual source (UI override, alera.toml or defaults).
+    ConfigEffective(IdArgs),
+    /// Delete only the Host UI override; fall back to alera.toml or defaults.
+    ConfigClear(IdArgs),
     /// Replace the shared project settings with validated JSON.
     ConfigSet(ProjectConfigSetArgs),
     /// Preview Classic Host project removal impact before confirmation.

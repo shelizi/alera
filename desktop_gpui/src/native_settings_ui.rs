@@ -153,13 +153,17 @@ impl Workbench {
         self.project_settings_error = None;
         self.project_settings_config = None;
         self.project_settings_save_status.clear();
+        self.project_settings_source = None;
+        self.project_settings_repo_error = false;
+        self.project_settings_use_repo_confirmed = false;
+
         self.project_settings_request = self.project_settings_request.wrapping_add(1);
         let request = self.project_settings_request;
         let generation = self.workspace_generation;
         cx.spawn(async move |view, cx| {
             let project = project_id.clone();
             let result = cx
-                .background_spawn(async move { bridge.read_project_settings(&project) })
+                .background_spawn(async move { bridge.read_project_settings_document(&project) })
                 .await;
             view.update(cx, |view, cx| {
                 if view.project_settings_request != request {
@@ -168,6 +172,9 @@ impl Workbench {
                 if view.workspace_generation != generation {
                     view.project_settings_loading = false;
                     view.project_settings_project_id = None;
+                    view.project_settings_source = None;
+                    view.project_settings_repo_error = false;
+                    view.project_settings_use_repo_confirmed = false;
                     view.project_settings_rows.clear();
                     view.project_settings_error = Some(
                         "Workspace changed; refresh Project Settings".to_owned(),
@@ -177,18 +184,23 @@ impl Workbench {
                 }
                 view.project_settings_loading = false;
                 match result {
-                    Ok(value) => {
+                    Ok(document) => {
+                        let value = document.config;
                         match alera_gpui_desktop::project_settings_preview::project_settings_summary(&value) {
                             Ok(rows) => {
                                 view.project_settings_rows = rows;
                                 view.project_settings_config = Some(value);
                                 view.project_settings_project_id = Some(project_id);
+                                view.project_settings_source = Some(document.origin);
+                                view.project_settings_repo_error = document.repo_config_error;
                                 view.project_settings_error = None;
                             }
                             Err(error) => {
                                 view.project_settings_rows.clear();
                                 view.project_settings_config = None;
                                 view.project_settings_project_id = None;
+                                view.project_settings_source = None;
+                                view.project_settings_repo_error = false;
                                 view.project_settings_error = Some(error.to_owned());
                             }
                         }
@@ -197,6 +209,8 @@ impl Workbench {
                         view.project_settings_rows.clear();
                         view.project_settings_config = None;
                         view.project_settings_project_id = None;
+                        view.project_settings_source = None;
+                        view.project_settings_repo_error = false;
                         view.project_settings_error = Some(format!(
                             "Host Project Settings unavailable: {error}"
                         ));
@@ -402,6 +416,7 @@ impl Workbench {
         }
         self.project_settings_copy_inputs = copy_inputs;
         self.project_settings_setup_inputs = setup_inputs;
+        self.project_settings_use_repo_confirmed = false;
         self.project_settings_draft_provider = provider;
         self.project_settings_editing = true;
         self.project_settings_save_status.clear();
@@ -530,6 +545,12 @@ impl Workbench {
                 return;
             }
         };
+        let Some(original_source) = self.project_settings_source else {
+            self.project_settings_save_status =
+                "Reload effective Project Settings before saving".into();
+            cx.notify();
+            return;
+        };
         let original = original.clone();
         let generation = self.workspace_generation;
         self.project_settings_mutation_request =
@@ -541,9 +562,9 @@ impl Workbench {
         cx.spawn(async move |view, cx| {
             let project_for_host = project_id.clone();
             let result = cx.background_spawn(async move {
-                let latest = bridge.read_project_settings(&project_for_host)
+                let latest = bridge.read_project_settings_document(&project_for_host)
                     .map_err(|error| (error, false))?;
-                if latest != original {
+                if latest.config != original || latest.origin != original_source {
                     return Err((
                         std::io::Error::new(
                             std::io::ErrorKind::AlreadyExists,
@@ -554,12 +575,12 @@ impl Workbench {
                 }
                 bridge.write_project_settings(&project_for_host, &encoded)
                     .map_err(|error| (error, true))?;
-                let readback = bridge.read_project_settings(&project_for_host)
+                let readback = bridge.read_project_settings_document(&project_for_host)
                     .map_err(|error| (error, true))?;
-                if !alera_gpui_desktop::project_settings_preview::host_config_matches(
-                    &revised,
-                    &readback,
-                ) {
+                if readback.origin != HostProjectConfigOrigin::UiOverride
+                    || !alera_gpui_desktop::project_settings_preview::host_config_matches(
+                        &revised, &readback.config,
+                    ) {
                     return Err((
                         std::io::Error::other("Host project settings readback differs from saved values"),
                         true,
@@ -576,9 +597,12 @@ impl Workbench {
                 view.project_settings_save_busy = false;
                 match result {
                     Ok(readback) => {
-                        match alera_gpui_desktop::project_settings_preview::project_settings_summary(&readback) {
+                        match alera_gpui_desktop::project_settings_preview::project_settings_summary(&readback.config) {
                             Ok(rows) => {
-                                view.project_settings_config = Some(readback);
+                                view.project_settings_source = Some(readback.origin);
+                                view.project_settings_repo_error = readback.repo_config_error;
+                                view.project_settings_use_repo_confirmed = false;
+                                view.project_settings_config = Some(readback.config);
                                 view.project_settings_project_id = Some(project_id);
                                 view.project_settings_rows = rows;
                                 view.project_settings_error = None;
@@ -611,6 +635,9 @@ impl Workbench {
                             view.project_settings_rows.clear();
                             view.project_settings_copy_inputs.clear();
                             view.project_settings_setup_inputs.clear();
+                            view.project_settings_source = None;
+                            view.project_settings_repo_error = false;
+                            view.project_settings_use_repo_confirmed = false;
                             view.project_settings_error = Some(
                                 "Project save outcome is uncertain; refresh from Host before editing again".into()
                             );
@@ -623,6 +650,153 @@ impl Workbench {
                 cx.notify();
             }).ok();
         }).detach();
+        cx.notify();
+    }
+
+    /// "Use Repo File" is Classic's explicit action to remove the Host UI
+    /// override. Never delete or modify the repository's alera.toml. Without
+    /// a valid repo file the effective source becomes defaults instead.
+    pub(super) fn use_repo_file_for_project_settings(&mut self, cx: &mut Context<Self>) {
+        if self.project_settings_loading
+            || self.project_settings_save_busy
+            || self.project_settings_editing
+            || self.project_settings_source != Some(HostProjectConfigOrigin::UiOverride)
+        {
+            return;
+        }
+        if !self.project_settings_use_repo_confirmed {
+            self.project_settings_use_repo_confirmed = true;
+            self.project_settings_save_status =
+                "Confirm removing this project's UI override. alera.toml will take over if valid; otherwise defaults apply. No repository files will be changed.".into();
+            cx.notify();
+            return;
+        }
+        self.project_settings_use_repo_confirmed = false;
+        let Some(project_id) = self.project_settings_project_id.clone() else {
+            self.project_settings_save_status =
+                "Reload Project Settings before switching source".into();
+            cx.notify();
+            return;
+        };
+        if self.runtime_catalog.as_ref().and_then(|catalog| {
+            alera_gpui_desktop::project_settings_preview::project_id_for_workspace(
+                catalog,
+                self.model.root(),
+            )
+        }) != Some(project_id.as_str())
+        {
+            self.project_settings_save_status = "Workspace project changed; refresh first".into();
+            cx.notify();
+            return;
+        }
+        let Some(original) = self.project_settings_config.clone() else {
+            self.project_settings_save_status = "ProjectConfig is not loaded; refresh first".into();
+            cx.notify();
+            return;
+        };
+        let Some(bridge) = self.runtime_bridge.clone() else {
+            self.project_settings_save_status = "Runtime Host CLI unavailable".into();
+            cx.notify();
+            return;
+        };
+        let generation = self.workspace_generation;
+        self.project_settings_mutation_request =
+            self.project_settings_mutation_request.wrapping_add(1);
+        let request = self.project_settings_mutation_request;
+        self.project_settings_save_busy = true;
+        self.project_settings_save_status =
+            "Checking Host override and switching to repository configuration…".into();
+        cx.spawn(async move |view, cx| {
+            let selected_project_id = project_id.clone();
+            let result = cx.background_spawn(async move {
+                let latest = bridge.read_project_settings_document(&selected_project_id)
+                    .map_err(|error| (error, false))?;
+                if latest.origin != HostProjectConfigOrigin::UiOverride || latest.config != original {
+                    return Err((
+                        std::io::Error::new(
+                            std::io::ErrorKind::AlreadyExists,
+                            "Host ProjectConfig changed; refresh before removing the override",
+                        ),
+                        false,
+                    ));
+                }
+                bridge.clear_project_settings_override(&selected_project_id)
+                    .map_err(|error| (error, true))?;
+                let readback = bridge.read_project_settings_document(&selected_project_id)
+                    .map_err(|error| (error, true))?;
+                if readback.origin == HostProjectConfigOrigin::UiOverride {
+                    return Err((
+                        std::io::Error::other("Host still reports an active UI override"),
+                        true,
+                    ));
+                }
+                Ok(readback)
+            }).await;
+            view.update(cx, |view, cx| {
+                if view.workspace_generation != generation
+                    || view.project_settings_mutation_request != request
+                {
+                    return;
+                }
+                view.project_settings_save_busy = false;
+                view.project_settings_use_repo_confirmed = false;
+                match result {
+                    Ok(readback) => {
+                        match alera_gpui_desktop::project_settings_preview::project_settings_summary(
+                            &readback.config,
+                        ) {
+                            Ok(rows) => {
+                                let source = readback.origin;
+                                let repo_error = readback.repo_config_error;
+                                view.project_settings_source = Some(source);
+                                view.project_settings_repo_error = repo_error;
+                                view.project_settings_config = Some(readback.config);
+                                view.project_settings_project_id = Some(project_id);
+                                view.project_settings_rows = rows;
+                                view.project_settings_error = None;
+                                view.project_settings_save_status = if repo_error {
+                                    "Host UI override removed; repository alera.toml is invalid. Fix the file before using repo setup.".into()
+                                } else {
+                                    format!("UI override removed; Host now uses {}", source.label())
+                                };
+                            }
+                            Err(error) => {
+                                view.project_settings_config = None;
+                                view.project_settings_source = None;
+                                view.project_settings_error = Some(format!(
+                                    "Override removed, but Host returned invalid settings: {error}; refresh"
+                                ));
+                            }
+                        }
+                    }
+                    Err((error, outcome_unknown)) => {
+                        if outcome_unknown {
+                            view.project_settings_config = None;
+                            view.project_settings_source = None;
+                            view.project_settings_repo_error = false;
+                            view.project_settings_project_id = None;
+                            view.project_settings_rows.clear();
+                            view.project_settings_error = Some(
+                                "Override removal outcome is uncertain; refresh Host settings before another action".into()
+                            );
+                        }
+                        view.project_settings_save_status =
+                            format!("Use Repo File not confirmed: {error}");
+                    }
+                }
+                cx.notify();
+            }).ok();
+        }).detach();
+        cx.notify();
+    }
+
+    pub(super) fn cancel_use_repo_file_confirmation(&mut self, cx: &mut Context<Self>) {
+        if self.project_settings_save_busy {
+            return;
+        }
+        self.project_settings_use_repo_confirmed = false;
+        self.project_settings_save_status =
+            "Kept Host UI override; no configuration changed".into();
         cx.notify();
     }
 

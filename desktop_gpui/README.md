@@ -115,10 +115,24 @@ CLI is outdated. Build/update the Native-bundled Rust CLI together with the
 Native frontend before using Save. No CLI/Host changes are applied to a
 shipping Classic install automatically.
 
-Repository **`alera.toml` source selection / Use Repo File** is still
-not available in this Native form; changes write the Host-owned UI override.
-The read-only summary remains useful even when the CLI cannot save.
-Interactive Windows GUI + live Host acceptance is a separate release gate.
+**Effective source and Use Repo File (S09):** The Native editor now uses
+the same effective ProjectConfig resolver as the Runtime Host and explicitly
+labels its source: **UI override**, **Repository alera.toml**, or **Defaults**.
+`config-effective` is an additive CLI command; it does not change Classic's
+legacy `config-show` semantics. When an override exists, **Use Repo File**
+opens a second confirmation. Confirming removes *only* that project's Host UI
+override via the existing `projectConfig.remove` action. The repo file is
+never modified. The effective config is read back before success is reported.
+If no repo file exists, the Host uses defaults; if `alera.toml` is invalid,
+the form displays a warning without echoing parser text or its contents.
+
+Both **Save to Host** and **Use Repo File** compare the current effective
+config *and its origin* with what was loaded, and reject mismatched snapshots.
+The Host still lacks atomic cross-client compare-and-set, so a concurrent
+Classic update between the preflight read and mutation remains possible.
+Older CLI sidecars without `config-effective/config-clear` fail explicitly;
+package the matching updated CLI with Native. The real Windows GPUI/Host
+round trip remains a release gate.
 
 ## Native terminal scrollback (Windows / macOS / Linux)
 

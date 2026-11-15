@@ -101,7 +101,7 @@ use alera_gpui_desktop::project_tree::{
     ProjectTreeGroup,
 };
 use alera_gpui_desktop::runtime_bridge::{
-    AgentHookSettingsSnapshot, ProjectRemovalPreview, RuntimeCliBridge,
+    AgentHookSettingsSnapshot, HostProjectConfigOrigin, ProjectRemovalPreview, RuntimeCliBridge,
 };
 use alera_gpui_desktop::runtime_catalog::RuntimeCatalog;
 use alera_gpui_desktop::session::{
@@ -617,6 +617,9 @@ struct Workbench {
     project_settings_error: Option<String>,
     project_settings_request: u64,
     project_settings_config: Option<serde_json::Value>,
+    project_settings_source: Option<HostProjectConfigOrigin>,
+    project_settings_repo_error: bool,
+    project_settings_use_repo_confirmed: bool,
     project_settings_editing: bool,
     project_settings_draft_provider: Option<String>,
     project_settings_prompt_input: Entity<QuickOpenInput>,
@@ -5663,6 +5666,10 @@ impl Workbench {
         self.project_settings_project_id = None;
         self.project_settings_config = None;
         self.project_settings_rows.clear();
+        self.project_settings_source = None;
+        self.project_settings_repo_error = false;
+        self.project_settings_use_repo_confirmed = false;
+
         self.project_settings_editing = false;
         self.project_settings_loading = false;
         self.project_settings_save_busy = false;
@@ -14879,6 +14886,9 @@ fn main() {
                             project_settings_error: None,
                             project_settings_request: 0,
                             project_settings_config: None,
+                            project_settings_source: None,
+                            project_settings_repo_error: false,
+                            project_settings_use_repo_confirmed: false,
                             project_settings_editing: false,
                             project_settings_draft_provider: None,
                             project_settings_prompt_input: cx.new(|cx| QuickOpenInput::profile_multiline(cx)),

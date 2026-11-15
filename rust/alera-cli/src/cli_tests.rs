@@ -6,6 +6,26 @@ use crate::cli::{
 use crate::cli_orchestration::{OrchestrationAction, OrchestrationCommand};
 
 #[test]
+fn project_config_effective_and_clear_are_explicit_subcommands() {
+    for (verb, expected_clear) in [("config-effective", false), ("config-clear", true)] {
+        let parsed =
+            Cli::try_parse_from(["alera", "project", "--json", verb, "--id", "test-project"])
+                .expect("project source command must parse");
+        match parsed.command {
+            Command::Project(crate::cli::ProjectCommand {
+                action: crate::cli::ProjectAction::ConfigEffective(IdArgs { id }),
+                ..
+            }) if !expected_clear => assert_eq!(id, "test-project"),
+            Command::Project(crate::cli::ProjectCommand {
+                action: crate::cli::ProjectAction::ConfigClear(IdArgs { id }),
+                ..
+            }) if expected_clear => assert_eq!(id, "test-project"),
+            other => panic!("incorrect config command: {other:?}"),
+        }
+    }
+}
+
+#[test]
 fn project_config_set_accepts_stdin_sentinel_without_secret_commandline() {
     let parsed = Cli::try_parse_from([
         "alera",

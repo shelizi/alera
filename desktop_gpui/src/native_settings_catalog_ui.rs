@@ -344,6 +344,9 @@ impl Workbench {
         };
         let editing = self.project_settings_editing;
         let busy = self.project_settings_save_busy;
+        let config_source = self.project_settings_source;
+        let repo_config_error = self.project_settings_repo_error;
+        let confirm_repo_fallback = self.project_settings_use_repo_confirmed;
         let save_status = self.project_settings_save_status.clone();
         let draft_provider = self.project_settings_draft_provider.clone();
         let status = if self.project_settings_loading {
@@ -351,7 +354,7 @@ impl Workbench {
         } else if let Some(error) = self.project_settings_error.as_deref() {
             error.to_owned()
         } else if loaded {
-            "Runtime Host configuration · prompt text stays hidden until you choose Edit. Worktree copy/setup rules are preserved unchanged."
+            "Runtime Host effective configuration · paths, setup commands and prompt text remain hidden until you choose Edit."
                 .to_owned()
         } else {
             "Refresh to inspect this registered project's actual configuration.".to_owned()
@@ -414,6 +417,19 @@ impl Workbench {
                     ),
             )
             .child(div().text_xs().text_color(rgb(MUTED)).child(status))
+            .when(loaded, |panel| {
+                panel.child(
+                    div().flex().items_center().justify_between().gap_2()
+                        .p_2().rounded_md().border_1().border_color(rgb(BORDER))
+                        .child(div().text_xs().text_color(rgb(TEXT)).child("Effective config source"))
+                        .child(div().text_xs().text_color(rgb(MUTED))
+                            .child(config_source.map(HostProjectConfigOrigin::label).unwrap_or("Unknown"))),
+                )
+            })
+            .when(loaded && repo_config_error, |panel| {
+                panel.child(div().text_xs().text_color(rgb(MUTED))
+                    .child("Repository alera.toml is invalid; Host reported defaults. Fix that file before relying on repository setup."))
+            })
             .children(rows.into_iter().enumerate().map(|(i, (name, value))| {
                 div()
                     .id(("native-host-project-config-row", i))
@@ -426,6 +442,43 @@ impl Workbench {
                     .child(div().text_xs().text_color(rgb(TEXT)).child(name))
                     .child(div().text_xs().text_color(rgb(MUTED)).child(value))
             }))
+            .when(loaded
+                && config_source == Some(HostProjectConfigOrigin::UiOverride)
+                && !editing && !busy, |panel| {
+                panel.child(
+                    div().flex().flex_col().gap_2()
+                        .child(div().text_xs().text_color(rgb(MUTED))
+                            .child("Use Repo File removes only the Host UI override. A valid alera.toml takes effect; without one, defaults apply."))
+                        .child(
+                            div().flex().flex_wrap().gap_2()
+                                .child(
+                                    native_components::action_button(
+                                        "host-project-config-use-repo",
+                                        if confirm_repo_fallback {
+                                            "Confirm Remove UI Override"
+                                        } else {
+                                            "Use Repo File"
+                                        },
+                                        false,
+                                        confirm_repo_fallback,
+                                    ).on_click(cx.listener(|view, _, _, cx| {
+                                        view.use_repo_file_for_project_settings(cx);
+                                    })),
+                                )
+                                .when(confirm_repo_fallback, |row| {
+                                    row.child(
+                                        native_components::action_button(
+                                            "host-project-config-use-repo-cancel",
+                                            "Keep UI Override",
+                                            false, false,
+                                        ).on_click(cx.listener(|view, _, _, cx| {
+                                            view.cancel_use_repo_file_confirmation(cx);
+                                        })),
+                                    )
+                                }),
+                        ),
+                )
+            })
             .when(loaded && !editing && !busy, |panel| {
                 panel.child(
                     native_components::action_button(

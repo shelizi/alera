@@ -29,6 +29,84 @@ pub fn terminal_cli_arguments(runtime_dir: &Path, args: &[OsString]) -> Vec<OsSt
     command
 }
 
+/// Origin of the *effective* Runtime Host project configuration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HostProjectConfigOrigin {
+    UiOverride,
+    RepoFile,
+    None,
+}
+
+impl HostProjectConfigOrigin {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::UiOverride => "UI override",
+            Self::RepoFile => "Repository alera.toml",
+            Self::None => "Defaults (no repo file)",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct HostProjectSettingsDocument {
+    pub config: Value,
+    pub origin: HostProjectConfigOrigin,
+    pub repo_config_error: bool,
+}
+
+fn parse_host_project_settings_document(
+    response: &Value,
+    project_id: &str,
+) -> io::Result<HostProjectSettingsDocument> {
+    if response.get("kind").and_then(Value::as_str) != Some("projectConfig")
+        || response.get("projectId").and_then(Value::as_str) != Some(project_id)
+    {
+        return Err(io::Error::new(
+            ErrorKind::InvalidData,
+            "Effective project config response mismatched",
+        ));
+    }
+    let origin = match response.get("origin").and_then(Value::as_str) {
+        Some("uiOverride") => HostProjectConfigOrigin::UiOverride,
+        Some("repoFile") => HostProjectConfigOrigin::RepoFile,
+        Some("none") => HostProjectConfigOrigin::None,
+        _ => {
+            return Err(io::Error::new(
+                ErrorKind::InvalidData,
+                "Unknown effective ProjectConfig source",
+            ))
+        }
+    };
+    let repo_config_error = match response.get("error") {
+        None | Some(Value::Null) => false,
+        Some(Value::String(s)) => !s.is_empty(),
+        _ => {
+            return Err(io::Error::new(
+                ErrorKind::InvalidData,
+                "Invalid ProjectConfig error field",
+            ))
+        }
+    };
+    if repo_config_error && origin != HostProjectConfigOrigin::RepoFile {
+        return Err(io::Error::new(
+            ErrorKind::InvalidData,
+            "Unexpected ProjectConfig source error",
+        ));
+    }
+    let config = response
+        .get("config")
+        .filter(|config| config.is_object())
+        .cloned()
+        .ok_or_else(|| {
+            io::Error::new(ErrorKind::InvalidData, "Effective project config missing")
+        })?;
+    Ok(HostProjectSettingsDocument {
+        config,
+        origin,
+        repo_config_error,
+    })
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectRemovalPreview {
     pub workspace_count: u64,
@@ -1321,8 +1399,12 @@ impl RuntimeCliBridge {
         Ok(())
     }
 
-    /// Fetch Classic's entire project config for a first-class shared editor.
-    pub fn read_project_settings(&self, project_id: &str) -> io::Result<Value> {
+    /// Fetch the complete effective ProjectConfig and exact source using the
+    /// existing Host resolver. Unlike config-show, this includes repo files.
+    pub fn read_project_settings_document(
+        &self,
+        project_id: &str,
+    ) -> io::Result<HostProjectSettingsDocument> {
         validate_catalog_identifier(project_id)?;
         let mut command = windowless_command(&self.executable);
         command
@@ -1330,7 +1412,7 @@ impl RuntimeCliBridge {
             .arg("--json")
             .arg("--runtime-dir")
             .arg(&self.runtime_dir)
-            .arg("config-show")
+            .arg("config-effective")
             .arg("--id")
             .arg(project_id)
             .stdin(Stdio::null())
@@ -1368,19 +1450,37 @@ impl RuntimeCliBridge {
         }
         let response: Value = serde_json::from_slice(&bytes)
             .map_err(|error| io::Error::new(ErrorKind::InvalidData, error))?;
-        if response.get("kind").and_then(Value::as_str) != Some("projectConfig")
-            || response.get("projectId").and_then(Value::as_str) != Some(project_id)
-        {
-            return Err(io::Error::new(
-                ErrorKind::InvalidData,
-                "Project config response mismatched",
+        parse_host_project_settings_document(&response, project_id)
+    }
+
+    pub fn read_project_settings(&self, project_id: &str) -> io::Result<Value> {
+        self.read_project_settings_document(project_id)
+            .map(|document| document.config)
+    }
+
+    /// Explicitly remove only the Host UI override; never modify alera.toml.
+    /// No implicit Host start or direct RuntimeStore/SQLite access in Native.
+    pub fn clear_project_settings_override(&self, project_id: &str) -> io::Result<()> {
+        validate_catalog_identifier(project_id)?;
+        let mut command = windowless_command(&self.executable);
+        command
+            .arg("project")
+            .arg("--json")
+            .arg("--runtime-dir")
+            .arg(&self.runtime_dir)
+            .arg("config-clear")
+            .arg("--id")
+            .arg(project_id)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let mut child = command.spawn()?;
+        if !wait_with_timeout(&mut child, PROBE_TIMEOUT)?.success() {
+            return Err(io::Error::other(
+                "Host refused ProjectConfig override removal or CLI is outdated",
             ));
         }
-        response
-            .get("config")
-            .cloned()
-            .filter(Value::is_object)
-            .ok_or_else(|| io::Error::new(ErrorKind::InvalidData, "Project config JSON missing"))
+        Ok(())
     }
 
     pub fn write_project_settings(&self, project_id: &str, json: &str) -> io::Result<()> {
@@ -1902,6 +2002,56 @@ fn validate_desktop_settings_response(verb: Option<&str>, response: &Value) -> i
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn effective_project_config_source_is_strict_and_does_not_expose_repo_parse_errors() {
+        let override_doc = serde_json::json!({
+            "kind": "projectConfig", "projectId": "p-1",
+            "origin": "uiOverride", "error": null,
+            "config": {"worktree": {"setup": ["export SECRET=hidden"]}},
+        });
+        let parsed = parse_host_project_settings_document(&override_doc, "p-1").unwrap();
+        assert_eq!(parsed.origin, HostProjectConfigOrigin::UiOverride);
+        assert_eq!(parsed.origin.label(), "UI override");
+        assert!(!parsed.repo_config_error);
+        assert_eq!(
+            parsed.config["worktree"]["setup"][0],
+            "export SECRET=hidden"
+        );
+        assert!(parse_host_project_settings_document(&override_doc, "p-2").is_err());
+        let repo = serde_json::json!({
+            "kind": "projectConfig", "projectId": "p-1",
+            "origin": "repoFile", "error": "private parser error with path",
+            "config": {},
+        });
+        let parsed = parse_host_project_settings_document(&repo, "p-1").unwrap();
+        assert_eq!(parsed.origin, HostProjectConfigOrigin::RepoFile);
+        assert!(parsed.repo_config_error);
+        assert!(parse_host_project_settings_document(
+            &serde_json::json!({
+                "kind": "projectConfig", "projectId": "p-1", "origin": "other",
+                "error": null, "config": {},
+            }),
+            "p-1"
+        )
+        .is_err());
+        assert!(parse_host_project_settings_document(
+            &serde_json::json!({
+                "kind": "projectConfig", "projectId": "p-1", "origin": "none",
+                "error": null, "config": "not-an-object",
+            }),
+            "p-1"
+        )
+        .is_err());
+        assert!(parse_host_project_settings_document(
+            &serde_json::json!({
+                "kind": "projectConfig", "projectId": "p-1", "origin": "uiOverride",
+                "error": "wrong origin error", "config": {},
+            }),
+            "p-1"
+        )
+        .is_err());
+    }
 
     #[test]
     fn s03_shared_settings_cas_rejects_mismatched_or_missing_host_readback() {

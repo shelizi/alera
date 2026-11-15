@@ -491,6 +491,52 @@ async fn run_project_command(command: ProjectCommand) -> i32 {
                 Err(error) => return print_error(error),
             }
         }
+        ProjectAction::ConfigEffective(IdArgs { id }) => {
+            let store = match open_store(&runtime).await {
+                Ok(store) => store,
+                Err(error) => return print_error(error),
+            };
+            match project_management::effective_project_config(&store, &id).await {
+                Ok(effective) => print_value(
+                    &json!({
+                        "kind": "projectConfig",
+                        "projectId": id,
+                        "origin": effective.origin,
+                        "config": effective.config,
+                        "error": effective.error,
+                    }),
+                    json_output,
+                    "effective project settings listed",
+                ),
+                Err(error) => return print_error(error),
+            }
+        }
+        ProjectAction::ConfigClear(IdArgs { id }) => {
+            let store = match open_store(&runtime).await {
+                Ok(store) => store,
+                Err(error) => return print_error(error),
+            };
+            match store.find_project(&id).await {
+                Ok(Some(_)) => {}
+                Ok(None) => return print_error(format!("Project not found: {id}")),
+                Err(error) => return print_error(error),
+            }
+            let payload = json!({"projectId": id});
+            let fallback_id = id.clone();
+            match runtime_host_or_store_unit(
+                &runtime,
+                "projectConfig.remove",
+                &payload,
+                |store| async move { store.remove_project_config(&fallback_id).await },
+            ).await {
+                Ok(()) => print_value(
+                    &json!({"kind": "projectConfigCleared", "projectId": id}),
+                    json_output,
+                    "project settings override cleared",
+                ),
+                Err(error) => return print_error(error),
+            }
+        }
         ProjectAction::ConfigSet(args) => {
             // Native uses --config-json - and pipes the full JSON through
             // stdin: setup commands and prompts never appear in process argv.
