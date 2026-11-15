@@ -322,17 +322,33 @@ impl Workbench {
     /// Worktree setup commands and prompt bodies are counted, not displayed,
     /// because a search preview must not reveal potential secret values.
     fn render_host_project_settings(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let project = self.runtime_catalog.as_ref().and_then(|catalog| {
-            let id = alera_gpui_desktop::project_settings_preview::project_id_for_workspace(
+        let project_id = self.runtime_catalog.as_ref().and_then(|catalog| {
+            alera_gpui_desktop::project_settings_preview::selected_project_for_settings(
                 catalog,
                 self.model.root(),
-            )?;
-            catalog.projects.iter().find(|project| project.id == id)
+                self.project_settings_selected_project_id.as_deref(),
+            )
         });
-        let project_id = project.map(|project| project.id.as_str());
+        let project = self.runtime_catalog.as_ref().and_then(|catalog| {
+            catalog
+                .projects
+                .iter()
+                .find(|project| Some(project.id.as_str()) == project_id)
+        });
         let project_name = project
             .map(|project| project.name.clone())
-            .unwrap_or_else(|| "No registered Host project for this workspace".to_owned());
+            .unwrap_or_else(|| "No registered Host projects".to_owned());
+        let project_choices = self
+            .runtime_catalog
+            .as_ref()
+            .map(|catalog| {
+                catalog
+                    .projects
+                    .iter()
+                    .map(|p| (p.id.clone(), p.name.clone(), p.root.display().to_string()))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
         let loaded = project_id.is_some()
             && self.project_settings_project_id.as_deref() == project_id
             && !self.project_settings_loading
@@ -405,8 +421,10 @@ impl Workbench {
                                 return;
                             }
                             if view.runtime_catalog.as_ref().and_then(|catalog| {
-                                alera_gpui_desktop::project_settings_preview::project_id_for_workspace(
-                                    catalog, view.model.root(),
+                                alera_gpui_desktop::project_settings_preview::selected_project_for_settings(
+                                    catalog,
+                                    view.model.root(),
+                                    view.project_settings_selected_project_id.as_deref(),
                                 )
                             }).is_none() {
                                 view.refresh_project_tree(cx);
@@ -417,6 +435,67 @@ impl Workbench {
                     ),
             )
             .child(div().text_xs().text_color(rgb(MUTED)).child(status))
+            .when(!project_choices.is_empty(), |panel| {
+                panel.child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .text_color(rgb(TEXT))
+                                .child("Registered Projects"),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(rgb(MUTED))
+                                .child("Choose a project's settings without switching your active Workspace. Save or Cancel an open draft first."),
+                        )
+                        .child(
+                            div()
+                                .id("host-project-settings-project-list")
+                                .max_h(px(190.0))
+                                .overflow_y_scroll()
+                                .flex()
+                                .flex_col()
+                                .gap_1()
+                                .children(
+                                    project_choices.into_iter().enumerate().map(|(index, (id, name, root))| {
+                                        let selected = Some(id.as_str()) == project_id;
+                                        div()
+                                            .id(("host-project-settings-choice", index))
+                                            .cursor_pointer()
+                                            .flex()
+                                            .flex_col()
+                                            .gap_1()
+                                            .p_2()
+                                            .rounded_md()
+                                            .border_1()
+                                            .border_color(rgb(if selected { BORDER_ACTIVE } else { BORDER }))
+                                            .bg(rgb(if selected { ACTIVE } else { TOOLBAR }))
+                                            .child(
+                                                div()
+                                                    .text_sm()
+                                                    .text_color(rgb(TEXT))
+                                                    .child(if selected { format!("✓ {name}") } else { name }),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(rgb(MUTED))
+                                                    .child(root),
+                                            )
+                                            .on_click(cx.listener(move |view, _, _, cx| {
+                                                view.select_host_project_settings_project(&id, cx);
+                                            }))
+                                    })
+                                ),
+                        ),
+                )
+            })
             .when(loaded, |panel| {
                 panel.child(
                     div().flex().items_center().justify_between().gap_2()

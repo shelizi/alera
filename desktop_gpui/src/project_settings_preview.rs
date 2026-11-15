@@ -30,6 +30,24 @@ pub fn project_id_for_workspace<'a>(
         .map(|project| project.id.as_str())
 }
 
+/// Resolve the Project Settings selection only against the trusted Host
+/// catalog. An explicit selection never changes the active workspace; if a
+/// project disappears during refresh, fall back to the active workspace's
+/// registered project or Classic's first registered project.
+pub fn selected_project_for_settings<'a>(
+    catalog: &'a RuntimeCatalog,
+    workspace: &Path,
+    selected_id: Option<&str>,
+) -> Option<&'a str> {
+    if let Some(id) = selected_id {
+        if let Some(project) = catalog.projects.iter().find(|project| project.id == id) {
+            return Some(project.id.as_str());
+        }
+    }
+    project_id_for_workspace(catalog, workspace)
+        .or_else(|| catalog.projects.first().map(|project| project.id.as_str()))
+}
+
 /// Display useful settings facts without echoing arbitrary setup commands,
 /// copied paths, secrets or new-workspace prompt text into UI search results.
 pub fn project_settings_summary(value: &Value) -> Result<Vec<(String, String)>, &'static str> {
@@ -592,6 +610,60 @@ mod tests {
             updated_project_config(&future, Some("customEnterpriseForge"), "new").unwrap()
                 ["gitHostingProvider"],
             "customEnterpriseForge"
+        );
+    }
+
+    #[test]
+    fn s10_selects_any_registered_host_project_without_switching_workspace() {
+        let mut catalog = RuntimeCatalog::default();
+        catalog.projects.push(RuntimeProject {
+            id: "current".into(),
+            name: "Current workspace".into(),
+            root: PathBuf::from("/current-repo"),
+        });
+        catalog.projects.push(RuntimeProject {
+            id: "other".into(),
+            name: "Other registered project".into(),
+            root: PathBuf::from("/other-repo"),
+        });
+        catalog.workspaces.push(RuntimeWorkspace {
+            id: "current-ws".into(),
+            project_id: "current".into(),
+            name: "feature".into(),
+            path: PathBuf::from("/current-worktree"),
+            branch: None,
+            is_pinned: false,
+            tag_names: vec![],
+            tag_ids: vec![],
+            section_id: None,
+            parent_workspace_id: None,
+            is_archived: false,
+        });
+        let active = Path::new("/current-worktree");
+        assert_eq!(
+            selected_project_for_settings(&catalog, active, None),
+            Some("current")
+        );
+        assert_eq!(
+            selected_project_for_settings(&catalog, active, Some("other")),
+            Some("other")
+        );
+        assert_eq!(
+            selected_project_for_settings(&catalog, active, Some("unknown-or-deleted")),
+            Some("current")
+        );
+        assert_eq!(
+            selected_project_for_settings(&catalog, Path::new("/unregistered"), None),
+            Some("current")
+        );
+        assert_eq!(
+            selected_project_for_settings(&catalog, Path::new("/unregistered"), Some("other")),
+            Some("other")
+        );
+        catalog.projects.clear();
+        assert_eq!(
+            selected_project_for_settings(&catalog, active, Some("other")),
+            None
         );
     }
 

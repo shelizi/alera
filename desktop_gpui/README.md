@@ -134,6 +134,24 @@ Older CLI sidecars without `config-effective/config-clear` fail explicitly;
 package the matching updated CLI with Native. The real Windows GPUI/Host
 round trip remains a release gate.
 
+**Cross-project selection (S10):** Settings → Projects now shows a
+bounded, scrollable list of *all* registered Runtime Host projects.
+Choosing one changes only the Project Settings target; the Workbench's
+active Workspace, Terminal tabs, Editor buffers and Git branch do not
+switch. The first selection follows the active Workspace's registered
+project (or the first registered project if that Workspace is not
+registered). Each row includes the registered project name and path to
+distinguish duplicates. All source reads, edits, Save to Host and
+Use Repo File actions use the selected Project ID.
+
+Switching settings projects is blocked while an edit draft exists or a
+Host write is in progress. Explicit Save or Cancel unlocks selection.
+A completed project switch clears the previous project's preview and
+disarms any pending override-removal confirmation; stale async Host
+read responses cannot populate a different project's form. When the
+active Workspace itself changes, the Settings selection resets.
+Deleted/unknown project IDs never become Host mutation targets.
+
 ## Native terminal scrollback (Windows / macOS / Linux)
 
 **Settings → Terminal → Advanced → Scrollback Lines** now changes the *real*

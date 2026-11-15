@@ -612,6 +612,8 @@ struct Workbench {
     runtime_catalog: Option<RuntimeCatalog>,
     runtime_catalog_error: Option<String>,
     project_settings_project_id: Option<String>,
+    /// Explicit Settings-only selection; never changes the active workspace.
+    project_settings_selected_project_id: Option<String>,
     project_settings_rows: Vec<(String, String)>,
     project_settings_loading: bool,
     project_settings_error: Option<String>,
@@ -5665,6 +5667,8 @@ impl Workbench {
             self.project_settings_mutation_request.wrapping_add(1);
         self.project_settings_project_id = None;
         self.project_settings_config = None;
+        self.project_settings_selected_project_id = None;
+
         self.project_settings_rows.clear();
         self.project_settings_source = None;
         self.project_settings_repo_error = false;
@@ -14881,6 +14885,7 @@ fn main() {
                             runtime_catalog: None,
                             runtime_catalog_error: None,
                             project_settings_project_id: None,
+                            project_settings_selected_project_id: None,
                             project_settings_rows: Vec::new(),
                             project_settings_loading: false,
                             project_settings_error: None,

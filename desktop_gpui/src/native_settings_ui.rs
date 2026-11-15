@@ -117,6 +117,60 @@ impl Workbench {
         });
     }
 
+    /// S10 changes the Project Settings target, not the active Workspace.
+    /// A pending draft must be explicitly Saved or Cancelled before switching.
+    /// Incrementing the load request rejects late responses for the old target.
+    pub(super) fn select_host_project_settings_project(
+        &mut self,
+        project_id: &str,
+        cx: &mut Context<Self>,
+    ) {
+        if self.project_settings_editing || self.project_settings_save_busy {
+            self.project_settings_save_status =
+                "Save or Cancel the current Project Settings draft before selecting another project"
+                    .into();
+            cx.notify();
+            return;
+        }
+        let registered = self.runtime_catalog.as_ref().is_some_and(|catalog| {
+            catalog
+                .projects
+                .iter()
+                .any(|project| project.id == project_id)
+        });
+        if !registered {
+            self.project_settings_error =
+                Some("Selected project is no longer registered; refresh Projects".into());
+            cx.notify();
+            return;
+        }
+        if self.project_settings_selected_project_id.as_deref() == Some(project_id)
+            && (self.project_settings_loading
+                || self.project_settings_project_id.as_deref() == Some(project_id))
+        {
+            return;
+        }
+        self.project_settings_selected_project_id = Some(project_id.to_owned());
+        self.project_settings_request = self.project_settings_request.wrapping_add(1);
+        self.project_settings_mutation_request =
+            self.project_settings_mutation_request.wrapping_add(1);
+        self.project_settings_loading = false;
+        self.project_settings_project_id = None;
+        self.project_settings_config = None;
+        self.project_settings_rows.clear();
+        self.project_settings_source = None;
+        self.project_settings_repo_error = false;
+        self.project_settings_use_repo_confirmed = false;
+        self.project_settings_error = None;
+        self.project_settings_save_status.clear();
+        self.project_settings_draft_provider = None;
+        self.project_settings_copy_inputs.clear();
+        self.project_settings_setup_inputs.clear();
+        self.project_settings_prompt_input
+            .update(cx, |input, cx| input.clear(cx));
+        self.refresh_host_project_settings(cx);
+    }
+
     /// Read the selected project's actual Classic Runtime Host config.
     /// Never open a shadow JSON editor or expose setup shell commands in a
     /// generic Settings search preview.
@@ -128,9 +182,10 @@ impl Workbench {
             return;
         }
         let Some(project_id) = self.runtime_catalog.as_ref().and_then(|catalog| {
-            alera_gpui_desktop::project_settings_preview::project_id_for_workspace(
+            alera_gpui_desktop::project_settings_preview::selected_project_for_settings(
                 catalog,
                 self.model.root(),
+                self.project_settings_selected_project_id.as_deref(),
             )
             .map(str::to_owned)
         }) else {
@@ -138,7 +193,7 @@ impl Workbench {
             self.project_settings_config = None;
             self.project_settings_rows.clear();
             self.project_settings_error = Some(
-                "This workspace is not in the current Host project catalog. Refresh Projects."
+                "No registered projects are available in the Host catalog. Refresh Projects."
                     .to_owned(),
             );
             cx.notify();
@@ -469,9 +524,10 @@ impl Workbench {
             return;
         };
         if self.runtime_catalog.as_ref().and_then(|catalog| {
-            alera_gpui_desktop::project_settings_preview::project_id_for_workspace(
+            alera_gpui_desktop::project_settings_preview::selected_project_for_settings(
                 catalog,
                 self.model.root(),
+                self.project_settings_selected_project_id.as_deref(),
             )
         }) != Some(project_id.as_str())
         {
@@ -679,9 +735,10 @@ impl Workbench {
             return;
         };
         if self.runtime_catalog.as_ref().and_then(|catalog| {
-            alera_gpui_desktop::project_settings_preview::project_id_for_workspace(
+            alera_gpui_desktop::project_settings_preview::selected_project_for_settings(
                 catalog,
                 self.model.root(),
+                self.project_settings_selected_project_id.as_deref(),
             )
         }) != Some(project_id.as_str())
         {
