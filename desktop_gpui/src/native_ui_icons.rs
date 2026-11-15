@@ -3,6 +3,7 @@
 //! Mirror Classic's semantic split: Lucide for ordinary UI controls and
 //! VS Code Codicons for source-control actions and file-type fallbacks.
 //! Keep this mapping centralized instead of inventing glyphs per toolbar.
+use crate::native_file_icons::material_icon_svg;
 use alera_gpui_desktop::visual_tokens::{MUTED, TEXT};
 use gpui::{div, px, rgb, Div, ElementId, ParentElement, Styled};
 use gpui_kit::assets::IconName as LucideIcon;
@@ -204,6 +205,32 @@ pub fn icon(icon: UiIcon, size_px: f32, color: u32) -> Div {
             .text_size(px(size_px))
             .text_color(rgb(color))
             .child(icon.glyph().to_string())
+    }
+}
+
+/// Show Classic's bundled multicolor Material Icon Theme when available;
+/// unknown files keep the old Lucide/Codicon fallback with no runtime IO.
+pub fn explorer_file_icon_element(
+    name: &str,
+    is_directory: bool,
+    expanded: bool,
+    size_px: f32,
+    fallback_color: u32,
+) -> Div {
+    let frame = div()
+        .w(px(size_px))
+        .h(px(size_px))
+        .flex()
+        .items_center()
+        .justify_center();
+    if let Some(svg) = material_icon_svg(name, is_directory, expanded) {
+        frame.child(Icon::default().data(svg).with_size(px(size_px)))
+    } else {
+        frame.child(icon(
+            explorer_file_icon(name, is_directory, expanded),
+            size_px,
+            fallback_color,
+        ))
     }
 }
 

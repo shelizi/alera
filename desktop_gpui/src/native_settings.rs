@@ -2,6 +2,10 @@
 //! The Host permits only these scalar MCP paths; storage uses a separate
 //! versioned JSON file under AleraNative (or an isolated smoke-test state).
 use crate::explorer_visibility::ExplorerVisibilityOptions;
+use crate::visual_tokens::{
+    PROJECTS_SIDEBAR_WIDTH, RIGHT_SIDEBAR_MAX_WIDTH, RIGHT_SIDEBAR_WIDTH, SIDEBAR_MAX_WIDTH,
+    SIDEBAR_MIN_WIDTH,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -40,6 +44,39 @@ pub fn valid_terminal_scrollback_lines(lines: u64) -> bool {
     (100..=200_000).contains(&lines)
 }
 
+/// GPUI-only shell layout. Classic owns its own preferences; never expose
+/// these fields to Host MCP or DesktopSettings shared paths.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NativeSidebarLayout {
+    pub projects_collapsed: bool,
+    pub context_visible: bool,
+    pub projects_width: f32,
+    pub context_width: f32,
+    pub context_is_git: bool,
+}
+
+impl Default for NativeSidebarLayout {
+    fn default() -> Self {
+        Self {
+            projects_collapsed: false,
+            context_visible: true,
+            projects_width: PROJECTS_SIDEBAR_WIDTH,
+            context_width: RIGHT_SIDEBAR_WIDTH,
+            context_is_git: false,
+        }
+    }
+}
+
+impl NativeSidebarLayout {
+    fn valid(&self) -> bool {
+        self.projects_width.is_finite()
+            && (SIDEBAR_MIN_WIDTH..=SIDEBAR_MAX_WIDTH).contains(&self.projects_width)
+            && self.context_width.is_finite()
+            && (SIDEBAR_MIN_WIDTH..=RIGHT_SIDEBAR_MAX_WIDTH).contains(&self.context_width)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NativeSettings {
@@ -63,6 +100,10 @@ pub struct NativeSettings {
     pub explorer_show_hidden: bool,
     #[serde(default)]
     pub explorer_show_ignored: bool,
+    /// Saved only under Native's versioned local JSON; older settings
+    /// documents migrate to Classic-compatible shell defaults.
+    #[serde(default)]
+    pub sidebar_layout: NativeSidebarLayout,
     // These three safety controls cannot be changed by an Agent.
     pub confirm_project_removal: bool,
     pub confirm_workspace_removal: bool,
@@ -92,6 +133,7 @@ impl Default for NativeSettings {
             editor_two_row_tabs: false,
             explorer_show_hidden: default_explorer_show_hidden(),
             explorer_show_ignored: false,
+            sidebar_layout: NativeSidebarLayout::default(),
             confirm_project_removal: true,
             confirm_workspace_removal: true,
             auto_archive_workspaces_after_days: 0,
@@ -326,6 +368,12 @@ impl NativeSettings {
                 "Invalid Native settings document",
             ));
         }
+        if !self.sidebar_layout.valid() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Invalid Native sidebar layout",
+            ));
+        }
         if self.agent_executable_paths.len() > 12
             || self.agent_executable_paths.iter().any(|(id, path)| {
                 alera_core::agent_descriptor::agent_descriptor(id)
@@ -527,6 +575,36 @@ impl NativeSettingsStore {
             return Err(io::Error::other(
                 "Native Explorer visibility readback does not match write",
             ));
+        }
+        Ok(readback)
+    }
+
+    /// Atomic Native-only layout persistence with the existing cross-window
+    /// lock. Preserve all unrelated settings and refuse stale writes.
+    pub fn compare_and_set_sidebar_layout(
+        &self,
+        expected: &NativeSidebarLayout,
+        next: &NativeSidebarLayout,
+    ) -> io::Result<NativeSettings> {
+        if !expected.valid() || !next.valid() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Native sidebar width out of range",
+            ));
+        }
+        let _lock = self.lock()?;
+        let mut settings = self.read()?;
+        if settings.sidebar_layout != *expected {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "Native sidebar layout changed in another window",
+            ));
+        }
+        settings.sidebar_layout = next.clone();
+        self.persist(&settings)?;
+        let readback = self.read()?;
+        if readback.sidebar_layout != *next {
+            return Err(io::Error::other("Native sidebar layout readback mismatch"));
         }
         Ok(readback)
     }
@@ -1029,6 +1107,58 @@ mod tests {
         assert!(store
             .compare_and_set_default_agent_profile(Some("managed_codex"), None)
             .is_err());
+    }
+
+    #[test]
+    fn native_sidebar_layout_is_private_atomic_and_roundtrips() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = NativeSettingsStore::new(dir.path());
+        let initial = NativeSidebarLayout::default();
+        assert!(!NativeSettings::writable("sidebar.projectsWidth"));
+        assert!(!NativeSettings::writable("sidebar.contextVisible"));
+        let next = NativeSidebarLayout {
+            projects_collapsed: true,
+            context_visible: false,
+            projects_width: 365.0,
+            context_width: 670.0,
+            context_is_git: true,
+        };
+        let result = store
+            .compare_and_set_sidebar_layout(&initial, &next)
+            .unwrap();
+        assert_eq!(result.sidebar_layout, next);
+        assert_eq!(store.read().unwrap().sidebar_layout, next);
+        assert!(store
+            .compare_and_set_sidebar_layout(&initial, &next)
+            .is_err());
+
+        let mut invalid = next.clone();
+        invalid.context_width = f32::NAN;
+        assert!(store
+            .compare_and_set_sidebar_layout(&next, &invalid)
+            .is_err());
+        invalid.context_width = 2000.0;
+        assert!(store
+            .compare_and_set_sidebar_layout(&next, &invalid)
+            .is_err());
+        assert_eq!(store.read().unwrap().sidebar_layout, next);
+    }
+
+    #[test]
+    fn legacy_native_settings_without_sidebar_layout_still_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = NativeSettingsStore::new(dir.path());
+        let mut document = serde_json::to_value(NativeSettings::default()).unwrap();
+        document.as_object_mut().unwrap().remove("sidebar_layout");
+        fs::write(
+            dir.path().join(SETTINGS_FILENAME),
+            serde_json::to_vec(&document).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            store.read().unwrap().sidebar_layout,
+            NativeSidebarLayout::default()
+        );
     }
 
     #[test]

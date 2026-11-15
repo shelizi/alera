@@ -4,6 +4,7 @@ mod native_action_dialog_ui;
 mod native_agent_quota_ui;
 mod native_center_git_diff_ui;
 mod native_components;
+mod native_file_icons;
 mod native_git_favorites_ui;
 mod native_history_sync_ui;
 mod native_host_pins_ui;
@@ -95,7 +96,7 @@ use alera_gpui_desktop::mcp_workspace_creation::HostManagedWorkspaceRequest;
 use alera_gpui_desktop::model::WorkbenchModel;
 use alera_gpui_desktop::native_i18n::UiLocale;
 use alera_gpui_desktop::native_modal::NativeModalSize;
-use alera_gpui_desktop::native_settings::{NativeSettings, NativeSettingsStore};
+use alera_gpui_desktop::native_settings::{NativeSettings, NativeSettingsStore, NativeSidebarLayout};
 use alera_gpui_desktop::project_tree::{
     collect_project_tree_with_registered, project_group_matches_search,
     project_title_matches_search, sidebar_workspaces_for_group, worktree_matches_search,
@@ -158,7 +159,7 @@ use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMen
 use gpui_kit::component::IconName;
 use gpui_kit::component::WindowExt as _;
 use native_components::{icon, icon_button, UiIcon};
-use native_ui_icons::explorer_file_icon;
+use native_ui_icons::explorer_file_icon_element;
 use quick_open_ui::{bind_quick_open_keys, QuickOpenInput};
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -610,6 +611,7 @@ struct Workbench {
     right_sidebar_visible: bool,
     right_sidebar_width: f32,
     sidebar_resize_drag: Option<SidebarResizeDrag>,
+    sidebar_save_busy: bool,
     explorer_context_menu: Option<ExplorerContextMenu>,
     show_project_management: bool,
     runtime_details_open: bool,
@@ -1406,6 +1408,7 @@ impl Workbench {
                     if let Ok(relative) = path.strip_prefix(self.model.root()) {
                         let relative = relative.to_path_buf();
                         self.right_sidebar_view = RightSidebarView::Git;
+                        self.save_sidebar_layout(cx);
                         self.preview_git_change(relative, None, false, cx);
                     }
                 }
@@ -4740,6 +4743,7 @@ impl Workbench {
     ) {
         self.right_sidebar_view = RightSidebarView::Explorer;
         self.explorer_context_menu = None;
+        self.save_sidebar_layout(cx);
         self.toggle_content_search(window, cx);
     }
 
@@ -5882,7 +5886,64 @@ impl Workbench {
         .detach();
     }
 
+    fn sidebar_layout_snapshot(&self) -> NativeSidebarLayout {
+        NativeSidebarLayout {
+            projects_collapsed: self.projects_sidebar_collapsed,
+            context_visible: self.right_sidebar_visible,
+            projects_width: self.projects_sidebar_width,
+            context_width: self.right_sidebar_width,
+            context_is_git: self.right_sidebar_view == RightSidebarView::Git,
+        }
+    }
+
+    /// Persist on final drag or click, never on every mouse-move frame.
+    /// While a write is in flight, the latest UI state is coalesced and
+    /// saved after that write returns. All unrelated settings stay intact.
+    fn save_sidebar_layout(&mut self, cx: &mut Context<Self>) {
+        if self.sidebar_save_busy { return; }
+        let next = self.sidebar_layout_snapshot();
+        let expected = self.native_settings.sidebar_layout.clone();
+        if next == expected { return; }
+        let Some(store) = self.native_settings_store.clone() else {
+            self.model.set_status("Native sidebar state cannot be persisted: no settings store");
+            return;
+        };
+        self.sidebar_save_busy = true;
+        cx.spawn(async move |view, cx| {
+            let result = cx.background_spawn(async move {
+                store.compare_and_set_sidebar_layout(&expected, &next)
+            }).await;
+            view.update(cx, |view, cx| {
+                view.sidebar_save_busy = false;
+                match result {
+                    Ok(settings) => {
+                        view.native_settings.sidebar_layout = settings.sidebar_layout;
+                        // A newer click/drag may have arrived during the write.
+                        if view.sidebar_layout_snapshot() != view.native_settings.sidebar_layout {
+                            view.save_sidebar_layout(cx);
+                        }
+                    }
+                    Err(error) => view.model.set_status(format!(
+                        "Native sidebar settings not saved: {error}; restart to reload another window's state"
+                    )),
+                }
+                cx.notify();
+            }).ok();
+        }).detach();
+    }
+
     fn install_native_settings(&mut self, settings: NativeSettings, cx: &mut Context<Self>) {
+        if self.sidebar_resize_drag.is_none() && !self.sidebar_save_busy {
+            self.projects_sidebar_collapsed = settings.sidebar_layout.projects_collapsed;
+            self.projects_sidebar_width = settings.sidebar_layout.projects_width;
+            self.right_sidebar_visible = settings.sidebar_layout.context_visible;
+            self.right_sidebar_width = settings.sidebar_layout.context_width;
+            self.right_sidebar_view = if settings.sidebar_layout.context_is_git {
+                RightSidebarView::Git
+            } else {
+                RightSidebarView::Explorer
+            };
+        }
         let visibility = ExplorerVisibilityOptions {
             show_hidden: settings.explorer_show_hidden,
             show_ignored: settings.explorer_show_ignored,
@@ -8630,9 +8691,13 @@ impl Workbench {
         let stopped_label = tab.stopped_label();
         let agent_tooltip = tab.agent_status_tooltip();
         let identity = tab.identity;
-        let icon_kind = match tab.kind {
-            WorkbenchTabKind::Terminal | WorkbenchTabKind::Agent => UiIcon::Terminal,
-            WorkbenchTabKind::Editor => explorer_file_icon(&tab.title, false, false),
+        let tab_icon = if tab.kind == WorkbenchTabKind::Editor {
+            explorer_file_icon_element(
+                &tab.title, false, false, 12.0,
+                if selected { TEXT } else { MUTED },
+            )
+        } else {
+            icon(UiIcon::Terminal, 12.0, if selected { TEXT } else { MUTED })
         };
         let status_color = tab.agent_state.map(|state| match state {
             AgentActivityState::Working => AGENT_WORKING,
@@ -8677,7 +8742,7 @@ impl Workbench {
                     .px_1()
                     .cursor_pointer()
                     .text_color(rgb(if selected { TEXT } else { MUTED }))
-                    .child(icon(icon_kind, 12.0, if selected { TEXT } else { MUTED }))
+                    .child(tab_icon)
                     .child(
                         div()
                             .id(("mixed-tab-title", index))
@@ -10505,13 +10570,19 @@ impl Render for Workbench {
         // lifecycle poll coalesces stable changes before the Host RPC.
         // No resizing from inside GPUI's paint/layout phase.
         let viewport = window.viewport_size();
+        let window_width = f32::from(viewport.width);
+        let initial_context_width = if self.right_sidebar_visible {
+            self.right_sidebar_width
+        } else {
+            PROJECTS_COLLAPSED_WIDTH
+        };
         let projects_width = if self.projects_sidebar_collapsed {
             PROJECTS_COLLAPSED_WIDTH
         } else {
-            self.projects_sidebar_width
+            clamp_projects_sidebar_width(self.projects_sidebar_width, window_width, initial_context_width)
         };
         let context_width = if self.right_sidebar_visible {
-            self.right_sidebar_width
+            clamp_context_sidebar_width(self.right_sidebar_width, window_width, projects_width)
         } else {
             PROJECTS_COLLAPSED_WIDTH
         };
@@ -11007,6 +11078,7 @@ impl Render for Workbench {
                 let Some(drag) = this.sidebar_resize_drag else { return; };
                 if event.pressed_button != Some(gpui::MouseButton::Left) {
                     this.sidebar_resize_drag = None;
+                    this.save_sidebar_layout(cx);
                     cx.notify();
                     return;
                 }
@@ -11037,10 +11109,16 @@ impl Render for Workbench {
                 cx.notify();
             }))
             .on_mouse_up(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
-                if this.sidebar_resize_drag.take().is_some() { cx.notify(); }
+                if this.sidebar_resize_drag.take().is_some() {
+                    this.save_sidebar_layout(cx);
+                    cx.notify();
+                }
             }))
             .on_mouse_up_out(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
-                if this.sidebar_resize_drag.take().is_some() { cx.notify(); }
+                if this.sidebar_resize_drag.take().is_some() {
+                    this.save_sidebar_layout(cx);
+                    cx.notify();
+                }
             }))
             .on_action(cx.listener(Self::toggle_file_search_action))
             .on_action(cx.listener(Self::toggle_content_search_action))
@@ -11113,7 +11191,7 @@ impl Render for Workbench {
                         div()
                             .id("native-right-sidebar-scroll")
                             .when(!self.right_sidebar_visible, |panel| panel.hidden())
-                            .w(px(self.right_sidebar_width))
+                            .w(px(context_width))
                             .flex()
                             .flex_col()
                             .bg(rgb(PANEL))
@@ -11138,6 +11216,7 @@ impl Render for Workbench {
                                         self.right_sidebar_view == RightSidebarView::Explorer,
                                     ).on_click(cx.listener(|view, _, _, cx| {
                                         view.right_sidebar_view = RightSidebarView::Explorer;
+                                        view.save_sidebar_layout(cx);
                                         cx.notify();
                                     })))
                                     .child(icon_button(
@@ -11146,6 +11225,7 @@ impl Render for Workbench {
                                     ).on_click(cx.listener(|view, _, _, cx| {
                                         view.explorer_context_menu = None;
                                         view.right_sidebar_view = RightSidebarView::Git;
+                                        view.save_sidebar_layout(cx);
                                         cx.notify();
                                     })))
                                     .child(div().flex_1())
@@ -11153,6 +11233,7 @@ impl Render for Workbench {
                                         "right-sidebar-collapse", UiIcon::ChevronsRight, "Collapse panel", false,
                                     ).on_click(cx.listener(|this, _, _, cx| {
                                         this.right_sidebar_visible = false;
+                                        this.save_sidebar_layout(cx);
                                         cx.notify();
                                     }))),
                             )
@@ -11429,7 +11510,7 @@ impl Render for Workbench {
                                             let drop_target = path.clone();
                                             let external_drop_target = path.clone();
                                             let selected = explorer_multi_selection.contains(&path);
-                                            let row_icon = explorer_file_icon(&label, hit.is_directory, false);
+                                            let row_icon = explorer_file_icon_element(&label, hit.is_directory, false, 15.0, if selected { TEXT } else { MUTED });
                                             let status_badge = explorer_git_badges.get(&path);
                                             let full_relative = relative.display().to_string();
                                             let parent_label = relative
@@ -11452,7 +11533,7 @@ impl Render for Workbench {
                                                 .cursor_pointer()
                                                 .bg(rgb(if selected { ACTIVE } else { PANEL }))
                                                 .hover(|style| style.bg(rgb(ACTIVE)))
-                                                .child(icon(row_icon, 15.0, if selected { TEXT } else { MUTED }))
+                                                .child(row_icon)
                                                 .child(div().min_w_0().flex_1().flex().items_center().gap_2()
                                                     .child(div().min_w_0().flex_1().truncate().text_sm().child(label))
                                                     .when(!parent_label.is_empty(), |row| {
@@ -11527,7 +11608,7 @@ impl Render for Workbench {
                                             let selected = explorer_multi_selection.contains(&row_path);
                                             let is_directory = item.is_directory;
                                             let status_badge = explorer_git_badges.get(&row_path);
-                                            let row_icon = explorer_file_icon(&item.name, is_directory, item.expanded);
+                                            let row_icon = explorer_file_icon_element(&item.name, is_directory, item.expanded, 15.0, if selected { TEXT } else { MUTED });
                                             let row_label = item.name;
                                             div()
                                                 .id(("explorer-tree-row", i))
@@ -11564,7 +11645,7 @@ impl Render for Workbench {
                                                 } else {
                                                     div().w(px(20.0)).into_any_element()
                                                 })
-                                                .child(icon(row_icon, 15.0, if selected { TEXT } else { MUTED }))
+                                                .child(row_icon)
                                                 .child(div().flex_1().min_w_0().truncate().text_sm().child(row_label))
                                                 .child(explorer_status_badge(status_badge))
                                                 .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
@@ -11633,7 +11714,7 @@ impl Render for Workbench {
                                             let visible_for_click = explorer_visible_paths.clone();
                                             let selected = explorer_multi_selection.contains(&file_path);
                                             let status_badge = explorer_git_badges.get(&file_path);
-                                            let row_icon = explorer_file_icon(&item.name, is_directory, false);
+                                            let row_icon = explorer_file_icon_element(&item.name, is_directory, false, 15.0, if selected { TEXT } else { MUTED });
                                             div()
                                                 .id(i)
                                                 .pl_2()
@@ -11645,7 +11726,7 @@ impl Render for Workbench {
                                                 .cursor_pointer()
                                                 .bg(rgb(if selected { ACTIVE } else { PANEL }))
                                                 .hover(|style| style.bg(rgb(ACTIVE)))
-                                                .child(icon(row_icon, 15.0, if selected { TEXT } else { MUTED }))
+                                                .child(row_icon)
                                                 .child(div().flex_1().min_w_0().truncate().text_sm().child(item.name))
                                                 .child(explorer_status_badge(status_badge))
                                                 .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
@@ -12811,6 +12892,7 @@ impl Render for Workbench {
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.right_sidebar_view = RightSidebarView::Explorer;
                                     this.right_sidebar_visible = true;
+                                    this.save_sidebar_layout(cx);
                                     cx.notify();
                                 })))
                             .child(icon_button("right-rail-git", UiIcon::Branch, "Source Control", false)
@@ -12818,12 +12900,14 @@ impl Render for Workbench {
                                     this.right_sidebar_view = RightSidebarView::Git;
                                     this.explorer_context_menu = None;
                                     this.right_sidebar_visible = true;
+                                    this.save_sidebar_layout(cx);
                                     cx.notify();
                                 })))
                             .child(div().flex_1())
                             .child(icon_button("right-rail-expand", UiIcon::ChevronsLeft, "Expand panel", false)
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.right_sidebar_visible = true;
+                                    this.save_sidebar_layout(cx);
                                     cx.notify();
                                 }))),
                     )
@@ -12957,7 +13041,7 @@ impl Render for Workbench {
                                             // second line beneath live tabs.
                                             .children(tabs.into_iter().map(|(index, title, transient)| {
                                                 let selected = showing_explorer_preview && active_tab == Some(index);
-                                                let file_icon = explorer_file_icon(&title, false, false);
+                                                let file_icon = explorer_file_icon_element(&title, false, false, 12.0, if selected { TEXT } else { MUTED });
                                                 div()
                                                     .id(("file-preview-tab", index))
                                                     .h(px(32.0))
@@ -12980,7 +13064,7 @@ impl Render for Workbench {
                                                             .px_1()
                                                             .cursor_pointer()
                                                             .text_color(rgb(if selected { TEXT } else { MUTED }))
-                                                            .child(icon(file_icon, 12.0, if selected { TEXT } else { MUTED }))
+                                                            .child(file_icon)
                                                             .child(
                                                                 div()
                                                                     .min_w_0()
@@ -13935,7 +14019,7 @@ impl Render for Workbench {
                     .child(
                         div()
                             .when(self.projects_sidebar_collapsed, |panel| panel.hidden())
-                            .w(px(self.projects_sidebar_width))
+                            .w(px(projects_width))
                             .flex()
                             .flex_col()
                             .bg(rgb(PANEL))
@@ -13961,6 +14045,7 @@ impl Render for Workbench {
                                         "projects-sidebar-collapse", UiIcon::PanelLeft, "Collapse Sidebar", false,
                                     ).on_click(cx.listener(|this, _, _, cx| {
                                         this.projects_sidebar_collapsed = true;
+                                        this.save_sidebar_layout(cx);
                                         cx.notify();
                                     }))),
                             )
@@ -14743,6 +14828,7 @@ impl Render for Workbench {
                                         "projects-sidebar-expand", UiIcon::PanelLeft, "Expand Sidebar", false,
                                     ).on_click(cx.listener(|this, _, _, cx| {
                                         this.projects_sidebar_collapsed = false;
+                                        this.save_sidebar_layout(cx);
                                         cx.notify();
                                     }))),
                             )
@@ -15085,12 +15171,17 @@ fn main() {
                             explorer_delete_pending: None,
                             model,
                             center_view: CenterView::Terminal,
-                            right_sidebar_view: RightSidebarView::Explorer,
-                            projects_sidebar_collapsed: false,
-                            projects_sidebar_width: PROJECTS_SIDEBAR_WIDTH,
-                            right_sidebar_visible: true,
-                            right_sidebar_width: RIGHT_SIDEBAR_WIDTH,
+                            right_sidebar_view: if native_settings.sidebar_layout.context_is_git {
+                                RightSidebarView::Git
+                            } else {
+                                RightSidebarView::Explorer
+                            },
+                            projects_sidebar_collapsed: native_settings.sidebar_layout.projects_collapsed,
+                            projects_sidebar_width: native_settings.sidebar_layout.projects_width,
+                            right_sidebar_visible: native_settings.sidebar_layout.context_visible,
+                            right_sidebar_width: native_settings.sidebar_layout.context_width,
                             sidebar_resize_drag: None,
+                            sidebar_save_busy: false,
                             explorer_context_menu: None,
                             show_project_management: false,
                             runtime_details_open: false,
