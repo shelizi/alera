@@ -80,8 +80,8 @@ macOS app-bundle icon packaging remains a separate distribution concern.
 
 ## Host-backed Project Settings editing (S07/S08)
 
-**Settings → Projects → Project Settings** reads the active Workspace's
-registered ProjectConfig from the existing Runtime Host. The safe summary
+**Settings → Projects → Project Settings** reads the selected registered
+ProjectConfig from the existing Runtime Host (default: the active Workspace's project). The safe summary
 counts Worktree copy/setup rules and reports whether a prompt is configured,
 without expanding command text, paths or project instructions. Choose
 **Edit Project Settings** to explicitly open the Native editor for **Git
