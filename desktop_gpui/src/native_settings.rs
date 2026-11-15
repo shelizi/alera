@@ -54,6 +54,9 @@ pub struct NativeSidebarLayout {
     pub projects_width: f32,
     pub context_width: f32,
     pub context_is_git: bool,
+    /// Optional since older GPUI versions only had Explorer and Git.
+    #[serde(default)]
+    pub context_is_search: bool,
 }
 
 impl Default for NativeSidebarLayout {
@@ -64,6 +67,7 @@ impl Default for NativeSidebarLayout {
             projects_width: PROJECTS_SIDEBAR_WIDTH,
             context_width: RIGHT_SIDEBAR_WIDTH,
             context_is_git: false,
+            context_is_search: false,
         }
     }
 }
@@ -74,6 +78,7 @@ impl NativeSidebarLayout {
             && (SIDEBAR_MIN_WIDTH..=SIDEBAR_MAX_WIDTH).contains(&self.projects_width)
             && self.context_width.is_finite()
             && (SIDEBAR_MIN_WIDTH..=RIGHT_SIDEBAR_MAX_WIDTH).contains(&self.context_width)
+            && !(self.context_is_git && self.context_is_search)
     }
 }
 
@@ -1122,6 +1127,7 @@ mod tests {
             projects_width: 365.0,
             context_width: 670.0,
             context_is_git: true,
+            context_is_search: false,
         };
         let result = store
             .compare_and_set_sidebar_layout(&initial, &next)
@@ -1142,6 +1148,46 @@ mod tests {
             .compare_and_set_sidebar_layout(&next, &invalid)
             .is_err());
         assert_eq!(store.read().unwrap().sidebar_layout, next);
+
+        // A persisted Search tab cannot also be Source Control.
+        let mut invalid = next.clone();
+        invalid.context_is_search = true;
+        assert!(store
+            .compare_and_set_sidebar_layout(&next, &invalid)
+            .is_err());
+
+        let search = NativeSidebarLayout {
+            context_is_git: false,
+            context_is_search: true,
+            ..next.clone()
+        };
+        let saved = store
+            .compare_and_set_sidebar_layout(&next, &search)
+            .unwrap();
+        assert_eq!(saved.sidebar_layout, search);
+        assert_eq!(store.read().unwrap().sidebar_layout, search);
+    }
+
+    #[test]
+    fn old_sidebar_settings_without_search_field_migrate_to_explorer_git() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = NativeSettingsStore::new(dir.path());
+        let mut document = serde_json::to_value(NativeSettings::default()).unwrap();
+        let layout = document
+            .get_mut("sidebar_layout")
+            .unwrap()
+            .as_object_mut()
+            .unwrap();
+        layout.remove("context_is_search");
+        layout.insert("context_is_git".into(), serde_json::json!(true));
+        fs::write(
+            dir.path().join(SETTINGS_FILENAME),
+            serde_json::to_vec(&document).unwrap(),
+        )
+        .unwrap();
+        let stored = store.read().unwrap().sidebar_layout;
+        assert!(stored.context_is_git);
+        assert!(!stored.context_is_search);
     }
 
     #[test]

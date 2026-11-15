@@ -186,6 +186,7 @@ actions!(
     [
         ToggleFileSearch,
         ToggleContentSearch,
+        RunContentSearch,
         ExplorerCopy,
         ExplorerCut,
         ExplorerPaste,
@@ -563,6 +564,7 @@ struct PendingTerminalPane {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RightSidebarView {
     Explorer,
+    Search,
     Git,
 }
 
@@ -4741,10 +4743,18 @@ impl Workbench {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.right_sidebar_view = RightSidebarView::Explorer;
-        self.explorer_context_menu = None;
-        self.save_sidebar_layout(cx);
-        self.toggle_content_search(window, cx);
+        self.open_content_search_panel(window, cx);
+    }
+
+    fn run_content_search_action(
+        &mut self,
+        _: &RunContentSearch,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.right_sidebar_view == RightSidebarView::Search {
+            self.search_project_contents(cx);
+        }
     }
 
     fn toggle_file_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -4824,22 +4834,22 @@ impl Workbench {
         }
     }
 
-    fn toggle_content_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.content_query.is_some() {
-            self.content_query = None;
-            // A scan can finish after the panel is closed. Invalidating its
-            // ticket guarantees it never restores hidden or stale results.
-            self.content_request = self.content_request.wrapping_add(1);
-            self.content_loading = false;
-            self.content_matches.clear();
-            self.content_error = None;
-            self.content_searched_query.clear();
-            self.content_truncated = false;
-        } else {
-            let input = cx.new(QuickOpenInput::new);
-            window.focus(&input.read(cx).focus_handle(cx), cx);
-            self.content_query = Some(input);
+    /// Open Classic's dedicated Search panel using the existing safe
+    /// cross-worktree content-search engine. Switching tabs retains results;
+    /// changing workspaces still invalidates in-flight searches.
+    fn open_content_search_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.right_sidebar_view = RightSidebarView::Search;
+        self.right_sidebar_visible = true;
+        self.explorer_context_menu = None;
+        if self.content_query.is_none() {
+            self.content_query = Some(cx.new(|cx| {
+                QuickOpenInput::with_placeholder("Search in files…", cx)
+            }));
         }
+        if let Some(input) = &self.content_query {
+            window.focus(&input.read(cx).focus_handle(cx), cx);
+        }
+        self.save_sidebar_layout(cx);
         cx.notify();
     }
 
@@ -5581,7 +5591,9 @@ impl Workbench {
         self.file_index = None;
         self.file_index_loading = false;
         self.file_index_request = self.file_index_request.wrapping_add(1);
-        self.content_query = None;
+        self.content_query = Some(cx.new(|cx| {
+            QuickOpenInput::with_placeholder("Search in files…", cx)
+        }));
         self.content_search_scope = WorktreeContentScope::Current;
         self.content_worktrees_searched = 0;
         self.content_worktrees_skipped = 0;
@@ -5893,6 +5905,7 @@ impl Workbench {
             projects_width: self.projects_sidebar_width,
             context_width: self.right_sidebar_width,
             context_is_git: self.right_sidebar_view == RightSidebarView::Git,
+            context_is_search: self.right_sidebar_view == RightSidebarView::Search,
         }
     }
 
@@ -5938,7 +5951,9 @@ impl Workbench {
             self.projects_sidebar_width = settings.sidebar_layout.projects_width;
             self.right_sidebar_visible = settings.sidebar_layout.context_visible;
             self.right_sidebar_width = settings.sidebar_layout.context_width;
-            self.right_sidebar_view = if settings.sidebar_layout.context_is_git {
+            self.right_sidebar_view = if settings.sidebar_layout.context_is_search {
+                RightSidebarView::Search
+            } else if settings.sidebar_layout.context_is_git {
                 RightSidebarView::Git
             } else {
                 RightSidebarView::Explorer
@@ -10725,6 +10740,10 @@ impl Render for Workbench {
         let content_worktrees_searched = self.content_worktrees_searched;
         let content_worktrees_skipped = self.content_worktrees_skipped;
         let content_results_total = self.content_matches.len();
+        let content_no_results = content_results_total == 0
+            && !content_loading
+            && self.content_error.is_none()
+            && !self.content_searched_query.is_empty();
         let content_results: Vec<_> = self
             .content_matches
             .iter()
@@ -11122,6 +11141,7 @@ impl Render for Workbench {
             }))
             .on_action(cx.listener(Self::toggle_file_search_action))
             .on_action(cx.listener(Self::toggle_content_search_action))
+            .on_action(cx.listener(Self::run_content_search_action))
             .on_action(cx.listener(Self::explorer_copy_action))
             .on_action(cx.listener(Self::explorer_cut_action))
             .on_action(cx.listener(Self::explorer_paste_action))
@@ -11220,6 +11240,12 @@ impl Render for Workbench {
                                         cx.notify();
                                     })))
                                     .child(icon_button(
+                                        "right-sidebar-search", UiIcon::Search, "Search",
+                                        self.right_sidebar_view == RightSidebarView::Search,
+                                    ).on_click(cx.listener(|view, _, window, cx| {
+                                        view.open_content_search_panel(window, cx);
+                                    })))
+                                    .child(icon_button(
                                         "right-sidebar-git", UiIcon::Branch, "Source Control",
                                         self.right_sidebar_view == RightSidebarView::Git,
                                     ).on_click(cx.listener(|view, _, _, cx| {
@@ -11243,16 +11269,22 @@ impl Render for Workbench {
                                     .flex_1()
                                     .min_h_0()
                                     .track_focus(&self.explorer_keyboard_focus)
-                                    .key_context("AleraGpuiExplorer")
+                                    // Search input must never inherit Explorer's
+                                    // Enter, Delete, or Ctrl+A file actions.
+                                    .when(self.right_sidebar_view == RightSidebarView::Explorer, |v| {
+                                        v.key_context("AleraGpuiExplorer")
+                                    })
                                     .relative()
                                     .flex()
                                     .flex_col()
                                     .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
                                         if this.explorer_context_menu.take().is_some() { cx.notify(); }
                                     }))
-                                    .when(self.right_sidebar_view != RightSidebarView::Explorer, |v| v.hidden())
+                                    .when(self.right_sidebar_view == RightSidebarView::Git, |v| v.hidden())
                             .child(
                                 div()
+                                    .id("right-explorer-header")
+                                    .when(self.right_sidebar_view != RightSidebarView::Explorer, |v| v.hidden())
                                     .h(px(SECTION_HEADER_HEIGHT))
                                     .px_3()
                                     .flex()
@@ -11362,6 +11394,7 @@ impl Render for Workbench {
                             .child(
                                 div()
                                     .id("explorer-classic-filter")
+                                    .when(self.right_sidebar_view != RightSidebarView::Explorer, |v| v.hidden())
                                     .px_2()
                                     .py_2()
                                     .border_b_1()
@@ -11370,14 +11403,31 @@ impl Render for Workbench {
                             )
                             .child(
                                 div()
-                                    .id("content-search-panel")
+                                    .id("right-search-header")
+                                    .when(self.right_sidebar_view != RightSidebarView::Search, |v| v.hidden())
+                                    .h(px(SECTION_HEADER_HEIGHT))
                                     .px_3()
-                                    .py_1()
+                                    .flex()
+                                    .items_center()
                                     .border_b_1()
                                     .border_color(rgb(BORDER))
-                                    .when(content_query.is_none(), |panel| panel.hidden())
+                                    .child(div().text_xs().font_weight(gpui::FontWeight::SEMIBOLD).child("SEARCH")),
+                            )
+                            .child(
+                                div()
+                                    .id("content-search-panel")
+                                    .key_context("AleraGpuiSearch")
+                                    .flex_1()
+                                    .min_h_0()
+                                    .flex()
+                                    .flex_col()
+                                    .px_3()
+                                    .py_1()
+                                    .when(self.right_sidebar_view != RightSidebarView::Search, |panel| panel.hidden())
                                     .child(if let Some(input) = content_query {
                                         div()
+                                            .flex_1()
+                                            .min_h_0()
                                             .mt_2()
                                             .flex()
                                             .flex_col()
@@ -11387,7 +11437,7 @@ impl Render for Workbench {
                                                 .items_center()
                                                 .gap_1()
                                                 .child(div().flex_1().min_w_0().child(input))
-                                                .child(icon_button("content-search-run", UiIcon::Search, "Search selected content scope", content_loading)
+                                                .child(icon_button("content-search-run", UiIcon::Search, "Search selected content scope (Ctrl/Cmd+Enter)", content_loading)
                                                     .on_click(cx.listener(|this, _, _, cx| {
                                                         this.search_project_contents(cx);
                                                     }))))
@@ -11438,35 +11488,63 @@ impl Render for Workbench {
                                             .child(
                                                 div()
                                                     .id("content-search-results")
-                                                    .max_h(px(230.0))
+                                                    .flex_1()
+                                                    .min_h_0()
                                                     .overflow_y_scroll()
                                                     .children(content_results.into_iter().map(|(i, hit)| {
-                                                        let label = format!(
-                                                            "{}:{}:{}  {}",
-                                                            hit.hit.path.display(),
-                                                            hit.hit.line,
-                                                            hit.hit.column,
-                                                            hit.hit.snippet
-                                                        );
+                                                        let file_name = hit.hit.path.file_name()
+                                                            .map(|part| part.to_string_lossy().into_owned())
+                                                            .unwrap_or_else(|| hit.hit.path.display().to_string());
+                                                        let position = format!("{}:{}", hit.hit.line, hit.hit.column);
+                                                        let snippet = hit.hit.snippet.clone();
                                                         let owner_label = hit.label();
+                                                        let full_path = format!(
+                                                            "{}:{}:{} · {}",
+                                                            hit.hit.path.display(), hit.hit.line, hit.hit.column, owner_label
+                                                        );
                                                         div()
                                                             .id(("content-search-result", i))
                                                             .cursor_pointer()
-                                                            .py_1()
                                                             .min_w_0()
+                                                            .px_1()
+                                                            .py_2()
+                                                            .border_b_1()
+                                                            .border_color(rgb(BORDER))
                                                             .hover(|style| style.bg(rgb(ACTIVE)))
+                                                            .tooltip(move |window, cx| {
+                                                                gpui_kit::component::tooltip::Tooltip::new(full_path.clone())
+                                                                    .build(window, cx)
+                                                            })
                                                             .child(
                                                                 div()
                                                                     .min_w_0()
                                                                     .flex()
                                                                     .flex_col()
-                                                                    .child(div().min_w_0().text_xs().child(label))
-                                                                    .child(div().min_w_0().text_xs().text_color(rgb(MUTED)).child(owner_label)),
+                                                                    .gap_1()
+                                                                    .child(div()
+                                                                        .min_w_0()
+                                                                        .flex()
+                                                                        .items_center()
+                                                                        .gap_2()
+                                                                        .child(explorer_file_icon_element(&file_name, false, false, 15.0, MUTED))
+                                                                        .child(div().min_w_0().flex_1().truncate().text_sm().child(file_name))
+                                                                        .child(div().text_xs().text_color(rgb(MUTED)).child(position)))
+                                                                    .child(div().min_w_0().truncate().text_xs().child(snippet))
+                                                                    .child(div().min_w_0().truncate().text_xs()
+                                                                        .text_color(rgb(MUTED)).child(owner_label)),
                                                             )
                                                             .on_click(cx.listener(move |this, _, window, cx| {
                                                                 this.open_content_search_hit(&hit, window, cx);
                                                             }))
-                                                    })),
+                                                    }))
+                                                    .when(content_no_results, |results| results.child(
+                                                        div()
+                                                            .px_2()
+                                                            .py_3()
+                                                            .text_xs()
+                                                            .text_color(rgb(MUTED))
+                                                            .child("No matching lines in the selected worktree scope"),
+                                                    )),
                                             )
                                     } else {
                                         div().h(px(0.0))
@@ -11477,6 +11555,7 @@ impl Render for Workbench {
                                     .flex_1()
                                     .min_h_0()
                                     .id("explorer-scroll")
+                                    .when(self.right_sidebar_view != RightSidebarView::Explorer, |v| v.hidden())
                                     .track_scroll(&self.explorer_scroll)
                                     .on_drop(cx.listener(|this, paths: &gpui::ExternalPaths, _, cx| {
                                         this.import_explorer_drop(paths.paths().to_vec(), None, cx);
@@ -12894,6 +12973,10 @@ impl Render for Workbench {
                                     this.right_sidebar_visible = true;
                                     this.save_sidebar_layout(cx);
                                     cx.notify();
+                                })))
+                            .child(icon_button("right-rail-search", UiIcon::Search, "Search", false)
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.open_content_search_panel(window, cx);
                                 })))
                             .child(icon_button("right-rail-git", UiIcon::Branch, "Source Control", false)
                                 .on_click(cx.listener(|this, _, _, cx| {
@@ -15046,6 +15129,8 @@ fn main() {
                 KeyBinding::new("cmd-shift-n", ExplorerNewFolder, Some("AleraGpuiExplorer")),
                 KeyBinding::new("ctrl-shift-f", ToggleContentSearch, None),
                 KeyBinding::new("cmd-shift-f", ToggleContentSearch, None),
+                KeyBinding::new("ctrl-enter", RunContentSearch, Some("AleraGpuiSearch")),
+                KeyBinding::new("cmd-enter", RunContentSearch, Some("AleraGpuiSearch")),
             ]);
             let bounds = Bounds::centered(None, size(px(1200.0), px(800.0)), cx);
             gpui_kit::open_window(
@@ -15171,7 +15256,9 @@ fn main() {
                             explorer_delete_pending: None,
                             model,
                             center_view: CenterView::Terminal,
-                            right_sidebar_view: if native_settings.sidebar_layout.context_is_git {
+                            right_sidebar_view: if native_settings.sidebar_layout.context_is_search {
+                                RightSidebarView::Search
+                            } else if native_settings.sidebar_layout.context_is_git {
                                 RightSidebarView::Git
                             } else {
                                 RightSidebarView::Explorer
@@ -15243,7 +15330,9 @@ fn main() {
                             file_index: None,
                             file_index_loading: false,
                             file_index_request: 0,
-                            content_query: None,
+                            content_query: Some(cx.new(|cx| {
+                                QuickOpenInput::with_placeholder("Search in files…", cx)
+                            })),
                             content_search_scope: WorktreeContentScope::Current,
                             content_worktrees_searched: 0,
                             content_worktrees_skipped: 0,
