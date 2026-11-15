@@ -57,6 +57,10 @@ pub struct NativeSidebarLayout {
     /// Optional since older GPUI versions only had Explorer and Git.
     #[serde(default)]
     pub context_is_search: bool,
+    #[serde(default)]
+    pub context_is_references: bool,
+    #[serde(default)]
+    pub context_is_pull_requests: bool,
 }
 
 impl Default for NativeSidebarLayout {
@@ -68,6 +72,8 @@ impl Default for NativeSidebarLayout {
             context_width: RIGHT_SIDEBAR_WIDTH,
             context_is_git: false,
             context_is_search: false,
+            context_is_references: false,
+            context_is_pull_requests: false,
         }
     }
 }
@@ -78,7 +84,16 @@ impl NativeSidebarLayout {
             && (SIDEBAR_MIN_WIDTH..=SIDEBAR_MAX_WIDTH).contains(&self.projects_width)
             && self.context_width.is_finite()
             && (SIDEBAR_MIN_WIDTH..=RIGHT_SIDEBAR_MAX_WIDTH).contains(&self.context_width)
-            && !(self.context_is_git && self.context_is_search)
+            && [
+                self.context_is_git,
+                self.context_is_search,
+                self.context_is_references,
+                self.context_is_pull_requests,
+            ]
+            .into_iter()
+            .filter(|selected| *selected)
+            .count()
+                <= 1
     }
 }
 
@@ -1128,6 +1143,8 @@ mod tests {
             context_width: 670.0,
             context_is_git: true,
             context_is_search: false,
+            context_is_references: false,
+            context_is_pull_requests: false,
         };
         let result = store
             .compare_and_set_sidebar_layout(&initial, &next)
@@ -1166,6 +1183,40 @@ mod tests {
             .unwrap();
         assert_eq!(saved.sidebar_layout, search);
         assert_eq!(store.read().unwrap().sidebar_layout, search);
+        let references = NativeSidebarLayout {
+            context_is_search: false,
+            context_is_references: true,
+            ..search.clone()
+        };
+        assert_eq!(
+            store
+                .compare_and_set_sidebar_layout(&search, &references)
+                .unwrap()
+                .sidebar_layout,
+            references
+        );
+        let mut invalid = references.clone();
+        invalid.context_is_git = true;
+        assert!(store
+            .compare_and_set_sidebar_layout(&references, &invalid)
+            .is_err());
+        let review = NativeSidebarLayout {
+            context_is_references: false,
+            context_is_pull_requests: true,
+            ..references.clone()
+        };
+        assert_eq!(
+            store
+                .compare_and_set_sidebar_layout(&references, &review)
+                .unwrap()
+                .sidebar_layout,
+            review
+        );
+        let mut invalid = review.clone();
+        invalid.context_is_references = true;
+        assert!(store
+            .compare_and_set_sidebar_layout(&review, &invalid)
+            .is_err());
     }
 
     #[test]
@@ -1188,6 +1239,8 @@ mod tests {
         let stored = store.read().unwrap().sidebar_layout;
         assert!(stored.context_is_git);
         assert!(!stored.context_is_search);
+        assert!(!stored.context_is_references);
+        assert!(!stored.context_is_pull_requests);
     }
 
     #[test]

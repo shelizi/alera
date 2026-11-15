@@ -10,9 +10,11 @@ mod native_history_sync_ui;
 mod native_host_pins_ui;
 mod native_popup_ui;
 mod native_project_sidebar_ui;
+mod native_review_links;
 mod native_settings_catalog_ui;
 mod native_settings_ui;
 mod native_shared_settings_ui;
+mod native_text_references;
 mod native_ui_icons;
 mod native_ui_theme;
 mod quick_open_ui;
@@ -159,6 +161,8 @@ use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMen
 use gpui_kit::component::IconName;
 use gpui_kit::component::WindowExt as _;
 use native_components::{icon, icon_button, UiIcon};
+use native_review_links::repository_pull_requests_url;
+use native_text_references::{identifier_at_cursor, is_whole_identifier_hit};
 use native_ui_icons::explorer_file_icon_element;
 use quick_open_ui::{bind_quick_open_keys, QuickOpenInput};
 use std::borrow::Cow;
@@ -187,6 +191,7 @@ actions!(
         ToggleFileSearch,
         ToggleContentSearch,
         RunContentSearch,
+        FindTextReferences,
         ExplorerCopy,
         ExplorerCut,
         ExplorerPaste,
@@ -565,7 +570,9 @@ struct PendingTerminalPane {
 enum RightSidebarView {
     Explorer,
     Search,
+    References,
     Git,
+    PullRequests,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -706,6 +713,15 @@ struct Workbench {
     content_error: Option<String>,
     content_searched_query: String,
     content_request: u64,
+    /// Textual identifier occurrences, intentionally NOT LSP semantic references.
+    references_symbol: Option<String>,
+    references_matches: Vec<WorktreeContentMatch>,
+    references_loading: bool,
+    references_error: Option<String>,
+    references_truncated: bool,
+    references_request: u64,
+    review_browser_url: Option<String>,
+    review_browser_error: Option<String>,
     git_snapshot: Option<GitSnapshot>,
     git_original_tabs: GitOriginalTabs,
     git_original_active: bool,
@@ -4757,6 +4773,15 @@ impl Workbench {
         }
     }
 
+    fn find_text_references_action(
+        &mut self,
+        _: &FindTextReferences,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.find_text_references(cx);
+    }
+
     fn toggle_file_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.quick_open.is_some() {
             self.close_quick_open_dialog(window, cx);
@@ -4853,6 +4878,139 @@ impl Workbench {
         cx.notify();
     }
 
+    fn open_references_panel(&mut self, cx: &mut Context<Self>) {
+        self.right_sidebar_view = RightSidebarView::References;
+        self.right_sidebar_visible = true;
+        self.explorer_context_menu = None;
+        self.save_sidebar_layout(cx);
+        cx.notify();
+    }
+
+    /// Read-only review entry until Native's provider-authenticated API
+    /// controller is connected. This never stores credentials or fetches a PR.
+    fn refresh_review_browser_url(&mut self) {
+        let root = self.model.root().to_string_lossy().into_owned();
+        match alera_core::git::repository_remote_url(&root) {
+            Ok(Some(remote)) => {
+                self.review_browser_url = repository_pull_requests_url(&remote);
+                self.review_browser_error = if self.review_browser_url.is_none() {
+                    Some("This Git remote cannot be mapped safely to a GitHub, Gitea or GitLab review URL".into())
+                } else {
+                    None
+                };
+            }
+            Ok(None) => {
+                self.review_browser_url = None;
+                self.review_browser_error = Some("This workspace has no Git remote".into());
+            }
+            Err(error) => {
+                self.review_browser_url = None;
+                self.review_browser_error = Some(format!("Cannot inspect Git remote: {error}"));
+            }
+        }
+    }
+
+    fn open_pull_requests_panel(&mut self, cx: &mut Context<Self>) {
+        self.right_sidebar_view = RightSidebarView::PullRequests;
+        self.right_sidebar_visible = true;
+        self.explorer_context_menu = None;
+        self.refresh_review_browser_url();
+        self.save_sidebar_layout(cx);
+        cx.notify();
+    }
+
+    fn open_pull_requests_in_browser(&mut self, cx: &mut Context<Self>) {
+        self.refresh_review_browser_url();
+        if let Some(url) = &self.review_browser_url {
+            cx.open_url(url);
+        } else if let Some(error) = &self.review_browser_error {
+            self.model.set_status(format!("Cannot open Pull Requests: {error}"));
+        }
+        cx.notify();
+    }
+
+    /// Find whole-identifier text occurrences in saved workspace files.
+    /// No LSP provider is connected yet; this cannot distinguish definitions,
+    /// comments, strings, shadowing or language-specific symbols.
+    fn find_text_references(&mut self, cx: &mut Context<Self>) {
+        self.open_references_panel(cx);
+        let Some(owner) = self.focused_editor() else {
+            self.references_error = Some("Open an Editor file, select a symbol, then run Find Text References".into());
+            cx.notify();
+            return;
+        };
+        let (path, symbol) = {
+            let editor = owner.read(cx);
+            let document = editor.document();
+            (
+                document.path().map(Path::to_path_buf),
+                identifier_at_cursor(document.content(), document.selection(), document.cursor()),
+            )
+        };
+        let Some(path) = path.filter(|path| path.starts_with(self.model.root())) else {
+            self.references_error = Some("Find Text References requires a saved file inside this workspace".into());
+            cx.notify();
+            return;
+        };
+        let _ = path; // The root and identifier, not a user's absolute path, define the scan.
+        let Some(symbol) = symbol else {
+            self.references_error = Some("Select a single identifier or place the Editor caret on a symbol".into());
+            cx.notify();
+            return;
+        };
+        self.references_request = self.references_request.wrapping_add(1);
+        let ticket = self.references_request;
+        let workspace_generation = self.workspace_generation;
+        let root = self.model.root().to_path_buf();
+        self.references_symbol = Some(symbol.clone());
+        self.references_matches.clear();
+        self.references_truncated = false;
+        self.references_error = None;
+        self.references_loading = true;
+        cx.spawn(async move |view, cx| {
+            let result = cx.background_spawn(async move {
+                let mut result = search_worktree_contents(
+                    &root, &symbol, WorktreeContentScope::Current,
+                )?;
+                result.matches.retain(|hit| {
+                    is_whole_identifier_hit(&hit.hit.snippet, hit.hit.column, &symbol)
+                });
+                Ok::<_, std::io::Error>(result)
+            }).await;
+            view.update(cx, |view, cx| {
+                if view.workspace_generation != workspace_generation
+                    || view.references_request != ticket {
+                    return;
+                }
+                view.references_loading = false;
+                match result {
+                    Ok(found) => {
+                        view.references_matches = found.matches;
+                        view.references_truncated = found.truncated;
+                        view.references_error = None;
+                    }
+                    Err(error) => {
+                        view.references_matches.clear();
+                        view.references_truncated = false;
+                        view.references_error = Some(format!("Text reference scan failed: {error}"));
+                    }
+                }
+                cx.notify();
+            }).ok();
+        }).detach();
+        cx.notify();
+    }
+
+    fn clear_text_references(&mut self, cx: &mut Context<Self>) {
+        self.references_request = self.references_request.wrapping_add(1);
+        self.references_symbol = None;
+        self.references_matches.clear();
+        self.references_loading = false;
+        self.references_error = None;
+        self.references_truncated = false;
+        cx.notify();
+    }
+
     fn search_project_contents(&mut self, cx: &mut Context<Self>) {
         let Some(query) = self
             .content_query
@@ -4926,6 +5084,31 @@ impl Workbench {
             cx.notify();
             return;
         }
+        self.open_checked_search_hit(hit, window, cx);
+    }
+
+    fn open_reference_hit(
+        &mut self,
+        hit: &WorktreeContentMatch,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.references_matches.iter().any(|item| item == hit) {
+            self.model.set_status("Text references changed; run Find Text References again");
+            cx.notify();
+            return;
+        }
+        self.open_checked_search_hit(hit, window, cx);
+    }
+
+    /// Shared path validation, safe cross-worktree routing and Editor cursor
+    /// navigation used by both the Search and Text References panels.
+    fn open_checked_search_hit(
+        &mut self,
+        hit: &WorktreeContentMatch,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let path = match hit.checked_path() {
             Ok(path) => path,
             Err(error) => {
@@ -5559,6 +5742,7 @@ impl Workbench {
         self.save_mixed_pane_layout(cx);
         self.save_terminal_layout();
         self.model = next;
+        self.refresh_review_browser_url();
         self.center_view = CenterView::Terminal;
         self.mixed_tabs
             .reset(self.workspace_generation.wrapping_add(1));
@@ -5603,6 +5787,12 @@ impl Workbench {
         self.content_truncated = false;
         self.content_searched_query.clear();
         self.content_request = self.content_request.wrapping_add(1);
+        self.references_request = self.references_request.wrapping_add(1);
+        self.references_symbol = None;
+        self.references_matches.clear();
+        self.references_loading = false;
+        self.references_error = None;
+        self.references_truncated = false;
         self.git_snapshot = None;
         self.git_original_tabs.reset();
         self.git_original_active = false;
@@ -5906,6 +6096,8 @@ impl Workbench {
             context_width: self.right_sidebar_width,
             context_is_git: self.right_sidebar_view == RightSidebarView::Git,
             context_is_search: self.right_sidebar_view == RightSidebarView::Search,
+            context_is_references: self.right_sidebar_view == RightSidebarView::References,
+            context_is_pull_requests: self.right_sidebar_view == RightSidebarView::PullRequests,
         }
     }
 
@@ -5951,7 +6143,11 @@ impl Workbench {
             self.projects_sidebar_width = settings.sidebar_layout.projects_width;
             self.right_sidebar_visible = settings.sidebar_layout.context_visible;
             self.right_sidebar_width = settings.sidebar_layout.context_width;
-            self.right_sidebar_view = if settings.sidebar_layout.context_is_search {
+            self.right_sidebar_view = if settings.sidebar_layout.context_is_pull_requests {
+                RightSidebarView::PullRequests
+            } else if settings.sidebar_layout.context_is_references {
+                RightSidebarView::References
+            } else if settings.sidebar_layout.context_is_search {
                 RightSidebarView::Search
             } else if settings.sidebar_layout.context_is_git {
                 RightSidebarView::Git
@@ -10783,6 +10979,35 @@ impl Render for Workbench {
                 }
             )
         };
+        let reference_count = self.references_matches.len();
+        let reference_symbol = self.references_symbol.clone();
+        let reference_truncated = self.references_truncated;
+        let references_loading = self.references_loading;
+        let references_error = self.references_error.clone();
+        let reference_status = if references_loading {
+            "Scanning saved workspace files for whole-word text matches…".to_owned()
+        } else if let Some(error) = references_error {
+            error
+        } else if reference_symbol.is_none() {
+            "Select a symbol in an Editor and choose Find Text References (Shift+F12).".to_owned()
+        } else if reference_count == 0 {
+            "No textual occurrences found in saved workspace files.".to_owned()
+        } else {
+            format!(
+                "{reference_count} text match(es){}{}",
+                if reference_truncated { " · partial results" } else { "" },
+                if reference_count > 80 { " · showing first 80" } else { "" },
+            )
+        };
+        let mut prior_reference_path: Option<PathBuf> = None;
+        let reference_rows: Vec<_> = self.references_matches.iter()
+            .take(80).cloned().enumerate()
+            .map(|(i, hit)| {
+                let new_file = prior_reference_path.as_ref() != Some(&hit.hit.path);
+                prior_reference_path = Some(hit.hit.path.clone());
+                (i, hit, new_file)
+            })
+            .collect();
         let git_filter_input = self.git_filter_input.clone();
         let git_filter = self.git_filter_input.read(cx).query().to_owned();
         let git_all_changes = self
@@ -11142,6 +11367,7 @@ impl Render for Workbench {
             .on_action(cx.listener(Self::toggle_file_search_action))
             .on_action(cx.listener(Self::toggle_content_search_action))
             .on_action(cx.listener(Self::run_content_search_action))
+            .on_action(cx.listener(Self::find_text_references_action))
             .on_action(cx.listener(Self::explorer_copy_action))
             .on_action(cx.listener(Self::explorer_cut_action))
             .on_action(cx.listener(Self::explorer_paste_action))
@@ -11246,6 +11472,12 @@ impl Render for Workbench {
                                         view.open_content_search_panel(window, cx);
                                     })))
                                     .child(icon_button(
+                                        "right-sidebar-references", UiIcon::List, "References (textual)",
+                                        self.right_sidebar_view == RightSidebarView::References,
+                                    ).on_click(cx.listener(|view, _, _, cx| {
+                                        view.open_references_panel(cx);
+                                    })))
+                                    .child(icon_button(
                                         "right-sidebar-git", UiIcon::Branch, "Source Control",
                                         self.right_sidebar_view == RightSidebarView::Git,
                                     ).on_click(cx.listener(|view, _, _, cx| {
@@ -11253,6 +11485,12 @@ impl Render for Workbench {
                                         view.right_sidebar_view = RightSidebarView::Git;
                                         view.save_sidebar_layout(cx);
                                         cx.notify();
+                                    })))
+                                    .child(icon_button(
+                                        "right-sidebar-pr", UiIcon::PullRequest, "Pull Requests (browser)",
+                                        self.right_sidebar_view == RightSidebarView::PullRequests,
+                                    ).on_click(cx.listener(|view, _, _, cx| {
+                                        view.open_pull_requests_panel(cx);
                                     })))
                                     .child(div().flex_1())
                                     .child(icon_button(
@@ -11280,7 +11518,7 @@ impl Render for Workbench {
                                     .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
                                         if this.explorer_context_menu.take().is_some() { cx.notify(); }
                                     }))
-                                    .when(self.right_sidebar_view == RightSidebarView::Git, |v| v.hidden())
+                                    .when(matches!(self.right_sidebar_view, RightSidebarView::Git | RightSidebarView::References | RightSidebarView::PullRequests), |v| v.hidden())
                             .child(
                                 div()
                                     .id("right-explorer-header")
@@ -11861,6 +12099,159 @@ impl Render for Workbench {
                                         None,
                                     )),
                             )
+                            )
+                            .child(
+                                div()
+                                    .id("right-references-panel")
+                                    .when(self.right_sidebar_view != RightSidebarView::References, |panel| panel.hidden())
+                                    .flex_1()
+                                    .min_h_0()
+                                    .flex()
+                                    .flex_col()
+                                    .child(
+                                        div()
+                                            .h(px(SECTION_HEADER_HEIGHT))
+                                            .px_2()
+                                            .flex()
+                                            .items_center()
+                                            .gap_1()
+                                            .border_b_1()
+                                            .border_color(rgb(BORDER))
+                                            .child(div()
+                                                .min_w_0()
+                                                .flex_1()
+                                                .truncate()
+                                                .text_xs()
+                                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                                .child(match &reference_symbol {
+                                                    Some(symbol) => format!("TEXT REFERENCES · {symbol}"),
+                                                    None => "TEXT REFERENCES".into(),
+                                                }))
+                                            .child(icon_button(
+                                                "references-run", UiIcon::Search,
+                                                "Find text references at Editor cursor (Shift+F12)", references_loading,
+                                            ).on_click(cx.listener(|this, _, _, cx| {
+                                                this.find_text_references(cx);
+                                            })))
+                                            .child(icon_button(
+                                                "references-clear", UiIcon::Close, "Clear References", false,
+                                            ).on_click(cx.listener(|this, _, _, cx| {
+                                                this.clear_text_references(cx);
+                                            }))),
+                                    )
+                                    .child(div().px_3().py_2().text_xs().text_color(rgb(MUTED))
+                                        .child("Textual word matches, not language-server references. Saved files only."))
+                                    .child(div().px_3().py_2().text_xs().text_color(rgb(MUTED))
+                                        .child(reference_status))
+                                    .child(
+                                        div()
+                                            .id("reference-results-scroll")
+                                            .flex_1()
+                                            .min_h_0()
+                                            .overflow_y_scroll()
+                                            .children(reference_rows.into_iter().map(|(i, hit, file_header)| {
+                                                let path = hit.hit.path.clone();
+                                                let file_name = path.file_name()
+                                                    .map(|value| value.to_string_lossy().to_string())
+                                                    .unwrap_or_else(|| path.display().to_string());
+                                                let path_hint = path.display().to_string();
+                                                let snippet = hit.hit.snippet.clone();
+                                                let position = format!("{}:{}", hit.hit.line, hit.hit.column);
+                                                div()
+                                                    .id(("reference-row", i))
+                                                    .min_w_0()
+                                                    .when(file_header, |row| row.child(
+                                                        div()
+                                                            .px_2().py_2()
+                                                            .bg(rgb(PANEL))
+                                                            .border_b_1()
+                                                            .border_color(rgb(BORDER))
+                                                            .flex()
+                                                            .items_center()
+                                                            .gap_2()
+                                                            .child(explorer_file_icon_element(&file_name, false, false, 15.0, MUTED))
+                                                            .child(div().min_w_0().flex_1().truncate().text_sm()
+                                                                .font_weight(gpui::FontWeight::SEMIBOLD).child(file_name))
+                                                            .tooltip(move |window, cx| {
+                                                                gpui_kit::component::tooltip::Tooltip::new(path_hint.clone())
+                                                                    .build(window, cx)
+                                                            })
+                                                    ))
+                                                    .child(div()
+                                                        .px_3().py_2()
+                                                        .cursor_pointer()
+                                                        .hover(|style| style.bg(rgb(ACTIVE)))
+                                                        .flex()
+                                                        .flex_col()
+                                                        .gap_1()
+                                                        .child(div().text_xs().text_color(rgb(MUTED)).child(position))
+                                                        .child(div().min_w_0().truncate().text_xs().child(snippet))
+                                                        .on_click(cx.listener(move |this, _, window, cx| {
+                                                            this.open_reference_hit(&hit, window, cx);
+                                                        })))
+                                            })),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .id("right-pr-browser-panel")
+                                    .when(self.right_sidebar_view != RightSidebarView::PullRequests, |panel| panel.hidden())
+                                    .flex_1()
+                                    .min_h_0()
+                                    .flex()
+                                    .flex_col()
+                                    .child(
+                                        div()
+                                            .h(px(SECTION_HEADER_HEIGHT))
+                                            .px_2()
+                                            .border_b_1()
+                                            .border_color(rgb(BORDER))
+                                            .flex()
+                                            .items_center()
+                                            .gap_2()
+                                            .child(div().min_w_0().flex_1().text_xs()
+                                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                                .child("PULL REQUESTS"))
+                                            .child(icon_button(
+                                                "pr-refresh-remote", UiIcon::Refresh, "Refresh Git remote", false,
+                                            ).on_click(cx.listener(|this, _, _, cx| {
+                                                this.refresh_review_browser_url();
+                                                cx.notify();
+                                            }))),
+                                    )
+                                    .child(div().px_3().py_3().text_xs().text_color(rgb(MUTED))
+                                        .child("Open the repository's PR/MR page in your browser. Authentication stays in your browser."))
+                                    .child(if let Some(url) = self.review_browser_url.clone() {
+                                        div()
+                                            .px_3().py_2()
+                                            .flex().flex_col().gap_2()
+                                            .child(div().text_xs().text_color(rgb(MUTED)).child(url))
+                                            .child(
+                                                div()
+                                                    .id("pr-open-browser")
+                                                    .cursor_pointer()
+                                                    .rounded_md()
+                                                    .bg(rgb(ACTIVE))
+                                                    .hover(|style| style.bg(rgb(ELEVATED)))
+                                                    .px_3().py_2()
+                                                    .text_sm()
+                                                    .child("Open Pull Requests in browser")
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.open_pull_requests_in_browser(cx);
+                                                    })),
+                                            )
+                                            .into_any_element()
+                                    } else {
+                                        div()
+                                            .px_3().py_2()
+                                            .text_xs().text_color(rgb(MUTED))
+                                            .child(self.review_browser_error.clone().unwrap_or_else(|| {
+                                                "No supported remote found; check Git remote settings and refresh".into()
+                                            }))
+                                            .into_any_element()
+                                    })
+                                    .child(div().px_3().py_3().text_xs().text_color(rgb(MUTED))
+                                        .child("In-app PR listing, review, comments and creation require the Native forge provider controller and are not connected yet.")),
                             )
                             .child(
                                 div()
@@ -12978,6 +13369,10 @@ impl Render for Workbench {
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.open_content_search_panel(window, cx);
                                 })))
+                            .child(icon_button("right-rail-references", UiIcon::List, "References", false)
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.open_references_panel(cx);
+                                })))
                             .child(icon_button("right-rail-git", UiIcon::Branch, "Source Control", false)
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.right_sidebar_view = RightSidebarView::Git;
@@ -12985,6 +13380,10 @@ impl Render for Workbench {
                                     this.right_sidebar_visible = true;
                                     this.save_sidebar_layout(cx);
                                     cx.notify();
+                                })))
+                            .child(icon_button("right-rail-pr", UiIcon::PullRequest, "Pull Requests (browser)", false)
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.open_pull_requests_panel(cx);
                                 })))
                             .child(div().flex_1())
                             .child(icon_button("right-rail-expand", UiIcon::ChevronsLeft, "Expand panel", false)
@@ -15070,6 +15469,9 @@ fn main() {
             Some("Native state directory unavailable".into()),
         ),
     };
+    let initial_review_url = alera_core::git::repository_remote_url(
+        &model.root().to_string_lossy(),
+    ).ok().flatten().and_then(|remote| repository_pull_requests_url(&remote));
     let initial_visibility = ExplorerVisibilityOptions {
         show_ignored: native_settings.explorer_show_ignored,
         show_hidden: native_settings.explorer_show_hidden,
@@ -15131,6 +15533,7 @@ fn main() {
                 KeyBinding::new("cmd-shift-f", ToggleContentSearch, None),
                 KeyBinding::new("ctrl-enter", RunContentSearch, Some("AleraGpuiSearch")),
                 KeyBinding::new("cmd-enter", RunContentSearch, Some("AleraGpuiSearch")),
+                KeyBinding::new("shift-f12", FindTextReferences, Some("AleraGpuiEditor")),
             ]);
             let bounds = Bounds::centered(None, size(px(1200.0), px(800.0)), cx);
             gpui_kit::open_window(
@@ -15256,7 +15659,11 @@ fn main() {
                             explorer_delete_pending: None,
                             model,
                             center_view: CenterView::Terminal,
-                            right_sidebar_view: if native_settings.sidebar_layout.context_is_search {
+                            right_sidebar_view: if native_settings.sidebar_layout.context_is_pull_requests {
+                                RightSidebarView::PullRequests
+                            } else if native_settings.sidebar_layout.context_is_references {
+                                RightSidebarView::References
+                            } else if native_settings.sidebar_layout.context_is_search {
                                 RightSidebarView::Search
                             } else if native_settings.sidebar_layout.context_is_git {
                                 RightSidebarView::Git
@@ -15342,6 +15749,14 @@ fn main() {
                             content_error: None,
                             content_searched_query: String::new(),
                             content_request: 0,
+                            references_symbol: None,
+                            references_matches: Vec::new(),
+                            references_loading: false,
+                            references_error: None,
+                            references_truncated: false,
+                            references_request: 0,
+                            review_browser_url: initial_review_url,
+                            review_browser_error: None,
                             git_snapshot: None,
                             git_original_tabs: GitOriginalTabs::default(),
                             git_original_active: false,
