@@ -13798,6 +13798,18 @@ impl Render for Workbench {
                                                                     mixed_drag_generation, &self.terminals.sessions, self.settings_menu_locale, cx,
                                                                 )
                                                             }))
+                                                            .child(
+                                                                div()
+                                                                    .id("mixed-secondary-tabs-empty-area")
+                                                                    .flex_1()
+                                                                    .min_w(px(40.0))
+                                                                    .h(px(TAB_STRIP_HEIGHT - 1.0))
+                                                                    .on_click(cx.listener(|this, event: &gpui::ClickEvent, _, cx| {
+                                                                        if event.click_count() == 2 {
+                                                                            this.new_editor_in_pane(PaneSlot::Secondary, cx);
+                                                                        }
+                                                                    })),
+                                                            )
                                                             .on_drop(cx.listener(|this, drag: &MixedTabDrag, window, cx| {
                                                                 if drag.workspace_generation == this.workspace_generation
                                                                     && this.mixed_tab_is_current(&drag.identity, cx)
@@ -14328,6 +14340,18 @@ impl Render for Workbench {
                                                                     mixed_drag_generation, &self.terminals.sessions, self.settings_menu_locale, cx,
                                                                 )
                                                             }))
+                                                            .child(
+                                                                div()
+                                                                    .id("mixed-secondary-tabs-empty-area")
+                                                                    .flex_1()
+                                                                    .min_w(px(40.0))
+                                                                    .h(px(TAB_STRIP_HEIGHT - 1.0))
+                                                                    .on_click(cx.listener(|this, event: &gpui::ClickEvent, _, cx| {
+                                                                        if event.click_count() == 2 {
+                                                                            this.new_editor_in_pane(PaneSlot::Secondary, cx);
+                                                                        }
+                                                                    })),
+                                                            )
                                                             .on_drop(cx.listener(|this, drag: &MixedTabDrag, window, cx| {
                                                                 if drag.workspace_generation == this.workspace_generation
                                                                     && this.mixed_tab_is_current(&drag.identity, cx)

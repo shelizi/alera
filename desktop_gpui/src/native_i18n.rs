@@ -195,6 +195,51 @@ mod tests {
     }
 
     #[test]
+    fn explorer_context_actions_have_real_translations_in_all_locales() {
+        // ExplorerMenuAction::label() is the source of context menu labels.
+        let labels = [
+            "New file…",
+            "New folder…",
+            "Rename…",
+            "Move to folder…",
+            "Copy into folder…",
+            "Duplicate",
+            "Delete permanently…",
+            "Copy selection",
+            "Cut selection",
+            "Paste",
+            "Open in Alera",
+            "Show in file manager",
+            "View current Git changes",
+            "Copy path",
+            "Copy relative path",
+            "Collapse folder",
+            "Refresh",
+            "File / folder Git history",
+            "Explorer item changed; refresh the folder",
+        ];
+        for source in labels {
+            assert_eq!(tr(UiLocale::English, source), source);
+            for locale in [
+                UiLocale::TraditionalChinese,
+                UiLocale::SimplifiedChinese,
+                UiLocale::Japanese,
+            ] {
+                assert_ne!(tr(locale, source), source, "{source} / {}", locale.tag());
+            }
+        }
+        let popup = include_str!("native_popup_ui.rs");
+        let explorer_menu = popup
+            .split_once("pub(super) fn kit_explorer_context_menu(")
+            .unwrap()
+            .1
+            .split_once("fn run_kit_explorer_menu_action(")
+            .unwrap()
+            .0;
+        assert!(explorer_menu.contains("PopupMenuItem::new(tr(locale, action.label()))"));
+    }
+
+    #[test]
     fn new_tab_menu_actions_have_translations_in_every_supported_language() {
         let sources = [
             "Pane no longer available; reopen New Tab",

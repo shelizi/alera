@@ -316,8 +316,8 @@ mod shared_row_tests {
             "Host-backed controls unexpectedly missing"
         );
         assert_eq!(
-            totals.actions, 4,
-            "only real Native actions may be clickable"
+            totals.actions, 6,
+            "exactly the six connected Native action handlers may be clickable"
         );
         assert_eq!(
             totals.read_only, 3,

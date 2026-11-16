@@ -444,11 +444,15 @@ impl Workbench {
         &mut Context<gpui_kit::component::menu::PopupMenu>,
     ) -> gpui_kit::component::menu::PopupMenu
            + 'static {
-        move |mut menu, _, _| {
+        move |mut menu, _, cx| {
+            let locale = owner
+                .upgrade()
+                .map(|entity| entity.read(cx).settings_menu_locale)
+                .unwrap_or_else(|| UiLocale::from_preference("system"));
             for action in Self::explorer_actions_for_path(path.as_deref()) {
                 let owner = owner.clone();
                 let path = path.clone();
-                menu = menu.item(PopupMenuItem::new(action.label()).on_click(
+                menu = menu.item(PopupMenuItem::new(tr(locale, action.label())).on_click(
                     move |_, window, cx| {
                         let _ = owner.update(cx, |view, cx| {
                             view.run_kit_explorer_menu_action(path.clone(), action, window, cx);
@@ -472,8 +476,10 @@ impl Workbench {
         }
         if let Some(ref path) = path {
             if !path.starts_with(self.model.root()) || !path.exists() {
-                self.model
-                    .set_status("Explorer item changed; refresh the folder");
+                self.model.set_status(tr(
+                    self.settings_menu_locale,
+                    "Explorer item changed; refresh the folder",
+                ));
                 cx.notify();
                 return;
             }

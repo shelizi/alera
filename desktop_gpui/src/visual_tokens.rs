@@ -251,8 +251,11 @@ mod tests {
             "AgentStateSummary::from_sessions(&self.terminals.sessions, agent_inventory_current)"
         ));
         assert!(source.contains("AgentVisualState::for_session(session, agent_inventory_current)"));
-        assert!(source.contains("agent_state_summary_chips(\n                                            agent_state_summary, agent_ui_locale, false,"));
-        assert!(source.contains("agent_state_summary_chips(\n                                agent_state_summary, agent_ui_locale, true,"));
+        // Keep the rendered calls, but do not couple this test to rustfmt
+        // indentation or whether the helper is namespace-qualified.
+        let compact = source.split_whitespace().collect::<String>();
+        assert!(compact.contains("agent_state_summary_chips(agent_state_summary,agent_ui_locale,false,"));
+        assert!(compact.contains("agent_state_summary_chips(agent_state_summary,agent_ui_locale,true,"));
         assert!(source.contains("let inventory_current = !self.terminals.session_list_is_stale();"));
         assert!(source.contains("if is_agent && inventory_current && tab.running"));
         assert!(source.contains("AgentVisualState::from_hook(state, tab.interrupted).color()"));
@@ -282,6 +285,21 @@ mod tests {
             );
         }
         assert!(source.matches("tab_close_button(").count() >= 3);
+    }
+
+    #[test]
+    fn secondary_tab_blank_space_creates_an_editor_in_both_split_directions() {
+        let source = include_str!("main.rs");
+        // Both side-by-side and stacked secondary panes need the Classic
+        // double-click-to-create target, scoped to the secondary pane.
+        assert_eq!(source.matches(r#".id("mixed-tabs-empty-area")"#).count(), 1);
+        let marker = r#".id("mixed-secondary-tabs-empty-area")"#;
+        assert_eq!(source.matches(marker).count(), 2);
+        for secondary in source.split(marker).skip(1) {
+            let blank_area = secondary.split(".on_drop(").next().unwrap();
+            assert!(blank_area.contains("event.click_count() == 2"));
+            assert!(blank_area.contains("this.new_editor_in_pane(PaneSlot::Secondary, cx);"));
+        }
     }
 
     #[test]

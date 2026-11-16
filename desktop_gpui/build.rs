@@ -3,6 +3,8 @@
 // constructs the first frame even though the application compiles correctly.
 // Reserve stack address space; this does not commit physical RAM until used.
 fn main() {
+    // Native i18n uses hand-maintained menus as well as generated UI labels.
+    println!("cargo:rerun-if-changed=locales");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         // Classic keeps the canonical desktop icon in windows/runner/resources.
         // Embedding the exact same .ico avoids the generic Rust/GPUI icon in

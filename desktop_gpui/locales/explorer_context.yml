@@ -1,0 +1,98 @@
+# Hand-maintained labels for the Native Explorer context menu.
+# Keep keys identical to ExplorerMenuAction::label() in main.rs.
+_version: 2
+"New file…":
+  en: "New file…"
+  zh-TW: "新增檔案…"
+  zh-CN: "新建文件…"
+  ja: "新しいファイル…"
+"New folder…":
+  en: "New folder…"
+  zh-TW: "新增資料夾…"
+  zh-CN: "新建文件夹…"
+  ja: "新しいフォルダー…"
+"Rename…":
+  en: "Rename…"
+  zh-TW: "重新命名…"
+  zh-CN: "重命名…"
+  ja: "名前を変更…"
+"Move to folder…":
+  en: "Move to folder…"
+  zh-TW: "移至資料夾…"
+  zh-CN: "移至文件夹…"
+  ja: "フォルダーに移動…"
+"Copy into folder…":
+  en: "Copy into folder…"
+  zh-TW: "複製到資料夾…"
+  zh-CN: "复制到文件夹…"
+  ja: "フォルダーにコピー…"
+"Duplicate":
+  en: "Duplicate"
+  zh-TW: "建立副本"
+  zh-CN: "创建副本"
+  ja: "複製"
+"Delete permanently…":
+  en: "Delete permanently…"
+  zh-TW: "永久刪除…"
+  zh-CN: "永久删除…"
+  ja: "完全に削除…"
+"Cut selection":
+  en: "Cut selection"
+  zh-TW: "剪下選取項目"
+  zh-CN: "剪切所选项"
+  ja: "選択項目を切り取り"
+"Paste":
+  en: "Paste"
+  zh-TW: "貼上"
+  zh-CN: "粘贴"
+  ja: "貼り付け"
+"Open in Alera":
+  en: "Open in Alera"
+  zh-TW: "在 Alera 中開啟"
+  zh-CN: "在 Alera 中打开"
+  ja: "Alera で開く"
+"Show in file manager":
+  en: "Show in file manager"
+  zh-TW: "在檔案總管中顯示"
+  zh-CN: "在文件管理器中显示"
+  ja: "ファイルマネージャーで表示"
+"View current Git changes":
+  en: "View current Git changes"
+  zh-TW: "檢視目前 Git 變更"
+  zh-CN: "查看当前 Git 更改"
+  ja: "現在の Git の変更を表示"
+"Copy path":
+  en: "Copy path"
+  zh-TW: "複製路徑"
+  zh-CN: "复制路径"
+  ja: "パスをコピー"
+"Copy relative path":
+  en: "Copy relative path"
+  zh-TW: "複製相對路徑"
+  zh-CN: "复制相对路径"
+  ja: "相対パスをコピー"
+"Collapse folder":
+  en: "Collapse folder"
+  zh-TW: "收合資料夾"
+  zh-CN: "折叠文件夹"
+  ja: "フォルダーを折りたたむ"
+"File / folder Git history":
+  en: "File / folder Git history"
+  zh-TW: "檔案／資料夾 Git 歷史紀錄"
+  zh-CN: "文件／文件夹 Git 历史记录"
+  ja: "ファイル／フォルダーの Git 履歴"
+"Explorer item changed; refresh the folder":
+  en: "Explorer item changed; refresh the folder"
+  zh-TW: "檔案總管項目已變更，請重新整理資料夾"
+  zh-CN: "文件管理器项目已更改，请刷新文件夹"
+  ja: "エクスプローラーの項目が変更されました。フォルダーを更新してください"
+"Copy selection":
+  en: "Copy selection"
+  zh-TW: "複製選取項目"
+  zh-CN: "复制所选项"
+  ja: "選択項目をコピー"
+"Refresh":
+  en: "Refresh"
+  zh-TW: "重新整理"
+  zh-CN: "刷新"
+  ja: "更新"
