@@ -5,10 +5,33 @@ use alera_gpui_desktop::agent_quota::{
     mark_failed_quota_refresh, merge_quota_snapshots, parse_agent_usage_summary,
     parse_quota_snapshots, scoped_quota_refresh, status_bar_account_label, QuotaReading,
 };
-use alera_gpui_desktop::agent_status_visual::AgentStateSummary;
+use alera_gpui_desktop::agent_status_visual::{AgentStateSummary, AgentVisualState};
 use alera_gpui_desktop::native_i18n::tr;
+use gpui_kit::component::spinner::Spinner;
+use gpui_kit::component::Sizable as _;
 use std::io;
 use std::sync::OnceLock;
+
+/// Classic uses one animated glyph for a working Agent and colored static
+/// status dots for other states. GPUI Kit's spinner animates its own element
+/// (not the entire Workbench) and follows OS reduced-motion preferences.
+pub(super) fn agent_run_indicator(state: AgentVisualState, size: f32) -> gpui::AnyElement {
+    if state == AgentVisualState::Working {
+        div()
+            .w(px(size))
+            .h(px(size))
+            .text_color(rgb(state.run_indicator_color()))
+            .child(Spinner::new().with_size(px(size)))
+            .into_any_element()
+    } else {
+        div()
+            .w(px(size))
+            .h(px(size))
+            .rounded_full()
+            .bg(rgb(state.run_indicator_color()))
+            .into_any_element()
+    }
+}
 
 /// Render the same live Host Agent counts in the left sidebar and footer.
 /// Each item is a Classic-color status dot + count, with translated tooltip;
@@ -38,10 +61,19 @@ pub(super) fn agent_state_summary_chips(
                 })
                 .child(
                     div()
-                        .w(px(TAB_ATTENTION_DOT_SIZE))
-                        .h(px(TAB_ATTENTION_DOT_SIZE))
-                        .rounded_full()
-                        .bg(rgb(state.color())),
+                        .w(px(12.0))
+                        .h(px(12.0))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(agent_run_indicator(
+                            state,
+                            if state == AgentVisualState::Working {
+                                11.0
+                            } else {
+                                TAB_ATTENTION_DOT_SIZE
+                            },
+                        )),
                 )
                 .child(div().text_color(rgb(MUTED)).child(count.to_string())),
         );

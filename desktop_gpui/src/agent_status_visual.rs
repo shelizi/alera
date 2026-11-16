@@ -4,6 +4,7 @@
 //! this mapping. No PTY creation, ownership or unread acknowledgment lives
 //! here. Stale inventories must never display "currently working" counts.
 
+use crate::native_i18n::{tr, UiLocale};
 use crate::terminal::{AgentActivityState, TerminalSession};
 use crate::visual_tokens::{AGENT_BLOCKED, AGENT_DONE, AGENT_WAITING, AGENT_WORKING};
 use std::collections::HashSet;
@@ -48,6 +49,33 @@ impl AgentVisualState {
             Self::Blocked | Self::Interrupted => AGENT_BLOCKED,
             Self::Done => AGENT_DONE,
         }
+    }
+
+    /// Classic uses the blue info dot in Tab strips, but an amber
+    /// spinner in sidebar/run summaries. Both denote the SAME Host state.
+    pub const fn run_indicator_color(self) -> u32 {
+        match self {
+            Self::Working | Self::Waiting => AGENT_WAITING,
+            Self::Blocked | Self::Interrupted => AGENT_BLOCKED,
+            Self::Done => AGENT_DONE,
+        }
+    }
+
+    /// Classic's compact status tooltip, without low-level Host IDs.
+    /// The Session details view remains the source for those identifiers.
+    pub fn tooltip(self, agent_name: &str, locale: UiLocale) -> String {
+        let key = agent_name.trim();
+        let name = if key.is_empty() {
+            tr(locale, "Agents")
+        } else {
+            // Host sends wire IDs such as "claude" and "agy". Show the
+            // same canonical display names as Classic's descriptor registry
+            // without maintaining a second, divergent name table.
+            alera_core::agent_descriptor::agent_descriptor(&key.to_ascii_lowercase())
+                .map(|descriptor| descriptor.display_name.to_string())
+                .unwrap_or_else(|| key.to_string())
+        };
+        format!("{} · {}", name, tr(locale, self.label()))
     }
 
     /// Translation key from Classic's AgentRunStateIndicator terminology.
@@ -180,6 +208,59 @@ mod tests {
         );
         assert_eq!(AgentVisualState::Interrupted.color(), AGENT_BLOCKED);
         assert_eq!(AgentVisualState::Interrupted.label(), "Interrupted");
+    }
+
+    #[test]
+    fn classic_working_tab_dot_and_sidebar_spinner_have_distinct_colors() {
+        assert_eq!(AgentVisualState::Working.color(), AGENT_WORKING);
+        assert_eq!(
+            AgentVisualState::Working.run_indicator_color(),
+            AGENT_WAITING
+        );
+        for state in [
+            AgentVisualState::Waiting,
+            AgentVisualState::Blocked,
+            AgentVisualState::Interrupted,
+            AgentVisualState::Done,
+        ] {
+            assert_eq!(state.color(), state.run_indicator_color());
+        }
+    }
+
+    #[test]
+    fn tooltip_is_localized_compact_and_does_not_expose_host_identifiers() {
+        let working = AgentVisualState::Working;
+        assert_eq!(
+            working.tooltip("Codex", UiLocale::TraditionalChinese),
+            "Codex · 工作中"
+        );
+        assert_eq!(
+            AgentVisualState::Waiting.tooltip("Claude Code", UiLocale::Japanese),
+            "Claude Code · 入力待ち"
+        );
+        assert_eq!(
+            AgentVisualState::Interrupted.tooltip(" ", UiLocale::English),
+            "Agents · Interrupted"
+        );
+        let tooltip = working.tooltip("Codex", UiLocale::SimplifiedChinese);
+        assert_eq!(
+            AgentVisualState::Waiting.tooltip("claude", UiLocale::TraditionalChinese),
+            "Claude Code · 等待輸入"
+        );
+        assert_eq!(
+            AgentVisualState::Done.tooltip("agy", UiLocale::English),
+            "Antigravity · Done"
+        );
+        assert_eq!(
+            AgentVisualState::Blocked.tooltip("copilot", UiLocale::English),
+            "GitHub Copilot · Blocked"
+        );
+        assert_eq!(
+            working.tooltip("unknown-adapter", UiLocale::English),
+            "unknown-adapter · Working"
+        );
+        assert!(!tooltip.contains("Host session"));
+        assert!(!tooltip.contains("Workspace:"));
     }
 
     #[test]

@@ -214,6 +214,35 @@ mod tests {
     }
 
     #[test]
+    fn classic_agent_working_motion_is_limited_to_sidebar_and_compact_tray() {
+        let renderer = include_str!("native_agent_quota_ui.rs");
+        assert!(renderer.contains("fn agent_run_indicator("));
+        assert!(renderer.contains("Spinner::new().with_size(px(size))"));
+        assert!(renderer.contains("state.run_indicator_color()"));
+        let main = include_str!("main.rs");
+        let tab = main
+            .split_once("fn render_mixed_tab_chip(")
+            .unwrap()
+            .1
+            .split_once("fn sync_mixed_tabs(")
+            .unwrap()
+            .0;
+        // Classic Tab strip uses the blue 6px attention dot, not an
+        // independently ticking Spinner per open Tab.
+        assert!(tab.contains("TAB_ATTENTION_DOT_SIZE"));
+        assert!(!tab.contains("Spinner::new()"));
+        assert!(tab.contains(".tooltip(agent_type, locale)"));
+        assert!(tab.contains("tab_tooltip_title = agent_tooltip.clone()"));
+        let sidebar = main
+            .split_once(r#".id("terminal-sessions-scroll")"#)
+            .unwrap()
+            .1;
+        assert!(sidebar.contains("agent_run_indicator("));
+        assert!(sidebar.contains("if state == AgentVisualState::Working"));
+        assert!(sidebar.contains("state.tooltip(&brand, agent_ui_locale)"));
+    }
+
+    #[test]
     fn agent_status_summary_and_host_row_share_live_only_state_colors() {
         let source = include_str!("main.rs");
         // Both summary surfaces must render from the same *current* Host

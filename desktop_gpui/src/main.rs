@@ -96,7 +96,7 @@ use alera_gpui_desktop::mcp_ui_bridge::{
 };
 use alera_gpui_desktop::mcp_workspace_creation::HostManagedWorkspaceRequest;
 use alera_gpui_desktop::model::WorkbenchModel;
-use alera_gpui_desktop::native_i18n::{tr, UiLocale};
+use alera_gpui_desktop::native_i18n::UiLocale;
 use alera_gpui_desktop::agent_status_visual::{AgentStateSummary, AgentVisualState};
 use alera_gpui_desktop::native_modal::NativeModalSize;
 use alera_gpui_desktop::native_settings::{NativeSettings, NativeSettingsStore, NativeSidebarLayout};
@@ -8890,6 +8890,7 @@ impl Workbench {
         pinned: bool,
         drag_generation: u64,
         host_sessions: &[TerminalSession],
+        locale: UiLocale,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let secondary = pane == PaneSlot::Secondary;
@@ -8903,7 +8904,18 @@ impl Workbench {
             ("mixed-tab", "mixed-tab-focus", "mixed-tab-close")
         };
         let stopped_label = tab.stopped_label();
-        let agent_tooltip = tab.agent_status_tooltip();
+        // Classic tooltips describe the live Agent state in the selected
+        // language; raw Host IDs are still available in Session details.
+        let agent_tooltip = if tab.kind == WorkbenchTabKind::Agent && tab.running {
+            tab.agent_state.and_then(|state| {
+                tab.verified_agent_brand(host_sessions).map(|agent_type| {
+                    AgentVisualState::from_hook(state, tab.interrupted)
+                        .tooltip(agent_type, locale)
+                })
+            })
+        } else {
+            None
+        };
         // Only the exact, still-running Host identity may choose a brand.
         // Generic Terminal/Editor tabs retain their own icon; the separate
         // 6px Hook status dot and stopped label never move or get concealed.
@@ -8928,7 +8940,9 @@ impl Workbench {
             None
         };
         let title = tab.title;
-        let tab_tooltip_title = title.clone();
+        // The title has its own hover target. Show the same Agent state
+        // tooltip there, rather than masking it with a title-only bubble.
+        let tab_tooltip_title = agent_tooltip.clone().unwrap_or_else(|| title.clone());
         let for_click = identity.clone();
         let for_middle = identity.clone();
         let for_right = identity.clone();
@@ -13501,6 +13515,7 @@ impl Render for Workbench {
                                                     true,
                                                     mixed_drag_generation,
                                                     &self.terminals.sessions,
+                                                    self.settings_menu_locale,
                                                     cx,
                                                 )
                                             }))
@@ -13534,7 +13549,7 @@ impl Render for Workbench {
                                                 let pinned = pinned_ids.contains(&tab.identity);
                                                 Self::render_mixed_tab_chip(
                                                     index, tab, PaneSlot::Primary, selected, pinned,
-                                                    mixed_drag_generation, &self.terminals.sessions, cx,
+                                                    mixed_drag_generation, &self.terminals.sessions, self.settings_menu_locale, cx,
                                                 )
                                             }))
                                             .children(git_original_tabs.into_iter().enumerate().map(|(index, tab)| {
@@ -13749,6 +13764,7 @@ impl Render for Workbench {
                                                                     true,
                                                                     mixed_drag_generation,
                                                                     &self.terminals.sessions,
+                                                                    self.settings_menu_locale,
                                                                     cx,
                                                                 )
                                                             }))
@@ -13779,7 +13795,7 @@ impl Render for Workbench {
                                                                 let pinned = pinned_ids.contains(&tab.identity);
                                                                 Self::render_mixed_tab_chip(
                                                                     index, tab, PaneSlot::Secondary, selected, pinned,
-                                                                    mixed_drag_generation, &self.terminals.sessions, cx,
+                                                                    mixed_drag_generation, &self.terminals.sessions, self.settings_menu_locale, cx,
                                                                 )
                                                             }))
                                                             .on_drop(cx.listener(|this, drag: &MixedTabDrag, window, cx| {
@@ -14277,6 +14293,7 @@ impl Render for Workbench {
                                                                     true,
                                                                     mixed_drag_generation,
                                                                     &self.terminals.sessions,
+                                                                    self.settings_menu_locale,
                                                                     cx,
                                                                 )
                                                             }))
@@ -14308,7 +14325,7 @@ impl Render for Workbench {
                                                                 let pinned = pinned_ids.contains(&tab.identity);
                                                                 Self::render_mixed_tab_chip(
                                                                     index, tab, PaneSlot::Secondary, selected, pinned,
-                                                                    mixed_drag_generation, &self.terminals.sessions, cx,
+                                                                    mixed_drag_generation, &self.terminals.sessions, self.settings_menu_locale, cx,
                                                                 )
                                                             }))
                                                             .on_drop(cx.listener(|this, drag: &MixedTabDrag, window, cx| {
@@ -15345,8 +15362,19 @@ impl Render for Workbench {
                                     .overflow_y_scroll()
                                     .children(terminal_sessions.into_iter().enumerate().map(|(index, (handle, label, workspace_id, agent_type, visual_state))| {
                                         let brand = agent_type.as_deref().unwrap_or("terminal").trim().to_ascii_lowercase();
+                                        let row_status_tooltip = visual_state
+                                            .map(|state| state.tooltip(&brand, agent_ui_locale));
                                         div()
                                             .id(("terminal-session", index))
+                                            // The whole Session row is easier to hover than a
+                                            // 6px status dot; both show the same state.
+                                            .when(row_status_tooltip.is_some(), |row| {
+                                                let tip = row_status_tooltip.clone().unwrap_or_default();
+                                                row.tooltip(move |window, cx| {
+                                                    gpui_kit::component::tooltip::Tooltip::new(tip.clone())
+                                                        .build(window, cx)
+                                                })
+                                            })
                                             .py_1()
                                             .px_1()
                                             .cursor_pointer()
@@ -15359,23 +15387,28 @@ impl Render for Workbench {
                                                     .items_center()
                                                     .gap_2()
                                                     .child(native_agent_quota_ui::quota_provider_icon(&brand, 14.0))
-                                                    // Fixed state slot, like Classic's Tab dot;
-                                                    // disappearing Hook state cannot shift labels.
+                                                    // Like Classic's sidebar, animate only Working,
+                                                    // and reserve a stable slot for every Hook state.
                                                     .child(
                                                         div()
                                                             .id(("host-agent-status-dot", index))
-                                                            .w(px(TAB_ATTENTION_DOT_SIZE))
-                                                            .h(px(TAB_ATTENTION_DOT_SIZE))
+                                                            .w(px(12.0))
+                                                            .h(px(12.0))
                                                             .flex_shrink_0()
+                                                            .flex()
+                                                            .items_center()
+                                                            .justify_center()
                                                             .when(visual_state.is_some(), |dot| {
                                                                 let state = visual_state.unwrap();
-                                                                let tooltip = tr(agent_ui_locale, state.label());
-                                                                dot.rounded_full()
-                                                                    .bg(rgb(state.color()))
-                                                                    .tooltip(move |window, cx| {
-                                                                        gpui_kit::component::tooltip::Tooltip::new(tooltip.clone())
-                                                                            .build(window, cx)
-                                                                    })
+                                                                let tooltip = state.tooltip(&brand, agent_ui_locale);
+                                                                dot.child(native_agent_quota_ui::agent_run_indicator(
+                                                                    state,
+                                                                    if state == AgentVisualState::Working { 11.0 } else { TAB_ATTENTION_DOT_SIZE },
+                                                                ))
+                                                                .tooltip(move |window, cx| {
+                                                                    gpui_kit::component::tooltip::Tooltip::new(tooltip.clone())
+                                                                        .build(window, cx)
+                                                                })
                                                             })
                                                     )
                                                     .child(div().min_w_0().truncate().child(label)),
