@@ -15963,7 +15963,7 @@ fn main() {
                             settings_section: None,
                             settings_modal_focus: cx.focus_handle(),
                             settings_kit_dialog_open: false,
-                            settings_menu_locale: UiLocale::English,
+                            settings_menu_locale: UiLocale::from_preference("system"),
                             settings_menu_language: "system".into(),
                             settings_extra_values: serde_json::Map::new(),
                             settings_shared_busy: false,

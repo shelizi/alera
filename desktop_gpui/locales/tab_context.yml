@@ -1,0 +1,128 @@
+# Hand-maintained Native Tab/Panes translations; Settings ui.yml is generated separately.
+# Keep action labels in sync with native_popup_ui.rs; never translate IDs or filesystem paths.
+_version: 2
+"Focus":
+  en: "Focus"
+  zh-TW: "切換至此分頁"
+  zh-CN: "切换到此标签页"
+  ja: "このタブに切り替え"
+"Pin Tab":
+  en: "Pin Tab"
+  zh-TW: "釘選分頁"
+  zh-CN: "固定标签页"
+  ja: "タブをピン留め"
+"Unpin Tab":
+  en: "Unpin Tab"
+  zh-TW: "取消釘選分頁"
+  zh-CN: "取消固定标签页"
+  ja: "ピン留めを解除"
+"Close":
+  en: "Close"
+  zh-TW: "關閉"
+  zh-CN: "关闭"
+  ja: "閉じる"
+"Close others":
+  en: "Close others"
+  zh-TW: "關閉其他分頁"
+  zh-CN: "关闭其他标签页"
+  ja: "他のタブを閉じる"
+"Close to right":
+  en: "Close to right"
+  zh-TW: "關閉右側分頁"
+  zh-CN: "关闭右侧标签页"
+  ja: "右側のタブを閉じる"
+"Move left":
+  en: "Move left"
+  zh-TW: "向左移動"
+  zh-CN: "向左移动"
+  ja: "左に移動"
+"Move right":
+  en: "Move right"
+  zh-TW: "向右移動"
+  zh-CN: "向右移动"
+  ja: "右に移動"
+"Move to first pane":
+  en: "Move to first pane"
+  zh-TW: "移至第一窗格"
+  zh-CN: "移至第一个窗格"
+  ja: "最初のペインに移動"
+"Move to second pane":
+  en: "Move to second pane"
+  zh-TW: "移至第二窗格"
+  zh-CN: "移至第二个窗格"
+  ja: "2 番目のペインに移動"
+"Tab changed; action cancelled":
+  en: "Tab changed; action cancelled"
+  zh-TW: "分頁已變更，已取消操作"
+  zh-CN: "标签页已更改，操作已取消"
+  ja: "タブが変更されたため操作を中止しました"
+"New File in this pane":
+  en: "New File in this pane"
+  zh-TW: "在此窗格新增檔案"
+  zh-CN: "在此窗格新建文件"
+  ja: "このペインに新しいファイルを作成"
+"Refresh output":
+  en: "Refresh output"
+  zh-TW: "重新整理輸出"
+  zh-CN: "刷新输出"
+  ja: "出力を更新"
+"Copy visible terminal":
+  en: "Copy visible terminal"
+  zh-TW: "複製可見終端機內容"
+  zh-CN: "复制可见终端内容"
+  ja: "表示中のターミナル内容をコピー"
+"Copy selected rows":
+  en: "Copy selected rows"
+  zh-TW: "複製選取的列"
+  zh-CN: "复制选中行"
+  ja: "選択した行をコピー"
+"Toggle VT screen / text log":
+  en: "Toggle VT screen / text log"
+  zh-TW: "切換 VT 畫面／文字日誌"
+  zh-CN: "切换 VT 画面／文本日志"
+  ja: "VT 画面／テキストログを切り替え"
+"Resize: 80 × 24":
+  en: "Resize: 80 × 24"
+  zh-TW: "調整大小：80 × 24"
+  zh-CN: "调整大小：80 × 24"
+  ja: "サイズ変更：80 × 24"
+"Resize: 120 × 36":
+  en: "Resize: 120 × 36"
+  zh-TW: "調整大小：120 × 36"
+  zh-CN: "调整大小：120 × 36"
+  ja: "サイズ変更：120 × 36"
+"Toggle Terminal split":
+  en: "Toggle Terminal split"
+  zh-TW: "切換終端機分割"
+  zh-CN: "切换终端拆分"
+  ja: "ターミナル分割を切り替え"
+"Switch Terminal split direction":
+  en: "Switch Terminal split direction"
+  zh-TW: "切換終端機分割方向"
+  zh-CN: "切换终端拆分方向"
+  ja: "ターミナルの分割方向を切り替え"
+"Move tab to first pane":
+  en: "Move tab to first pane"
+  zh-TW: "將分頁移至第一窗格"
+  zh-CN: "将标签页移至第一个窗格"
+  ja: "タブを最初のペインに移動"
+"Move tab to second pane":
+  en: "Move tab to second pane"
+  zh-TW: "將分頁移至第二窗格"
+  zh-CN: "将标签页移至第二个窗格"
+  ja: "タブを 2 番目のペインに移動"
+"Switch split direction":
+  en: "Switch split direction"
+  zh-TW: "切換分割方向"
+  zh-CN: "切换拆分方向"
+  ja: "分割方向を切り替え"
+"Close split pane":
+  en: "Close split pane"
+  zh-TW: "關閉分割窗格"
+  zh-CN: "关闭拆分窗格"
+  ja: "分割ペインを閉じる"
+"Open a tab to split":
+  en: "Open a tab to split"
+  zh-TW: "請先開啟分頁再分割"
+  zh-CN: "请先打开标签页再拆分"
+  ja: "分割するにはタブを開いてください"

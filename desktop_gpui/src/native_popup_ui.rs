@@ -2,6 +2,7 @@
 //! Only target validation and binding to Alera actions live here.
 
 use super::*;
+use alera_gpui_desktop::native_i18n::tr;
 
 impl Workbench {
     fn kit_menu_host_is_active(&self, target: &TerminalTabContextTarget) -> bool {
@@ -181,95 +182,113 @@ impl Workbench {
         &mut Context<gpui_kit::component::menu::PopupMenu>,
     ) -> gpui_kit::component::menu::PopupMenu
            + 'static {
-        move |mut menu, _, _| {
+        move |mut menu, _, cx| {
+            // Use the authoritative shared Desktop locale when this popup
+            // opens, not the locale when the Tab was first created.
+            let locale = owner
+                .upgrade()
+                .map(|entity| entity.read(cx).settings_menu_locale)
+                .unwrap_or_else(|| UiLocale::from_preference("system"));
             let file_owner = owner.clone();
             let pane = if active_in_secondary {
                 PaneSlot::Secondary
             } else {
                 PaneSlot::Primary
             };
-            menu = menu.item(PopupMenuItem::new("New File in this pane").on_click(
-                move |_, _, cx| {
-                    let _ = file_owner.update(cx, |view, cx| view.new_editor_in_pane(pane, cx));
-                },
-            ));
+            menu = menu.item(
+                PopupMenuItem::new(tr(locale, "New File in this pane")).on_click(
+                    move |_, _, cx| {
+                        let _ = file_owner.update(cx, |view, cx| view.new_editor_in_pane(pane, cx));
+                    },
+                ),
+            );
             menu = menu.separator();
             if let Some(WorkbenchTabIdentity::Host(target)) = active.clone() {
-                menu = menu.label("Terminal");
+                menu = menu.label(tr(locale, "Terminal"));
                 let refresh_owner = owner.clone();
                 let refresh_target = target.clone();
-                menu = menu.item(
-                    PopupMenuItem::new("Refresh output").on_click(move |_, _, cx| {
+                menu = menu.item(PopupMenuItem::new(tr(locale, "Refresh output")).on_click(
+                    move |_, _, cx| {
                         let _ = refresh_owner.update(cx, |view, cx| {
                             if view.kit_menu_host_is_active(&refresh_target) {
                                 view.refresh_terminal_output(cx);
                             }
                         });
-                    }),
-                );
+                    },
+                ));
                 let copy_owner = owner.clone();
                 let copy_target = target.clone();
-                menu = menu.item(PopupMenuItem::new("Copy visible terminal").on_click(
-                    move |_, _, cx| {
-                        let _ = copy_owner.update(cx, |view, cx| {
-                            if view.kit_menu_host_is_active(&copy_target) {
-                                view.copy_terminal_text_for_pane(pane, false, cx);
-                            }
-                        });
-                    },
-                ));
+                menu = menu.item(
+                    PopupMenuItem::new(tr(locale, "Copy visible terminal")).on_click(
+                        move |_, _, cx| {
+                            let _ = copy_owner.update(cx, |view, cx| {
+                                if view.kit_menu_host_is_active(&copy_target) {
+                                    view.copy_terminal_text_for_pane(pane, false, cx);
+                                }
+                            });
+                        },
+                    ),
+                );
                 let selected_owner = owner.clone();
                 let selected_target = target.clone();
-                menu = menu.item(PopupMenuItem::new("Copy selected rows").on_click(
-                    move |_, _, cx| {
-                        let _ = selected_owner.update(cx, |view, cx| {
-                            if view.kit_menu_host_is_active(&selected_target) {
-                                view.copy_terminal_text_for_pane(pane, true, cx);
-                            }
-                        });
-                    },
-                ));
+                menu = menu.item(
+                    PopupMenuItem::new(tr(locale, "Copy selected rows")).on_click(
+                        move |_, _, cx| {
+                            let _ = selected_owner.update(cx, |view, cx| {
+                                if view.kit_menu_host_is_active(&selected_target) {
+                                    view.copy_terminal_text_for_pane(pane, true, cx);
+                                }
+                            });
+                        },
+                    ),
+                );
                 let mode_owner = owner.clone();
                 let mode_target = target.clone();
-                menu = menu.item(PopupMenuItem::new("Toggle VT screen / text log").on_click(
-                    move |_, _, cx| {
-                        let _ = mode_owner.update(cx, |view, cx| {
-                            if view.kit_menu_host_is_active(&mode_target) {
-                                view.terminals.toggle_view_mode();
-                                view.save_terminal_layout();
-                                cx.notify();
-                            }
-                        });
-                    },
-                ));
+                menu = menu.item(
+                    PopupMenuItem::new(tr(locale, "Toggle VT screen / text log")).on_click(
+                        move |_, _, cx| {
+                            let _ = mode_owner.update(cx, |view, cx| {
+                                if view.kit_menu_host_is_active(&mode_target) {
+                                    view.terminals.toggle_view_mode();
+                                    view.save_terminal_layout();
+                                    cx.notify();
+                                }
+                            });
+                        },
+                    ),
+                );
                 for (label, cols, rows) in
                     [("Resize: 80 × 24", 80, 24), ("Resize: 120 × 36", 120, 36)]
                 {
                     let size_owner = owner.clone();
                     let size_target = target.clone();
-                    menu = menu.item(PopupMenuItem::new(label).on_click(move |_, _, cx| {
-                        let _ = size_owner.update(cx, |view, cx| {
-                            if view.kit_menu_host_is_active(&size_target) {
-                                view.resize_terminal(cols, rows, cx);
-                            }
-                        });
-                    }));
+                    menu = menu.item(PopupMenuItem::new(tr(locale, label)).on_click(
+                        move |_, _, cx| {
+                            let _ = size_owner.update(cx, |view, cx| {
+                                if view.kit_menu_host_is_active(&size_target) {
+                                    view.resize_terminal(cols, rows, cx);
+                                }
+                            });
+                        },
+                    ));
                 }
                 let split_owner = owner.clone();
                 let split_target = target.clone();
-                menu = menu.item(PopupMenuItem::new("Toggle Terminal split").on_click(
-                    move |_, _, cx| {
-                        let _ = split_owner.update(cx, |view, cx| {
-                            if view.kit_menu_host_is_active(&split_target) {
-                                view.toggle_terminal_split(cx);
-                            }
-                        });
-                    },
-                ));
+                menu = menu.item(
+                    PopupMenuItem::new(tr(locale, "Toggle Terminal split")).on_click(
+                        move |_, _, cx| {
+                            let _ = split_owner.update(cx, |view, cx| {
+                                if view.kit_menu_host_is_active(&split_target) {
+                                    view.toggle_terminal_split(cx);
+                                }
+                            });
+                        },
+                    ),
+                );
                 let direction_owner = owner.clone();
                 let direction_target = target.clone();
                 menu = menu.item(
-                    PopupMenuItem::new("Switch Terminal split direction").on_click(
+                    PopupMenuItem::new(tr(locale, "Switch Terminal split direction")).on_click(
                         move |_, _, cx| {
                             let _ = direction_owner.update(cx, |view, cx| {
                                 if view.kit_menu_host_is_active(&direction_target)
@@ -296,35 +315,39 @@ impl Workbench {
                 } else {
                     MixedContextAction::SecondPane
                 };
-                menu = menu.item(PopupMenuItem::new(label).on_click(move |_, window, cx| {
-                    let _ = split_owner.update(cx, |view, cx| {
-                        if view.mixed_tab_is_current(&active, cx) {
-                            view.mixed_tab_context = Some(active.clone());
-                            view.apply_mixed_tab_context(action, window, cx);
-                        }
-                    });
-                }));
-            }
-            if has_secondary {
-                let axis_owner = owner.clone();
-                menu = menu.item(PopupMenuItem::new("Switch split direction").on_click(
-                    move |_, _, cx| {
-                        let _ = axis_owner.update(cx, |view, cx| {
-                            view.mixed_panes.toggle_axis();
-                            view.save_mixed_pane_layout(cx);
-                            cx.notify();
+                menu = menu.item(PopupMenuItem::new(tr(locale, label)).on_click(
+                    move |_, window, cx| {
+                        let _ = split_owner.update(cx, |view, cx| {
+                            if view.mixed_tab_is_current(&active, cx) {
+                                view.mixed_tab_context = Some(active.clone());
+                                view.apply_mixed_tab_context(action, window, cx);
+                            }
                         });
                     },
                 ));
+            }
+            if has_secondary {
+                let axis_owner = owner.clone();
+                menu = menu.item(
+                    PopupMenuItem::new(tr(locale, "Switch split direction")).on_click(
+                        move |_, _, cx| {
+                            let _ = axis_owner.update(cx, |view, cx| {
+                                view.mixed_panes.toggle_axis();
+                                view.save_mixed_pane_layout(cx);
+                                cx.notify();
+                            });
+                        },
+                    ),
+                );
                 let owner = owner.clone();
-                menu = menu.item(PopupMenuItem::new("Close split pane").on_click(
+                menu = menu.item(PopupMenuItem::new(tr(locale, "Close split pane")).on_click(
                     move |_, _, cx| {
                         let _ = owner.update(cx, |view, cx| view.unsplit_mixed_panes(cx));
                     },
                 ));
             }
             if active.is_none() && !has_secondary {
-                menu = menu.label("Open a tab to split");
+                menu = menu.label(tr(locale, "Open a tab to split"));
             }
             menu
         }
@@ -397,7 +420,11 @@ impl Workbench {
         &mut Context<gpui_kit::component::menu::PopupMenu>,
     ) -> gpui_kit::component::menu::PopupMenu
            + 'static {
-        move |mut menu, _, _| {
+        move |mut menu, _, cx| {
+            let locale = owner
+                .upgrade()
+                .map(|entity| entity.read(cx).settings_menu_locale)
+                .unwrap_or_else(|| UiLocale::from_preference("system"));
             let actions = [
                 (MixedContextAction::Focus, "Focus"),
                 (
@@ -425,25 +452,30 @@ impl Workbench {
             for (action, label) in actions {
                 let owner = owner.clone();
                 let identity = identity.clone();
-                menu = menu.item(PopupMenuItem::new(label).on_click(move |_, window, cx| {
-                    let _ = owner.update(cx, |view, cx| {
-                        let expected = if secondary {
-                            PaneSlot::Secondary
-                        } else {
-                            PaneSlot::Primary
-                        };
-                        if view.mixed_tab_is_current(&identity, cx)
-                            && view.mixed_tabs.contains(&identity)
-                            && view.mixed_panes.tabs_in(expected).contains(&identity)
-                        {
-                            view.mixed_tab_context = Some(identity.clone());
-                            view.apply_mixed_tab_context(action, window, cx);
-                        } else {
-                            view.model.set_status("Tab changed; action cancelled");
-                            cx.notify();
-                        }
-                    });
-                }));
+                menu = menu.item(PopupMenuItem::new(tr(locale, label)).on_click(
+                    move |_, window, cx| {
+                        let _ = owner.update(cx, |view, cx| {
+                            let expected = if secondary {
+                                PaneSlot::Secondary
+                            } else {
+                                PaneSlot::Primary
+                            };
+                            if view.mixed_tab_is_current(&identity, cx)
+                                && view.mixed_tabs.contains(&identity)
+                                && view.mixed_panes.tabs_in(expected).contains(&identity)
+                            {
+                                view.mixed_tab_context = Some(identity.clone());
+                                view.apply_mixed_tab_context(action, window, cx);
+                            } else {
+                                view.model.set_status(tr(
+                                    view.settings_menu_locale,
+                                    "Tab changed; action cancelled",
+                                ));
+                                cx.notify();
+                            }
+                        });
+                    },
+                ));
             }
             menu
         }

@@ -145,6 +145,56 @@ mod tests {
         }
     }
     #[test]
+    fn tab_context_and_pane_actions_have_real_translations_in_all_locales() {
+        // The mixed Editor/Terminal/Agent Tab context menu and the adjacent
+        // pane actions must never silently revert to English in zh-TW,
+        // zh-CN or Japanese. Keep these labels in the Native locale catalog.
+        let labels = [
+            "Focus",
+            "Pin Tab",
+            "Unpin Tab",
+            "Close",
+            "Close others",
+            "Close to right",
+            "Move left",
+            "Move right",
+            "Move to first pane",
+            "Move to second pane",
+            "Tab changed; action cancelled",
+            "New File in this pane",
+            "Refresh output",
+            "Copy visible terminal",
+            "Copy selected rows",
+            "Toggle VT screen / text log",
+            "Resize: 80 × 24",
+            "Resize: 120 × 36",
+            "Toggle Terminal split",
+            "Switch Terminal split direction",
+            "Move tab to first pane",
+            "Move tab to second pane",
+            "Switch split direction",
+            "Close split pane",
+            "Open a tab to split",
+        ];
+        for source in labels {
+            assert_eq!(tr(UiLocale::English, source), source);
+            for locale in [
+                UiLocale::TraditionalChinese,
+                UiLocale::SimplifiedChinese,
+                UiLocale::Japanese,
+            ] {
+                let translated = tr(locale, source);
+                assert_ne!(translated, source, "{source} missing in {}", locale.tag());
+                assert!(
+                    !translated.trim().is_empty(),
+                    "{source}: empty {}",
+                    locale.tag()
+                );
+            }
+        }
+    }
+
+    #[test]
     fn locale_variants_and_unknown_sources_fall_back_safely() {
         assert_eq!(
             UiLocale::from_preference("traditionalChinese"),
