@@ -13927,6 +13927,9 @@ impl Render for Workbench {
                                             .min_h_0()
                                             .flex()
                                             .flex_col()
+                                            .when(!center_is_editor && !show_center_git_diff, |pane| {
+                                                pane.bg(rgb(TERMINAL_DEFAULT_BG))
+                                            })
                             .child(
                                 if let Some(original) = active_git_original.clone() {
                                     div().id("git-original-readonly-view")
@@ -13980,18 +13983,23 @@ impl Render for Workbench {
                             .child(if has_terminal_preview {
                                 div()
                                     .flex_1()
+                                    .min_w_0()
                                     .min_h_0()
                                     .flex()
                                     .flex_col()
                                     .when(native_center_git_diff_ui::should_hide_underlying_terminal(center_is_editor, show_center_git_diff), |panel| panel.hidden())
                                     .border_t_1()
                                     .border_color(rgb(BORDER))
-                                    .bg(rgb(BG))
+                                    // Match the VT viewport, including the 12px text inset,
+                                    // split gutters and any remaining resize slack.
+                                    .bg(rgb(TERMINAL_DEFAULT_BG))
                                     .child(
                                         div()
                                             .flex_1()
+                                            .min_w_0()
                                             .min_h_0()
                                             .flex()
+                                            .bg(rgb(TERMINAL_DEFAULT_BG))
                                             .when(terminal_split_horizontal, |layout| layout.flex_row())
                                             .when(!terminal_split_horizontal, |layout| layout.flex_col())
                                             .child(if terminal_is_vt {
@@ -14087,6 +14095,7 @@ impl Render for Workbench {
                                     } else {
                                         div()
                                             .id("terminal-output-scroll")
+                                            .min_w_0()
                                             .bg(rgb(TERMINAL_DEFAULT_BG))
                                             .key_context("AleraGpuiTerminalRaw")
                                             .track_focus(&terminal_keyboard_focus)

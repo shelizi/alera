@@ -214,6 +214,49 @@ mod tests {
     }
 
     #[test]
+    fn terminal_full_width_uses_one_background_for_viewport_and_gutters() {
+        // The shell color (#101010) differs from VT (#15171B). Unused
+        // strips, splits and padding must inherit VT, not the shell.
+        let source = include_str!("main.rs");
+        let pane = source
+            .split_once(r#".id("mixed-primary-pane")"#)
+            .unwrap()
+            .1
+            .split_once(".child(")
+            .unwrap()
+            .0;
+        assert!(pane.contains(".min_w_0()"));
+        assert!(pane.contains("pane.bg(rgb(TERMINAL_DEFAULT_BG))"));
+        let outer = source
+            .split_once(".child(if has_terminal_preview {")
+            .unwrap()
+            .1
+            .split_once(".child(if terminal_is_vt {")
+            .unwrap()
+            .0;
+        assert!(outer.contains(".bg(rgb(TERMINAL_DEFAULT_BG))"));
+        assert!(!outer.contains(".bg(rgb(BG))"));
+        let viewport = source
+            .split_once(r#".id("terminal-colored-grid")"#)
+            .unwrap()
+            .1
+            .split_once(".children(terminal_screen_rows")
+            .unwrap()
+            .0;
+        assert!(viewport.contains(".flex_1()"));
+        assert!(viewport.contains(".min_w_0()"));
+        assert!(viewport.contains(".bg(rgb(TERMINAL_DEFAULT_BG))"));
+        let secondary = source
+            .split_once(r#".id("mixed-secondary-content")"#)
+            .unwrap()
+            .1
+            .split_once(".child(if let Some(rows)")
+            .unwrap()
+            .0;
+        assert!(secondary.contains(".bg(rgb(TERMINAL_DEFAULT_BG))"));
+    }
+
+    #[test]
     fn terminal_viewport_fits_real_shell_chrome_and_pinned_tabs() {
         assert_eq!(usable_workbench_height(800.0, false, false), 672.0);
         assert_eq!(usable_workbench_height(800.0, true, false), 628.0);
