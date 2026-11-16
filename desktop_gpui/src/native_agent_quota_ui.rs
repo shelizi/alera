@@ -5,8 +5,49 @@ use alera_gpui_desktop::agent_quota::{
     mark_failed_quota_refresh, merge_quota_snapshots, parse_agent_usage_summary,
     parse_quota_snapshots, scoped_quota_refresh, status_bar_account_label, QuotaReading,
 };
+use alera_gpui_desktop::agent_status_visual::AgentStateSummary;
+use alera_gpui_desktop::native_i18n::tr;
 use std::io;
 use std::sync::OnceLock;
+
+/// Render the same live Host Agent counts in the left sidebar and footer.
+/// Each item is a Classic-color status dot + count, with translated tooltip;
+/// neither surface owns or subscribes to an additional Host connection.
+pub(super) fn agent_state_summary_chips(
+    summary: AgentStateSummary,
+    locale: UiLocale,
+    labeled: bool,
+) -> gpui::Div {
+    let mut row = div().flex().items_center().gap_2().text_xs();
+    if labeled {
+        row = row.child(div().text_color(rgb(MUTED)).child(tr(locale, "Agents")));
+    }
+    for (state, count) in summary.groups() {
+        if count == 0 {
+            continue;
+        }
+        let tooltip = format!("{}: {}", tr(locale, state.label()), count);
+        row = row.child(
+            div()
+                .id(("agent-summary-count", state as usize))
+                .flex()
+                .items_center()
+                .gap_1()
+                .tooltip(move |window, cx| {
+                    gpui_kit::component::tooltip::Tooltip::new(tooltip.clone()).build(window, cx)
+                })
+                .child(
+                    div()
+                        .w(px(TAB_ATTENTION_DOT_SIZE))
+                        .h(px(TAB_ATTENTION_DOT_SIZE))
+                        .rounded_full()
+                        .bg(rgb(state.color())),
+                )
+                .child(div().text_color(rgb(MUTED)).child(count.to_string())),
+        );
+    }
+    row
+}
 
 /// Embed the exact provider artwork already shipped by Classic. Avoid
 /// hand-drawn monograms or runtime file paths that break portable builds.

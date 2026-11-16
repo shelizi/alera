@@ -1,0 +1,33 @@
+# Native Agent status UI-only labels. Classic AgentRunStateIndicator vocabulary.
+# Keep separate from generated Settings ui.yml.
+_version: 2
+"Agents":
+  en: "Agents"
+  zh-TW: "代理程式"
+  zh-CN: "智能体"
+  ja: "エージェント"
+"Working":
+  en: "Working"
+  zh-TW: "工作中"
+  zh-CN: "工作中"
+  ja: "作業中"
+"Waiting for input":
+  en: "Waiting for input"
+  zh-TW: "等待輸入"
+  zh-CN: "等待输入"
+  ja: "入力待ち"
+"Blocked":
+  en: "Blocked"
+  zh-TW: "受阻"
+  zh-CN: "已阻塞"
+  ja: "ブロック中"
+"Interrupted":
+  en: "Interrupted"
+  zh-TW: "已中斷"
+  zh-CN: "已中断"
+  ja: "中断"
+"Done":
+  en: "Done"
+  zh-TW: "已完成"
+  zh-CN: "已完成"
+  ja: "完了"

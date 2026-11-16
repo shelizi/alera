@@ -96,7 +96,8 @@ use alera_gpui_desktop::mcp_ui_bridge::{
 };
 use alera_gpui_desktop::mcp_workspace_creation::HostManagedWorkspaceRequest;
 use alera_gpui_desktop::model::WorkbenchModel;
-use alera_gpui_desktop::native_i18n::UiLocale;
+use alera_gpui_desktop::native_i18n::{tr, UiLocale};
+use alera_gpui_desktop::agent_status_visual::{AgentStateSummary, AgentVisualState};
 use alera_gpui_desktop::native_modal::NativeModalSize;
 use alera_gpui_desktop::native_settings::{NativeSettings, NativeSettingsStore, NativeSidebarLayout};
 use alera_gpui_desktop::project_tree::{
@@ -115,7 +116,7 @@ use alera_gpui_desktop::terminal::{
     encode_terminal_key, estimate_terminal_viewport_with_line_height, raw_key_reply_may_drain,
     resolve_registered_host_workspace_path, select_registered_host_workspace,
     terminal_clipboard_payload, terminal_ime_anchor_with_line_height, terminal_key_dispatch,
-    AgentActivityState, TerminalAutoResizeGate, TerminalClipboardShortcut, TerminalCreateFlow,
+    TerminalAutoResizeGate, TerminalClipboardShortcut, TerminalCreateFlow,
     TerminalCreateTick, TerminalDock, TerminalKeyDispatch, TerminalLineSelection,
     TerminalPollCadence, TerminalPollGate, TerminalSession, TerminalTabContextTarget,
     TerminalViewMode, TerminalViewportProposal, HOST_SESSION_LIST_SCOPE,
@@ -125,7 +126,7 @@ use alera_gpui_desktop::terminal_stream_bridge::{
     NativeTerminalStreamBridge, StreamViewUpdate, TerminalStreamRetryGate,
 };
 use alera_gpui_desktop::visual_tokens::{
-    ACTIVE, AGENT_BLOCKED, AGENT_DONE, AGENT_WAITING, AGENT_WORKING, BG, BORDER, BORDER_ACTIVE,
+    ACTIVE, AGENT_BLOCKED, AGENT_DONE, AGENT_WAITING, BG, BORDER, BORDER_ACTIVE,
     clamp_context_sidebar_width, clamp_projects_sidebar_width, ELEVATED, MUTED, PANEL,
     PROJECTS_COLLAPSED_WIDTH, RESIZE_CHROME,
     SECTION_HEADER_HEIGHT, SIDEBAR_RESIZE_HANDLE_WIDTH,
@@ -8920,12 +8921,12 @@ impl Workbench {
                 .into_any_element()
         };
         let identity = tab.identity;
-        let status_color = tab.agent_state.map(|state| match state {
-            AgentActivityState::Working => AGENT_WORKING,
-            AgentActivityState::Waiting => AGENT_WAITING,
-            AgentActivityState::Blocked => AGENT_BLOCKED,
-            AgentActivityState::Done => AGENT_DONE,
-        });
+        let status_color = if tab.kind == WorkbenchTabKind::Agent && tab.running {
+            tab.agent_state
+                .map(|state| AgentVisualState::from_hook(state, tab.interrupted).color())
+        } else {
+            None
+        };
         let title = tab.title;
         let tab_tooltip_title = title.clone();
         let for_click = identity.clone();
@@ -9043,6 +9044,9 @@ impl Workbench {
     fn sync_mixed_tabs(&mut self, cx: &mut Context<Self>) {
         let mut observed = Vec::new();
         let mut preferred = None;
+        // A stale Host inventory may retain the last VT preview, but must
+        // never resurrect working/waiting/done Hook markers on a repaint.
+        let inventory_current = !self.terminals.session_list_is_stale();
         for (index, tab) in self.terminals.tabs.iter().enumerate() {
             let Some(target) = self.terminals.context_target_at(index) else {
                 continue;
@@ -9064,12 +9068,17 @@ impl Workbench {
                 title: tab.title.clone(),
                 dirty: false,
                 running: tab.running,
-                agent_state: if is_agent {
-                    agent_session.and_then(|session| session.agent_state)
+                agent_state: if is_agent && inventory_current && tab.running {
+                    agent_session
+                        .filter(|session| session.running)
+                        .and_then(|session| session.agent_state)
                 } else {
                     None
                 },
-                interrupted: is_agent && agent_session.is_some_and(|session| session.interrupted),
+                interrupted: is_agent
+                    && inventory_current
+                    && tab.running
+                    && agent_session.is_some_and(|session| session.running && session.interrupted),
             });
             if self.center_view == CenterView::Terminal && self.terminals.active_tab == Some(index)
             {
@@ -10681,6 +10690,10 @@ impl Render for Workbench {
         let agent_prompt_input = self.agent_prompt_input.clone();
         let agent_status = self.agent_status.clone();
         let terminal_list_loading = self.terminal_list_loading;
+        let agent_inventory_current = !self.terminals.session_list_is_stale();
+        let agent_state_summary =
+            AgentStateSummary::from_sessions(&self.terminals.sessions, agent_inventory_current);
+        let agent_ui_locale = self.settings_menu_locale;
         let terminal_sessions: Vec<_> = self
             .terminals
             .sessions
@@ -10688,11 +10701,20 @@ impl Render for Workbench {
             .map(|session| {
                 (
                     session.handle.clone(),
-                    session.label(),
+                    // Process presence and Hook state are independent. The
+                    // optional colored badge below owns Hook presentation;
+                    // the title itself never repeats a stale Hook result.
+                    format!(
+                        "{} {} · {}",
+                        if session.running { "●" } else { "○" },
+                        session.agent_type.as_deref().unwrap_or("Terminal"),
+                        session.handle,
+                    ),
                     session.workspace_id.clone(),
                     // Do not advertise a stale branded session when its
                     // Host PTY is no longer running.
                     session.running.then(|| session.agent_type.clone()).flatten(),
+                    AgentVisualState::for_session(session, agent_inventory_current),
                 )
             })
             .collect();
@@ -15144,6 +15166,11 @@ impl Render for Workbench {
                                         .text_xs()
                                         .font_weight(gpui::FontWeight::SEMIBOLD)
                                         .child("RUNTIME / AGENTS"))
+                                    .when(agent_state_summary.total() > 0, |header| {
+                                        header.child(native_agent_quota_ui::agent_state_summary_chips(
+                                            agent_state_summary, agent_ui_locale, false,
+                                        ))
+                                    })
                                     .child(icon(
                                         if self.runtime_details_open { UiIcon::Close } else { UiIcon::More },
                                         16.0, MUTED,
@@ -15316,7 +15343,7 @@ impl Render for Workbench {
                                     .id("terminal-sessions-scroll")
                                     .max_h(px(145.0))
                                     .overflow_y_scroll()
-                                    .children(terminal_sessions.into_iter().enumerate().map(|(index, (handle, label, workspace_id, agent_type))| {
+                                    .children(terminal_sessions.into_iter().enumerate().map(|(index, (handle, label, workspace_id, agent_type, visual_state))| {
                                         let brand = agent_type.as_deref().unwrap_or("terminal").trim().to_ascii_lowercase();
                                         div()
                                             .id(("terminal-session", index))
@@ -15332,6 +15359,25 @@ impl Render for Workbench {
                                                     .items_center()
                                                     .gap_2()
                                                     .child(native_agent_quota_ui::quota_provider_icon(&brand, 14.0))
+                                                    // Fixed state slot, like Classic's Tab dot;
+                                                    // disappearing Hook state cannot shift labels.
+                                                    .child(
+                                                        div()
+                                                            .id(("host-agent-status-dot", index))
+                                                            .w(px(TAB_ATTENTION_DOT_SIZE))
+                                                            .h(px(TAB_ATTENTION_DOT_SIZE))
+                                                            .flex_shrink_0()
+                                                            .when(visual_state.is_some(), |dot| {
+                                                                let state = visual_state.unwrap();
+                                                                let tooltip = tr(agent_ui_locale, state.label());
+                                                                dot.rounded_full()
+                                                                    .bg(rgb(state.color()))
+                                                                    .tooltip(move |window, cx| {
+                                                                        gpui_kit::component::tooltip::Tooltip::new(tooltip.clone())
+                                                                            .build(window, cx)
+                                                                    })
+                                                            })
+                                                    )
                                                     .child(div().min_w_0().truncate().child(label)),
                                             )
                                             .child(
@@ -15397,6 +15443,13 @@ impl Render for Workbench {
                             .overflow_hidden()
                             .child(status),
                     )
+                    .when(agent_state_summary.total() > 0, |footer| {
+                        footer.child(
+                            native_agent_quota_ui::agent_state_summary_chips(
+                                agent_state_summary, agent_ui_locale, true,
+                            )
+                        )
+                    })
                     .child(self.render_native_quota_status(cx))
                     .child(self.render_kit_branch_dropdown(
                         "status-branch-picker",

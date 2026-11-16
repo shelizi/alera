@@ -233,6 +233,29 @@ mod tests {
     }
 
     #[test]
+    fn agent_state_chips_have_real_translations_in_all_four_locales() {
+        for source in [
+            "Agents",
+            "Working",
+            "Waiting for input",
+            "Blocked",
+            "Interrupted",
+            "Done",
+        ] {
+            assert_eq!(tr(UiLocale::English, source), source);
+            for locale in [
+                UiLocale::TraditionalChinese,
+                UiLocale::SimplifiedChinese,
+                UiLocale::Japanese,
+            ] {
+                let label = tr(locale, source);
+                assert_ne!(label, source, "{source} missing in {}", locale.tag());
+                assert!(!label.trim().is_empty());
+            }
+        }
+    }
+
+    #[test]
     fn locale_variants_and_unknown_sources_fall_back_safely() {
         assert_eq!(
             UiLocale::from_preference("traditionalChinese"),

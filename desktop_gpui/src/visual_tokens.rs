@@ -214,6 +214,26 @@ mod tests {
     }
 
     #[test]
+    fn agent_status_summary_and_host_row_share_live_only_state_colors() {
+        let source = include_str!("main.rs");
+        // Both summary surfaces must render from the same *current* Host
+        // inventory, not from the last stale Terminal output or local profile.
+        assert!(source.contains(
+            "AgentStateSummary::from_sessions(&self.terminals.sessions, agent_inventory_current)"
+        ));
+        assert!(source.contains("AgentVisualState::for_session(session, agent_inventory_current)"));
+        assert!(source.contains("agent_state_summary_chips(\n                                            agent_state_summary, agent_ui_locale, false,"));
+        assert!(source.contains("agent_state_summary_chips(\n                                agent_state_summary, agent_ui_locale, true,"));
+        assert!(source.contains("let inventory_current = !self.terminals.session_list_is_stale();"));
+        assert!(source.contains("if is_agent && inventory_current && tab.running"));
+        assert!(source.contains("AgentVisualState::from_hook(state, tab.interrupted).color()"));
+        // Status never alters the separate 6px Tab attention slot or the
+        // Agent profile selection marker.
+        assert!(source.contains(".w(px(TAB_ATTENTION_DOT_SIZE))"));
+        assert!(source.contains("if selected { \"●\" } else { \"○\" }"));
+    }
+
+    #[test]
     fn classic_tab_rows_keep_sixteen_pixel_leading_gutter_and_compact_close() {
         let classic = include_str!(
             "../../lib/src/features/workbench/presentation/workspace_workbench_tab_strip.dart"
