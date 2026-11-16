@@ -182,6 +182,38 @@ mod tests {
     }
 
     #[test]
+    fn agent_brand_icons_reach_all_split_tabs_and_sidebar_rows() {
+        let source = include_str!("main.rs");
+        let chip = source
+            .split_once("fn render_mixed_tab_chip(")
+            .unwrap()
+            .1
+            .split_once("fn sync_mixed_tabs(")
+            .unwrap()
+            .0;
+        assert!(chip.contains("tab.verified_agent_brand(host_sessions)"));
+        assert!(chip.contains("native_agent_quota_ui::quota_provider_icon("));
+        assert!(chip.contains("TAB_ATTENTION_DOT_SIZE"));
+        let tab_calls = source
+            .split("Self::render_mixed_tab_chip(")
+            .skip(1)
+            .collect::<Vec<_>>();
+        assert_eq!(tab_calls.len(), 6);
+        for call in tab_calls {
+            assert!(
+                call.split_once(')').unwrap().0.contains("&self.terminals.sessions"),
+                "All pinned/unpinned Primary/Secondary/stacked Tab paths must use current Host branding",
+            );
+        }
+        let sidebar = source
+            .split_once(r#".id("agent-profiles-list")"#)
+            .unwrap()
+            .1;
+        assert!(sidebar.contains("quota_provider_icon(&brand, 16.0)"));
+        assert!(sidebar.contains("quota_provider_icon(&brand, 14.0)"));
+    }
+
+    #[test]
     fn classic_tab_rows_keep_sixteen_pixel_leading_gutter_and_compact_close() {
         let classic = include_str!(
             "../../lib/src/features/workbench/presentation/workspace_workbench_tab_strip.dart"

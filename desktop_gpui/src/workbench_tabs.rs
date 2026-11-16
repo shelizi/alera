@@ -31,6 +31,29 @@ pub struct WorkbenchTab {
 }
 
 impl WorkbenchTab {
+    /// Brand the Tab only from a current authenticated Host session matching
+    /// the full stable identity. A recycled handle, stale Workspace/Tab ID,
+    /// closed PTY or generic Terminal must never inherit another Agent logo.
+    /// This is a display-only lookup and does not alter any Host ownership.
+    pub fn verified_agent_brand<'a>(&self, sessions: &'a [TerminalSession]) -> Option<&'a str> {
+        if self.kind != WorkbenchTabKind::Agent || !self.running {
+            return None;
+        }
+        let WorkbenchTabIdentity::Host(target) = &self.identity else {
+            return None;
+        };
+        sessions
+            .iter()
+            .find(|session| {
+                session.running
+                    && session.handle == target.handle
+                    && session.workspace_id == target.workspace_id()
+                    && session.tab_id == target.tab_id()
+            })
+            .and_then(|session| session.agent_type.as_deref())
+            .filter(|kind| !kind.trim().is_empty())
+    }
+
     /// Human-readable status anchored to the verified Host identity. The
     /// tooltip never reports a Hook for a stopped PTY, generic terminal or
     /// Editor; labels contain no Agent prompt, tool input or credentials.
@@ -289,6 +312,45 @@ mod tests {
             agent_state: None,
             interrupted: false,
         }
+    }
+
+    #[test]
+    fn brand_icon_requires_exact_live_agent_host_identity() {
+        let (tab, dock) = host("pty-agent", true);
+        assert_eq!(tab.verified_agent_brand(&dock.sessions), Some("Codex"));
+        let mut stale = dock.sessions[0].clone();
+        stale.workspace_id = "different-workspace".into();
+        assert_eq!(tab.verified_agent_brand(&[stale.clone()]), None);
+        stale = dock.sessions[0].clone();
+        stale.tab_id = "reused-tab".into();
+        assert_eq!(tab.verified_agent_brand(&[stale.clone()]), None);
+        stale = dock.sessions[0].clone();
+        stale.handle = "another-session".into();
+        assert_eq!(tab.verified_agent_brand(&[stale.clone()]), None);
+        stale = dock.sessions[0].clone();
+        stale.running = false;
+        assert_eq!(tab.verified_agent_brand(&[stale.clone()]), None);
+        stale = dock.sessions[0].clone();
+        stale.agent_type = None;
+        assert_eq!(tab.verified_agent_brand(&[stale]), None);
+        let mut stopped_tab = tab.clone();
+        stopped_tab.running = false;
+        assert_eq!(stopped_tab.verified_agent_brand(&dock.sessions), None);
+        let (terminal, _) = host("pty-agent", false);
+        assert_eq!(terminal.verified_agent_brand(&dock.sessions), None);
+        assert_eq!(editor(7, 1).verified_agent_brand(&dock.sessions), None);
+    }
+
+    #[test]
+    fn brand_icon_ignores_stale_session_even_when_a_live_match_follows() {
+        let (tab, dock) = host("pty-agent", true);
+        let mut reused = dock.sessions[0].clone();
+        reused.workspace_id = "other".into();
+        reused.agent_type = Some("claude".into());
+        assert_eq!(
+            tab.verified_agent_brand(&[reused, dock.sessions[0].clone()]),
+            Some("Codex")
+        );
     }
 
     #[test]

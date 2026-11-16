@@ -8888,6 +8888,7 @@ impl Workbench {
         selected: bool,
         pinned: bool,
         drag_generation: u64,
+        host_sessions: &[TerminalSession],
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let secondary = pane == PaneSlot::Secondary;
@@ -8902,15 +8903,23 @@ impl Workbench {
         };
         let stopped_label = tab.stopped_label();
         let agent_tooltip = tab.agent_status_tooltip();
-        let identity = tab.identity;
-        let tab_icon = if tab.kind == WorkbenchTabKind::Editor {
+        // Only the exact, still-running Host identity may choose a brand.
+        // Generic Terminal/Editor tabs retain their own icon; the separate
+        // 6px Hook status dot and stopped label never move or get concealed.
+        let tab_icon: gpui::AnyElement = if tab.kind == WorkbenchTabKind::Editor {
             explorer_file_icon_element(
                 &tab.title, false, false, 12.0,
                 if selected { TEXT } else { MUTED },
+            ).into_any_element()
+        } else if let Some(agent_type) = tab.verified_agent_brand(host_sessions) {
+            native_agent_quota_ui::quota_provider_icon(
+                &agent_type.trim().to_ascii_lowercase(), 12.0,
             )
         } else {
             icon(UiIcon::Terminal, 12.0, if selected { TEXT } else { MUTED })
+                .into_any_element()
         };
+        let identity = tab.identity;
         let status_color = tab.agent_state.map(|state| match state {
             AgentActivityState::Working => AGENT_WORKING,
             AgentActivityState::Waiting => AGENT_WAITING,
@@ -10681,6 +10690,9 @@ impl Render for Workbench {
                     session.handle.clone(),
                     session.label(),
                     session.workspace_id.clone(),
+                    // Do not advertise a stale branded session when its
+                    // Host PTY is no longer running.
+                    session.running.then(|| session.agent_type.clone()).flatten(),
                 )
             })
             .collect();
@@ -13466,6 +13478,7 @@ impl Render for Workbench {
                                                     selected,
                                                     true,
                                                     mixed_drag_generation,
+                                                    &self.terminals.sessions,
                                                     cx,
                                                 )
                                             }))
@@ -13499,7 +13512,7 @@ impl Render for Workbench {
                                                 let pinned = pinned_ids.contains(&tab.identity);
                                                 Self::render_mixed_tab_chip(
                                                     index, tab, PaneSlot::Primary, selected, pinned,
-                                                    mixed_drag_generation, cx,
+                                                    mixed_drag_generation, &self.terminals.sessions, cx,
                                                 )
                                             }))
                                             .children(git_original_tabs.into_iter().enumerate().map(|(index, tab)| {
@@ -13713,6 +13726,7 @@ impl Render for Workbench {
                                                                     selected,
                                                                     true,
                                                                     mixed_drag_generation,
+                                                                    &self.terminals.sessions,
                                                                     cx,
                                                                 )
                                                             }))
@@ -13743,7 +13757,7 @@ impl Render for Workbench {
                                                                 let pinned = pinned_ids.contains(&tab.identity);
                                                                 Self::render_mixed_tab_chip(
                                                                     index, tab, PaneSlot::Secondary, selected, pinned,
-                                                                    mixed_drag_generation, cx,
+                                                                    mixed_drag_generation, &self.terminals.sessions, cx,
                                                                 )
                                                             }))
                                                             .on_drop(cx.listener(|this, drag: &MixedTabDrag, window, cx| {
@@ -14240,6 +14254,7 @@ impl Render for Workbench {
                                                                     selected,
                                                                     true,
                                                                     mixed_drag_generation,
+                                                                    &self.terminals.sessions,
                                                                     cx,
                                                                 )
                                                             }))
@@ -14271,7 +14286,7 @@ impl Render for Workbench {
                                                                 let pinned = pinned_ids.contains(&tab.identity);
                                                                 Self::render_mixed_tab_chip(
                                                                     index, tab, PaneSlot::Secondary, selected, pinned,
-                                                                    mixed_drag_generation, cx,
+                                                                    mixed_drag_generation, &self.terminals.sessions, cx,
                                                                 )
                                                             }))
                                                             .on_drop(cx.listener(|this, drag: &MixedTabDrag, window, cx| {
@@ -15205,9 +15220,9 @@ impl Render for Workbench {
                                 .children(agent_profile_rows.into_iter().map(|(index, profile)| {
                                     let selected = agent_profile_selected.as_deref() == Some(profile.id.as_str());
                                     let id = profile.id;
+                                    let brand = profile.agent_type.trim().to_ascii_lowercase();
                                     let kind = if profile.managed { "Managed" } else { "Command" };
-                                    let label = format!("{} {} · {} ({kind})",
-                                        if selected { "●" } else { "○" }, profile.name, profile.agent_type);
+                                    let label = format!("{} · {} ({kind})", profile.name, profile.agent_type);
                                     div()
                                         .id(("agent-profile-row", index))
                                         .cursor_pointer()
@@ -15215,7 +15230,17 @@ impl Render for Workbench {
                                         .text_color(rgb(if selected { TEXT } else { MUTED }))
                                         .hover(|style| style.bg(rgb(ACTIVE)))
                                         .py_1()
-                                        .child(label)
+                                        .flex()
+                                        .min_w_0()
+                                        .items_center()
+                                        .gap_2()
+                                        // Keep the pre-existing selected/unselected state,
+                                        // separate from the Agent's brand identity.
+                                        .child(div().w(px(10.0)).flex_shrink_0().child(
+                                            if selected { "●" } else { "○" },
+                                        ))
+                                        .child(native_agent_quota_ui::quota_provider_icon(&brand, 16.0))
+                                        .child(div().min_w_0().truncate().child(label))
                                         .on_click(cx.listener(move |this, _, _, cx| {
                                             this.agent_selected_profile = Some(id.clone());
                                             cx.notify();
@@ -15291,7 +15316,8 @@ impl Render for Workbench {
                                     .id("terminal-sessions-scroll")
                                     .max_h(px(145.0))
                                     .overflow_y_scroll()
-                                    .children(terminal_sessions.into_iter().enumerate().map(|(index, (handle, label, workspace_id))| {
+                                    .children(terminal_sessions.into_iter().enumerate().map(|(index, (handle, label, workspace_id, agent_type))| {
+                                        let brand = agent_type.as_deref().unwrap_or("terminal").trim().to_ascii_lowercase();
                                         div()
                                             .id(("terminal-session", index))
                                             .py_1()
@@ -15299,7 +15325,15 @@ impl Render for Workbench {
                                             .cursor_pointer()
                                             .text_sm()
                                             .hover(|style| style.bg(rgb(ACTIVE)))
-                                            .child(label)
+                                            .child(
+                                                div()
+                                                    .min_w_0()
+                                                    .flex()
+                                                    .items_center()
+                                                    .gap_2()
+                                                    .child(native_agent_quota_ui::quota_provider_icon(&brand, 14.0))
+                                                    .child(div().min_w_0().truncate().child(label)),
+                                            )
                                             .child(
                                                 div()
                                                     .text_xs()
