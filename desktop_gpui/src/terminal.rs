@@ -2253,9 +2253,11 @@ impl TerminalDock {
         let mut sessions = sessions;
         // A snapshot RPC can complete after a newer Host delta. Preserve
         // that newer exact-identity status, but do not leak it to a recycled
-        // handle, changed Agent type or a stopped session.
+        // handle, changed Agent type or a stopped session. A removed Hook
+        // leaves a revision tombstone (state=None, updated_at=Some) so an
+        // older inventory cannot resurrect a falsely "working" Agent.
         for current in &mut sessions {
-            if !current.running || current.agent_state.is_none() {
+            if !current.running {
                 continue;
             }
             let Some(old) = self.sessions.iter().find(|old| {
@@ -2267,21 +2269,40 @@ impl TerminalDock {
             }) else {
                 continue;
             };
-            if let (Some(old_time), Some(current_time)) = (
-                old.agent_updated_at
-                    .as_deref()
-                    .and_then(agent_host_utc_time_key),
-                current
-                    .agent_updated_at
-                    .as_deref()
-                    .and_then(agent_host_utc_time_key),
-            ) {
-                if old_time > current_time {
-                    current.agent_state = old.agent_state;
-                    current.interrupted = old.interrupted;
-                    current.agent_state_started_at = old.agent_state_started_at.clone();
+            let old_time = old
+                .agent_updated_at
+                .as_deref()
+                .and_then(agent_host_utc_time_key);
+            let current_time = current
+                .agent_updated_at
+                .as_deref()
+                .and_then(agent_host_utc_time_key);
+            if old.agent_state.is_none() {
+                // A newer removal outranks a stale/unversioned snapshot.
+                // Carry it across a no-status inventory until a verifiably
+                // newer Hook state arrives. Equal times fail closed.
+                if old_time.as_ref().is_some_and(|previous| {
+                    current_time
+                        .as_ref()
+                        .is_none_or(|incoming| previous >= incoming)
+                }) {
+                    current.agent_state = None;
+                    current.interrupted = false;
+                    current.agent_state_started_at = None;
                     current.agent_updated_at = old.agent_updated_at.clone();
                 }
+            } else if current.agent_state.is_some()
+                && old_time
+                    .as_ref()
+                    .zip(current_time.as_ref())
+                    .is_some_and(|(previous, incoming)| previous > incoming)
+            {
+                // Never restore old activity when the Host explicitly lists
+                // no state; only carry a more recent positive Hook state.
+                current.agent_state = old.agent_state;
+                current.interrupted = old.interrupted;
+                current.agent_state_started_at = old.agent_state_started_at.clone();
+                current.agent_updated_at = old.agent_updated_at.clone();
             }
         }
         self.session_list_stale = false;
@@ -2317,30 +2338,21 @@ impl TerminalDock {
             }) else {
                 continue;
             };
-            if change.removed {
-                if session.agent_state.is_some() || session.interrupted {
-                    session.agent_state = None;
-                    session.agent_updated_at = None;
-                    session.agent_state_started_at = None;
-                    session.interrupted = false;
-                    changed = true;
-                }
-                continue;
-            }
             // The Host may list a running PTY before its first Agent Hook.
             // A redacted, authenticated delta with the same session/workspace/
             // tab identity may identify it without creating or moving a PTY.
-            // Never replace a previously confirmed adapter with another one.
-            if change.state.is_none()
-                || change.agent_type.is_none()
-                || session
-                    .agent_type
-                    .as_ref()
-                    .zip(change.agent_type.as_ref())
-                    .is_some_and(|(known, incoming)| known != incoming)
+            // Never allow a different Agent adapter to clear or overwrite it.
+            if session
+                .agent_type
+                .as_ref()
+                .zip(change.agent_type.as_ref())
+                .is_some_and(|(known, incoming)| known != incoming)
             {
                 continue;
             }
+            // All updates, including removal, must be ordered against the
+            // latest confirmed revision. An older "removed" event must not
+            // erase a newer Working/Waiting/Blocked/Done event.
             let Some(incoming_time) = agent_host_utc_time_key(&change.updated_at) else {
                 continue;
             };
@@ -2350,6 +2362,22 @@ impl TerminalDock {
                 .and_then(agent_host_utc_time_key)
                 .is_some_and(|previous_time| incoming_time < previous_time)
             {
+                continue;
+            }
+            if change.removed {
+                if session.agent_state.is_some()
+                    || session.interrupted
+                    || session.agent_updated_at.as_deref() != Some(change.updated_at.as_str())
+                {
+                    session.agent_state = None;
+                    session.agent_updated_at = Some(change.updated_at.clone());
+                    session.agent_state_started_at = None;
+                    session.interrupted = false;
+                    changed = true;
+                }
+                continue;
+            }
+            if change.state.is_none() || change.agent_type.is_none() {
                 continue;
             }
             let next_interrupted =
@@ -4002,6 +4030,210 @@ mod tests {
         removed.removed = true;
         assert!(dock.apply_agent_presence_changes(&[removed]));
         assert_eq!(dock.sessions[0].agent_state, None);
+    }
+
+    #[test]
+    fn removed_agent_hook_rejects_stale_remove_and_keeps_newer_revision() {
+        let mut dock = TerminalDock::for_workspace(31);
+        let snapshot = json!({"items":[{
+            "handle":"pty-1","workspaceId":"w1","tabId":"t1","running":true,
+            "agentType":"codex","agentState":"working",
+            "stateStartedAt":"2026-11-16T12:00:00Z",
+            "updatedAt":"2026-11-16T12:00:02Z"
+        }]});
+        assert!(dock.apply_session_list(31, parse_terminal_list(&snapshot).unwrap()));
+        let make_delta =
+            |time: &str, removed: bool, state: Option<AgentActivityState>| AgentPresenceChange {
+                session_id: "pty-1".into(),
+                workspace_id: "w1".into(),
+                tab_id: "t1".into(),
+                agent_type: Some("codex".into()),
+                state,
+                state_started_at: time.into(),
+                updated_at: time.into(),
+                interrupted: false,
+                removed,
+            };
+        assert!(
+            !dock.apply_agent_presence_changes(&[make_delta("2026-11-16T12:00:01Z", true, None),]),
+            "out-of-order removal cannot clear newer Hook"
+        );
+        assert_eq!(
+            dock.sessions[0].agent_state,
+            Some(AgentActivityState::Working)
+        );
+
+        let mut spoofed = make_delta("2026-11-16T12:00:05Z", true, None);
+        spoofed.agent_type = Some("claude".into());
+        assert!(!dock.apply_agent_presence_changes(&[spoofed]));
+        assert_eq!(
+            dock.sessions[0].agent_state,
+            Some(AgentActivityState::Working)
+        );
+
+        assert!(dock.apply_agent_presence_changes(&[make_delta(
+            "2026-11-16T12:00:06Z",
+            true,
+            None
+        ),]));
+        assert_eq!(dock.sessions[0].agent_state, None);
+        assert_eq!(
+            dock.sessions[0].agent_updated_at.as_deref(),
+            Some("2026-11-16T12:00:06Z"),
+            "keep revision tombstone without showing a live state"
+        );
+        assert!(!dock.apply_agent_presence_changes(&[make_delta(
+            "2026-11-16T12:00:04Z",
+            false,
+            Some(AgentActivityState::Waiting)
+        ),]));
+        assert_eq!(dock.sessions[0].agent_state, None);
+        assert!(dock.apply_agent_presence_changes(&[make_delta(
+            "2026-11-16T12:00:07Z",
+            false,
+            Some(AgentActivityState::Working)
+        ),]));
+        assert_eq!(
+            dock.sessions[0].agent_state,
+            Some(AgentActivityState::Working)
+        );
+    }
+
+    #[test]
+    fn removed_agent_hook_stays_removed_across_older_and_unversioned_host_lists() {
+        let mut dock = TerminalDock::for_workspace(32);
+        let old = json!({"items":[{
+            "handle":"pty-1","workspaceId":"w1","tabId":"t1","running":true,
+            "agentType":"codex","agentState":"working",
+            "stateStartedAt":"2026-11-16T12:00:00Z",
+            "updatedAt":"2026-11-16T12:00:02Z"
+        }]});
+        assert!(dock.apply_session_list(32, parse_terminal_list(&old).unwrap()));
+        let removed = AgentPresenceChange {
+            session_id: "pty-1".into(),
+            workspace_id: "w1".into(),
+            tab_id: "t1".into(),
+            agent_type: Some("codex".into()),
+            state: None,
+            state_started_at: "2026-11-16T12:00:06Z".into(),
+            updated_at: "2026-11-16T12:00:06Z".into(),
+            interrupted: false,
+            removed: true,
+        };
+        assert!(dock.apply_agent_presence_changes(&[removed]));
+        assert!(dock.apply_session_list(32, parse_terminal_list(&old).unwrap()));
+        assert_eq!(dock.sessions[0].agent_state, None);
+        let unversioned = json!({"items":[{
+            "handle":"pty-1","workspaceId":"w1","tabId":"t1","running":true,
+            "agentType":"codex"
+        }]});
+        assert!(dock.apply_session_list(32, parse_terminal_list(&unversioned).unwrap()));
+        assert_eq!(
+            dock.sessions[0].agent_updated_at.as_deref(),
+            Some("2026-11-16T12:00:06Z")
+        );
+        assert!(dock.apply_session_list(32, parse_terminal_list(&old).unwrap()));
+        assert_eq!(dock.sessions[0].agent_state, None);
+        let newer = json!({"items":[{
+            "handle":"pty-1","workspaceId":"w1","tabId":"t1","running":true,
+            "agentType":"codex","agentState":"done",
+            "stateStartedAt":"2026-11-16T12:00:07Z",
+            "updatedAt":"2026-11-16T12:00:07Z"
+        }]});
+        assert!(dock.apply_session_list(32, parse_terminal_list(&newer).unwrap()));
+        assert_eq!(
+            dock.sessions[0].agent_state,
+            Some(AgentActivityState::Done),
+            "a genuinely newer state must recover normally"
+        );
+        let reused = json!({"items":[{
+            "handle":"pty-1","workspaceId":"w2","tabId":"t2","running":true,
+            "agentType":"claude","agentState":"working",
+            "stateStartedAt":"2026-11-16T12:00:01Z",
+            "updatedAt":"2026-11-16T12:00:01Z"
+        }]});
+        assert!(dock.apply_session_list(32, parse_terminal_list(&reused).unwrap()));
+        assert_eq!(dock.sessions[0].agent_type.as_deref(), Some("claude"));
+        assert_eq!(
+            dock.sessions[0].agent_state,
+            Some(AgentActivityState::Working),
+            "the old session tombstone must not leak to a new Host identity"
+        );
+    }
+
+    #[test]
+    fn isolated_multi_agent_host_payload_to_summary_survives_transitions_and_outage() {
+        use crate::agent_status_visual::AgentStateSummary;
+        let mut dock = TerminalDock::for_workspace(33);
+        let inventory = json!({"kind":"terminals","items":[
+            {"handle":"a","workspaceId":"ws1","tabId":"t1","running":true,"agentType":"codex",
+             "agentState":"working","updatedAt":"2026-11-16T12:00:01Z"},
+            {"handle":"b","workspaceId":"ws2","tabId":"t2","running":true,"agentType":"claude",
+             "agentState":"waiting","updatedAt":"2026-11-16T12:00:01Z"},
+            {"handle":"c","workspaceId":"ws1","tabId":"t3","running":true,"agentType":"agy",
+             "agentState":"blocked","updatedAt":"2026-11-16T12:00:01Z"},
+            {"handle":"d","workspaceId":"ws3","tabId":"t4","running":true,"agentType":"copilot",
+             "agentState":"done","interrupted":true,"updatedAt":"2026-11-16T12:00:01Z"}
+        ]});
+        assert!(dock.apply_session_list(33, parse_terminal_list(&inventory).unwrap()));
+        assert!(dock.open("a"));
+        let original_active = dock.active_tab;
+        let original_tabs = dock.tabs.len();
+        let summary =
+            AgentStateSummary::from_sessions(&dock.sessions, !dock.session_list_is_stale());
+        assert_eq!(
+            (
+                summary.working,
+                summary.waiting,
+                summary.blocked,
+                summary.interrupted,
+                summary.done
+            ),
+            (1, 1, 1, 1, 0)
+        );
+        let change = AgentPresenceChange {
+            session_id: "b".into(),
+            workspace_id: "ws2".into(),
+            tab_id: "t2".into(),
+            agent_type: Some("claude".into()),
+            state: Some(AgentActivityState::Working),
+            state_started_at: "2026-11-16T12:00:04Z".into(),
+            updated_at: "2026-11-16T12:00:04Z".into(),
+            interrupted: false,
+            removed: false,
+        };
+        assert!(dock.apply_agent_presence_changes(&[change]));
+        let summary =
+            AgentStateSummary::from_sessions(&dock.sessions, !dock.session_list_is_stale());
+        assert_eq!(
+            (
+                summary.working,
+                summary.waiting,
+                summary.blocked,
+                summary.interrupted
+            ),
+            (2, 0, 1, 1)
+        );
+        dock.note_session_list_failure();
+        assert_eq!(
+            AgentStateSummary::from_sessions(&dock.sessions, !dock.session_list_is_stale()).total(),
+            0
+        );
+        assert!(dock.apply_session_list(33, parse_terminal_list(&inventory).unwrap()));
+        let summary =
+            AgentStateSummary::from_sessions(&dock.sessions, !dock.session_list_is_stale());
+        assert_eq!(
+            (
+                summary.working,
+                summary.waiting,
+                summary.blocked,
+                summary.interrupted
+            ),
+            (2, 0, 1, 1),
+            "older list must not undo newer authenticated delta"
+        );
+        assert_eq!(dock.active_tab, original_active);
+        assert_eq!(dock.tabs.len(), original_tabs);
     }
 
     #[test]
