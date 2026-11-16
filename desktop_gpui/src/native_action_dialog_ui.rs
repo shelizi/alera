@@ -3,6 +3,7 @@
 //! TWO-click confirmation, never a silent file-system operation.
 
 use super::*;
+use alera_gpui_desktop::native_i18n::tr;
 use native_components::action_button;
 
 /// Keep filename and directory independently readable in narrow Quick Open
@@ -544,6 +545,10 @@ impl Workbench {
         let input = self.explorer_action_input.clone();
         let fallback_focus = self.explorer_action_modal_focus.clone();
         window.open_dialog(cx, move |dialog, window, cx| {
+            let locale = owner
+                .upgrade()
+                .map(|entity| entity.read(cx).settings_menu_locale)
+                .unwrap_or_else(|| UiLocale::from_preference("system"));
             if first_focus.replace(false) {
                 if let Some(input) = input.as_ref() {
                     window.focus(&input.read(cx).focus_handle(cx), cx);
@@ -560,11 +565,11 @@ impl Workbench {
             let for_cancel = owner.clone();
             let for_submit = owner.clone();
             dialog
-                .title(if action == ExplorerAction::Delete {
+                .title(tr(locale, if action == ExplorerAction::Delete {
                     "Delete permanently"
                 } else {
                     action.label()
-                })
+                }))
                 .w(px(520.))
                 .centered()
                 .close_button(false)
@@ -777,6 +782,7 @@ impl Workbench {
             return None;
         }
         let destructive = action == ExplorerAction::Delete;
+        let locale = self.settings_menu_locale;
         let description = if destructive {
             "The selected files and folders (including contents) will be permanently removed, not moved to Recycle Bin. Review the selection before confirming."
         } else if action == ExplorerAction::Duplicate {
@@ -790,11 +796,12 @@ impl Workbench {
             .map(ExplorerDeleteBatch::len)
             .unwrap_or(0);
         let button_text = if self.explorer_delete_confirmed {
-            format!("Confirm permanent deletion ({delete_count})")
+            tr(locale, "Confirm permanent deletion ({count})")
+                .replace("{count}", &delete_count.to_string())
         } else if destructive {
-            "Delete permanently…".to_owned()
+            tr(locale, "Delete permanently…")
         } else {
-            action.label().to_owned()
+            tr(locale, action.label())
         };
         let input = self.explorer_action_input.clone();
         let body = div()
@@ -809,7 +816,7 @@ impl Workbench {
                 div()
                     .text_sm()
                     .text_color(rgb(if destructive { 0xf4b0b0 } else { MUTED }))
-                    .child(description),
+                    .child(tr(locale, description)),
             )
             .children(input.map(|input| div().child(input)))
             .child(div().flex_1())
@@ -820,7 +827,7 @@ impl Workbench {
                     .items_center()
                     .gap_2()
                     .child(
-                        action_button("explorer-action-cancel", "Cancel", false, false).on_click(
+                        action_button("explorer-action-cancel", tr(locale, "Cancel"), false, false).on_click(
                             cx.listener(|view, _, window, cx| {
                                 view.cancel_explorer_action(cx);
                                 window.close_dialog(cx);

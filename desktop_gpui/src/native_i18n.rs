@@ -240,6 +240,99 @@ mod tests {
     }
 
     #[test]
+    fn explorer_action_dialog_and_feedback_translate_in_all_locales() {
+        // Context menu localization includes dialogs, destructive confirmation,
+        // completion/errors and the Explorer overflow menu, not menu items alone.
+        let labels = [
+            "Delete permanently",
+            "New file",
+            "New folder",
+            "Rename",
+            "Move into folder",
+            "Copy into folder",
+            "New file name",
+            "New folder name",
+            "New name",
+            "Destination folder inside workspace",
+            "Copy into destination folder inside workspace",
+            "The selected files and folders (including contents) will be permanently removed, not moved to Recycle Bin. Review the selection before confirming.",
+            "Create a copy of the selected item in its current folder.",
+            "Enter the name or destination within the current workspace.",
+            "Confirm permanent deletion ({count})",
+            "Cancel",
+            "Select a file or folder in Explorer first",
+            "Close Editor tabs for the selected file or folder before Rename/Move",
+            "Explorer operation succeeded: {action}{target}",
+            "Explorer operation refused: {action}: {error}",
+            "Permanently delete {count} selected item(s), including folder contents? This cannot be undone. Press CONFIRM PERMANENT DELETE to proceed.",
+            "Close any Native Editor files inside the selection before permanent deletion",
+            "Delete confirmation expired; choose the items again",
+            "Delete selection or workspace changed; no files were deleted",
+            "Permanently deleted {count} Explorer item(s)",
+            "Explorer delete refused or partially completed: {error}. Check refreshed files.",
+            "Select a file or folder to Copy or Cut",
+            "Copied {count} Explorer item(s); choose destination and Paste",
+            "Cut {count} Explorer item(s); choose destination and Paste",
+            "Explorer Copy/Cut refused: {error}",
+            "Explorer clipboard is empty; Copy or Cut a file first",
+            "Explorer Paste succeeded: {count} item(s)",
+            "Explorer Paste refused or stopped: {error}",
+            "Opened system file manager",
+            "Cannot reveal selected item: {error}",
+            "Choose an existing Explorer item first",
+            "Copied path relative to the project root",
+            "Copied full file/folder path",
+            "Collapse folder refused: {error}",
+            "Explorer refresh failed: {error}",
+            "Tree refresh failed: {error}",
+            "Show ignored files",
+            "Hide ignored files",
+            "Show hidden items",
+            "Hide hidden items",
+            "Save all editor files",
+            "Collapse all folders",
+            "Collapse All failed: {error}",
+            "Save editor changes and finish imports before deleting files",
+            "Explorer delete refused: {error}",
+            "Explorer delete preflight refused: {error}",
+            "Change one Explorer visibility option at a time",
+            "Show/hide Explorer items",
+            "Select a file or folder first",
+            "Refresh Explorer",
+        ];
+        for source in labels {
+            assert_eq!(tr(UiLocale::English, source), source);
+            for locale in [UiLocale::TraditionalChinese, UiLocale::SimplifiedChinese, UiLocale::Japanese] {
+                assert_ne!(tr(locale, source), source, "Missing {source} / {}", locale.tag());
+            }
+        }
+        for locale in UiLocale::ALL {
+            for source in [
+                "Confirm permanent deletion ({count})",
+                "Explorer Paste succeeded: {count} item(s)",
+                "Explorer operation succeeded: {action}{target}",
+                "Explorer operation refused: {action}: {error}",
+            ] {
+                for placeholder in ["{count}", "{action}", "{target}", "{error}"] {
+                    if source.contains(placeholder) {
+                        assert!(tr(locale, source).contains(placeholder),
+                            "{source}: missing {placeholder} in {}", locale.tag());
+                    }
+                }
+            }
+        }
+        let dialog = include_str!("native_action_dialog_ui.rs");
+        assert!(dialog.contains(".title(tr(locale, if action == ExplorerAction::Delete"));
+        assert!(dialog.contains(".child(tr(locale, description))"));
+        assert!(dialog.contains("tr(locale, \"Confirm permanent deletion ({count})\")"));
+        assert!(dialog.contains("tr(locale, \"Cancel\")"));
+        let workbench = include_str!("main.rs");
+        assert!(workbench.contains("PopupMenuItem::new(tr(locale, if ignored"));
+        assert!(workbench.contains("PopupMenuItem::new(tr(locale, if hidden"));
+        assert!(workbench.contains("Explorer operation succeeded: {action}{target}"));
+    }
+
+    #[test]
     fn new_tab_menu_actions_have_translations_in_every_supported_language() {
         let sources = [
             "Pane no longer available; reopen New Tab",

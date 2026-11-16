@@ -96,3 +96,278 @@ _version: 2
   zh-TW: "重新整理"
   zh-CN: "刷新"
   ja: "更新"
+"Delete permanently":
+  en: "Delete permanently"
+  zh-TW: "永久刪除"
+  zh-CN: "永久删除"
+  ja: "完全に削除"
+"New file":
+  en: "New file"
+  zh-TW: "新增檔案"
+  zh-CN: "新建文件"
+  ja: "新しいファイル"
+"New folder":
+  en: "New folder"
+  zh-TW: "新增資料夾"
+  zh-CN: "新建文件夹"
+  ja: "新しいフォルダー"
+"Rename":
+  en: "Rename"
+  zh-TW: "重新命名"
+  zh-CN: "重命名"
+  ja: "名前を変更"
+"Move into folder":
+  en: "Move into folder"
+  zh-TW: "移至資料夾"
+  zh-CN: "移至文件夹"
+  ja: "フォルダーに移動"
+"Copy into folder":
+  en: "Copy into folder"
+  zh-TW: "複製到資料夾"
+  zh-CN: "复制到文件夹"
+  ja: "フォルダーにコピー"
+"New file name":
+  en: "New file name"
+  zh-TW: "新檔案名稱"
+  zh-CN: "新文件名称"
+  ja: "新しいファイル名"
+"New folder name":
+  en: "New folder name"
+  zh-TW: "新資料夾名稱"
+  zh-CN: "新文件夹名称"
+  ja: "新しいフォルダー名"
+"New name":
+  en: "New name"
+  zh-TW: "新名稱"
+  zh-CN: "新名称"
+  ja: "新しい名前"
+"Destination folder inside workspace":
+  en: "Destination folder inside workspace"
+  zh-TW: "工作區內的目的資料夾"
+  zh-CN: "工作区内的目标文件夹"
+  ja: "ワークスペース内の移動先フォルダー"
+"Copy into destination folder inside workspace":
+  en: "Copy into destination folder inside workspace"
+  zh-TW: "工作區內要複製到的資料夾"
+  zh-CN: "工作区内要复制到的文件夹"
+  ja: "ワークスペース内のコピー先フォルダー"
+"The selected files and folders (including contents) will be permanently removed, not moved to Recycle Bin. Review the selection before confirming.":
+  en: "The selected files and folders (including contents) will be permanently removed, not moved to Recycle Bin. Review the selection before confirming."
+  zh-TW: "選取的檔案與資料夾（含內容）將永久刪除，不會移至資源回收筒。請確認選取項目後再繼續。"
+  zh-CN: "所选文件及文件夹（含内容）将被永久删除，不会移至回收站。请确认所选项目后再继续。"
+  ja: "選択したファイルとフォルダー（内容を含む）はごみ箱に移動せず完全に削除されます。選択内容を確認してください。"
+"Create a copy of the selected item in its current folder.":
+  en: "Create a copy of the selected item in its current folder."
+  zh-TW: "在目前資料夾建立所選項目的副本。"
+  zh-CN: "在当前文件夹创建所选项目的副本。"
+  ja: "選択した項目のコピーを現在のフォルダーに作成します。"
+"Enter the name or destination within the current workspace.":
+  en: "Enter the name or destination within the current workspace."
+  zh-TW: "輸入名稱或目前工作區內的目的位置。"
+  zh-CN: "输入名称或当前工作区内的目标位置。"
+  ja: "名前または現在のワークスペース内の移動先を入力してください。"
+"Confirm permanent deletion ({count})":
+  en: "Confirm permanent deletion ({count})"
+  zh-TW: "確認永久刪除（{count}）"
+  zh-CN: "确认永久删除（{count}）"
+  ja: "完全削除を確認（{count} 件）"
+"Cancel":
+  en: "Cancel"
+  zh-TW: "取消"
+  zh-CN: "取消"
+  ja: "キャンセル"
+"Select a file or folder in Explorer first":
+  en: "Select a file or folder in Explorer first"
+  zh-TW: "請先在檔案總管選取檔案或資料夾"
+  zh-CN: "请先在文件管理器中选择文件或文件夹"
+  ja: "エクスプローラーでファイルまたはフォルダーを選択してください"
+"Close Editor tabs for the selected file or folder before Rename/Move":
+  en: "Close Editor tabs for the selected file or folder before Rename/Move"
+  zh-TW: "重新命名或移動前，請先關閉該檔案或資料夾所屬的編輯器分頁"
+  zh-CN: "重命名或移动前，请先关闭该文件或文件夹对应的编辑器标签页"
+  ja: "名前の変更または移動の前に、対象のファイルやフォルダーのエディタータブを閉じてください"
+"Explorer operation succeeded: {action}{target}":
+  en: "Explorer operation succeeded: {action}{target}"
+  zh-TW: "檔案總管操作完成：{action}{target}"
+  zh-CN: "文件管理器操作成功：{action}{target}"
+  ja: "エクスプローラー操作が完了しました：{action}{target}"
+"Explorer operation refused: {action}: {error}":
+  en: "Explorer operation refused: {action}: {error}"
+  zh-TW: "檔案總管無法執行{action}：{error}"
+  zh-CN: "文件管理器无法执行{action}：{error}"
+  ja: "エクスプローラーで{action}を実行できません：{error}"
+"Permanently delete {count} selected item(s), including folder contents? This cannot be undone. Press CONFIRM PERMANENT DELETE to proceed.":
+  en: "Permanently delete {count} selected item(s), including folder contents? This cannot be undone. Press CONFIRM PERMANENT DELETE to proceed."
+  zh-TW: "即將永久刪除 {count} 個選取項目（含資料夾內所有內容）。此操作無法復原；請再次按下「確認永久刪除」。"
+  zh-CN: "即将永久删除 {count} 个所选项目（包括文件夹内所有内容）。此操作无法撤销；请再次点击“确认永久删除”。"
+  ja: "選択した {count} 件（フォルダーの内容を含む）を完全に削除します。元に戻せません。続行するには「完全削除を確認」をもう一度押してください。"
+"Close any Native Editor files inside the selection before permanent deletion":
+  en: "Close any Native Editor files inside the selection before permanent deletion"
+  zh-TW: "永久刪除前，請先關閉選取項目內的 Native Editor 檔案"
+  zh-CN: "永久删除前，请先关闭所选项目中打开的 Native Editor 文件"
+  ja: "完全削除する前に、選択範囲内の Native Editor のファイルを閉じてください"
+"Delete confirmation expired; choose the items again":
+  en: "Delete confirmation expired; choose the items again"
+  zh-TW: "刪除確認已失效，請重新選取項目"
+  zh-CN: "删除确认已失效，请重新选择项目"
+  ja: "削除の確認が期限切れです。項目を選び直してください"
+"Delete selection or workspace changed; no files were deleted":
+  en: "Delete selection or workspace changed; no files were deleted"
+  zh-TW: "選取項目或工作區已變更，未刪除任何檔案"
+  zh-CN: "所选项目或工作区已更改，没有删除任何文件"
+  ja: "選択内容またはワークスペースが変更されたため、ファイルは削除されませんでした"
+"Permanently deleted {count} Explorer item(s)":
+  en: "Permanently deleted {count} Explorer item(s)"
+  zh-TW: "已永久刪除 {count} 個檔案總管項目"
+  zh-CN: "已永久删除 {count} 个文件管理器项目"
+  ja: "エクスプローラーの {count} 件を完全に削除しました"
+"Explorer delete refused or partially completed: {error}. Check refreshed files.":
+  en: "Explorer delete refused or partially completed: {error}. Check refreshed files."
+  zh-TW: "檔案總管刪除失敗或部分完成：{error}。請檢查重新整理後的檔案。"
+  zh-CN: "文件管理器删除失败或部分完成：{error}。请检查刷新后的文件。"
+  ja: "エクスプローラーの削除が失敗または一部のみ完了しました：{error}。更新後のファイルを確認してください。"
+"Select a file or folder to Copy or Cut":
+  en: "Select a file or folder to Copy or Cut"
+  zh-TW: "請選取要複製或剪下的檔案或資料夾"
+  zh-CN: "请选择要复制或剪切的文件或文件夹"
+  ja: "コピーまたは切り取りするファイルかフォルダーを選択してください"
+"Copied {count} Explorer item(s); choose destination and Paste":
+  en: "Copied {count} Explorer item(s); choose destination and Paste"
+  zh-TW: "已複製 {count} 個項目；請選擇目的地後貼上"
+  zh-CN: "已复制 {count} 个项目；请选择目标位置后粘贴"
+  ja: "{count} 件をコピーしました。貼り付け先を選んで貼り付けてください"
+"Cut {count} Explorer item(s); choose destination and Paste":
+  en: "Cut {count} Explorer item(s); choose destination and Paste"
+  zh-TW: "已剪下 {count} 個項目；請選擇目的地後貼上"
+  zh-CN: "已剪切 {count} 个项目；请选择目标位置后粘贴"
+  ja: "{count} 件を切り取りました。移動先を選んで貼り付けてください"
+"Explorer Copy/Cut refused: {error}":
+  en: "Explorer Copy/Cut refused: {error}"
+  zh-TW: "檔案總管無法複製／剪下：{error}"
+  zh-CN: "文件管理器无法复制／剪切：{error}"
+  ja: "エクスプローラーでコピー／切り取りできません：{error}"
+"Explorer clipboard is empty; Copy or Cut a file first":
+  en: "Explorer clipboard is empty; Copy or Cut a file first"
+  zh-TW: "檔案總管剪貼簿為空，請先複製或剪下檔案"
+  zh-CN: "文件管理器剪贴板为空，请先复制或剪切文件"
+  ja: "エクスプローラーのクリップボードは空です。先にファイルをコピーまたは切り取りしてください"
+"Explorer Paste succeeded: {count} item(s)":
+  en: "Explorer Paste succeeded: {count} item(s)"
+  zh-TW: "已貼上 {count} 個項目"
+  zh-CN: "已粘贴 {count} 个项目"
+  ja: "{count} 件を貼り付けました"
+"Explorer Paste refused or stopped: {error}":
+  en: "Explorer Paste refused or stopped: {error}"
+  zh-TW: "檔案總管貼上失敗或已中止：{error}"
+  zh-CN: "文件管理器粘贴失败或已停止：{error}"
+  ja: "エクスプローラーの貼り付けが失敗または中断されました：{error}"
+"Opened system file manager":
+  en: "Opened system file manager"
+  zh-TW: "已開啟系統檔案總管"
+  zh-CN: "已打开系统文件管理器"
+  ja: "システムのファイルマネージャーを開きました"
+"Cannot reveal selected item: {error}":
+  en: "Cannot reveal selected item: {error}"
+  zh-TW: "無法在檔案總管顯示選取項目：{error}"
+  zh-CN: "无法在文件管理器中显示所选项目：{error}"
+  ja: "選択した項目をファイルマネージャーで表示できません：{error}"
+"Choose an existing Explorer item first":
+  en: "Choose an existing Explorer item first"
+  zh-TW: "請先選取存在的檔案總管項目"
+  zh-CN: "请先选择存在的文件管理器项目"
+  ja: "既存の項目をエクスプローラーで選択してください"
+"Copied path relative to the project root":
+  en: "Copied path relative to the project root"
+  zh-TW: "已複製相對於專案根目錄的路徑"
+  zh-CN: "已复制相对于项目根目录的路径"
+  ja: "プロジェクトルートからの相対パスをコピーしました"
+"Copied full file/folder path":
+  en: "Copied full file/folder path"
+  zh-TW: "已複製完整檔案／資料夾路徑"
+  zh-CN: "已复制完整文件／文件夹路径"
+  ja: "ファイル／フォルダーの完全なパスをコピーしました"
+"Collapse folder refused: {error}":
+  en: "Collapse folder refused: {error}"
+  zh-TW: "無法收合資料夾：{error}"
+  zh-CN: "无法折叠文件夹：{error}"
+  ja: "フォルダーを折りたためません：{error}"
+"Explorer refresh failed: {error}":
+  en: "Explorer refresh failed: {error}"
+  zh-TW: "檔案總管重新整理失敗：{error}"
+  zh-CN: "文件管理器刷新失败：{error}"
+  ja: "エクスプローラーの更新に失敗しました：{error}"
+"Tree refresh failed: {error}":
+  en: "Tree refresh failed: {error}"
+  zh-TW: "檔案樹重新整理失敗：{error}"
+  zh-CN: "文件树刷新失败：{error}"
+  ja: "ファイルツリーの更新に失敗しました：{error}"
+"Show ignored files":
+  en: "Show ignored files"
+  zh-TW: "顯示忽略的檔案"
+  zh-CN: "显示忽略的文件"
+  ja: "無視されたファイルを表示"
+"Hide ignored files":
+  en: "Hide ignored files"
+  zh-TW: "隱藏忽略的檔案"
+  zh-CN: "隐藏忽略的文件"
+  ja: "無視されたファイルを非表示"
+"Show hidden items":
+  en: "Show hidden items"
+  zh-TW: "顯示隱藏項目"
+  zh-CN: "显示隐藏项目"
+  ja: "隠し項目を表示"
+"Hide hidden items":
+  en: "Hide hidden items"
+  zh-TW: "隱藏隱藏項目"
+  zh-CN: "隐藏隐藏项目"
+  ja: "隠し項目を非表示"
+"Save all editor files":
+  en: "Save all editor files"
+  zh-TW: "儲存所有編輯器檔案"
+  zh-CN: "保存所有编辑器文件"
+  ja: "すべてのエディターファイルを保存"
+"Collapse all folders":
+  en: "Collapse all folders"
+  zh-TW: "收合所有資料夾"
+  zh-CN: "折叠所有文件夹"
+  ja: "すべてのフォルダーを折りたたむ"
+"Collapse All failed: {error}":
+  en: "Collapse All failed: {error}"
+  zh-TW: "收合全部失敗：{error}"
+  zh-CN: "全部折叠失败：{error}"
+  ja: "すべての折りたたみに失敗しました：{error}"
+"Save editor changes and finish imports before deleting files":
+  en: "Save editor changes and finish imports before deleting files"
+  zh-TW: "刪除檔案前，請先儲存編輯器變更並完成匯入"
+  zh-CN: "删除文件前，请先保存编辑器更改并完成导入"
+  ja: "ファイルを削除する前に、エディターの変更を保存しインポートを完了してください"
+"Explorer delete refused: {error}":
+  en: "Explorer delete refused: {error}"
+  zh-TW: "檔案總管無法刪除：{error}"
+  zh-CN: "文件管理器无法删除：{error}"
+  ja: "エクスプローラーで削除できません：{error}"
+"Explorer delete preflight refused: {error}":
+  en: "Explorer delete preflight refused: {error}"
+  zh-TW: "檔案總管刪除前檢查未通過：{error}"
+  zh-CN: "文件管理器删除前检查未通过：{error}"
+  ja: "エクスプローラーの削除前チェックに失敗しました：{error}"
+"Change one Explorer visibility option at a time":
+  en: "Change one Explorer visibility option at a time"
+  zh-TW: "一次只能變更一項檔案總管顯示設定"
+  zh-CN: "每次只能更改一项文件管理器显示设置"
+  ja: "エクスプローラーの表示設定は一度に1項目ずつ変更してください"
+"Show/hide Explorer items":
+  en: "Show/hide Explorer items"
+  zh-TW: "顯示／隱藏檔案總管項目"
+  zh-CN: "显示／隐藏文件管理器项目"
+  ja: "エクスプローラーの項目の表示／非表示"
+"Select a file or folder first":
+  en: "Select a file or folder first"
+  zh-TW: "請先選取檔案或資料夾"
+  zh-CN: "请先选择文件或文件夹"
+  ja: "まずファイルまたはフォルダーを選択してください"
+"Refresh Explorer":
+  en: "Refresh Explorer"
+  zh-TW: "重新整理檔案總管"
+  zh-CN: "刷新文件管理器"
+  ja: "エクスプローラーを更新"

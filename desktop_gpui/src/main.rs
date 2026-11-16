@@ -96,7 +96,7 @@ use alera_gpui_desktop::mcp_ui_bridge::{
 };
 use alera_gpui_desktop::mcp_workspace_creation::HostManagedWorkspaceRequest;
 use alera_gpui_desktop::model::WorkbenchModel;
-use alera_gpui_desktop::native_i18n::UiLocale;
+use alera_gpui_desktop::native_i18n::{tr, UiLocale};
 use alera_gpui_desktop::agent_status_visual::{AgentStateSummary, AgentVisualState};
 use alera_gpui_desktop::native_modal::NativeModalSize;
 use alera_gpui_desktop::native_settings::{NativeSettings, NativeSettingsStore, NativeSidebarLayout};
@@ -1141,7 +1141,7 @@ impl Workbench {
         // mutate the tree or write Native JSON before Host CAS acknowledges.
         if previous.show_hidden != next.show_hidden && previous.show_ignored != next.show_ignored {
             self.model
-                .set_status("Change one Explorer visibility option at a time");
+                .set_status(tr(self.settings_menu_locale, "Change one Explorer visibility option at a time"));
             cx.notify();
             return;
         }
@@ -1156,7 +1156,7 @@ impl Workbench {
     fn set_explorer_clipboard(&mut self, mode: ExplorerClipboardMode, cx: &mut Context<Self>) {
         let Some(selected) = self.explorer_selection.clone() else {
             self.model
-                .set_status("Select a file or folder to Copy or Cut");
+                .set_status(tr(self.settings_menu_locale, "Select a file or folder to Copy or Cut"));
             cx.notify();
             return;
         };
@@ -1170,18 +1170,18 @@ impl Workbench {
             Ok(clipboard) => {
                 let count = clipboard.len();
                 self.explorer_clipboard = Some(clipboard);
-                self.model.set_status(format!(
-                    "{} {count} Explorer item(s); choose destination and Paste",
-                    if mode == ExplorerClipboardMode::Copy {
-                        "Copied"
-                    } else {
-                        "Cut"
-                    }
-                ));
+                let source = if mode == ExplorerClipboardMode::Copy {
+                    "Copied {count} Explorer item(s); choose destination and Paste"
+                } else {
+                    "Cut {count} Explorer item(s); choose destination and Paste"
+                };
+                self.model.set_status(
+                    tr(self.settings_menu_locale, source).replace("{count}", &count.to_string()),
+                );
             }
             Err(error) => self
                 .model
-                .set_status(format!("Explorer Copy/Cut refused: {error}")),
+                .set_status(tr(self.settings_menu_locale, "Explorer Copy/Cut refused: {error}").replace("{error}", &error.to_string())),
         }
         cx.notify();
     }
@@ -1198,7 +1198,7 @@ impl Workbench {
             .collect();
         let Some(clipboard) = self.explorer_clipboard.as_mut() else {
             self.model
-                .set_status("Explorer clipboard is empty; Copy or Cut a file first");
+                .set_status(tr(self.settings_menu_locale, "Explorer clipboard is empty; Copy or Cut a file first"));
             cx.notify();
             return;
         };
@@ -1232,7 +1232,7 @@ impl Workbench {
                 self.content_matches.clear();
                 self.persist_session();
                 self.model
-                    .set_status(format!("Explorer Paste succeeded: {} item(s)", paths.len()));
+                    .set_status(tr(self.settings_menu_locale, "Explorer Paste succeeded: {count} item(s)").replace("{count}", &paths.len().to_string()));
                 self.refresh_git(cx);
             }
             Err(error) => {
@@ -1247,7 +1247,7 @@ impl Workbench {
                 self.file_index = None;
                 self.content_matches.clear();
                 self.model
-                    .set_status(format!("Explorer Paste refused or stopped: {error}"));
+                    .set_status(tr(self.settings_menu_locale, "Explorer Paste refused or stopped: {error}").replace("{error}", &error.to_string()));
                 self.refresh_git(cx);
             }
         }
@@ -1407,15 +1407,16 @@ impl Workbench {
                     .ok_or_else(|| {
                         std::io::Error::new(
                             std::io::ErrorKind::InvalidInput,
-                            "Select a file or folder first",
+                            tr(self.settings_menu_locale, "Select a file or folder first"),
                         )
                     })
                     .and_then(|path| {
                         ExplorerFiles::new(self.model.root())?.reveal_in_file_manager(path)
                     });
                 self.model.set_status(match result {
-                    Ok(()) => "Opened system file manager".to_owned(),
-                    Err(error) => format!("Cannot reveal selected item: {error}"),
+                    Ok(()) => tr(self.settings_menu_locale, "Opened system file manager"),
+                    Err(error) => tr(self.settings_menu_locale, "Cannot reveal selected item: {error}")
+                        .replace("{error}", &error.to_string()),
                 });
                 cx.notify();
             }
@@ -1440,7 +1441,7 @@ impl Workbench {
                     .filter(|path| path.starts_with(self.model.root()) && path.exists())
                 else {
                     self.model
-                        .set_status("Choose an existing Explorer item first");
+                        .set_status(tr(self.settings_menu_locale, "Choose an existing Explorer item first"));
                     cx.notify();
                     return;
                 };
@@ -1454,11 +1455,11 @@ impl Workbench {
                 };
                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
                 self.model
-                    .set_status(if action == ExplorerMenuAction::CopyRelativePath {
+                    .set_status(tr(self.settings_menu_locale, if action == ExplorerMenuAction::CopyRelativePath {
                         "Copied path relative to the project root"
                     } else {
                         "Copied full file/folder path"
-                    });
+                    }));
                 cx.notify();
             }
             ExplorerMenuAction::CollapseFolder => {
@@ -1471,7 +1472,7 @@ impl Workbench {
                         if let Ok(relative) = folder.strip_prefix(self.model.root()) {
                             if let Err(error) = tree.collapse(relative) {
                                 self.model
-                                    .set_status(format!("Collapse folder refused: {error}"));
+                                    .set_status(tr(self.settings_menu_locale, "Collapse folder refused: {error}").replace("{error}", &error.to_string()));
                             }
                         }
                     }
@@ -1483,7 +1484,7 @@ impl Workbench {
                 if let Some(tree) = &mut self.tree {
                     if let Err(error) = tree.refresh() {
                         self.model
-                            .set_status(format!("Explorer refresh failed: {error}"));
+                            .set_status(tr(self.settings_menu_locale, "Explorer refresh failed: {error}").replace("{error}", &error.to_string()));
                     }
                 }
                 self.refresh_git(cx);
@@ -1519,7 +1520,7 @@ impl Workbench {
         ) && self.explorer_selection.is_none()
         {
             self.model
-                .set_status("Select a file or folder in Explorer first");
+                .set_status(tr(self.settings_menu_locale, "Select a file or folder in Explorer first"));
             cx.notify();
             return;
         }
@@ -1544,6 +1545,7 @@ impl Workbench {
                     ExplorerAction::Copy => "Copy into destination folder inside workspace",
                     ExplorerAction::Duplicate | ExplorerAction::Delete => unreachable!(),
                 };
+                let placeholder = tr(self.settings_menu_locale, placeholder);
                 let input = cx.new(|cx| QuickOpenInput::with_placeholder(placeholder, cx));
                 window.focus(&input.read(cx).focus_handle(cx), cx);
                 Some(input)
@@ -1566,7 +1568,7 @@ impl Workbench {
     fn apply_explorer_batch_delete(&mut self, cx: &mut Context<Self>) {
         if self.explorer_drop_busy || self.editor_dirty(cx) {
             self.model
-                .set_status("Save editor changes and finish imports before deleting files");
+                .set_status(tr(self.settings_menu_locale, "Save editor changes and finish imports before deleting files"));
             cx.notify();
             return;
         }
@@ -1580,7 +1582,7 @@ impl Workbench {
             Ok(files) => files,
             Err(error) => {
                 self.model
-                    .set_status(format!("Explorer delete refused: {error}"));
+                    .set_status(tr(self.settings_menu_locale, "Explorer delete refused: {error}").replace("{error}", &error.to_string()));
                 cx.notify();
                 return;
             }
@@ -1594,19 +1596,19 @@ impl Workbench {
         if !self.explorer_delete_confirmed {
             match ExplorerDeleteBatch::capture(&files, &selection, self.workspace_generation) {
                 Ok(batch) if !batch.affects_open_files(&open_files) => {
-                    self.model.set_status(format!(
-                        "Permanently delete {} selected item(s), including folder contents? This cannot be undone. Press CONFIRM PERMANENT DELETE to proceed.",
-                        batch.len(),
-                    ));
+                    self.model.set_status(
+                        tr(self.settings_menu_locale, "Permanently delete {count} selected item(s), including folder contents? This cannot be undone. Press CONFIRM PERMANENT DELETE to proceed.")
+                            .replace("{count}", &batch.len().to_string()),
+                    );
                     self.explorer_delete_confirmed = true;
                     self.explorer_delete_pending = Some(batch);
                 }
-                Ok(_) => self.model.set_status(
+                Ok(_) => self.model.set_status(tr(self.settings_menu_locale,
                     "Close any Native Editor files inside the selection before permanent deletion",
-                ),
+                )),
                 Err(error) => self
                     .model
-                    .set_status(format!("Explorer delete preflight refused: {error}")),
+                    .set_status(tr(self.settings_menu_locale, "Explorer delete preflight refused: {error}").replace("{error}", &error.to_string())),
             }
             cx.notify();
             return;
@@ -1617,7 +1619,7 @@ impl Workbench {
         self.explorer_delete_confirmed = false;
         let Some(batch) = self.explorer_delete_pending.take() else {
             self.model
-                .set_status("Delete confirmation expired; choose the items again");
+                .set_status(tr(self.settings_menu_locale, "Delete confirmation expired; choose the items again"));
             cx.notify();
             return;
         };
@@ -1625,7 +1627,7 @@ impl Workbench {
             || batch.affects_open_files(&open_files)
         {
             self.model
-                .set_status("Delete selection or workspace changed; no files were deleted");
+                .set_status(tr(self.settings_menu_locale, "Delete selection or workspace changed; no files were deleted"));
             cx.notify();
             return;
         }
@@ -1653,11 +1655,11 @@ impl Workbench {
                 self.cancel_explorer_action(cx);
                 self.persist_session();
                 self.model
-                    .set_status(format!("Permanently deleted {count} Explorer item(s)"));
+                    .set_status(tr(self.settings_menu_locale, "Permanently deleted {count} Explorer item(s)").replace("{count}", &count.to_string()));
             }
-            Err(error) => self.model.set_status(format!(
-                "Explorer delete refused or partially completed: {error}. Check refreshed files."
-            )),
+            Err(error) => self.model.set_status(tr(self.settings_menu_locale,
+                "Explorer delete refused or partially completed: {error}. Check refreshed files.")
+                .replace("{error}", &error.to_string())),
         }
         self.refresh_git(cx);
         cx.notify();
@@ -1692,9 +1694,9 @@ impl Workbench {
                 .map(|(_, path)| path)
                 .collect();
             if affects_open_editor_path(&source, &open_paths) {
-                self.model.set_status(
+                self.model.set_status(tr(self.settings_menu_locale,
                     "Close Editor tabs for the selected file or folder before Rename/Move",
-                );
+                ));
                 cx.notify();
                 return;
             }
@@ -1747,14 +1749,13 @@ impl Workbench {
                 self.explorer_selection = target.clone();
                 self.cancel_explorer_action(cx);
                 self.persist_session();
-                self.model.set_status(format!(
-                    "{} succeeded{}",
-                    action.label(),
-                    target
-                        .as_ref()
-                        .map(|target| format!(": {}", target.display()))
-                        .unwrap_or_default()
-                ));
+                self.model.set_status(
+                    tr(self.settings_menu_locale, "Explorer operation succeeded: {action}{target}")
+                        .replace("{action}", &tr(self.settings_menu_locale, action.label()))
+                        .replace("{target}", &target.as_ref()
+                            .map(|target| format!(": {}", target.display()))
+                            .unwrap_or_default()),
+                );
                 if action == ExplorerAction::NewFile {
                     if let Some(path) = target {
                         if self.model.open_path(&path) {
@@ -1766,7 +1767,9 @@ impl Workbench {
             }
             Err(error) => {
                 self.model
-                    .set_status(format!("{} refused: {error}", action.label()));
+                    .set_status(tr(self.settings_menu_locale, "Explorer operation refused: {action}: {error}")
+                        .replace("{action}", &tr(self.settings_menu_locale, action.label()))
+                        .replace("{error}", &error.to_string()));
                 // A failed attempt must never retain an armed delete.
                 self.explorer_delete_confirmed = false;
             }
@@ -11597,13 +11600,13 @@ impl Render for Workbench {
                                             .flex()
                                             .gap_1()
                                             .child(
-                                                icon_button(("explorer-file-action", 0usize), UiIcon::NewFile, "New file", false)
+                                                icon_button(("explorer-file-action", 0usize), UiIcon::NewFile, tr(self.settings_menu_locale, "New file"), false)
                                                     .on_click(cx.listener(|this, _, window, cx| {
                                                         this.begin_explorer_action(ExplorerAction::NewFile, window, cx);
                                                     })),
                                             )
                                             .child(
-                                                icon_button(("explorer-file-action", 1usize), UiIcon::NewFolder, "New folder", false)
+                                                icon_button(("explorer-file-action", 1usize), UiIcon::NewFolder, tr(self.settings_menu_locale, "New folder"), false)
                                                     .on_click(cx.listener(|this, _, window, cx| {
                                                         this.begin_explorer_action(ExplorerAction::NewFolder, window, cx);
                                                     })),
@@ -11614,16 +11617,20 @@ impl Render for Workbench {
                                                 let hidden = self.explorer_visibility.show_hidden;
                                                 Button::new("explorer-visibility-options")
                                                     .icon(IconName::Ellipsis)
-                                                    .tooltip("Show/hide Explorer items")
+                                                    .tooltip(tr(self.settings_menu_locale, "Show/hide Explorer items"))
                                                     .ghost()
-                                                    .dropdown_menu(move |menu, _, _| {
+                                                    .dropdown_menu(move |menu, _, cx| {
+                                                        let locale = owner
+                                                            .upgrade()
+                                                            .map(|entity| entity.read(cx).settings_menu_locale)
+                                                            .unwrap_or_else(|| UiLocale::from_preference("system"));
                                                         let ignored_owner = owner.clone();
                                                         let mut menu = menu.item(
-                                                            PopupMenuItem::new(if ignored {
+                                                            PopupMenuItem::new(tr(locale, if ignored {
                                                                 "Hide ignored files"
                                                             } else {
                                                                 "Show ignored files"
-                                                            })
+                                                            }))
                                                             .on_click(move |_, _, cx| {
                                                                 let _ = ignored_owner.update(cx, |view, cx| {
                                                                     let mut next = view.explorer_visibility;
@@ -11635,11 +11642,11 @@ impl Render for Workbench {
                                                         if cfg!(windows) {
                                                             let hidden_owner = owner.clone();
                                                             menu = menu.item(
-                                                                PopupMenuItem::new(if hidden {
+                                                                PopupMenuItem::new(tr(locale, if hidden {
                                                                     "Hide hidden items"
                                                                 } else {
                                                                     "Show hidden items"
-                                                                })
+                                                                }))
                                                                 .on_click(move |_, _, cx| {
                                                                     let _ = hidden_owner.update(cx, |view, cx| {
                                                                         let mut next = view.explorer_visibility;
@@ -11650,17 +11657,17 @@ impl Render for Workbench {
                                                             );
                                                         }
                                                         let save_owner = owner.clone();
-                                                        menu = menu.item(PopupMenuItem::new("Save all editor files")
+                                                        menu = menu.item(PopupMenuItem::new(tr(locale, "Save all editor files"))
                                                             .on_click(move |_, _, cx| {
                                                                 let _ = save_owner.update(cx, |view, cx| view.save_all_editors(cx));
                                                             }));
                                                         let collapse_owner = owner.clone();
-                                                        menu.item(PopupMenuItem::new("Collapse all folders")
+                                                        menu.item(PopupMenuItem::new(tr(locale, "Collapse all folders"))
                                                             .on_click(move |_, _, cx| {
                                                                 let _ = collapse_owner.update(cx, |view, cx| {
                                                                     if let Some(tree) = &mut view.tree {
                                                                         if let Err(error) = tree.collapse_all() {
-                                                                            view.model.set_status(format!("Collapse All failed: {error}"));
+                                                                            view.model.set_status(tr(view.settings_menu_locale, "Collapse All failed: {error}").replace("{error}", &error.to_string()));
                                                                         }
                                                                     }
                                                                     view.tree_mode = true;
@@ -11670,7 +11677,7 @@ impl Render for Workbench {
                                                     })
                                             })
                                             .child(
-                                                icon_button("explorer-refresh", UiIcon::Refresh, "Refresh Explorer", false)
+                                                icon_button("explorer-refresh", UiIcon::Refresh, tr(self.settings_menu_locale, "Refresh Explorer"), false)
                                                     .on_click(cx.listener(|this, _, _, cx| {
                                                         this.model.refresh_directory();
                                                         if let Some(tree) = &mut this.tree {

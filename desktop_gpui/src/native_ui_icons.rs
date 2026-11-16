@@ -5,7 +5,7 @@
 //! Keep this mapping centralized instead of inventing glyphs per toolbar.
 use crate::native_file_icons::material_icon_svg;
 use alera_gpui_desktop::visual_tokens::{MUTED, TAB_CLOSE_ICON_SIZE, TAB_CLOSE_TARGET_SIZE, TEXT};
-use gpui::{div, px, rgb, Div, ElementId, ParentElement, Styled};
+use gpui::{div, px, rgb, Div, ElementId, ParentElement, SharedString, Styled};
 use gpui_kit::assets::IconName as LucideIcon;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::{Icon, Sizable as _};
@@ -258,7 +258,7 @@ pub fn tab_close_button(id: impl Into<ElementId>, label: &'static str) -> Button
 pub fn icon_button(
     id: impl Into<ElementId>,
     icon_kind: UiIcon,
-    label: &'static str,
+    label: impl Into<SharedString>,
     active: bool,
 ) -> Button {
     let button = Button::new(id)
