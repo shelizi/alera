@@ -157,7 +157,7 @@ fn lucide_name(kind: UiIcon) -> Option<LucideIcon> {
         UiIcon::List => LucideIcon::List,
         UiIcon::PullRequest => LucideIcon::GitPullRequest,
         UiIcon::Edit => LucideIcon::Pencil,
-        UiIcon::Delete => LucideIcon::Trash2,
+        UiIcon::Delete => LucideIcon::Trash,
         UiIcon::More => LucideIcon::Ellipsis,
         UiIcon::Settings => LucideIcon::Settings,
         UiIcon::PanelLeft => LucideIcon::PanelLeft,
@@ -170,7 +170,7 @@ fn lucide_name(kind: UiIcon) -> Option<LucideIcon> {
         UiIcon::Graph => LucideIcon::GitGraph,
         UiIcon::Branch => LucideIcon::GitBranch,
         UiIcon::GitMerge => LucideIcon::GitMerge,
-        UiIcon::History => LucideIcon::History,
+        UiIcon::History => LucideIcon::Clock,
         UiIcon::Save => LucideIcon::Save,
         UiIcon::Check => LucideIcon::Check,
         // Keep Classic Codicons for source control, and the differentiated

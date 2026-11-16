@@ -127,7 +127,7 @@ use alera_gpui_desktop::terminal_stream_bridge::{
 use alera_gpui_desktop::visual_tokens::{
     ACTIVE, AGENT_BLOCKED, AGENT_DONE, AGENT_WAITING, AGENT_WORKING, BG, BORDER, BORDER_ACTIVE,
     clamp_context_sidebar_width, clamp_projects_sidebar_width, ELEVATED, MUTED, PANEL,
-    PROJECTS_COLLAPSED_WIDTH, PROJECTS_SIDEBAR_WIDTH, RESIZE_CHROME, RIGHT_SIDEBAR_WIDTH,
+    PROJECTS_COLLAPSED_WIDTH, RESIZE_CHROME,
     SECTION_HEADER_HEIGHT, SIDEBAR_RESIZE_HANDLE_WIDTH,
     STATUS_BAR_HEIGHT, TAB_STRIP_HEIGHT, TEXT, TOOLBAR, TOP_BAR_HEIGHT,
 };
@@ -12162,6 +12162,7 @@ impl Render for Workbench {
                                                     .min_w_0()
                                                     .when(file_header, |row| row.child(
                                                         div()
+                                                            .id(("reference-file-header", i))
                                                             .px_2().py_2()
                                                             .bg(rgb(PANEL))
                                                             .border_b_1()
@@ -12178,6 +12179,7 @@ impl Render for Workbench {
                                                             })
                                                     ))
                                                     .child(div()
+                                                        .id(("reference-match", i))
                                                         .px_3().py_2()
                                                         .cursor_pointer()
                                                         .hover(|style| style.bg(rgb(ACTIVE)))
