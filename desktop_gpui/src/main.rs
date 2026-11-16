@@ -130,6 +130,7 @@ use alera_gpui_desktop::visual_tokens::{
     PROJECTS_COLLAPSED_WIDTH, RESIZE_CHROME,
     SECTION_HEADER_HEIGHT, SIDEBAR_RESIZE_HANDLE_WIDTH,
     STATUS_BAR_HEIGHT, TAB_STRIP_HEIGHT, TEXT, TOOLBAR, TOP_BAR_HEIGHT,
+    EDITOR_TOOLBAR_HEIGHT, usable_workbench_height, secondary_terminal_render_height,
 };
 use alera_gpui_desktop::vt_screen::{StyledRow, TERMINAL_DEFAULT_BG};
 use alera_gpui_desktop::workbench_layout_store::{
@@ -137,7 +138,7 @@ use alera_gpui_desktop::workbench_layout_store::{
     SavedWorkbenchPane, SCRATCH_EDITOR_KEY_PREFIX, WORKBENCH_LAYOUT_VERSION,
 };
 use alera_gpui_desktop::workbench_panes::{
-    shared_pinned_tab_row, PaneAttachGuard, PaneAxis, PaneSlot, WorkbenchPaneLayout,
+    primary_pinned_row_visible, PaneAttachGuard, PaneAxis, PaneSlot, WorkbenchPaneLayout,
 };
 use alera_gpui_desktop::workbench_tabs::{
     WorkbenchTab, WorkbenchTabIdentity, WorkbenchTabKind, WorkbenchTabs,
@@ -10403,8 +10404,12 @@ impl Render for Workbench {
             self.native_settings.editor_two_row_tabs && !primary_pinned_tabs.is_empty();
         let secondary_two_rows =
             self.native_settings.editor_two_row_tabs && !secondary_pinned_tabs.is_empty();
-        let shared_pinned_row =
-            shared_pinned_tab_row(primary_two_rows, secondary_two_rows, mixed_has_secondary);
+        let shared_pinned_row = primary_pinned_row_visible(
+            primary_two_rows,
+            secondary_two_rows,
+            mixed_has_secondary,
+            self.mixed_panes.axis(),
+        );
         // Classic only creates a second row when that pane has pinned tabs.
         // In one-row mode keep the pins ahead of the regular scrolling tabs.
         let mixed_primary_tabs = if primary_two_rows {
@@ -10799,16 +10804,24 @@ impl Render for Workbench {
         };
         let content_width =
             (f32::from(viewport.width) - projects_width - context_width - RESIZE_CHROME).max(0.0);
-        let content_height = (f32::from(viewport.height)
-            - TOP_BAR_HEIGHT
-            - STATUS_BAR_HEIGHT
-            - TAB_STRIP_HEIGHT
-            - 14.0)
-            .max(0.0);
+        let content_height = usable_workbench_height(
+            f32::from(viewport.height),
+            shared_pinned_row,
+            show_editor_toolbar
+                && !native_center_git_diff_ui::should_show_center_git_diff_view(
+                    git_original_is_active,
+                    self.center_git_diff_is_current(),
+                ),
+        );
         let split_width = mixed_has_secondary && mixed_split_horizontal;
         let split_height = mixed_has_secondary && !mixed_split_horizontal;
         let primary_width = content_width / if split_width { 2.0 } else { 1.0 };
         let primary_height = content_height / if split_height { 2.0 } else { 1.0 };
+        let secondary_workbench_height = secondary_terminal_render_height(
+            primary_height,
+            split_height,
+            secondary_two_rows,
+        );
         // Keep Windows Zhuyin candidate popups beside the visible VT cursor.
         // The 1px GPUI TextInput still captures composition; only its local
         // visual anchor moves, without altering Host PTY geometry.
@@ -10831,7 +10844,7 @@ impl Render for Workbench {
                 terminal_ime_anchor_with_line_height(
                     tab.screen.cursor(),
                     primary_width,
-                    (primary_height - TAB_STRIP_HEIGHT).max(24.0),
+                    secondary_workbench_height,
                     terminal_font_size,
                     terminal_line_height,
                 )
@@ -10909,8 +10922,7 @@ impl Render for Workbench {
                 {
                     if tab.running {
                         let width = content_width / if split_width { 2.0 } else { 1.0 };
-                        let height = content_height / if split_height { 2.0 } else { 1.0 }
-                            - TAB_STRIP_HEIGHT;
+                        let height = secondary_workbench_height;
                         if let Some((cols, rows)) = estimate_terminal_viewport_with_line_height(
                             width,
                             height,
@@ -13829,7 +13841,7 @@ impl Render for Workbench {
                             )
                             .child(
                                 div()
-                                    .h(px(29.0))
+                                    .h(px(EDITOR_TOOLBAR_HEIGHT))
                                     .px_4()
                                     .bg(rgb(BG))
                                     .flex()

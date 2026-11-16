@@ -31,6 +31,54 @@ pub const MIN_EDITOR_WIDTH: f32 = 360.0;
 pub const RESIZE_CHROME: f32 = 14.0;
 pub const SIDEBAR_RESIZE_HANDLE_WIDTH: f32 = 6.0;
 pub const TAB_STRIP_HEIGHT: f32 = 44.0;
+pub const EDITOR_TOOLBAR_HEIGHT: f32 = 29.0;
+// The native Terminal viewport uses a one-pixel top border and pane seams.
+// Keep a two-pixel safety margin instead of subtracting an unrelated 14px.
+const TERMINAL_VIEWPORT_BORDER_SLACK: f32 = 2.0;
+
+/// GPUI's viewport is its client rectangle, not the external Windows title
+/// bar. Reserve exactly the shell/header heights actually rendered so the
+/// Host PTY grows to the full available Terminal area.
+pub fn usable_workbench_height(
+    window_height: f32,
+    primary_pinned_row_visible: bool,
+    editor_toolbar_visible: bool,
+) -> f32 {
+    if !window_height.is_finite() {
+        return 0.0;
+    }
+    (window_height
+        - TOP_BAR_HEIGHT
+        - STATUS_BAR_HEIGHT
+        - TAB_STRIP_HEIGHT * (1.0 + f32::from(primary_pinned_row_visible))
+        - if editor_toolbar_visible {
+            EDITOR_TOOLBAR_HEIGHT
+        } else {
+            0.0
+        }
+        - TERMINAL_VIEWPORT_BORDER_SLACK)
+        .max(0.0)
+}
+
+/// In a side-by-side split both Tab strips sit above the panes. In a
+/// stacked split the secondary pane owns an additional 44px (or 88px)
+/// header inside its half of the content region.
+pub fn secondary_terminal_render_height(
+    allocated_pane_height: f32,
+    stacked_split: bool,
+    secondary_pinned_row: bool,
+) -> f32 {
+    if !allocated_pane_height.is_finite() {
+        return 0.0;
+    }
+    (allocated_pane_height
+        - if stacked_split {
+            TAB_STRIP_HEIGHT * (1.0 + f32::from(secondary_pinned_row))
+        } else {
+            0.0
+        })
+    .max(0.0)
+}
 
 /// A drag can never make the center unusable or exceed Classic's sidebar
 /// preferences. On very small windows, the sidebar keeps its 220px minimum.
@@ -163,6 +211,29 @@ mod tests {
                 "{id} must not shrink in the shell row"
             );
         }
+    }
+
+    #[test]
+    fn terminal_viewport_fits_real_shell_chrome_and_pinned_tabs() {
+        assert_eq!(usable_workbench_height(800.0, false, false), 672.0);
+        assert_eq!(usable_workbench_height(800.0, true, false), 628.0);
+        assert_eq!(usable_workbench_height(800.0, false, true), 643.0);
+        assert_eq!(usable_workbench_height(800.0, true, true), 599.0);
+        assert_eq!(usable_workbench_height(f32::NAN, false, false), 0.0);
+        assert_eq!(usable_workbench_height(20.0, false, false), 0.0);
+    }
+
+    #[test]
+    fn secondary_terminal_height_subtracts_only_its_actual_stacked_header() {
+        assert_eq!(secondary_terminal_render_height(300.0, false, false), 300.0);
+        assert_eq!(secondary_terminal_render_height(300.0, false, true), 300.0);
+        assert_eq!(secondary_terminal_render_height(300.0, true, false), 256.0);
+        assert_eq!(secondary_terminal_render_height(300.0, true, true), 212.0);
+        assert_eq!(secondary_terminal_render_height(50.0, true, true), 0.0);
+        assert_eq!(
+            secondary_terminal_render_height(f32::INFINITY, true, false),
+            0.0
+        );
     }
 
     #[test]

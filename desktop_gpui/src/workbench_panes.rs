@@ -24,6 +24,22 @@ pub fn shared_pinned_tab_row(
     primary_two_rows || (has_secondary && secondary_two_rows)
 }
 
+/// Only side-by-side panes share a pinned Tab baseline. Stacked panes have
+/// independent headers: a pin in the bottom pane must not introduce an empty
+/// row above the top Terminal.
+pub fn primary_pinned_row_visible(
+    primary_two_rows: bool,
+    secondary_two_rows: bool,
+    has_secondary: bool,
+    axis: PaneAxis,
+) -> bool {
+    shared_pinned_tab_row(
+        primary_two_rows,
+        secondary_two_rows,
+        has_secondary && axis == PaneAxis::Horizontal,
+    )
+}
+
 /// Which of the two workbench panes a tab strip belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum PaneSlot {
@@ -647,6 +663,40 @@ mod tests {
         assert!(shared_pinned_tab_row(false, true, true));
         assert!(shared_pinned_tab_row(true, true, true));
         assert!(!shared_pinned_tab_row(false, true, false));
+    }
+
+    #[test]
+    fn only_side_by_side_panes_share_pinned_tab_header_height() {
+        assert!(primary_pinned_row_visible(
+            false,
+            true,
+            true,
+            PaneAxis::Horizontal
+        ));
+        assert!(primary_pinned_row_visible(
+            true,
+            false,
+            true,
+            PaneAxis::Horizontal
+        ));
+        assert!(!primary_pinned_row_visible(
+            false,
+            true,
+            true,
+            PaneAxis::Vertical
+        ));
+        assert!(primary_pinned_row_visible(
+            true,
+            false,
+            true,
+            PaneAxis::Vertical
+        ));
+        assert!(!primary_pinned_row_visible(
+            false,
+            true,
+            false,
+            PaneAxis::Horizontal
+        ));
     }
 
     #[test]
