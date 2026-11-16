@@ -104,6 +104,68 @@ mod tests {
     }
 
     #[test]
+    fn collapsed_panels_stay_hidden_after_flex_display_is_applied() {
+        // GPUI Styled::flex() sets display:Flex and silently overrides a
+        // previous hidden() (display:None). A GUI smoke test caught both
+        // expanded and collapsed project panels on screen together.
+        let source = include_str!("main.rs");
+        for id in [
+            "native-right-sidebar-scroll",
+            "right-explorer-header",
+            "right-search-header",
+            "right-references-panel",
+            "right-pr-browser-panel",
+            "right-sidebar-rail",
+            "projects-sidebar-expanded",
+            "projects-sidebar-rail",
+        ] {
+            let needle = format!(r#".id("{id}")"#);
+            let start = source
+                .find(&needle)
+                .unwrap_or_else(|| panic!("Missing panel {id}"));
+            let region = &source[start + needle.len()..];
+            let style = region.split(".child(").next().unwrap_or(region);
+            let hidden = style
+                .find("|")
+                .and_then(|_| style.find(".hidden()"))
+                .unwrap_or_else(|| panic!("{id} missing hidden() guard"));
+            let flex = style
+                .find(".flex()")
+                .unwrap_or_else(|| panic!("{id} missing display:Flex"));
+            assert!(
+                flex < hidden,
+                "{id}: .flex() overrides .hidden() when called after it"
+            );
+        }
+    }
+
+    #[test]
+    fn sidebars_keep_width_when_center_contains_long_content() {
+        // Without shrink=0, a long terminal line or tab label can squeeze
+        // the right sidebar down to a sliver and place the remainder offscreen.
+        let source = include_str!("main.rs");
+        for id in [
+            "native-right-sidebar-scroll",
+            "right-sidebar-rail",
+            "right-sidebar-resize-handle",
+            "projects-sidebar-expanded",
+            "projects-sidebar-rail",
+            "projects-sidebar-resize-handle",
+        ] {
+            let needle = format!(r#".id("{id}")"#);
+            let start = source
+                .find(&needle)
+                .unwrap_or_else(|| panic!("Missing panel {id}"));
+            let region = &source[start + needle.len()..];
+            let style = region.split(".child(").next().unwrap_or(region);
+            assert!(
+                style.contains(".flex_shrink_0()"),
+                "{id} must not shrink in the shell row"
+            );
+        }
+    }
+
+    #[test]
     fn hook_state_colors_match_classic_status_dots() {
         for (name, color) in [
             ("info", AGENT_WORKING),

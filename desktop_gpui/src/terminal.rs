@@ -1284,6 +1284,11 @@ pub fn estimate_terminal_viewport(
     estimate_terminal_viewport_with_line_height(region_width_px, region_height_px, font_px, 1.3)
 }
 
+/// Classic TerminalSettings defaults to AleraTokens.space12 for both axes.
+/// Keep VT row estimation and Windows IME candidate anchoring in sync with UI.
+pub const TERMINAL_PADDING_X: f32 = 12.0;
+pub const TERMINAL_PADDING_Y: f32 = 12.0;
+
 pub fn estimate_terminal_viewport_with_line_height(
     region_width_px: f32,
     region_height_px: f32,
@@ -1299,8 +1304,9 @@ pub fn estimate_terminal_viewport_with_line_height(
     {
         return None;
     }
-    let columns = ((region_width_px - 24.0) / (font_px * 0.62)).floor();
-    let lines = ((region_height_px - 16.0) / (font_px * line_height_factor)).floor();
+    let columns = ((region_width_px - 2.0 * TERMINAL_PADDING_X) / (font_px * 0.62)).floor();
+    let lines =
+        ((region_height_px - 2.0 * TERMINAL_PADDING_Y) / (font_px * line_height_factor)).floor();
     if columns < 20.0 || lines < 5.0 {
         return None;
     }
@@ -1343,13 +1349,17 @@ pub fn terminal_ime_anchor_with_line_height(
     }
     let cell_width = font_px * 0.62;
     let line_height = font_px * line_height_factor;
-    let visible_cols = ((panel_width_px - 24.0) / cell_width).floor().max(1.0);
-    let visible_rows = ((panel_height_px - 16.0) / line_height).floor().max(1.0);
+    let visible_cols = ((panel_width_px - 2.0 * TERMINAL_PADDING_X) / cell_width)
+        .floor()
+        .max(1.0);
+    let visible_rows = ((panel_height_px - 2.0 * TERMINAL_PADDING_Y) / line_height)
+        .floor()
+        .max(1.0);
     let col = (cursor.1 as f32).min(visible_cols - 1.0);
     let row = (cursor.0 as f32).min(visible_rows - 1.0);
     Some((
-        (12.0 + col * cell_width).min(panel_width_px - 2.0),
-        (8.0 + row * line_height).min(panel_height_px - 2.0),
+        (TERMINAL_PADDING_X + col * cell_width).min(panel_width_px - 2.0),
+        (TERMINAL_PADDING_Y + row * line_height).min(panel_height_px - 2.0),
     ))
 }
 
@@ -2657,15 +2667,15 @@ mod tests {
     #[test]
     fn native_ime_candidate_anchor_tracks_vt_cursor_inside_each_visible_pane() {
         let at_origin = terminal_ime_anchor_px((0, 0), 420.0, 470.0, 14.0).unwrap();
-        assert_eq!(at_origin, (12.0, 8.0));
+        assert_eq!(at_origin, (12.0, 12.0));
 
         let moved = terminal_ime_anchor_px((11, 20), 420.0, 470.0, 14.0).unwrap();
         assert!((moved.0 - (12.0 + 20.0 * 14.0 * 0.62)).abs() < 0.01);
-        assert!((moved.1 - (8.0 + 11.0 * 14.0 * 1.3)).abs() < 0.01);
+        assert!((moved.1 - (12.0 + 11.0 * 14.0 * 1.3)).abs() < 0.01);
 
         let narrow = terminal_ime_anchor_px((99, 239), 220.0, 180.0, 14.0).unwrap();
         assert!(narrow.0 >= 12.0 && narrow.0 <= 218.0);
-        assert!(narrow.1 >= 8.0 && narrow.1 <= 178.0);
+        assert!(narrow.1 >= 12.0 && narrow.1 <= 178.0);
         assert!(terminal_ime_anchor_px((0, 0), f32::NAN, 100.0, 14.0).is_none());
         assert!(terminal_ime_anchor_px((0, 0), 500.0, f32::INFINITY, 14.0).is_none());
         assert!(terminal_ime_anchor_px((0, 0), 500.0, 500.0, 0.0).is_none());

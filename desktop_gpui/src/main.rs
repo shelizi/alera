@@ -10822,7 +10822,7 @@ impl Render for Workbench {
                     terminal_line_height,
                 )
             })
-            .unwrap_or((12.0, 8.0));
+            .unwrap_or((12.0, 12.0));
         let secondary_ime_anchor = mixed_secondary_host
             .as_ref()
             .and_then(|target| self.terminals.index_for_context(target))
@@ -10836,7 +10836,7 @@ impl Render for Workbench {
                     terminal_line_height,
                 )
             })
-            .unwrap_or((12.0, 8.0));
+            .unwrap_or((12.0, 12.0));
         let mut proposed_viewports = Vec::new();
         if self.settings_section.is_none() && !center_is_editor {
             if let Some((target, tab)) = current_primary_host.as_ref().zip(primary_terminal) {
@@ -11430,16 +11430,18 @@ impl Render for Workbench {
             .child(
                 div()
                     .flex_1()
+                    .min_w_0()
                     .min_h_0()
                     .flex()
                     .flex_row_reverse()
                     .child(
                         div()
                             .id("native-right-sidebar-scroll")
-                            .when(!self.right_sidebar_visible, |panel| panel.hidden())
                             .w(px(context_width))
+                            .flex_shrink_0()
                             .flex()
                             .flex_col()
+                            .when(!self.right_sidebar_visible, |panel| panel.hidden())
                             .bg(rgb(PANEL))
                             .border_l_1()
                             .border_color(rgb(BORDER))
@@ -11522,10 +11524,10 @@ impl Render for Workbench {
                             .child(
                                 div()
                                     .id("right-explorer-header")
-                                    .when(self.right_sidebar_view != RightSidebarView::Explorer, |v| v.hidden())
                                     .h(px(SECTION_HEADER_HEIGHT))
                                     .px_3()
                                     .flex()
+                                    .when(self.right_sidebar_view != RightSidebarView::Explorer, |v| v.hidden())
                                     .justify_between()
                                     .items_center()
                                     .child(div()
@@ -11642,10 +11644,10 @@ impl Render for Workbench {
                             .child(
                                 div()
                                     .id("right-search-header")
-                                    .when(self.right_sidebar_view != RightSidebarView::Search, |v| v.hidden())
                                     .h(px(SECTION_HEADER_HEIGHT))
                                     .px_3()
                                     .flex()
+                                    .when(self.right_sidebar_view != RightSidebarView::Search, |v| v.hidden())
                                     .items_center()
                                     .border_b_1()
                                     .border_color(rgb(BORDER))
@@ -12103,11 +12105,11 @@ impl Render for Workbench {
                             .child(
                                 div()
                                     .id("right-references-panel")
-                                    .when(self.right_sidebar_view != RightSidebarView::References, |panel| panel.hidden())
                                     .flex_1()
                                     .min_h_0()
                                     .flex()
                                     .flex_col()
+                                    .when(self.right_sidebar_view != RightSidebarView::References, |panel| panel.hidden())
                                     .child(
                                         div()
                                             .h(px(SECTION_HEADER_HEIGHT))
@@ -12197,11 +12199,11 @@ impl Render for Workbench {
                             .child(
                                 div()
                                     .id("right-pr-browser-panel")
-                                    .when(self.right_sidebar_view != RightSidebarView::PullRequests, |panel| panel.hidden())
                                     .flex_1()
                                     .min_h_0()
                                     .flex()
                                     .flex_col()
+                                    .when(self.right_sidebar_view != RightSidebarView::PullRequests, |panel| panel.hidden())
                                     .child(
                                         div()
                                             .h(px(SECTION_HEADER_HEIGHT))
@@ -13351,10 +13353,11 @@ impl Render for Workbench {
                     .child(
                         div()
                             .id("right-sidebar-rail")
-                            .when(self.right_sidebar_visible, |rail| rail.hidden())
                             .w(px(PROJECTS_COLLAPSED_WIDTH))
+                            .flex_shrink_0()
                             .flex()
                             .flex_col()
+                            .when(self.right_sidebar_visible, |rail| rail.hidden())
                             .items_center()
                             .bg(rgb(PANEL))
                             .border_l_1()
@@ -13400,6 +13403,7 @@ impl Render for Workbench {
                             .id("right-sidebar-resize-handle")
                             .when(!self.right_sidebar_visible, |handle| handle.hidden())
                             .w(px(SIDEBAR_RESIZE_HANDLE_WIDTH))
+                            .flex_shrink_0()
                             .h_full()
                             .bg(rgb(BORDER))
                             .cursor(gpui::CursorStyle::ResizeLeftRight)
@@ -13418,6 +13422,7 @@ impl Render for Workbench {
                         div()
                             .flex_1()
                             .min_w_0()
+                            .overflow_hidden()
                             .flex()
                             .flex_col()
                             // One header layout owns both split Pane Tab bars.  The secondary
@@ -14014,7 +14019,7 @@ impl Render for Workbench {
                                             .overflow_x_scroll()
                                             .overflow_y_scroll()
                                             .px_3()
-                                            .py_2()
+                                            .py_3()
                                             .font_family(terminal_font_family.clone())
                                             .text_size(px(terminal_font_size))
                                             .whitespace_nowrap()
@@ -14090,7 +14095,7 @@ impl Render for Workbench {
                                             .min_h_0()
                                             .overflow_y_scroll()
                                             .px_3()
-                                            .py_2()
+                                            .py_3()
                                             .font_family(terminal_font_family.clone())
                                             .text_size(px(terminal_font_size))
                                             .child(terminal_input)
@@ -14147,7 +14152,7 @@ impl Render for Workbench {
                                                         .overflow_x_scroll()
                                                         .overflow_y_scroll()
                                                         .px_3()
-                                                        .py_2()
+                                                        .py_3()
                                                         .font_family(terminal_font_family.clone())
                                                         .text_size(px(terminal_font_size))
                                                         .child(output))
@@ -14486,6 +14491,7 @@ impl Render for Workbench {
                             .id("projects-sidebar-resize-handle")
                             .when(self.projects_sidebar_collapsed, |handle| handle.hidden())
                             .w(px(SIDEBAR_RESIZE_HANDLE_WIDTH))
+                            .flex_shrink_0()
                             .h_full()
                             .bg(rgb(BORDER))
                             .cursor(gpui::CursorStyle::ResizeLeftRight)
@@ -14502,10 +14508,12 @@ impl Render for Workbench {
                     )
                     .child(
                         div()
-                            .when(self.projects_sidebar_collapsed, |panel| panel.hidden())
+                            .id("projects-sidebar-expanded")
                             .w(px(projects_width))
+                            .flex_shrink_0()
                             .flex()
                             .flex_col()
+                            .when(self.projects_sidebar_collapsed, |panel| panel.hidden())
                             .bg(rgb(PANEL))
                             .border_r_1()
                             .border_color(rgb(BORDER))
@@ -15295,10 +15303,11 @@ impl Render for Workbench {
                     .child(
                         div()
                             .id("projects-sidebar-rail")
-                            .when(!self.projects_sidebar_collapsed, |rail| rail.hidden())
                             .w(px(PROJECTS_COLLAPSED_WIDTH))
+                            .flex_shrink_0()
                             .flex()
                             .flex_col()
+                            .when(!self.projects_sidebar_collapsed, |rail| rail.hidden())
                             .items_center()
                             .bg(rgb(PANEL))
                             .border_r_1()
