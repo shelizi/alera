@@ -3,6 +3,8 @@
 
 use super::*;
 use alera_gpui_desktop::native_i18n::tr;
+use alera_gpui_desktop::visual_tokens::new_tab_menu_max_height;
+use gpui_kit::assets::IconName;
 
 impl Workbench {
     fn kit_menu_host_is_active(&self, target: &TerminalTabContextTarget) -> bool {
@@ -33,40 +35,61 @@ impl Workbench {
         &mut Context<gpui_kit::component::menu::PopupMenu>,
     ) -> gpui_kit::component::menu::PopupMenu
            + 'static {
-        move |mut menu, _, _| {
+        move |mut menu, window, cx| {
+            // Pick up changes to the shared App Language at popup-open time,
+            // just like Tab right-click and pane action menus.
+            let locale = owner
+                .upgrade()
+                .map(|entity| entity.read(cx).settings_menu_locale)
+                .unwrap_or_else(|| UiLocale::from_preference("system"));
+            let viewport_height = f32::from(window.viewport_size().height);
             let Some(target) = target.clone() else {
-                return menu.label("Pane no longer available; reopen New Tab");
+                return menu.label(tr(locale, "Pane no longer available; reopen New Tab"));
             };
             let new_file_owner = owner.clone();
             let new_file_target = target.clone();
-            menu = menu.item(PopupMenuItem::new("New File").on_click(move |_, _, cx| {
-                let _ = new_file_owner.update(cx, |view, cx| {
-                    if new_file_target.still_valid(view.workspace_generation, &view.mixed_panes) {
-                        view.new_editor_in_pane(new_file_target.pane(), cx);
-                    } else {
-                        view.model.set_status("Pane changed; reopen New Tab");
-                        cx.notify();
-                    }
-                });
-            }));
+            menu = menu.item(
+                PopupMenuItem::new(tr(locale, "New File"))
+                    .icon(IconName::File)
+                    .on_click(move |_, _, cx| {
+                        let _ = new_file_owner.update(cx, |view, cx| {
+                            if new_file_target
+                                .still_valid(view.workspace_generation, &view.mixed_panes)
+                            {
+                                view.new_editor_in_pane(new_file_target.pane(), cx);
+                            } else {
+                                view.model.set_status(tr(
+                                    view.settings_menu_locale,
+                                    "Pane changed; reopen New Tab",
+                                ));
+                                cx.notify();
+                            }
+                        });
+                    }),
+            );
             let new_terminal_owner = owner.clone();
             let new_terminal_target = target.clone();
             menu = menu.item(
-                PopupMenuItem::new("New Terminal").on_click(move |_, _, cx| {
-                    let _ = new_terminal_owner.update(cx, |view, cx| {
-                        view.create_host_terminal_in_pane(new_terminal_target.clone(), cx);
-                    });
-                }),
+                PopupMenuItem::new(tr(locale, "New Terminal"))
+                    .icon(IconName::Terminal)
+                    .on_click(move |_, _, cx| {
+                        let _ = new_terminal_owner.update(cx, |view, cx| {
+                            view.create_host_terminal_in_pane(new_terminal_target.clone(), cx);
+                        });
+                    }),
             );
             // Classic lists installed local Agent CLIs, not just Host Agent
             // Profiles. Inventory is read-only and works without any Host.
-            menu = menu.separator().label("Installed Agent CLIs");
+            menu = menu.separator().label(tr(locale, "Installed Agent CLIs"));
             if installed.is_empty() {
-                menu = menu.label(if installed_loading {
-                    "Detecting installed Agent CLIs…"
-                } else {
-                    "No installed Agent CLIs detected"
-                });
+                menu = menu.label(tr(
+                    locale,
+                    if installed_loading {
+                        "Detecting installed Agent CLIs…"
+                    } else {
+                        "No installed Agent CLIs detected"
+                    },
+                ));
             }
             for agent in installed.iter().cloned() {
                 let agent_owner = owner.clone();
@@ -81,27 +104,37 @@ impl Workbench {
             }
             let refresh_owner = owner.clone();
             menu = menu.item(
-                PopupMenuItem::new("Rescan installed agents (reopen menu)").on_click(
-                    move |_, _, cx| {
+                PopupMenuItem::new(tr(locale, "Rescan installed agents"))
+                    .icon(IconName::RefreshCw)
+                    .on_click(move |_, _, cx| {
                         let _ = refresh_owner.update(cx, |view, cx| {
                             view.refresh_installed_agent_clis(cx);
                         });
-                    },
-                ),
+                    }),
             );
             if !profiles.is_empty() {
-                menu = menu.separator().label("Host Agent Profiles");
+                menu = menu.separator().label(tr(locale, "Host Agent Profiles"));
             }
             for profile in profiles.iter().cloned() {
                 let owner = owner.clone();
                 let agent_target = target.clone();
                 let id = profile.id;
-                let label = format!("New Agent · {} ({})", profile.name, profile.agent_type);
+                let label = format!(
+                    "{} · {} ({})",
+                    tr(locale, "New Agent"),
+                    profile.name,
+                    profile.agent_type
+                );
                 menu = menu.item(PopupMenuItem::new(label).on_click(move |_, window, cx| {
                     let _ = owner.update(cx, |view, cx| {
                         view.prepare_agent_in_pane(&id, &agent_target, window, cx);
                     });
                 }));
+            }
+            if terminal_create_timed_out || terminal_create_unknown || terminal_create_busy {
+                // Only add recovery chrome when an operation is actually
+                // pending; keep normal New Tab usage close to Classic.
+                menu = menu.separator().label(tr(locale, "Pending Host requests"));
             }
             if terminal_create_timed_out {
                 let retry_owner = owner.clone();
@@ -109,8 +142,8 @@ impl Workbench {
                 // Retrying is global, but the saved creation intent still
                 // determines which pane may receive the Host session.
                 menu = menu.item(
-                    PopupMenuItem::new("Recheck pending Host session (no new PTY)").on_click(
-                        move |_, _, cx| {
+                    PopupMenuItem::new(tr(locale, "Recheck pending Host session (no new PTY)"))
+                        .on_click(move |_, _, cx| {
                             let _ = retry_owner.update(cx, |view, cx| {
                                 if retry_target
                                     .still_valid(view.workspace_generation, &view.mixed_panes)
@@ -119,14 +152,14 @@ impl Workbench {
                                     view.retry_host_terminal_confirmation(cx);
                                 }
                             });
-                        },
-                    ),
+                        }),
                 );
             }
             if terminal_create_unknown {
-                menu = menu.separator().label(
+                menu = menu.label(tr(
+                    locale,
                     "Host create result unknown · inspect running sessions before dismissing",
-                );
+                ));
             }
             if terminal_create_busy {
                 let cancel_owner = owner.clone();
@@ -134,8 +167,8 @@ impl Workbench {
                 // Local cancellation never terminates a Host PTY. Allow it
                 // from either current pane if the original pane was closed.
                 menu = menu.item(
-                    PopupMenuItem::new("Cancel pending request (keep Host PTY)").on_click(
-                        move |_, _, cx| {
+                    PopupMenuItem::new(tr(locale, "Cancel pending request (keep Host PTY)"))
+                        .on_click(move |_, _, cx| {
                             let _ = cancel_owner.update(cx, |view, cx| {
                                 if cancel_target
                                     .still_valid(view.workspace_generation, &view.mixed_panes)
@@ -144,30 +177,34 @@ impl Workbench {
                                     view.cancel_host_terminal_confirmation(cx);
                                 }
                             });
-                        },
-                    ),
+                        }),
                 );
             }
-            menu = menu.label("Attach running Host session");
+            menu = menu
+                .separator()
+                .label(tr(locale, "Attach running Host session"));
             if running.is_empty() {
-                menu = menu.label("No running Host sessions");
+                menu = menu.label(tr(locale, "No running Host sessions"));
             }
             for (expected, title) in running.iter().cloned() {
                 let owner = owner.clone();
                 let attach_target = target.clone();
-                menu = menu.item(PopupMenuItem::new(title).on_click(move |_, window, cx| {
-                    let _ = owner.update(cx, |view, cx| {
-                        // Recheck handle + Host workspace + tab ID and pane
-                        // generation at click time. Never follow reused IDs.
-                        if let Some(identity) =
-                            view.attach_live_terminal_to_pane(&expected, &attach_target, cx)
-                        {
-                            view.focus_mixed_tab(&identity, window, cx);
-                        }
-                    });
-                }));
+                menu = menu.item(PopupMenuItem::new(title).icon(IconName::Terminal).on_click(
+                    move |_, window, cx| {
+                        let _ = owner.update(cx, |view, cx| {
+                            // Recheck handle + Host workspace + tab ID and pane
+                            // generation at click time. Never follow reused IDs.
+                            if let Some(identity) =
+                                view.attach_live_terminal_to_pane(&expected, &attach_target, cx)
+                            {
+                                view.focus_mixed_tab(&identity, window, cx);
+                            }
+                        });
+                    },
+                ));
             }
-            menu.scrollable(true).max_h(px(320.0))
+            menu.scrollable(true)
+                .max_h(px(new_tab_menu_max_height(viewport_height)))
         }
     }
 

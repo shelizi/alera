@@ -1,0 +1,78 @@
+# Native New Tab (+) picker labels. Keep these outside generated Settings ui.yml.
+# Agent names, Host session titles, file paths and IDs must remain untranslated.
+_version: 2
+"Pane no longer available; reopen New Tab":
+  en: "Pane no longer available; reopen New Tab"
+  zh-TW: "窗格已失效，請重新開啟新增分頁選單"
+  zh-CN: "窗格已失效，请重新打开新建标签页菜单"
+  ja: "ペインが使用できません。新規タブメニューを開き直してください"
+"New File":
+  en: "New File"
+  zh-TW: "新增檔案"
+  zh-CN: "新建文件"
+  ja: "新規ファイル"
+"Pane changed; reopen New Tab":
+  en: "Pane changed; reopen New Tab"
+  zh-TW: "窗格已變更，請重新開啟新增分頁選單"
+  zh-CN: "窗格已更改，请重新打开新建标签页菜单"
+  ja: "ペインが変更されました。新規タブメニューを開き直してください"
+"New Terminal":
+  en: "New Terminal"
+  zh-TW: "新增終端機"
+  zh-CN: "新建终端"
+  ja: "新規ターミナル"
+"Installed Agent CLIs":
+  en: "Installed Agent CLIs"
+  zh-TW: "已安裝的 Agent CLI"
+  zh-CN: "已安装的 Agent CLI"
+  ja: "インストール済み Agent CLI"
+"Detecting installed Agent CLIs…":
+  en: "Detecting installed Agent CLIs…"
+  zh-TW: "正在偵測已安裝的 Agent CLI…"
+  zh-CN: "正在检测已安装的 Agent CLI…"
+  ja: "インストール済み Agent CLI を検出中…"
+"No installed Agent CLIs detected":
+  en: "No installed Agent CLIs detected"
+  zh-TW: "未偵測到已安裝的 Agent CLI"
+  zh-CN: "未检测到已安装的 Agent CLI"
+  ja: "インストール済み Agent CLI が見つかりません"
+"Rescan installed agents":
+  en: "Rescan installed agents"
+  zh-TW: "重新掃描已安裝的 Agent"
+  zh-CN: "重新扫描已安装的 Agent"
+  ja: "インストール済み Agent を再スキャン"
+"New Agent":
+  en: "New Agent"
+  zh-TW: "新增 Agent"
+  zh-CN: "新建 Agent"
+  ja: "新規 Agent"
+"Pending Host requests":
+  en: "Pending Host requests"
+  zh-TW: "待確認的 Host 請求"
+  zh-CN: "待确认的 Host 请求"
+  ja: "確認待ちの Host リクエスト"
+"Recheck pending Host session (no new PTY)":
+  en: "Recheck pending Host session (no new PTY)"
+  zh-TW: "重新確認待處理工作階段（不新增 PTY）"
+  zh-CN: "重新确认待处理会话（不新建 PTY）"
+  ja: "保留中のセッションを再確認（PTY は追加しない）"
+"Host create result unknown · inspect running sessions before dismissing":
+  en: "Host create result unknown · inspect running sessions before dismissing"
+  zh-TW: "Host 建立結果不明 · 關閉前請檢查執行中的工作階段"
+  zh-CN: "Host 创建结果未知 · 关闭前请检查运行中的会话"
+  ja: "Host 作成結果が不明 · 閉じる前に実行中セッションを確認"
+"Cancel pending request (keep Host PTY)":
+  en: "Cancel pending request (keep Host PTY)"
+  zh-TW: "取消待處理請求（保留 Host PTY）"
+  zh-CN: "取消待处理请求（保留 Host PTY）"
+  ja: "保留中のリクエストを中止（Host PTY は維持）"
+"Attach running Host session":
+  en: "Attach running Host session"
+  zh-TW: "附加執行中的 Host 工作階段"
+  zh-CN: "附加运行中的 Host 会话"
+  ja: "実行中の Host セッションを接続"
+"No running Host sessions":
+  en: "No running Host sessions"
+  zh-TW: "沒有執行中的 Host 工作階段"
+  zh-CN: "没有运行中的 Host 会话"
+  ja: "実行中の Host セッションはありません"

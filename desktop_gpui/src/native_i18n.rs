@@ -195,6 +195,44 @@ mod tests {
     }
 
     #[test]
+    fn new_tab_menu_actions_have_translations_in_every_supported_language() {
+        let sources = [
+            "Pane no longer available; reopen New Tab",
+            "New File",
+            "Pane changed; reopen New Tab",
+            "New Terminal",
+            "Installed Agent CLIs",
+            "Detecting installed Agent CLIs…",
+            "No installed Agent CLIs detected",
+            "Rescan installed agents",
+            "Host Agent Profiles",
+            "New Agent",
+            "Pending Host requests",
+            "Recheck pending Host session (no new PTY)",
+            "Host create result unknown · inspect running sessions before dismissing",
+            "Cancel pending request (keep Host PTY)",
+            "Attach running Host session",
+            "No running Host sessions",
+        ];
+        for source in sources {
+            assert_eq!(tr(UiLocale::English, source), source);
+            for locale in [
+                UiLocale::TraditionalChinese,
+                UiLocale::SimplifiedChinese,
+                UiLocale::Japanese,
+            ] {
+                let label = tr(locale, source);
+                assert_ne!(label, source, "untranslated: {source} in {}", locale.tag());
+                assert!(
+                    !label.trim().is_empty(),
+                    "empty: {source} in {}",
+                    locale.tag()
+                );
+            }
+        }
+    }
+
+    #[test]
     fn locale_variants_and_unknown_sources_fall_back_safely() {
         assert_eq!(
             UiLocale::from_preference("traditionalChinese"),

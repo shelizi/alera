@@ -38,6 +38,16 @@ pub const TAB_ATTENTION_DOT_SIZE: f32 = 6.0;
 pub const TAB_CLOSE_ICON_SIZE: f32 = 12.0;
 pub const TAB_CLOSE_TARGET_SIZE: f32 = 18.0;
 pub const EDITOR_TOOLBAR_HEIGHT: f32 = 29.0;
+
+/// A New Tab menu contains Agent discovery and optional Host sections, unlike
+/// Classic's short two-action picker. Let users see more of the list on large
+/// windows, but never make a short viewport scroll its entire menu off-screen.
+pub fn new_tab_menu_max_height(viewport_height: f32) -> f32 {
+    if !viewport_height.is_finite() || viewport_height <= 0.0 {
+        return 320.0;
+    }
+    (viewport_height - 96.0).max(0.0).min(560.0)
+}
 // The native Terminal viewport uses a one-pixel top border and pane seams.
 // Keep a two-pixel safety margin instead of subtracting an unrelated 14px.
 const TERMINAL_VIEWPORT_BORDER_SLACK: f32 = 2.0;
@@ -191,6 +201,26 @@ mod tests {
             );
         }
         assert!(source.matches("tab_close_button(").count() >= 3);
+    }
+
+    #[test]
+    fn new_tab_popup_fits_the_client_height_and_shows_more_agents() {
+        assert_eq!(new_tab_menu_max_height(1040.0), 560.0);
+        assert_eq!(new_tab_menu_max_height(400.0), 304.0);
+        assert_eq!(new_tab_menu_max_height(200.0), 104.0);
+        assert_eq!(new_tab_menu_max_height(f32::NAN), 320.0);
+        let source = include_str!("native_popup_ui.rs");
+        let menu = source
+            .split_once("pub(super) fn kit_new_tab_menu(")
+            .unwrap()
+            .1
+            .split_once("pub(super) fn kit_pane_actions_menu(")
+            .unwrap()
+            .0;
+        assert!(menu.contains("new_tab_menu_max_height("));
+        // Formatting must not affect this structural UX guard.
+        let compact = menu.split_whitespace().collect::<String>();
+        assert!(compact.contains(".separator().label(tr(locale,\"AttachrunningHostsession\"))"));
     }
 
     #[test]
