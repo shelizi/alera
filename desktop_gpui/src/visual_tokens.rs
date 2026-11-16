@@ -470,6 +470,30 @@ mod tests {
     }
 
     #[test]
+    fn split_pane_headers_and_terminal_seams_match_split_direction() {
+        let source = include_str!("main.rs");
+        for id in ["mixed-workbench-tab-strip", "mixed-secondary-toolbar"] {
+            let needle = format!(r#".id("{id}")"#);
+            let mut found = 0;
+            for row in source.split(&needle).skip(1) {
+                let style = row.split(".child(").next().unwrap_or(row);
+                assert!(style.contains(".h(px(TAB_STRIP_HEIGHT))"), "{id}: row height drift");
+                assert!(style.contains(".items_center()"), "{id}: row alignment drift");
+                found += 1;
+            }
+            assert!(found > 0);
+        }
+        let secondary = source.split_once(r#".id("mixed-secondary-pane")"#).unwrap().1
+            .split_once(".child(if mixed_split_horizontal {").unwrap().0;
+        assert!(secondary.contains(".when(mixed_split_horizontal, |pane| pane.border_l_1())"));
+        assert!(secondary.contains(".when(!mixed_split_horizontal, |pane| pane.border_t_1())"));
+        let vt = source.split_once(r#".id("mixed-secondary-content")"#).unwrap().1
+            .split_once(".key_context(").unwrap().0;
+        assert!(vt.contains(".when(mixed_split_horizontal, |panel| panel.border_t_1())"));
+        assert!(vt.contains(".bg(rgb(TERMINAL_DEFAULT_BG))"));
+    }
+
+    #[test]
     fn terminal_viewport_fits_real_shell_chrome_and_pinned_tabs() {
         assert_eq!(usable_workbench_height(800.0, false, false), 672.0);
         assert_eq!(usable_workbench_height(800.0, true, false), 628.0);

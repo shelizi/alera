@@ -333,6 +333,48 @@ mod tests {
     }
 
     #[test]
+    fn workbench_tooltips_and_explorer_empty_states_are_translated() {
+        // Every visible Tab action and Explorer empty state must match the
+        // saved language, not only right-click menu entries.
+        let labels = [
+            "New Tab",
+            "New Tab in second pane",
+            "Pane actions",
+            "Second pane actions",
+            "Close tab",
+            "Close preview",
+            "Close immutable Git original",
+            "Scroll terminal history up one page (Shift+PageUp)",
+            "Scroll terminal history down one page (Shift+PageDown)",
+            "Scroll second-pane terminal history up (Shift+PageUp)",
+            "Scroll second-pane terminal history down (Shift+PageDown)",
+            "Indexing workspace files…",
+            "No matching files or folders",
+            "Tree limited to 4,000 visible items",
+            "Move {count} Explorer items",
+            "No Host terminal selected. Choose an existing session in Projects on the left.",
+        ];
+        for source in labels {
+            assert_eq!(tr(UiLocale::English, source), source);
+            for locale in [
+                UiLocale::TraditionalChinese,
+                UiLocale::SimplifiedChinese,
+                UiLocale::Japanese,
+            ] {
+                assert_ne!(tr(locale, source), source, "{source} / {}", locale.tag());
+                if source.contains("{count}") {
+                    assert!(tr(locale, source).contains("{count}"));
+                }
+            }
+        }
+        let main = include_str!("main.rs");
+        assert!(main.contains("tab_close_button((close_id, index), tr(locale, \"Close tab\"))"));
+        assert!(main.contains(".child(tr(self.settings_menu_locale, if index_loading"));
+        assert!(main.contains("\"No matching files or folders\""));
+        assert!(main.contains("tr(self.settings_menu_locale, \"Move {count} Explorer items\")"));
+    }
+
+    #[test]
     fn new_tab_menu_actions_have_translations_in_every_supported_language() {
         let sources = [
             "Pane no longer available; reopen New Tab",

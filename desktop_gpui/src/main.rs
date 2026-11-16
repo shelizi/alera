@@ -9048,7 +9048,7 @@ impl Workbench {
                     )),
             )
             .child(
-                tab_close_button((close_id, index), "Close tab")
+                tab_close_button((close_id, index), tr(locale, "Close tab"))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.close_mixed_tab(&for_close, cx);
                     })),
@@ -11682,7 +11682,7 @@ impl Render for Workbench {
                                                         this.model.refresh_directory();
                                                         if let Some(tree) = &mut this.tree {
                                                             if let Err(error) = tree.refresh() {
-                                                                this.model.set_status(format!("Tree refresh failed: {error}"));
+                                                                this.model.set_status(tr(this.settings_menu_locale, "Tree refresh failed: {error}").replace("{error}", &error.to_string()));
                                                             }
                                                         }
                                                         this.refresh_git(cx);
@@ -11882,7 +11882,7 @@ impl Render for Workbench {
                                                 explorer_drag_selection.as_ref(),
                                             );
                                             let drag_caption = if drag_payload.len() > 1 {
-                                                format!("Move {} Explorer items", drag_payload.len())
+                                                tr(self.settings_menu_locale, "Move {count} Explorer items").replace("{count}", &drag_payload.len().to_string())
                                             } else {
                                                 format!("Move {label}")
                                             };
@@ -11977,7 +11977,7 @@ impl Render for Workbench {
                                                 explorer_drag_selection.as_ref(),
                                             );
                                             let drag_caption = if drag_payload.len() > 1 {
-                                                format!("Move {} Explorer items", drag_payload.len())
+                                                tr(self.settings_menu_locale, "Move {count} Explorer items").replace("{count}", &drag_payload.len().to_string())
                                             } else {
                                                 format!("Move {}", item.name)
                                             };
@@ -12084,7 +12084,7 @@ impl Render for Workbench {
                                                 explorer_drag_selection.as_ref(),
                                             );
                                             let drag_caption = if drag_payload.len() > 1 {
-                                                format!("Move {} Explorer items", drag_payload.len())
+                                                tr(self.settings_menu_locale, "Move {count} Explorer items").replace("{count}", &drag_payload.len().to_string())
                                             } else {
                                                 format!("Move {}", item.name)
                                             };
@@ -12152,9 +12152,9 @@ impl Render for Workbench {
                                     .when(explorer_filter_active && explorer_filter_empty,
                                         |view| view.child(div().px_3().py_3().text_xs()
                                             .text_color(rgb(MUTED))
-                                            .child(if index_loading { "Indexing workspace files…" } else { "No matching files or folders" })))
+                                            .child(tr(self.settings_menu_locale, if index_loading { "Indexing workspace files…" } else { "No matching files or folders" }))))
                                     .when(tree_mode && tree_truncated, |view| {
-                                        view.child(div().text_color(rgb(MUTED)).child("Tree limited to 4,000 visible items"))
+                                        view.child(div().text_color(rgb(MUTED)).child(tr(self.settings_menu_locale, "Tree limited to 4,000 visible items")))
                                     })
                                     .context_menu(Self::kit_explorer_context_menu(
                                         cx.entity().downgrade(),
@@ -13581,7 +13581,7 @@ impl Render for Workbench {
                                                             this.focus_git_original_tab(id, cx);
                                                         })))
                                                     .child(tab_close_button(("git-original-tab-close", index),
-                                                        "Close immutable Git original")
+                                                        tr(self.settings_menu_locale, "Close immutable Git original"))
                                                         .on_click(cx.listener(move |this, _, _, cx| {
                                                             this.close_git_original_tab(id, cx);
                                                         })))
@@ -13641,7 +13641,7 @@ impl Render for Workbench {
                                                             })),
                                                     )
                                                     .child(
-                                                        tab_close_button(("file-tab-close", index), "Close preview")
+                                                        tab_close_button(("file-tab-close", index), tr(self.settings_menu_locale, "Close preview"))
                                                             .on_click(cx.listener(move |this, _, _, cx| {
                                                                 this.model.close_tab(index);
                                                                 if this.model.tabs().is_empty() {
@@ -13672,7 +13672,7 @@ impl Render for Workbench {
                                                 let profiles = self.agent_profiles.clone();
                                                 let installed = self.installed_agent_clis.clone();
                                                 let installed_loading = self.installed_agent_clis_loading;
-                                                icon_button("mixed-new-tab", UiIcon::Add, "New Tab", terminal_creating
+                                                icon_button("mixed-new-tab", UiIcon::Add, tr(self.settings_menu_locale, "New Tab"), terminal_creating
                                                     && self.terminal_create_pane.as_ref().is_some_and(|pending| pending.target.pane() == PaneSlot::Primary))
                                                     .w(px(28.0))
                                                     .h(px(28.0))
@@ -13712,7 +13712,7 @@ impl Render for Workbench {
                                     )
                                     .child(
                                         icon_button("native-terminal-history-up-primary", UiIcon::ChevronUp,
-                                            "Scroll terminal history up one page (Shift+PageUp)", false)
+                                            tr(self.settings_menu_locale, "Scroll terminal history up one page (Shift+PageUp)"), false)
                                             .when(!terminal_is_vt || !mixed_primary_active.as_ref().is_some_and(|id|
                                                 matches!(id, WorkbenchTabIdentity::Host(_))), |button| button.hidden())
                                             .on_click(cx.listener(|this, _, _, cx| {
@@ -13721,7 +13721,7 @@ impl Render for Workbench {
                                     )
                                     .child(
                                         icon_button("native-terminal-history-down-primary", UiIcon::ChevronDown,
-                                            "Scroll terminal history down one page (Shift+PageDown)", false)
+                                            tr(self.settings_menu_locale, "Scroll terminal history down one page (Shift+PageDown)"), false)
                                             .when(!terminal_is_vt || !mixed_primary_active.as_ref().is_some_and(|id|
                                                 matches!(id, WorkbenchTabIdentity::Host(_))), |button| button.hidden())
                                             .on_click(cx.listener(|this, _, _, cx| {
@@ -13729,7 +13729,7 @@ impl Render for Workbench {
                                             })),
                                     )
                                     .child(
-                                        icon_button("mixed-pane-actions", UiIcon::More, "Pane actions", false)
+                                        icon_button("mixed-pane-actions", UiIcon::More, tr(self.settings_menu_locale, "Pane actions"), false)
                                             .dropdown_menu(Self::kit_pane_actions_menu(
                                                 cx.entity().downgrade(),
                                                 mixed_primary_active.clone(),
@@ -13845,7 +13845,7 @@ impl Render for Workbench {
                                                         let profiles = self.agent_profiles.clone();
                                                         let installed = self.installed_agent_clis.clone();
                                                         let installed_loading = self.installed_agent_clis_loading;
-                                                        icon_button("mixed-secondary-new-tab", UiIcon::Add, "New Tab in second pane", terminal_creating
+                                                        icon_button("mixed-secondary-new-tab", UiIcon::Add, tr(self.settings_menu_locale, "New Tab in second pane"), terminal_creating
                                                             && self.terminal_create_pane.as_ref().is_some_and(|pending| pending.target.pane() == PaneSlot::Secondary))
                                                             .w(px(28.0))
                                                             .h(px(28.0))
@@ -13872,7 +13872,7 @@ impl Render for Workbench {
                                                     })
                                                     .child(
                                                         icon_button("native-terminal-history-up-secondary", UiIcon::ChevronUp,
-                                                            "Scroll second-pane terminal history up (Shift+PageUp)", false)
+                                                            tr(self.settings_menu_locale, "Scroll second-pane terminal history up (Shift+PageUp)"), false)
                                                             .when(!terminal_is_vt || mixed_secondary_host.is_none(), |button| button.hidden())
                                                             .on_click(cx.listener(|this, _, _, cx| {
                                                                 this.scroll_native_terminal_page(PaneSlot::Secondary, true, cx);
@@ -13880,14 +13880,14 @@ impl Render for Workbench {
                                                     )
                                                     .child(
                                                         icon_button("native-terminal-history-down-secondary", UiIcon::ChevronDown,
-                                                            "Scroll second-pane terminal history down (Shift+PageDown)", false)
+                                                            tr(self.settings_menu_locale, "Scroll second-pane terminal history down (Shift+PageDown)"), false)
                                                             .when(!terminal_is_vt || mixed_secondary_host.is_none(), |button| button.hidden())
                                                             .on_click(cx.listener(|this, _, _, cx| {
                                                                 this.scroll_native_terminal_page(PaneSlot::Secondary, false, cx);
                                                             })),
                                                     )
                                                     .child(
-                                                        icon_button("mixed-secondary-pane-actions", UiIcon::More, "Second pane actions", false)
+                                                        icon_button("mixed-secondary-pane-actions", UiIcon::More, tr(self.settings_menu_locale, "Second pane actions"), false)
                                                             .dropdown_menu(Self::kit_pane_actions_menu(
                                                                 cx.entity().downgrade(),
                                                                 mixed_secondary_active.clone(),
@@ -14258,7 +14258,7 @@ impl Render for Workbench {
                                             .flex()
                                             .flex_col()
                                             .gap_2()
-                                            .child("No Host terminal selected. Choose an existing session in Projects on the left.")
+                                            .child(tr(self.settings_menu_locale, "No Host terminal selected. Choose an existing session in Projects on the left."))
                                             .child(
                                                 div()
                                                     .text_color(rgb(TEXT))
@@ -14276,7 +14276,8 @@ impl Render for Workbench {
                                             .min_h_0()
                                             .flex()
                                             .flex_col()
-                                            .border_l_1()
+                                            .when(mixed_split_horizontal, |pane| pane.border_l_1())
+                                            .when(!mixed_split_horizontal, |pane| pane.border_t_1())
                                             .border_color(rgb(BORDER))
                                             // Stacked panes keep their own header; horizontal
                                             // panes share the aligned header above this split.
@@ -14387,7 +14388,7 @@ impl Render for Workbench {
                                                         let profiles = self.agent_profiles.clone();
                                                         let installed = self.installed_agent_clis.clone();
                                                         let installed_loading = self.installed_agent_clis_loading;
-                                                        icon_button("mixed-secondary-new-tab", UiIcon::Add, "New Tab in second pane", terminal_creating
+                                                        icon_button("mixed-secondary-new-tab", UiIcon::Add, tr(self.settings_menu_locale, "New Tab in second pane"), terminal_creating
                                                             && self.terminal_create_pane.as_ref().is_some_and(|pending| pending.target.pane() == PaneSlot::Secondary))
                                                             .w(px(28.0))
                                                             .h(px(28.0))
@@ -14414,7 +14415,7 @@ impl Render for Workbench {
                                                     })
                                                     .child(
                                                         icon_button("native-terminal-history-up-secondary", UiIcon::ChevronUp,
-                                                            "Scroll second-pane terminal history up (Shift+PageUp)", false)
+                                                            tr(self.settings_menu_locale, "Scroll second-pane terminal history up (Shift+PageUp)"), false)
                                                             .when(!terminal_is_vt || mixed_secondary_host.is_none(), |button| button.hidden())
                                                             .on_click(cx.listener(|this, _, _, cx| {
                                                                 this.scroll_native_terminal_page(PaneSlot::Secondary, true, cx);
@@ -14422,14 +14423,14 @@ impl Render for Workbench {
                                                     )
                                                     .child(
                                                         icon_button("native-terminal-history-down-secondary", UiIcon::ChevronDown,
-                                                            "Scroll second-pane terminal history down (Shift+PageDown)", false)
+                                                            tr(self.settings_menu_locale, "Scroll second-pane terminal history down (Shift+PageDown)"), false)
                                                             .when(!terminal_is_vt || mixed_secondary_host.is_none(), |button| button.hidden())
                                                             .on_click(cx.listener(|this, _, _, cx| {
                                                                 this.scroll_native_terminal_page(PaneSlot::Secondary, false, cx);
                                                             })),
                                                     )
                                                     .child(
-                                                        icon_button("mixed-secondary-pane-actions", UiIcon::More, "Second pane actions", false)
+                                                        icon_button("mixed-secondary-pane-actions", UiIcon::More, tr(self.settings_menu_locale, "Second pane actions"), false)
                                                             .dropdown_menu(Self::kit_pane_actions_menu(
                                                                 cx.entity().downgrade(),
                                                                 mixed_secondary_active.clone(),
@@ -14462,6 +14463,8 @@ impl Render for Workbench {
                                                     .min_h_0()
                                                     .min_w_0()
                                                     .bg(rgb(TERMINAL_DEFAULT_BG))
+                                                    .when(mixed_split_horizontal, |panel| panel.border_t_1())
+                                                    .border_color(rgb(BORDER))
                                                     .key_context("AleraGpuiTerminalRaw")
                                                     .track_focus(&secondary_terminal_keyboard_focus)
                                                     .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |this, _, window, cx| {

@@ -242,7 +242,7 @@ pub fn explorer_file_icon_element(
 
 /// Classic's Tab X is a 12px glyph in a compact target, unlike the
 /// standard 30px toolbar controls. Preserve that hierarchy in both panes.
-pub fn tab_close_button(id: impl Into<ElementId>, label: &'static str) -> Button {
+pub fn tab_close_button(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Button {
     Button::new(id)
         .tooltip(label)
         .compact()

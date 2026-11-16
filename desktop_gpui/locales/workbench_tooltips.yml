@@ -1,0 +1,82 @@
+# Native mixed-pane Tab tooltips and Explorer empty states.
+_version: 2
+"New Tab":
+  en: "New Tab"
+  zh-TW: "新增分頁"
+  zh-CN: "新建标签页"
+  ja: "新しいタブ"
+"New Tab in second pane":
+  en: "New Tab in second pane"
+  zh-TW: "在副窗格新增分頁"
+  zh-CN: "在副窗格新建标签页"
+  ja: "第2ペインに新しいタブ"
+"Pane actions":
+  en: "Pane actions"
+  zh-TW: "窗格操作"
+  zh-CN: "窗格操作"
+  ja: "ペイン操作"
+"Second pane actions":
+  en: "Second pane actions"
+  zh-TW: "副窗格操作"
+  zh-CN: "副窗格操作"
+  ja: "第2ペインの操作"
+"Close tab":
+  en: "Close tab"
+  zh-TW: "關閉分頁"
+  zh-CN: "关闭标签页"
+  ja: "タブを閉じる"
+"Close preview":
+  en: "Close preview"
+  zh-TW: "關閉預覽"
+  zh-CN: "关闭预览"
+  ja: "プレビューを閉じる"
+"Close immutable Git original":
+  en: "Close immutable Git original"
+  zh-TW: "關閉唯讀 Git 原始版本"
+  zh-CN: "关闭只读 Git 原始版本"
+  ja: "読み取り専用の Git 元ファイルを閉じる"
+"Scroll terminal history up one page (Shift+PageUp)":
+  en: "Scroll terminal history up one page (Shift+PageUp)"
+  zh-TW: "向上捲動一頁終端機歷史（Shift+PageUp）"
+  zh-CN: "向上滚动一页终端历史记录（Shift+PageUp）"
+  ja: "端末履歴を1ページ上にスクロール（Shift+PageUp）"
+"Scroll terminal history down one page (Shift+PageDown)":
+  en: "Scroll terminal history down one page (Shift+PageDown)"
+  zh-TW: "向下捲動一頁終端機歷史（Shift+PageDown）"
+  zh-CN: "向下滚动一页终端历史记录（Shift+PageDown）"
+  ja: "端末履歴を1ページ下にスクロール（Shift+PageDown）"
+"Scroll second-pane terminal history up (Shift+PageUp)":
+  en: "Scroll second-pane terminal history up (Shift+PageUp)"
+  zh-TW: "向上捲動副窗格終端機歷史（Shift+PageUp）"
+  zh-CN: "向上滚动副窗格终端历史记录（Shift+PageUp）"
+  ja: "第2ペインの端末履歴を上にスクロール（Shift+PageUp）"
+"Scroll second-pane terminal history down (Shift+PageDown)":
+  en: "Scroll second-pane terminal history down (Shift+PageDown)"
+  zh-TW: "向下捲動副窗格終端機歷史（Shift+PageDown）"
+  zh-CN: "向下滚动副窗格终端历史记录（Shift+PageDown）"
+  ja: "第2ペインの端末履歴を下にスクロール（Shift+PageDown）"
+"Indexing workspace files…":
+  en: "Indexing workspace files…"
+  zh-TW: "正在建立工作區檔案索引…"
+  zh-CN: "正在索引工作区文件…"
+  ja: "ワークスペースのファイルをインデックスしています…"
+"No matching files or folders":
+  en: "No matching files or folders"
+  zh-TW: "找不到符合條件的檔案或資料夾"
+  zh-CN: "未找到匹配的文件或文件夹"
+  ja: "一致するファイルやフォルダーはありません"
+"Tree limited to 4,000 visible items":
+  en: "Tree limited to 4,000 visible items"
+  zh-TW: "檔案樹最多顯示 4,000 個項目"
+  zh-CN: "文件树最多显示 4,000 个项目"
+  ja: "ファイルツリーには最大4,000件まで表示します"
+"Move {count} Explorer items":
+  en: "Move {count} Explorer items"
+  zh-TW: "移動 {count} 個檔案總管項目"
+  zh-CN: "移动 {count} 个文件管理器项目"
+  ja: "エクスプローラーの {count} 件を移動"
+"No Host terminal selected. Choose an existing session in Projects on the left.":
+  en: "No Host terminal selected. Choose an existing session in Projects on the left."
+  zh-TW: "尚未選取 Host 終端機，請從左側專案選擇現有工作階段。"
+  zh-CN: "尚未选择 Host 终端，请从左侧项目中选择现有会话。"
+  ja: "Host 端末が選択されていません。左のプロジェクトから既存のセッションを選択してください。"
