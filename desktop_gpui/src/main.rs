@@ -130,8 +130,9 @@ use alera_gpui_desktop::visual_tokens::{
     clamp_context_sidebar_width, clamp_projects_sidebar_width, ELEVATED, MUTED, PANEL,
     PROJECTS_COLLAPSED_WIDTH, RESIZE_CHROME,
     SECTION_HEADER_HEIGHT, SIDEBAR_RESIZE_HANDLE_WIDTH,
-    STATUS_BAR_HEIGHT, TAB_STRIP_HEIGHT, TAB_STRIP_LEADING_PADDING, TAB_ATTENTION_DOT_SIZE, TEXT, TOOLBAR, TOP_BAR_HEIGHT,
+    STATUS_BAR_HEIGHT, TAB_STRIP_HEIGHT, TAB_STRIP_LEADING_PADDING, TAB_ATTENTION_DOT_SIZE, TAB_CHIP_HORIZONTAL_PADDING, TEXT, TOOLBAR, TOP_BAR_HEIGHT,
     EDITOR_TOOLBAR_HEIGHT, usable_workbench_height, secondary_terminal_render_height,
+    inner_secondary_terminal_render_height, TERMINAL_INNER_SPLIT_HEADER_HEIGHT,
 };
 use alera_gpui_desktop::vt_screen::{StyledRow, TERMINAL_DEFAULT_BG};
 use alera_gpui_desktop::workbench_layout_store::{
@@ -8956,7 +8957,7 @@ impl Workbench {
             .id((chip_id, index))
             .h(px(32.0))
             .mr_2()
-            .px_1()
+            .px(px(TAB_CHIP_HORIZONTAL_PADDING))
             .flex()
             .items_center()
             .rounded_md()
@@ -8978,7 +8979,6 @@ impl Workbench {
                     .flex()
                     .items_center()
                     .gap_1()
-                    .px_1()
                     .cursor_pointer()
                     .text_color(rgb(if selected { TEXT } else { MUTED }))
                     .child(tab_icon)
@@ -10935,9 +10935,9 @@ impl Render for Workbench {
                     }) {
                         let width =
                             primary_width / if terminal_split_horizontal { 2.0 } else { 1.0 };
-                        let height = primary_height
-                            / if terminal_split_horizontal { 1.0 } else { 2.0 }
-                            - 28.0;
+                        let height = inner_secondary_terminal_render_height(
+                            primary_height, terminal_split_horizontal,
+                        );
                         if let Some((cols, rows)) = estimate_terminal_viewport_with_line_height(
                             width,
                             height,
@@ -14196,11 +14196,13 @@ impl Render for Workbench {
                                                     .min_w_0()
                                                     .flex()
                                                     .flex_col()
-                                                    .border_t_1()
+                                                    .bg(rgb(TERMINAL_DEFAULT_BG))
+                                                    .when(terminal_split_horizontal, |pane| pane.border_l_1())
+                                                    .when(!terminal_split_horizontal, |pane| pane.border_t_1())
                                                     .border_color(rgb(BORDER))
                                                     .child(div()
                                                         .id("terminal-secondary-focus")
-                                                        .h(px(28.0))
+                                                        .h(px(TERMINAL_INNER_SPLIT_HEADER_HEIGHT))
                                                         .px_2()
                                                         .bg(rgb(PANEL))
                                                         .text_sm()
@@ -14232,6 +14234,8 @@ impl Render for Workbench {
                                                         .id("terminal-secondary-scroll")
                                                         .flex_1()
                                                         .min_h_0()
+                                                        .min_w_0()
+                                                        .bg(rgb(TERMINAL_DEFAULT_BG))
                                                         .overflow_x_scroll()
                                                         .overflow_y_scroll()
                                                         .px_3()

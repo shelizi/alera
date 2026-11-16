@@ -35,8 +35,10 @@ pub const TAB_STRIP_HEIGHT: f32 = 44.0;
 pub const TAB_STRIP_LEADING_PADDING: f32 = 16.0;
 // Classic keeps an attention-dot slot even without an agent status.
 pub const TAB_ATTENTION_DOT_SIZE: f32 = 6.0;
+// Classic chip content inset is AleraTokens.space6.
+pub const TAB_CHIP_HORIZONTAL_PADDING: f32 = 6.0;
 pub const TAB_CLOSE_ICON_SIZE: f32 = 12.0;
-pub const TAB_CLOSE_TARGET_SIZE: f32 = 18.0;
+pub const TAB_CLOSE_TARGET_SIZE: f32 = 16.0; // Classic: 12px icon + 2px padding on each side.
 pub const EDITOR_TOOLBAR_HEIGHT: f32 = 29.0;
 
 /// A New Tab menu contains Agent discovery and optional Host sections, unlike
@@ -94,6 +96,21 @@ pub fn secondary_terminal_render_height(
             0.0
         })
     .max(0.0)
+}
+
+/// Each legacy inner Terminal split renders a compact 28px focus header
+/// above the secondary VT scroll area, even when panes are side-by-side.
+pub const TERMINAL_INNER_SPLIT_HEADER_HEIGHT: f32 = 28.0;
+
+/// Remaining terminal content height after the inner split header.
+/// The Host PTY must not be given rows that fit behind that header.
+pub fn inner_secondary_terminal_render_height(primary_height: f32, side_by_side: bool) -> f32 {
+    if !primary_height.is_finite() {
+        return 0.0;
+    }
+    (primary_height / if side_by_side { 1.0 } else { 2.0 }
+        - TERMINAL_INNER_SPLIT_HEADER_HEIGHT)
+        .max(0.0)
 }
 
 /// A drag can never make the center unusable or exceed Classic's sidebar
@@ -288,6 +305,28 @@ mod tests {
     }
 
     #[test]
+    fn mixed_tab_chip_matches_classic_six_pixel_inset_and_compact_close_target() {
+        let classic = include_str!("../../lib/src/features/workbench/presentation/workspace_workbench_tab_chips.dart");
+        assert!(classic.contains("horizontal: AleraTokens.space6,"));
+        assert!(classic.contains("padding: EdgeInsets.all(2),"));
+        assert!(classic.contains("size: 12,"));
+        assert_eq!(TAB_CHIP_HORIZONTAL_PADDING, 6.0);
+        assert_eq!(TAB_CLOSE_ICON_SIZE, 12.0);
+        assert_eq!(TAB_CLOSE_TARGET_SIZE, 16.0);
+        let source = include_str!("main.rs");
+        let chip = source.split_once("fn render_mixed_tab_chip(").unwrap().1
+            .split_once("fn sync_mixed_tabs(").unwrap().0;
+        let outer = chip.split_once(".id((chip_id, index))").unwrap().1
+            .split_once(".child(").unwrap().0;
+        assert!(outer.contains(".px(px(TAB_CHIP_HORIZONTAL_PADDING))"));
+        let focus = chip.split_once(".id((focus_id, index))").unwrap().1
+            .split_once(".cursor_pointer()").unwrap().0;
+        assert!(!focus.contains(".px_1()"), "Nested chip padding makes the icon 8px from the edge instead of Classic 6px");
+        assert!(chip.contains(".h(px(32.0))"));
+        assert!(chip.contains(".mr_2()"));
+    }
+
+    #[test]
     fn secondary_tab_blank_space_creates_an_editor_in_both_split_directions() {
         let source = include_str!("main.rs");
         // Both side-by-side and stacked secondary panes need the Classic
@@ -470,6 +509,35 @@ mod tests {
     }
 
     #[test]
+    fn legacy_terminal_inner_split_has_directional_seam_and_full_bleed_background() {
+        // The inner Terminal split is distinct from mixed Workbench panes.
+        // Both views must inherit the same VT canvas even with long output.
+        let source = include_str!("main.rs");
+        let preview = source
+            .split_once(r#".id("terminal-secondary-preview")"#)
+            .unwrap()
+            .1
+            .split_once(".child(div()")
+            .unwrap()
+            .0;
+        assert!(preview.contains(".min_w_0()"));
+        assert!(preview.contains(".bg(rgb(TERMINAL_DEFAULT_BG))"));
+        assert!(preview.contains(".when(terminal_split_horizontal, |pane| pane.border_l_1())"));
+        assert!(preview.contains(".when(!terminal_split_horizontal, |pane| pane.border_t_1())"));
+        let secondary_scroll = source
+            .split_once(r#".id("terminal-secondary-scroll")"#)
+            .unwrap()
+            .1
+            .split_once(".child(output)")
+            .unwrap()
+            .0;
+        assert!(secondary_scroll.contains(".min_w_0()"));
+        assert!(secondary_scroll.contains(".bg(rgb(TERMINAL_DEFAULT_BG))"));
+        assert!(secondary_scroll.contains(".px_3()"));
+        assert!(secondary_scroll.contains(".py_3()"));
+    }
+
+    #[test]
     fn split_pane_headers_and_terminal_seams_match_split_direction() {
         let source = include_str!("main.rs");
         for id in ["mixed-workbench-tab-strip", "mixed-secondary-toolbar"] {
@@ -514,6 +582,20 @@ mod tests {
             secondary_terminal_render_height(f32::INFINITY, true, false),
             0.0
         );
+    }
+
+    #[test]
+    fn inner_terminal_split_viewport_reserves_focus_header_in_both_orientations() {
+        assert_eq!(TERMINAL_INNER_SPLIT_HEADER_HEIGHT, 28.0);
+        assert_eq!(inner_secondary_terminal_render_height(500.0, true), 472.0);
+        assert_eq!(inner_secondary_terminal_render_height(500.0, false), 222.0);
+        assert_eq!(inner_secondary_terminal_render_height(12.0, true), 0.0);
+        assert_eq!(inner_secondary_terminal_render_height(12.0, false), 0.0);
+        assert_eq!(inner_secondary_terminal_render_height(f32::NAN, true), 0.0);
+        assert_eq!(inner_secondary_terminal_render_height(f32::INFINITY, false), 0.0);
+        let source = include_str!("main.rs");
+        assert!(source.contains(".h(px(TERMINAL_INNER_SPLIT_HEADER_HEIGHT))"));
+        assert!(source.contains("let height = inner_secondary_terminal_render_height("));
     }
 
     #[test]
