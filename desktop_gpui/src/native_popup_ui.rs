@@ -1,10 +1,42 @@
 //! GPUI Kit owns all Native context/dropdown menu presentation and focus.
 //! Only target validation and binding to Alera actions live here.
 
+use super::native_agent_quota_ui::{classic_agent_svg_bytes, quota_provider_icon};
 use super::*;
 use alera_gpui_desktop::native_i18n::tr;
 use alera_gpui_desktop::visual_tokens::new_tab_menu_max_height;
+
 use gpui_kit::assets::IconName;
+use gpui_kit::component::Icon;
+
+/// SVG identities use GPUI Kit's native Item.icon slot, maintaining Classic's
+/// visual alignment and the standard accessible menu label/key navigation.
+/// Raster identities use ElementItem (with the same activation/dismissal
+/// semantics), because GPUI Kit's icon slot only accepts SVG-backed Icons.
+fn branded_agent_popup_item(agent_id: String, label: String) -> PopupMenuItem {
+    if let Some(svg) = classic_agent_svg_bytes(&agent_id) {
+        return PopupMenuItem::new(label).icon(Icon::default().data(svg));
+    }
+    if matches!(
+        agent_id.as_str(),
+        "cursor" | "agy" | "opencode" | "opencode2" | "amp"
+    ) {
+        // The standard PopupMenuItem reserves an empty xsmall icon (12px)
+        // plus a 4px gap for ElementItem. Offset one icon slot so PNG logos
+        // align with SVG/logo items, not a second indented column.
+        return PopupMenuItem::element(move |_, _| {
+            div()
+                .flex()
+                .min_w_0()
+                .items_center()
+                .gap_1()
+                .ml(px(-16.0))
+                .child(quota_provider_icon(&agent_id, 16.0))
+                .child(label.clone())
+        });
+    }
+    PopupMenuItem::new(label).icon(IconName::Terminal)
+}
 
 impl Workbench {
     fn kit_menu_host_is_active(&self, target: &TerminalTabContextTarget) -> bool {
@@ -96,11 +128,18 @@ impl Workbench {
                 let agent_target = target.clone();
                 let agent_id = agent.id.clone();
                 let label = agent.new_tab_menu_label().to_owned();
-                menu = menu.item(PopupMenuItem::new(label).on_click(move |_, window, cx| {
-                    let _ = agent_owner.update(cx, |view, cx| {
-                        view.prepare_detected_agent_in_pane(&agent_id, &agent_target, window, cx);
-                    });
-                }));
+                menu = menu.item(branded_agent_popup_item(agent_id.clone(), label).on_click(
+                    move |_, window, cx| {
+                        let _ = agent_owner.update(cx, |view, cx| {
+                            view.prepare_detected_agent_in_pane(
+                                &agent_id,
+                                &agent_target,
+                                window,
+                                cx,
+                            );
+                        });
+                    },
+                ));
             }
             let refresh_owner = owner.clone();
             menu = menu.item(
@@ -125,11 +164,14 @@ impl Workbench {
                     profile.name,
                     profile.agent_type
                 );
-                menu = menu.item(PopupMenuItem::new(label).on_click(move |_, window, cx| {
-                    let _ = owner.update(cx, |view, cx| {
-                        view.prepare_agent_in_pane(&id, &agent_target, window, cx);
-                    });
-                }));
+                let brand_id = profile.agent_type.clone();
+                menu = menu.item(branded_agent_popup_item(brand_id, label).on_click(
+                    move |_, window, cx| {
+                        let _ = owner.update(cx, |view, cx| {
+                            view.prepare_agent_in_pane(&id, &agent_target, window, cx);
+                        });
+                    },
+                ));
             }
             if terminal_create_timed_out || terminal_create_unknown || terminal_create_busy {
                 // Only add recovery chrome when an operation is actually

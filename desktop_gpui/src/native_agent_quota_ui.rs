@@ -27,48 +27,63 @@ fn quota_gauge_icon() -> gpui::AnyElement {
     gpui::svg().data(SVG).size(px(13.0)).into_any_element()
 }
 
-fn quota_provider_icon(provider: &str, size: f32) -> gpui::AnyElement {
+/// Embed the exact SVG artwork that Classic uses for AgentIdentityIcon.
+/// The quota panel and + menu share these static buffers, including corrected
+/// currentColor values for dark surfaces; no runtime asset lookup is needed.
+pub(super) fn classic_agent_svg_bytes(provider: &str) -> Option<&'static [u8]> {
     match provider {
-        "claude" => gpui::svg()
-            .data(include_bytes!("../../assets/agents/claude.svg"))
-            .size(px(size))
-            .into_any_element(),
+        "claude" => Some(include_bytes!("../../assets/agents/claude.svg")),
         "codex" => {
             static SVG: OnceLock<Vec<u8>> = OnceLock::new();
-            gpui::svg()
-                .data(light_current_color_icon(
-                    include_str!("../../assets/agents/codex.svg"),
-                    &SVG,
-                ))
-                .size(px(size))
-                .into_any_element()
+            Some(light_current_color_icon(
+                include_str!("../../assets/agents/codex.svg"),
+                &SVG,
+            ))
         }
-        "kimi" => gpui::svg()
-            .data(include_bytes!("../../assets/agents/kimi.svg"))
-            .size(px(size))
-            .into_any_element(),
+        "copilot" => {
+            static SVG: OnceLock<Vec<u8>> = OnceLock::new();
+            Some(light_current_color_icon(
+                include_str!("../../assets/agents/copilot.svg"),
+                &SVG,
+            ))
+        }
+        "pi" => {
+            static SVG: OnceLock<Vec<u8>> = OnceLock::new();
+            Some(light_current_color_icon(
+                include_str!("../../assets/agents/pi.svg"),
+                &SVG,
+            ))
+        }
+        "fx" => {
+            static SVG: OnceLock<Vec<u8>> = OnceLock::new();
+            Some(light_current_color_icon(
+                include_str!("../../assets/agents/fx.svg"),
+                &SVG,
+            ))
+        }
         "grok" => {
             static SVG: OnceLock<Vec<u8>> = OnceLock::new();
-            gpui::svg()
-                .data(light_current_color_icon(
-                    include_str!("../../assets/agents/grok.svg"),
-                    &SVG,
-                ))
-                .size(px(size))
-                .into_any_element()
+            Some(light_current_color_icon(
+                include_str!("../../assets/agents/grok.svg"),
+                &SVG,
+            ))
         }
-        "minimax" => gpui::svg()
-            .data(include_bytes!("../../assets/agents/minimax.svg"))
-            .size(px(size))
-            .into_any_element(),
-        "zai" => gpui::svg()
-            .data(include_bytes!("../../assets/agents/zai.svg"))
-            .size(px(size))
-            .into_any_element(),
-        "devin" => gpui::svg()
-            .data(include_bytes!("../../assets/agents/devin.svg"))
-            .size(px(size))
-            .into_any_element(),
+        "kimi" => Some(include_bytes!("../../assets/agents/kimi.svg")),
+        "minimax" => Some(include_bytes!("../../assets/agents/minimax.svg")),
+        "zai" => Some(include_bytes!("../../assets/agents/zai.svg")),
+        "devin" => Some(include_bytes!("../../assets/agents/devin.svg")),
+        _ => None,
+    }
+}
+
+/// Shared Classic AgentIdentityIcon artwork for quota panels and Native
+/// New Tab menu. Keep SVG/PNG decoding cached and never load assets from disk
+/// on each popup open, preserving portable EXE behavior.
+pub(super) fn quota_provider_icon(provider: &str, size: f32) -> gpui::AnyElement {
+    if let Some(svg) = classic_agent_svg_bytes(provider) {
+        return gpui::svg().data(svg).size(px(size)).into_any_element();
+    }
+    match provider {
         "cursor" => {
             static IMG: OnceLock<Arc<gpui::Image>> = OnceLock::new();
             gpui::img(
@@ -97,7 +112,21 @@ fn quota_provider_icon(provider: &str, size: f32) -> gpui::AnyElement {
             .size(px(size))
             .into_any_element()
         }
-        "opencode" => {
+        "amp" => {
+            static IMG: OnceLock<Arc<gpui::Image>> = OnceLock::new();
+            gpui::img(
+                IMG.get_or_init(|| {
+                    Arc::new(gpui::Image::from_bytes(
+                        gpui::ImageFormat::Png,
+                        include_bytes!("../../assets/agents/amp.png").to_vec(),
+                    ))
+                })
+                .clone(),
+            )
+            .size(px(size))
+            .into_any_element()
+        }
+        "opencode" | "opencode2" => {
             static IMG: OnceLock<Arc<gpui::Image>> = OnceLock::new();
             gpui::img(
                 IMG.get_or_init(|| {
@@ -132,8 +161,8 @@ fn quota_overview_status(loading: bool, failed: bool, has_entries: bool) -> &'st
 #[cfg(test)]
 mod quota_ui_tests {
     use super::{
-        light_current_color_icon, quota_overview_status, quota_pin_button_label,
-        quota_reading_color, quota_status_label, QuotaReading,
+        classic_agent_svg_bytes, light_current_color_icon, quota_overview_status,
+        quota_pin_button_label, quota_reading_color, quota_status_label, QuotaReading,
     };
     use alera_gpui_desktop::visual_tokens::{AGENT_BLOCKED, AGENT_DONE, AGENT_WAITING, FAINT};
     use std::sync::OnceLock;
@@ -159,6 +188,48 @@ mod quota_ui_tests {
         assert_eq!(quota_reading_color("error", &reading), AGENT_BLOCKED);
         reading.remaining_percent = None;
         assert_eq!(quota_reading_color("ok", &reading), FAINT);
+    }
+
+    #[test]
+    fn classic_agent_artwork_is_shared_by_installed_and_profile_menu_entries() {
+        let popup = include_str!("native_popup_ui.rs");
+        assert!(popup.contains("branded_agent_popup_item(agent_id.clone(), label)"));
+        assert!(popup.contains("branded_agent_popup_item(brand_id, label)"));
+        assert!(popup.contains("PopupMenuItem::new(label).icon(Icon::default().data(svg))"));
+        assert!(popup.contains("PopupMenuItem::element"));
+        // GPUI Kit inserts a blank xsmall icon in ElementItem rows:
+        // compensate exactly once so PNG and SVG icons align with File/Terminal.
+        assert!(popup.contains(".ml(px(-16.0))"));
+
+        let artwork = include_str!("native_agent_quota_ui.rs");
+        for asset in [
+            "agents/codex.svg",
+            "agents/claude.svg",
+            "agents/copilot.svg",
+            "agents/cursor.png",
+            "agents/agy.png",
+            "agents/opencode.png",
+            "agents/pi.svg",
+            "agents/amp.png",
+            "agents/grok.svg",
+            "agents/devin.svg",
+            "agents/fx.svg",
+        ] {
+            assert!(artwork.contains(asset), "missing Classic artwork: {asset}");
+        }
+        assert!(artwork.contains("\"opencode\" | \"opencode2\""));
+        for agent_id in ["codex", "claude", "copilot", "grok", "devin", "pi", "fx"] {
+            let svg = classic_agent_svg_bytes(agent_id)
+                .unwrap_or_else(|| panic!("missing native SVG logo for {agent_id}"));
+            assert!(svg.starts_with(b"<svg"), "{agent_id} not a standalone SVG");
+            assert!(
+                !std::str::from_utf8(svg).unwrap().contains("currentColor"),
+                "{agent_id} icon would render black on dark menu"
+            );
+        }
+        for agent_id in ["agy", "cursor", "opencode", "opencode2", "amp"] {
+            assert!(classic_agent_svg_bytes(agent_id).is_none());
+        }
     }
 
     #[test]
