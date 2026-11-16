@@ -157,7 +157,7 @@ fn lucide_name(kind: UiIcon) -> Option<LucideIcon> {
         UiIcon::List => LucideIcon::List,
         UiIcon::PullRequest => LucideIcon::GitPullRequest,
         UiIcon::Edit => LucideIcon::Pencil,
-        UiIcon::Delete => LucideIcon::Trash,
+        UiIcon::Delete => LucideIcon::Trash, // GPUI Kit 0.9's Trash SVG is Classic's trash2 shape.
         UiIcon::More => LucideIcon::Ellipsis,
         UiIcon::Settings => LucideIcon::Settings,
         UiIcon::PanelLeft => LucideIcon::PanelLeft,
@@ -170,7 +170,7 @@ fn lucide_name(kind: UiIcon) -> Option<LucideIcon> {
         UiIcon::Graph => LucideIcon::GitGraph,
         UiIcon::Branch => LucideIcon::GitBranch,
         UiIcon::GitMerge => LucideIcon::GitMerge,
-        UiIcon::History => LucideIcon::Clock,
+        UiIcon::History => return None, // Draw the missing Classic history SVG below.
         UiIcon::Save => LucideIcon::Save,
         UiIcon::Check => LucideIcon::Check,
         // Keep Classic Codicons for source control, and the differentiated
@@ -192,6 +192,15 @@ fn lucide_name(kind: UiIcon) -> Option<LucideIcon> {
     })
 }
 
+/// Classic uses Lucide `history`, which GPUI Kit 0.9 does not expose.
+/// Use the original Lucide stroke paths instead of its unrelated clock icon.
+/// Lucide artwork is ISC-licensed, matching the existing Lucide asset family.
+const CLASSIC_HISTORY_SVG: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
+<path d="M3 3v5h5"/>
+<path d="M12 7v5l4 2"/>
+</svg>"#;
+
 pub fn icon(icon: UiIcon, size_px: f32, color: u32) -> Div {
     let frame = div()
         .w(px(size_px))
@@ -199,6 +208,14 @@ pub fn icon(icon: UiIcon, size_px: f32, color: u32) -> Div {
         .flex()
         .items_center()
         .justify_center();
+    if icon == UiIcon::History {
+        return frame.child(
+            Icon::default()
+                .data(CLASSIC_HISTORY_SVG)
+                .with_size(px(size_px))
+                .text_color(rgb(color)),
+        );
+    }
     if let Some(name) = lucide_name(icon) {
         frame.child(
             Icon::new(name)

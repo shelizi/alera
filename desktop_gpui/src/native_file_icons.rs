@@ -3,11 +3,13 @@
 //! Upstream license: ../assets/material-icon-theme/LICENSE.upstream.
 
 /// Exact rendered SVG for common file/folder names, without runtime disk IO.
-/// These assets retain their upstream multicolor fills (do not tint them).
+/// Closed assets retain their upstream multicolor fills (do not tint them).
+/// Matching open-folder SVGs are not yet bundled: fall back to Classic's
+/// Lucide folderOpen icon rather than displaying a closed folder while open.
 pub fn material_icon_svg(
     path_or_name: &str,
     is_directory: bool,
-    _expanded: bool,
+    expanded: bool,
 ) -> Option<&'static [u8]> {
     let name = path_or_name
         .rsplit(['/', '\\'])
@@ -15,6 +17,12 @@ pub fn material_icon_svg(
         .unwrap_or(path_or_name)
         .to_ascii_lowercase();
     if is_directory {
+        // Classic's material theme supplies separate SVGs for expanded
+        // folders. Until those exact vectors are bundled, use its Lucide
+        // folder-open fallback instead of falsely showing a closed folder.
+        if expanded {
+            return None;
+        }
         return Some(match name.as_str() {
             "src" | "source" => include_bytes!("../assets/material-icon-theme/folder-src.svg"),
             "theme" | "themes" => include_bytes!("../assets/material-icon-theme/folder-theme.svg"),
@@ -127,12 +135,26 @@ mod tests {
     #[test]
     fn folders_and_windows_paths_are_supported() {
         assert!(material_icon_svg("src", true, false).is_some());
-        assert!(material_icon_svg("src", true, true).is_some());
+        assert!(material_icon_svg("src", true, true).is_none());
         assert!(material_icon_svg("C:\\temp\\main.dart", false, false).is_some());
         assert!(material_icon_svg("mystery.xyz", false, false).is_none());
         assert!(material_icon_svg("untitled", false, false).is_none());
     }
 
+
+    #[test]
+    fn expanded_folders_use_classic_open_fallback_instead_of_closed_material_art() {
+        for folder in ["src", "theme", "unknown", ".github", "C:\\demo\\src"] {
+            assert!(material_icon_svg(folder, true, false).is_some(), "{folder}");
+            assert!(material_icon_svg(folder, true, true).is_none(), "{folder}");
+        }
+        // When open Material assets are unavailable, keep Classic's Lucide
+        // fallback rather than rendering the CLOSED folder art as open.
+        let icons = include_str!("native_ui_icons.rs");
+        assert!(icons.contains("UiIcon::FolderOpen"));
+        assert!(icons.contains("explorer_file_icon(name, is_directory, expanded)"));
+        assert!(icons.contains("UiIcon::FolderOpen | UiIcon::Open => LucideIcon::FolderOpen"));
+    }
     #[test]
     fn every_embedded_asset_is_self_contained_svg() {
         let inputs = [

@@ -283,6 +283,23 @@ mod tests {
     }
 
     #[test]
+    fn native_delete_and_restore_icons_follow_classic_lucide_registry() {
+        let classic = include_str!("../../lib/src/design_system/icons/alera_icons.dart");
+        assert!(classic.contains("static const IconData delete = LucideIcons.trash2;"));
+        assert!(classic.contains("static const IconData restore = LucideIcons.history;"));
+        let native = include_str!("native_ui_icons.rs");
+        // GPUI Kit v0.9 calls the Classic trash2 artwork "Trash";
+        // its packaged SVG has the same two interior bin strokes.
+        assert!(native.contains("UiIcon::Delete => LucideIcon::Trash,"));
+        // GPUI Kit lacks a History variant entirely, so embed the actual
+        // Classic Lucide stroke paths rather than showing a plain clock.
+        assert!(native.contains("UiIcon::History => return None"));
+        assert!(native.contains("CLASSIC_HISTORY_SVG"));
+        assert!(native.contains(".data(CLASSIC_HISTORY_SVG)"));
+        assert!(native.contains("M12 7v5l4 2"));
+    }
+
+    #[test]
     fn classic_tab_rows_keep_sixteen_pixel_leading_gutter_and_compact_close() {
         let classic = include_str!(
             "../../lib/src/features/workbench/presentation/workspace_workbench_tab_strip.dart"
