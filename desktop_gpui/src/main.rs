@@ -129,7 +129,7 @@ use alera_gpui_desktop::visual_tokens::{
     clamp_context_sidebar_width, clamp_projects_sidebar_width, ELEVATED, MUTED, PANEL,
     PROJECTS_COLLAPSED_WIDTH, RESIZE_CHROME,
     SECTION_HEADER_HEIGHT, SIDEBAR_RESIZE_HANDLE_WIDTH,
-    STATUS_BAR_HEIGHT, TAB_STRIP_HEIGHT, TEXT, TOOLBAR, TOP_BAR_HEIGHT,
+    STATUS_BAR_HEIGHT, TAB_STRIP_HEIGHT, TAB_STRIP_LEADING_PADDING, TAB_ATTENTION_DOT_SIZE, TEXT, TOOLBAR, TOP_BAR_HEIGHT,
     EDITOR_TOOLBAR_HEIGHT, usable_workbench_height, secondary_terminal_render_height,
 };
 use alera_gpui_desktop::vt_screen::{StyledRow, TERMINAL_DEFAULT_BG};
@@ -164,7 +164,7 @@ use gpui_kit::component::WindowExt as _;
 use native_components::{icon, icon_button, UiIcon};
 use native_review_links::repository_pull_requests_url;
 use native_text_references::{identifier_at_cursor, is_whole_identifier_hit};
-use native_ui_icons::explorer_file_icon_element;
+use native_ui_icons::{explorer_file_icon_element, tab_close_button};
 use quick_open_ui::{bind_quick_open_keys, QuickOpenInput};
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -8955,6 +8955,12 @@ impl Workbench {
                     .cursor_pointer()
                     .text_color(rgb(if selected { TEXT } else { MUTED }))
                     .child(tab_icon)
+                    // Classic reserves the 6px status slot even while idle;
+                    // changing Agent states cannot shift the title or X.
+                    .child(div().w(px(TAB_ATTENTION_DOT_SIZE)).h(px(TAB_ATTENTION_DOT_SIZE))
+                        .when(status_color.is_some(), |dot| {
+                            dot.rounded_full().bg(rgb(status_color.unwrap_or(MUTED)))
+                        }))
                     .child(
                         div()
                             .id(("mixed-tab-title", index))
@@ -8975,17 +8981,6 @@ impl Workbench {
                             .child(title),
                     )
                     .when(tab.dirty, |entry| entry.child(div().text_xs().child("●")))
-                    .when(status_color.is_some(), |entry| {
-                        // Classic AgentStatusDot is a compact 7px status dot;
-                        // its full state remains available via the tab tooltip.
-                        entry.child(
-                            div()
-                                .w(px(7.0))
-                                .h(px(7.0))
-                                .rounded_full()
-                                .bg(rgb(status_color.unwrap_or(MUTED))),
-                        )
-                    })
                     .when(pinned, |entry| entry.child(icon(UiIcon::Pin, 12.0, MUTED)))
                     .when(stopped_label.is_some(), |entry| {
                         entry.child(
@@ -9026,9 +9021,7 @@ impl Workbench {
                     )),
             )
             .child(
-                icon_button((close_id, index), UiIcon::Close, "Close tab", false)
-                    .w(px(22.0))
-                    .h(px(22.0))
+                tab_close_button((close_id, index), "Close tab")
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.close_mixed_tab(&for_close, cx);
                     })),
@@ -13460,7 +13453,7 @@ impl Render for Workbench {
                                             .flex()
                                             .items_center()
                                             .overflow_x_scroll()
-                                            .pl_2()
+                                            .pl(px(TAB_STRIP_LEADING_PADDING))
                                             .bg(rgb(TOOLBAR))
                                             .border_b_1()
                                             .border_color(rgb(BORDER))
@@ -13499,7 +13492,7 @@ impl Render for Workbench {
                                             .flex()
                                             .items_center()
                                             .overflow_x_scroll()
-                                            .pl_2()
+                                            .pl(px(TAB_STRIP_LEADING_PADDING))
                                             .children(mixed_primary_tabs.into_iter().enumerate().map(|(index, tab)| {
                                                 let selected = !showing_explorer_preview
                                                     && mixed_primary_active.as_ref() == Some(&tab.identity);
@@ -13530,9 +13523,8 @@ impl Render for Workbench {
                                                         .on_click(cx.listener(move |this, _, _, cx| {
                                                             this.focus_git_original_tab(id, cx);
                                                         })))
-                                                    .child(icon_button(("git-original-tab-close", index),
-                                                        UiIcon::Close, "Close immutable Git original", false)
-                                                        .w(px(22.0)).h(px(22.0))
+                                                    .child(tab_close_button(("git-original-tab-close", index),
+                                                        "Close immutable Git original")
                                                         .on_click(cx.listener(move |this, _, _, cx| {
                                                             this.close_git_original_tab(id, cx);
                                                         })))
@@ -13592,9 +13584,7 @@ impl Render for Workbench {
                                                             })),
                                                     )
                                                     .child(
-                                                        icon_button(("file-tab-close", index), UiIcon::Close, "Close preview", false)
-                                                            .w(px(22.0))
-                                                            .h(px(22.0))
+                                                        tab_close_button(("file-tab-close", index), "Close preview")
                                                             .on_click(cx.listener(move |this, _, _, cx| {
                                                                 this.model.close_tab(index);
                                                                 if this.model.tabs().is_empty() {
@@ -13710,7 +13700,7 @@ impl Render for Workbench {
                                                             .flex()
                                                             .items_center()
                                                             .overflow_x_scroll()
-                                                            .pl_2()
+                                                            .pl(px(TAB_STRIP_LEADING_PADDING))
                                                             .bg(rgb(TOOLBAR))
                                                             .border_b_1()
                                                             .border_color(rgb(BORDER))
@@ -13732,7 +13722,7 @@ impl Render for Workbench {
                                                 div()
                                                     .id("mixed-secondary-toolbar")
                                                     .h(px(TAB_STRIP_HEIGHT))
-                                                    .px_2()
+                                                    .pr_2()
                                                     .flex()
                                                     .items_center()
                                                     .gap_1()
@@ -13747,6 +13737,7 @@ impl Render for Workbench {
                                                             .flex()
                                                             .items_center()
                                                             .overflow_x_scroll()
+                                                            .pl(px(TAB_STRIP_LEADING_PADDING))
                                                             .children(mixed_secondary_tabs.clone().into_iter().enumerate().map(|(index, tab)| {
                                                                 let selected = mixed_secondary_active.as_ref() == Some(&tab.identity);
                                                                 let pinned = pinned_ids.contains(&tab.identity);
@@ -14236,7 +14227,7 @@ impl Render for Workbench {
                                                             .flex()
                                                             .items_center()
                                                             .overflow_x_scroll()
-                                                            .pl_2()
+                                                            .pl(px(TAB_STRIP_LEADING_PADDING))
                                                             .bg(rgb(TOOLBAR))
                                                             .border_b_1()
                                                             .border_color(rgb(BORDER))
@@ -14259,7 +14250,7 @@ impl Render for Workbench {
                                                     .id("mixed-secondary-toolbar")
 
                                                     .h(px(TAB_STRIP_HEIGHT))
-                                                    .px_2()
+                                                    .pr_2()
                                                     .flex()
                                                     .items_center()
                                                     .gap_1()
@@ -14274,6 +14265,7 @@ impl Render for Workbench {
                                                             .flex()
                                                             .items_center()
                                                             .overflow_x_scroll()
+                                                            .pl(px(TAB_STRIP_LEADING_PADDING))
                                                             .children(mixed_secondary_tabs.into_iter().enumerate().map(|(index, tab)| {
                                                                 let selected = mixed_secondary_active.as_ref() == Some(&tab.identity);
                                                                 let pinned = pinned_ids.contains(&tab.identity);

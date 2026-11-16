@@ -31,6 +31,12 @@ pub const MIN_EDITOR_WIDTH: f32 = 360.0;
 pub const RESIZE_CHROME: f32 = 14.0;
 pub const SIDEBAR_RESIZE_HANDLE_WIDTH: f32 = 6.0;
 pub const TAB_STRIP_HEIGHT: f32 = 44.0;
+// Classic's tab rows use space16 from the outer pane edge.
+pub const TAB_STRIP_LEADING_PADDING: f32 = 16.0;
+// Classic keeps an attention-dot slot even without an agent status.
+pub const TAB_ATTENTION_DOT_SIZE: f32 = 6.0;
+pub const TAB_CLOSE_ICON_SIZE: f32 = 12.0;
+pub const TAB_CLOSE_TARGET_SIZE: f32 = 18.0;
 pub const EDITOR_TOOLBAR_HEIGHT: f32 = 29.0;
 // The native Terminal viewport uses a one-pixel top border and pane seams.
 // Keep a two-pixel safety margin instead of subtracting an unrelated 14px.
@@ -140,6 +146,84 @@ mod tests {
         }
         assert!(TAB_STRIP_HEIGHT >= SECTION_HEADER_HEIGHT);
         assert!(RIGHT_SIDEBAR_WIDTH >= 220.0);
+    }
+
+    #[test]
+    fn classic_tab_chip_attention_dot_precedes_title_and_keeps_its_slot() {
+        let classic = include_str!(
+            "../../lib/src/features/workbench/presentation/workspace_workbench_tab_chips.dart"
+        );
+        assert!(classic.contains("dimension: 6"));
+        let source = include_str!("main.rs");
+        let chip = source
+            .split_once("fn render_mixed_tab_chip(")
+            .unwrap()
+            .1
+            .split_once("/// Project both original state owners")
+            .unwrap()
+            .0;
+        let dot = chip.find(".w(px(TAB_ATTENTION_DOT_SIZE))").unwrap();
+        let title = chip.find(r#".id(("mixed-tab-title", index))"#).unwrap();
+        assert!(
+            dot < title,
+            "Agent status dot must stay before the tab title"
+        );
+        assert!(chip.contains("div().w(px(TAB_ATTENTION_DOT_SIZE))"));
+    }
+
+    #[test]
+    fn classic_tab_rows_keep_sixteen_pixel_leading_gutter_and_compact_close() {
+        let classic = include_str!(
+            "../../lib/src/features/workbench/presentation/workspace_workbench_tab_strip.dart"
+        );
+        assert!(classic.contains("const SizedBox(width: AleraTokens.space16)"));
+        let source = include_str!("main.rs");
+        for id in [
+            "mixed-primary-pinned-tab-strip",
+            "mixed-tabs-scroll",
+            "mixed-secondary-tabs-scroll",
+        ] {
+            let start = source.find(&format!(r#".id("{id}")"#)).unwrap();
+            let style = &source[start..start + 550];
+            assert!(
+                style.contains(".pl(px(TAB_STRIP_LEADING_PADDING))"),
+                "Tab row {id} lacks Classic's leading inset"
+            );
+        }
+        assert!(source.matches("tab_close_button(").count() >= 3);
+    }
+
+    #[test]
+    fn editor_find_bar_does_not_consume_a_row_while_closed() {
+        let find_ui = include_str!("editor_find_ui.rs");
+        let closed = find_ui
+            .split_once("if !self.find.visible {")
+            .unwrap()
+            .1
+            .split_once("let search = self.find.search(cx);")
+            .unwrap()
+            .0;
+        assert!(!closed.contains("Find / Replace"));
+        assert!(closed.contains(".h(px(0.0))"));
+        let editor = include_str!("editor_ui.rs");
+        assert!(editor.contains(r#""editor-show-find""#));
+        assert!(editor.contains("this.show_find(&ShowFind, window, cx)"));
+    }
+
+    #[test]
+    fn editor_status_is_single_line_but_plaintext_warning_remains_visible() {
+        let editor = include_str!("editor_ui.rs");
+        let status = editor
+            .split_once(r#".id("editor-compact-status")"#)
+            .unwrap()
+            .1
+            .split_once(".child(")
+            .unwrap()
+            .0;
+        assert!(status.contains(".whitespace_nowrap()"));
+        assert!(status.contains(".truncate()"));
+        assert!(editor.contains("Drafts: plaintext"));
+        assert!(editor.contains("RECOVERY_PLAINTEXT_NOTICE"));
     }
 
     #[test]

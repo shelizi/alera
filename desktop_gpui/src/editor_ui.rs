@@ -4,6 +4,7 @@
 //! owns Unicode indexing and conflict-safe writes. A native uniform_list
 //! virtualizes displayed rows beyond line 600; this still is NOT a full IDE
 //! editor. Mouse and Traditional Chinese IME need independent GUI acceptance.
+use crate::native_ui_icons::{icon_button, UiIcon};
 use alera_gpui_desktop::editor::{
     byte_to_utf16, edge_scroll_offset, utf16_to_byte, EditorDocument, EditorLineIndex,
 };
@@ -32,7 +33,7 @@ use std::time::{Duration, Instant};
 
 #[path = "editor_find_ui.rs"]
 mod editor_find_ui;
-use editor_find_ui::EditorFindUi;
+use editor_find_ui::{EditorFindUi, ShowFind};
 
 const EDITOR_LINE_HEIGHT: f32 = 19.0;
 // Match the Flutter desktop's neutral theme rather than the old blue-tinted
@@ -1500,6 +1501,29 @@ impl Render for NativeEditor {
             if composing { " · composing" } else { "" },
             recovery
         );
+        // Classic puts persistent editing metadata in compact chrome. Keep
+        // important recovery/errors visible, with full diagnostics in Tooltip.
+        let status_needs_attention = self.status.starts_with("Recovered")
+            || self.status.to_ascii_lowercase().contains("failed")
+            || self.status.to_ascii_lowercase().contains("blocked");
+        let compact_status = if status_needs_attention {
+            format!(
+                "{} · Ln {}/{} Col {}",
+                self.status,
+                line_index + 1,
+                line_count,
+                column_index + 1,
+            )
+        } else {
+            format!(
+                "Ln {}/{} Col {} · {}",
+                line_index + 1,
+                line_count,
+                column_index + 1,
+                if dirty { "Modified" } else { "Saved" },
+            )
+        };
+        let has_draft_store = self.tabs.has_draft_store();
         let find_toolbar = self.render_find_toolbar(window, cx);
         div()
             .size_full()
@@ -1831,10 +1855,54 @@ impl Render for NativeEditor {
                     .gap_2()
                     .text_sm()
                     .text_color(rgb(MUTED_TEXT))
-                    .child(div().flex_1().min_w_0().overflow_hidden().child(status))
+                    .child(
+                        div()
+                            .id("editor-compact-status")
+                            .flex_1()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .truncate()
+                            .tooltip(move |window, cx| {
+                                gpui_kit::component::tooltip::Tooltip::new(status.clone())
+                                    .build(window, cx)
+                            })
+                            .child(compact_status),
+                    )
+                    // The security warning remains visible, but no longer
+                    // repeats a long plaintext-recovery paragraph every frame.
+                    .child(
+                        div()
+                            .id("editor-draft-plaintext-warning")
+                            .text_xs()
+                            .text_color(rgb(MUTED_TEXT))
+                            .whitespace_nowrap()
+                            .when(!has_draft_store, |hint| hint.hidden())
+                            .tooltip(|window, cx| {
+                                gpui_kit::component::tooltip::Tooltip::new(
+                                    RECOVERY_PLAINTEXT_NOTICE,
+                                )
+                                .build(window, cx)
+                            })
+                            .child("Drafts: plaintext"),
+                    )
+                    .child(
+                        icon_button(
+                            "editor-show-find",
+                            UiIcon::Search,
+                            "Find / Replace (Ctrl+F)",
+                            false,
+                        )
+                        .w(px(24.0))
+                        .h(px(24.0))
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.show_find(&ShowFind, window, cx);
+                        })),
+                    )
                     .child(
                         div()
                             .flex()
+                            .items_center()
                             .gap_3()
                             .child(
                                 div()

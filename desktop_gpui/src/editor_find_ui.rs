@@ -166,16 +166,12 @@ impl NativeEditor {
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         if !self.find.visible {
+            // Classic's Find/Replace is an on-demand overlay, not a
+            // permanent row stealing space from both narrow Editor panes.
+            // Ctrl+F and the compact status-row Search button open it.
             return div()
-                .id("editor-show-find")
-                .px_3()
-                .py_1()
-                .text_sm()
-                .cursor_pointer()
-                .child("Find / Replace")
-                .on_click(cx.listener(|this, _, window, cx| {
-                    this.show_find(&ShowFind, window, cx);
-                }))
+                .id("editor-find-collapsed")
+                .h(px(0.0))
                 .into_any_element();
         }
         let search = self.find.search(cx);

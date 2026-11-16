@@ -4,7 +4,7 @@
 //! VS Code Codicons for source-control actions and file-type fallbacks.
 //! Keep this mapping centralized instead of inventing glyphs per toolbar.
 use crate::native_file_icons::material_icon_svg;
-use alera_gpui_desktop::visual_tokens::{MUTED, TEXT};
+use alera_gpui_desktop::visual_tokens::{MUTED, TAB_CLOSE_ICON_SIZE, TAB_CLOSE_TARGET_SIZE, TEXT};
 use gpui::{div, px, rgb, Div, ElementId, ParentElement, Styled};
 use gpui_kit::assets::IconName as LucideIcon;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -238,6 +238,19 @@ pub fn explorer_file_icon_element(
             fallback_color,
         ))
     }
+}
+
+/// Classic's Tab X is a 12px glyph in a compact target, unlike the
+/// standard 30px toolbar controls. Preserve that hierarchy in both panes.
+pub fn tab_close_button(id: impl Into<ElementId>, label: &'static str) -> Button {
+    Button::new(id)
+        .tooltip(label)
+        .compact()
+        .w(px(TAB_CLOSE_TARGET_SIZE))
+        .h(px(TAB_CLOSE_TARGET_SIZE))
+        .p_0()
+        .child(icon(UiIcon::Close, TAB_CLOSE_ICON_SIZE, MUTED))
+        .ghost()
 }
 
 /// GPUI Kit owns the button, hover, focus, and tooltip semantics. Keep
