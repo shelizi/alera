@@ -3,9 +3,8 @@
 //! Upstream license: ../assets/material-icon-theme/LICENSE.upstream.
 
 /// Exact rendered SVG for common file/folder names, without runtime disk IO.
-/// Closed assets retain their upstream multicolor fills (do not tint them).
-/// Matching open-folder SVGs are not yet bundled: fall back to Classic's
-/// Lucide folderOpen icon rather than displaying a closed folder while open.
+/// Paired open/closed folder assets retain their upstream multicolor fills.
+/// All imagery is compiled into the binary; icons are not downloaded at runtime.
 pub fn material_icon_svg(
     path_or_name: &str,
     is_directory: bool,
@@ -17,17 +16,69 @@ pub fn material_icon_svg(
         .unwrap_or(path_or_name)
         .to_ascii_lowercase();
     if is_directory {
-        // Classic's material theme supplies separate SVGs for expanded
-        // folders. Until those exact vectors are bundled, use its Lucide
-        // folder-open fallback instead of falsely showing a closed folder.
-        if expanded {
-            return None;
-        }
-        return Some(match name.as_str() {
-            "src" | "source" => include_bytes!("../assets/material-icon-theme/folder-src.svg"),
-            "theme" | "themes" => include_bytes!("../assets/material-icon-theme/folder-theme.svg"),
-            _ => include_bytes!("../assets/material-icon-theme/folder-base.svg"),
-        });
+        // Classic uses Material Icon Theme for both collapsed and expanded
+        // folders; keep paired SVGs from the same pinned upstream revision.
+        // Match its dot/underscore/hyphen-prefixed directory associations.
+        let folder_name = name.trim_start_matches(&['.', '_', '-'][..]);
+        let (closed, opened): (&'static [u8], &'static [u8]) = match folder_name {
+            "src" | "srcs" | "source" | "sources" | "code" => (
+                include_bytes!("../assets/material-icon-theme/folder-src.svg"),
+                include_bytes!("../assets/material-icon-theme/folder-src-open.svg"),
+            ),
+            "theme" | "themes" => (
+                include_bytes!("../assets/material-icon-theme/folder-theme.svg"),
+                include_bytes!("../assets/material-icon-theme/folder-theme-open.svg"),
+            ),
+            "doc" | "docs" | "document" | "documents" | "documentation" | "wiki" | "news" | "blog" => (
+                include_bytes!("../assets/material-icon-theme/folder-docs.svg"),
+                include_bytes!("../assets/material-icon-theme/folder-docs-open.svg"),
+            ),
+            "test" | "tests" | "testing" | "spec" | "specs" | "testfiles" | "snapshots" => (
+                include_bytes!("../assets/material-icon-theme/folder-test.svg"),
+                include_bytes!("../assets/material-icon-theme/folder-test-open.svg"),
+            ),
+            "script" | "scripts" | "scripting" | "xtask" => (
+                include_bytes!("../assets/material-icon-theme/folder-scripts.svg"),
+                include_bytes!("../assets/material-icon-theme/folder-scripts-open.svg"),
+            ),
+            "node" | "nodejs" | "node_modules" => (
+                include_bytes!("../assets/material-icon-theme/folder-node.svg"),
+                include_bytes!("../assets/material-icon-theme/folder-node-open.svg"),
+            ),
+            "github" => (
+                include_bytes!("../assets/material-icon-theme/folder-github.svg"),
+                include_bytes!("../assets/material-icon-theme/folder-github-open.svg"),
+            ),
+            "vscode" | "vscode-test" => (
+                include_bytes!("../assets/material-icon-theme/folder-vscode.svg"),
+                include_bytes!("../assets/material-icon-theme/folder-vscode-open.svg"),
+            ),
+            "dist" | "out" | "output" | "outputs" | "build" | "builds" | "release" | "bin" | "distribution" | "compiled" => (
+                include_bytes!("../assets/material-icon-theme/folder-dist.svg"),
+                include_bytes!("../assets/material-icon-theme/folder-dist-open.svg"),
+            ),
+            "cfg" | "cfgs" | "conf" | "confs" | "config" | "configs" | "configuration" | "configurations" | "setting" | "settings" => (
+                include_bytes!("../assets/material-icon-theme/folder-config.svg"),
+                include_bytes!("../assets/material-icon-theme/folder-config-open.svg"),
+            ),
+            "component" | "components" => (
+                include_bytes!("../assets/material-icon-theme/folder-components.svg"),
+                include_bytes!("../assets/material-icon-theme/folder-components-open.svg"),
+            ),
+            "img" | "imgs" | "image" | "images" | "icons" | "icon" | "pics" | "pictures" | "photos" | "screenshots" => (
+                include_bytes!("../assets/material-icon-theme/folder-images.svg"),
+                include_bytes!("../assets/material-icon-theme/folder-images-open.svg"),
+            ),
+            "app" | "apps" => (
+                include_bytes!("../assets/material-icon-theme/folder-app.svg"),
+                include_bytes!("../assets/material-icon-theme/folder-app-open.svg"),
+            ),
+            _ => (
+                include_bytes!("../assets/material-icon-theme/folder-base.svg"),
+                include_bytes!("../assets/material-icon-theme/folder-base-open.svg"),
+            ),
+        };
+        return Some(if expanded { opened } else { closed });
     }
     let svg: &'static [u8] = match name.as_str() {
         "dockerfile"
@@ -135,7 +186,7 @@ mod tests {
     #[test]
     fn folders_and_windows_paths_are_supported() {
         assert!(material_icon_svg("src", true, false).is_some());
-        assert!(material_icon_svg("src", true, true).is_none());
+        assert!(material_icon_svg("src", true, true).is_some());
         assert!(material_icon_svg("C:\\temp\\main.dart", false, false).is_some());
         assert!(material_icon_svg("mystery.xyz", false, false).is_none());
         assert!(material_icon_svg("untitled", false, false).is_none());
@@ -143,17 +194,27 @@ mod tests {
 
 
     #[test]
-    fn expanded_folders_use_classic_open_fallback_instead_of_closed_material_art() {
-        for folder in ["src", "theme", "unknown", ".github", "C:\\demo\\src"] {
-            assert!(material_icon_svg(folder, true, false).is_some(), "{folder}");
-            assert!(material_icon_svg(folder, true, true).is_none(), "{folder}");
+    fn expanded_folders_use_classic_multicolor_material_open_art() {
+        // Exact opened-folder geometry from the pinned upstream
+        // folderGenerator.ts, retaining each closed icon's colored motive.
+        const UPSTREAM_OPEN_PATH: &str = "M14.483 6H4.721a1 1 0 0 0-.949.684L2 12V5h12a1 1 0 0 0-1-1H7.562a1 1 0 0 1-.64-.232l-.644-.536A1 1 0 0 0 5.638 3H2a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h11l2.403-5.606A1 1 0 0 0 14.483 6";
+        for folder in [
+            "src", "theme", "docs", "test", "scripts", "node_modules",
+            ".github", ".vscode", "dist", "config", "components",
+            "images", "app", "unknown", "C:\\demo\\src",
+        ] {
+            let closed = material_icon_svg(folder, true, false).expect(folder);
+            let opened = material_icon_svg(folder, true, true).expect(folder);
+            assert_ne!(opened, closed, "{folder}: opened icon must differ from closed");
+            let svg = std::str::from_utf8(opened).expect("SVG must be UTF-8");
+            assert!(svg.contains(UPSTREAM_OPEN_PATH), "{folder}: wrong open geometry");
+            assert!(svg.contains("id=\"motive\""), "{folder}: lost colored motive");
+            assert!(!svg.contains("<script") && !svg.contains("<foreignObject"));
         }
-        // When open Material assets are unavailable, keep Classic's Lucide
-        // fallback rather than rendering the CLOSED folder art as open.
-        let icons = include_str!("native_ui_icons.rs");
-        assert!(icons.contains("UiIcon::FolderOpen"));
-        assert!(icons.contains("explorer_file_icon(name, is_directory, expanded)"));
-        assert!(icons.contains("UiIcon::FolderOpen | UiIcon::Open => LucideIcon::FolderOpen"));
+        assert_ne!(material_icon_svg(".github", true, false),
+                   material_icon_svg("unknown", true, false));
+        assert_ne!(material_icon_svg("src", true, true),
+                   material_icon_svg("theme", true, true));
     }
     #[test]
     fn every_embedded_asset_is_self_contained_svg() {
