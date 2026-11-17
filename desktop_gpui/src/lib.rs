@@ -50,6 +50,7 @@ pub mod runtime_bridge;
 pub mod runtime_catalog;
 pub mod session;
 pub mod settings_menu_catalog;
+pub mod syntax_highlighting;
 pub mod terminal;
 pub mod terminal_bootstrap;
 pub mod terminal_output_budget;

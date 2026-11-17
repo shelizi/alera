@@ -34,6 +34,9 @@ base64 = "0.22.1"
 unicode-segmentation = "1.12"
 rust-i18n = "=4.2.4"
 alacritty_terminal = "=0.26.0"
+# TextMate syntax definitions from bat. Keep this independent of gpui-kit so
+# NativeEditor can retain its document, IME, undo and pane ownership.
+two-face = { version = "=0.5.2", default-features = false, features = ["syntect-onig"] }
 
 [target.'cfg(windows)'.dependencies]
 # Native toast WinRT and isolated Win32 COM activation callback. Classic's
