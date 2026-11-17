@@ -95,7 +95,9 @@ void _registerTerminalSurfaceCodeCopyTests() {
               matching: find.byType(MouseRegion),
             ),
           )
-          .lastWhere((region) => region.onHover != null && region.onExit != null);
+          .lastWhere(
+            (region) => region.onHover != null && region.onExit != null,
+          );
       terminalRegion.onExit!(
         PointerExitEvent(position: tester.getCenter(find.byKey(copyKey))),
       );
@@ -278,6 +280,105 @@ void _registerTerminalSurfaceCodeCopyTests() {
       );
     }
   });
+
+  testWidgets(
+    'Claude titled JavaScript and C snippets get separate copy buttons',
+    (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      final clipboardWrites = <String>[];
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        (call) async {
+          if (call.method == 'Clipboard.setData') {
+            clipboardWrites.add(
+              (call.arguments as Map<Object?, Object?>)['text'] as String,
+            );
+          }
+          return null;
+        },
+      );
+      try {
+        final factory = _FakeTerminalPtySessionFactory();
+        final runtime = XtermTerminalRuntime(
+          ptySessionFactory: factory,
+          shellLaunchesBuilder: _testShellLaunches,
+          initialSettings: TerminalSettings.defaults.copyWith(
+            showCodeBlockCopyButton: true,
+          ),
+        );
+        addTearDown(runtime.dispose);
+        final session = runtime.sessionFor(
+          workspace: _workspace(),
+          tab: _tab(),
+        );
+        await _pumpTerminalSurface(tester, session);
+        final pty = factory.sessions.single;
+        pty.emitOutput(
+          utf8.encode(
+            '❯ 給我常見語言的程式碼\r\n'
+            '• 以下是一些 Hello World 範例:\r\n'
+            '\r\n'
+            'Python\r\n'
+            'print("Hello, World!")\r\n'
+            '\r\n'
+            'JavaScript (Node.js)\r\n'
+            'console.log("Hello, World!");\r\n'
+            '\r\n'
+            'C\r\n'
+            '#include <stdio.h>\r\n'
+            '\r\n'
+            'int main(void) {\r\n'
+            '  printf("Hello, World!");\r\n'
+            '  return 0;\r\n'
+            '}\r\n'
+            '\r\n'
+            '✻ Brewed for 4s',
+          ),
+        );
+        await _pumpTerminalOutput(tester);
+        final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+        await mouse.addPointer(
+          location: _cellCenter(tester, const xterm.CellOffset(3, 0)),
+        );
+        const copyKey = ValueKey<String>('terminal-copy-code-button');
+        pty.writes.clear();
+
+        await mouse.moveTo(_cellCenter(tester, const xterm.CellOffset(3, 7)));
+        await tester.pump();
+        expect(find.byKey(copyKey), findsOneWidget);
+        await tester.tap(find.byKey(copyKey));
+        await tester.pump();
+        expect(clipboardWrites, <String>['console.log("Hello, World!");']);
+
+        await mouse.moveTo(_cellCenter(tester, const xterm.CellOffset(3, 13)));
+        await tester.pump();
+        expect(find.byKey(copyKey), findsOneWidget);
+        await tester.tap(find.byKey(copyKey));
+        await tester.pump();
+        expect(clipboardWrites, <String>[
+          'console.log("Hello, World!");',
+          '#include <stdio.h>\n\nint main(void) {\n  printf("Hello, World!");\n  return 0;\n}',
+        ]);
+        expect(pty.writes, isEmpty, reason: 'copy must not modify Claude PTY');
+
+        await mouse.moveTo(_cellCenter(tester, const xterm.CellOffset(3, 9)));
+        await tester.pump();
+        expect(
+          find.byKey(copyKey),
+          findsNothing,
+          reason: 'C language heading is not itself source code',
+        );
+        await mouse.removePointer();
+      } finally {
+        await tester.pumpWidget(const SizedBox());
+        debugDefaultTargetPlatformOverride = null;
+        tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          SystemChannels.platform,
+          null,
+        );
+      }
+    },
+  );
 
   testWidgets(
     'copy button defaults off and toggles live without restarting the PTY',

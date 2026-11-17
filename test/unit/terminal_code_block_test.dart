@@ -261,4 +261,92 @@ void main() {
       'console.log(42);',
     );
   });
+
+  test('detects Claude multi-language titled code sections without fences', () {
+    final terminal = xterm.Terminal()..resize(110, 36);
+    addTearDown(terminal.dispose);
+    terminal.write(
+      '❯ 給我多種語言 Hello World\r\n'
+      '• 這裡是幾種常見語言的 Hello World:\r\n'
+      '\r\n'
+      'Python\r\n'
+      'print("Hello, World!")\r\n'
+      '\r\n'
+      'JavaScript (Node.js)\r\n'
+      'console.log("Hello, World!");\r\n'
+      '\r\n'
+      'C\r\n'
+      '#include <stdio.h>\r\n'
+      '\r\n'
+      'int main(void) {\r\n'
+      '  printf("Hello, World!\\n");\r\n'
+      '  return 0;\r\n'
+      '}\r\n'
+      '\r\n'
+      'Java\r\n'
+      'public class Hello {\r\n'
+      '  public static void main(String[] args) {\r\n'
+      '    System.out.println("Hello, World!");\r\n'
+      '  }\r\n'
+      '}\r\n'
+      '\r\n'
+      'PowerShell\r\n'
+      'Write-Output "Hello, World!"\r\n'
+      '\r\n'
+      '你要用哪種語言？我可以幫你建立檔案。\r\n'
+      '✻ Brewed for 4s',
+    );
+
+    TerminalCodeBlock? codeAt(int row) => resolveTerminalCodeBlockAt(
+      terminal: terminal,
+      offset: xterm.CellOffset(4, row),
+    );
+
+    expect(codeAt(4)?.code, 'print("Hello, World!")');
+    expect(codeAt(7)?.code, 'console.log("Hello, World!");');
+    expect(
+      codeAt(10)?.code,
+      '#include <stdio.h>\n\nint main(void) {\n  printf("Hello, World!\\n");\n  return 0;\n}',
+    );
+    expect(codeAt(13)?.openingRow, codeAt(10)?.openingRow);
+    expect(
+      codeAt(19)?.code,
+      'public class Hello {\n  public static void main(String[] args) {\n    System.out.println("Hello, World!");\n  }\n}',
+    );
+    expect(codeAt(25)?.code, 'Write-Output "Hello, World!"');
+    for (final headingOrProse in [1, 3, 6, 9, 16, 17, 23, 24, 26, 27, 28]) {
+      expect(
+        codeAt(headingOrProse),
+        isNull,
+        reason:
+            'a language heading or prose line is not copyable: $headingOrProse',
+      );
+    }
+  });
+
+  test('does not treat ordinary language labels or prose as source code', () {
+    final terminal = xterm.Terminal()..resize(95, 16);
+    addTearDown(terminal.dispose);
+    terminal.write(
+      '❯ 語言建議\r\n'
+      '• Available languages:\r\n'
+      '\r\n'
+      'Python\r\n'
+      'This language is easy to learn.\r\n'
+      '\r\n'
+      'JavaScript\r\n'
+      'You can use JavaScript for websites.\r\n'
+      '\r\n'
+      '✻ Brewed for 2s',
+    );
+    for (final row in [3, 4, 6, 7]) {
+      expect(
+        resolveTerminalCodeBlockAt(
+          terminal: terminal,
+          offset: xterm.CellOffset(2, row),
+        ),
+        isNull,
+      );
+    }
+  });
 }

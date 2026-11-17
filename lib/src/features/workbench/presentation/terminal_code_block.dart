@@ -61,11 +61,16 @@ TerminalCodeBlock? resolveTerminalCodeBlockAt({
       opening = fence;
     }
   }
-  return _resolveClaudeRenderedCodeAt(
-    terminal.buffer,
-    offset.y,
-    maxScanRows: maxScanRows,
-  );
+  return _resolveClaudeLanguageCodeAt(
+        terminal.buffer,
+        offset.y,
+        maxScanRows: maxScanRows,
+      ) ??
+      _resolveClaudeRenderedCodeAt(
+        terminal.buffer,
+        offset.y,
+        maxScanRows: maxScanRows,
+      );
 }
 
 final RegExp _claudeCodeBullet = RegExp(r'^[ \t]{0,3}[•●] (.+)$');
@@ -84,7 +89,7 @@ final RegExp _probableCodeOpener = RegExp(
 );
 
 final RegExp _claudeTurnBoundary = RegExp(
-  r'^(?:❯(?:\s|$)|[✻✦✶*]\s+(?:Cooked|Done)\b)',
+  r'^(?:❯(?:\s|$)|[✻✦✶*]\s+(?:Cooked|Brewed|Done)\b)',
 );
 
 /// Unbulleted snippets can follow Claude's prose or earlier code blocks.
@@ -202,6 +207,117 @@ TerminalCodeBlock? _resolveClaudeRenderedCodeAt(
         openingRow: start,
         closingRow: lastRow,
         code: parts.join('\n'),
+      );
+    }
+  }
+  return null;
+}
+
+/// Claude Code also renders syntax-highlighted snippets with plain language
+/// headings instead of backtick fences or a bullet on the first source line.
+/// Only detect those headings inside a Claude reply, never general PTY output.
+final RegExp _claudeLanguageHeading = RegExp(
+  r'^[ \t]{0,4}(?:Python(?:\s+\d+(?:\.\d+)*)?|'
+  r'JavaScript(?:\s*\((?:Node(?:\.js)?|Deno|Bun)\))?|'
+  r'TypeScript|C\+\+|C#|C|Java|PowerShell|Bash|Shell|'
+  r'Rust|Go|Dart|PHP|Ruby|Kotlin|Swift|SQL|HTML|CSS|JSON|YAML|XML)'
+  r':?[ \t]*$',
+  caseSensitive: false,
+);
+
+final RegExp _languageCodeStatement = RegExp(
+  r'^(?:public|private|protected|static|void|int|long|float|'
+  r'double|bool|boolean|char|String|using|namespace|'
+  r'Write-Output|Write-Host|Get-Content|Set-Content|'
+  r'echo|puts|printf|println|System)\b',
+  caseSensitive: false,
+);
+
+bool _looksLikeLanguageCode(String text) {
+  final source = text.trimLeft();
+  if (source.isEmpty) return false;
+  return _probableCodeOpener.hasMatch(source) ||
+      _languageCodeStatement.hasMatch(source) ||
+      source.startsWith(r'$') ||
+      source.startsWith('#include') ||
+      source.startsWith('//') ||
+      source.startsWith('/*') ||
+      source.startsWith('*/') ||
+      source.startsWith('}') ||
+      source.startsWith(']') ||
+      source.startsWith(')');
+}
+
+TerminalCodeBlock? _resolveClaudeLanguageCodeAt(
+  xterm.Buffer buffer,
+  int hoveredRow, {
+  required int maxScanRows,
+}) {
+  final lines = buffer.lines;
+  final first = math.max(0, hoveredRow - math.min(maxScanRows, 150));
+  for (var header = hoveredRow - 1; header >= first; header--) {
+    if (lines[header].isWrapped ||
+        !_claudeLanguageHeading.hasMatch(lines[header].getText())) {
+      continue;
+    }
+    if (!_insideClaudeResponse(buffer, header, maxScanRows: maxScanRows)) {
+      continue;
+    }
+
+    var codeStart = header + 1;
+    // Allow one presentation spacer between a label and its source.
+    if (codeStart < lines.length && lines[codeStart].getText().trim().isEmpty) {
+      codeStart++;
+    }
+    if (codeStart >= lines.length ||
+        lines[codeStart].isWrapped ||
+        !_looksLikeLanguageCode(lines[codeStart].getText())) {
+      continue;
+    }
+
+    final source = <String>[];
+    var lastRow = codeStart - 1;
+    for (
+      var row = codeStart;
+      row < lines.length && row <= codeStart + math.min(maxScanRows, 150);
+      row++
+    ) {
+      final raw = lines[row].getText();
+      if (lines[row].isWrapped) {
+        if (source.isEmpty) break;
+        final wrapsAgain = row + 1 < lines.length && lines[row + 1].isWrapped;
+        source[source.length - 1] += wrapsAgain ? raw : raw.trimRight();
+        lastRow = row;
+        continue;
+      }
+      if (_claudeLanguageHeading.hasMatch(raw) ||
+          _claudeTurnBoundary.hasMatch(raw.trimLeft())) {
+        break;
+      }
+      if (raw.trim().isEmpty) {
+        // Preserve blank source lines (e.g. between a C include and main)
+        // but stop at a blank before another language or ordinary prose.
+        final nextRow = row + 1;
+        if (nextRow < lines.length &&
+            !lines[nextRow].isWrapped &&
+            _looksLikeLanguageCode(lines[nextRow].getText()) &&
+            !_claudeLanguageHeading.hasMatch(lines[nextRow].getText())) {
+          source.add('');
+          lastRow = row;
+          continue;
+        }
+        break;
+      }
+      if (!_looksLikeLanguageCode(raw)) break;
+      final wrapsNext = row + 1 < lines.length && lines[row + 1].isWrapped;
+      source.add(wrapsNext ? raw : raw.trimRight());
+      lastRow = row;
+    }
+    if (hoveredRow >= codeStart && hoveredRow <= lastRow) {
+      return TerminalCodeBlock(
+        openingRow: codeStart,
+        closingRow: lastRow,
+        code: source.join('\n'),
       );
     }
   }
