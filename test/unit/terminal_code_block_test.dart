@@ -106,4 +106,78 @@ void main() {
     );
     expect(block?.code, 'abcdefghijklmno');
   });
+
+  test(
+    'recognizes actual Claude Code rendered code without Markdown fences',
+    () {
+      final terminal = xterm.Terminal()..resize(120, 12);
+      addTearDown(terminal.dispose);
+      terminal.write(
+        '❯ Test prompt\r\n'
+        '• \x1b[34mconst\x1b[0m answer = \x1b[32m42\x1b[0m;\r\n'
+        '  console.log(answer);\r\n'
+        '\r\n'
+        '✦ Cooked for 4s',
+      );
+
+      final block = resolveTerminalCodeBlockAt(
+        terminal: terminal,
+        offset: const xterm.CellOffset(9, 2),
+      );
+      expect(block?.openingRow, 1);
+      expect(block?.closingRow, 2);
+      expect(block?.code, 'const answer = 42;\nconsole.log(answer);');
+      expect(
+        resolveTerminalCodeBlockAt(
+          terminal: terminal,
+          offset: const xterm.CellOffset(5, 4),
+        ),
+        isNull,
+      );
+    },
+  );
+
+  test('does not mistake ordinary Claude bullet prose for code', () {
+    final terminal = xterm.Terminal()..resize(120, 10);
+    addTearDown(terminal.dispose);
+    terminal.write(
+      '• The new terminal feature works correctly.\r\n'
+      '  It does not need a tool call.\r\n'
+      '\r\n'
+      '• const answer = 42;',
+    );
+    expect(
+      resolveTerminalCodeBlockAt(
+        terminal: terminal,
+        offset: const xterm.CellOffset(3, 0),
+      ),
+      isNull,
+    );
+    expect(
+      resolveTerminalCodeBlockAt(
+        terminal: terminal,
+        offset: const xterm.CellOffset(5, 3),
+      )?.code,
+      'const answer = 42;',
+    );
+  });
+
+  test('preserves code indentation and internal blank source lines', () {
+    final terminal = xterm.Terminal()..resize(120, 12);
+    addTearDown(terminal.dispose);
+    terminal.write(
+      '• function f() {\r\n'
+      '    const a = 1;\r\n'
+      '  \r\n'
+      '    return a;\r\n'
+      '  }\r\n'
+      '\r\n'
+      'Done',
+    );
+    final block = resolveTerminalCodeBlockAt(
+      terminal: terminal,
+      offset: const xterm.CellOffset(4, 3),
+    );
+    expect(block?.code, 'function f() {\n  const a = 1;\n\n  return a;\n}');
+  });
 }

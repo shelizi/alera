@@ -61,6 +61,81 @@ TerminalCodeBlock? resolveTerminalCodeBlockAt({
       opening = fence;
     }
   }
+  return _resolveClaudeRenderedCodeAt(
+    terminal.buffer,
+    offset.y,
+    maxScanRows: maxScanRows,
+  );
+}
+
+final RegExp _claudeCodeBullet = RegExp(r'^[ \t]{0,3}[•●] (.+)$');
+
+/// Claude Code's Ink renderer may output the code without backticks. The
+/// leading response bullet is followed by code lines indented two cells.
+/// Only enable the copy overlay when the first line looks like source code.
+final RegExp _probableCodeOpener = RegExp(
+  r'^(?:(?:const|let|var|export|import|function|class|interface|type|'
+  r'async|await|def|print|from|return|fn|pub|use|struct|impl|enum|'
+  r'package|#include|SELECT|INSERT|UPDATE|CREATE|WITH)\b|'
+  r'\{|<|\[|(?:[\w.-]+\s*\()|(?:[\w.-]+\s*[:=]\s*)|'
+  r'(?:\$\s*)?(?:git|npm|pnpm|yarn|cargo|curl|docker|'
+  r'kubectl|python|node|flutter|ls|cd)\s+)',
+  caseSensitive: false,
+);
+
+TerminalCodeBlock? _resolveClaudeRenderedCodeAt(
+  xterm.Buffer buffer,
+  int hoveredRow, {
+  required int maxScanRows,
+}) {
+  final lines = buffer.lines;
+  final first = math.max(0, hoveredRow - math.min(maxScanRows, 150));
+  for (var start = hoveredRow; start >= first; start--) {
+    if (lines[start].isWrapped) continue;
+    final match = _claudeCodeBullet.firstMatch(lines[start].getText());
+    if (match == null) continue;
+    final openingCode = match.group(1)!.trimRight();
+    if (!_probableCodeOpener.hasMatch(openingCode)) continue;
+
+    final parts = <String>[openingCode];
+    var lastRow = start;
+    for (
+      var row = start + 1;
+      row < lines.length && row <= start + math.min(maxScanRows, 150);
+      row++
+    ) {
+      final line = lines[row];
+      final raw = line.getText();
+      if (line.isWrapped) {
+        parts[parts.length - 1] += raw.trimRight();
+        lastRow = row;
+        continue;
+      }
+      if (raw.trim().isEmpty) {
+        // Keep a blank source line only if source indentation resumes.
+        if (row + 1 < lines.length &&
+            !lines[row + 1].isWrapped &&
+            lines[row + 1].getText().startsWith('  ') &&
+            lines[row + 1].getText().trim().isNotEmpty) {
+          parts.add('');
+          lastRow = row;
+          continue;
+        }
+        break;
+      }
+      if (!raw.startsWith('  ')) break;
+      parts.add(raw.substring(2).trimRight());
+      lastRow = row;
+    }
+
+    if (hoveredRow <= lastRow) {
+      return TerminalCodeBlock(
+        openingRow: start,
+        closingRow: lastRow,
+        code: parts.join('\n'),
+      );
+    }
+  }
   return null;
 }
 

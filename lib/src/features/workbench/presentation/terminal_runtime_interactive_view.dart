@@ -144,11 +144,12 @@ class _InteractiveTerminalViewState extends State<_InteractiveTerminalView> {
     // Resolve the contents again instead of copying stale terminal output.
     final current = resolveTerminalCodeBlockAt(
       terminal: widget.session._terminal,
-      offset: xterm.CellOffset(0, target.openingRow + 1),
+      offset: xterm.CellOffset(0, target.openingRow),
     );
     if (current == null ||
         current.openingRow != target.openingRow ||
-        current.closingRow != target.closingRow) {
+        current.closingRow != target.closingRow ||
+        current.code != target.code) {
       _clearHoverState();
       return;
     }
