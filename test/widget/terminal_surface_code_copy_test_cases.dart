@@ -52,10 +52,55 @@ void _registerTerminalSurfaceCodeCopyTests() {
       expect(find.byKey(copyKey), findsOneWidget);
       pty.writes.clear();
 
-      await tester.tap(find.byKey(copyKey));
+      await mouse.moveTo(tester.getCenter(find.byKey(copyKey)));
+      await tester.pump();
+      await mouse.down(tester.getCenter(find.byKey(copyKey)));
+      await mouse.up();
       await tester.pump();
       expect(clipboardWrites, <String>['const answer = 42;']);
       expect(pty.writes, isEmpty, reason: 'copy must not send input to Claude');
+
+      // Clicking must not consume the button: a second copy should work
+      // without leaving or re-entering this code block.
+      expect(find.byKey(copyKey), findsOneWidget);
+      await mouse.moveTo(tester.getCenter(find.byKey(copyKey)));
+      await tester.pump();
+      await mouse.down(tester.getCenter(find.byKey(copyKey)));
+      await mouse.up();
+      await tester.pump();
+      expect(clipboardWrites, <String>[
+        'const answer = 42;',
+        'const answer = 42;',
+      ]);
+      expect(find.byKey(copyKey), findsOneWidget);
+      expect(pty.writes, isEmpty);
+      // The copied checkmark is transient: restore the copy icon so the
+      // control does not look permanently consumed after the first click.
+      await tester.pump(const Duration(milliseconds: 1250));
+      expect(find.byIcon(Icons.content_copy), findsOneWidget);
+      expect(find.byKey(copyKey), findsOneWidget);
+      await mouse.down(tester.getCenter(find.byKey(copyKey)));
+      await mouse.up();
+      await tester.pump();
+      expect(clipboardWrites, hasLength(3));
+      expect(clipboardWrites.last, 'const answer = 42;');
+      expect(find.byKey(copyKey), findsOneWidget);
+
+      // Tooltip/overlay hit-test changes can report MouseRegion exit even
+      // though the pointer is still on the copy button. Keep it visible.
+      final terminalRegion = tester
+          .widgetList<MouseRegion>(
+            find.ancestor(
+              of: find.byKey(copyKey),
+              matching: find.byType(MouseRegion),
+            ),
+          )
+          .lastWhere((region) => region.onHover != null && region.onExit != null);
+      terminalRegion.onExit!(
+        PointerExitEvent(position: tester.getCenter(find.byKey(copyKey))),
+      );
+      await tester.pump();
+      expect(find.byKey(copyKey), findsOneWidget);
 
       await mouse.moveTo(_cellCenter(tester, const xterm.CellOffset(2, 4)));
       await tester.pump();

@@ -21,16 +21,18 @@ class _InteractiveTerminalViewState extends State<_InteractiveTerminalView> {
   double _copyButtonTop = 8;
   bool _copiedCode = false;
   bool _pointerOverCopyButton = false;
+  Timer? _copyFeedbackTimer;
 
   @override
   void initState() {
     super.initState();
-    widget.session._scrollController.addListener(_clearHoverState);
+    widget.session._scrollController.addListener(_clearHoverOnScroll);
   }
 
   @override
   void dispose() {
-    widget.session._scrollController.removeListener(_clearHoverState);
+    widget.session._scrollController.removeListener(_clearHoverOnScroll);
+    _copyFeedbackTimer?.cancel();
     super.dispose();
   }
 
@@ -38,6 +40,7 @@ class _InteractiveTerminalViewState extends State<_InteractiveTerminalView> {
   void didUpdateWidget(covariant _InteractiveTerminalView oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.showCodeBlockCopyButton != widget.showCodeBlockCopyButton) {
+      _copyFeedbackTimer?.cancel();
       // A setting change must clear any stale copy overlay immediately.
       _hoveredCodeBlock = null;
       _lastHoverCodeRow = null;
@@ -46,8 +49,8 @@ class _InteractiveTerminalViewState extends State<_InteractiveTerminalView> {
       _pointerOverCopyButton = false;
     }
     if (oldWidget.session != widget.session) {
-      oldWidget.session._scrollController.removeListener(_clearHoverState);
-      widget.session._scrollController.addListener(_clearHoverState);
+      oldWidget.session._scrollController.removeListener(_clearHoverOnScroll);
+      widget.session._scrollController.addListener(_clearHoverOnScroll);
       _clearHoverState();
     }
   }
@@ -55,7 +58,7 @@ class _InteractiveTerminalViewState extends State<_InteractiveTerminalView> {
   @override
   Widget build(BuildContext context) {
     return MouseRegion(
-      onExit: (_) => _clearHoverState(),
+      onExit: _handleMouseExit,
       onHover: _handleHover,
       child: Stack(
         fit: StackFit.expand,
@@ -145,7 +148,10 @@ class _InteractiveTerminalViewState extends State<_InteractiveTerminalView> {
     setState(() {
       _hoveredCodeBlock = block;
       _copyButtonTop = buttonTop;
-      if (!sameBlock) _copiedCode = false;
+      if (!sameBlock) {
+        _copyFeedbackTimer?.cancel();
+        _copiedCode = false;
+      }
     });
   }
 
@@ -168,7 +174,16 @@ class _InteractiveTerminalViewState extends State<_InteractiveTerminalView> {
     }
     try {
       await widget.session._launchInputOwner.clipboard.writeText(current.code);
-      if (mounted) setState(() => _copiedCode = true);
+      if (!mounted || !identical(_hoveredCodeBlock, target)) return;
+      _copyFeedbackTimer?.cancel();
+      setState(() => _copiedCode = true);
+      // Do not leave a permanent checkmark that looks like the button vanished.
+      // Keep the same button actionable for repeated copies without re-hovering.
+      _copyFeedbackTimer = Timer(const Duration(milliseconds: 1200), () {
+        _copyFeedbackTimer = null;
+        if (!mounted || !widget.showCodeBlockCopyButton || !_copiedCode) return;
+        setState(() => _copiedCode = false);
+      });
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.maybeOf(context)?.showSnackBar(
@@ -212,7 +227,28 @@ class _InteractiveTerminalViewState extends State<_InteractiveTerminalView> {
     });
   }
 
+  void _handleMouseExit(PointerExitEvent event) {
+    // Tooltips and overlay layers can change MouseRegion hit testing even
+    // while the physical pointer stays inside the terminal. In that case,
+    // do not dismiss a copy button that the user is actively clicking.
+    final render = context.findRenderObject();
+    if (render is RenderBox && render.attached) {
+      final local = render.globalToLocal(event.position);
+      if ((Offset.zero & render.size).contains(local)) return;
+    }
+    _clearHoverState();
+  }
+
+  void _clearHoverOnScroll() {
+    // Restoring keyboard focus after copying can scroll xterm to its cursor.
+    // Keep the button under the pointer so another click can copy again;
+    // _copyCodeBlock revalidates the buffer before writing to the clipboard.
+    if (_pointerOverCopyButton && _hoveredCodeBlock != null) return;
+    _clearHoverState();
+  }
+
   void _clearHoverState() {
+    _copyFeedbackTimer?.cancel();
     _lastHoverOffset = null;
     _lastHoverLink = null;
     _lastHoverCodeRow = null;
