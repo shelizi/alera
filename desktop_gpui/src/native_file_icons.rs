@@ -81,19 +81,63 @@ pub fn material_icon_svg(
         return Some(if expanded { opened } else { closed });
     }
     let svg: &'static [u8] = match name.as_str() {
-        "dockerfile"
-        | "docker-compose.yml"
-        | "docker-compose.yaml"
-        | "compose.yml"
-        | "compose.yaml" => {
+        // Exact filenames take precedence over ordinary extensions, matching
+        // Flutter Classic's Material Icon Theme fileToIcon associations.
+        "package.json" | "package-lock.json" | ".nvmrc" => {
+            include_bytes!("../assets/material-icon-theme/nodejs.svg")
+        }
+        "pnpm-lock.yaml" | "pnpm-workspace.yaml" | ".pnpmfile.cjs" => {
+            include_bytes!("../assets/material-icon-theme/pnpm.svg")
+        }
+        "yarn.lock" | ".yarnrc" | ".yarnclean" => {
+            include_bytes!("../assets/material-icon-theme/yarn.svg")
+        }
+        name if name.starts_with("tsconfig.") && name.ends_with(".json") => {
+            include_bytes!("../assets/material-icon-theme/tsconfig.svg")
+        }
+        name if name.starts_with("next.config.")
+            && matches!(name.rsplit_once('.').map(|(_, ext)| ext), Some("js" | "mjs" | "ts" | "mts")) => {
+            include_bytes!("../assets/material-icon-theme/next.svg")
+        }
+        ".eslintignore" | ".eslintrc" | ".eslintcache" => {
+            include_bytes!("../assets/material-icon-theme/eslint.svg")
+        }
+        name if name.starts_with(".eslintrc.") || name.starts_with("eslint.config.") => {
+            include_bytes!("../assets/material-icon-theme/eslint.svg")
+        }
+        ".prettierignore" | ".prettierrc" => {
+            include_bytes!("../assets/material-icon-theme/prettier.svg")
+        }
+        name if name.starts_with(".prettierrc.") || name.starts_with("prettier.config.") => {
+            include_bytes!("../assets/material-icon-theme/prettier.svg")
+        }
+        name if name.starts_with("vite.config.") => {
+            include_bytes!("../assets/material-icon-theme/vite.svg")
+        }
+        name if name.starts_with("vitest.config.") || name.starts_with("vitest.workspace.") => {
+            include_bytes!("../assets/material-icon-theme/vitest.svg")
+        }
+        "makefile" | "gnumakefile" | "kbuild" => {
+            include_bytes!("../assets/material-icon-theme/makefile.svg")
+        }
+        "build.gradle" | "build.gradle.kts" | "settings.gradle"
+        | "settings.gradle.kts" | "gradle.properties" | "gradlew" | "gradlew.bat" => {
+            include_bytes!("../assets/material-icon-theme/gradle.svg")
+        }
+        ".gitlab-ci.yml" | ".gitlab-ci.yaml" => {
+            include_bytes!("../assets/material-icon-theme/gitlab.svg")
+        }
+        name if name == "dockerfile" || name.starts_with("dockerfile.")
+            || name == "docker-compose.yml" || name == "docker-compose.yaml"
+            || (name.starts_with("docker-compose.") && (name.ends_with(".yml") || name.ends_with(".yaml")))
+            || name == "compose.yml" || name == "compose.yaml"
+            || (name.starts_with("compose.") && (name.ends_with(".yml") || name.ends_with(".yaml"))) => {
             include_bytes!("../assets/material-icon-theme/docker.svg")
         }
         ".gitignore" | ".gitattributes" | ".gitmodules" => {
             include_bytes!("../assets/material-icon-theme/git.svg")
         }
-        "tsconfig.json" | "jsconfig.json" => {
-            include_bytes!("../assets/material-icon-theme/typescript.svg")
-        }
+        "jsconfig.json" => include_bytes!("../assets/material-icon-theme/typescript.svg"),
         "cargo.toml" | "cargo.lock" => include_bytes!("../assets/material-icon-theme/rust.svg"),
         _ => match name.rsplit_once('.').map(|(_, ext)| ext) {
             Some("rs") => include_bytes!("../assets/material-icon-theme/rust.svg"),
@@ -184,6 +228,34 @@ mod tests {
     }
 
     #[test]
+    fn classic_tooling_names_override_plain_extension_icons() {
+        // Classic Material Icon Theme maps filenames before extensions.
+        // Otherwise tool-specific configs look like generic JSON/YAML/TS.
+        for (name, generic) in [
+            ("package.json", "plain.json"),
+            ("pnpm-lock.yaml", "plain.yaml"),
+            ("yarn.lock", "plain.lock"),
+            ("tsconfig.json", "plain.json"),
+            ("eslint.config.js", "plain.js"),
+            (".prettierrc.json", "plain.json"),
+            ("vite.config.ts", "plain.ts"),
+            ("vitest.config.ts", "plain.ts"),
+            ("next.config.mjs", "plain.mjs"),
+            ("Makefile", "plain.unknown"),
+            ("build.gradle", "plain.unknown"),
+            (".gitlab-ci.yml", "plain.yml"),
+        ] {
+            let named = material_icon_svg(name, false, false).unwrap_or_else(|| panic!("{name}"));
+            assert_ne!(Some(named), material_icon_svg(generic, false, false), "{name}");
+            assert!(named.len() > 80 && (named.starts_with(b"<svg") || named.starts_with(b"<?xml")));
+        }
+        assert_eq!(
+            material_icon_svg(r"C:\project\PNPM-LOCK.YAML", false, false),
+            material_icon_svg("pnpm-lock.yaml", false, false),
+        );
+    }
+
+    #[test]
     fn folders_and_windows_paths_are_supported() {
         assert!(material_icon_svg("src", true, false).is_some());
         assert!(material_icon_svg("src", true, true).is_some());
@@ -247,6 +319,17 @@ mod tests {
             "Dockerfile",
             "a.gitignore",
             "package.json",
+            "pnpm-lock.yaml",
+            "yarn.lock",
+            "tsconfig.json",
+            "eslint.config.js",
+            ".prettierrc.json",
+            "vite.config.ts",
+            "vitest.config.ts",
+            "next.config.mjs",
+            "Makefile",
+            "build.gradle",
+            ".gitlab-ci.yml",
         ];
         for name in inputs {
             if let Some(svg) = material_icon_svg(name, false, false) {

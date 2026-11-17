@@ -26,6 +26,15 @@ matching opened counterparts. Their directory aliases follow the
 upstream folder icon associations; unknown directories retain the
 generic Material folder icon.
 
+## Named tooling and configuration files
+
+The pinned upstream `icons/` directory also supplies `nodejs`, `pnpm`,
+`yarn`, `tsconfig`, `eslint`, `prettier`, `vite`, `vitest`, `next`,
+`makefile`, `gradle`, and `gitlab` SVGs. Native first matches known
+tooling filenames (such as `package.json`, `pnpm-lock.yaml`,
+`vite.config.ts`, and `.gitlab-ci.yml`) before falling back to generic
+JSON/YAML/JavaScript or other extension icons, consistent with Classic.
+
 The assets are embedded at compile time and never fetched over the network
 by the desktop app. Unknown file types retain the Lucide/Codicon fallback.
 To update, verify the upstream revision and MIT license, then rerun the
