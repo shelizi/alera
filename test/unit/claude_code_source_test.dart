@@ -192,6 +192,44 @@ void main() {
     },
   );
 
+  test('canonical block extent reaches the true final visible row', () {
+    final store = ClaudeCodeMessageStore();
+    addTearDown(store.dispose);
+    final sourceLines = List<String>.generate(
+      20,
+      (index) =>
+          'value_' + (index + 1).toString() + ' = ' + (index + 1).toString(),
+    );
+    store.observeHookEvent(
+      _hook('Stop', {
+        'last_assistant_message':
+            fence + 'python\n' + sourceLines.join('\n') + '\n' + fence,
+      }),
+    );
+    final terminal = xterm.Terminal()..resize(120, 30);
+    terminal.write(
+      [
+        '❯ test',
+        '• ' + sourceLines.first,
+        for (final line in sourceLines.skip(1)) '  ' + line,
+        '',
+        'After the program.',
+      ].join('\r\n'),
+    );
+    final block = resolveClaudeSourceCodeBlockAt(
+      terminal: terminal,
+      offset: const xterm.CellOffset(3, 2),
+      sourceBlocks: store.blocksForTerminal('terminal-1'),
+    );
+    expect(block?.openingRow, 1);
+    expect(
+      block?.closingRow,
+      20,
+      reason: 'A hover near the start still knows the real last row',
+    );
+    expect(block?.code, sourceLines.join('\n'));
+  });
+
   test('rejects code snippets when only a shared prefix matches', () {
     final store = ClaudeCodeMessageStore();
     addTearDown(store.dispose);

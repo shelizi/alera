@@ -72,9 +72,13 @@ TerminalCodeBlock? resolveClaudeSourceCodeBlockAt({
     var sourceIndex = index + direction;
     var terminalRow = direction < 0 ? hovered.first - 1 : hovered.last + 1;
     var matched = 0;
+    // Keep following the actual rendered snippet to its end. Five matching
+    // lines are sufficient to verify identity, but not to position a button
+    // *after* a 100-line code block when the user hovers near its beginning.
+    // Bound the walk to avoid a full scrollback scan for huge files.
     while (sourceIndex >= 0 &&
         sourceIndex < source.length &&
-        matched < 5 &&
+        matched < 600 &&
         terminalRow >= 0 &&
         terminalRow < buffer.lines.length) {
       // Markdown preserves empty lines but Ink can add/remove spacers.

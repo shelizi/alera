@@ -18,7 +18,6 @@ class _InteractiveTerminalViewState extends State<_InteractiveTerminalView> {
   TerminalLinkRange? _lastHoverLink;
   TerminalCodeBlock? _hoveredCodeBlock;
   int? _lastHoverCodeRow;
-  double _lastCodePointerY = 8;
   double _copyButtonTop = 8;
   bool _copiedCode = false;
   bool _pointerOverCopyButton = false;
@@ -134,7 +133,7 @@ class _InteractiveTerminalViewState extends State<_InteractiveTerminalView> {
     _lastHoverLink = link;
     _setHoveredLink(link);
     if (widget.showCodeBlockCopyButton) {
-      _handleCodeHover(offset, event.localPosition.dy);
+      _handleCodeHover(offset);
     }
   }
 
@@ -144,7 +143,7 @@ class _InteractiveTerminalViewState extends State<_InteractiveTerminalView> {
     final offset = _lastHoverOffset;
     if (offset == null) return;
     _lastHoverCodeRow = null;
-    _handleCodeHover(offset, _lastCodePointerY);
+    _handleCodeHover(offset);
   }
 
   TerminalCodeBlock? _resolveCodeBlockAt(xterm.CellOffset offset) {
@@ -172,16 +171,37 @@ class _InteractiveTerminalViewState extends State<_InteractiveTerminalView> {
     );
   }
 
-  void _handleCodeHover(xterm.CellOffset offset, double pointerY) {
-    if (!widget.showCodeBlockCopyButton || _lastHoverCodeRow == offset.y)
+  /// Anchor the copy action *after* the rendered block, not at the mouse.
+  /// xterm's render box owns viewport/scrollback positioning, so convert its
+  /// cell coordinates into this overlay's coordinates after scrolling.
+  double _copyTopBelowCode(TerminalCodeBlock block) {
+    final viewState = widget.session._terminalViewKey.currentState;
+    final overlay = context.findRenderObject();
+    if (viewState == null || overlay is! RenderBox || !overlay.attached) {
+      return 8;
+    }
+    final renderer = viewState.renderTerminal;
+    final lastLineTop = renderer.getOffset(
+      xterm.CellOffset(0, block.closingRow),
+    );
+    final afterLastLine = renderer.localToGlobal(
+      lastLineTop + Offset(0, renderer.cellSize.height),
+    );
+    final idealTop = overlay.globalToLocal(afterLastLine).dy + 4;
+    final maxTop = (overlay.size.height - 36).clamp(4.0, double.infinity);
+    // The end can be outside the viewport, or at its last line. Keep the
+    // action reachable at the bottom edge in those cases, never above the
+    // last rendered code row when there is room below it.
+    return idealTop.clamp(4.0, maxTop).toDouble();
+  }
+
+  void _handleCodeHover(xterm.CellOffset offset) {
+    if (!widget.showCodeBlockCopyButton || _lastHoverCodeRow == offset.y) {
       return;
+    }
     _lastHoverCodeRow = offset.y;
-    _lastCodePointerY = pointerY;
     final block = _resolveCodeBlockAt(offset);
-    final height = context.size?.height ?? 0;
-    final buttonTop = (pointerY - 16)
-        .clamp(4.0, (height - 36).clamp(4.0, double.infinity))
-        .toDouble();
+    final buttonTop = block == null ? _copyButtonTop : _copyTopBelowCode(block);
     final previous = _hoveredCodeBlock;
     final sameBlock =
         previous?.openingRow == block?.openingRow &&
