@@ -132,7 +132,8 @@ use alera_gpui_desktop::visual_tokens::{
     SECTION_HEADER_HEIGHT, SIDEBAR_RESIZE_HANDLE_WIDTH,
     STATUS_BAR_HEIGHT, TAB_STRIP_HEIGHT, TAB_STRIP_LEADING_PADDING, TAB_ATTENTION_DOT_SIZE, TAB_CHIP_HORIZONTAL_PADDING, TEXT, TOOLBAR, TOP_BAR_HEIGHT,
     EDITOR_TOOLBAR_HEIGHT, usable_workbench_height, secondary_terminal_render_height,
-    inner_secondary_terminal_render_height, TERMINAL_INNER_SPLIT_HEADER_HEIGHT,
+    primary_inner_terminal_render_size, inner_secondary_terminal_render_height,
+    TERMINAL_INNER_SPLIT_HEADER_HEIGHT,
 };
 use alera_gpui_desktop::vt_screen::{StyledRow, TERMINAL_DEFAULT_BG};
 use alera_gpui_desktop::workbench_layout_store::{
@@ -10861,6 +10862,12 @@ impl Render for Workbench {
         let split_height = mixed_has_secondary && !mixed_split_horizontal;
         let primary_width = content_width / if split_width { 2.0 } else { 1.0 };
         let primary_height = content_height / if split_height { 2.0 } else { 1.0 };
+        // The inner Terminal split further reduces the primary VT viewport.
+        // Reuse these *visible* dimensions for both PTY rows and the Windows
+        // IME cursor anchor; otherwise a candidate popup can cross the seam.
+        let (primary_terminal_width, primary_terminal_height) = primary_inner_terminal_render_size(
+            primary_width, primary_height, terminal_split_exists, terminal_split_horizontal,
+        );
         let secondary_workbench_height = secondary_terminal_render_height(
             primary_height,
             split_height,
@@ -10873,8 +10880,8 @@ impl Render for Workbench {
             .and_then(|tab| {
                 terminal_ime_anchor_with_line_height(
                     tab.screen.cursor(),
-                    primary_width,
-                    primary_height,
+                    primary_terminal_width,
+                    primary_terminal_height,
                     terminal_font_size,
                     terminal_line_height,
                 )
@@ -10898,18 +10905,8 @@ impl Render for Workbench {
         if self.settings_section.is_none() && !center_is_editor {
             if let Some((target, tab)) = current_primary_host.as_ref().zip(primary_terminal) {
                 if tab.running && self.terminals.context_target_is_live(target) {
-                    let width = primary_width
-                        / if terminal_split_exists && terminal_split_horizontal {
-                            2.0
-                        } else {
-                            1.0
-                        };
-                    let height = primary_height
-                        / if terminal_split_exists && !terminal_split_horizontal {
-                            2.0
-                        } else {
-                            1.0
-                        };
+                    let width = primary_terminal_width;
+                    let height = primary_terminal_height;
                     if let Some((cols, rows)) = estimate_terminal_viewport_with_line_height(
                         width,
                         height,
@@ -13565,14 +13562,14 @@ impl Render for Workbench {
                                                 let title = tab.title();
                                                 div()
                                                     .id(("git-original-tab", index))
-                                                    .h(px(32.0)).mr_2().px_1()
+                                                    .h(px(32.0)).mr_2().px(px(TAB_CHIP_HORIZONTAL_PADDING))
                                                     .flex().items_center().rounded_md().border_1()
                                                     .border_color(rgb(if active { BORDER_ACTIVE } else { BORDER }))
                                                     .bg(rgb(if active { ELEVATED } else { TOOLBAR }))
                                                     .child(div()
                                                         .id(("git-original-tab-select", index))
                                                         .min_w_0().max_w(px(210.0)).flex()
-                                                        .items_center().gap_1().px_1()
+                                                        .items_center().gap_1()
                                                         .cursor_pointer().text_sm()
                                                         .text_color(rgb(if active { TEXT } else { MUTED }))
                                                         .child(icon(UiIcon::File, 12.0, MUTED))
@@ -13596,7 +13593,7 @@ impl Render for Workbench {
                                                     .id(("file-preview-tab", index))
                                                     .h(px(32.0))
                                                     .mr_2()
-                                                    .px_1()
+                                                    .px(px(TAB_CHIP_HORIZONTAL_PADDING))
                                                     .flex()
                                                     .items_center()
                                                     .rounded_md()
@@ -13611,7 +13608,6 @@ impl Render for Workbench {
                                                             .flex()
                                                             .items_center()
                                                             .gap_1()
-                                                            .px_1()
                                                             .cursor_pointer()
                                                             .text_color(rgb(if selected { TEXT } else { MUTED }))
                                                             .child(file_icon)

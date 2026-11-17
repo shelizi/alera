@@ -98,6 +98,23 @@ pub fn secondary_terminal_render_height(
     .max(0.0)
 }
 
+/// Visible primary Terminal dimensions after the *inner* Terminal split.
+/// The PTY grid and Windows IME candidate anchor must use the same bounds:
+/// passing the unsplit workbench size lets candidates drift into the other pane.
+pub fn primary_inner_terminal_render_size(
+    pane_width: f32,
+    pane_height: f32,
+    split_exists: bool,
+    side_by_side: bool,
+) -> (f32, f32) {
+    if !pane_width.is_finite() || !pane_height.is_finite() {
+        return (0.0, 0.0);
+    }
+    let width = pane_width / if split_exists && side_by_side { 2.0 } else { 1.0 };
+    let height = pane_height / if split_exists && !side_by_side { 2.0 } else { 1.0 };
+    (width.max(0.0), height.max(0.0))
+}
+
 /// Each legacy inner Terminal split renders a compact 28px focus header
 /// above the secondary VT scroll area, even when panes are side-by-side.
 pub const TERMINAL_INNER_SPLIT_HEADER_HEIGHT: f32 = 28.0;
@@ -319,6 +336,24 @@ mod tests {
             );
         }
         assert!(source.matches("tab_close_button(").count() >= 3);
+    }
+
+    #[test]
+    fn git_original_and_explorer_preview_tabs_share_classic_chip_padding() {
+        let source = include_str!("main.rs");
+        // Secondary Tab types must not retain the old nested 4px + 4px
+        // padding while mixed Host/Editor chips use Classic's 6px inset.
+        for (outer_id, inner_id) in [
+            (r#".id(("git-original-tab", index))"#, r#".id(("git-original-tab-select", index))"#),
+            (r#".id(("file-preview-tab", index))"#, r#".id(("file-tab", index))"#),
+        ] {
+            let tab = source.split_once(outer_id).unwrap().1;
+            let outer = tab.split_once(".child(").unwrap().0;
+            assert!(outer.contains(".px(px(TAB_CHIP_HORIZONTAL_PADDING))"), "{outer_id}: chip has wrong horizontal inset");
+            let selection = tab.split_once(inner_id).unwrap().1
+                .split_once(".cursor_pointer()").unwrap().0;
+            assert!(!selection.contains(".px_1()"), "{inner_id}: old nested padding drifts from Classic");
+        }
     }
 
     #[test]
@@ -599,6 +634,46 @@ mod tests {
             secondary_terminal_render_height(f32::INFINITY, true, false),
             0.0
         );
+    }
+
+    #[test]
+    fn inner_terminal_pty_and_ime_share_visible_split_bounds() {
+        assert_eq!(primary_inner_terminal_render_size(1000.0, 600.0, false, true), (1000.0, 600.0));
+        assert_eq!(primary_inner_terminal_render_size(1000.0, 600.0, false, false), (1000.0, 600.0));
+        assert_eq!(primary_inner_terminal_render_size(1000.0, 600.0, true, true), (500.0, 600.0));
+        assert_eq!(primary_inner_terminal_render_size(1000.0, 600.0, true, false), (1000.0, 300.0));
+        assert_eq!(primary_inner_terminal_render_size(-20.0, 600.0, true, true), (0.0, 600.0));
+        assert_eq!(primary_inner_terminal_render_size(f32::NAN, 600.0, true, true), (0.0, 0.0));
+        assert_eq!(primary_inner_terminal_render_size(1000.0, f32::INFINITY, true, false), (0.0, 0.0));
+        // The same dimensions must bound the actual PTY cell count and IME
+        // popup position, not just the floating-point layout calculation.
+        for side_by_side in [true, false] {
+            let (width, height) = primary_inner_terminal_render_size(
+                1000.0, 600.0, true, side_by_side,
+            );
+            let (cols, rows) = crate::terminal::estimate_terminal_viewport_with_line_height(
+                width, height, 14.0, 1.3,
+            ).expect("inner split should fit Terminal cells");
+            let (ime_x, ime_y) = crate::terminal::terminal_ime_anchor_with_line_height(
+                (100, 120), width, height, 14.0, 1.3,
+            ).expect("inner split must fit IME cursor");
+            assert!(ime_x <= width - 2.0 && ime_y <= height - 2.0);
+            if side_by_side {
+                assert!(cols < 70, "half-width Terminal must have fewer columns");
+            } else {
+                assert!(rows < 20, "half-height Terminal must have fewer rows");
+            }
+        }
+        let source = include_str!("main.rs");
+        assert!(source.contains("let (primary_terminal_width, primary_terminal_height) = primary_inner_terminal_render_size("));
+        let anchor = source.split_once("let primary_ime_anchor =").unwrap().1
+            .split_once("let secondary_ime_anchor =").unwrap().0;
+        assert!(anchor.contains("primary_terminal_width,"), "primary IME must not use unsplit width");
+        assert!(anchor.contains("primary_terminal_height,"), "primary IME must not use unsplit height");
+        let resize = source.split_once("let mut proposed_viewports =").unwrap().1
+            .split_once("if terminal_split_exists {").unwrap().0;
+        assert!(resize.contains("let width = primary_terminal_width;"));
+        assert!(resize.contains("let height = primary_terminal_height;"));
     }
 
     #[test]
