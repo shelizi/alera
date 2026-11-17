@@ -349,4 +349,137 @@ void main() {
       );
     }
   });
+
+  test(
+    'copies entire unlabelled Claude eight-queens C program across blank lines',
+    () {
+      final source = <String>[
+        '#include <stdio.h>',
+        '#include <stdlib.h>',
+        '',
+        '#define N 8',
+        '',
+        'static int queens[N];',
+        'static int col_used[N];',
+        'static int diag1[2 * N - 1];',
+        'static int diag2[2 * N - 1];',
+        'static int solution_count = 0;',
+        '',
+        'static void print_board(void) {',
+        '  printf("Solution #%d:\\n", solution_count);',
+        '  for (int r = 0; r < N; r++) {',
+        '    for (int c = 0; c < N; c++) {',
+        "      putchar(queens[r] == c ? 'Q' : '.');",
+        "      putchar(' ');",
+        '    }',
+        "    putchar('\\n');",
+        '  }',
+        '}',
+        '',
+        'static void solve(int row) {',
+        '  if (row == N) {',
+        '    solution_count++;',
+        '    print_board();',
+        '    return;',
+        '  }',
+        '  for (int col = 0; col < N; col++) {',
+        '    int d1 = row + col;',
+        '    int d2 = row - col + N - 1;',
+        '    if (col_used[col] || diag1[d1] || diag2[d2])',
+        '      continue;',
+        '    /* 放置皇后 */',
+        '    queens[row] = col;',
+        '    col_used[col] = diag1[d1] = diag2[d2] = 1;',
+        '    solve(row + 1);',
+        '    /* 回溯：移除皇后 */',
+        '    col_used[col] = diag1[d1] = diag2[d2] = 0;',
+        '  }',
+        '}',
+        '',
+        'int main(void) {',
+        '  solve(0);',
+        '  printf("Total solutions: %d\\n", solution_count);',
+        '  return EXIT_SUCCESS;',
+        '}',
+      ];
+      final terminal = xterm.Terminal()..resize(110, 20);
+      addTearDown(terminal.dispose);
+      terminal.write(
+        '❯ 給我八皇后 C implement 的 code\r\n'
+        '• 下面是八皇后問題的 C 實作，它用回溯法找出全部 92 組解。\r\n'
+        '\r\n'
+        '${source.join('\r\n')}\r\n'
+        '\r\n'
+        '運作方式\r\n'
+        '- 每一列放一個皇后。\r\n'
+        '編譯與執行\r\n'
+        'gcc -O2 -o queens queens.c\r\n'
+        './queens\r\n'
+        '✻ Crunched for 8s',
+      );
+      TerminalCodeBlock? at(int row) => resolveTerminalCodeBlockAt(
+        terminal: terminal,
+        offset: xterm.CellOffset(8, row),
+      );
+      final expected = source.join('\n');
+      expect(at(3)?.code, expected, reason: 'include at first line');
+      expect(
+        at(3 + source.indexOf('static void solve(int row) {'))?.code,
+        expected,
+        reason: 'hover over nested function after many blank rows',
+      );
+      expect(
+        at(
+          3 +
+              source.indexOf(
+                '  printf("Total solutions: %d\\n", solution_count);',
+              ),
+        )?.code,
+        expected,
+        reason: 'hover near end must copy full C file',
+      );
+      expect(at(2), isNull, reason: 'intro spacer is not code');
+      expect(
+        at(3 + source.length + 1),
+        isNull,
+        reason: 'prose heading is not code',
+      );
+      expect(
+        at(3 + source.length + 4),
+        isNull,
+        reason: 'shell commands are outside code',
+      );
+    },
+  );
+
+  test('does not copy terminal output after Claude turn end', () {
+    final terminal = xterm.Terminal()..resize(100, 16);
+    addTearDown(terminal.dispose);
+    terminal.write(
+      '❯ Explain C code\r\n'
+      '• The code follows:\r\n'
+      '\r\n'
+      'static int queens[N];\r\n'
+      'int main(void) {\r\n'
+      '  return 0;\r\n'
+      '}\r\n'
+      '✻ Crunched for 8s\r\n'
+      '#include <not-code>\r\n'
+      'int main(void) { return 1; }',
+    );
+    expect(
+      resolveTerminalCodeBlockAt(
+        terminal: terminal,
+        offset: const xterm.CellOffset(2, 9),
+      ),
+      isNull,
+    );
+    expect(
+      resolveTerminalCodeBlockAt(
+        terminal: terminal,
+        offset: const xterm.CellOffset(2, 5),
+      )?.code,
+      'static int queens[N];\nint main(void) {\n  return 0;\n}',
+    );
+  });
 }

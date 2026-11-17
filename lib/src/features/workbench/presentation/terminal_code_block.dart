@@ -66,6 +66,11 @@ TerminalCodeBlock? resolveTerminalCodeBlockAt({
         offset.y,
         maxScanRows: maxScanRows,
       ) ??
+      _resolveClaudeBareCodeAt(
+        terminal.buffer,
+        offset.y,
+        maxScanRows: maxScanRows,
+      ) ??
       _resolveClaudeRenderedCodeAt(
         terminal.buffer,
         offset.y,
@@ -89,7 +94,7 @@ final RegExp _probableCodeOpener = RegExp(
 );
 
 final RegExp _claudeTurnBoundary = RegExp(
-  r'^(?:❯(?:\s|$)|[✻✦✶*]\s+(?:Cooked|Brewed|Done)\b)',
+  r'^(?:❯(?:\s|$)|[✻✦✶]\s+|[*]\s+(?:Cooked|Brewed|Crunched|Done)\b)',
 );
 
 /// Unbulleted snippets can follow Claude's prose or earlier code blocks.
@@ -318,6 +323,157 @@ TerminalCodeBlock? _resolveClaudeLanguageCodeAt(
         openingRow: codeStart,
         closingRow: lastRow,
         code: source.join('\n'),
+      );
+    }
+  }
+  return null;
+}
+
+/// Claude often emits an entire syntax-highlighted source file without
+/// Markdown fences or a "C" title. Detect a strong source opener within a
+/// response bullet and continue through declarations, functions and blank
+/// lines. Never treat generic PTY output as source by itself.
+final RegExp _claudeBareCodeStart = RegExp(
+  r'^(?:#(?:include|define|pragma|ifn?def|endif)\b|'
+  r'(?:static\s+)?(?:unsigned\s+|signed\s+)?'
+  r'(?:void|int|long|short|char|float|double|bool|size_t)\s+\**[A-Za-z_]\w*|'
+  r'(?:const|let|var|function|class|interface|type|def|from|import|'
+  r'export|fn|pub|struct|impl|enum|package|using|namespace|typedef)\b|'
+  r'(?:async\s+)?function\s+|'
+  r'(?:print|printf|console\.log|Write-Output)\s*\()',
+  caseSensitive: false,
+);
+
+final RegExp _claudeBareControlLine = RegExp(
+  r'^(?:if|else|for|while|do|switch|case|default|'
+  r'try|catch|finally|return|continue|break|throw|'
+  r'await|yield|pass|assert)\b',
+  caseSensitive: false,
+);
+
+bool _looksLikeBareCodeLine(String raw) {
+  final source = raw.trimLeft();
+  if (source.isEmpty) return false;
+  if (_claudeBareCodeStart.hasMatch(source) ||
+      _claudeBareControlLine.hasMatch(source) ||
+      _looksLikeLanguageCode(source)) {
+    return true;
+  }
+  if (source.startsWith('/*') ||
+      source.startsWith('*/') ||
+      source.startsWith('//') ||
+      source.startsWith('* ') ||
+      source.startsWith('#')) {
+    return true;
+  }
+  if (source == '{' || source == '}' || source == '};') return true;
+  // Covers ordinary assignment, function calls and array expressions,
+  // including lines nested many spaces inside C/JS/Python functions.
+  return source.endsWith(';') ||
+      source.endsWith('{') ||
+      source.endsWith('}') ||
+      source.endsWith('=>') ||
+      source.endsWith(',') ||
+      source.contains(' = ') ||
+      source.contains(' += ') ||
+      source.contains(' -= ') ||
+      source.contains('++') ||
+      source.contains('--');
+}
+
+TerminalCodeBlock? _resolveClaudeBareCodeAt(
+  xterm.Buffer buffer,
+  int hoveredRow, {
+  required int maxScanRows,
+}) {
+  final lines = buffer.lines;
+  final first = math.max(0, hoveredRow - maxScanRows);
+  int? replyBullet;
+  for (var row = hoveredRow; row >= first; row--) {
+    if (lines[row].isWrapped) continue;
+    final raw = lines[row].getText();
+    if (_claudeTurnBoundary.hasMatch(raw.trimLeft())) return null;
+    if (_claudeCodeBullet.hasMatch(raw)) {
+      replyBullet = row;
+      break;
+    }
+  }
+  if (replyBullet == null) return null;
+  // A source-code bullet already has a dedicated renderer-aware decoder
+  // which removes its presentation prefix. Do not turn its indented child
+  // rows into a separate bare code block.
+  final bulletText = _claudeCodeBullet
+      .firstMatch(lines[replyBullet].getText())
+      ?.group(1);
+  if (bulletText != null && _probableCodeOpener.hasMatch(bulletText)) {
+    return null;
+  }
+
+  // Use the earliest genuine source opener in the current Claude answer,
+  // not the nearest nested "static"/"int" declaration to the hovered row.
+  for (var start = replyBullet + 1; start <= hoveredRow; start++) {
+    if (lines[start].isWrapped ||
+        !_claudeBareCodeStart.hasMatch(lines[start].getText().trimLeft())) {
+      continue;
+    }
+
+    final source = <String>[];
+    var lastRow = start - 1;
+    for (
+      var row = start;
+      row < lines.length && row <= start + maxScanRows;
+      row++
+    ) {
+      final line = lines[row];
+      final raw = line.getText();
+      if (line.isWrapped) {
+        if (source.isEmpty) break;
+        final wrapsAgain = row + 1 < lines.length && lines[row + 1].isWrapped;
+        source[source.length - 1] += wrapsAgain ? raw : raw.trimRight();
+        lastRow = row;
+        continue;
+      }
+      if (_claudeTurnBoundary.hasMatch(raw.trimLeft()) ||
+          _claudeCodeBullet.hasMatch(raw) ||
+          _claudeLanguageHeading.hasMatch(raw)) {
+        break;
+      }
+      if (raw.trim().isEmpty) {
+        // Keep blank lines between preprocessor directives, declarations,
+        // functions and comments, but stop before ordinary explanation.
+        final nextRow = row + 1;
+        if (nextRow < lines.length &&
+            !lines[nextRow].isWrapped &&
+            _looksLikeBareCodeLine(lines[nextRow].getText())) {
+          source.add('');
+          lastRow = row;
+          continue;
+        }
+        break;
+      }
+      if (!_looksLikeBareCodeLine(raw)) break;
+      final wrapsNext = row + 1 < lines.length && lines[row + 1].isWrapped;
+      source.add(wrapsNext ? raw : raw.trimRight());
+      lastRow = row;
+    }
+
+    if (hoveredRow <= lastRow && source.isNotEmpty) {
+      // Claude's rendered code can have a shared presentation gutter.
+      // Strip only that common gutter; preserve nested source indentation.
+      final indents = source
+          .where((text) => text.isNotEmpty)
+          .map((text) => text.length - text.trimLeft().length);
+      final gutter = indents.isEmpty ? 0 : indents.reduce(math.min);
+      final code = source
+          .map((text) {
+            if (text.isEmpty || gutter == 0) return text;
+            return text.substring(gutter);
+          })
+          .join('\n');
+      return TerminalCodeBlock(
+        openingRow: start,
+        closingRow: lastRow,
+        code: code,
       );
     }
   }

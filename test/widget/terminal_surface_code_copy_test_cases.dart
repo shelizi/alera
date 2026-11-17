@@ -380,6 +380,100 @@ void _registerTerminalSurfaceCodeCopyTests() {
     },
   );
 
+  testWidgets('copies full unlabelled Claude eight-queens C source by mouse', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    final clipboardWrites = <String>[];
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (call) async {
+        if (call.method == 'Clipboard.setData') {
+          clipboardWrites.add(
+            (call.arguments as Map<Object?, Object?>)['text'] as String,
+          );
+        }
+        return null;
+      },
+    );
+    try {
+      final factory = _FakeTerminalPtySessionFactory();
+      final runtime = XtermTerminalRuntime(
+        ptySessionFactory: factory,
+        shellLaunchesBuilder: _testShellLaunches,
+        initialSettings: TerminalSettings.defaults.copyWith(
+          showCodeBlockCopyButton: true,
+        ),
+      );
+      addTearDown(runtime.dispose);
+      final session = runtime.sessionFor(workspace: _workspace(), tab: _tab());
+      await _pumpTerminalSurface(tester, session);
+      final pty = factory.sessions.single;
+      const code =
+          '#include <stdio.h>\n'
+          '\n'
+          '#define N 8\n'
+          '\n'
+          'static int queens[N];\n'
+          '\n'
+          'static void solve(int row) {\n'
+          '  if (row == N) {\n'
+          '    printf("Solved");\n'
+          '    return;\n'
+          '  }\n'
+          '}';
+      pty.emitOutput(
+        utf8.encode(
+          '❯ 給我八皇后程式碼\r\n'
+          '• 下面是八皇后問題的 C 實作，用回溯法找出 92 組解。\r\n'
+          '\r\n'
+          '${code.replaceAll('\n', '\r\n')}\r\n'
+          '\r\n'
+          '運作方式\r\n'
+          '- 每列放一個皇后。\r\n'
+          '✻ Crunched for 8s',
+        ),
+      );
+      await _pumpTerminalOutput(tester);
+      final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+      await mouse.addPointer(
+        location: _cellCenter(tester, const xterm.CellOffset(4, 0)),
+      );
+      await mouse.moveTo(_cellCenter(tester, const xterm.CellOffset(4, 9)));
+      await tester.pump();
+      const buttonKey = ValueKey<String>('terminal-copy-code-button');
+      expect(find.byKey(buttonKey), findsOneWidget);
+
+      pty.writes.clear();
+      await tester.tap(find.byKey(buttonKey));
+      await tester.pump();
+      expect(clipboardWrites, <String>[code]);
+      expect(pty.writes, isEmpty);
+
+      // The same source is still copyable after clicking.
+      expect(find.byKey(buttonKey), findsOneWidget);
+      await tester.tap(find.byKey(buttonKey));
+      await tester.pump();
+      expect(clipboardWrites, <String>[code, code]);
+
+      await mouse.moveTo(_cellCenter(tester, const xterm.CellOffset(4, 16)));
+      await tester.pump();
+      expect(
+        find.byKey(buttonKey),
+        findsNothing,
+        reason: 'Claude explanation is not source code',
+      );
+      await mouse.removePointer();
+    } finally {
+      await tester.pumpWidget(const SizedBox());
+      debugDefaultTargetPlatformOverride = null;
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        null,
+      );
+    }
+  });
+
   testWidgets(
     'copy button defaults off and toggles live without restarting the PTY',
     (tester) async {
