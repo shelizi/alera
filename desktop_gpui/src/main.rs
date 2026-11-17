@@ -14154,6 +14154,7 @@ impl Render for Workbench {
                                         div()
                                             .id("terminal-output-scroll")
                                             .min_w_0()
+                                            .min_h_0()
                                             .bg(rgb(TERMINAL_DEFAULT_BG))
                                             .key_context("AleraGpuiTerminalRaw")
                                             .track_focus(&terminal_keyboard_focus)
@@ -14199,11 +14200,21 @@ impl Render for Workbench {
                                                     .child(div()
                                                         .id("terminal-secondary-focus")
                                                         .h(px(TERMINAL_INNER_SPLIT_HEADER_HEIGHT))
+                                                        // PTY rows reserve this exact 28px: prevent
+                                                        // Flex shrinking the focus header in short panes.
+                                                        .flex_shrink_0()
+                                                        .min_w_0()
+                                                        .flex()
+                                                        .items_center()
                                                         .px_2()
                                                         .bg(rgb(PANEL))
                                                         .text_sm()
                                                         .cursor_pointer()
-                                                        .child(format!("Second pane: {title} · click to focus"))
+                                                        .child(div().min_w_0().truncate().child(format!(
+                                                            "{}: {title} · {}",
+                                                            tr(self.settings_menu_locale, "Second pane"),
+                                                            tr(self.settings_menu_locale, "Click to focus"),
+                                                        )))
                                                         .on_click(cx.listener(|this, _, _, cx| {
                                                             this.switch_terminal_split_focus(cx);
                                                         }))

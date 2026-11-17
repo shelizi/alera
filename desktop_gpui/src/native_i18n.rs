@@ -145,6 +145,23 @@ mod tests {
         }
     }
     #[test]
+    fn inner_split_terminal_header_is_localized_in_every_ui_language() {
+        let source = include_str!("main.rs");
+        let focus = source.split_once(r#".id("terminal-secondary-focus")"#).unwrap().1
+            .split_once(".on_click(").unwrap().0;
+        for phrase in ["Second pane", "Click to focus"] {
+            assert!(focus.contains(&format!(r#"tr(self.settings_menu_locale, "{phrase}")"#)),
+                "{phrase} must use the active workbench language");
+            assert_eq!(tr(UiLocale::English, phrase), phrase);
+            for locale in [UiLocale::TraditionalChinese, UiLocale::SimplifiedChinese, UiLocale::Japanese] {
+                let translated = tr(locale, phrase);
+                assert_ne!(translated, phrase, "{phrase} missing for {}", locale.tag());
+                assert!(!translated.is_empty());
+            }
+        }
+    }
+
+    #[test]
     fn tab_context_and_pane_actions_have_real_translations_in_all_locales() {
         // The mixed Editor/Terminal/Agent Tab context menu and the adjacent
         // pane actions must never silently revert to English in zh-TW,

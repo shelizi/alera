@@ -561,6 +561,22 @@ mod tests {
     }
 
     #[test]
+    fn inner_terminal_header_keeps_its_reserved_height_and_truncates_long_titles() {
+        let source = include_str!("main.rs");
+        let focus = source.split_once(r#".id("terminal-secondary-focus")"#).unwrap().1
+            .split_once(".on_click(").unwrap().0;
+        assert!(focus.contains(".h(px(TERMINAL_INNER_SPLIT_HEADER_HEIGHT))"));
+        assert!(focus.contains(".flex_shrink_0()"), "focus header must not shrink below PTY-reserved 28px");
+        assert!(focus.contains(".flex()") && focus.contains(".items_center()"), "focus text must be vertically centered");
+        assert!(focus.contains(".min_w_0()"), "focus header must fit narrow split widths");
+        assert!(focus.contains(".child(div().min_w_0().truncate().child(format!("), "long Terminal titles must truncate inside the split");
+        let transcript = source.split_once(r#".id("terminal-output-scroll")"#).unwrap().1
+            .split_once(".child(if terminal_output.is_empty()").unwrap().0;
+        assert!(transcript.contains(".min_h_0()"), "scrollable transcript must shrink with split height");
+        assert!(transcript.contains(".bg(rgb(TERMINAL_DEFAULT_BG))"));
+    }
+
+    #[test]
     fn legacy_terminal_inner_split_has_directional_seam_and_full_bleed_background() {
         // The inner Terminal split is distinct from mixed Workbench panes.
         // Both views must inherit the same VT canvas even with long output.

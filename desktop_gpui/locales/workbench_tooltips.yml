@@ -20,6 +20,16 @@ _version: 2
   zh-TW: "副窗格操作"
   zh-CN: "副窗格操作"
   ja: "第2ペインの操作"
+"Second pane":
+  en: "Second pane"
+  zh-TW: "副窗格"
+  zh-CN: "副窗格"
+  ja: "第2ペイン"
+"Click to focus":
+  en: "Click to focus"
+  zh-TW: "點擊以切換焦點"
+  zh-CN: "点击以切换焦点"
+  ja: "クリックしてフォーカス"
 "Close tab":
   en: "Close tab"
   zh-TW: "關閉分頁"
