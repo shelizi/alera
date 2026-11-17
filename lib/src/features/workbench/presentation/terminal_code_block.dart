@@ -83,40 +83,107 @@ final RegExp _probableCodeOpener = RegExp(
   caseSensitive: false,
 );
 
+final RegExp _claudeTurnBoundary = RegExp(
+  r'^(?:❯(?:\s|$)|[✻✦✶*]\s+(?:Cooked|Done)\b)',
+);
+
+/// Unbulleted snippets can follow Claude's prose or earlier code blocks.
+/// Only consider them when an actual response bullet appears in this turn.
+bool _insideClaudeResponse(
+  xterm.Buffer buffer,
+  int start, {
+  required int maxScanRows,
+}) {
+  final lines = buffer.lines;
+  final first = math.max(0, start - math.min(maxScanRows, 150));
+  for (var row = start - 1; row >= first; row--) {
+    if (lines[row].isWrapped) continue;
+    final text = lines[row].getText();
+    if (_claudeTurnBoundary.hasMatch(text.trimLeft())) return false;
+    if (_claudeCodeBullet.hasMatch(text)) return true;
+  }
+  return false;
+}
+
+/// A Claude response can indent both source and ordinary explanation.
+/// A blank line may stay inside a copied snippet only when the next
+/// indented line still looks like source, not a prose paragraph.
+bool _looksLikeIndentedCodeAfterBlank(String raw) {
+  if (!raw.startsWith('  ')) return false;
+  final source = raw.substring(2).trimLeft();
+  if (source.isEmpty) return false;
+  return _probableCodeOpener.hasMatch(source) ||
+      source.startsWith('}') ||
+      source.startsWith(']') ||
+      source.startsWith(')') ||
+      source.startsWith('//') ||
+      source.startsWith('/*') ||
+      source.startsWith('*/');
+}
+
 TerminalCodeBlock? _resolveClaudeRenderedCodeAt(
   xterm.Buffer buffer,
   int hoveredRow, {
   required int maxScanRows,
 }) {
   final lines = buffer.lines;
-  final first = math.max(0, hoveredRow - math.min(maxScanRows, 150));
+  final scanLimit = math.min(maxScanRows, 150);
+  final first = math.max(0, hoveredRow - scanLimit);
   for (var start = hoveredRow; start >= first; start--) {
     if (lines[start].isWrapped) continue;
-    final match = _claudeCodeBullet.firstMatch(lines[start].getText());
-    if (match == null) continue;
-    final openingCode = match.group(1)!.trimRight();
+    final rawOpening = lines[start].getText();
+    final bullet = _claudeCodeBullet.firstMatch(rawOpening);
+    final unbulleted = bullet == null && rawOpening.startsWith('  ');
+    if (bullet == null && !unbulleted) continue;
+
+    if (unbulleted) {
+      // The second physical row of an existing snippet is continuation,
+      // not another copyable block. A new block starts after prose or a gap.
+      if (start > 0) {
+        final previous = lines[start - 1];
+        final previousText = previous.getText();
+        if (previous.isWrapped ||
+            previousText.startsWith('  ') ||
+            _claudeCodeBullet.hasMatch(previousText)) {
+          continue;
+        }
+      }
+      if (!_insideClaudeResponse(buffer, start, maxScanRows: maxScanRows)) {
+        continue;
+      }
+    }
+
+    // A wrapped opener such as "• console.log(42)" might be split before
+    // its opening parenthesis. Match the logical line, not its first row.
+    var openingCode = bullet?.group(1) ?? rawOpening.substring(2);
+    var openingLastRow = start;
+    while (openingLastRow + 1 < lines.length &&
+        lines[openingLastRow + 1].isWrapped) {
+      openingLastRow++;
+      openingCode += lines[openingLastRow].getText();
+    }
+    openingCode = openingCode.trimRight();
     if (!_probableCodeOpener.hasMatch(openingCode)) continue;
 
     final parts = <String>[openingCode];
-    var lastRow = start;
+    var lastRow = openingLastRow;
     for (
-      var row = start + 1;
-      row < lines.length && row <= start + math.min(maxScanRows, 150);
+      var row = openingLastRow + 1;
+      row < lines.length && row <= start + scanLimit;
       row++
     ) {
       final line = lines[row];
       final raw = line.getText();
       if (line.isWrapped) {
-        parts[parts.length - 1] += raw.trimRight();
+        final continues = row + 1 < lines.length && lines[row + 1].isWrapped;
+        parts[parts.length - 1] += continues ? raw : raw.trimRight();
         lastRow = row;
         continue;
       }
       if (raw.trim().isEmpty) {
-        // Keep a blank source line only if source indentation resumes.
         if (row + 1 < lines.length &&
             !lines[row + 1].isWrapped &&
-            lines[row + 1].getText().startsWith('  ') &&
-            lines[row + 1].getText().trim().isNotEmpty) {
+            _looksLikeIndentedCodeAfterBlank(lines[row + 1].getText())) {
           parts.add('');
           lastRow = row;
           continue;
@@ -124,7 +191,9 @@ TerminalCodeBlock? _resolveClaudeRenderedCodeAt(
         break;
       }
       if (!raw.startsWith('  ')) break;
-      parts.add(raw.substring(2).trimRight());
+      final continues = row + 1 < lines.length && lines[row + 1].isWrapped;
+      final source = raw.substring(2);
+      parts.add(continues ? source : source.trimRight());
       lastRow = row;
     }
 

@@ -137,4 +137,91 @@ void _registerTerminalSurfaceCodeCopyTests() {
       }
     },
   );
+
+  testWidgets('copies only a second Claude snippet without a bullet', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    final clipboardWrites = <String>[];
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (call) async {
+        if (call.method == 'Clipboard.setData') {
+          clipboardWrites.add(
+            (call.arguments as Map<Object?, Object?>)['text'] as String,
+          );
+        }
+        return null;
+      },
+    );
+    try {
+      final factory = _FakeTerminalPtySessionFactory();
+      final runtime = XtermTerminalRuntime(
+        ptySessionFactory: factory,
+        shellLaunchesBuilder: _testShellLaunches,
+      );
+      addTearDown(runtime.dispose);
+      final session = runtime.sessionFor(workspace: _workspace(), tab: _tab());
+      await _pumpTerminalSurface(tester, session);
+      final pty = factory.sessions.single;
+      pty.emitOutput(
+        utf8.encode(
+          '❯ UI test\r\n'
+          '• const first = 1;\r\n'
+          '  console.log(first);\r\n'
+          '\r\n'
+          '  This is another block.\r\n'
+          '\r\n'
+          '  const second = 2;\r\n'
+          '  console.log(second);\r\n'
+          '\r\n'
+          '✻ Cooked for 2s',
+        ),
+      );
+      await _pumpTerminalOutput(tester);
+
+      final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+      await mouse.addPointer(
+        location: _cellCenter(tester, const xterm.CellOffset(4, 0)),
+      );
+      const copyKey = ValueKey<String>('terminal-copy-code-button');
+      pty.writes.clear();
+
+      await mouse.moveTo(_cellCenter(tester, const xterm.CellOffset(4, 2)));
+      await tester.pump();
+      expect(find.byKey(copyKey), findsOneWidget);
+      await tester.tap(find.byKey(copyKey));
+      await tester.pump();
+      expect(clipboardWrites, <String>[
+        'const first = 1;\nconsole.log(first);',
+      ]);
+
+      await mouse.moveTo(_cellCenter(tester, const xterm.CellOffset(4, 4)));
+      await tester.pump();
+      expect(find.byKey(copyKey), findsNothing);
+
+      await mouse.moveTo(_cellCenter(tester, const xterm.CellOffset(4, 7)));
+      await tester.pump();
+      expect(find.byKey(copyKey), findsOneWidget);
+      await tester.tap(find.byKey(copyKey));
+      await tester.pump();
+      expect(clipboardWrites, <String>[
+        'const first = 1;\nconsole.log(first);',
+        'const second = 2;\nconsole.log(second);',
+      ]);
+      expect(pty.writes, isEmpty);
+
+      await mouse.moveTo(_cellCenter(tester, const xterm.CellOffset(4, 4)));
+      await tester.pump();
+      expect(find.byKey(copyKey), findsNothing);
+      await mouse.removePointer();
+    } finally {
+      await tester.pumpWidget(const SizedBox());
+      debugDefaultTargetPlatformOverride = null;
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        null,
+      );
+    }
+  });
 }

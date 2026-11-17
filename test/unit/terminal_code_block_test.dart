@@ -180,4 +180,85 @@ void main() {
     );
     expect(block?.code, 'function f() {\n  const a = 1;\n\n  return a;\n}');
   });
+
+  test('keeps Claude rendered code blocks separate across prose', () {
+    final terminal = xterm.Terminal()..resize(100, 15);
+    addTearDown(terminal.dispose);
+    terminal.write(
+      '❯ UI test\r\n'
+      '• const first = 1;\r\n'
+      '  console.log(first);\r\n'
+      '\r\n'
+      '  This second block is separate.\r\n'
+      '  It is prose, not source code.\r\n'
+      '\r\n'
+      '  const second = 2;\r\n'
+      '  console.log(second);\r\n'
+      '\r\n'
+      '✻ Cooked for 2s',
+    );
+    final first = resolveTerminalCodeBlockAt(
+      terminal: terminal,
+      offset: const xterm.CellOffset(4, 2),
+    );
+    final second = resolveTerminalCodeBlockAt(
+      terminal: terminal,
+      offset: const xterm.CellOffset(4, 8),
+    );
+    expect(first?.code, 'const first = 1;\nconsole.log(first);');
+    expect(second?.openingRow, 7);
+    expect(second?.code, 'const second = 2;\nconsole.log(second);');
+    expect(
+      resolveTerminalCodeBlockAt(
+        terminal: terminal,
+        offset: const xterm.CellOffset(3, 4),
+      ),
+      isNull,
+    );
+  });
+
+  test('detects unbulleted code after Claude prose and not after turn end', () {
+    final terminal = xterm.Terminal()..resize(100, 12);
+    addTearDown(terminal.dispose);
+    terminal.write(
+      '❯ UI test\r\n'
+      '• Here is the sample:\r\n'
+      '\r\n'
+      '  console.log("hello");\r\n'
+      '\r\n'
+      '✻ Cooked for 1s\r\n'
+      '  const unrelated = 10;',
+    );
+    expect(
+      resolveTerminalCodeBlockAt(
+        terminal: terminal,
+        offset: const xterm.CellOffset(4, 3),
+      )?.code,
+      'console.log("hello");',
+    );
+    expect(
+      resolveTerminalCodeBlockAt(
+        terminal: terminal,
+        offset: const xterm.CellOffset(4, 6),
+      ),
+      isNull,
+    );
+  });
+
+  test('collects Claude code opener wrapped before function parenthesis', () {
+    final terminal = xterm.Terminal()..resize(12, 10);
+    addTearDown(terminal.dispose);
+    terminal.write(
+      '• console.log(42);\r\n'
+      '\r\n'
+      '✻ Cooked for 1s',
+    );
+    expect(
+      resolveTerminalCodeBlockAt(
+        terminal: terminal,
+        offset: const xterm.CellOffset(4, 1),
+      )?.code,
+      'console.log(42);',
+    );
+  });
 }
