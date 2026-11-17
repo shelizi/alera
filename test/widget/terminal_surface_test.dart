@@ -28,6 +28,7 @@ import 'package:xterm2/xterm.dart' as xterm;
 
 part 'terminal_surface_core_test_cases.dart';
 part 'terminal_surface_clipboard_test_cases.dart';
+part 'terminal_surface_code_copy_test_cases.dart';
 part 'terminal_surface_composer_test_cases.dart';
 part 'terminal_surface_composer_submit_test_cases.dart';
 part 'terminal_surface_interaction_test_cases.dart';
@@ -38,6 +39,7 @@ part 'terminal_surface_test_harness.dart';
 void main() {
   _registerTerminalSurfaceRuntimeTests();
   _registerTerminalSurfaceClipboardTests();
+  _registerTerminalSurfaceCodeCopyTests();
   _registerTerminalSurfaceComposerTests();
   _registerTerminalSurfaceComposerSubmitTests();
   _registerTerminalSurfaceInteractionTests();

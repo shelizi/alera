@@ -9,6 +9,7 @@ import 'package:alera/src/app/localization/alera_localizations.dart';
 import 'package:alera/src/features/settings/domain/alera_settings.dart';
 import 'package:alera/src/features/workbench/application/terminal_runtime_bindings.dart';
 import 'package:alera/src/features/workbench/presentation/terminal_buffer_budget.dart';
+import 'package:alera/src/features/workbench/presentation/terminal_code_block.dart';
 import 'package:alera/src/features/workbench/presentation/terminal_composer_controller.dart';
 import 'package:alera/src/features/workbench/presentation/terminal_link_resolver.dart';
 import 'package:alera/src/features/workbench/presentation/terminal_search_controller.dart';
