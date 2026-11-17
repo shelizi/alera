@@ -49,6 +49,7 @@ final class const ClaudeRuntimeHomePreparation({
   required final String runtimeHomePath,
   required final Map<String, String> environment,
   required final ManagedAgentHookInstallStatus hookStatus,
+  final String? codeCopySettingsPath,
 });
 
 final class ClaudeRuntimeHomeService({
@@ -104,6 +105,12 @@ final class ClaudeRuntimeHomeService({
   Future<ClaudeRuntimeHomePreparation> prepareForTerminalLaunch() async {
     final runtimeHome = await _runtimeHomeDirectory();
     final status = await install(runtimeHome: runtimeHome);
+    // Additional --settings must include only Alera commands. The merged
+    // runtime settings.json also contains user hooks, plugins and preferences:
+    // passing it as --settings would double-register the user's own hooks.
+    final codeCopySettings = status.managedHooksPresent
+        ? _writeCodeCopyHooksSettings(_descriptor(runtimeHome))
+        : null;
     final inheritedConfigDir = _environment['CLAUDE_CONFIG_DIR']?.trim();
     final keepsInheritedConfigDir =
         inheritedConfigDir != null &&
@@ -119,6 +126,7 @@ final class ClaudeRuntimeHomeService({
         if (keepsInheritedConfigDir) 'CLAUDE_CONFIG_DIR': inheritedConfigDir,
       },
       hookStatus: status,
+      codeCopySettingsPath: codeCopySettings,
     );
   }
 
@@ -364,6 +372,8 @@ class const _CopiedResourceMarker({
 });
 
 const List<_ClaudeHookEvent> _claudeEvents = <_ClaudeHookEvent>[
+  _ClaudeHookEvent('SessionStart'),
+  _ClaudeHookEvent('MessageDisplay'),
   _ClaudeHookEvent('UserPromptSubmit'),
   _ClaudeHookEvent('Stop'),
   _ClaudeHookEvent('StopFailure'),

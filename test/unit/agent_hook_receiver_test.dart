@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:alera/src/features/agent_status/application/agent_status_controller.dart';
+import 'package:alera/src/features/agent_status/application/claude_code_message_store.dart';
 import 'package:alera/src/features/agent_status/domain/agent_status.dart';
 import 'package:alera/src/features/agent_status/infra/agent_hook_endpoint_file.dart';
 import 'package:alera/src/features/agent_status/infra/agent_hook_request_parser.dart';
@@ -49,6 +50,56 @@ void main() {
           tabId: 'tab-1',
         ),
         containsPair('ALERA_TERMINAL_SESSION_ID', 'session-1'),
+      );
+    });
+
+    test('copy-only Claude Hook does not enable Agent status', () async {
+      await receiver.dispose();
+      final sourceStore = ClaudeCodeMessageStore();
+      addTearDown(sourceStore.dispose);
+      sink = _FakeStatusSink();
+      receiver = AgentHookReceiver(
+        statusSink: sink,
+        applicationSupportDirectory: () async => tempDir,
+        token: 'token-1',
+        hookServer: hookServer,
+        isAgentEnabled: (agent) => agent == AgentType.claude,
+        isStatusEnabled: (_) => false,
+        claudeCodeMessageStore: sourceStore,
+        captureClaudeSourceEnabled: () => true,
+      );
+      await receiver.start();
+
+      final response = await _post(
+        receiver.endpoint!.port,
+        path: '/hook/claude',
+        token: 'token-1',
+        body: jsonEncode(<String, Object?>{
+          'terminalSessionId': 'session-1',
+          'workspaceId': 'workspace-1',
+          'tabId': 'tab-1',
+          'hookEventName': 'Stop',
+          'payload': {
+            'session_id': 'claude-session-1',
+            'transcript_path': 'claude-session-1.jsonl',
+            'last_assistant_message':
+                '\u0060\u0060\u0060js\nconst answer = 42;\n\u0060\u0060\u0060',
+          },
+        }),
+        contentType: .json,
+      );
+      expect(response.statusCode, HttpStatus.noContent);
+      await _waitUntil(
+        () => sourceStore.blocksForTerminal('session-1').isNotEmpty,
+      );
+      expect(
+        sourceStore.blocksForTerminal('session-1').single.code,
+        'const answer = 42;',
+      );
+      expect(
+        sink.events,
+        isEmpty,
+        reason: 'Copy-only hook reception must not change disabled status',
       );
     });
 

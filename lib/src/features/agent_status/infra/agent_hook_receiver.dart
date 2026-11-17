@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:alera/src/features/agent_status/application/agent_status_controller.dart';
+import 'package:alera/src/features/agent_status/application/claude_code_message_store.dart';
 import 'package:alera/src/features/agent_status/domain/agent_status.dart';
 import 'package:alera/src/features/agent_status/infra/agent_hook_endpoint_file.dart';
 import 'package:alera/src/features/agent_status/infra/codex_transcript_status_watcher.dart';
@@ -18,24 +19,33 @@ class AgentHookReceiver._(
   final ApplicationSupportDirectoryResolver _applicationSupportDirectory,
   final String _token,
   final AgentHookEnabledPredicate _isAgentEnabled,
+  final AgentHookEnabledPredicate _isStatusEnabled,
   CodexTranscriptStatusWatcher? codexTranscriptStatusWatcher,
   final AgentHookServer _hookServer,
+  final ClaudeCodeMessageStore? _claudeCodeMessageStore,
+  final bool Function()? _captureClaudeSourceEnabled,
 ) {
   factory({
     required AgentStatusSink statusSink,
     ApplicationSupportDirectoryResolver? applicationSupportDirectory,
     String? token,
     AgentHookEnabledPredicate? isAgentEnabled,
+    AgentHookEnabledPredicate? isStatusEnabled,
     CodexTranscriptStatusWatcher? codexTranscriptStatusWatcher,
     AgentHookServer? hookServer,
+    ClaudeCodeMessageStore? claudeCodeMessageStore,
+    bool Function()? captureClaudeSourceEnabled,
   }) {
     return AgentHookReceiver._(
       statusSink,
       applicationSupportDirectory ?? aleraApplicationSupportDirectory,
       token ?? createAgentHookToken(),
       isAgentEnabled ?? ((_) => true),
+      isStatusEnabled ?? ((_) => true),
       codexTranscriptStatusWatcher,
       hookServer ?? RustAgentHookServer(),
+      claudeCodeMessageStore,
+      captureClaudeSourceEnabled,
     );
   }
 
@@ -96,6 +106,7 @@ class AgentHookReceiver._(
   /// Releases per-terminal watch state once the terminal session is gone.
   void clearTerminalSession(String terminalSessionId) {
     _codexTranscriptStatusWatcher.clearTerminal(terminalSessionId);
+    _claudeCodeMessageStore?.clearTerminal(terminalSessionId);
   }
 
   Future<Map<String, String>?> launchEnvironmentFor({
@@ -190,12 +201,26 @@ class AgentHookReceiver._(
       if (events.isEmpty) {
         return;
       }
-      final statusSink = _statusSink;
-      if (statusSink is AgentStatusController) {
-        statusSink.applyHookEvents(events);
-      } else {
+      // Retain raw Claude deltas before status normalization can discard an
+      // event without a status transition. Never capture when copy is off.
+      if (_captureClaudeSourceEnabled?.call() ?? false) {
         for (final event in events) {
-          statusSink.applyHookEvent(event);
+          _claudeCodeMessageStore?.observeHookEvent(event);
+        }
+      }
+      // Copy-only hooks must not activate Agent status indicators when the
+      // user explicitly disabled Claude status tracking.
+      final statusEvents = events
+          .where((event) => _isStatusEnabled(event.agentType))
+          .toList(growable: false);
+      if (statusEvents.isNotEmpty) {
+        final statusSink = _statusSink;
+        if (statusSink is AgentStatusController) {
+          statusSink.applyHookEvents(statusEvents);
+        } else {
+          for (final event in statusEvents) {
+            statusSink.applyHookEvent(event);
+          }
         }
       }
       for (final event in events) {

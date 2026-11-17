@@ -332,7 +332,7 @@ fn coalesce_pending(pending: &mut Vec<AgentHookEventDto>) -> u32 {
     let original_len = pending.len();
     let mut latest_by_key = HashMap::<(String, String), usize>::new();
     for (index, event) in pending.iter().enumerate() {
-        if !is_status_completion_event(event) {
+        if !is_status_completion_event(event) && !is_lossless_claude_event(event) {
             latest_by_key.insert(
                 (event.terminal_session_id.clone(), event.agent_type.clone()),
                 index,
@@ -341,7 +341,7 @@ fn coalesce_pending(pending: &mut Vec<AgentHookEventDto>) -> u32 {
     }
     let mut index = 0usize;
     pending.retain(|event| {
-        let keep = if is_status_completion_event(event) {
+        let keep = if is_status_completion_event(event) || is_lossless_claude_event(event) {
             true
         } else {
             latest_by_key
@@ -353,6 +353,16 @@ fn coalesce_pending(pending: &mut Vec<AgentHookEventDto>) -> u32 {
         keep
     });
     original_len.saturating_sub(pending.len()) as u32
+}
+
+/// Delta events are ordered source data, not coalescible status pulses.
+/// SessionStart is also a boundary: never merge a new Claude session away.
+fn is_lossless_claude_event(event: &AgentHookEventDto) -> bool {
+    event.agent_type == "claude"
+        && matches!(
+            event.inferred_event_name.as_deref(),
+            Some("SessionStart" | "MessageDisplay")
+        )
 }
 
 fn is_status_completion_event(event: &AgentHookEventDto) -> bool {

@@ -98,6 +98,7 @@ TerminalCodeBlock? resolveTerminalCodeBlockAt({
   required xterm.Terminal terminal,
   required xterm.CellOffset offset,
   int maxScanRows = 600,
+  bool includeClaudeHeuristics = true,
 }) {
   final lines = terminal.buffer.lines;
   if (offset.y < 0 || offset.y >= lines.length || maxScanRows < 1) {
@@ -135,6 +136,9 @@ TerminalCodeBlock? resolveTerminalCodeBlockAt({
       opening = fence;
     }
   }
+  // Production code-copy uses canonical Claude hooks; legacy heuristics stay
+  // available only to older direct resolver tests and callers.
+  if (!includeClaudeHeuristics) return null;
   return _resolveClaudeLanguageCodeAt(
         terminal.buffer,
         offset.y,

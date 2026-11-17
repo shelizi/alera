@@ -22,6 +22,7 @@ part 'terminal_runtime_providers.g.dart';
 @Riverpod(keepAlive: true)
 TerminalRuntime terminalRuntime(Ref ref) {
   final terminalHostClient = ref.watch(terminalHostClientProvider);
+  final claudeSourceStore = ref.watch(claudeCodeMessageStoreProvider);
   final agentRuntimeOverlay = ref.watch(agentRuntimeOverlayServiceProvider);
   final aleraCliShim = ref.watch(aleraCliTerminalShimServiceProvider);
   final shellStartupPreparer = ref.watch(terminalShellStartupPreparerProvider);
@@ -31,6 +32,7 @@ TerminalRuntime terminalRuntime(Ref ref) {
       client: terminalHostClient,
     ),
     initialSettings: ref.read(settingsControllerProvider).terminal,
+    claudeCodeMessageStore: claudeSourceStore,
     shellLaunchesBuilder: () => terminalShellLaunches(
       powerShell7ExecutablePath: ref
           .read(settingsControllerProvider)
@@ -83,9 +85,38 @@ TerminalRuntime terminalRuntime(Ref ref) {
             } catch (_) {}
           }
 
-          return addAleraCliShim().then(
-            (_) => environment.isEmpty ? null : environment,
-          );
+          Future<void> addClaudeSourceHooks() async {
+            if (!ref
+                .read(settingsControllerProvider)
+                .terminal
+                .showCodeBlockCopyButton)
+              return;
+            try {
+              final hookEnv = await ref
+                  .read(agentHookReceiverProvider)
+                  .launchEnvironmentFor(
+                    terminalSessionId: terminalSessionId,
+                    workspaceId: workspaceId,
+                    tabId: tabId,
+                  );
+              mergeTerminalLaunchEnvironment(environment, hookEnv);
+              final prepared = await ref
+                  .read(claudeRuntimeHomeServiceProvider)
+                  .prepareForTerminalLaunch();
+              mergeTerminalLaunchEnvironment(environment, prepared.environment);
+              // Claude --settings adds the managed hooks without redirecting
+              // CLAUDE_CONFIG_DIR or hiding the user's resume history.
+              if (prepared.codeCopySettingsPath case final path?) {
+                environment['ALERA_CLAUDE_COPY_SETTINGS'] = path;
+              }
+            } catch (_) {
+              // The terminal remains usable when hooks are unavailable.
+            }
+          }
+
+          return addAleraCliShim()
+              .then((_) => addClaudeSourceHooks())
+              .then((_) => environment.isEmpty ? null : environment);
         },
   );
   ref.listen<TerminalSettings>(

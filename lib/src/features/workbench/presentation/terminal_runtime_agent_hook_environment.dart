@@ -130,6 +130,7 @@ bool _isAleraAgentHookEnvironmentKey(String key, String _) {
       key == 'ALERA_TAB_ID' ||
       key == 'ALERA_CODEX_HOME' ||
       key == 'ALERA_CLAUDE_CONFIG_DIR' ||
+      key == 'ALERA_CLAUDE_COPY_SETTINGS' ||
       key == 'ALERA_COPILOT_HOME' ||
       key == 'ALERA_COPILOT_SOURCE_HOME' ||
       key == 'ALERA_OPENCODE_CONFIG_DIR' ||

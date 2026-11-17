@@ -61,14 +61,14 @@ void _registerClaudeRuntimeCcsTests(
     );
     expect(credentials.readAsStringSync(), '{"secret":"keep"}\n');
     final localHooks = _hooks(localSettingsPath);
-    expect(_managedCommandCount(localHooks, 'alera-claude-hook.sh'), 7);
+    expect(_managedCommandCount(localHooks, 'alera-claude-hook.sh'), 9);
     expect(preparation.environment, isEmpty);
     expect(
       _managedCommandCount(
         _hooks(p.join(preparation.runtimeHomePath, 'settings.json')),
         'alera-claude-hook.sh',
       ),
-      7,
+      9,
     );
 
     final removed = await service.remove();

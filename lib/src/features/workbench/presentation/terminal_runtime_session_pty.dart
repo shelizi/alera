@@ -67,7 +67,13 @@ extension _XtermTerminalSessionPty on _XtermTerminalSessionHandle {
             session: session,
             workspaceLaunch: prepared.workspaceLaunch,
             interactiveShell: prepared.interactiveShell,
-            initialCommand: _tab.initialCommand,
+            initialCommand: _canonicalClaudeStartupCommand(
+              initialCommand: _tab.initialCommand,
+              agentType: _tab.payload['agentType'],
+              settingsEnabled: _settings.showCodeBlockCopyButton,
+              environment: prepared.workspaceLaunch.environment,
+              interactiveShell: prepared.interactiveShell,
+            ),
             isCurrent: () => !_disposed && _activePtyGeneration == generation,
           ),
         );

@@ -13,6 +13,7 @@ class _XtermTerminalSessionHandle(
   final void Function(TerminalRuntimeExitEvent event) _onExit,
   this._onVisibilityChanged,
   final void Function(String workspaceId) _onUserInput,
+  this._claudeCodeMessageStore,
 ) extends TerminalSessionHandle
     with _TerminalSearchSessionSupport, _TerminalSessionCapabilitiesSupport
     implements
@@ -30,6 +31,8 @@ class _XtermTerminalSessionHandle(
 
   @override
   WorkspaceTabRecord _tab;
+
+  final ClaudeCodeMessageStore? _claudeCodeMessageStore;
 
   /// Lets the runtime re-run the memory budget when a terminal stops being
   /// visible, which is the only moment a new eviction candidate appears.

@@ -37,6 +37,8 @@ extension _ClaudeManagedAgentHook on ManagedAgentHookInstallService {
       configShape: .hooks,
       definitionShape: .nestedCommand,
       events: const <_ManagedHookEvent>[
+        _ManagedHookEvent('SessionStart'),
+        _ManagedHookEvent('MessageDisplay'),
         _ManagedHookEvent('UserPromptSubmit'),
         _ManagedHookEvent('Stop'),
         _ManagedHookEvent('StopFailure'),

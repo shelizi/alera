@@ -57,6 +57,22 @@ void main() {
 
       final preparation = await service.prepareForTerminalLaunch();
 
+      // --settings must contain *only* our Hook commands. The normal runtime
+      // settings includes personal CLI preferences and arbitrary user Hooks,
+      // which must not be duplicated by an additional settings file.
+      final isolatedCopySettings = preparation.codeCopySettingsPath;
+      expect(isolatedCopySettings, isNotNull);
+      final isolatedConfig = _readJson(isolatedCopySettings!);
+      expect(isolatedConfig.keys, <String>['hooks']);
+      final isolatedHooks = _hooks(isolatedCopySettings);
+      expect(_managedCommandCount(isolatedHooks, 'alera-claude-hook.sh'), 3);
+      expect(isolatedHooks.keys.toSet(), <String>{
+        'SessionStart',
+        'MessageDisplay',
+        'Stop',
+      });
+      expect(_commandsFor(isolatedHooks, 'UserPromptSubmit'), isEmpty);
+
       final expectedRuntimeHome = p.join(
         support.path,
         'agent-runtime-homes',
@@ -98,7 +114,7 @@ void main() {
         _commandsFor(runtimeHooks, 'UserPromptSubmit'),
         contains('echo user-hook'),
       );
-      expect(_managedCommandCount(runtimeHooks, 'alera-claude-hook.sh'), 7);
+      expect(_managedCommandCount(runtimeHooks, 'alera-claude-hook.sh'), 9);
       final hookScriptFile = File(
         p.join(home.path, '.alera', 'agent-hooks', 'alera-claude-hook.sh'),
       );
@@ -231,7 +247,7 @@ void main() {
       final runtimeHooks = _hooks(
         p.join(preparation.runtimeHomePath, 'settings.json'),
       );
-      expect(_managedCommandCount(runtimeHooks, 'alera-claude-hook.cmd'), 7);
+      expect(_managedCommandCount(runtimeHooks, 'alera-claude-hook.cmd'), 9);
       final promptCommand = _commandsFor(
         runtimeHooks,
         'UserPromptSubmit',
@@ -738,7 +754,7 @@ void main() {
             isNot(contains(staleManagedCommand)),
           ),
         );
-        expect(_managedCommandCount(runtimeHooks, 'alera-claude-hook.sh'), 7);
+        expect(_managedCommandCount(runtimeHooks, 'alera-claude-hook.sh'), 9);
       },
     );
 

@@ -84,6 +84,34 @@ fn coalesces_intermediate_events_but_preserves_completion_boundaries() {
 }
 
 #[test]
+fn preserves_every_claude_source_delta_and_session_boundary() {
+    let mut events = vec![
+        event("terminal", "claude", "SessionStart"),
+        event("terminal", "claude", "MessageDisplay"),
+        event("terminal", "claude", "MessageDisplay"),
+        event("terminal", "claude", "PostToolUse"),
+        event("terminal", "claude", "PostToolUseFailure"),
+        event("terminal", "claude", "Stop"),
+    ];
+    let coalesced = coalesce_pending(&mut events);
+    assert_eq!(coalesced, 1);
+    assert_eq!(events.len(), 5);
+    assert_eq!(
+        events[0].inferred_event_name.as_deref(),
+        Some("SessionStart")
+    );
+    assert_eq!(
+        events[1].inferred_event_name.as_deref(),
+        Some("MessageDisplay")
+    );
+    assert_eq!(
+        events[2].inferred_event_name.as_deref(),
+        Some("MessageDisplay")
+    );
+    assert_eq!(events[4].inferred_event_name.as_deref(), Some("Stop"));
+}
+
+#[test]
 fn serves_http_hook_routes() {
     let endpoint = start_agent_hook_receiver(
         "test-token".to_string(),

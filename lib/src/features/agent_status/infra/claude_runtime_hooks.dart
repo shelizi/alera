@@ -101,6 +101,30 @@ extension _ClaudeRuntimeHooks on ClaudeRuntimeHomeService {
     return true;
   }
 
+  /// Only Alera Hook subscriptions for Claude's optional code-copy feature.
+  /// Do not inject the merged runtime settings.json as --settings: that file
+  /// includes the user's pre-existing hooks, which would execute twice.
+  String _writeCodeCopyHooksSettings(_ClaudeRuntimeHookDescriptor descriptor) {
+    final file = p.join(
+      p.dirname(descriptor.settingsPath),
+      'code-copy-hooks.json',
+    );
+    const names = <String>{'SessionStart', 'MessageDisplay', 'Stop'};
+    final hooks = <String, Object?>{};
+    for (final event in _claudeEvents.where(
+      (event) => names.contains(event.eventName),
+    )) {
+      hooks[event.eventName] = <Object?>[
+        _managedHookDefinition(
+          event,
+          _managedCommand(descriptor: descriptor, event: event),
+        ),
+      ];
+    }
+    _writeJsonObject(file, <String, Object?>{'hooks': hooks});
+    return file;
+  }
+
   bool _removeManagedHooksAtSettings({
     required String settingsPath,
     required _ClaudeRuntimeHookDescriptor descriptor,

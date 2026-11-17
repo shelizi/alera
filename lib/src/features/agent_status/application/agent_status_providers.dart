@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:alera/src/features/agent_profiles/domain/agent_descriptor_registry.dart';
 import 'package:alera/src/features/agent_status/application/agent_hook_reconciliation_service.dart';
 import 'package:alera/src/features/agent_status/application/agent_awake_service.dart';
+import 'package:alera/src/features/agent_status/application/claude_code_message_store.dart';
 import 'package:alera/src/features/agent_status/application/agent_status_controller.dart';
 import 'package:alera/src/features/agent_status/application/agent_status_notification_activation_service.dart';
 import 'package:alera/src/features/agent_status/application/agent_status_notification_scheduler.dart';
@@ -36,11 +37,33 @@ import 'package:riverpod_annotation/riverpod_annotation.dart';
 part 'agent_status_notification_providers.dart';
 part 'agent_status_providers.g.dart';
 
+/// Session-local canonical Markdown for the optional terminal code copy UI.
+final claudeCodeMessageStoreProvider = Provider<ClaudeCodeMessageStore>((ref) {
+  final store = ClaudeCodeMessageStore();
+  ref.listen<bool>(
+    settingsControllerProvider.select(
+      (settings) => settings.terminal.showCodeBlockCopyButton,
+    ),
+    (_, enabled) {
+      if (!enabled) store.clearAll();
+    },
+  );
+  ref.onDispose(store.dispose);
+  return store;
+});
+
 @Riverpod(keepAlive: true)
 AgentHookReceiver agentHookReceiver(Ref ref) {
   final receiver = AgentHookReceiver(
     statusSink: ref.read(agentStatusControllerProvider.notifier),
     hookServer: ref.watch(agentHookServerProvider),
+    claudeCodeMessageStore: ref.watch(claudeCodeMessageStoreProvider),
+    captureClaudeSourceEnabled: () =>
+        ref.read(settingsControllerProvider).terminal.showCodeBlockCopyButton,
+    isStatusEnabled: (agentType) => isAgentStatusHookEnabled(
+      ref.read(settingsControllerProvider).agents.agentStatusHooks,
+      agentType,
+    ),
     // The transcript watchdog is the one poller that scales with how many
     // agents are running, so it is the one that parks while hidden.
     codexTranscriptStatusWatcher: CodexTranscriptStatusWatcher(
@@ -48,10 +71,15 @@ AgentHookReceiver agentHookReceiver(Ref ref) {
       const Duration(seconds: 5),
       ref.watch(appForegroundProvider),
     ),
-    isAgentEnabled: (agentType) => isAgentStatusHookEnabled(
-      ref.read(settingsControllerProvider).agents.agentStatusHooks,
-      agentType,
-    ),
+    isAgentEnabled: (agentType) {
+      final settings = ref.read(settingsControllerProvider);
+      return isAgentStatusHookEnabled(
+            settings.agents.agentStatusHooks,
+            agentType,
+          ) ||
+          (agentType == AgentType.claude &&
+              settings.terminal.showCodeBlockCopyButton);
+    },
   );
   ref.onDispose(() {
     unawaited(receiver.dispose());
@@ -214,8 +242,13 @@ void agentHookReceiverLifecycleCoordinator(Ref ref) {
       (settings) => settings.agents.agentStatusHooks,
     ),
   );
+  final copyEnabled = ref.watch(
+    settingsControllerProvider.select(
+      (settings) => settings.terminal.showCodeBlockCopyButton,
+    ),
+  );
   final receiver = ref.watch(agentHookReceiverProvider);
-  if (hooks.anyEnabled) {
+  if (hooks.anyEnabled || copyEnabled) {
     unawaited(
       receiver.updateEnabledAgents().catchError(_ignoreProviderAsyncError),
     );
@@ -228,15 +261,21 @@ void agentHookReceiverLifecycleCoordinator(Ref ref) {
 @Riverpod(keepAlive: true)
 void agentHookInstallerCoordinator(Ref ref) {
   final service = ref.watch(agentHookReconciliationServiceProvider);
-  ref.listen<AgentStatusHookSettings>(
+  ref.listen<({AgentStatusHookSettings hooks, bool codeCopy})>(
     settingsControllerProvider.select(
-      (settings) => settings.agents.agentStatusHooks,
+      (settings) => (
+        hooks: settings.agents.agentStatusHooks,
+        codeCopy: settings.terminal.showCodeBlockCopyButton,
+      ),
     ),
     (previous, next) {
-      if (previous != null && previous == next) {
-        return;
-      }
-      final operation = service.reconcile(next);
+      if (previous != null && previous == next) return;
+      final effectiveHooks = next.codeCopy
+          ? AgentStatusHookSettings(
+              values: <String, bool>{...next.hooks.values, 'claude': true},
+            )
+          : next.hooks;
+      final operation = service.reconcile(effectiveHooks);
       unawaited(
         operation.then<void>((_) {}).catchError(_ignoreProviderAsyncError),
       );
@@ -253,6 +292,7 @@ Future<Map<String, String>?> terminalLaunchEnvironmentFor({
   required ClaudeRuntimeHomeService claudeRuntimeHome,
   required AgentRuntimeOverlayService agentRuntimeOverlay,
   required AgentStatusHookSettings hooks,
+  bool enableClaudeCopy = false,
   required String terminalSessionId,
   required String workspaceId,
   required String tabId,
@@ -287,7 +327,7 @@ Future<Map<String, String>?> terminalLaunchEnvironmentFor({
       return (await codexRuntimeHome.prepareForTerminalLaunch()).environment;
     });
   }
-  if (hooks.claude) {
+  if (hooks.claude || enableClaudeCopy) {
     await _addAgentHookEnvironment(environment, 'Claude', () async {
       return (await claudeRuntimeHome.prepareForTerminalLaunch()).environment;
     });

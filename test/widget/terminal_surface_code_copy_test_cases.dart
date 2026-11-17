@@ -1,6 +1,175 @@
 part of 'terminal_surface_test.dart';
 
 void _registerTerminalSurfaceCodeCopyTests() {
+  testWidgets('Claude agent launch adds copy Hook settings only when enabled', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    try {
+      final launches = <({bool enabled, String command})>[];
+      for (final enabled in <bool>[false, true]) {
+        final factory = _FakeTerminalPtySessionFactory();
+        final runtime = XtermTerminalRuntime(
+          ptySessionFactory: factory,
+          shellLaunchesBuilder: _testShellLaunches,
+          agentHookEnvironmentBuilder:
+              ({
+                required terminalSessionId,
+                required workspaceId,
+                required tabId,
+              }) => <String, String>{
+                'ALERA_CLAUDE_COPY_SETTINGS':
+                    r'C:\Program Files\Alera\claude\settings.json',
+              },
+          initialSettings: TerminalSettings.defaults.copyWith(
+            showCodeBlockCopyButton: enabled,
+          ),
+        );
+        addTearDown(runtime.dispose);
+        final tab = WorkspaceTabRecord(
+          id: enabled ? 'tab-copy-on' : 'tab-copy-off',
+          workspaceId: 'ws-1',
+          title: 'Claude',
+          createdAt: DateTime.utc(2026),
+          updatedAt: DateTime.utc(2026),
+          payload: {
+            'agentType': 'claude',
+            workspaceTabInitialCommandPayloadKey: 'claude',
+          },
+        );
+        final session = runtime.sessionFor(workspace: _workspace(), tab: tab);
+        await _pumpTerminalSurface(tester, session);
+        await tester.pump(const Duration(milliseconds: 600));
+        await tester.pump();
+        final command = factory.sessions.single.writes.map(utf8.decode).join();
+        launches.add((enabled: enabled, command: command));
+        await tester.pumpWidget(const SizedBox());
+      }
+      expect(launches[0].command, contains('claude'));
+      expect(launches[0].command, isNot(contains('--settings')));
+      expect(launches[1].command, contains('claude --settings'));
+      expect(launches[1].command, contains('Program Files'));
+    } finally {
+      await tester.pumpWidget(const SizedBox());
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
+
+  testWidgets(
+    'Claude Hook copy uses original source beyond rendered viewport',
+    (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      final copied = <String>[];
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        (call) async {
+          if (call.method == 'Clipboard.setData') {
+            copied.add(
+              (call.arguments as Map<Object?, Object?>)['text'] as String,
+            );
+          }
+          return null;
+        },
+      );
+      try {
+        final store = ClaudeCodeMessageStore();
+        addTearDown(store.dispose);
+        final factory = _FakeTerminalPtySessionFactory();
+        final runtime = XtermTerminalRuntime(
+          ptySessionFactory: factory,
+          shellLaunchesBuilder: _testShellLaunches,
+          claudeCodeMessageStore: store,
+          initialSettings: TerminalSettings.defaults.copyWith(
+            showCodeBlockCopyButton: true,
+          ),
+        );
+        addTearDown(runtime.dispose);
+        final tab = _tab();
+        final session = runtime.sessionFor(workspace: _workspace(), tab: tab);
+        await _pumpTerminalSurface(tester, session);
+        final pty = factory.sessions.single;
+        pty.emitOutput(
+          utf8.encode(
+            '❯ generate code\r\n'
+            '• value_001 = 1\r\n'
+            '  value_002 = 2\r\n'
+            '  value_003 = 3\r\n'
+            '\r\n'
+            'Jump to bottom\r\n',
+          ),
+        );
+        await _pumpTerminalOutput(tester);
+
+        final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+        await mouse.addPointer(
+          location: _cellCenter(tester, const xterm.CellOffset(2, 0)),
+        );
+        await mouse.moveTo(_cellCenter(tester, const xterm.CellOffset(3, 2)));
+        await tester.pump();
+        const copyKey = ValueKey<String>('terminal-copy-code-button');
+        expect(
+          find.byKey(copyKey),
+          findsNothing,
+          reason: 'No language or output heuristics without source',
+        );
+
+        final original = List.generate(70, (index) {
+          final number = index + 1;
+          return 'value_' +
+              number.toString().padLeft(3, '0') +
+              ' = ' +
+              number.toString();
+        }).join('\n');
+        store.observeHookEvent(
+          AgentHookEvent(
+            terminalSessionId: tab.terminalSessionId,
+            workspaceId: tab.workspaceId,
+            tabId: tab.id,
+            agentType: AgentType.claude,
+            hookEventName: 'MessageDisplay',
+            payload: {
+              'session_id': 'claude-test-1',
+              'transcript_path': 'claude-test-1.jsonl',
+              'message_id': 'message-1',
+              'index': 0,
+              'final': true,
+              'delta':
+                  '\u0060\u0060\u0060python\n' +
+                  original +
+                  '\n\u0060\u0060\u0060',
+            },
+          ),
+        );
+        await tester.pump();
+        expect(
+          find.byKey(copyKey),
+          findsOneWidget,
+          reason: 'Hook update makes button available without mouse reentry',
+        );
+
+        pty.writes.clear();
+        await tester.tap(find.byKey(copyKey));
+        await tester.pump();
+        expect(copied, <String>[original]);
+        expect(pty.writes, isEmpty);
+        expect(find.byKey(copyKey), findsOneWidget);
+
+        await tester.tap(find.byKey(copyKey));
+        await tester.pump();
+        expect(copied, <String>[original, original]);
+        expect(find.byKey(copyKey), findsOneWidget);
+        await mouse.removePointer();
+      } finally {
+        await tester.pumpWidget(const SizedBox());
+        debugDefaultTargetPlatformOverride = null;
+        tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          SystemChannels.platform,
+          null,
+        );
+      }
+    },
+  );
+
   testWidgets('hovering Claude code shows copy control and copies code only', (
     tester,
   ) async {

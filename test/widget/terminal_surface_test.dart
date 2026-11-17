@@ -1,6 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:alera/src/features/agent_status/application/claude_code_message_store.dart';
+import 'package:alera/src/features/agent_status/domain/agent_status.dart';
+
 import 'package:alera/src/app/providers.dart';
 import 'package:alera/src/app/theme/alera_tokens.dart';
 import 'package:alera/src/design_system/forms/alera_text_actions_scope.dart';

@@ -18,6 +18,7 @@ class _InteractiveTerminalViewState extends State<_InteractiveTerminalView> {
   TerminalLinkRange? _lastHoverLink;
   TerminalCodeBlock? _hoveredCodeBlock;
   int? _lastHoverCodeRow;
+  double _lastCodePointerY = 8;
   double _copyButtonTop = 8;
   bool _copiedCode = false;
   bool _pointerOverCopyButton = false;
@@ -27,11 +28,15 @@ class _InteractiveTerminalViewState extends State<_InteractiveTerminalView> {
   void initState() {
     super.initState();
     widget.session._scrollController.addListener(_clearHoverOnScroll);
+    widget.session._claudeCodeMessageStore?.addListener(_onClaudeSourceUpdate);
   }
 
   @override
   void dispose() {
     widget.session._scrollController.removeListener(_clearHoverOnScroll);
+    widget.session._claudeCodeMessageStore?.removeListener(
+      _onClaudeSourceUpdate,
+    );
     _copyFeedbackTimer?.cancel();
     super.dispose();
   }
@@ -50,7 +55,13 @@ class _InteractiveTerminalViewState extends State<_InteractiveTerminalView> {
     }
     if (oldWidget.session != widget.session) {
       oldWidget.session._scrollController.removeListener(_clearHoverOnScroll);
+      oldWidget.session._claudeCodeMessageStore?.removeListener(
+        _onClaudeSourceUpdate,
+      );
       widget.session._scrollController.addListener(_clearHoverOnScroll);
+      widget.session._claudeCodeMessageStore?.addListener(
+        _onClaudeSourceUpdate,
+      );
       _clearHoverState();
     }
   }
@@ -127,14 +138,46 @@ class _InteractiveTerminalViewState extends State<_InteractiveTerminalView> {
     }
   }
 
+  void _onClaudeSourceUpdate() {
+    if (!mounted || !widget.showCodeBlockCopyButton || _pointerOverCopyButton)
+      return;
+    final offset = _lastHoverOffset;
+    if (offset == null) return;
+    _lastHoverCodeRow = null;
+    _handleCodeHover(offset, _lastCodePointerY);
+  }
+
+  TerminalCodeBlock? _resolveCodeBlockAt(xterm.CellOffset offset) {
+    final store = widget.session._claudeCodeMessageStore;
+    if (store != null) {
+      final id = widget.session.terminalSessionId;
+      if (store.hasClaudeSession(id)) {
+        return resolveClaudeSourceCodeBlockAt(
+          terminal: widget.session._terminal,
+          offset: offset,
+          sourceBlocks: store.blocksForTerminal(id),
+        );
+      }
+      // A normal shell can still copy explicit fenced Markdown. Never use
+      // Claude-specific syntax guessing in the production Classic terminal.
+      return resolveTerminalCodeBlockAt(
+        terminal: widget.session._terminal,
+        offset: offset,
+        includeClaudeHeuristics: false,
+      );
+    }
+    return resolveTerminalCodeBlockAt(
+      terminal: widget.session._terminal,
+      offset: offset,
+    );
+  }
+
   void _handleCodeHover(xterm.CellOffset offset, double pointerY) {
     if (!widget.showCodeBlockCopyButton || _lastHoverCodeRow == offset.y)
       return;
     _lastHoverCodeRow = offset.y;
-    final block = resolveTerminalCodeBlockAt(
-      terminal: widget.session._terminal,
-      offset: offset,
-    );
+    _lastCodePointerY = pointerY;
+    final block = _resolveCodeBlockAt(offset);
     final height = context.size?.height ?? 0;
     final buttonTop = (pointerY - 16)
         .clamp(4.0, (height - 36).clamp(4.0, double.infinity))
@@ -161,10 +204,9 @@ class _InteractiveTerminalViewState extends State<_InteractiveTerminalView> {
     if (target == null) return;
     // A streaming TUI can repaint or replace rows between hover and click.
     // Resolve the contents again instead of copying stale terminal output.
-    final current = resolveTerminalCodeBlockAt(
-      terminal: widget.session._terminal,
-      offset: xterm.CellOffset(0, target.openingRow),
-    );
+    final hoveredRow = _lastHoverCodeRow;
+    if (hoveredRow == null) return;
+    final current = _resolveCodeBlockAt(xterm.CellOffset(0, hoveredRow));
     if (current == null ||
         current.openingRow != target.openingRow ||
         current.closingRow != target.closingRow ||
@@ -173,38 +215,10 @@ class _InteractiveTerminalViewState extends State<_InteractiveTerminalView> {
       return;
     }
     try {
-      // Claude's TUI may replace unshown source rows with a viewport hint.
-      // When an exact same-workspace transcript match exists, copy the full
-      // canonical code; otherwise retain the ordinary terminal selection.
-      // Virtualized Claude code may be incomplete even after the viewport
-      // marker has scrolled away. Verify its file and source structure before
-      // reading the current workspace's matching canonical transcript.
-      final needsCompleteSource = terminalCodeBlockNeedsCanonicalRecovery(
-        terminal: widget.session._terminal,
-        block: current,
-      );
-      final completeCode = needsCompleteSource
-          ? await recoverCompleteClaudeCodeFromTranscript(
-              workspacePath: widget.session.workspacePath,
-              visibleCode: current.code,
-              viewportHintNearby: needsCompleteSource,
-            )
-          : null;
-      if (!mounted ||
-          !widget.showCodeBlockCopyButton ||
-          !identical(_hoveredCodeBlock, target))
-        return;
-      if (completeCode == null && needsCompleteSource) {
-        // A virtualized PTY buffer is not the full source. Do not silently
-        // claim a successful copy of a truncated file with an injected hint.
-        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-          SnackBar(content: Text(context.tr('Could not copy code'))),
-        );
-        return;
-      }
-      await widget.session._launchInputOwner.clipboard.writeText(
-        completeCode ?? current.code,
-      );
+      // The hover resolver already selected the exact Claude source, or a
+      // normal shell's explicitly fenced block. Never re-parse source syntax
+      // from rendered TUI lines while copying.
+      await widget.session._launchInputOwner.clipboard.writeText(current.code);
       if (!mounted || !identical(_hoveredCodeBlock, target)) return;
       _copyFeedbackTimer?.cancel();
       setState(() => _copiedCode = true);
