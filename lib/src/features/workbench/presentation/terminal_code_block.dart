@@ -566,3 +566,97 @@ final class _CodeFence {
     );
   }
 }
+
+/// Recovers a complete Claude source snippet from a canonical assistant message
+/// when the terminal TUI has virtualized/truncated its on-screen scrollback.
+///
+/// Only accept a response whose first four nonempty source lines match the
+/// visible copy block. It must contain more code than the terminal currently
+/// holds, preventing an older or unrelated Claude answer from replacing it.
+/// The canonical JSONL contains assistant prose after the source. Unlike the
+/// terminal's relaxed hover heuristic, this stricter extractor must never
+/// accept an English paragraph merely because it mentions "N = 8".
+final RegExp _canonicalCodeAssignment = RegExp(
+  r'^[A-Za-z_][\w.\[\]]*\s*(?:=|\+=|-=|\*=|/=)\s*\S',
+);
+
+bool _looksLikeCanonicalClaudeCodeLine(String raw) {
+  final source = raw.trimLeft();
+  if (source.isEmpty) return false;
+  if (_claudeBareCodeStart.hasMatch(source) ||
+      _claudeBareControlLine.hasMatch(source) ||
+      _languageCodeStatement.hasMatch(source)) {
+    return true;
+  }
+  if (source.startsWith('#') ||
+      source.startsWith('//') ||
+      source.startsWith('/*') ||
+      source.startsWith('*/') ||
+      source.startsWith('* ')) {
+    return true;
+  }
+  if (source == '{' ||
+      source == '}' ||
+      source == '};' ||
+      source == ']' ||
+      source == ')') {
+    return true;
+  }
+  return source.endsWith(';') ||
+      source.endsWith('{') ||
+      source.endsWith('}') ||
+      source.endsWith('=>') ||
+      _canonicalCodeAssignment.hasMatch(source);
+}
+
+String? recoverCompleteClaudeSourceFromText({
+  required String visibleCode,
+  required String assistantText,
+}) {
+  final visible = visibleCode.replaceAll('\r\n', '\n').split('\n');
+  final signature = visible
+      .map((line) => line.trim())
+      .where((line) => line.isNotEmpty)
+      .take(4)
+      .toList();
+  if (signature.length < 4 || visible.length < 12) return null;
+
+  final lines = assistantText.replaceAll('\r\n', '\n').split('\n');
+  final visibleLineCount = visible.length;
+  for (var start = 0; start < lines.length; start++) {
+    if (lines[start].trim() != signature.first ||
+        !_claudeBareCodeStart.hasMatch(lines[start].trimLeft())) {
+      continue;
+    }
+    final codeLines = <String>[];
+    for (var i = start; i < lines.length; i++) {
+      final line = lines[i].trimRight();
+      if (line.isEmpty) {
+        if (i + 1 < lines.length &&
+            _looksLikeCanonicalClaudeCodeLine(lines[i + 1])) {
+          codeLines.add('');
+          continue;
+        }
+        break;
+      }
+      if (!_looksLikeCanonicalClaudeCodeLine(line)) break;
+      codeLines.add(line);
+    }
+    final canonicalSignature = codeLines
+        .map((line) => line.trim())
+        .where((line) => line.isNotEmpty)
+        .take(4)
+        .toList();
+    if (canonicalSignature.length != signature.length) continue;
+    var matches = true;
+    for (var i = 0; i < signature.length; i++) {
+      if (canonicalSignature[i] != signature[i]) {
+        matches = false;
+        break;
+      }
+    }
+    if (!matches || codeLines.length <= visibleLineCount) continue;
+    return codeLines.join('\n');
+  }
+  return null;
+}

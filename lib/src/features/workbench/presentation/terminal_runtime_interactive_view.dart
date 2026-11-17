@@ -173,7 +173,30 @@ class _InteractiveTerminalViewState extends State<_InteractiveTerminalView> {
       return;
     }
     try {
-      await widget.session._launchInputOwner.clipboard.writeText(current.code);
+      // Claude's TUI may replace unshown source rows with a viewport hint.
+      // When an exact same-workspace transcript match exists, copy the full
+      // canonical code; otherwise retain the ordinary terminal selection.
+      final completeCode = current.code.contains('Jump to bottom')
+          ? await recoverCompleteClaudeCodeFromTranscript(
+              workspacePath: widget.session.workspacePath,
+              visibleCode: current.code,
+            )
+          : null;
+      if (!mounted ||
+          !widget.showCodeBlockCopyButton ||
+          !identical(_hoveredCodeBlock, target))
+        return;
+      if (completeCode == null && current.code.contains('Jump to bottom')) {
+        // A virtualized PTY buffer is not the full source. Do not silently
+        // claim a successful copy of a truncated file with an injected hint.
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+          SnackBar(content: Text(context.tr('Could not copy code'))),
+        );
+        return;
+      }
+      await widget.session._launchInputOwner.clipboard.writeText(
+        completeCode ?? current.code,
+      );
       if (!mounted || !identical(_hoveredCodeBlock, target)) return;
       _copyFeedbackTimer?.cancel();
       setState(() => _copiedCode = true);
