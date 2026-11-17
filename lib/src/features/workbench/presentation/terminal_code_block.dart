@@ -18,6 +18,80 @@ final class TerminalCodeBlock {
   bool containsRow(int row) => row >= openingRow && row <= closingRow;
 }
 
+/// Claude Code may draw its virtualized-scrollback marker on a nearby TUI row,
+/// *not inside* the visible code text. Copying only the parsed code in that
+/// situation silently truncates a file even though the button appears.
+///
+/// Inspect a small area around the code block's final row. A marker elsewhere
+/// in the terminal scrollback (for example, a different Claude answer) must
+/// not force transcript recovery for this block.
+bool terminalCodeBlockHasViewportHint({
+  required xterm.Terminal terminal,
+  required TerminalCodeBlock block,
+}) {
+  if (block.code.contains('Jump to bottom')) return true;
+  final lines = terminal.buffer.lines;
+  if (lines.length == 0) return false;
+  final first = math.max(0, block.closingRow - 8);
+  final last = math.min(lines.length - 1, block.closingRow + 12);
+  for (var row = first; row <= last; row++) {
+    if (lines[row].getText().contains('Jump to bottom')) return true;
+  }
+  return false;
+}
+
+/// A virtualized Claude response can lose its viewport marker while retaining
+/// only the start of a Swift/Objective-C file. A filename-qualified heading and
+/// an unfinished source body together are strong evidence that copying the
+/// visible fragment alone would lose part of the file.
+bool terminalCodeBlockNeedsCanonicalRecovery({
+  required xterm.Terminal terminal,
+  required TerminalCodeBlock block,
+}) {
+  if (terminalCodeBlockHasViewportHint(terminal: terminal, block: block)) {
+    return true;
+  }
+  final lines = terminal.buffer.lines;
+  if (lines.length == 0 || block.code.split('\n').length < 12) return false;
+
+  var hasSourceFilename = false;
+  for (
+    var row = math.max(0, block.openingRow - 3);
+    row < block.openingRow && row < lines.length;
+    row++
+  ) {
+    if (_isFilenameQualifiedCodeHeading(lines[row].getText())) {
+      hasSourceFilename = true;
+      break;
+    }
+  }
+  if (!hasSourceFilename) return false;
+
+  // A complete Swift/Obj-C file must close the scopes it opened. On a
+  // virtualized screen the first few method bodies are often visible but
+  // the final class/struct closing brace has already scrolled away.
+  var braceDepth = 0;
+  for (final unit in block.code.codeUnits) {
+    if (unit == 123) braceDepth++; // {
+    if (unit == 125) braceDepth--; // }
+  }
+  if (braceDepth > 0) return true;
+
+  // Some complete-looking declarations are followed by additional source
+  // after Ink's spacer rows. Detect those instead of quietly copying a prefix.
+  final peekEnd = math.min(lines.length - 1, block.closingRow + 5);
+  for (var row = block.closingRow + 1; row <= peekEnd; row++) {
+    final raw = lines[row].getText();
+    if (_claudeLanguageHeading.hasMatch(raw) ||
+        _claudeTurnBoundary.hasMatch(raw.trimLeft())) {
+      break;
+    }
+    if (raw.trim().isEmpty) continue;
+    return !lines[row].isWrapped && _looksLikeLanguageCode(raw);
+  }
+  return false;
+}
+
 /// Styling alone cannot safely distinguish code from ordinary terminal output.
 /// Scan a bounded range only when the mouse crosses into a different row.
 TerminalCodeBlock? resolveTerminalCodeBlockAt({
@@ -105,7 +179,10 @@ bool _insideClaudeResponse(
   required int maxScanRows,
 }) {
   final lines = buffer.lines;
-  final first = math.max(0, start - math.min(maxScanRows, 150));
+  // Multi-language Claude replies can contain hundreds of source lines
+  // between their first response bullet and a later Swift section.
+  // Scan up to the already bounded caller range, stopping at the turn boundary.
+  final first = math.max(0, start - maxScanRows);
   for (var row = start - 1; row >= first; row--) {
     if (lines[row].isWrapped) continue;
     final text = lines[row].getText();
@@ -173,7 +250,12 @@ TerminalCodeBlock? _resolveClaudeRenderedCodeAt(
       openingCode += lines[openingLastRow].getText();
     }
     openingCode = openingCode.trimRight();
-    if (!_probableCodeOpener.hasMatch(openingCode)) continue;
+    // "• Objective-C (queens.m)" is a label, not a function call.
+    if (_claudeLanguageHeading.hasMatch(rawOpening) ||
+        _claudeLanguageHeading.hasMatch(openingCode) ||
+        !_probableCodeOpener.hasMatch(openingCode)) {
+      continue;
+    }
 
     final parts = <String>[openingCode];
     var lastRow = openingLastRow;
@@ -221,36 +303,89 @@ TerminalCodeBlock? _resolveClaudeRenderedCodeAt(
 /// Claude Code also renders syntax-highlighted snippets with plain language
 /// headings instead of backtick fences or a bullet on the first source line.
 /// Only detect those headings inside a Claude reply, never general PTY output.
+/// An assistant can render a labeled code block as "Swift (queens.swift)"
+/// or "• Objective-C (queens.m):" without Markdown backticks. Accept the
+/// language and optional filename for any known language, but never a random
+/// prose heading or command result.
 final RegExp _claudeLanguageHeading = RegExp(
-  r'^[ \t]{0,4}(?:Python(?:\s+\d+(?:\.\d+)*)?|'
-  r'JavaScript(?:\s*\((?:Node(?:\.js)?|Deno|Bun)\))?|'
-  r'TypeScript|C\+\+|C#|C|Java|PowerShell|Bash|Shell|'
-  r'Rust|Go|Dart|PHP|Ruby|Kotlin|Swift|SQL|HTML|CSS|JSON|YAML|XML)'
-  r':?[ \t]*$',
+  r'^[ \t]{0,4}(?:[•●][ \t]+)?'
+  r'(?:Python(?:\s+\d+(?:\.\d+)*)?|JavaScript|TypeScript|'
+  r'Objective-C|Objective C|Obj-C|ObjC|C\+\+|C#|C|Java|'
+  r'PowerShell|Bash|Shell|Rust|Go|Dart|PHP|Ruby|Kotlin|'
+  r'Swift|SQL|HTML|CSS|JSON|YAML|XML)'
+  r'(?:[ \t]*\([A-Za-z0-9_.+/-]{1,80}\))?:?[ \t]*$',
   caseSensitive: false,
 );
+
+/// A virtualized Claude TUI may retain only its current screen, dropping the
+/// earlier '•' reply marker. A language *with a matching source filename*
+/// remains an unambiguous code section even when the introducing bullet was
+/// evicted from scrollback. Plain "Swift" prose still requires reply context.
+bool _isFilenameQualifiedCodeHeading(String raw) {
+  if (!_claudeLanguageHeading.hasMatch(raw)) return false;
+  final match = RegExp(r'\(([A-Za-z0-9_.+/-]{1,80})\):?\s*$')
+      .firstMatch(raw.trimRight());
+  if (match == null) return false;
+  final filename = match.group(1)!.toLowerCase();
+  return RegExp(
+    r'\.(?:swift|m|mm|h|hpp|c|cc|cpp|cs|rs|go|'
+    r'dart|py|js|jsx|ts|tsx|java|kt|php|rb|sh|'
+    r'ps1|sql|html|css|json|yaml|yml|xml)$',
+  ).hasMatch(filename);
+}
 
 final RegExp _languageCodeStatement = RegExp(
   r'^(?:public|private|protected|static|void|int|long|float|'
   r'double|bool|boolean|char|String|using|namespace|'
+  r'NSInteger|NSUInteger|BOOL|instancetype|id|NS[A-Z]\w*|'
+  r'func|mutating|nonmutating|override|required|convenience|'
+  r'final|extension|protocol|actor|subscript|init|deinit|'
   r'Write-Output|Write-Host|Get-Content|Set-Content|'
   r'echo|puts|printf|println|System)\b',
   caseSensitive: false,
 );
 
+/// Recognize language-neutral source structure plus common Swift/Obj-C
+/// declarations. The heading and Claude-turn checks outside this function
+/// prevent ordinary terminal output and English paragraphs becoming code.
 bool _looksLikeLanguageCode(String text) {
   final source = text.trimLeft();
-  if (source.isEmpty) return false;
-  return _probableCodeOpener.hasMatch(source) ||
+  if (source.isEmpty || _claudeLanguageHeading.hasMatch(text)) return false;
+  if (_probableCodeOpener.hasMatch(source) ||
       _languageCodeStatement.hasMatch(source) ||
-      source.startsWith(r'$') ||
-      source.startsWith('#include') ||
-      source.startsWith('//') ||
+      _claudeBareControlLine.hasMatch(source)) {
+    return true;
+  }
+  if (RegExp(
+    r'^[@#](?:import|interface|implementation|property|end|'
+    r'protocol|class|synthesize|dynamic|autoreleasepool|'
+    r'available|objc|MainActor|include|define|pragma)\b',
+  ).hasMatch(source))
+    return true;
+  if (RegExp(r'^[+-]\s*\([^)]*\)\s*[A-Za-z_]\w*').hasMatch(source)) {
+    return true;
+  }
+  if (source.startsWith('//') ||
       source.startsWith('/*') ||
       source.startsWith('*/') ||
-      source.startsWith('}') ||
-      source.startsWith(']') ||
-      source.startsWith(')');
+      source.startsWith(r'$') ||
+      source == '{' ||
+      source == '}' ||
+      source == '};' ||
+      source == ']' ||
+      source == ')' ||
+      source.endsWith('{') ||
+      source.endsWith('}') ||
+      source.endsWith('=>')) {
+    return true;
+  }
+  if (_canonicalCodeAssignment.hasMatch(source)) return true;
+  if (source.endsWith(';') && RegExp(r'[=();\[\].]').hasMatch(source)) {
+    return true;
+  }
+  // Objective-C sends, Swift property access and method calls.
+  if (source.startsWith('[') && source.endsWith(';')) return true;
+  return false;
 }
 
 TerminalCodeBlock? _resolveClaudeLanguageCodeAt(
@@ -265,7 +400,10 @@ TerminalCodeBlock? _resolveClaudeLanguageCodeAt(
         !_claudeLanguageHeading.hasMatch(lines[header].getText())) {
       continue;
     }
-    if (!_insideClaudeResponse(buffer, header, maxScanRows: maxScanRows)) {
+    final headingLine = lines[header].getText();
+    if (!_claudeCodeBullet.hasMatch(headingLine) &&
+        !_isFilenameQualifiedCodeHeading(headingLine) &&
+        !_insideClaudeResponse(buffer, header, maxScanRows: maxScanRows)) {
       continue;
     }
 
@@ -302,8 +440,18 @@ TerminalCodeBlock? _resolveClaudeLanguageCodeAt(
       if (raw.trim().isEmpty) {
         // Preserve blank source lines (e.g. between a C include and main)
         // but stop at a blank before another language or ordinary prose.
-        final nextRow = row + 1;
-        if (nextRow < lines.length &&
+        // Claude's virtualized Ink renderer sometimes inserts multiple
+        // spacer rows inside a source block (especially after Swift braces).
+        // Look ahead across a few blanks, but never cross another title or
+        // into ordinary explanation text.
+        var nextRow = row + 1;
+        final peekEnd = math.min(row + 4, lines.length - 1);
+        while (nextRow <= peekEnd &&
+            !lines[nextRow].isWrapped &&
+            lines[nextRow].getText().trim().isEmpty) {
+          nextRow++;
+        }
+        if (nextRow <= peekEnd &&
             !lines[nextRow].isWrapped &&
             _looksLikeLanguageCode(lines[nextRow].getText()) &&
             !_claudeLanguageHeading.hasMatch(lines[nextRow].getText())) {
@@ -319,10 +467,21 @@ TerminalCodeBlock? _resolveClaudeLanguageCodeAt(
       lastRow = row;
     }
     if (hoveredRow >= codeStart && hoveredRow <= lastRow) {
+      // A code presentation may add two leading gutter cells to every row.
+      // Strip only that shared offset, keeping nested language indentation.
+      final indents = source
+          .where((line) => line.isNotEmpty)
+          .map((line) => line.length - line.trimLeft().length);
+      final gutter = indents.isEmpty ? 0 : indents.reduce(math.min);
       return TerminalCodeBlock(
         openingRow: codeStart,
         closingRow: lastRow,
-        code: source.join('\n'),
+        code: source
+            .map(
+              (line) =>
+                  line.isEmpty || gutter == 0 ? line : line.substring(gutter),
+            )
+            .join('\n'),
       );
     }
   }
@@ -334,7 +493,8 @@ TerminalCodeBlock? _resolveClaudeLanguageCodeAt(
 /// response bullet and continue through declarations, functions and blank
 /// lines. Never treat generic PTY output as source by itself.
 final RegExp _claudeBareCodeStart = RegExp(
-  r'^(?:#(?:include|define|pragma|ifn?def|endif)\b|'
+  r'^(?:#(?:include|import|define|pragma|ifn?def|endif)\b|'
+  r'@(?:interface|implementation|protocol|import|class|MainActor)\b|'
   r'(?:static\s+)?(?:unsigned\s+|signed\s+)?'
   r'(?:void|int|long|short|char|float|double|bool|size_t)\s+\**[A-Za-z_]\w*|'
   r'(?:const|let|var|function|class|interface|type|def|from|import|'
@@ -583,9 +743,7 @@ final RegExp _canonicalCodeAssignment = RegExp(
 bool _looksLikeCanonicalClaudeCodeLine(String raw) {
   final source = raw.trimLeft();
   if (source.isEmpty) return false;
-  if (_claudeBareCodeStart.hasMatch(source) ||
-      _claudeBareControlLine.hasMatch(source) ||
-      _languageCodeStatement.hasMatch(source)) {
+  if (_claudeBareCodeStart.hasMatch(source) || _looksLikeLanguageCode(source)) {
     return true;
   }
   if (source.startsWith('#') ||

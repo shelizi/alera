@@ -117,6 +117,26 @@ void main() {
       ),
       fullCode,
     );
+    final markerFree = visible.replaceAll('Jump to bottom (ctrl+End)', '');
+    expect(
+      await recoverCompleteClaudeCodeFromTranscript(
+        workspacePath: workspacePath,
+        visibleCode: markerFree,
+        projectsRoot: root,
+      ),
+      isNull,
+      reason: 'No marker evidence means no transcript I/O by default',
+    );
+    expect(
+      await recoverCompleteClaudeCodeFromTranscript(
+        workspacePath: workspacePath,
+        visibleCode: markerFree,
+        viewportHintNearby: true,
+        projectsRoot: root,
+      ),
+      fullCode,
+      reason: 'Confirmed adjacent marker permits exact-prefix source recovery',
+    );
     expect(
       await recoverCompleteClaudeCodeFromTranscript(
         workspacePath: r'D:\sandbox\someone-else',
@@ -148,4 +168,115 @@ void main() {
       reason: 'Reject matching code prefix when the JSONL cwd is unrelated',
     );
   });
+
+  test(
+    'recovers separate Objective-C and Swift source from a single reply',
+    () {
+      final objcLines = <String>[
+        '#import <Foundation/Foundation.h>',
+        '',
+        '#define N 8',
+        '',
+        '@interface QueensSolver : NSObject',
+        '@property (nonatomic, readonly) NSInteger solutionCount;',
+        '- (void)solve;',
+        '@end',
+        '',
+        '@implementation QueensSolver {',
+        '  NSInteger _queens[N];',
+        '}',
+        '- (void)solve',
+        '{',
+        '  for (NSInteger row = 0; row < N; row++) {',
+        '    _queens[row] = row;',
+        '  }',
+        '}',
+        '@end',
+        '',
+        'int main(void) {',
+        '  @autoreleasepool {',
+        '    QueensSolver *solver = [[QueensSolver alloc] init];',
+        '    [solver solve];',
+        '  }',
+        '  return 0;',
+        '}',
+      ];
+      final swiftLines = <String>[
+        'let n = 8',
+        '',
+        'struct QueensSolver {',
+        '  private var queens = [Int](repeating: 0, count: n)',
+        '  private(set) var solutionCount = 0',
+        '',
+        '  private func isSafe(row: Int, col: Int) -> Bool {',
+        '    for r in 0..<row {',
+        '      let c = queens[r]',
+        '      if c == col { return false }',
+        '    }',
+        '    return true',
+        '  }',
+        '  private mutating func place(row: Int) {',
+        '    for col in 0..<n where isSafe(row: row, col: col) {',
+        '      queens[row] = col',
+        '      place(row: row + 1)',
+        '    }',
+        '  }',
+        '  mutating func solve() {',
+        '    place(row: 0)',
+        '  }',
+        '}',
+        '',
+        'var solver = QueensSolver()',
+        'solver.solve()',
+        'print("Total solutions")',
+      ];
+      final objc = objcLines.join('\n');
+      final swift = swiftLines.join('\n');
+      final plain =
+          'Objective-C (queens.m):\n\n' +
+          objc +
+          '\n\nSwift (queens.swift):\n\n' +
+          swift +
+          '\n\nHow it works: For N = 8, there are 92 solutions.';
+      final fenced =
+          '**Objective-C (queens.m)**\n\n' +
+          '```objc\n' +
+          objc +
+          '\n```\n\n' +
+          '**Swift (queens.swift)**\n\n```swift\n' +
+          swift +
+          '\n```\n\nHow it works: Both use backtracking.';
+      final partialObjc =
+          objcLines.take(16).join('\n') +
+          '                Jump to bottom (ctrl+End)';
+      final partialSwift =
+          swiftLines.take(17).join('\n') +
+          '                Jump to bottom (ctrl+End)';
+      for (final answer in [plain, fenced]) {
+        expect(
+          recoverCompleteClaudeSourceFromText(
+            visibleCode: partialObjc,
+            assistantText: answer,
+          ),
+          objc,
+          reason: 'Obj-C must not include the next Swift code block',
+        );
+        expect(
+          recoverCompleteClaudeSourceFromText(
+            visibleCode: partialSwift,
+            assistantText: answer,
+          ),
+          swift,
+          reason: 'Swift must not include Obj-C or following explanation',
+        );
+        expect(
+          recoverCompleteClaudeSourceFromText(
+            visibleCode: partialSwift.replaceFirst('let n = 8', 'let n = 9'),
+            assistantText: answer,
+          ),
+          isNull,
+        );
+      }
+    },
+  );
 }

@@ -176,17 +176,25 @@ class _InteractiveTerminalViewState extends State<_InteractiveTerminalView> {
       // Claude's TUI may replace unshown source rows with a viewport hint.
       // When an exact same-workspace transcript match exists, copy the full
       // canonical code; otherwise retain the ordinary terminal selection.
-      final completeCode = current.code.contains('Jump to bottom')
+      // Virtualized Claude code may be incomplete even after the viewport
+      // marker has scrolled away. Verify its file and source structure before
+      // reading the current workspace's matching canonical transcript.
+      final needsCompleteSource = terminalCodeBlockNeedsCanonicalRecovery(
+        terminal: widget.session._terminal,
+        block: current,
+      );
+      final completeCode = needsCompleteSource
           ? await recoverCompleteClaudeCodeFromTranscript(
               workspacePath: widget.session.workspacePath,
               visibleCode: current.code,
+              viewportHintNearby: needsCompleteSource,
             )
           : null;
       if (!mounted ||
           !widget.showCodeBlockCopyButton ||
           !identical(_hoveredCodeBlock, target))
         return;
-      if (completeCode == null && current.code.contains('Jump to bottom')) {
+      if (completeCode == null && needsCompleteSource) {
         // A virtualized PTY buffer is not the full source. Do not silently
         // claim a successful copy of a truncated file with an injected hint.
         ScaffoldMessenger.maybeOf(context)?.showSnackBar(

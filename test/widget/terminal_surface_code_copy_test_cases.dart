@@ -380,6 +380,123 @@ void _registerTerminalSurfaceCodeCopyTests() {
     },
   );
 
+  testWidgets('copy button distinguishes Objective-C and Swift source', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    final clipboardWrites = <String>[];
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (call) async {
+        if (call.method == 'Clipboard.setData') {
+          clipboardWrites.add(
+            (call.arguments as Map<Object?, Object?>)['text'] as String,
+          );
+        }
+        return null;
+      },
+    );
+    try {
+      final factory = _FakeTerminalPtySessionFactory();
+      final runtime = XtermTerminalRuntime(
+        ptySessionFactory: factory,
+        shellLaunchesBuilder: _testShellLaunches,
+        initialSettings: TerminalSettings.defaults.copyWith(
+          showCodeBlockCopyButton: true,
+        ),
+      );
+      addTearDown(runtime.dispose);
+      final session = runtime.sessionFor(workspace: _workspace(), tab: _tab());
+      await _pumpTerminalSurface(tester, session);
+      final pty = factory.sessions.single;
+      pty.emitOutput(
+        utf8.encode(
+          '❯ give me objective-c and swift code\r\n'
+          '• Objective-C (queens.m)\r\n'
+          '#import <Foundation/Foundation.h>\r\n'
+          '@interface QueensSolver : NSObject\r\n'
+          '- (void)solve;\r\n'
+          '@end\r\n'
+          '\r\n'
+          'Swift (queens.swift)\r\n'
+          'let n = 8\r\n'
+          'struct QueensSolver {\r\n'
+          '  private mutating func solve() {\r\n'
+          '    print("ok")\r\n'
+          '  }\r\n'
+          '}\r\n'
+          '\r\n'
+          'These versions use backtracking.\r\n'
+          '✻ Churned for 10s',
+        ),
+      );
+      await _pumpTerminalOutput(tester);
+      final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+      await mouse.addPointer(
+        location: _cellCenter(tester, const xterm.CellOffset(4, 0)),
+      );
+      const key = ValueKey<String>('terminal-copy-code-button');
+      await mouse.moveTo(_cellCenter(tester, const xterm.CellOffset(4, 4)));
+      await tester.pump();
+      expect(
+        find.byKey(key),
+        findsOneWidget,
+        reason: 'Objective-C method should show code copy control',
+      );
+      pty.writes.clear();
+      await tester.tap(find.byKey(key));
+      await tester.pump();
+      expect(clipboardWrites, <String>[
+        '#import <Foundation/Foundation.h>\n'
+            '@interface QueensSolver : NSObject\n'
+            '- (void)solve;\n@end',
+      ]);
+      expect(pty.writes, isEmpty);
+
+      await mouse.moveTo(_cellCenter(tester, const xterm.CellOffset(4, 11)));
+      await tester.pump();
+      expect(
+        find.byKey(key),
+        findsOneWidget,
+        reason: 'Swift nested method should have its own copy control',
+      );
+      await tester.tap(find.byKey(key));
+      await tester.pump();
+      expect(clipboardWrites, <String>[
+        '#import <Foundation/Foundation.h>\n'
+            '@interface QueensSolver : NSObject\n'
+            '- (void)solve;\n@end',
+        'let n = 8\nstruct QueensSolver {\n'
+            '  private mutating func solve() {\n'
+            '    print("ok")\n  }\n}',
+      ]);
+      expect(pty.writes, isEmpty);
+
+      await mouse.moveTo(_cellCenter(tester, const xterm.CellOffset(4, 7)));
+      await tester.pump();
+      expect(
+        find.byKey(key),
+        findsNothing,
+        reason: 'Swift label must not be copyable code',
+      );
+      await mouse.moveTo(_cellCenter(tester, const xterm.CellOffset(4, 15)));
+      await tester.pump();
+      expect(
+        find.byKey(key),
+        findsNothing,
+        reason: 'English explanation must not be copyable code',
+      );
+      await mouse.removePointer();
+    } finally {
+      await tester.pumpWidget(const SizedBox());
+      debugDefaultTargetPlatformOverride = null;
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        null,
+      );
+    }
+  });
+
   testWidgets('copies full unlabelled Claude eight-queens C source by mouse', (
     tester,
   ) async {

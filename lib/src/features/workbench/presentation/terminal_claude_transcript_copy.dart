@@ -14,11 +14,12 @@ Future<String?> recoverCompleteClaudeCodeFromTranscript({
   required String workspacePath,
   required String visibleCode,
   Directory? projectsRoot,
+  bool viewportHintNearby = false,
 }) async {
-  // The expensive disk fallback is needed only when Claude has inserted its
-  // virtualized-scrollback hint into an otherwise copyable source line.
-  // Ordinary terminal copies must remain synchronous and entirely local.
-  if (!visibleCode.contains('Jump to bottom') ||
+  // The TUI marker can appear beside the code, not in its source text.
+  // The caller may pass a confirmed nearby marker; ordinary clipboard
+  // clicks must not read history without evidence of virtualized output.
+  if ((!viewportHintNearby && !visibleCode.contains('Jump to bottom')) ||
       visibleCode.split('\n').length < 12 ||
       workspacePath.isEmpty) {
     return null;
