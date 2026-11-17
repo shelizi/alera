@@ -13918,9 +13918,9 @@ impl Render for Workbench {
                                             .min_w_0()
                                             .overflow_hidden()
                                             .child(if has_native_editor {
-                                                format!("Editing: {}{}", editor_title, if editor_dirty { " ●" } else { "" })
+                                                format!("{}: {}{}", tr(self.settings_menu_locale, "Editing"), editor_title, if editor_dirty { " ●" } else { "" })
                                             } else {
-                                                format!("{} · read-only preview", filename)
+                                                format!("{} · {}", filename, tr(self.settings_menu_locale, "read-only preview"))
                                             }),
                                     )
                                     .child(
@@ -13929,14 +13929,14 @@ impl Render for Workbench {
                                             .items_center()
                                             .gap_1()
                                             .child(
-                                                icon_button("native-editor-new", UiIcon::NewFile, "Create new untitled editor", false)
+                                                icon_button("native-editor-new", UiIcon::NewFile, tr(self.settings_menu_locale, "Create new untitled editor"), false)
                                                     .on_click(cx.listener(|this, _, _, cx| {
                                                         this.new_editor(cx);
                                                     }))
                                                     .when(has_native_editor, |button| button.hidden()),
                                             )
                                             .child(
-                                                icon_button("native-editor-edit", UiIcon::Edit, "Edit currently selected file", false)
+                                                icon_button("native-editor-edit", UiIcon::Edit, tr(self.settings_menu_locale, "Edit currently selected file"), false)
                                                     .on_click(cx.listener(|this, _, _, cx| {
                                                         this.open_editor(cx);
                                                     }))
@@ -13945,25 +13945,25 @@ impl Render for Workbench {
                                             .when(editor.is_some() && !showing_explorer_preview, |toolbar| {
                                                 toolbar
                                                     .child(
-                                                        icon_button("native-editor-save", UiIcon::Save, "Save current editor file (Ctrl+S)", false)
+                                                        icon_button("native-editor-save", UiIcon::Save, tr(self.settings_menu_locale, "Save current editor file (Ctrl+S)"), false)
                                                             .on_click(cx.listener(|this, _, _, cx| {
                                                                 this.save_editor(cx);
                                                             })),
                                                     )
                                                     .child(
-                                                        icon_button("native-editor-save-as", UiIcon::SaveAs, "Save current editor as a different file", false)
+                                                        icon_button("native-editor-save-as", UiIcon::SaveAs, tr(self.settings_menu_locale, "Save current editor as a different file"), false)
                                                             .on_click(cx.listener(|this, _, _, cx| {
                                                                 this.pick_save_as(cx);
                                                             })),
                                                     )
                                                     .child(
-                                                        icon_button("native-editor-close", UiIcon::Close, "Close current editor tab", false)
+                                                        icon_button("native-editor-close", UiIcon::Close, tr(self.settings_menu_locale, "Close current editor tab"), false)
                                                             .on_click(cx.listener(|this, _, _, cx| {
                                                                 this.close_editor(false, cx);
                                                             })),
                                                     )
                                                     .child(
-                                                        icon_button("native-editor-discard", if discard_pending { UiIcon::Check } else { UiIcon::Delete }, "Discard unsaved changes (confirmation required)", discard_pending)
+                                                        icon_button("native-editor-discard", if discard_pending { UiIcon::Check } else { UiIcon::Delete }, tr(self.settings_menu_locale, "Discard unsaved changes (confirmation required)"), discard_pending)
                                                             .on_click(cx.listener(|this, _, _, cx| {
                                                                 this.close_editor(true, cx);
                                                             }))

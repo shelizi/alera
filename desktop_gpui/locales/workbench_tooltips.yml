@@ -1,5 +1,53 @@
 # Native mixed-pane Tab tooltips and Explorer empty states.
 _version: 2
+"Editing":
+  en: "Editing"
+  zh-TW: "正在編輯"
+  zh-CN: "正在编辑"
+  ja: "編集中"
+
+"read-only preview":
+  en: "read-only preview"
+  zh-TW: "唯讀預覽"
+  zh-CN: "只读预览"
+  ja: "読み取り専用プレビュー"
+
+"Create new untitled editor":
+  en: "Create new untitled editor"
+  zh-TW: "新增未命名編輯器"
+  zh-CN: "新建未命名编辑器"
+  ja: "無題のエディターを新規作成"
+
+"Edit currently selected file":
+  en: "Edit currently selected file"
+  zh-TW: "編輯目前選取的檔案"
+  zh-CN: "编辑当前选中的文件"
+  ja: "選択中のファイルを編集"
+
+"Save current editor file (Ctrl+S)":
+  en: "Save current editor file (Ctrl+S)"
+  zh-TW: "儲存目前編輯中的檔案（Ctrl+S）"
+  zh-CN: "保存当前编辑的文件（Ctrl+S）"
+  ja: "現在のファイルを保存（Ctrl+S）"
+
+"Save current editor as a different file":
+  en: "Save current editor as a different file"
+  zh-TW: "將目前檔案另存新檔"
+  zh-CN: "将当前文件另存为"
+  ja: "現在のファイルを別名で保存"
+
+"Close current editor tab":
+  en: "Close current editor tab"
+  zh-TW: "關閉目前的編輯器分頁"
+  zh-CN: "关闭当前编辑器标签页"
+  ja: "現在のエディタータブを閉じる"
+
+"Discard unsaved changes (confirmation required)":
+  en: "Discard unsaved changes (confirmation required)"
+  zh-TW: "捨棄未儲存變更（需再次確認）"
+  zh-CN: "放弃未保存的更改（需要再次确认）"
+  ja: "未保存の変更を破棄（確認が必要）"
+
 "New Tab":
   en: "New Tab"
   zh-TW: "新增分頁"

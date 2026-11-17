@@ -162,6 +162,46 @@ mod tests {
     }
 
     #[test]
+    fn native_editor_toolbar_has_real_localized_labels_and_tooltips() {
+        // Classic localizes the Editor shell. GPUI's toolbar must use the
+        // same active language for every button and its status caption.
+        let source = include_str!("main.rs");
+        let editor_toolbar = source
+            .split_once(".when(!show_editor_toolbar || show_center_git_diff").unwrap().1
+            .split_once(r#".id("mixed-pane-layout")"#).unwrap().0;
+        assert!(editor_toolbar.contains(r#"tr(self.settings_menu_locale, "Editing")"#));
+        assert!(editor_toolbar.contains(r#"tr(self.settings_menu_locale, "read-only preview")"#));
+        for label in [
+            "Create new untitled editor",
+            "Edit currently selected file",
+            "Save current editor file (Ctrl+S)",
+            "Save current editor as a different file",
+            "Close current editor tab",
+            "Discard unsaved changes (confirmation required)",
+        ] {
+            assert!(editor_toolbar.contains(&format!(r#"tr(self.settings_menu_locale, "{label}")"#)),
+                "Native Editor tooltip must use current UI language: {label}");
+        }
+        for label in [
+            "Editing",
+            "read-only preview",
+            "Create new untitled editor",
+            "Edit currently selected file",
+            "Save current editor file (Ctrl+S)",
+            "Save current editor as a different file",
+            "Close current editor tab",
+            "Discard unsaved changes (confirmation required)",
+        ] {
+            assert_eq!(tr(UiLocale::English, label), label);
+            for locale in [UiLocale::TraditionalChinese, UiLocale::SimplifiedChinese, UiLocale::Japanese] {
+                let translated = tr(locale, label);
+                assert_ne!(translated, label, "{label}: missing {}", locale.tag());
+                assert!(!translated.trim().is_empty());
+            }
+        }
+    }
+
+    #[test]
     fn tab_context_and_pane_actions_have_real_translations_in_all_locales() {
         // The mixed Editor/Terminal/Agent Tab context menu and the adjacent
         // pane actions must never silently revert to English in zh-TW,
