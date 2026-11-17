@@ -80,6 +80,7 @@ class const TerminalSettings({
   this.clipboardOnSelect = false,
   this.allowOsc52Clipboard = false,
   this.showComposerByDefault = false,
+  this.showCodeBlockCopyButton = false,
   this.toolbarCorner = TerminalToolbarCorner.topRight,
   this.hostEmptyShutdownDelaySeconds = 30,
   this.hostDetachedSessionShutdownDelaySeconds = 60 * 60,
@@ -111,6 +112,10 @@ class const TerminalSettings({
 
   /// Whether new terminal sessions open the prompt composer immediately.
   final bool showComposerByDefault;
+
+  /// Opt-in hover copy for recognized terminal code blocks (including Claude Code).
+  /// Local UI preference; absent keys in older settings decode as disabled.
+  final bool showCodeBlockCopyButton;
 
   /// Where the terminal action-button cluster sits inside the tab.
   final TerminalToolbarCorner toolbarCorner;
@@ -164,6 +169,7 @@ class const TerminalSettings({
     clipboardOnSelect: false,
     allowOsc52Clipboard: false,
     showComposerByDefault: false,
+    showCodeBlockCopyButton: false,
     toolbarCorner: .topRight,
     hostEmptyShutdownDelaySeconds: 30,
     hostDetachedSessionShutdownDelaySeconds: 60 * 60,

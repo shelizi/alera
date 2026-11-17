@@ -3599,6 +3599,14 @@ class TerminalSettingsMapper extends ClassMapperBase<TerminalSettings> {
     opt: true,
     def: false,
   );
+  static bool _$showCodeBlockCopyButton(TerminalSettings v) =>
+      v.showCodeBlockCopyButton;
+  static const Field<TerminalSettings, bool> _f$showCodeBlockCopyButton = Field(
+    'showCodeBlockCopyButton',
+    _$showCodeBlockCopyButton,
+    opt: true,
+    def: false,
+  );
   static TerminalToolbarCorner _$toolbarCorner(TerminalSettings v) =>
       v.toolbarCorner;
   static const Field<TerminalSettings, TerminalToolbarCorner> _f$toolbarCorner =
@@ -3695,6 +3703,7 @@ class TerminalSettingsMapper extends ClassMapperBase<TerminalSettings> {
     #clipboardOnSelect: _f$clipboardOnSelect,
     #allowOsc52Clipboard: _f$allowOsc52Clipboard,
     #showComposerByDefault: _f$showComposerByDefault,
+    #showCodeBlockCopyButton: _f$showCodeBlockCopyButton,
     #toolbarCorner: _f$toolbarCorner,
     #hostEmptyShutdownDelaySeconds: _f$hostEmptyShutdownDelaySeconds,
     #hostDetachedSessionShutdownDelaySeconds:
@@ -3730,6 +3739,7 @@ class TerminalSettingsMapper extends ClassMapperBase<TerminalSettings> {
       clipboardOnSelect: data.dec(_f$clipboardOnSelect),
       allowOsc52Clipboard: data.dec(_f$allowOsc52Clipboard),
       showComposerByDefault: data.dec(_f$showComposerByDefault),
+      showCodeBlockCopyButton: data.dec(_f$showCodeBlockCopyButton),
       toolbarCorner: data.dec(_f$toolbarCorner),
       hostEmptyShutdownDelaySeconds: data.dec(_f$hostEmptyShutdownDelaySeconds),
       hostDetachedSessionShutdownDelaySeconds: data.dec(
@@ -3832,6 +3842,7 @@ abstract class TerminalSettingsCopyWith<$R, $In extends TerminalSettings, $Out>
     bool? clipboardOnSelect,
     bool? allowOsc52Clipboard,
     bool? showComposerByDefault,
+    bool? showCodeBlockCopyButton,
     TerminalToolbarCorner? toolbarCorner,
     int? hostEmptyShutdownDelaySeconds,
     int? hostDetachedSessionShutdownDelaySeconds,
@@ -3884,6 +3895,7 @@ class _TerminalSettingsCopyWithImpl<$R, $Out>
     bool? clipboardOnSelect,
     bool? allowOsc52Clipboard,
     bool? showComposerByDefault,
+    bool? showCodeBlockCopyButton,
     TerminalToolbarCorner? toolbarCorner,
     int? hostEmptyShutdownDelaySeconds,
     int? hostDetachedSessionShutdownDelaySeconds,
@@ -3917,6 +3929,8 @@ class _TerminalSettingsCopyWithImpl<$R, $Out>
         #allowOsc52Clipboard: allowOsc52Clipboard,
       if (showComposerByDefault != null)
         #showComposerByDefault: showComposerByDefault,
+      if (showCodeBlockCopyButton != null)
+        #showCodeBlockCopyButton: showCodeBlockCopyButton,
       if (toolbarCorner != null) #toolbarCorner: toolbarCorner,
       if (hostEmptyShutdownDelaySeconds != null)
         #hostEmptyShutdownDelaySeconds: hostEmptyShutdownDelaySeconds,
@@ -3971,6 +3985,10 @@ class _TerminalSettingsCopyWithImpl<$R, $Out>
     showComposerByDefault: data.get(
       #showComposerByDefault,
       or: $value.showComposerByDefault,
+    ),
+    showCodeBlockCopyButton: data.get(
+      #showCodeBlockCopyButton,
+      or: $value.showCodeBlockCopyButton,
     ),
     toolbarCorner: data.get(#toolbarCorner, or: $value.toolbarCorner),
     hostEmptyShutdownDelaySeconds: data.get(

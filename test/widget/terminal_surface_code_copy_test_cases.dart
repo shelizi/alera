@@ -22,6 +22,9 @@ void _registerTerminalSurfaceCodeCopyTests() {
       final runtime = XtermTerminalRuntime(
         ptySessionFactory: factory,
         shellLaunchesBuilder: _testShellLaunches,
+        initialSettings: TerminalSettings.defaults.copyWith(
+          showCodeBlockCopyButton: true,
+        ),
       );
       addTearDown(runtime.dispose);
       final session = runtime.sessionFor(workspace: _workspace(), tab: _tab());
@@ -89,6 +92,9 @@ void _registerTerminalSurfaceCodeCopyTests() {
         final runtime = XtermTerminalRuntime(
           ptySessionFactory: factory,
           shellLaunchesBuilder: _testShellLaunches,
+          initialSettings: TerminalSettings.defaults.copyWith(
+            showCodeBlockCopyButton: true,
+          ),
         );
         addTearDown(runtime.dispose);
         final session = runtime.sessionFor(
@@ -159,6 +165,9 @@ void _registerTerminalSurfaceCodeCopyTests() {
       final runtime = XtermTerminalRuntime(
         ptySessionFactory: factory,
         shellLaunchesBuilder: _testShellLaunches,
+        initialSettings: TerminalSettings.defaults.copyWith(
+          showCodeBlockCopyButton: true,
+        ),
       );
       addTearDown(runtime.dispose);
       final session = runtime.sessionFor(workspace: _workspace(), tab: _tab());
@@ -224,4 +233,80 @@ void _registerTerminalSurfaceCodeCopyTests() {
       );
     }
   });
+
+  testWidgets(
+    'copy button defaults off and toggles live without restarting the PTY',
+    (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      try {
+        final factory = _FakeTerminalPtySessionFactory();
+        final runtime = XtermTerminalRuntime(
+          ptySessionFactory: factory,
+          shellLaunchesBuilder: _testShellLaunches,
+        );
+        addTearDown(runtime.dispose);
+        final session = runtime.sessionFor(
+          workspace: _workspace(),
+          tab: _tab(),
+        );
+        await _pumpTerminalSurface(tester, session);
+        final pty = factory.sessions.single;
+        pty.emitOutput(
+          utf8.encode(
+            'Claude says:\r\n'
+            '~~~dart\r\n'
+            'void main() {}\r\n'
+            '~~~\r\n'
+            'Done',
+          ),
+        );
+        await _pumpTerminalOutput(tester);
+        final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+        await mouse.addPointer(
+          location: _cellCenter(tester, const xterm.CellOffset(3, 0)),
+        );
+        await mouse.moveTo(_cellCenter(tester, const xterm.CellOffset(3, 2)));
+        await tester.pump();
+
+        const copyKey = ValueKey<String>('terminal-copy-code-button');
+        expect(runtime.terminalSettings.showCodeBlockCopyButton, isFalse);
+        expect(find.byKey(copyKey), findsNothing);
+
+        runtime.updateSettings(
+          TerminalSettings.defaults.copyWith(showCodeBlockCopyButton: true),
+        );
+        await tester.pump();
+        await mouse.moveTo(_cellCenter(tester, const xterm.CellOffset(3, 1)));
+        await mouse.moveTo(_cellCenter(tester, const xterm.CellOffset(3, 2)));
+        await tester.pump();
+        expect(find.byKey(copyKey), findsOneWidget);
+
+        runtime.updateSettings(TerminalSettings.defaults);
+        await tester.pump();
+        expect(find.byKey(copyKey), findsNothing);
+        await mouse.moveTo(_cellCenter(tester, const xterm.CellOffset(3, 1)));
+        await mouse.moveTo(_cellCenter(tester, const xterm.CellOffset(3, 2)));
+        await tester.pump();
+        expect(find.byKey(copyKey), findsNothing);
+
+        runtime.updateSettings(
+          TerminalSettings.defaults.copyWith(showCodeBlockCopyButton: true),
+        );
+        await tester.pump();
+        await mouse.moveTo(_cellCenter(tester, const xterm.CellOffset(3, 1)));
+        await mouse.moveTo(_cellCenter(tester, const xterm.CellOffset(3, 2)));
+        await tester.pump();
+        expect(find.byKey(copyKey), findsOneWidget);
+        expect(
+          pty.writes,
+          isEmpty,
+          reason: 'setting changes must not send PTY input',
+        );
+        await mouse.removePointer();
+      } finally {
+        await tester.pumpWidget(const SizedBox());
+        debugDefaultTargetPlatformOverride = null;
+      }
+    },
+  );
 }

@@ -437,6 +437,9 @@ const Map<String, String> _traditionalChineseSettingsExtra = <String, String>{
   'Color Overrides': '色彩覆寫',
   'TUI Scroll Speed': 'TUI 捲動速度',
   'Copy On Select': '選取時複製',
+  'Show Code Block Copy Button': '顯示程式碼區塊複製按鈕',
+  'Show a copy button over recognized code blocks in terminal output, including Claude Code.':
+      '在終端機輸出的可辨識程式碼區塊上顯示複製按鈕（包括 Claude Code）。',
   'Allow OSC 52 Clipboard Writes': '允許 OSC 52 寫入剪貼簿',
   'Show Terminal Composer By Default': '預設顯示終端機 Composer',
   'Scrollback Lines': 'Scrollback 行數',

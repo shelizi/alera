@@ -443,6 +443,9 @@ const Map<String, String> _japaneseSettingsExtra = <String, String>{
   'Color Overrides': '色の上書き',
   'TUI Scroll Speed': 'TUI のスクロール速度',
   'Copy On Select': '選択時にコピー',
+  'Show Code Block Copy Button': 'コードブロックのコピーボタンを表示',
+  'Show a copy button over recognized code blocks in terminal output, including Claude Code.':
+      'Claude Code を含むターミナル出力のコードブロックにコピーボタンを表示します。',
   'Allow OSC 52 Clipboard Writes': 'OSC 52 によるクリップボード書き込みを許可',
   'Show Terminal Composer By Default': 'ターミナルの入力欄を既定で表示',
   'Scrollback Lines': 'スクロールバックの行数',

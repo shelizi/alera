@@ -256,6 +256,15 @@ class const TerminalSettingsPane({
                 ),
               ),
               SettingsSwitchRow(
+                title: 'Show Code Block Copy Button',
+                description: 'Show a copy button over recognized code blocks in terminal output, including Claude Code.',
+                value: settings.showCodeBlockCopyButton,
+                onChanged: (value) => onChanged(
+                  (settings) =>
+                      settings.copyWith(showCodeBlockCopyButton: value),
+                ),
+              ),
+              SettingsSwitchRow(
                 title: 'Show Terminal Composer By Default',
                 description: 'Open the prompt composer when a new terminal session starts.',
                 value: settings.showComposerByDefault,

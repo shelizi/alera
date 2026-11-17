@@ -148,6 +148,7 @@ final class TerminalRuntimeRendererAdapterOwner {
       session: session,
       autofocus: autofocus,
       onKeyEvent: onKeyEvent,
+      showCodeBlockCopyButton: session._settings.showCodeBlockCopyButton,
     );
   }
 

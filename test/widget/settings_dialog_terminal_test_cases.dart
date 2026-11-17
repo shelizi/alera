@@ -1,6 +1,52 @@
 part of 'settings_dialog_test.dart';
 
 void _registerSettingsDialogTerminalTests() {
+  testWidgets('code-block copy starts disabled and persists when toggled', (
+    tester,
+  ) async {
+    final repository = _FakeSettingsRepository(AleraSettings.defaults);
+    final container = await _pumpSettingsDialog(
+      tester,
+      settingsRepository: repository,
+    );
+    await _selectTerminalSectionByNav(tester);
+    final setting = find.ancestor(
+      of: find.text('Show Code Block Copy Button'),
+      matching: find.byType(SettingsSwitchRow),
+    );
+    final toggle = find.descendant(of: setting, matching: find.byType(Switch));
+    expect(
+      container
+          .read(settingsControllerProvider)
+          .terminal
+          .showCodeBlockCopyButton,
+      isFalse,
+    );
+    await tester.ensureVisible(toggle);
+    await tester.pumpAndSettle();
+    await tester.tap(toggle);
+    await tester.pumpAndSettle();
+    expect(
+      container
+          .read(settingsControllerProvider)
+          .terminal
+          .showCodeBlockCopyButton,
+      isTrue,
+    );
+    expect((await repository.load()).terminal.showCodeBlockCopyButton, isTrue);
+
+    await tester.tap(toggle);
+    await tester.pumpAndSettle();
+    expect(
+      container
+          .read(settingsControllerProvider)
+          .terminal
+          .showCodeBlockCopyButton,
+      isFalse,
+    );
+    expect((await repository.load()).terminal.showCodeBlockCopyButton, isFalse);
+  });
+
   testWidgets('edits additional terminal numeric and color overrides', (
     tester,
   ) async {

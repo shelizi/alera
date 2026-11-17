@@ -102,6 +102,18 @@ const List<SettingsSearchEntry> terminalSearchEntries = <SettingsSearchEntry>[
     groupId: 'interaction',
   ),
   SettingsSearchEntry(
+    title: 'Show Code Block Copy Button',
+    description: 'Show a copy button over recognized code blocks in terminal output, including Claude Code.',
+    keywords: <String>[
+      'claude code',
+      'code block',
+      'copy',
+      'clipboard',
+      'hover',
+    ],
+    groupId: 'interaction',
+  ),
+  SettingsSearchEntry(
     title: 'Show Terminal Composer By Default',
     description: 'Open the prompt composer when a new terminal session starts.',
     keywords: <String>['composer', 'prompt', 'input', 'default'],

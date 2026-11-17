@@ -4,6 +4,7 @@ class const _InteractiveTerminalView({
   super.key,
   required final _XtermTerminalSessionHandle session,
   required final bool autofocus,
+  required final bool showCodeBlockCopyButton,
   final FocusOnKeyEventCallback? onKeyEvent,
 }) extends StatefulWidget {
   @override
@@ -36,6 +37,14 @@ class _InteractiveTerminalViewState extends State<_InteractiveTerminalView> {
   @override
   void didUpdateWidget(covariant _InteractiveTerminalView oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.showCodeBlockCopyButton != widget.showCodeBlockCopyButton) {
+      // A setting change must clear any stale copy overlay immediately.
+      _hoveredCodeBlock = null;
+      _lastHoverCodeRow = null;
+      _lastHoverOffset = null;
+      _copiedCode = false;
+      _pointerOverCopyButton = false;
+    }
     if (oldWidget.session != widget.session) {
       oldWidget.session._scrollController.removeListener(_clearHoverState);
       widget.session._scrollController.addListener(_clearHoverState);
@@ -59,7 +68,7 @@ class _InteractiveTerminalViewState extends State<_InteractiveTerminalView> {
                 : SystemMouseCursors.click,
             onTapUp: _handleTapUp,
           ),
-          if (_hoveredCodeBlock != null)
+          if (widget.showCodeBlockCopyButton && _hoveredCodeBlock != null)
             Positioned(
               top: _copyButtonTop,
               right: 8,
@@ -110,11 +119,14 @@ class _InteractiveTerminalViewState extends State<_InteractiveTerminalView> {
     _lastHoverOffset = offset;
     _lastHoverLink = link;
     _setHoveredLink(link);
-    _handleCodeHover(offset, event.localPosition.dy);
+    if (widget.showCodeBlockCopyButton) {
+      _handleCodeHover(offset, event.localPosition.dy);
+    }
   }
 
   void _handleCodeHover(xterm.CellOffset offset, double pointerY) {
-    if (_lastHoverCodeRow == offset.y) return;
+    if (!widget.showCodeBlockCopyButton || _lastHoverCodeRow == offset.y)
+      return;
     _lastHoverCodeRow = offset.y;
     final block = resolveTerminalCodeBlockAt(
       terminal: widget.session._terminal,
@@ -138,6 +150,7 @@ class _InteractiveTerminalViewState extends State<_InteractiveTerminalView> {
   }
 
   Future<void> _copyCodeBlock() async {
+    if (!widget.showCodeBlockCopyButton) return;
     final target = _hoveredCodeBlock;
     if (target == null) return;
     // A streaming TUI can repaint or replace rows between hover and click.

@@ -11,6 +11,36 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   group('AleraSettings JSON', () {
+    test('code block copy is opt-in and survives settings JSON', () {
+      expect(TerminalSettings.defaults.showCodeBlockCopyButton, isFalse);
+      expect(AleraSettings.defaults.terminal.showCodeBlockCopyButton, isFalse);
+
+      final disabledJson = Map<String, Object?>.from(
+        AleraSettings.defaults.toMap(),
+      );
+      final terminal = Map<String, Object?>.from(
+        disabledJson['terminal']! as Map,
+      )..remove('showCodeBlockCopyButton');
+      disabledJson['terminal'] = terminal;
+      expect(
+        AleraSettings.fromJson(disabledJson).terminal.showCodeBlockCopyButton,
+        isFalse,
+        reason: 'Old settings files must not activate the hover button',
+      );
+
+      final enabled = AleraSettings.defaults.copyWith(
+        terminal: TerminalSettings.defaults.copyWith(
+          showCodeBlockCopyButton: true,
+        ),
+      );
+      final saved = enabled.toMap();
+      expect((saved['terminal'] as Map)['showCodeBlockCopyButton'], isTrue);
+      expect(
+        AleraSettings.fromJson(saved).terminal.showCodeBlockCopyButton,
+        isTrue,
+      );
+    });
+
     test('round-trips through json', () {
       const settings = AleraSettings(
         general: GeneralSettings(
