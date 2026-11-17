@@ -482,4 +482,67 @@ void main() {
       'static int queens[N];\nint main(void) {\n  return 0;\n}',
     );
   });
+
+  test('copies Claude bullet-start eight-queens C code without fences', () {
+    final source = <String>[
+      '#include <stdio.h>',
+      '',
+      '#define N 8',
+      '',
+      'static int queens[N];',
+      'static int solution_count = 0;',
+      '',
+      'void print_board(void)',
+      '{',
+      '  printf("Solution %d\\n", solution_count);',
+      '}',
+      '',
+      'void solve(int row)',
+      '{',
+      '  if (row == N) {',
+      '    solution_count++;',
+      '    print_board();',
+      '    return;',
+      '  }',
+      '  for (int col = 0; col < N; col++) {',
+      '    queens[row] = col;',
+      '    solve(row + 1);',
+      '  }',
+      '}',
+      '',
+      'int main(void)',
+      '{',
+      '  solve(0);',
+      '  return 0;',
+      '}',
+    ];
+    final terminal = xterm.Terminal()..resize(120, 20);
+    addTearDown(terminal.dispose);
+    terminal.write(
+      '❯ Give me 8 queens code\r\n'
+      '• ${source.first}\r\n'
+      '${source.skip(1).map((line) => line.isEmpty ? "" : "  $line").join('\r\n')}\r\n'
+      'How it works: place queens using backtracking.\r\n'
+      '✻ Churned for 6s',
+    );
+    final expected = source.join('\n');
+    for (final row in [1, 4, 10, 18, 28]) {
+      expect(
+        resolveTerminalCodeBlockAt(
+          terminal: terminal,
+          offset: xterm.CellOffset(3, row),
+        )?.code,
+        expected,
+        reason: 'code should remain a single block at scrollback row $row',
+      );
+    }
+    expect(
+      resolveTerminalCodeBlockAt(
+        terminal: terminal,
+        offset: const xterm.CellOffset(3, 31),
+      ),
+      isNull,
+      reason: 'explanation after code is not copyable',
+    );
+  });
 }

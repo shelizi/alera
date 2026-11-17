@@ -474,6 +474,92 @@ void _registerTerminalSurfaceCodeCopyTests() {
     }
   });
 
+  testWidgets('copies complete C source starting with Claude code bullet', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    final copies = <String>[];
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (call) async {
+        if (call.method == 'Clipboard.setData') {
+          copies.add(
+            (call.arguments as Map<Object?, Object?>)['text'] as String,
+          );
+        }
+        return null;
+      },
+    );
+    try {
+      final factory = _FakeTerminalPtySessionFactory();
+      final runtime = XtermTerminalRuntime(
+        ptySessionFactory: factory,
+        shellLaunchesBuilder: _testShellLaunches,
+        initialSettings: TerminalSettings.defaults.copyWith(
+          showCodeBlockCopyButton: true,
+        ),
+      );
+      addTearDown(runtime.dispose);
+      final session = runtime.sessionFor(workspace: _workspace(), tab: _tab());
+      await _pumpTerminalSurface(tester, session);
+      final pty = factory.sessions.single;
+      pty.emitOutput(
+        utf8.encode(
+          '❯ 8 queens in C\r\n'
+          '• #include <stdio.h>\r\n'
+          '  \r\n'
+          '  #define N 8\r\n'
+          '  \r\n'
+          '  static int queens[N];\r\n'
+          '  \r\n'
+          '  void solve(int row)\r\n'
+          '  {\r\n'
+          '    if (row == N) {\r\n'
+          '      printf("Solved");\r\n'
+          '      return;\r\n'
+          '    }\r\n'
+          '  }\r\n'
+          'How it works: backtracking.\r\n'
+          '✻ Churned for 6s',
+        ),
+      );
+      await _pumpTerminalOutput(tester);
+      final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+      await mouse.addPointer(
+        location: _cellCenter(tester, const xterm.CellOffset(4, 0)),
+      );
+      await mouse.moveTo(_cellCenter(tester, const xterm.CellOffset(4, 10)));
+      await tester.pump();
+      const button = ValueKey<String>('terminal-copy-code-button');
+      expect(find.byKey(button), findsOneWidget);
+      pty.writes.clear();
+      await tester.tap(find.byKey(button));
+      await tester.pump();
+      const expected =
+          '#include <stdio.h>\n\n#define N 8\n\n'
+          'static int queens[N];\n\nvoid solve(int row)\n'
+          '{\n  if (row == N) {\n    printf("Solved");\n'
+          '    return;\n  }\n}';
+      expect(copies, <String>[expected]);
+      expect(pty.writes, isEmpty);
+      await mouse.moveTo(_cellCenter(tester, const xterm.CellOffset(4, 14)));
+      await tester.pump();
+      expect(
+        find.byKey(button),
+        findsNothing,
+        reason: 'explanation text must not be copied',
+      );
+      await mouse.removePointer();
+    } finally {
+      await tester.pumpWidget(const SizedBox());
+      debugDefaultTargetPlatformOverride = null;
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        null,
+      );
+    }
+  });
+
   testWidgets(
     'copy button defaults off and toggles live without restarting the PTY',
     (tester) async {

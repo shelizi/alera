@@ -381,6 +381,82 @@ bool _looksLikeBareCodeLine(String raw) {
       source.contains('--');
 }
 
+/// Return a whole source block, including blank lines and nested indentation.
+/// The first row may include Claude's leading '• ' bullet; the other rows
+/// retain the presentation gutter and are dedented independently.
+TerminalCodeBlock? _collectClaudeBareCode(
+  xterm.Buffer buffer,
+  int start, {
+  required int maxScanRows,
+  String? bulletCode,
+}) {
+  final lines = buffer.lines;
+  final source = <String>[];
+  var lastRow = start - 1;
+  for (
+    var row = start;
+    row < lines.length && row <= start + maxScanRows;
+    row++
+  ) {
+    final line = lines[row];
+    final raw = row == start && bulletCode != null
+        ? bulletCode
+        : line.getText();
+    if (line.isWrapped) {
+      if (source.isEmpty) break;
+      final wrapsAgain = row + 1 < lines.length && lines[row + 1].isWrapped;
+      source[source.length - 1] += wrapsAgain ? raw : raw.trimRight();
+      lastRow = row;
+      continue;
+    }
+    if (row > start &&
+        (_claudeTurnBoundary.hasMatch(raw.trimLeft()) ||
+            _claudeCodeBullet.hasMatch(raw) ||
+            _claudeLanguageHeading.hasMatch(raw))) {
+      break;
+    }
+    if (raw.trim().isEmpty) {
+      final nextRow = row + 1;
+      if (nextRow < lines.length &&
+          !lines[nextRow].isWrapped &&
+          _looksLikeBareCodeLine(lines[nextRow].getText())) {
+        source.add('');
+        lastRow = row;
+        continue;
+      }
+      break;
+    }
+    if (!_looksLikeBareCodeLine(raw)) break;
+    final wrapsNext = row + 1 < lines.length && lines[row + 1].isWrapped;
+    source.add(wrapsNext ? raw : raw.trimRight());
+    lastRow = row;
+  }
+  if (source.isEmpty) return null;
+
+  // Strip only Claude's common presentation gutter. When the first line
+  // has a bullet, exclude that line from the indentation calculation:
+  // '#include' in '• #include' is already flush-left source text.
+  final unbulleted = bulletCode == null ? source : source.skip(1).toList();
+  final indents = unbulleted
+      .where((line) => line.isNotEmpty)
+      .map((line) => line.length - line.trimLeft().length);
+  final gutter = indents.isEmpty ? 0 : indents.reduce(math.min);
+  final codeLines = <String>[];
+  for (var i = 0; i < source.length; i++) {
+    final line = source[i];
+    if (line.isEmpty || gutter == 0 || (bulletCode != null && i == 0)) {
+      codeLines.add(line);
+    } else {
+      codeLines.add(line.substring(gutter));
+    }
+  }
+  return TerminalCodeBlock(
+    openingRow: start,
+    closingRow: lastRow,
+    code: codeLines.join('\n'),
+  );
+}
+
 TerminalCodeBlock? _resolveClaudeBareCodeAt(
   xterm.Buffer buffer,
   int hoveredRow, {
@@ -399,83 +475,39 @@ TerminalCodeBlock? _resolveClaudeBareCodeAt(
     }
   }
   if (replyBullet == null) return null;
-  // A source-code bullet already has a dedicated renderer-aware decoder
-  // which removes its presentation prefix. Do not turn its indented child
-  // rows into a separate bare code block.
-  final bulletText = _claudeCodeBullet
+
+  // A Claude reply may begin with code itself ('• #include <stdio.h>'),
+  // followed by unbulleted lines. That is one copyable source block.
+  final bulletCode = _claudeCodeBullet
       .firstMatch(lines[replyBullet].getText())
       ?.group(1);
-  if (bulletText != null && _probableCodeOpener.hasMatch(bulletText)) {
+  if (bulletCode != null &&
+      _claudeBareCodeStart.hasMatch(bulletCode.trimLeft())) {
+    final block = _collectClaudeBareCode(
+      buffer,
+      replyBullet,
+      maxScanRows: maxScanRows,
+      bulletCode: bulletCode,
+    );
+    if (block?.containsRow(hoveredRow) == true) return block;
+  } else if (bulletCode != null && _probableCodeOpener.hasMatch(bulletCode)) {
+    // Keep short commands handled by the existing bullet-specific decoder.
     return null;
   }
 
-  // Use the earliest genuine source opener in the current Claude answer,
-  // not the nearest nested "static"/"int" declaration to the hovered row.
+  // For prose-introduced source, use its first real declaration instead of
+  // a later nested function statement under the hovered row.
   for (var start = replyBullet + 1; start <= hoveredRow; start++) {
     if (lines[start].isWrapped ||
         !_claudeBareCodeStart.hasMatch(lines[start].getText().trimLeft())) {
       continue;
     }
-
-    final source = <String>[];
-    var lastRow = start - 1;
-    for (
-      var row = start;
-      row < lines.length && row <= start + maxScanRows;
-      row++
-    ) {
-      final line = lines[row];
-      final raw = line.getText();
-      if (line.isWrapped) {
-        if (source.isEmpty) break;
-        final wrapsAgain = row + 1 < lines.length && lines[row + 1].isWrapped;
-        source[source.length - 1] += wrapsAgain ? raw : raw.trimRight();
-        lastRow = row;
-        continue;
-      }
-      if (_claudeTurnBoundary.hasMatch(raw.trimLeft()) ||
-          _claudeCodeBullet.hasMatch(raw) ||
-          _claudeLanguageHeading.hasMatch(raw)) {
-        break;
-      }
-      if (raw.trim().isEmpty) {
-        // Keep blank lines between preprocessor directives, declarations,
-        // functions and comments, but stop before ordinary explanation.
-        final nextRow = row + 1;
-        if (nextRow < lines.length &&
-            !lines[nextRow].isWrapped &&
-            _looksLikeBareCodeLine(lines[nextRow].getText())) {
-          source.add('');
-          lastRow = row;
-          continue;
-        }
-        break;
-      }
-      if (!_looksLikeBareCodeLine(raw)) break;
-      final wrapsNext = row + 1 < lines.length && lines[row + 1].isWrapped;
-      source.add(wrapsNext ? raw : raw.trimRight());
-      lastRow = row;
-    }
-
-    if (hoveredRow <= lastRow && source.isNotEmpty) {
-      // Claude's rendered code can have a shared presentation gutter.
-      // Strip only that common gutter; preserve nested source indentation.
-      final indents = source
-          .where((text) => text.isNotEmpty)
-          .map((text) => text.length - text.trimLeft().length);
-      final gutter = indents.isEmpty ? 0 : indents.reduce(math.min);
-      final code = source
-          .map((text) {
-            if (text.isEmpty || gutter == 0) return text;
-            return text.substring(gutter);
-          })
-          .join('\n');
-      return TerminalCodeBlock(
-        openingRow: start,
-        closingRow: lastRow,
-        code: code,
-      );
-    }
+    final block = _collectClaudeBareCode(
+      buffer,
+      start,
+      maxScanRows: maxScanRows,
+    );
+    if (block?.containsRow(hoveredRow) == true) return block;
   }
   return null;
 }
