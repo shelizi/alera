@@ -13,6 +13,7 @@ use alera_gpui_desktop::editor_tabs::{
     DetachedEditorTab, EditorSaveGuard, EditorTabDragIdentity, EditorTabLabel, EditorTabs,
     SaveAllReport,
 };
+use alera_gpui_desktop::syntax_highlighting::{compose_line_styles, SyntaxHighlightCache};
 use alera_gpui_desktop::visible_line_hit::{
     apply_pointer_hit, VisibleLineGeometry, VisibleLineHitSet,
 };
@@ -162,6 +163,7 @@ impl gpui::Render for EditorTabDragPreview {
 pub struct NativeEditor {
     find: EditorFindUi,
     tabs: EditorTabs,
+    syntax: SyntaxHighlightCache,
     show_local_tab_strip: bool,
     tab_context: Option<EditorSaveGuard>,
     workspace_root: PathBuf,
@@ -232,6 +234,7 @@ impl NativeEditor {
         Self {
             find: EditorFindUi::new(cx),
             tabs,
+            syntax: SyntaxHighlightCache::default(),
             // Workbench owns the only visible mixed Editor/Terminal/Agent
             // strip. Keep the legacy local row opt-in for standalone views.
             show_local_tab_strip: false,
@@ -1372,35 +1375,43 @@ impl NativeEditor {
         let start = span.start;
         let end = span.end;
         let mut display = raw.clone();
-        let mut highlights = Vec::new();
-        if let Some(composition) = marked {
-            let from = composition.start.max(start);
-            let to = composition.end.min(end);
-            if from < to {
-                highlights.push((
-                    from - start..to - start,
-                    gpui::HighlightStyle {
-                        underline: Some(gpui::UnderlineStyle {
-                            thickness: px(1.0),
-                            color: Some(rgb(COMPOSITION_COLOR).into()),
-                            wavy: false,
-                        }),
-                        ..Default::default()
-                    },
-                ));
-            }
-        } else if !selection.is_empty() {
+        let is_composing = marked.is_some();
+        let local_marked = marked.and_then(|range| {
+            let from = range.start.max(start);
+            let to = range.end.min(end);
+            (from < to).then_some(from - start..to - start)
+        });
+        let local_selection = if !is_composing && !selection.is_empty() {
             let from = selection.start.max(start);
             let to = selection.end.min(end);
-            if from < to {
-                highlights.push((
-                    from - start..to - start,
-                    gpui::HighlightStyle {
-                        background_color: Some(rgb(SELECTED_BG).into()),
-                        ..Default::default()
-                    },
-                ));
-            }
+            (from < to).then_some(from - start..to - start)
+        } else {
+            None
+        };
+        let mut highlights: Vec<_> = compose_line_styles(
+            &raw,
+            self.syntax.snapshot().line(index),
+            local_selection,
+            local_marked,
+        )
+        .into_iter()
+        .map(|span| {
+            (
+                span.range,
+                gpui::HighlightStyle {
+                    color: span.rgb.map(|color| rgb(color).into()),
+                    background_color: span.selected.then(|| rgb(SELECTED_BG).into()),
+                    underline: span.composing.then(|| gpui::UnderlineStyle {
+                        thickness: px(1.0),
+                        color: Some(rgb(COMPOSITION_COLOR).into()),
+                        wavy: false,
+                    }),
+                    ..Default::default()
+                },
+            )
+        })
+        .collect();
+        if !is_composing && !selection.is_empty() {
             if end < text_len && selection.start <= end && selection.end > end {
                 let from = display.len();
                 display.push('↵');
@@ -1468,6 +1479,10 @@ impl Render for NativeEditor {
         }
         let show_local_tab_strip = self.show_local_tab_strip;
         self.line_geometry.clear();
+        if let (Some(tab), Some(document)) = (self.active_tab_instance(), self.tabs.document()) {
+            self.syntax
+                .refresh(tab, document.content(), document.path(), None);
+        }
         let line_offsets = Arc::new(EditorLineIndex::new(self.doc().content()));
         let line_count = line_offsets.line_count();
         let (line_index, column_index) = self.doc().line_column();
@@ -1490,11 +1505,12 @@ impl Render for NativeEditor {
             .as_ref()
             .and_then(|guard| self.tabs.index_for_guard(guard));
         let status = format!(
-            "{} · Ln {} / {} Col {} · Undo {} / Redo {} · {}{}{}",
+            "{} · Ln {} / {} Col {} · {} · Undo {} / Redo {} · {}{}{}",
             self.status,
             line_index + 1,
             line_count,
             column_index + 1,
+            self.syntax.snapshot().language().unwrap_or("Plain Text"),
             undo_count,
             redo_count,
             if dirty { "Modified" } else { "Saved" },
