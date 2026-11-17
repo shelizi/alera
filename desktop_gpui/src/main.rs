@@ -10772,6 +10772,10 @@ impl Render for Workbench {
                         TerminalViewMode::Screen => tab.screen.contents(),
                         TerminalViewMode::Transcript => tab.output.clone(),
                     },
+                    match self.terminals.view_mode {
+                        TerminalViewMode::Screen => Some(tab.screen.styled_rows()),
+                        TerminalViewMode::Transcript => None,
+                    },
                 )
             });
         let terminal_split_exists = terminal_secondary_output.is_some();
@@ -14185,7 +14189,7 @@ impl Render for Workbench {
                                                 terminal_output
                                             })
                                             })
-                                            .child(if let Some((title, output)) = terminal_secondary_output {
+                                            .child(if let Some((title, output, styled_rows)) = terminal_secondary_output {
                                                 div()
                                                     .id("terminal-secondary-preview")
                                                     .flex_1()
@@ -14249,7 +14253,45 @@ impl Render for Workbench {
                                                         .py_3()
                                                         .font_family(terminal_font_family.clone())
                                                         .text_size(px(terminal_font_size))
-                                                        .child(output))
+                                                        .whitespace_nowrap()
+                                                        .child(if let Some(rows) = styled_rows {
+                                                            div()
+                                                                .id("terminal-secondary-colored-grid")
+                                                                .flex()
+                                                                .flex_col()
+                                                                .whitespace_nowrap()
+                                                                .children(rows.into_iter().enumerate().map(|(row_index, row)| {
+                                                                    div()
+                                                                        .id(("terminal-secondary-colored-row", row_index))
+                                                                        .whitespace_nowrap()
+                                                                        .line_height(px(terminal_font_size * terminal_line_height))
+                                                                        .bg(rgb(TERMINAL_DEFAULT_BG))
+                                                                        .child(
+                                                                            gpui::StyledText::new(row.text)
+                                                                                .with_highlights(row.spans.into_iter().map(|span| {
+                                                                                    let style = span.style;
+                                                                                    (
+                                                                                        span.range,
+                                                                                        gpui::HighlightStyle {
+                                                                                            color: Some(rgb(style.fg).into()),
+                                                                                            background_color: Some(rgb(style.bg).into()),
+                                                                                            font_weight: style.bold.then_some(gpui::FontWeight::BOLD),
+                                                                                            font_style: style.italic.then_some(gpui::FontStyle::Italic),
+                                                                                            underline: style.underline.then_some(gpui::UnderlineStyle {
+                                                                                                thickness: px(1.0),
+                                                                                                color: Some(rgb(style.fg).into()),
+                                                                                                wavy: false,
+                                                                                            }),
+                                                                                            ..Default::default()
+                                                                                        },
+                                                                                    )
+                                                                                })),
+                                                                        )
+                                                                }))
+                                                                .into_any_element()
+                                                        } else {
+                                                            div().child(output).into_any_element()
+                                                        }))
                                                     .into_any_element()
                                             } else {
                                                 div().h(px(0.0)).into_any_element()

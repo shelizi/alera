@@ -577,6 +577,25 @@ mod tests {
     }
 
     #[test]
+    fn inner_terminal_split_preserves_vt_ansi_styling_in_secondary_pane() {
+        let source = include_str!("main.rs");
+        let secondary_source = source.split_once("let terminal_secondary_output =").unwrap().1
+            .split_once("let terminal_split_exists =").unwrap().0;
+        assert!(secondary_source.contains("TerminalViewMode::Screen => Some(tab.screen.styled_rows())"),
+            "legacy second Terminal must read styled VT rows, not only plain screen contents");
+        let view = source.split_once(r#".id("terminal-secondary-scroll")"#).unwrap().1
+            .split_once(r#".id("mixed-secondary-content")"#).unwrap().0;
+        assert!(view.contains(".child(if let Some(rows) = styled_rows"),
+            "legacy inner Terminal must render colored rows in Screen mode");
+        assert!(view.contains("gpui::StyledText::new(row.text)"));
+        assert!(view.contains(".with_highlights(row.spans.into_iter()"));
+        assert!(view.contains("background_color: Some(rgb(style.bg).into())"));
+        assert!(view.contains("font_weight: style.bold.then_some(gpui::FontWeight::BOLD)"));
+        assert!(view.contains(".child(output)"),
+            "legacy inner Terminal must retain plain Transcript mode");
+    }
+
+    #[test]
     fn legacy_terminal_inner_split_has_directional_seam_and_full_bleed_background() {
         // The inner Terminal split is distinct from mixed Workbench panes.
         // Both views must inherit the same VT canvas even with long output.
