@@ -133,6 +133,262 @@ void _registerTerminalSurfaceCodeCopyTests() {
     },
   );
 
+  testWidgets('80-line Claude code stays copyable after viewport scrollback', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    final copied = <String>[];
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (call) async {
+        if (call.method == 'Clipboard.setData') {
+          copied.add(
+            (call.arguments as Map<Object?, Object?>)['text'] as String,
+          );
+        }
+        return null;
+      },
+    );
+    try {
+      final store = ClaudeCodeMessageStore();
+      addTearDown(store.dispose);
+      final factory = _FakeTerminalPtySessionFactory();
+      final runtime = XtermTerminalRuntime(
+        ptySessionFactory: factory,
+        shellLaunchesBuilder: _testShellLaunches,
+        claudeCodeMessageStore: store,
+        initialSettings: TerminalSettings.defaults.copyWith(
+          showCodeBlockCopyButton: true,
+        ),
+      );
+      addTearDown(runtime.dispose);
+      final tab = _tab();
+      final session = runtime.sessionFor(workspace: _workspace(), tab: tab);
+      await _pumpTerminalSurface(tester, session);
+      final lines = List<String>.generate(
+        80,
+        (i) =>
+            'line_' +
+            (i + 1).toString().padLeft(3, '0') +
+            ' = "ALERA_LONG_' +
+            (i + 1).toString().padLeft(3, '0') +
+            '"',
+      );
+      final code = lines.join('\n');
+      factory.sessions.single.emitOutput(
+        utf8.encode(
+          [
+            '❯ request 80 source lines',
+            '• ' + lines.first,
+            ...lines.skip(1),
+            'Completed.',
+          ].join('\r\n'),
+        ),
+      );
+      await _pumpTerminalOutput(tester);
+      store.observeHookEvent(
+        AgentHookEvent(
+          terminalSessionId: tab.terminalSessionId,
+          workspaceId: tab.workspaceId,
+          tabId: tab.id,
+          agentType: AgentType.claude,
+          hookEventName: 'Stop',
+          payload: <String, Object?>{
+            'session_id': 'claude-long-scroll',
+            'transcript_path': 'claude-long-scroll.jsonl',
+            'last_assistant_message':
+                '\u0060\u0060\u0060python\n' + code + '\n\u0060\u0060\u0060',
+          },
+        ),
+      );
+
+      final terminal = tester
+          .widget<xterm.TerminalView>(find.byType(xterm.TerminalView))
+          .terminal;
+      expect(terminal.buffer.scrollBack, greaterThan(0));
+      int locate(String pattern) {
+        for (var i = 0; i < terminal.buffer.lines.length; i++) {
+          if (terminal.buffer.lines[i].getText().contains(pattern)) {
+            return i;
+          }
+        }
+        throw StateError('Cannot locate line: ' + pattern);
+      }
+
+      final row65 = locate('ALERA_LONG_065');
+      final row78 = locate('ALERA_LONG_078');
+      final lastRow = locate('ALERA_LONG_080');
+      final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+      await mouse.addPointer(
+        location: _cellCenter(tester, xterm.CellOffset(4, row65 - 1)),
+      );
+      await mouse.moveTo(_cellCenter(tester, xterm.CellOffset(4, row65)));
+      await tester.pump();
+      const copyKey = ValueKey<String>('terminal-copy-code-button');
+      expect(
+        find.byKey(copyKey),
+        findsOneWidget,
+        reason: 'Copy action must exist when source start is offscreen',
+      );
+
+      final render = tester
+          .state<xterm.TerminalViewState>(find.byType(xterm.TerminalView))
+          .renderTerminal;
+      final afterLastLine = render
+          .localToGlobal(
+            render.getOffset(xterm.CellOffset(0, lastRow)) +
+                Offset(0, render.cellSize.height),
+          )
+          .dy;
+      final initialButtonTop = tester.getTopLeft(find.byKey(copyKey)).dy;
+      final viewportBottom = tester
+          .getBottomLeft(find.byType(xterm.TerminalView))
+          .dy;
+      final expectedTop = (afterLastLine + 4).clamp(4.0, viewportBottom - 36);
+      expect(
+        initialButtonTop,
+        closeTo(expectedTop, 1),
+        reason:
+            'Anchor is below code when space permits, otherwise pinned '
+            'to the reachable viewport bottom edge',
+      );
+
+      await mouse.moveTo(_cellCenter(tester, xterm.CellOffset(4, row78)));
+      await tester.pump();
+      expect(
+        tester.getTopLeft(find.byKey(copyKey)).dy,
+        closeTo(initialButtonTop, 1),
+        reason: 'Hovering later lines must not move the copy button',
+      );
+
+      await tester.tap(find.byKey(copyKey));
+      await tester.pump();
+      expect(copied, [code]);
+      await tester.tap(find.byKey(copyKey));
+      await tester.pump();
+      expect(copied, [code, code]);
+      await mouse.removePointer();
+    } finally {
+      await tester.pumpWidget(const SizedBox());
+      debugDefaultTargetPlatformOverride = null;
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        null,
+      );
+    }
+  });
+
+  testWidgets('long single canonical line survives TUI visual soft wraps', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    final copied = <String>[];
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (call) async {
+        if (call.method == 'Clipboard.setData') {
+          copied.add(
+            (call.arguments as Map<Object?, Object?>)['text'] as String,
+          );
+        }
+        return null;
+      },
+    );
+    try {
+      final store = ClaudeCodeMessageStore();
+      addTearDown(store.dispose);
+      final factory = _FakeTerminalPtySessionFactory();
+      final runtime = XtermTerminalRuntime(
+        ptySessionFactory: factory,
+        shellLaunchesBuilder: _testShellLaunches,
+        claudeCodeMessageStore: store,
+        initialSettings: TerminalSettings.defaults.copyWith(
+          showCodeBlockCopyButton: true,
+        ),
+      );
+      addTearDown(runtime.dispose);
+      final tab = _tab();
+      final session = runtime.sessionFor(workspace: _workspace(), tab: tab);
+      await _pumpTerminalSurface(tester, session);
+      final code =
+          'const wrapped = "ALERA_WRAP_TEST_' +
+          List.filled(20, '0123456789abcdef').join() +
+          '";';
+      final chunks = <String>[];
+      for (var index = 0; index < code.length; index += 55) {
+        final end = (index + 55).clamp(0, code.length);
+        chunks.add(code.substring(index, end));
+      }
+      factory.sessions.single.emitOutput(
+        utf8.encode(
+          [
+            '❯ create long source',
+            '• ' + chunks.first,
+            for (final part in chunks.skip(1)) '  ' + part,
+            '',
+            'Explanation follows',
+          ].join('\r\n'),
+        ),
+      );
+      await _pumpTerminalOutput(tester);
+      store.observeHookEvent(
+        AgentHookEvent(
+          terminalSessionId: tab.terminalSessionId,
+          workspaceId: tab.workspaceId,
+          tabId: tab.id,
+          agentType: AgentType.claude,
+          hookEventName: 'Stop',
+          payload: <String, Object?>{
+            'session_id': 'claude-soft-wrapped',
+            'transcript_path': 'claude-soft-wrapped.jsonl',
+            'last_assistant_message':
+                '\u0060\u0060\u0060typescript\n' +
+                code +
+                '\n\u0060\u0060\u0060',
+          },
+        ),
+      );
+      final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+      await mouse.addPointer(
+        location: _cellCenter(tester, const xterm.CellOffset(5, 0)),
+      );
+      await mouse.moveTo(_cellCenter(tester, const xterm.CellOffset(5, 3)));
+      await tester.pump();
+      const key = ValueKey<String>('terminal-copy-code-button');
+      expect(
+        find.byKey(key),
+        findsOneWidget,
+        reason: 'Hovering a middle TUI continuation row must expose action',
+      );
+
+      final render = tester
+          .state<xterm.TerminalViewState>(find.byType(xterm.TerminalView))
+          .renderTerminal;
+      final lastCodeBottom = render
+          .localToGlobal(
+            render.getOffset(xterm.CellOffset(0, chunks.length)) +
+                Offset(0, render.cellSize.height),
+          )
+          .dy;
+      final maxTop =
+          tester.getBottomLeft(find.byType(xterm.TerminalView)).dy - 36;
+      final expected = (lastCodeBottom + 4).clamp(4.0, maxTop);
+      expect(tester.getTopLeft(find.byKey(key)).dy, closeTo(expected, 1));
+
+      await tester.tap(find.byKey(key));
+      await tester.pump();
+      expect(copied, <String>[code]);
+      await mouse.removePointer();
+    } finally {
+      await tester.pumpWidget(const SizedBox());
+      debugDefaultTargetPlatformOverride = null;
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        null,
+      );
+    }
+  });
+
   testWidgets('copy button is fixed below the last rendered code row', (
     tester,
   ) async {

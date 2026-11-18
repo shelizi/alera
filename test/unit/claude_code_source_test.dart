@@ -230,6 +230,154 @@ void main() {
     expect(block?.code, sourceLines.join('\n'));
   });
 
+  test(
+    '80-line canonical source matches after xterm scrollback exceeds viewport',
+    () {
+      final store = ClaudeCodeMessageStore();
+      addTearDown(store.dispose);
+      final lines = List<String>.generate(
+        80,
+        (i) =>
+            'line_' +
+            (i + 1).toString().padLeft(3, '0') +
+            ' = "ALERA_LONG_' +
+            (i + 1).toString().padLeft(3, '0') +
+            '"',
+      );
+      final source = lines.join('\n');
+      store.observeHookEvent(
+        _hook('Stop', {
+          'last_assistant_message': fence + 'python\n' + source + '\n' + fence,
+        }),
+      );
+      expect(store.blocksForTerminal('terminal-1').single.code, source);
+      final terminal = xterm.Terminal()..resize(120, 25);
+      terminal.write(
+        [
+          '❯ long source',
+          '• ' + lines.first,
+          for (final line in lines.skip(1)) line,
+          '',
+          'Finished generating 80 lines.',
+        ].join('\r\n'),
+      );
+
+      var lastVisibleCode = -1;
+      for (var i = 0; i < terminal.buffer.lines.length; i++) {
+        if (terminal.buffer.lines[i].getText().contains('ALERA_LONG_075')) {
+          lastVisibleCode = i;
+          break;
+        }
+      }
+      expect(lastVisibleCode, greaterThan(25));
+      final block = resolveClaudeSourceCodeBlockAt(
+        terminal: terminal,
+        offset: xterm.CellOffset(8, lastVisibleCode),
+        sourceBlocks: store.blocksForTerminal('terminal-1'),
+      );
+      expect(block?.code, source);
+      expect(block?.closingRow, greaterThanOrEqualTo(lastVisibleCode));
+    },
+  );
+
+  test('matches Claude TUI soft-wrapped long source lines exactly', () {
+    final store = ClaudeCodeMessageStore();
+    addTearDown(store.dispose);
+    final source =
+        'const longLine = "ALERA_WRAP_010_' +
+        List.filled(30, '0123456789abcdef').join() +
+        '";';
+    store.observeHookEvent(
+      _hook('Stop', {
+        'last_assistant_message':
+            fence + 'typescript\n' + source + '\n' + fence,
+      }),
+    );
+    final terminal = xterm.Terminal()..resize(120, 20);
+    final pieces = <String>[];
+    for (var i = 0; i < source.length; i += 80) {
+      final last = (i + 80).clamp(0, source.length);
+      pieces.add(source.substring(i, last));
+    }
+    terminal.write(
+      [
+        '❯ show one long line',
+        '• ' + pieces.first,
+        for (final piece in pieces.skip(1)) '  ' + piece,
+        '',
+        'Explanation, not code',
+      ].join('\r\n'),
+    );
+    for (final row in <int>[1, 2, 4, pieces.length]) {
+      final result = resolveClaudeSourceCodeBlockAt(
+        terminal: terminal,
+        offset: xterm.CellOffset(7, row),
+        sourceBlocks: store.blocksForTerminal('terminal-1'),
+      );
+      expect(
+        result?.code,
+        source,
+        reason:
+            'Source line should match when hovered at rendered row ' +
+            row.toString(),
+      );
+      expect(result?.openingRow, 1);
+      expect(result?.closingRow, pieces.length);
+    }
+  });
+
+  test(
+    'preserves nested triple-backticks inside a four-backtick source fence',
+    () {
+      final store = ClaudeCodeMessageStore();
+      addTearDown(store.dispose);
+      final tick = String.fromCharCode(96);
+      final triple = tick * 3;
+      final quadruple = tick * 4;
+      final code = [
+        'ALERA_NESTED_START',
+        triple,
+        '',
+        'ALERA_NESTED_INNER',
+        triple,
+        'ALERA_NESTED_END',
+      ].join('\n');
+      store.observeHookEvent(
+        _hook('Stop', {
+          'last_assistant_message':
+              quadruple + 'text\n' + code + '\n' + quadruple,
+        }),
+      );
+      final blocks = store.blocksForTerminal('terminal-1');
+      expect(blocks, hasLength(1));
+      expect(blocks.single.code, code);
+      final terminal = xterm.Terminal()..resize(110, 18);
+      terminal.write(
+        [
+          '❯ source',
+          '• ALERA_NESTED_START',
+          '  ' + triple,
+          '',
+          '  ALERA_NESTED_INNER',
+          '  ' + triple,
+          '  ALERA_NESTED_END',
+          '',
+          'Finished.',
+        ].join('\r\n'),
+      );
+      for (final row in <int>[1, 4, 6]) {
+        final match = resolveClaudeSourceCodeBlockAt(
+          terminal: terminal,
+          offset: xterm.CellOffset(8, row),
+          sourceBlocks: blocks,
+        );
+        expect(match?.code, code);
+        expect(match?.openingRow, 1);
+        expect(match?.closingRow, 6);
+      }
+    },
+  );
+
   test('rejects code snippets when only a shared prefix matches', () {
     final store = ClaudeCodeMessageStore();
     addTearDown(store.dispose);

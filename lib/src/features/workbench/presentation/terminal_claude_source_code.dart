@@ -16,8 +16,8 @@ TerminalCodeBlock? resolveClaudeSourceCodeBlockAt({
 }) {
   final lines = terminal.buffer.lines;
   if (offset.y < 0 || offset.y >= lines.length) return null;
-  final hovered = _logicalLineAt(terminal.buffer, offset.y);
-  if (hovered == null || hovered.text.trim().isEmpty) return null;
+  final displayed = _logicalLineAt(terminal.buffer, offset.y);
+  if (displayed == null || displayed.text.trim().isEmpty) return null;
 
   TerminalCodeBlock? best;
   var bestScore = 0;
@@ -25,7 +25,12 @@ TerminalCodeBlock? resolveClaudeSourceCodeBlockAt({
   for (final source in sourceBlocks) {
     final codeLines = source.code.split('\n');
     for (var index = 0; index < codeLines.length; index++) {
-      if (!_sameCodeLine(hovered.text, codeLines[index])) continue;
+      final hovered = _matchingCodeLineAt(
+        terminal.buffer,
+        offset.y,
+        codeLines[index],
+      );
+      if (hovered == null) continue;
 
       final evidence = _findWitnesses(
         terminal.buffer,
@@ -97,9 +102,15 @@ TerminalCodeBlock? resolveClaudeSourceCodeBlockAt({
         if (logical == null) break;
         terminalRow = direction < 0 ? logical.first - 1 : logical.last + 1;
         skipped++;
-        if (_sameCodeLine(logical.text, source[sourceIndex])) {
-          first = math.min(first, logical.first);
-          last = math.max(last, logical.last);
+        final witness = _matchingCodeLineAt(
+          buffer,
+          logical.first,
+          source[sourceIndex],
+        );
+        if (witness != null) {
+          first = math.min(first, witness.first);
+          last = math.max(last, witness.last);
+          terminalRow = direction < 0 ? witness.first - 1 : witness.last + 1;
           score++;
           matched++;
           sourceIndex += direction;
@@ -139,6 +150,55 @@ _LogicalLine? _logicalLineAt(xterm.Buffer buffer, int row) {
     joined.write(lines[line].getText());
   }
   return _LogicalLine(first, last, joined.toString());
+}
+
+/// A TUI may explicitly split a long Markdown line into several screen rows
+/// without marking those rows with xterm automatic wrapping. Reassemble only
+/// when their entire text equals one canonical source line, never a prefix.
+_LogicalLine? _matchingCodeLineAt(
+  xterm.Buffer buffer,
+  int row,
+  String original,
+) {
+  final current = _logicalLineAt(buffer, row);
+  if (current == null) return null;
+  if (_sameCodeLine(current.text, original)) return current;
+  if (original.trim().length < buffer.viewWidth - 8) return null;
+
+  final expected = original.trim();
+  var start = current.first;
+  for (var backwards = 0; backwards < 18 && start >= 0; backwards++) {
+    final joined = StringBuffer();
+    var nextRow = start;
+    var containsHover = false;
+    for (
+      var forward = 0;
+      forward < 18 && nextRow < buffer.lines.length;
+      forward++
+    ) {
+      final part = _logicalLineAt(buffer, nextRow);
+      if (part == null) break;
+      var display = part.text.trim();
+      if (forward == 0) {
+        display = display.replaceFirst(RegExp(r'^[•●│┃>][ \t]+'), '');
+      }
+      joined.write(display);
+      if (part.first <= current.first && part.last >= current.last) {
+        containsHover = true;
+      }
+      if (joined.length > expected.length) break;
+      if (forward > 0 && containsHover && joined.toString() == expected) {
+        return _LogicalLine(start, part.last, joined.toString());
+      }
+      if (display.isEmpty) break;
+      nextRow = part.last + 1;
+    }
+    if (start == 0) break;
+    final previous = _logicalLineAt(buffer, start - 1);
+    if (previous == null || previous.text.trim().isEmpty) break;
+    start = previous.first;
+  }
+  return null;
 }
 
 bool _sameCodeLine(String displayed, String original) {
