@@ -21,12 +21,15 @@ import 'package:alera/src/features/settings/domain/alera_settings.dart';
 import 'package:alera/src/features/workbench/application/workbench_providers.dart'
     show workspaceFileServiceProvider;
 import 'package:alera/src/features/workbench/application/workbench_state.dart';
+import 'package:alera/src/features/workbench/application/source_control_watcher.dart';
 import 'package:alera/src/features/workbench/domain/workbench_view_prefs.dart';
+import 'package:alera/src/features/workbench/domain/workspace_source_control_scope.dart';
 import 'package:alera/src/features/workbench/application/workspace_file_service.dart';
 import 'package:alera/src/features/workbench/domain/workspace.dart';
 import 'package:alera/src/features/workbench/domain/workspace_tab_record.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_editor_surface.dart';
 import 'package:alera/src/features/workbench/presentation/workspace_git_diff_surface.dart';
+import 'package:alera/src/features/workbench/presentation/workspace_git_diff_panel.dart';
 import 'package:alera/src/shared/infra/git/git_diff_models.dart';
 import 'package:alera/src/shared/infra/git/git_providers.dart';
 import 'package:code_forge/code_forge.dart' as code_forge;
@@ -42,6 +45,7 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart'
 import 'package:path/path.dart' as p;
 
 import '../unit/fake_git_backend.dart';
+import '../unit/fake_source_control_watcher.dart';
 
 part 'workspace_git_diff_surface_pull_request_cases.dart';
 part 'workspace_git_diff_surface_open_path_cases.dart';
@@ -107,6 +111,164 @@ Set<Color> _textSpanBackgroundColors(InlineSpan span) {
 }
 
 void main() {
+  testWidgets(
+    'source control file click renders and switches its full-file diff',
+    (tester) async {
+      tester.view.physicalSize = const Size(1300, 760);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      const original =
+          'start\nkeep one\nold three\nkeep four\nkeep five\ntail\n';
+      const updated =
+          'start\nkeep one\nnew three\nkeep four\nkeep five\ntail\n';
+      final backend = FakeGitBackend()
+        ..gitRepositoryStateResult = const GitRepositoryState(branch: 'main')
+        ..gitStatusResult = const GitStatusResult(
+          entries: <GitChangeEntry>[
+            GitChangeEntry(
+              path: 'lib/real.dart',
+              area: .staged,
+              status: .modified,
+            ),
+          ],
+        )
+        ..gitDiffResult = const GitDiffResult(
+          files: <GitDiffFile>[
+            GitDiffFile(
+              path: 'lib/real.dart',
+              area: .staged,
+              status: .modified,
+              lines: <GitDiffLine>[
+                GitDiffLine.hunk('@@ -2,3 +2,3 @@'),
+                GitDiffLine.context(' keep one'),
+                GitDiffLine.deletion('-old three'),
+                GitDiffLine.addition('+new three'),
+                GitDiffLine.context(' keep four'),
+              ],
+            ),
+          ],
+        )
+        ..diffBlobBytesBySide[(filePath: 'lib/real.dart', oldSide: true)] =
+            Uint8List.fromList(original.codeUnits)
+        ..diffBlobBytesBySide[(filePath: 'lib/real.dart', oldSide: false)] =
+            Uint8List.fromList(updated.codeUnits);
+      final workspace = _workspace();
+      WorkspaceTabRecord? selectedTab;
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            gitBackendProvider.overrideWithValue(backend),
+            workspaceFileServiceProvider.overrideWithValue(
+              _DiffEncodingFileService(),
+            ),
+            sourceControlWatcherProvider.overrideWithValue(
+              FakeSourceControlWatcher(),
+            ),
+            settingsControllerProvider.overrideWithValue(.defaults),
+          ],
+          child: MaterialApp(
+            home: Scaffold(
+              body: StatefulBuilder(
+                builder: (context, update) => Row(
+                  children: <Widget>[
+                    SizedBox(
+                      width: 340,
+                      child: WorkspaceGitDiffPanel(
+                        workspace: workspace,
+                        sourceControlScope: WorkspaceSourceControlScope(
+                          workspaceId: workspace.id,
+                          workspacePath: workspace.path,
+                          path: workspace.path,
+                        ),
+                        viewMode: .flat,
+                        onViewModeChanged: (_) {},
+                        groupMode: .byArea,
+                        onGroupModeChanged: (_) {},
+                        onOpenGitDiff:
+                            ({
+                              area,
+                              relativePath,
+                              gitDiffRoot,
+                              required scope,
+                              bool preview = false,
+                            }) async {
+                              expect(area, GitChangeArea.staged);
+                              expect(relativePath, 'lib/real.dart');
+                              expect(scope, WorkspaceGitDiffScope.file);
+                              update(
+                                () => selectedTab = _diffTab(
+                                  filePath: relativePath,
+                                  area: area,
+                                  title: 'real.dart staged',
+                                  gitDiffRoot: gitDiffRoot,
+                                ),
+                              );
+                            },
+                        onOpenGitCommitDiff: ({
+                          relativePath,
+                          oldPath,
+                          required scope,
+                          gitDiffRoot,
+                          required commitOid,
+                          parentOid,
+                          required compareRef,
+                          subject,
+                          message,
+                          bool preview = false,
+                        }) async {},
+                      ),
+                    ),
+                    Expanded(
+                      child: selectedTab == null
+                          ? const SizedBox.shrink()
+                          : WorkspaceGitDiffSurface(
+                              workspace: workspace,
+                              tab: selectedTab!,
+                            ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('lib/real.dart'), findsOneWidget);
+      expect(find.text('new three'), findsNothing);
+
+      await tester.tap(find.text('lib/real.dart'));
+      await tester.pumpAndSettle();
+      expect(
+        backend.calls.any(
+          (call) =>
+              call.method == 'diff' &&
+              call.args['filePath'] == 'lib/real.dart' &&
+              call.args['area'] == GitChangeArea.staged,
+        ),
+        isTrue,
+      );
+      expect(find.text('start'), findsOneWidget);
+      expect(find.text('tail'), findsOneWidget);
+      expect(find.text('old three'), findsOneWidget);
+      expect(find.text('new three'), findsOneWidget);
+
+      await tester.tap(find.byTooltip('Switch to Side-by-Side View'));
+      await tester.pumpAndSettle();
+      expect(find.text('keep five'), findsNWidgets(2));
+      expect(find.text('old three'), findsOneWidget);
+      expect(find.text('new three'), findsOneWidget);
+
+      await tester.tap(find.byTooltip('Switch to Diff Only'));
+      await tester.pumpAndSettle();
+      expect(find.text('tail'), findsNothing);
+      expect(find.text('old three'), findsOneWidget);
+      expect(find.text('new three'), findsOneWidget);
+    },
+  );
+
   _registerWorkspaceGitDiffSurfacePullRequestTests();
   _registerWorkspaceGitDiffSurfaceReadingDiffTests();
   _registerWorkspaceGitDiffNavigationTests();
