@@ -1085,6 +1085,66 @@ void main() {
     expect(find.text('inserted'), findsOneWidget);
   });
 
+  testWidgets(
+    'full-file rejects a structurally complete native plan that hides edits',
+    (tester) async {
+      final backend = FakeGitBackend()
+        ..gitDiffResult = const GitDiffResult(
+          files: <GitDiffFile>[
+            GitDiffFile(
+              path: 'lib/omitted.dart',
+              area: .staged,
+              status: .modified,
+              lines: <GitDiffLine>[
+                GitDiffLine.hunk('@@ -1,3 +1,3 @@'),
+                GitDiffLine.context(' before'),
+                GitDiffLine.deletion('-old value'),
+                GitDiffLine.addition('+new value'),
+                GitDiffLine.context(' after'),
+              ],
+              // These plans cover the entire blob but omit both change rows.
+              // Merely checking sequential line indices is not sufficient.
+              fullFileRows: <GitDiffFullFileRow>[
+                GitDiffFullFileRow(kind: .contextRange, startIndex: 0),
+              ],
+              fullFileSideBySideRows: <GitDiffFullFileSideBySideRow>[
+                GitDiffFullFileSideBySideRow(
+                  kind: .contextRange,
+                  oldStartIndex: 0,
+                  newStartIndex: 0,
+                ),
+              ],
+            ),
+          ],
+        )
+        ..diffBlobBytesBySide[(filePath: 'lib/omitted.dart', oldSide: true)] =
+            Uint8List.fromList('before\nold value\nafter\n'.codeUnits)
+        ..diffBlobBytesBySide[(filePath: 'lib/omitted.dart', oldSide: false)] =
+            Uint8List.fromList('before\nnew value\nafter\n'.codeUnits);
+      await _pumpDiffSurface(
+        tester,
+        backend: backend,
+        tab: _diffTab(
+          filePath: 'lib/omitted.dart',
+          title: 'omitted.dart staged',
+          area: .staged,
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('old value'), findsOneWidget);
+      expect(find.text('new value'), findsOneWidget);
+      expect(find.text('before'), findsOneWidget);
+      expect(find.text('after'), findsOneWidget);
+
+      await tester.tap(find.byTooltip('Switch to Side-by-Side View'));
+      await tester.pumpAndSettle();
+      expect(find.text('old value'), findsOneWidget);
+      expect(find.text('new value'), findsOneWidget);
+      expect(find.text('before'), findsNWidgets(2));
+      expect(find.text('after'), findsNWidgets(2));
+    },
+  );
+
   testWidgets('full-file still accepts complete native line projection', (
     tester,
   ) async {

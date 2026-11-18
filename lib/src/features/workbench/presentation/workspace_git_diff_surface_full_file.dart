@@ -207,6 +207,12 @@ List<_DiffRowSpan>? _buildProjectedFullFileRowSpans(
   // Validate the projection against the decoded blob; never silently skip
   // unchanged lines when a cached/native plan is incomplete.
   var nextFullIndex = 0;
+  final remainingChanges = <int>{
+    for (var index = 0; index < file.lines.length; index++)
+      if (file.lines[index].kind == GitDiffLineKind.addition ||
+          file.lines[index].kind == GitDiffLineKind.deletion)
+        index,
+  };
 
   void flushMaterialized() {
     if (materialized.isEmpty) return;
@@ -240,10 +246,18 @@ List<_DiffRowSpan>? _buildProjectedFullFileRowSpans(
         final diffLine = file.lines[diffLineIndex];
         final fullLineIndex = projection.fullLineIndex;
         if (diffLine.kind == GitDiffLineKind.deletion) {
-          if (fullLineIndex != null) return null;
+          if (fullLineIndex != null ||
+              !remainingChanges.remove(diffLineIndex)) {
+            return null;
+          }
         } else if (diffLine.kind == GitDiffLineKind.context ||
             diffLine.kind == GitDiffLineKind.addition) {
           if (fullLineIndex != nextFullIndex || nextFullIndex >= lines.length) {
+            return null;
+          }
+          if (diffLine.kind == GitDiffLineKind.addition &&
+              (!remainingChanges.remove(diffLineIndex) ||
+                  _extractContent(diffLine.text) != lines[nextFullIndex])) {
             return null;
           }
           nextFullIndex += 1;
@@ -269,7 +283,9 @@ List<_DiffRowSpan>? _buildProjectedFullFileRowSpans(
         );
     }
   }
-  if (nextFullIndex != lines.length) return null;
+  if (nextFullIndex != lines.length || remainingChanges.isNotEmpty) {
+    return null;
+  }
   flushMaterialized();
   return spans;
 }
@@ -510,6 +526,12 @@ List<_DiffRowSpan>? _buildProjectedFullFileSideBySideRowSpans(
   final materialized = <_DiffRow>[];
   var nextOldIndex = 0;
   var nextNewIndex = 0;
+  final remainingChanges = <int>{
+    for (var index = 0; index < file.lines.length; index++)
+      if (file.lines[index].kind == GitDiffLineKind.addition ||
+          file.lines[index].kind == GitDiffLineKind.deletion)
+        index,
+  };
 
   void flushMaterialized() {
     if (materialized.isEmpty) return;
@@ -542,6 +564,12 @@ List<_DiffRowSpan>? _buildProjectedFullFileSideBySideRowSpans(
             newEnd > newLines.length ||
             oldEnd - oldStart != newEnd - newStart) {
           return null;
+        }
+        // A native context span must not silently classify edits as equal.
+        for (var offset = 0; offset < oldEnd - oldStart; offset++) {
+          if (oldLines[oldStart + offset] != newLines[newStart + offset]) {
+            return null;
+          }
         }
         flushMaterialized();
         if (oldEnd > oldStart || newEnd > newStart) {
@@ -581,6 +609,40 @@ List<_DiffRowSpan>? _buildProjectedFullFileSideBySideRowSpans(
         } else if (projection.rightDiffLineIndex != null) {
           return null;
         }
+        final leftDiffIndex = projection.leftDiffLineIndex;
+        if (leftDiffIndex != null) {
+          if (leftDiffIndex < 0 || leftDiffIndex >= file.lines.length) {
+            return null;
+          }
+          final line = file.lines[leftDiffIndex];
+          if (line.kind != GitDiffLineKind.context &&
+              line.kind != GitDiffLineKind.deletion) {
+            return null;
+          }
+          if (line.kind == GitDiffLineKind.deletion &&
+              (!remainingChanges.remove(leftDiffIndex) ||
+                  _extractContent(line.text) !=
+                      oldLines[projection.oldStartIndex!])) {
+            return null;
+          }
+        }
+        final rightDiffIndex = projection.rightDiffLineIndex;
+        if (rightDiffIndex != null) {
+          if (rightDiffIndex < 0 || rightDiffIndex >= file.lines.length) {
+            return null;
+          }
+          final line = file.lines[rightDiffIndex];
+          if (line.kind != GitDiffLineKind.context &&
+              line.kind != GitDiffLineKind.addition) {
+            return null;
+          }
+          if (line.kind == GitDiffLineKind.addition &&
+              (!remainingChanges.remove(rightDiffIndex) ||
+                  _extractContent(line.text) !=
+                      newLines[projection.newStartIndex!])) {
+            return null;
+          }
+        }
         final left = _projectedFullFileSideLine(
           file: file,
           fullLines: oldLines,
@@ -606,7 +668,9 @@ List<_DiffRowSpan>? _buildProjectedFullFileSideBySideRowSpans(
         materialized.add(_SideBySideDiffRow(left: left, right: right));
     }
   }
-  if (nextOldIndex != oldLines.length || nextNewIndex != newLines.length) {
+  if (nextOldIndex != oldLines.length ||
+      nextNewIndex != newLines.length ||
+      remainingChanges.isNotEmpty) {
     return null;
   }
   flushMaterialized();
