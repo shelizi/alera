@@ -188,8 +188,9 @@ _EditableDiffInputs _prepareEditableDiff(
 /// unchanged middle sections as replacements after the Myers distance cap.
 List<_EditableLineDiffStep>? _anchoredEditableLineDiff(
   List<String> oldLines,
-  List<String> newLines,
-) {
+  List<String> newLines, {
+  int depth = 0,
+}) {
   final oldPositions = <String, int>{};
   final newPositions = <String, int>{};
   for (var index = 0; index < oldLines.length; index++) {
@@ -207,6 +208,41 @@ List<_EditableLineDiffStep>? _anchoredEditableLineDiff(
     if (newIndex != null && newIndex >= 0) {
       candidates.add((oldIndex, newIndex));
     }
+  }
+  if (candidates.isEmpty) {
+    // Some large files contain no unique common lines, but still share
+    // substantial repeated runs (closing braces, blank lines, separators).
+    // Anchor the first and last matching occurrence of each shared value.
+    // The LIS below keeps only monotonic pairs; intervening regions are
+    // still diffed, so these anchors never claim different text is equal.
+    final oldBounds = <String, (int, int)>{};
+    final newBounds = <String, (int, int)>{};
+    for (var index = 0; index < oldLines.length; index++) {
+      oldBounds.update(
+        oldLines[index],
+        (bounds) => (bounds.$1, index),
+        ifAbsent: () => (index, index),
+      );
+    }
+    for (var index = 0; index < newLines.length; index++) {
+      newBounds.update(
+        newLines[index],
+        (bounds) => (bounds.$1, index),
+        ifAbsent: () => (index, index),
+      );
+    }
+    for (final entry in oldBounds.entries) {
+      final matching = newBounds[entry.key];
+      if (matching == null) continue;
+      candidates.add((entry.value.$1, matching.$1));
+      if (entry.value.$1 != entry.value.$2 && matching.$1 != matching.$2) {
+        candidates.add((entry.value.$2, matching.$2));
+      }
+    }
+    candidates.sort((left, right) {
+      final oldComparison = left.$1.compareTo(right.$1);
+      return oldComparison != 0 ? oldComparison : left.$2.compareTo(right.$2);
+    });
   }
   if (candidates.isEmpty) return null;
 
@@ -245,9 +281,28 @@ List<_EditableLineDiffStep>? _anchoredEditableLineDiff(
     if (oldStart == oldEnd && newStart == newEnd) return;
     final oldChunk = oldLines.sublist(oldStart, oldEnd);
     final newChunk = newLines.sublist(newStart, newEnd);
-    final localSteps = _editableDiffHasNoSharedMiddle(oldChunk, newChunk)
+    if (listEquals(oldChunk, newChunk)) {
+      for (var index = 0; index < oldChunk.length; index++) {
+        steps.add(
+          _EditableLineDiffStep(
+            kind: _EditableLineDiffKind.equal,
+            oldIndex: oldStart + index,
+            newIndex: newStart + index,
+          ),
+        );
+      }
+      return;
+    }
+    final noCommonLines = _editableDiffHasNoSharedMiddle(oldChunk, newChunk);
+    final tryAnchors = depth >= 8
+        ? null
+        : () => _anchoredEditableLineDiff(oldChunk, newChunk, depth: depth + 1);
+    final preferAnchors = oldChunk.length + newChunk.length >= 1024;
+    final localSteps = noCommonLines
         ? _coarseEditableLineDiff(oldChunk, newChunk)
-        : (_myersEditableLineDiff(oldChunk, newChunk) ??
+        : ((preferAnchors ? tryAnchors?.call() : null) ??
+              _myersEditableLineDiff(oldChunk, newChunk) ??
+              (!preferAnchors ? tryAnchors?.call() : null) ??
               _coarseEditableLineDiff(oldChunk, newChunk));
     for (final step in localSteps) {
       steps.add(
