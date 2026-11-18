@@ -120,6 +120,92 @@ fn git_diff_decodes_big5_untracked_text_instead_of_marking_it_binary() {
 }
 
 #[test]
+fn git_diff_does_not_render_eof_newline_metadata_as_extra_changed_lines() {
+    for (scenario, baseline, changed) in [
+        ("both missing newline", "baseline", "without final newline"),
+        ("new missing newline", "baseline\n", "without final newline"),
+        ("old missing newline", "baseline", "with final newline\n"),
+    ] {
+        let repo = init_repo();
+        std::fs::write(repo.path().join("eof.txt"), baseline).expect("write baseline");
+        run_git(repo.path(), &["add", "eof.txt"]);
+        run_git(repo.path(), &["commit", "-m", "add newline fixture"]);
+        std::fs::write(repo.path().join("eof.txt"), changed).expect("write update");
+        let unstaged = git_diff(
+            path_str(repo.path()),
+            "eof.txt".to_string(),
+            GitChangeArea::Unstaged,
+        )
+        .expect("unstaged EOF diff");
+        assert_eq!(unstaged.files[0].added, Some(1), "unstaged {scenario}");
+        assert_eq!(unstaged.files[0].removed, Some(1), "unstaged {scenario}");
+        run_git(repo.path(), &["add", "eof.txt"]);
+
+        let diff = git_diff(
+            path_str(repo.path()),
+            "eof.txt".to_string(),
+            GitChangeArea::Staged,
+        )
+        .expect("staged EOF diff");
+        let file = diff.files.first().expect("one changed file");
+        let changed_lines: Vec<(GitDiffLineKind, String)> = file
+            .lines
+            .iter()
+            .filter(|line| {
+                matches!(
+                    line.kind,
+                    GitDiffLineKind::Addition | GitDiffLineKind::Deletion
+                )
+            })
+            .map(|line| (line.kind, line.text.clone()))
+            .collect();
+        assert_eq!(
+            changed_lines,
+            vec![
+                (
+                    GitDiffLineKind::Deletion,
+                    format!("-{baseline}").trim_end_matches('\n').to_string()
+                ),
+                (
+                    GitDiffLineKind::Addition,
+                    format!("+{changed}").trim_end_matches('\n').to_string()
+                ),
+            ],
+            "unexpected duplicate or metadata change rows in {scenario}",
+        );
+        assert_eq!(file.added, Some(1), "{scenario}");
+        assert_eq!(file.removed, Some(1), "{scenario}");
+
+        run_git(repo.path(), &["commit", "-m", "change EOF fixture"]);
+        let history = git_history(path_str(repo.path()), Some(3), None, None, None)
+            .expect("EOF commit history");
+        let committed = git_commit_diff(
+            path_str(repo.path()),
+            history.items[0].id.clone(),
+            Some(history.items[1].id.clone()),
+            Some("eof.txt".to_string()),
+            None,
+        )
+        .expect("committed EOF diff");
+        let committed_file = committed.files.first().expect("committed EOF file");
+        assert_eq!(committed_file.added, Some(1), "committed {scenario}");
+        assert_eq!(committed_file.removed, Some(1), "committed {scenario}");
+        let committed_changes: Vec<(GitDiffLineKind, String)> = committed_file
+            .lines
+            .iter()
+            .filter(|line| {
+                matches!(
+                    line.kind,
+                    GitDiffLineKind::Addition | GitDiffLineKind::Deletion
+                )
+            })
+            .map(|line| (line.kind, line.text.clone()))
+            .collect();
+        assert_eq!(committed_changes, changed_lines, "committed {scenario}");
+    }
+}
+
+#[test]
 fn git_diff_projects_side_by_side_rows_without_duplicating_line_text() {
     let repo = init_repo();
     std::fs::write(

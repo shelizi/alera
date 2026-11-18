@@ -1436,8 +1436,10 @@ fn commit_diff_stats_by_path(diff: &mut Diff<'_>) -> Result<CommitDiffLineStatsB
         };
         let entry = stats.entry(path).or_insert((0, 0));
         match line.origin_value() {
-            DiffLineType::Addition => entry.0 = entry.0.saturating_add(line.num_lines()),
-            DiffLineType::Deletion => entry.1 = entry.1.saturating_add(line.num_lines()),
+            // Count unterminated content lines even though libgit2 reports
+            // num_lines() == 0; EOFNL markers themselves are not content.
+            DiffLineType::Addition => entry.0 = entry.0.saturating_add(line.num_lines().max(1)),
+            DiffLineType::Deletion => entry.1 = entry.1.saturating_add(line.num_lines().max(1)),
             _ => {}
         }
         true

@@ -65,10 +65,21 @@ pub(super) fn render_diff_for_path(
             return true;
         }
         match line.origin_value() {
-            DiffLineType::Addition => added = added.saturating_add(line.num_lines()),
-            DiffLineType::Deletion => removed = removed.saturating_add(line.num_lines()),
+            // A content line without a final newline reports num_lines() == 0.
+            // It still represents one added/deleted line (EOFNL is metadata).
+            DiffLineType::Addition => added = added.saturating_add(line.num_lines().max(1)),
+            DiffLineType::Deletion => removed = removed.saturating_add(line.num_lines().max(1)),
             DiffLineType::Binary => is_binary = true,
             _ => {}
+        }
+        // libgit2 emits EOFNL pseudo-lines to describe a missing final newline.
+        // They are patch metadata, not extra additions/deletions or context.
+        // Rendering them as text duplicates changed rows in full-file Diff.
+        if matches!(
+            line.origin_value(),
+            DiffLineType::ContextEOFNL | DiffLineType::AddEOFNL | DiffLineType::DeleteEOFNL
+        ) {
+            return true;
         }
         if line_preview_truncated || truncated {
             return true;
