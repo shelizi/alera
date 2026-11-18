@@ -1,7 +1,9 @@
 part of 'workbench_controller_test.dart';
 
 class _FakeWorkbenchViewPrefsRepository
-    implements WorkbenchViewPrefsRepository {
+    implements
+        WorkbenchViewPrefsRepository,
+        SharedWorkbenchViewPrefsEventMerger {
   WorkbenchViewPrefs prefs = .defaults;
   Object? loadError;
   Object? saveError;
@@ -11,8 +13,25 @@ class _FakeWorkbenchViewPrefsRepository
   Completer<void>? saveRelease;
   Completer<void>? saveCompleted;
 
+  final _incoming = StreamController<WorkbenchViewPrefs>.broadcast();
+
   @override
-  Stream<WorkbenchViewPrefs> get changes => const Stream.empty();
+  Stream<WorkbenchViewPrefs> get changes => _incoming.stream;
+
+  void emitIncomingSharedPrefs(WorkbenchViewPrefs prefs) =>
+      _incoming.add(prefs);
+
+  @override
+  WorkbenchViewPrefs mergeIncomingSharedPrefs({
+    required WorkbenchViewPrefs current,
+    required WorkbenchViewPrefs incoming,
+  }) => incoming.copyWith(
+    activeContextPanelTab: current.activeContextPanelTab,
+    rightSidebarWidth: current.rightSidebarWidth,
+    rightSidebarVisible: current.rightSidebarVisible,
+  );
+
+  Future<void> close() => _incoming.close();
 
   @override
   Future<WorkbenchViewPrefs> load() async {

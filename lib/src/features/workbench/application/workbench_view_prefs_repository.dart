@@ -11,6 +11,18 @@ final class SharedWorkbenchPreferenceUnavailable implements Exception {
   String toString() => 'Shared $preference requires the Rust Runtime Host';
 }
 
+/// Runtime Host events only describe shared preferences. Replaying their
+/// local Drift snapshot must not overwrite an in-progress Classic-only UI
+/// selection (such as the active Source Control/Explorer panel).
+///
+/// Repositories without this capability still publish full snapshots.
+abstract interface class SharedWorkbenchViewPrefsEventMerger {
+  WorkbenchViewPrefs mergeIncomingSharedPrefs({
+    required WorkbenchViewPrefs current,
+    required WorkbenchViewPrefs incoming,
+  });
+}
+
 abstract interface class WorkbenchViewPrefsRepository {
   Stream<WorkbenchViewPrefs> get changes;
 

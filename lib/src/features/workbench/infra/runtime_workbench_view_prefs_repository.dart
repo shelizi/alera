@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:alera/src/features/workbench/application/workbench_view_prefs_repository.dart';
 import 'package:alera/src/features/workbench/domain/workbench_view_prefs.dart';
 import 'package:alera/src/platform/runtime_host/protocol/terminal_host_protocol.dart';
@@ -9,11 +11,43 @@ class RuntimeWorkbenchViewPrefsRepository({
   required final RuntimeHostClient client,
   required final WorkbenchViewPrefsRepository legacyRepository,
   final Future<void> Function()? beforeAccess,
-}) implements WorkbenchViewPrefsRepository {
+}) implements
+    WorkbenchViewPrefsRepository,
+    SharedWorkbenchViewPrefsEventMerger {
+  String? _lastSharedFingerprint;
   int? _revision;
   Map<String, bool>? _lastExplorerShared;
   Map<String, List<String>>? _lastGitFavoritesShared;
   Map<String, Set<String>>? _lastGitFavoritesView;
+
+  /// Host notifications cover shared sidebar/filter/Explorer/favorites
+  /// values, not Classic-only pane selection, widths, or Diff preferences.
+  /// Preserve those local values even if the async Host event carries a
+  /// cached Drift snapshot from a different Alera process.
+  @override
+  WorkbenchViewPrefs mergeIncomingSharedPrefs({
+    required WorkbenchViewPrefs current,
+    required WorkbenchViewPrefs incoming,
+  }) => current.copyWith(
+    groupBy: incoming.groupBy,
+    sectionSort: incoming.sectionSort,
+    collapsedSectionIds: incoming.collapsedSectionIds,
+    othersSectionCollapsed: incoming.othersSectionCollapsed,
+    projectSort: incoming.projectSort,
+    workspaceSort: incoming.workspaceSort,
+    selectedProjectIds: incoming.selectedProjectIds,
+    selectedTagIds: incoming.selectedTagIds,
+    collapsedProjectIds: incoming.collapsedProjectIds,
+    collapsedParentWorkspaceIds: incoming.collapsedParentWorkspaceIds,
+    pinnedSectionCollapsed: incoming.pinnedSectionCollapsed,
+    allSectionCollapsed: incoming.allSectionCollapsed,
+    showPinnedWorkspacesBelow: incoming.showPinnedWorkspacesBelow,
+    workspaceKindFilter: incoming.workspaceKindFilter,
+    showActiveWorkspacesOnly: incoming.showActiveWorkspacesOnly,
+    explorerMode: incoming.explorerMode,
+    showHiddenFiles: incoming.showHiddenFiles,
+    favoriteBranchesByRepository: incoming.favoriteBranchesByRepository,
+  );
 
   @override
   Stream<WorkbenchViewPrefs> get changes => client.runtimeEvents
@@ -46,7 +80,11 @@ class RuntimeWorkbenchViewPrefsRepository({
         await _loadExplorerShared(_mergeShared(local, _asMap(record['prefs']))),
       );
       await legacyRepository.save(merged);
-      return await _forRuntime(merged);
+      final runtime = await _forRuntime(merged);
+      _lastSharedFingerprint = _sharedPayloadFingerprint(
+        await _hostSharedPayload(runtime),
+      );
+      return runtime;
     } catch (error, stackTrace) {
       // The local prefs still render, so the only visible symptom is that a
       // change made on another device never arrives.
@@ -55,6 +93,7 @@ class RuntimeWorkbenchViewPrefsRepository({
         error,
         stackTrace,
       );
+      _lastSharedFingerprint = null;
       _lastExplorerShared = null;
       _lastGitFavoritesShared = null;
       _lastGitFavoritesView = _snapshotFavoriteView(
@@ -245,7 +284,9 @@ class RuntimeWorkbenchViewPrefsRepository({
     }
   }
 
-  Future<void> _writeShared(WorkbenchViewPrefs prefs) async {
+  Future<Map<String, Object?>> _hostSharedPayload(
+    WorkbenchViewPrefs prefs,
+  ) async {
     final shared = _sharedJson(prefs);
     if (client is! RuntimeHostCapabilityClient ||
         !await (client as RuntimeHostCapabilityClient)
@@ -259,6 +300,16 @@ class RuntimeWorkbenchViewPrefsRepository({
         shared['groupBy'] = 'project';
       }
     }
+    return shared;
+  }
+
+  Future<void> _writeShared(WorkbenchViewPrefs prefs) async {
+    final shared = await _hostSharedPayload(prefs);
+    final fingerprint = _sharedPayloadFingerprint(shared);
+    if (_revision != null && _lastSharedFingerprint == fingerprint) {
+      // Classic-only pane/layout edits must not send redundant Host events.
+      return;
+    }
     final record = _asMap(
       await client.runtimeRequest(
         'workbenchViewPrefs.update',
@@ -266,7 +317,21 @@ class RuntimeWorkbenchViewPrefsRepository({
       ),
     );
     _revision = (record['revision'] as num?)?.toInt() ?? _revision;
+    _lastSharedFingerprint = fingerprint;
   }
+}
+
+/// Stable across the iteration order of set-valued Host fields.
+String _sharedPayloadFingerprint(Map<String, Object?> values) {
+  final sortedKeys = values.keys.toList()..sort();
+  return jsonEncode(<String, Object?>{
+    for (final key in sortedKeys)
+      key: switch (values[key]) {
+        final List items =>
+          (items.map((item) => item.toString()).toList()..sort()),
+        final value => value,
+      },
+  });
 }
 
 Map<String, Set<String>> _snapshotFavoriteView(

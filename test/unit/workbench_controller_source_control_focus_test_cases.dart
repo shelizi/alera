@@ -49,6 +49,40 @@ void _registerWorkbenchControllerSourceControlFocusTests() {
     }
   });
 
+  test(
+    'shared Host event does not reset selected Source Control pane',
+    () async {
+      await _controller.bootstrap();
+      _controller.setContextPanelTab(.gitDiff);
+      await _flushUntil(
+        () =>
+            _harness.viewPrefsRepository.prefs.activeContextPanelTab ==
+            WorkbenchContextPanelTab.gitDiff,
+      );
+      expect(
+        _controller.state.viewPrefs.activeContextPanelTab,
+        WorkbenchContextPanelTab.gitDiff,
+      );
+
+      // The incoming Host snapshot contains a stale Classic-only panel value
+      // alongside a legitimate updated shared Explorer preference.
+      _harness.viewPrefsRepository.emitIncomingSharedPrefs(
+        WorkbenchViewPrefs.defaults.copyWith(
+          showHiddenFiles: true,
+          activeContextPanelTab: .explorer,
+          rightSidebarWidth: 123,
+        ),
+      );
+      await _flush();
+      expect(
+        _controller.state.viewPrefs.activeContextPanelTab,
+        WorkbenchContextPanelTab.gitDiff,
+      );
+      expect(_controller.state.viewPrefs.rightSidebarWidth, 280);
+      expect(_controller.state.viewPrefs.showHiddenFiles, isTrue);
+    },
+  );
+
   test('selecting a git workspace keeps source control active', () async {
     await _controller.bootstrap();
     _controller.setContextPanelTab(.gitDiff);

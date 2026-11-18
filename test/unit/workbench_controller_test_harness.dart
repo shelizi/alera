@@ -123,6 +123,7 @@ class _WorkbenchHarness([ManagedWorkspaceRuntime? runtime]) {
   Future<void> dispose() async {
     container.dispose();
     await terminalRuntime.dispose();
+    await viewPrefsRepository.close();
     await projectRepository.dispose();
     await workbenchRepository.dispose();
     if (tempDir.existsSync()) {

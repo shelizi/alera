@@ -6,6 +6,100 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   test(
+    'Classic-only Diff pane changes do not emit Host shared updates',
+    () async {
+      final client = _FakeRuntimeHostClient()
+        ..responses['workbenchViewPrefs.get'] = {
+          'revision': 9,
+          'desktopInitialized': true,
+          'prefs': <String, Object?>{},
+        };
+      final legacy = _MemoryViewPrefsRepository();
+      final repo = RuntimeWorkbenchViewPrefsRepository(
+        client: client,
+        legacyRepository: legacy,
+      );
+      final loaded = await repo.load();
+      final localOnlyChange = loaded.copyWith(
+        activeContextPanelTab: WorkbenchContextPanelTab.gitDiff,
+        rightSidebarWidth: 400,
+        gitDiffContentMode: GitDiffContentMode.diffOnly,
+        gitDiffPresentationMode: GitDiffPresentationMode.sideBySide,
+      );
+      await repo.save(localOnlyChange);
+
+      expect(
+        client.payloads['workbenchViewPrefs.update'],
+        isNull,
+        reason:
+            'Classic-only layout changes must not emit redundant Host events',
+      );
+      expect(
+        legacy.prefs.activeContextPanelTab,
+        WorkbenchContextPanelTab.gitDiff,
+      );
+      expect(legacy.prefs.rightSidebarWidth, 400);
+      expect(legacy.prefs.gitDiffContentMode, GitDiffContentMode.diffOnly);
+      expect(
+        (await repo.load()).gitDiffPresentationMode,
+        GitDiffPresentationMode.sideBySide,
+      );
+    },
+  );
+
+  test(
+    'Host event merges shared values without resetting Classic Diff pane',
+    () {
+      final repo = RuntimeWorkbenchViewPrefsRepository(
+        client: _FakeRuntimeHostClient(),
+        legacyRepository: _MemoryViewPrefsRepository(),
+      );
+      final current = WorkbenchViewPrefs.defaults.copyWith(
+        activeContextPanelTab: WorkbenchContextPanelTab.gitDiff,
+        rightSidebarWidth: 420,
+        rightSidebarVisible: true,
+        gitDiffContentMode: GitDiffContentMode.fullFile,
+        gitDiffPresentationMode: GitDiffPresentationMode.sideBySide,
+        sourceControlRootByWorkspaceId: {'worktree-1': 'packages/editor'},
+      );
+      final incoming = WorkbenchViewPrefs.defaults.copyWith(
+        activeContextPanelTab: WorkbenchContextPanelTab.explorer,
+        rightSidebarWidth: 123,
+        rightSidebarVisible: false,
+        gitDiffContentMode: GitDiffContentMode.diffOnly,
+        gitDiffPresentationMode: GitDiffPresentationMode.unified,
+        sourceControlRootByWorkspaceId: {},
+        groupBy: WorkbenchGroupBy.section,
+        showHiddenFiles: true,
+        selectedProjectIds: {'project-from-host'},
+        favoriteBranchesByRepository: {
+          'repo': {'main'},
+        },
+      );
+
+      final merged = repo.mergeIncomingSharedPrefs(
+        current: current,
+        incoming: incoming,
+      );
+      expect(merged.activeContextPanelTab, WorkbenchContextPanelTab.gitDiff);
+      expect(merged.rightSidebarWidth, 420);
+      expect(merged.rightSidebarVisible, true);
+      expect(merged.gitDiffContentMode, GitDiffContentMode.fullFile);
+      expect(
+        merged.gitDiffPresentationMode,
+        GitDiffPresentationMode.sideBySide,
+      );
+      expect(merged.sourceControlRootByWorkspaceId, {
+        'worktree-1': 'packages/editor',
+      });
+      expect(merged.groupBy, WorkbenchGroupBy.section);
+      expect(merged.showHiddenFiles, true);
+      expect(merged.selectedProjectIds, {'project-from-host'});
+      expect(merged.favoriteBranchesByRepository['repo'], {'main'});
+    },
+  );
+
+  test(
     'sections roundtrip on supported hosts and are omitted on older hosts',
     () async {
       final client = _FakeRuntimeHostClient()..supportsSections = true;
@@ -27,7 +121,8 @@ void main() {
       expect(prefs.groupBy, WorkbenchGroupBy.section);
       expect(prefs.sectionSort, WorkbenchSortBy.recent);
       expect(prefs.collapsedSectionIds, {'s'});
-      await repo.save(prefs);
+      // Change a genuinely shared filter so a Host update is required.
+      await repo.save(prefs.copyWith(showActiveWorkspacesOnly: true));
       expect(
         client.payloads['workbenchViewPrefs.update']!.last['prefs'],
         containsPair('groupBy', 'section'),
@@ -41,7 +136,8 @@ void main() {
       expect(fallback.groupBy, WorkbenchGroupBy.project);
       expect(fallback.sectionSort, WorkbenchSortBy.recent);
       expect(fallback.collapsedSectionIds, {'s'});
-      await repo.save(prefs);
+      // Flip the shared filter back so a second Host write is required.
+      await repo.save(prefs.copyWith(showActiveWorkspacesOnly: false));
       final old =
           client.payloads['workbenchViewPrefs.update']!.last['prefs'] as Map;
       expect(old['groupBy'], 'project');

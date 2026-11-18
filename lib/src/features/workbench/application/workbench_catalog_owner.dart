@@ -198,9 +198,17 @@ final class WorkbenchCatalogOwner {
             _host.rootSubscriptions.watchViewPrefs(
               repository.changes,
               onData: (prefs) {
-                if (!_host.isDisposed) {
-                  _host.emitState(_host.readState().copyWith(viewPrefs: prefs));
-                }
+                if (_host.isDisposed) return;
+                final current = _host.readState();
+                final updated = switch (repository) {
+                  SharedWorkbenchViewPrefsEventMerger merger =>
+                    merger.mergeIncomingSharedPrefs(
+                      current: current.viewPrefs,
+                      incoming: prefs,
+                    ),
+                  _ => prefs,
+                };
+                _host.emitState(current.copyWith(viewPrefs: updated));
               },
             );
           },
