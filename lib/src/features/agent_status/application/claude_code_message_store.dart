@@ -172,6 +172,13 @@ bool _sameCodeBlocks(
   return true;
 }
 
+/// Parse Claude's canonical Markdown without interpreting the rendered PTY.
+/// Shared by live Hooks and the read-only local transcript fallback.
+List<ClaudeSourceCodeBlock> parseClaudeCodeBlocksFromMarkdown({
+  required String messageId,
+  required String markdown,
+}) => _parseCanonicalCodeBlocks(markdown, messageId);
+
 /// A structural Markdown scanner preserves code bytes exactly: Markdown AST
 /// textContent escapes '<', '>' and '&' for HTML rendering, which would corrupt
 /// copied Swift/Objective-C/C++ source. There are no language-specific rules.

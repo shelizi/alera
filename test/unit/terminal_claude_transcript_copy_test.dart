@@ -84,6 +84,77 @@ void main() {
     );
   });
 
+  test(
+    'extracts only exact-workspace canonical blocks from manual Claude JSONL',
+    () async {
+      final root = await Directory.systemTemp.createTemp('alera-raw-jsonl-');
+      addTearDown(() async {
+        if (await root.exists()) await root.delete(recursive: true);
+      });
+      final projectName = workspacePath.replaceAll(
+        RegExp(r'[^A-Za-z0-9-]'),
+        '-',
+      );
+      final project = Directory(p.join(root.path, projectName))
+        ..createSync(recursive: true);
+      final file = File(p.join(project.path, 'claude-session.jsonl'));
+      final swift = 'let answer = 42\nprint(answer)';
+      final objc =
+          '#import <Foundation/Foundation.h>\n'
+          'int main(void) { return 0; }';
+      final markdown =
+          '\u0060\u0060\u0060swift\n' +
+          swift +
+          '\n\u0060\u0060\u0060\n\n' +
+          '\u0060\u0060\u0060objective-c\n' +
+          objc +
+          '\n\u0060\u0060\u0060';
+      final valid = {
+        'type': 'assistant',
+        'cwd': workspacePath,
+        'message': {
+          'id': 'message-1',
+          'content': [
+            {'type': 'text', 'text': markdown},
+          ],
+        },
+      };
+      await file.writeAsString(
+        [
+          jsonEncode({
+            'type': 'assistant',
+            'cwd': r'D:\sandbox\other_workspace',
+            'message': {
+              'content': [
+                {
+                  'type': 'text',
+                  'text': '\u0060\u0060\u0060js\nconst bad = true;\n\u0060\u0060\u0060',
+                },
+              ],
+            },
+          }),
+          jsonEncode(valid),
+          jsonEncode(valid),
+          '{incomplete record',
+        ].join('\n'),
+      );
+
+      final blocks = await loadClaudeCodeBlocksFromTranscript(
+        workspacePath,
+        projectsRoot: root,
+      );
+      expect(blocks.map((block) => block.code), [swift, objc]);
+      expect(
+        await loadClaudeCodeBlocksFromTranscript(
+          r'D:\sandbox\other_workspace',
+          projectsRoot: root,
+        ),
+        isEmpty,
+        reason: 'Never leak or match an unrelated workspace transcript',
+      );
+    },
+  );
+
   test('reads only exact same-workspace matching Claude JSONL', () async {
     final root = await Directory.systemTemp.createTemp('alera-claude-copy-');
     addTearDown(() async {

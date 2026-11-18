@@ -12,6 +12,7 @@ import 'package:alera/src/features/workbench/application/terminal_runtime_bindin
 import 'package:alera/src/features/workbench/presentation/terminal_buffer_budget.dart';
 import 'package:alera/src/features/workbench/presentation/terminal_code_block.dart';
 import 'package:alera/src/features/workbench/presentation/terminal_claude_source_code.dart';
+import 'package:alera/src/features/workbench/presentation/terminal_claude_transcript_copy.dart';
 import 'package:alera/src/features/workbench/presentation/terminal_composer_controller.dart';
 import 'package:alera/src/features/workbench/presentation/terminal_link_resolver.dart';
 import 'package:alera/src/features/workbench/presentation/terminal_search_controller.dart';

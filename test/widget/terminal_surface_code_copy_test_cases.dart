@@ -1,6 +1,138 @@
 part of 'terminal_surface_test.dart';
 
 void _registerTerminalSurfaceCodeCopyTests() {
+  testWidgets(
+    'manual Claude transcript makes two source copy buttons available',
+    (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      final copied = <String>[];
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        (call) async {
+          if (call.method == 'Clipboard.setData') {
+            copied.add(
+              (call.arguments as Map<Object?, Object?>)['text'] as String,
+            );
+          }
+          return null;
+        },
+      );
+      try {
+        final sourceReady = Completer<List<ClaudeSourceCodeBlock>>();
+        var reads = 0;
+        final store = ClaudeCodeMessageStore();
+        addTearDown(store.dispose);
+        final factory = _FakeTerminalPtySessionFactory();
+        final runtime = XtermTerminalRuntime(
+          ptySessionFactory: factory,
+          shellLaunchesBuilder: _testShellLaunches,
+          claudeCodeMessageStore: store,
+          claudeTranscriptSourceLoader: (path) {
+            reads++;
+            expect(path, '/tmp/manual-claude-repo');
+            return sourceReady.future;
+          },
+          initialSettings: TerminalSettings.defaults.copyWith(
+            showCodeBlockCopyButton: true,
+          ),
+        );
+        addTearDown(runtime.dispose);
+        final session = runtime.sessionFor(
+          workspace: _workspace(path: '/tmp/manual-claude-repo'),
+          tab: _tab(),
+        );
+        await _pumpTerminalSurface(tester, session);
+        factory.sessions.single.emitOutput(
+          utf8.encode(
+            '❯ manual claude\r\n'
+            '• let answer = 42\r\n'
+            '  print(answer)\r\n'
+            '\r\n'
+            'Objective-C\r\n'
+            '#import <Foundation/Foundation.h>\r\n'
+            '\r\n'
+            'int main(void) { return 0; }\r\n'
+            '\r\n'
+            'Plain explanation, not code',
+          ),
+        );
+        await _pumpTerminalOutput(tester);
+        final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+        await mouse.addPointer(
+          location: _cellCenter(tester, const xterm.CellOffset(3, 0)),
+        );
+        await mouse.moveTo(_cellCenter(tester, const xterm.CellOffset(3, 1)));
+        await tester.pump();
+        const key = ValueKey<String>('terminal-copy-code-button');
+        expect(
+          find.byKey(key),
+          findsNothing,
+          reason: 'Never show speculative buttons without a canonical source',
+        );
+        expect(reads, 1);
+        sourceReady.complete(const [
+          ClaudeSourceCodeBlock(
+            messageId: 'm1',
+            code: 'let answer = 42\nprint(answer)',
+          ),
+          ClaudeSourceCodeBlock(
+            messageId: 'm1',
+            code:
+                '#import <Foundation/Foundation.h>\n'
+                'int main(void) { return 0; }',
+          ),
+        ]);
+        await tester.pump();
+        await tester.pump();
+        expect(
+          find.byKey(key),
+          findsOneWidget,
+          reason: 'Original transcript arriving under cursor shows the button',
+        );
+
+        await tester.tap(find.byKey(key));
+        await tester.pump();
+        expect(copied, ['let answer = 42\nprint(answer)']);
+        await tester.tap(find.byKey(key));
+        await tester.pump();
+        expect(copied, [
+          'let answer = 42\nprint(answer)',
+          'let answer = 42\nprint(answer)',
+        ]);
+
+        await mouse.moveTo(_cellCenter(tester, const xterm.CellOffset(3, 7)));
+        await tester.pump();
+        expect(find.byKey(key), findsOneWidget);
+        await tester.tap(find.byKey(key));
+        await tester.pump();
+        expect(
+          copied.last,
+          '#import <Foundation/Foundation.h>\nint main(void) { return 0; }',
+        );
+        expect(
+          reads,
+          1,
+          reason: 'Hovering between blocks must not re-read JSONL',
+        );
+        await mouse.moveTo(_cellCenter(tester, const xterm.CellOffset(3, 9)));
+        await tester.pump();
+        expect(
+          find.byKey(key),
+          findsNothing,
+          reason: 'Prose below the code block must not be copyable',
+        );
+        await mouse.removePointer();
+      } finally {
+        await tester.pumpWidget(const SizedBox());
+        debugDefaultTargetPlatformOverride = null;
+        tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          SystemChannels.platform,
+          null,
+        );
+      }
+    },
+  );
+
   testWidgets('copy button is fixed below the last rendered code row', (
     tester,
   ) async {

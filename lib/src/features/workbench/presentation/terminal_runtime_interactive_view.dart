@@ -22,6 +22,10 @@ class _InteractiveTerminalViewState extends State<_InteractiveTerminalView> {
   bool _copiedCode = false;
   bool _pointerOverCopyButton = false;
   Timer? _copyFeedbackTimer;
+  List<ClaudeSourceCodeBlock> _transcriptCodeBlocks = const [];
+  DateTime? _nextClaudeTranscriptRead;
+  bool _loadingClaudeTranscript = false;
+  int _transcriptReadGeneration = 0;
 
   @override
   void initState() {
@@ -37,6 +41,7 @@ class _InteractiveTerminalViewState extends State<_InteractiveTerminalView> {
       _onClaudeSourceUpdate,
     );
     _copyFeedbackTimer?.cancel();
+    _transcriptReadGeneration++;
     super.dispose();
   }
 
@@ -51,6 +56,10 @@ class _InteractiveTerminalViewState extends State<_InteractiveTerminalView> {
       _lastHoverOffset = null;
       _copiedCode = false;
       _pointerOverCopyButton = false;
+      _transcriptCodeBlocks = const [];
+      _nextClaudeTranscriptRead = null;
+      _transcriptReadGeneration++;
+      _loadingClaudeTranscript = false;
     }
     if (oldWidget.session != widget.session) {
       oldWidget.session._scrollController.removeListener(_clearHoverOnScroll);
@@ -61,6 +70,10 @@ class _InteractiveTerminalViewState extends State<_InteractiveTerminalView> {
       widget.session._claudeCodeMessageStore?.addListener(
         _onClaudeSourceUpdate,
       );
+      _transcriptCodeBlocks = const [];
+      _nextClaudeTranscriptRead = null;
+      _transcriptReadGeneration++;
+      _loadingClaudeTranscript = false;
       _clearHoverState();
     }
   }
@@ -124,6 +137,9 @@ class _InteractiveTerminalViewState extends State<_InteractiveTerminalView> {
       event.position,
     );
     final offset = viewState.renderTerminal.getCellOffset(localPosition);
+    if (widget.showCodeBlockCopyButton) {
+      _maybeLoadClaudeTranscriptSource(offset);
+    }
     if (_lastHoverOffset == offset) {
       _setHoveredLink(_lastHoverLink);
       return;
@@ -135,6 +151,66 @@ class _InteractiveTerminalViewState extends State<_InteractiveTerminalView> {
     if (widget.showCodeBlockCopyButton) {
       _handleCodeHover(offset);
     }
+  }
+
+  /// Manually launched Claude does not receive Alera's optional hook args.
+  /// Read original same-workspace Markdown instead of guessing from PTY text.
+  void _maybeLoadClaudeTranscriptSource(xterm.CellOffset offset) {
+    if (!widget.showCodeBlockCopyButton ||
+        widget.session._claudeCodeMessageStore == null ||
+        _loadingClaudeTranscript) {
+      return;
+    }
+    final id = widget.session.terminalSessionId;
+    final hooked = widget.session._claudeCodeMessageStore!.blocksForTerminal(
+      id,
+    );
+    // A user can switch from a hooked Claude run to a manual one in the
+    // same terminal. Old hook source should not block transcript recovery.
+    if (hooked.isNotEmpty &&
+        resolveClaudeSourceCodeBlockAt(
+              terminal: widget.session._terminal,
+              offset: offset,
+              sourceBlocks: hooked,
+            ) !=
+            null) {
+      return;
+    }
+    final now = DateTime.now();
+    if (_nextClaudeTranscriptRead case final next? when now.isBefore(next)) {
+      return;
+    }
+    final workspacePath = widget.session.workspacePath;
+    if (workspacePath.isEmpty) return;
+    _nextClaudeTranscriptRead = now.add(const Duration(seconds: 8));
+    _loadingClaudeTranscript = true;
+    final sourceSession = widget.session;
+    final generation = ++_transcriptReadGeneration;
+    unawaited(() async {
+      try {
+        final blocks = await sourceSession._claudeTranscriptSourceLoader(
+          workspacePath,
+        );
+        if (!mounted ||
+            !widget.showCodeBlockCopyButton ||
+            !identical(widget.session, sourceSession) ||
+            generation != _transcriptReadGeneration) {
+          return;
+        }
+        _transcriptCodeBlocks = blocks;
+        final offset = _lastHoverOffset;
+        if (offset != null && !_pointerOverCopyButton) {
+          _lastHoverCodeRow = null;
+          _handleCodeHover(offset);
+        }
+      } catch (_) {
+        // Failure to read an optional local transcript must not affect PTY.
+      } finally {
+        if (generation == _transcriptReadGeneration) {
+          _loadingClaudeTranscript = false;
+        }
+      }
+    }());
   }
 
   void _onClaudeSourceUpdate() {
@@ -150,12 +226,17 @@ class _InteractiveTerminalViewState extends State<_InteractiveTerminalView> {
     final store = widget.session._claudeCodeMessageStore;
     if (store != null) {
       final id = widget.session.terminalSessionId;
-      if (store.hasClaudeSession(id)) {
-        return resolveClaudeSourceCodeBlockAt(
+      final originals = <ClaudeSourceCodeBlock>[
+        ...store.blocksForTerminal(id),
+        ..._transcriptCodeBlocks,
+      ];
+      if (originals.isNotEmpty) {
+        final match = resolveClaudeSourceCodeBlockAt(
           terminal: widget.session._terminal,
           offset: offset,
-          sourceBlocks: store.blocksForTerminal(id),
+          sourceBlocks: originals,
         );
+        if (match != null) return match;
       }
       // A normal shell can still copy explicit fenced Markdown. Never use
       // Claude-specific syntax guessing in the production Classic terminal.

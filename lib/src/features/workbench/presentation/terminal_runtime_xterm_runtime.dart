@@ -6,6 +6,7 @@ class XtermTerminalRuntime._(
   final TerminalRuntimeRendererAdapterOwner _rendererAdapterOwner,
   final TerminalRuntimeLaunchInputOwner _launchInputOwner,
   final ClaudeCodeMessageStore? _claudeCodeMessageStore,
+  final ClaudeTranscriptSourceLoader _claudeTranscriptSourceLoader,
   final TerminalSessionCleanup? _terminalSessionCleanup,
   final bool _parserWorkerEnabled,
   final bool _snapshotHydrationProfilingEnabled,
@@ -25,6 +26,7 @@ class XtermTerminalRuntime._(
     TerminalProcessCreated? terminalProcessCreated,
     TerminalClipboard? terminalClipboard,
     ClaudeCodeMessageStore? claudeCodeMessageStore,
+    ClaudeTranscriptSourceLoader? claudeTranscriptSourceLoader,
     void Function(String message, {bool error})? interactionNotice,
     TerminalRuntimeLaunchInputOwner? launchInputOwner,
     TerminalRuntimeRendererAdapterOwner? rendererAdapterOwner,
@@ -67,6 +69,7 @@ class XtermTerminalRuntime._(
       resolvedRendererAdapterOwner,
       resolvedLaunchInputOwner,
       claudeCodeMessageStore,
+      claudeTranscriptSourceLoader ?? loadClaudeCodeBlocksFromTranscript,
       terminalSessionCleanup,
       parserWorkerEnabled,
       snapshotHydrationProfilingEnabled,
@@ -164,6 +167,7 @@ class XtermTerminalRuntime._(
       owner._handleVisibilityChanged,
       _handleUserInput,
       _claudeCodeMessageStore,
+      _claudeTranscriptSourceLoader,
     );
   }
 
